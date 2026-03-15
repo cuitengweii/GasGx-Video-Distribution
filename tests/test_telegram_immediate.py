@@ -287,6 +287,96 @@ def test_handle_home_collect_publish_deduplicates_running_task(tmp_path: Path, m
     assert len(tasks) == 1
 
 
+def test_recover_orphaned_home_action_marks_task_blocked_without_unsolicited_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    sent_cards: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_append_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(worker_impl, "_send_card_message", lambda **kwargs: sent_cards.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_try_delete_telegram_message", lambda **kwargs: False)
+
+    claimed = worker_impl._claim_home_action_task(
+        workspace=workspace,
+        chat_id=CHAT_ID,
+        action="collect_publish_latest",
+        value="video:10",
+        profile=DEFAULT_PROFILE,
+        username="tester",
+    )
+    task_key = str(claimed["task_key"])
+    worker_impl._update_home_action_task(
+        workspace,
+        task_key,
+        status="running",
+        detail="still running",
+        pid=4321,
+        extra={"loading_message_id": 0},
+    )
+
+    recovered = worker_impl._recover_orphaned_home_action_tasks(
+        workspace=workspace,
+        bot_token=BOT_TOKEN,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+    )
+
+    assert recovered == 1
+    assert sent_cards == []
+    task = _action_tasks(workspace)[task_key]
+    assert isinstance(task, dict)
+    assert task["status"] == "blocked"
+    assert "回传中断" in str(task["detail"])
+
+
+def test_recover_orphaned_home_action_notifies_when_loading_placeholder_exists(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    sent_cards: list[dict[str, object]] = []
+    deleted_messages: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_append_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(worker_impl, "_send_card_message", lambda **kwargs: sent_cards.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_try_delete_telegram_message",
+        lambda **kwargs: deleted_messages.append(dict(kwargs)) or True,
+    )
+
+    claimed = worker_impl._claim_home_action_task(
+        workspace=workspace,
+        chat_id=CHAT_ID,
+        action="collect_publish_latest",
+        value="image:3",
+        profile=DEFAULT_PROFILE,
+        username="tester",
+    )
+    task_key = str(claimed["task_key"])
+    worker_impl._update_home_action_task(
+        workspace,
+        task_key,
+        status="running",
+        detail="still running",
+        pid=9876,
+        extra={"loading_message_id": 901},
+    )
+
+    recovered = worker_impl._recover_orphaned_home_action_tasks(
+        workspace=workspace,
+        bot_token=BOT_TOKEN,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+    )
+
+    assert recovered == 1
+    assert len(deleted_messages) == 1
+    assert len(sent_cards) == 1
+    task = _action_tasks(workspace)[task_key]
+    assert isinstance(task, dict)
+    assert task["status"] == "blocked"
+    assert task["loading_message_id"] == 0
+
+
 def test_run_collect_publish_latest_job_video_records_prefilter_items(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()

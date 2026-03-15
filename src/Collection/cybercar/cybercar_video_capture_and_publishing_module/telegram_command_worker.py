@@ -3692,6 +3692,7 @@ def _recover_orphaned_home_action_tasks(
     for task in recovered:
         chat_id = str(task.get("chat_id") or "").strip()
         loading_message_id = int(task.get("loading_message_id") or 0)
+        should_notify = loading_message_id > 0
         if bot_token and chat_id and loading_message_id > 0:
             deleted = _try_delete_telegram_message(
                 bot_token=bot_token,
@@ -3702,7 +3703,7 @@ def _recover_orphaned_home_action_tasks(
             )
             if deleted:
                 _update_home_action_task(workspace, str(task.get("task_key") or "").strip(), extra={"loading_message_id": 0})
-        if bot_token and chat_id:
+        if bot_token and chat_id and should_notify:
             try:
                 _send_card_message(
                     bot_token=bot_token,
