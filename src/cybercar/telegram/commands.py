@@ -24,4 +24,17 @@ def handle_home_callback(*, update_id: int, callback: dict[str, Any], **kwargs: 
     )
 
 
-__all__ = ["build_home_callback_data", "handle_command", "handle_home_callback", "parse_home_callback_data"]
+def handle_callback_update(*, update: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return legacy_worker.handle_callback_update(
+        update=update,
+        **kwargs,
+    )
+
+
+__all__ = [
+    "build_home_callback_data",
+    "handle_callback_update",
+    "handle_command",
+    "handle_home_callback",
+    "parse_home_callback_data",
+]

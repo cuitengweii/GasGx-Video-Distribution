@@ -9269,7 +9269,7 @@ def handle_callback_update(
             callback_reply = "本条已经进入发布流程，无需重复点击。"
         else:
             declare_original = action == "publish_original"
-            _update_prefilter_item(
+            updated_item = _update_prefilter_item(
                 workspace,
                 item_id,
                 updates={
@@ -9290,7 +9290,7 @@ def handle_callback_update(
                 )
             callback_reply = "📝 已选择原创发布，正在启动发布。" if declare_original else "⚡ 已选择普通发布，正在启动发布。"
             _answer_callback_immediately(callback_reply)
-            started_item = _get_prefilter_item(workspace, item_id) or {}
+            started_item = _get_prefilter_item(workspace, item_id) or updated_item
             started_note = "已选择原创发布，后台任务正在排队，尚未确认平台发布成功。" if declare_original else "已选择普通发布，后台任务正在排队，尚未确认平台发布成功。"
             optimistic_card = _build_prefilter_status_card(
                 item=started_item,
