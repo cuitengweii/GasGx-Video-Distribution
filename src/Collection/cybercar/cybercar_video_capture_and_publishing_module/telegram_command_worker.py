@@ -107,6 +107,12 @@ DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS = 12
 DEFAULT_IMMEDIATE_COLLECT_LOCK_MAX_WAIT_SECONDS = 240
 DEFAULT_IMMEDIATE_PUBLISH_LOCK_RETRY_SECONDS = 15
 DEFAULT_IMMEDIATE_PUBLISH_LOCK_MAX_WAIT_SECONDS = 180
+DEFAULT_IMMEDIATE_X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 12
+DEFAULT_IMMEDIATE_X_DOWNLOAD_EXTRACTOR_RETRIES = 1
+DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRIES = 1
+DEFAULT_IMMEDIATE_X_DOWNLOAD_FRAGMENT_RETRIES = 1
+DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRY_SLEEP_SECONDS = 0
+DEFAULT_IMMEDIATE_X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS = 0
 COLLECT_PUBLISH_CANDIDATE_OPTIONS = [1, 3, 5, 10, 15, 30]
 COMMENT_REPLY_POST_OPTIONS = [3, 5, 7, 10]
 COLLECT_PUBLISH_DISCOVERY_MULTIPLIER = 4
@@ -1500,6 +1506,8 @@ def _compact_log_mentions(text: str) -> str:
 
 
 _NON_FINAL_BACKGROUND_FEEDBACK_STATUSES = {"running", "queued"}
+DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_LIMIT = 2
+DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_SECONDS = 3.0
 
 
 def _should_send_background_feedback(status: str) -> bool:
@@ -5198,6 +5206,13 @@ def _probe_platform_login_after_publish_failure(
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
         return "failed", str(error_text or "").strip()
+    if not (bool(result.get("sent")) or bool(result.get("skipped"))):
+        _append_log(
+            log_file,
+            f"[Worker] immediate publish login recheck inconclusive platform={platform_token} item={item_id} "
+            f"error={result.get('error') or '-'}",
+        )
+        return "failed", str(error_text or "").strip()
     notice = ""
     if bool(result.get("sent")):
         notice = "视频号登录二维码已发送到 Telegram"
@@ -5812,6 +5827,23 @@ def _run_unified_once(
     if merged_extra_args:
         cmd += ["-ExtraArgsJson", json.dumps(merged_extra_args, ensure_ascii=True)]
     return _run_cmd(cmd, timeout_seconds=timeout_seconds)
+
+
+def _build_immediate_fast_x_download_args() -> list[str]:
+    return [
+        "--x-download-socket-timeout",
+        str(max(5, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS))),
+        "--x-download-extractor-retries",
+        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_EXTRACTOR_RETRIES))),
+        "--x-download-retries",
+        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRIES))),
+        "--x-download-fragment-retries",
+        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_FRAGMENT_RETRIES))),
+        "--x-download-retry-sleep",
+        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRY_SLEEP_SECONDS))),
+        "--x-download-batch-retry-sleep",
+        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS))),
+    ]
 
 
 def _build_child_worker_env(repo_root: Optional[Path] = None) -> dict[str, str]:
@@ -6916,6 +6948,37 @@ def _is_immediate_collect_lock_retry_reason(reason: str, result: Optional[Dict[s
     return "previous pipeline still running" in merged or ("skip run" in merged and "still running" in merged)
 
 
+def _is_immediate_collect_transient_retry_reason(reason: str, result: Optional[Dict[str, Any]] = None) -> bool:
+    normalized = str(reason or "").strip()
+    if "X 元数据下载失败" not in normalized:
+        return False
+    lower = normalized.lower()
+    if "unexpected_eof_while_reading" in lower or "ssl 连接被对端中断" in normalized:
+        return True
+    if "连接被远端重置" in normalized or "请求超时" in normalized:
+        return True
+    if not isinstance(result, dict):
+        return False
+    merged = "\n".join(
+        part.strip().lower()
+        for part in (
+            str(result.get("stdout") or ""),
+            str(result.get("stderr") or ""),
+        )
+        if str(part or "").strip()
+    )
+    return any(
+        token in merged
+        for token in (
+            "unexpected_eof_while_reading",
+            "eof occurred in violation of protocol",
+            "connectionreseterror(10054",
+            "connection aborted.",
+            "read timed out",
+        )
+    )
+
+
 def _is_pipeline_lock_retry_reason(reason: str, result: Optional[Dict[str, Any]] = None) -> bool:
     normalized = str(reason or "").strip()
     if "上一条采集流程仍在处理中" in normalized or "已有发布/采集 pipeline 正在运行" in normalized:
@@ -6998,6 +7061,7 @@ def _run_collect_publish_latest_once(
                 "--require-x-live-discovery",
                 "--no-telegram-collect-notify",
                 "--no-telegram-prefilter",
+                *_build_immediate_fast_x_download_args(),
                 *(
                     [
                         "--collect-media-kind",
@@ -7755,6 +7819,7 @@ def _run_immediate_collect_item_job(
             "--no-telegram-collect-notify",
             "--no-telegram-prefilter",
             "--no-publish-skip-notify",
+            *_build_immediate_fast_x_download_args(),
         ]
         if media_kind == "image":
             collect_extra_args += [
@@ -7768,6 +7833,7 @@ def _run_immediate_collect_item_job(
             timeout_seconds=timeout_seconds,
             retry_seconds=float(DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS),
         )
+        transient_retry_attempts = 0
         target: Optional[Path] = None
         while target is None:
             before_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
@@ -7825,6 +7891,23 @@ def _run_immediate_collect_item_job(
                     },
                 )
                 time.sleep(min(float(DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS), max(1.0, remaining_wait_seconds)))
+                continue
+            if (
+                _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and transient_retry_attempts < int(DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_LIMIT)
+            ):
+                transient_retry_attempts += 1
+                _update_prefilter_item(
+                    workspace,
+                    item_id,
+                    updates={
+                        "status": "download_running",
+                        "action": "collect_retry_transient",
+                        "last_error": f"{reason}（第 {transient_retry_attempts} 次瞬时重试）",
+                        "updated_at": _now_text(),
+                    },
+                )
+                time.sleep(float(DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_SECONDS))
                 continue
 
             _update_prefilter_item(

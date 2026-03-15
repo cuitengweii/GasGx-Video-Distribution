@@ -157,7 +157,7 @@ DEFAULT_HASHTAGS = " ".join(REQUIRED_HASHTAGS)
 KUAISHOU_HASHTAG_LIMIT = 4
 KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#特斯拉Cybertruck"]
 DEFAULT_CAPTION = f"Cybertruck 赛博皮卡最新画面！\n\n{DEFAULT_HASHTAGS}"
-DEFAULT_COLLECTION_NAME = "赛博皮卡预定"
+DEFAULT_COLLECTION_NAME = "赛博皮卡天津港现车"
 CREATE_POST_URL = "https://channels.weixin.qq.com/platform/post/create"
 WECHAT_MICRO_CREATE_POST_URL = "https://channels.weixin.qq.com/micro/content/post/create"
 DOUYIN_CREATE_POST_URL = "https://creator.douyin.com/creator-micro/content/upload"
@@ -8456,6 +8456,12 @@ def download_from_x(
     chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
     require_x_live_discovery: bool = False,
     require_text_keyword_match: bool = False,
+    x_download_socket_timeout: int = 45,
+    x_download_extractor_retries: int = 3,
+    x_download_retries: int = 3,
+    x_download_fragment_retries: int = 3,
+    x_download_retry_sleep: float = 2.0,
+    x_download_batch_retry_sleep: float = X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
 ) -> list[Path]:
     _log("[Downloader] Starting X download task")
     download_media_kind = "image" if include_images else "video"
@@ -8469,17 +8475,32 @@ def download_from_x(
     _ensure_binary("yt-dlp")
     before = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
     media_filter_args = [] if include_images else ["--match-filter", "duration > 10 & duration < 60"]
+    effective_socket_timeout = max(5, int(x_download_socket_timeout or 45))
+    effective_extractor_retries = max(0, int(x_download_extractor_retries or 0))
+    effective_download_retries = max(0, int(x_download_retries or 0))
+    effective_fragment_retries = max(0, int(x_download_fragment_retries or 0))
+    effective_retry_sleep = max(0.0, float(x_download_retry_sleep or 0.0))
+    effective_batch_retry_sleep = max(0.0, float(x_download_batch_retry_sleep or 0.0))
+    _log(
+        "[Downloader] X retry policy: "
+        f"socket_timeout={effective_socket_timeout}s, "
+        f"extractor_retries={effective_extractor_retries}, "
+        f"download_retries={effective_download_retries}, "
+        f"fragment_retries={effective_fragment_retries}, "
+        f"retry_sleep={effective_retry_sleep:g}s, "
+        f"batch_retry_sleep={effective_batch_retry_sleep:g}s"
+    )
     network_retry_args = [
         "--socket-timeout",
-        "45",
+        str(effective_socket_timeout),
         "--extractor-retries",
-        "3",
+        str(effective_extractor_retries),
         "--retries",
-        "3",
+        str(effective_download_retries),
         "--fragment-retries",
-        "3",
+        str(effective_fragment_retries),
         "--retry-sleep",
-        "2",
+        f"{effective_retry_sleep:g}",
     ]
     selected_urls: list[str] = []
     image_status_candidates: list[str] = []
@@ -8642,6 +8663,7 @@ def download_from_x(
             selected_urls=selected_urls,
             step_name="Downloader",
             env=command_env,
+            retry_sleep_seconds=effective_batch_retry_sleep,
         )
     finally:
         if isinstance(cookie_export_path, Path):
@@ -12360,6 +12382,16 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
       return r.width > 6 && r.height > 6;
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    function clean(txt) {
+      return norm(txt)
+        .replace(/添加到合集/g, '')
+        .replace(/选择合集/g, '')
+        .replace(/请选择合集/g, '')
+        .replace(/共\\d+个内容/g, '')
+        .replace(/共\\d+条内容/g, '')
+        .replace(/展开|收起|更多/g, '')
+        .trim();
+    }
     function isPlaceholderText(txt) {
       return txt === '选择合集' || txt === '请选择合集' || txt === '添加到合集';
     }
@@ -12389,15 +12421,22 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
 
     const textNodes = Array.from(trigger.querySelectorAll(
       '.post-album-display-wrap .name, .post-album-display .name, .post-album-display-wrap .value, ' +
-      '.weui-desktop-form__dropdown__value, .weui-desktop-form__dropdown__text, .selector-value, .value, .name, .display, .selected'
+      '.weui-desktop-form__dropdown__value, .weui-desktop-form__dropdown__text, .selector-value, .value, .name, .display, .selected, ' +
+      '.post-album-action-text, .post-album-action-text span, .finder-card .post-album-action-text, ' +
+      '.finder-card-flex .post-album-action-text, input[placeholder*=\"合集\"], input[value], [contenteditable=\"true\"]'
     ))
       .filter(el => isVisible(el))
       .filter(el => !el.closest(
         '.option-item, .option-list, .weui-desktop-dialog, .weui-desktop-popover, ' +
         '.weui-desktop-dropdown, .selector-panel, [role=\"listbox\"], [role=\"option\"]'
       ))
-      .map(el => norm(el.innerText || el.textContent))
-      .filter(txt => !!txt && txt.length <= 40);
+      .map(el => {
+        const raw = ('value' in el && typeof el.value === 'string' && el.value)
+          ? el.value
+          : (el.innerText || el.textContent || '');
+        return clean(raw);
+      })
+      .filter(txt => !!txt && txt.length <= 80);
     const direct = Array.from(new Set(textNodes)).find(txt => !isPlaceholderText(txt));
     if (direct) return {hasField: true, current: direct, source: 'direct'};
 
@@ -12405,13 +12444,7 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
     const triggerText = norm(cloned ? (cloned.innerText || cloned.textContent || '') : '');
     if (!triggerText || isPlaceholderText(triggerText)) return {hasField: true, current: '', source: 'empty'};
 
-    const cleaned = triggerText
-      .replace(/添加到合集/g, '')
-      .replace(/选择合集/g, '')
-      .replace(/请选择合集/g, '')
-      .replace(/展开|收起|更多/g, '')
-      .replace(/\\s+/g, ' ')
-      .trim();
+    const cleaned = clean(triggerText);
     if (!cleaned || isPlaceholderText(cleaned)) return {hasField: true, current: '', source: 'cleaned-empty'};
     return {hasField: true, current: cleaned, source: 'fallback'};
     """
@@ -12422,9 +12455,19 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
     return state if isinstance(state, dict) else {}
 
 
+def _normalize_wechat_collection_value(text: str) -> str:
+    value = re.sub(r"\s+", "", str(text or ""))
+    value = value.replace("添加到合集", "").replace("加入合集", "")
+    value = value.replace("请选择合集", "").replace("选择合集", "")
+    value = re.sub(r"共\d+个内容", "", value)
+    value = re.sub(r"共\d+条内容", "", value)
+    value = value.replace("展开", "").replace("收起", "").replace("更多", "")
+    return value.strip("-")
+
+
 def _is_collection_match(current: str, target: str) -> bool:
-    norm_current = re.sub(r"\s+", "", current or "")
-    norm_target = re.sub(r"\s+", "", target or "")
+    norm_current = _normalize_wechat_collection_value(current)
+    norm_target = _normalize_wechat_collection_value(target)
     if not norm_current or not norm_target:
         return False
     return norm_current == norm_target
@@ -12454,6 +12497,49 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
       return r.width > 6 && r.height > 6;
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    function clean(txt) {
+      return norm(txt)
+        .replace(/添加到合集/g, '')
+        .replace(/加入合集/g, '')
+        .replace(/选择合集/g, '')
+        .replace(/请选择合集/g, '')
+        .replace(/共\\d+个内容/g, '')
+        .replace(/共\\d+条内容/g, '')
+        .replace(/展开|收起|更多/g, '')
+        .trim();
+    }
+    function setInputValue(el, value) {
+      if (!el) return false;
+      try { el.focus(); } catch (e) {}
+      try {
+        if ('value' in el) {
+          const proto = Object.getPrototypeOf(el);
+          const desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+          if (desc && desc.set) desc.set.call(el, value);
+          else el.value = value;
+        } else if (el.isContentEditable) {
+          el.textContent = value;
+        }
+      } catch (e) {
+        try { el.value = value; } catch (inner) {}
+      }
+      ['input', 'change', 'keyup', 'blur'].forEach(type => {
+        try {
+          const event = type === 'keyup'
+            ? new KeyboardEvent(type, {bubbles: true, cancelable: true, key: 'Enter', code: 'Enter'})
+            : new Event(type, {bubbles: true, cancelable: true});
+          el.dispatchEvent(event);
+        } catch (e) {}
+      });
+      return true;
+    }
+    function isCollectionSearchField(el) {
+      if (!el) return false;
+      const placeholder = norm((el.getAttribute && (el.getAttribute('placeholder') || el.getAttribute('data-placeholder'))) || '');
+      const ariaLabel = norm((el.getAttribute && el.getAttribute('aria-label')) || '');
+      const cls = norm(el.className || '');
+      return /合集/.test(placeholder + ' ' + ariaLabel + ' ' + cls);
+    }
     const target = norm(arguments[0] || '');
     if (!target) return {state: 'skip'};
 
@@ -12475,28 +12561,42 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
     } catch (e) {}
     trigger.click();
 
-    // 部分页面下拉内容在 post-album-wrap 内但默认隐藏，直接点击 option-item 也可生效。
-    const inlineNameNodes = Array.from(item.querySelectorAll('.post-album-wrap .option-item .name'));
-    const inlineExact = inlineNameNodes.find(el => norm(el.innerText || el.textContent) === target);
+    const searchFields = Array.from(document.querySelectorAll(
+      'input, textarea, [contenteditable=\"true\"], [role=\"textbox\"]'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => isCollectionSearchField(el))
+      .filter(el => item.contains(el) || !!el.closest('.finder-common-dialog, .weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown'));
+    if (searchFields.length) {
+      setInputValue(searchFields[0], target);
+    }
+
+    // 部分页面下拉内容在 post-album-wrap 内但默认隐藏，直接点击 card / option 也可生效。
+    const inlineNameNodes = Array.from(item.querySelectorAll(
+      '.post-album-wrap .option-item .name, ' +
+      '.post-album-wrap .post-album-action-text, .post-album-wrap .post-album-action-text span, ' +
+      '.post-album-wrap .finder-card .post-album-action-text, .post-album-wrap .finder-card-flex .post-album-action-text'
+    ));
+    const inlineExact = inlineNameNodes.find(el => clean(el.innerText || el.textContent) === target);
     if (inlineExact) {
-      const inlineClick = inlineExact.closest('.option-item') || inlineExact;
+      const inlineClick = inlineExact.closest('.finder-card, .finder-card-flex, .option-item') || inlineExact;
       inlineClick.click();
-      return {state: 'clicked_inline_exact', option: norm(inlineExact.innerText || inlineExact.textContent)};
+      return {state: 'clicked_inline_exact', option: clean(inlineExact.innerText || inlineExact.textContent)};
     }
 
     const inlinePartial = inlineNameNodes.find(el => {
-      const txt = norm(el.innerText || el.textContent);
+      const txt = clean(el.innerText || el.textContent);
       return !!txt && (txt.includes(target) || target.includes(txt));
     });
     if (inlinePartial) {
-      const inlineClick = inlinePartial.closest('.option-item') || inlinePartial;
+      const inlineClick = inlinePartial.closest('.finder-card, .finder-card-flex, .option-item') || inlinePartial;
       inlineClick.click();
-      return {state: 'clicked_inline_partial', option: norm(inlinePartial.innerText || inlinePartial.textContent)};
+      return {state: 'clicked_inline_partial', option: clean(inlinePartial.innerText || inlinePartial.textContent)};
     }
 
     const pools = [];
     const popups = Array.from(document.querySelectorAll(
-      '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown, .selector-panel'
+      '.finder-common-dialog, .weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown, .selector-panel, [role=\"listbox\"]'
     )).filter(isVisible);
     if (popups.length) pools.push(...popups);
     pools.push(document);
@@ -12510,12 +12610,18 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
 
     let best = null;
     let bestScore = 0;
+    const visibleOptions = [];
     for (const root of pools) {
-      const nodes = Array.from(root.querySelectorAll('.option-item, .name, li, button, div, span, a'))
+      const nodes = Array.from(root.querySelectorAll(
+        '.finder-card .post-album-action-text, .finder-card-flex .post-album-action-text, .post-album-action-text, ' +
+        '.option-item .name, .option-item, [role=\"option\"], li, button, div, span, a'
+      ))
         .filter(isVisible);
       for (const node of nodes) {
-        const txt = norm(node.innerText || node.textContent);
-        if (!txt || txt.length > 40) continue;
+        const txt = clean(node.innerText || node.textContent);
+        if (!txt || txt.length > 80) continue;
+        if (/^(添加到合集|加入合集|请选择合集|选择合集)$/.test(txt)) continue;
+        if (!visibleOptions.includes(txt)) visibleOptions.push(txt);
         const s = score(txt);
         if (s > bestScore) {
           bestScore = s;
@@ -12524,14 +12630,19 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
       }
       if (bestScore >= 3) break;
     }
-    if (!best || bestScore <= 0) return {state: 'option_not_found'};
+    if (!best || bestScore <= 0) return {state: 'option_not_found', visible_options: visibleOptions.slice(0, 8)};
 
     const clickNode =
-      best.closest('.option-item, li, button, a, .name') ||
+      best.closest('.finder-card, .finder-card-flex, .option-item, [role=\"option\"], li, button, a, .post-album-action-text, .name') ||
       best.parentElement ||
       best;
     clickNode.click();
-    return {state: 'clicked', option: norm(clickNode.innerText || clickNode.textContent), score: bestScore};
+    return {
+      state: 'clicked',
+      option: clean(clickNode.innerText || clickNode.textContent),
+      score: bestScore,
+      visible_options: visibleOptions.slice(0, 8)
+    };
     """
 
     js_collapse_picker = """
@@ -12583,11 +12694,13 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
                 return
         action_state = str((action or {}).get("state", "")) if isinstance(action, dict) else ""
         action_option = str((action or {}).get("option", "")) if isinstance(action, dict) else ""
+        action_visible = list((action or {}).get("visible_options") or []) if isinstance(action, dict) else []
         after_source = str(after.get("source", "") or "")
         _log(
             f"[Uploader] Collection select retry {attempt}/6: "
             f"action={action_state or 'none'}, option={action_option or '-'}, "
-            f"current={current or '-'}, source={after_source or '-'}"
+            f"current={current or '-'}, source={after_source or '-'}, "
+            f"visible={';'.join(action_visible[:4]) or '-'}"
         )
         if isinstance(action, dict) and action.get("state") in {"missing_field", "missing_trigger"}:
             break
@@ -12595,9 +12708,11 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
     final_state = _get_collection_state(ctx)
     final_current = str(final_state.get("current", "") or "")
     final_source = str(final_state.get("source", "") or "")
+    final_visible = list((action or {}).get("visible_options") or []) if isinstance(action, dict) else []
     raise RuntimeError(
         f"未能确认合集选择成功: {target}; "
-        f"当前字段值={final_current or '-'}; 读取来源={final_source or '-'}"
+        f"当前字段值={final_current or '-'}; 读取来源={final_source or '-'}; "
+        f"可见选项={','.join(final_visible[:4]) or '-'}"
     )
 
 

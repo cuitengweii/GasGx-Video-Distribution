@@ -2380,6 +2380,22 @@ def _run_collect_once(
         getattr(args, "require_text_keyword_match", False)
     ) or bool(HOURLY_COLLECT_REQUIRE_TEXT_KEYWORD_MATCH)
     xiaohongshu_allow_image = bool(getattr(args, "xiaohongshu_allow_image", True)) or collect_media_kind == "image"
+    x_download_socket_timeout = max(5, int(getattr(args, "x_download_socket_timeout", 45) or 45))
+    x_download_extractor_retries = max(0, int(getattr(args, "x_download_extractor_retries", 3) or 0))
+    x_download_retries = max(0, int(getattr(args, "x_download_retries", 3) or 0))
+    x_download_fragment_retries = max(0, int(getattr(args, "x_download_fragment_retries", 3) or 0))
+    x_download_retry_sleep = max(0.0, float(getattr(args, "x_download_retry_sleep", 2.0) or 0.0))
+    x_download_batch_retry_sleep = max(
+        0.0,
+        float(
+            getattr(
+                args,
+                "x_download_batch_retry_sleep",
+                core.X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
+            )
+            or 0.0
+        ),
+    )
     runtime_config = core._load_runtime_config(args.config or core.DEFAULT_CONFIG_PATH)
     spark_ai_config = runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {}
     exclude_keywords = core._normalize_keyword_list(runtime_config.get("exclude_keywords"), core.DEFAULT_EXCLUDE_KEYWORDS)
@@ -2416,6 +2432,8 @@ def _run_collect_once(
         f"require_text_keyword_match={require_text_keyword_match}, "
         f"collect_media_kind={collect_media_kind}, "
         f"xiaohongshu_allow_image={xiaohongshu_allow_image}, "
+        f"x_download_socket_timeout={x_download_socket_timeout}, "
+        f"x_download_retries={x_download_retries}, "
         f"network_mode={network_mode}"
     )
 
@@ -2459,6 +2477,12 @@ def _run_collect_once(
             chrome_user_data_dir=chrome_user_data_dir,
             require_x_live_discovery=bool(getattr(args, "require_x_live_discovery", False)),
             require_text_keyword_match=require_text_keyword_match,
+            x_download_socket_timeout=x_download_socket_timeout,
+            x_download_extractor_retries=x_download_extractor_retries,
+            x_download_retries=x_download_retries,
+            x_download_fragment_retries=x_download_fragment_retries,
+            x_download_retry_sleep=x_download_retry_sleep,
+            x_download_batch_retry_sleep=x_download_batch_retry_sleep,
         )
     else:
         # First collect video sources to satisfy the planned per-slot video quota.
@@ -2481,6 +2505,12 @@ def _run_collect_once(
             chrome_user_data_dir=chrome_user_data_dir,
             require_x_live_discovery=bool(getattr(args, "require_x_live_discovery", False)),
             require_text_keyword_match=require_text_keyword_match,
+            x_download_socket_timeout=x_download_socket_timeout,
+            x_download_extractor_retries=x_download_extractor_retries,
+            x_download_retries=x_download_retries,
+            x_download_fragment_retries=x_download_fragment_retries,
+            x_download_retry_sleep=x_download_retry_sleep,
+            x_download_batch_retry_sleep=x_download_batch_retry_sleep,
         )
 
         # Then top up media pool for Xiaohongshu image posts in this slot.
@@ -2516,6 +2546,12 @@ def _run_collect_once(
                     chrome_user_data_dir=chrome_user_data_dir,
                     require_x_live_discovery=bool(getattr(args, "require_x_live_discovery", False)),
                     require_text_keyword_match=require_text_keyword_match,
+                    x_download_socket_timeout=x_download_socket_timeout,
+                    x_download_extractor_retries=x_download_extractor_retries,
+                    x_download_retries=x_download_retries,
+                    x_download_fragment_retries=x_download_fragment_retries,
+                    x_download_retry_sleep=x_download_retry_sleep,
+                    x_download_batch_retry_sleep=x_download_batch_retry_sleep,
                 )
             except Exception as exc:
                 core._log(
@@ -3646,6 +3682,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--x-discovery-url-limit", type=int, default=core.X_DISCOVERY_URL_LIMIT)
     parser.add_argument("--x-discovery-scroll-rounds", type=int, default=core.X_DISCOVERY_SCROLL_ROUNDS)
     parser.add_argument("--x-discovery-scroll-wait", type=float, default=core.X_DISCOVERY_SCROLL_WAIT_SECONDS)
+    parser.add_argument("--x-download-socket-timeout", type=int, default=45, help=argparse.SUPPRESS)
+    parser.add_argument("--x-download-extractor-retries", type=int, default=3, help=argparse.SUPPRESS)
+    parser.add_argument("--x-download-retries", type=int, default=3, help=argparse.SUPPRESS)
+    parser.add_argument("--x-download-fragment-retries", type=int, default=3, help=argparse.SUPPRESS)
+    parser.add_argument("--x-download-retry-sleep", type=float, default=2.0, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--x-download-batch-retry-sleep",
+        type=float,
+        default=core.X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--proxy", default="", help="HTTP proxy, e.g. http://127.0.0.1:PORT")
     parser.add_argument(
         "--use-system-proxy",

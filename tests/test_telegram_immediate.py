@@ -754,6 +754,16 @@ def test_run_collect_publish_latest_job_fails_when_message_id_missing(tmp_path: 
     assert feedbacks[-1]["status"] == "failed"
 
 
+def test_build_immediate_fast_x_download_args() -> None:
+    extra_args = worker_impl._build_immediate_fast_x_download_args()
+
+    assert extra_args[extra_args.index("--x-download-socket-timeout") + 1] == "12"
+    assert extra_args[extra_args.index("--x-download-extractor-retries") + 1] == "1"
+    assert extra_args[extra_args.index("--x-download-retries") + 1] == "1"
+    assert extra_args[extra_args.index("--x-download-fragment-retries") + 1] == "1"
+    assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "0"
+
+
 def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatch, tmp_path: Path) -> None:
     attempts: list[dict[str, object]] = []
 
@@ -1186,6 +1196,59 @@ def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_p
     assert "即采即发发布失败" in str(feedbacks[1]["title"])
 
 
+def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_fails(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedbacks: list[dict[str, object]] = []
+    qr_requests: list[dict[str, object]] = []
+    original_error = "未能确认合集选择成功: 赛博皮卡精选; 当前字段值=-; 读取来源=empty"
+
+    fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
+        SimpleNamespace(success=False, error=original_error)
+    )
+
+    monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
+    monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs))
+        or {"ok": False, "needs_login": True, "sent": False, "error": "Connection aborted"},
+    )
+
+    item = _video_item(target_platforms="wechat")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = worker_impl._publish_immediate_candidate_platform(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+        platform="wechat",
+    )
+
+    assert exit_code == 2
+    assert len(qr_requests) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["platform_results"]["wechat"]["status"] == "failed"
+    assert updated["platform_results"]["wechat"]["error"] == original_error
+    assert len(feedbacks) == 2
+    assert "视频号发布失败" in str(feedbacks[0]["title"])
+    assert "即采即发发布失败" in str(feedbacks[1]["title"])
+
+
 def test_publish_platform_job_success_sends_platform_feedback_and_summary(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     video_path = workspace / "2_Processed" / "clip.mp4"
@@ -1279,6 +1342,131 @@ def test_run_immediate_collect_item_job_test_mode_keeps_real_collect_and_adopts_
     assert len(feedback_cards) == 1
     assert "\u56fe\u7247\u91c7\u96c6\u5df2\u5b8c\u6210" in str(feedback_cards[0]["title"])
     assert "\u6d4b\u8bd5\u6a21\u5f0f" in str(feedback_cards[0]["subtitle"])
+
+
+def test_run_immediate_collect_item_job_retries_transient_x_metadata_failure(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    collect_calls: list[dict[str, object]] = []
+    feedbacks: list[dict[str, object]] = []
+    approvals: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(worker_impl, "time", SimpleNamespace(sleep=lambda seconds: None, monotonic=worker_impl.time.monotonic, time=worker_impl.time.time))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
+
+    def run_unified_once(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        if len(collect_calls) == 1:
+            return {"stderr": "ERROR: unable to download JSON metadata: UNEXPECTED_EOF_WHILE_READING"}
+        processed = workspace / "2_Processed" / "retry-ok.mp4"
+        processed.write_text("video", encoding="utf-8")
+        return {"status": "success"}
+
+    def queue_immediate_platform_jobs(**kwargs: object) -> dict[str, object]:
+        item_id = str(kwargs["item_id"])
+        updated = worker_impl._update_prefilter_item(
+            workspace,
+            item_id,
+            updates={
+                "status": "publish_running",
+                "platform_results": {"wechat": {"status": "queued"}},
+                "action": "publish",
+            },
+        )
+        return {"spawned": 1, "failed": 0, "skipped_duplicate": 0, "item": updated}
+
+    monkeypatch.setattr(worker_impl, "_run_unified_once", run_unified_once)
+    monkeypatch.setattr(worker_impl, "_queue_immediate_platform_jobs", queue_immediate_platform_jobs)
+
+    item = _video_item(video_name="", processed_name="", status="publish_requested")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 0
+    assert len(collect_calls) == 2
+    assert len(approvals) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_running"
+    assert updated["processed_name"] == "retry-ok.mp4"
+    assert feedbacks[-1]["status"] == "running"
+
+
+def test_run_immediate_collect_item_job_passes_fast_x_download_args(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    collect_calls: list[dict[str, object]] = []
+    approvals: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_queue_immediate_platform_jobs",
+        lambda **kwargs: {
+            "spawned": 1,
+            "failed": 0,
+            "skipped_duplicate": 0,
+            "item": worker_impl._update_prefilter_item(
+                workspace,
+                str(kwargs["item_id"]),
+                updates={
+                    "status": "publish_running",
+                    "platform_results": {"wechat": {"status": "queued"}},
+                    "action": "publish",
+                },
+            ),
+        },
+    )
+
+    def run_unified_once(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        processed = workspace / "2_Processed" / "fast-video.mp4"
+        processed.parent.mkdir(parents=True, exist_ok=True)
+        processed.write_text("video", encoding="utf-8")
+        return {"status": "success"}
+
+    monkeypatch.setattr(worker_impl, "_run_unified_once", run_unified_once)
+
+    item = _video_item(video_name="", processed_name="", status="publish_requested", source_url="https://x.test/post/fast-video")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 0
+    assert len(approvals) == 1
+    extra_args = list(collect_calls[0]["extra_args"])
+    assert extra_args[extra_args.index("--x-download-socket-timeout") + 1] == "12"
+    assert extra_args[extra_args.index("--x-download-extractor-retries") + 1] == "1"
+    assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "0"
 
 
 def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monkeypatch) -> None:
