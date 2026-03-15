@@ -2572,6 +2572,7 @@ def _handle_home_callback(
     audit_file: Path,
     update_id: int,
     default_profile: str,
+    immediate_test_mode: bool = False,
 ) -> Dict[str, Any]:
     action = str(parsed.get("action") or "").strip().lower()
     value = str(parsed.get("value") or "").strip()
@@ -2824,6 +2825,7 @@ def _handle_home_callback(
                 action=action,
                 value=value,
                 task_key=task_key,
+                immediate_test_mode=immediate_test_mode,
             )
             detail = "后台任务已启动。"
             if action == "collect_publish_latest":
@@ -3171,12 +3173,61 @@ def _safe_save_state(path: Path, state: Dict[str, Any], log_file: Path) -> None:
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{int(time.time() * 1000)}")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            with contextlib.suppress(Exception):
+                tmp.unlink()
 
 
 def _file_lock_dir(path: Path) -> Path:
     return path.with_name(f"{path.name}.lock")
+
+
+def _file_lock_owner_path(lock_dir: Path) -> Path:
+    return lock_dir / "owner.json"
+
+
+def _build_file_lock_owner_payload(path: Path) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "path": str(path),
+        "created_at": _now_text(),
+        "acquired_epoch": time.time(),
+    }
+    try:
+        payload["ppid"] = os.getppid()
+    except Exception:
+        payload["ppid"] = 0
+    return payload
+
+
+def _load_file_lock_owner_payload(lock_dir: Path) -> dict[str, Any]:
+    owner_path = _file_lock_owner_path(lock_dir)
+    if not owner_path.exists():
+        return {}
+    try:
+        payload = json.loads(owner_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _is_known_dead_lock_owner(lock_dir: Path) -> bool:
+    payload = _load_file_lock_owner_payload(lock_dir)
+    pid = int(payload.get("pid") or 0)
+    if pid <= 0:
+        return False
+    host = str(payload.get("host") or "").strip()
+    if host and host.lower() != socket.gethostname().lower():
+        return False
+    return not _pid_is_running(pid)
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -3324,16 +3375,19 @@ def _acquire_file_lock(path: Path, timeout_seconds: float = DEFAULT_PREFILTER_QU
     while True:
         try:
             lock_dir.mkdir(parents=False, exist_ok=False)
-            (lock_dir / "owner.txt").write_text(
-                f"pid={os.getpid()}\nts={time.time():.6f}\npath={path}",
-                encoding="utf-8",
-            )
+            _atomic_write_json(_file_lock_owner_path(lock_dir), _build_file_lock_owner_payload(path))
             return lock_dir
         except FileExistsError:
             try:
                 age_seconds = max(0.0, time.time() - lock_dir.stat().st_mtime)
             except Exception:
                 age_seconds = 0.0
+            if _is_known_dead_lock_owner(lock_dir):
+                try:
+                    shutil.rmtree(lock_dir, ignore_errors=True)
+                    continue
+                except Exception:
+                    pass
             if age_seconds > stale_after_seconds:
                 try:
                     shutil.rmtree(lock_dir, ignore_errors=True)
@@ -4187,6 +4241,7 @@ def _upsert_immediate_candidate_item(
     chat_id: str,
     item_index: int,
     total_count: int,
+    allow_reuse: bool = True,
 ) -> Dict[str, Any]:
     item_id = _build_immediate_candidate_item_id(
         str(candidate.get("url") or "").strip(),
@@ -4223,7 +4278,14 @@ def _upsert_immediate_candidate_item(
         row["candidate_index"] = int(item_index or 0)
         row["candidate_limit"] = int(total_count or 0)
         row["chat_id"] = str(chat_id or row.get("chat_id") or "").strip()
-        if existing_status == "publish_done":
+        if not allow_reuse and existing_status in IMMEDIATE_CANDIDATE_REUSE_STATUSES:
+            row["status"] = "link_pending"
+            row["action"] = "resent_in_test_mode"
+            row["message_id"] = 0
+            row["platform_results"] = {}
+            row["publish_success_count"] = 0
+            row["publish_failed_count"] = 0
+        elif existing_status == "publish_done":
             row["status"] = "link_pending"
             row["action"] = "resent_after_terminal_state"
             row["message_id"] = 0
@@ -4234,6 +4296,8 @@ def _upsert_immediate_candidate_item(
         return {
             "item": dict(row),
             "already_sent": bool(
+                allow_reuse
+                and
                 existing_message_id > 0
                 and existing_status in (IMMEDIATE_CANDIDATE_REUSE_STATUSES - {"link_pending"})
             ),
@@ -4833,16 +4897,17 @@ def _build_platform_launch_result_section(platform_results: Dict[str, Dict[str, 
         if not isinstance(result, dict):
             result = {}
         status = str(result.get("status") or "").strip().lower()
+        simulated = bool(result.get("simulated"))
         label = _platform_display_with_logo(platform)
         if status == "queued":
             pid = int(result.get("pid") or 0)
-            value = "后台任务已排队"
+            value = "测试模式：平台任务已模拟排队" if simulated else "后台任务已排队"
             if pid > 0:
                 value = f"{value} (PID {pid})"
         elif status == "running":
-            value = "平台发布中"
+            value = "测试模式：平台发布模拟中" if simulated else "平台发布中"
         elif status == "success":
-            value = "平台已确认发布成功"
+            value = "测试模式：平台已模拟发布成功" if simulated else "平台已确认发布成功"
         elif status == "skipped_duplicate":
             reason = str(result.get("error") or "").strip()
             value = "平台已有发布记录，已自动跳过"
@@ -4884,6 +4949,267 @@ def _build_platform_launch_result_section(platform_results: Dict[str, Dict[str, 
         "emoji": "🧾",
         "items": items,
     }
+
+
+def _platform_result_is_terminal(status: str) -> bool:
+    return str(status or "").strip().lower() in {"success", "failed", "login_required", "skipped_duplicate"}
+
+
+def _claim_immediate_platform_feedback(
+    *,
+    workspace: Path,
+    item_id: str,
+    platform: str,
+) -> Dict[str, Any]:
+    platform_token = str(platform or "").strip().lower()
+
+    def _mutate(queue: Dict[str, Any]) -> Dict[str, Any]:
+        items = queue.get("items", {})
+        if not isinstance(items, dict):
+            items = {}
+            queue["items"] = items
+        row = items.get(item_id, {})
+        if not isinstance(row, dict):
+            return {"send_platform": False, "send_summary": False, "item": {}, "platform_result": {}}
+        results = _normalize_platform_results(row.get("platform_results"))
+        result = results.get(platform_token, {})
+        if not isinstance(result, dict):
+            result = {}
+        status = str(result.get("status") or "").strip().lower()
+        send_platform = _platform_result_is_terminal(status) and not str(result.get("feedback_sent_at") or "").strip()
+        if send_platform:
+            result = dict(result)
+            result["feedback_sent_at"] = _now_text()
+            results[platform_token] = result
+            row["platform_results"] = results
+            row.update(_summarize_platform_results(row))
+        send_summary = False
+        if (
+            row.get("platform_results")
+            and not any(
+                str(payload.get("status") or "").strip().lower() in {"queued", "running"}
+                for payload in _normalize_platform_results(row.get("platform_results")).values()
+                if isinstance(payload, dict)
+            )
+            and not str(row.get("publish_summary_sent_at") or "").strip()
+        ):
+            row["publish_summary_sent_at"] = _now_text()
+            send_summary = True
+        row["updated_at"] = _now_text()
+        items[item_id] = row
+        return {
+            "send_platform": send_platform,
+            "send_summary": send_summary,
+            "item": dict(row),
+            "platform_result": dict(result) if isinstance(result, dict) else {},
+        }
+
+    payload = _with_prefilter_queue_lock(workspace, _mutate)
+    return payload if isinstance(payload, dict) else {"send_platform": False, "send_summary": False, "item": {}, "platform_result": {}}
+
+
+def _build_immediate_platform_feedback_payload(
+    *,
+    item: Dict[str, Any],
+    platform: str,
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    platform_token = str(platform or "").strip().lower()
+    label = _platform_display_with_logo(platform_token)
+    status = str(result.get("status") or "").strip().lower()
+    publish_id = str(result.get("publish_id") or "").strip()
+    details = {
+        "reason": str(result.get("failure_reason") or "").strip(),
+        "category": str(result.get("failure_category") or "").strip(),
+        "suggestion": str(result.get("failure_suggestion") or "").strip(),
+        "raw_signal": str(result.get("error") or "").strip(),
+    }
+    if not any((details["reason"], details["category"], details["suggestion"])):
+        details = _describe_platform_failure(platform_token, str(result.get("error") or "").strip())
+
+    title = f"{label}发布状态更新"
+    subtitle = "平台已返回最新处理结果"
+    feedback_status = "success"
+    status_items: list[Any]
+    if status == "success":
+        title = f"{label}发布已确认"
+        subtitle = "平台已确认发布成功"
+        status_items = ["平台已确认发布成功。"]
+        if publish_id:
+            status_items.append({"label": "发布ID", "value": publish_id})
+    elif status == "skipped_duplicate":
+        title = f"{label}已跳过重复发布"
+        subtitle = "检测到历史发布记录，本轮未重复提交"
+        status_items = ["平台已有历史发布记录，本轮已自动跳过。"]
+        reason = str(result.get("error") or "").strip()
+        if reason:
+            status_items.append({"label": "原因", "value": reason})
+    elif status == "login_required":
+        title = f"{label}需要重新登录"
+        subtitle = "平台登录态失效，请先完成登录"
+        feedback_status = "failed"
+        status_items = ["检测到平台当前需要重新登录。"]
+        reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
+        if reason:
+            status_items.append({"label": "原因", "value": reason})
+        suggestion = str(details.get("suggestion") or "").strip() or "请先完成登录后再重新触发发布。"
+        status_items.append({"label": "建议", "value": suggestion})
+    else:
+        title = f"{label}发布失败"
+        subtitle = "平台处理失败，请查看原因后重试"
+        feedback_status = "failed"
+        status_items = ["平台处理失败，本次未确认发布成功。"]
+        reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
+        if reason:
+            status_items.append({"label": "原因", "value": reason})
+        suggestion = str(details.get("suggestion") or "").strip() or "查看该平台日志后重新触发发布。"
+        status_items.append({"label": "建议", "value": suggestion})
+
+    return {
+        "title": title,
+        "subtitle": subtitle,
+        "status": feedback_status,
+        "sections": [
+            _build_immediate_candidate_info_section(item),
+            {
+                "title": "执行状态",
+                "emoji": "📌",
+                "items": status_items,
+            },
+            _build_platform_launch_result_section({platform_token: result}),
+        ],
+    }
+
+
+def _build_immediate_publish_summary_feedback_payload(item: Dict[str, Any]) -> Dict[str, Any]:
+    platform_results = _normalize_platform_results(item.get("platform_results"))
+    item_status = str(item.get("status") or "").strip().lower()
+    success_count = int(item.get("publish_success_count") or 0)
+    failed_count = int(item.get("publish_failed_count") or 0)
+    total_count = len(platform_results)
+    status_items: list[Any] = [
+        {"label": "成功平台", "value": str(success_count)},
+        {"label": "失败平台", "value": str(failed_count)},
+        {"label": "目标平台", "value": str(total_count)},
+    ]
+    if item_status == "publish_done":
+        title = "即采即发已全部完成"
+        subtitle = "所有目标平台都已进入终态"
+        feedback_status = "success"
+        status_items.insert(0, "全部目标平台已完成发布或按去重策略跳过。")
+    elif item_status == "publish_partial":
+        title = "即采即发部分平台已完成"
+        subtitle = "部分平台成功，部分平台需要继续处理"
+        feedback_status = "failed"
+        status_items.insert(0, "本轮存在部分平台成功、部分平台失败或需要登录。")
+    else:
+        title = "即采即发发布失败"
+        subtitle = "所有目标平台都未成功完成"
+        feedback_status = "failed"
+        status_items.insert(0, "本轮所有目标平台均未确认发布成功。")
+    return {
+        "title": title,
+        "subtitle": subtitle,
+        "status": feedback_status,
+        "sections": [
+            _build_immediate_candidate_info_section(item),
+            {
+                "title": "执行汇总",
+                "emoji": "📦",
+                "items": status_items,
+            },
+            _build_platform_launch_result_section(platform_results),
+        ],
+    }
+
+
+def _send_immediate_platform_feedback(
+    *,
+    runner: Any,
+    email_settings: Any,
+    workspace: Path,
+    item_id: str,
+    platform: str,
+) -> None:
+    claimed = _claim_immediate_platform_feedback(workspace=workspace, item_id=item_id, platform=platform)
+    item = claimed.get("item") if isinstance(claimed.get("item"), dict) else {}
+    result = claimed.get("platform_result") if isinstance(claimed.get("platform_result"), dict) else {}
+    if bool(claimed.get("send_platform")) and item and result:
+        payload = _build_immediate_platform_feedback_payload(item=item, platform=platform, result=result)
+        _send_background_feedback(
+            runner=runner,
+            email_settings=email_settings,
+            workspace=workspace,
+            title=str(payload.get("title") or "").strip(),
+            subtitle=str(payload.get("subtitle") or "").strip(),
+            sections=list(payload.get("sections") or []),
+            status=str(payload.get("status") or "success").strip(),
+            platforms=[platform],
+            menu_label=_menu_breadcrumb_for_item(item),
+            task_identifier=_build_task_identifier(
+                action="collect_publish_latest",
+                value=str(item.get("target_platforms") or ""),
+                item_id=item_id,
+            ),
+        )
+    if bool(claimed.get("send_summary")) and item:
+        payload = _build_immediate_publish_summary_feedback_payload(item)
+        _send_background_feedback(
+            runner=runner,
+            email_settings=email_settings,
+            workspace=workspace,
+            title=str(payload.get("title") or "").strip(),
+            subtitle=str(payload.get("subtitle") or "").strip(),
+            sections=list(payload.get("sections") or []),
+            status=str(payload.get("status") or "success").strip(),
+            platforms=_resolve_item_target_platforms(item),
+            menu_label=_menu_breadcrumb_for_item(item),
+            task_identifier=_build_task_identifier(
+                action="collect_publish_latest",
+                value=str(item.get("target_platforms") or ""),
+                item_id=item_id,
+            ),
+        )
+
+
+def _probe_platform_login_after_publish_failure(
+    *,
+    workspace: Path,
+    item_id: str,
+    platform: str,
+    telegram_bot_identifier: str,
+    telegram_bot_token: str,
+    telegram_chat_id: str,
+    timeout_seconds: int,
+    log_file: Path,
+    error_text: str,
+) -> tuple[str, str]:
+    platform_token = str(platform or "").strip().lower()
+    if platform_token != "wechat":
+        return "failed", str(error_text or "").strip()
+    result = _request_platform_login_qr(
+        platform_name=platform_token,
+        bot_token=telegram_bot_token,
+        chat_id=telegram_chat_id,
+        timeout_seconds=max(10, int(timeout_seconds or 20)),
+        log_file=log_file,
+        telegram_bot_identifier=telegram_bot_identifier,
+        refresh_page=True,
+    )
+    if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
+        return "failed", str(error_text or "").strip()
+    notice = ""
+    if bool(result.get("sent")):
+        notice = "视频号登录二维码已发送到 Telegram"
+    elif bool(result.get("skipped")):
+        notice = "视频号登录二维码近期已发送，可直接查看最近一条二维码消息"
+    elif str(result.get("error") or "").strip():
+        notice = f"视频号登录二维码发送失败：{str(result.get('error') or '').strip()}"
+    merged_error = str(error_text or "").strip()
+    if notice and notice not in merged_error:
+        merged_error = f"{merged_error}；{notice}" if merged_error else notice
+    _append_log(log_file, f"[Worker] immediate publish login recheck platform={platform_token} status=login_required notice={notice or '-'} item={item_id}")
+    return "login_required", merged_error
 
 
 def _append_prefilter_feedback_event(
@@ -5520,6 +5846,7 @@ def _spawn_home_action_job(
     action: str,
     value: str,
     task_key: str,
+    immediate_test_mode: bool = False,
 ) -> Dict[str, Any]:
     log_dir = (workspace / DEFAULT_LOG_SUBDIR).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -5552,6 +5879,8 @@ def _spawn_home_action_job(
         "--home-action-task-key",
         str(task_key or "").strip(),
     ]
+    if immediate_test_mode:
+        cmd.append("--immediate-test-mode")
     if explicit_bot_token:
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
@@ -5664,6 +5993,7 @@ def _spawn_collect_publish_latest_job(
     telegram_chat_id: str,
     candidate_limit: int,
     media_kind: str = "video",
+    immediate_test_mode: bool = False,
 ) -> Dict[str, Any]:
     log_dir = (workspace / DEFAULT_LOG_SUBDIR).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -5698,6 +6028,8 @@ def _spawn_collect_publish_latest_job(
         "--collect-publish-media-kind",
         normalized_media_kind,
     ]
+    if immediate_test_mode:
+        cmd.append("--immediate-test-mode")
     if explicit_bot_token:
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
@@ -5741,6 +6073,7 @@ def _spawn_immediate_publish_item_job(
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
+    immediate_test_mode: bool = False,
 ) -> Dict[str, Any]:
     log_dir = (workspace / DEFAULT_LOG_SUBDIR).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -5767,6 +6100,8 @@ def _spawn_immediate_publish_item_job(
         "--publish-item-id",
         str(item_id or "").strip(),
     ]
+    if immediate_test_mode:
+        cmd.append("--immediate-test-mode")
     if explicit_bot_token:
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
@@ -5809,6 +6144,7 @@ def _spawn_immediate_collect_item_job(
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
+    immediate_test_mode: bool = False,
 ) -> Dict[str, Any]:
     log_dir = (workspace / DEFAULT_LOG_SUBDIR).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -5835,6 +6171,8 @@ def _spawn_immediate_collect_item_job(
         "--publish-item-id",
         str(item_id or "").strip(),
     ]
+    if immediate_test_mode:
+        cmd.append("--immediate-test-mode")
     if explicit_bot_token:
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
@@ -6761,6 +7099,51 @@ def _build_immediate_publish_args(
     return args
 
 
+def _list_downloaded_media(workspace: Path, media_kind: str = "video") -> Dict[str, Path]:
+    normalized_kind = _normalize_immediate_collect_media_kind(media_kind)
+    download_dir = (
+        (workspace / "1_Downloads_Images").resolve()
+        if normalized_kind == "image"
+        else (workspace / "1_Downloads").resolve()
+    )
+    if not download_dir.exists():
+        return {}
+    items: Dict[str, Path] = {}
+    for path in download_dir.iterdir():
+        if not path.is_file():
+            continue
+        suffix = path.suffix.lower()
+        if normalized_kind == "image":
+            if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+                continue
+        elif suffix != ".mp4":
+            continue
+        items[path.name] = path
+    return items
+
+
+def _adopt_downloaded_target_for_test_mode(
+    *,
+    workspace: Path,
+    media_kind: str,
+    downloaded_target: Path,
+) -> Optional[Path]:
+    normalized_kind = _normalize_immediate_collect_media_kind(media_kind)
+    target_dir = (
+        (workspace / "2_Processed_Images").resolve()
+        if normalized_kind == "image"
+        else (workspace / "2_Processed").resolve()
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = (target_dir / downloaded_target.name).resolve()
+    try:
+        if target != downloaded_target.resolve():
+            shutil.copy2(downloaded_target, target)
+        return target
+    except Exception:
+        return None
+
+
 def _build_immediate_cycle_context(
     *,
     core: Any,
@@ -6846,6 +7229,7 @@ def _queue_immediate_platform_jobs(
     telegram_chat_id: str,
     item_id: str,
     item: Dict[str, Any],
+    immediate_test_mode: bool = False,
 ) -> Dict[str, Any]:
     platform_results: Dict[str, Dict[str, Any]] = _normalize_platform_results(item.get("platform_results"))
     spawned = 0
@@ -6861,7 +7245,9 @@ def _queue_immediate_platform_jobs(
     for platform in _resolve_item_target_platforms(item):
         existing = platform_results.get(platform, {})
         existing_status = str(existing.get("status") or "").strip().lower()
-        if existing_status in {"queued", "running", "success", "skipped_duplicate"}:
+        if existing_status in {"queued", "running"}:
+            continue
+        if (not immediate_test_mode) and existing_status in {"success", "skipped_duplicate"}:
             continue
         if platform == "wechat":
             login_probe = _preflight_immediate_platform_login(
@@ -6885,7 +7271,7 @@ def _queue_immediate_platform_jobs(
                 }
                 failed += 1
                 continue
-        if target is not None and workspace_ctx is not None:
+        if target is not None and workspace_ctx is not None and (not immediate_test_mode):
             is_dup, dup_match, _target_fp = core._is_uploaded_content_duplicate(
                 workspace_ctx,
                 target,
@@ -7025,6 +7411,7 @@ def _finalize_immediate_collect_target(
     email_settings: Any,
     target: Path,
     reused_existing: bool,
+    immediate_test_mode: bool = False,
 ) -> int:
     actor = str(item.get("actor") or "").strip() or "@manual"
     workflow = str(item.get("workflow") or "").strip().lower()
@@ -7038,6 +7425,7 @@ def _finalize_immediate_collect_target(
             "action": "collect_reused" if reused_existing else "collect_done",
             "last_error": "",
             "reused_existing_material": bool(reused_existing),
+            "immediate_test_mode": bool(immediate_test_mode),
         },
     )
     if workflow == IMMEDIATE_COLLECT_REVIEW_WORKFLOW:
@@ -7061,12 +7449,14 @@ def _finalize_immediate_collect_target(
             if reused_existing
             else "当前候选已完成下载与落盘，可进入后续人工筛选使用。"
         )
+        if immediate_test_mode:
+            source_note = "测试模式已放宽采集筛选，本轮图片素材会优先保留，便于继续验证后续链路。"
         _send_background_feedback(
             runner=runner,
             email_settings=email_settings,
             workspace=workspace,
             title="图片采集已完成",
-            subtitle="本轮仅执行采集，不触发任何平台发布",
+            subtitle="测试模式已放宽采集筛选" if immediate_test_mode else "本轮仅执行采集，不触发任何平台发布",
             sections=[
                 _build_immediate_candidate_info_section(updated_item),
                 {
@@ -7103,12 +7493,14 @@ def _finalize_immediate_collect_target(
             if reused_existing
             else "当前候选已完成下载与落盘，但仍等待你手动确认是否发布。"
         )
+        if immediate_test_mode:
+            source_note = "测试模式已放宽采集筛选并保留本条候选，但仍等待你手动确认是否发布。"
         _send_background_feedback(
             runner=runner,
             email_settings=email_settings,
             workspace=workspace,
             title="即采即发候选已就绪",
-            subtitle="素材已准备完成，未获得人工确认前不会进入平台发布",
+            subtitle="测试模式下将放宽后续过滤，但仍需人工确认" if immediate_test_mode else "素材已准备完成，未获得人工确认前不会进入平台发布",
             sections=[
                 _build_immediate_candidate_info_section(pending_item),
                 {
@@ -7147,6 +7539,7 @@ def _finalize_immediate_collect_target(
         telegram_chat_id=telegram_chat_id,
         item_id=item_id,
         item=updated_item,
+        immediate_test_mode=immediate_test_mode,
     )
     final_item = queue_result.get("item") if isinstance(queue_result.get("item"), dict) else updated_item
     spawned = int(queue_result.get("spawned") or 0)
@@ -7158,6 +7551,8 @@ def _finalize_immediate_collect_target(
         if reused_existing
         else "当前候选已完成下载与落盘，后台开始按统一平台规则排队。"
     )
+    if immediate_test_mode:
+        source_note = "测试模式已放宽采集和去重过滤，当前候选仍会进入真实下载与平台发布链路。"
     if spawned <= 0 and skipped_duplicate > 0 and failed <= 0:
         _send_background_feedback(
             runner=runner,
@@ -7260,7 +7655,7 @@ def _finalize_immediate_collect_target(
         email_settings=email_settings,
         workspace=workspace,
         title="即采即发任务已排队",
-        subtitle="后台已接管处理，最终结果以后续平台通知为准",
+        subtitle="测试模式已放宽过滤，最终结果以后续平台通知为准" if immediate_test_mode else "后台已接管处理，最终结果以后续平台通知为准",
         sections=[
             _build_immediate_candidate_info_section(final_item),
             {
@@ -7268,7 +7663,7 @@ def _finalize_immediate_collect_target(
                 "emoji": "🚀",
                 "items": [
                     source_note,
-                    "当前只确认后台任务已启动，不代表平台已经发布成功。",
+                    "测试模式下会放宽采集与重复内容过滤，但不代表平台已经发布成功。" if immediate_test_mode else "当前只确认后台任务已启动，不代表平台已经发布成功。",
                     "各平台任务互不阻塞，会按实际结果分别回传通知。",
                 ],
             },
@@ -7298,6 +7693,7 @@ def _run_immediate_collect_item_job(
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
+    immediate_test_mode: bool = False,
 ) -> int:
     item = _get_prefilter_item(workspace, item_id)
     if not item:
@@ -7338,6 +7734,7 @@ def _run_immediate_collect_item_job(
             email_settings=email_settings,
             target=reused_target,
             reused_existing=True,
+            immediate_test_mode=immediate_test_mode,
         )
     priority_request_path = _register_pipeline_priority_request(
         workspace=workspace,
@@ -7373,6 +7770,7 @@ def _run_immediate_collect_item_job(
         )
         target: Optional[Path] = None
         while target is None:
+            before_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
             before_videos = (
                 _list_processed_videos(workspace)
                 if media_kind == "video"
@@ -7400,6 +7798,18 @@ def _run_immediate_collect_item_job(
             if new_targets:
                 target = sorted(new_targets, key=lambda path: path.stat().st_mtime, reverse=True)[0]
                 break
+            if immediate_test_mode:
+                after_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
+                new_downloads = [path for name, path in after_downloads.items() if name not in before_downloads]
+                if new_downloads:
+                    adopted = _adopt_downloaded_target_for_test_mode(
+                        workspace=workspace,
+                        media_kind=media_kind,
+                        downloaded_target=sorted(new_downloads, key=lambda path: path.stat().st_mtime, reverse=True)[0],
+                    )
+                    if adopted is not None:
+                        target = adopted
+                        break
 
             reason = _extract_attempt_reason(collect_result) or "未生成可发布素材。"
             remaining_wait_seconds = lock_wait_deadline - time.monotonic()
@@ -7461,6 +7871,7 @@ def _run_immediate_collect_item_job(
             email_settings=email_settings,
             target=target,
             reused_existing=False,
+            immediate_test_mode=immediate_test_mode,
         )
     finally:
         _clear_pipeline_priority_request(priority_request_path)
@@ -7525,6 +7936,7 @@ def _publish_immediate_candidate_platform(
             telegram_chat_id=telegram_chat_id,
         )
         args.upload_platforms = platform
+        args.notify_per_publish = False
         if media_kind == "image":
             args.collect_media_kind = "image"
             args.xiaohongshu_allow_image = True
@@ -7571,25 +7983,53 @@ def _publish_immediate_candidate_platform(
                     "failure_suggestion": "",
                 },
             )
+            _send_immediate_platform_feedback(
+                runner=runner,
+                email_settings=email_settings,
+                workspace=workspace,
+                item_id=item_id,
+                platform=platform,
+            )
             return 0
         error_text = str(getattr(event, "error", "") or "") if event is not None else "发布失败"
         duplicate_marker = "duplicate target blocked"
         failure = _describe_platform_failure(platform, error_text)
+        result_status = (
+            "skipped_duplicate"
+            if duplicate_marker in error_text.lower()
+            else ("login_required" if _failure_requires_login(failure, error_text) else "failed")
+        )
+        if result_status == "failed":
+            result_status, error_text = _probe_platform_login_after_publish_failure(
+                workspace=workspace,
+                item_id=item_id,
+                platform=platform,
+                telegram_bot_identifier=telegram_bot_identifier,
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id,
+                timeout_seconds=timeout_seconds,
+                log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+                error_text=error_text,
+            )
+            failure = _describe_platform_failure(platform, error_text)
         _merge_platform_result(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
             updates={
-                "status": (
-                    "skipped_duplicate"
-                    if duplicate_marker in error_text.lower()
-                    else ("login_required" if _failure_requires_login(failure, error_text) else "failed")
-                ),
+                "status": result_status,
                 "error": error_text or "发布失败",
                 "failure_reason": str(failure.get("reason") or "").strip(),
                 "failure_category": str(failure.get("category") or "").strip(),
                 "failure_suggestion": str(failure.get("suggestion") or "").strip(),
             },
+        )
+        _send_immediate_platform_feedback(
+            runner=runner,
+            email_settings=email_settings,
+            workspace=workspace,
+            item_id=item_id,
+            platform=platform,
         )
         return 0 if duplicate_marker in error_text.lower() else 2
 
@@ -7604,21 +8044,50 @@ def _publish_immediate_candidate_platform(
         error_text = str(exc)
         duplicate_marker = "duplicate target blocked"
         failure = _describe_platform_failure(platform, error_text)
+        args = _build_immediate_publish_args(
+            runner=runner,
+            workspace=workspace,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+        )
+        email_settings = runner._build_email_settings(args)
+        result_status = (
+            "skipped_duplicate"
+            if duplicate_marker in error_text.lower()
+            else ("login_required" if _failure_requires_login(failure, error_text) else "failed")
+        )
+        if result_status == "failed":
+            result_status, error_text = _probe_platform_login_after_publish_failure(
+                workspace=workspace,
+                item_id=item_id,
+                platform=platform,
+                telegram_bot_identifier=telegram_bot_identifier,
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id,
+                timeout_seconds=timeout_seconds,
+                log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+                error_text=error_text,
+            )
+            failure = _describe_platform_failure(platform, error_text)
         _merge_platform_result(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
             updates={
-                "status": (
-                    "skipped_duplicate"
-                    if duplicate_marker in error_text.lower()
-                    else ("login_required" if _failure_requires_login(failure, error_text) else "failed")
-                ),
+                "status": result_status,
                 "error": error_text,
                 "failure_reason": str(failure.get("reason") or "").strip(),
                 "failure_category": str(failure.get("category") or "").strip(),
                 "failure_suggestion": str(failure.get("suggestion") or "").strip(),
             },
+        )
+        _send_immediate_platform_feedback(
+            runner=runner,
+            email_settings=email_settings,
+            workspace=workspace,
+            item_id=item_id,
+            platform=platform,
         )
         return 0 if duplicate_marker in error_text.lower() else 2
 
@@ -7635,6 +8104,7 @@ def _run_immediate_publish_item_job(
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
+    immediate_test_mode: bool = False,
 ) -> int:
     item = _get_prefilter_item(workspace, item_id)
     if not item:
@@ -7651,6 +8121,7 @@ def _run_immediate_publish_item_job(
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
             item_id=item_id,
+            immediate_test_mode=immediate_test_mode,
         )
     queue_result = _queue_immediate_platform_jobs(
         workspace=workspace,
@@ -7662,6 +8133,7 @@ def _run_immediate_publish_item_job(
         telegram_chat_id=telegram_chat_id,
         item_id=item_id,
         item=item,
+        immediate_test_mode=immediate_test_mode,
     )
     return 0 if int(queue_result.get("spawned") or 0) > 0 else 2
 
@@ -7868,6 +8340,7 @@ def _publish_immediate_candidate(
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
+    immediate_test_mode: bool = False,
 ) -> int:
     return _run_immediate_publish_item_job(
         runner=runner,
@@ -7880,6 +8353,7 @@ def _publish_immediate_candidate(
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
         item_id=item_id,
+        immediate_test_mode=immediate_test_mode,
     )
 
 
@@ -7962,6 +8436,7 @@ def _run_home_action_job(
     action: str,
     value: str,
     task_key: str,
+    immediate_test_mode: bool = False,
 ) -> int:
     action_token = str(action or "").strip().lower()
     resolved_profile = _normalize_profile_name(profile)
@@ -8093,6 +8568,7 @@ def _run_home_action_job(
                 telegram_chat_id=telegram_chat_id,
                 candidate_limit=max(1, candidate_limit),
                 media_kind=media_kind,
+                immediate_test_mode=immediate_test_mode,
             )
             detail = f"{media_label}即采即发后台任务已结束，请查看后续预审卡片或总结结果。"
             result_status = "done" if exit_code == 0 else "failed"
@@ -8281,6 +8757,7 @@ def _run_collect_publish_latest_job(
     telegram_chat_id: str,
     candidate_limit: int,
     media_kind: str = "video",
+    immediate_test_mode: bool = False,
 ) -> int:
     runner, core = _load_runtime_modules()
     args = _build_immediate_publish_args(
@@ -8327,7 +8804,7 @@ def _run_collect_publish_latest_job(
         profile=profile,
         candidate_limit=requested_limit,
         discovery_limit=discovery_limit,
-        allow_search_inferred_match=False,
+        allow_search_inferred_match=immediate_test_mode,
         include_images=(normalized_media_kind == "image"),
     )
     candidates = [item for item in (discovered.get("candidates") or []) if isinstance(item, dict) and str(item.get("url") or "").strip()]
@@ -8375,6 +8852,7 @@ def _run_collect_publish_latest_job(
             chat_id=telegram_chat_id,
             item_index=idx,
             total_count=requested_limit,
+            allow_reuse=(not immediate_test_mode),
         )
         item = upserted.get("item") if isinstance(upserted, dict) else {}
         item_id = str(upserted.get("item_id") or "").strip()
@@ -8434,10 +8912,12 @@ def _run_collect_publish_latest_job(
             next_step_items.append(
                 f"我已发送本轮候选预审卡片；只有你明确点击“普通发布”或“原创发布”的候选，才会进入下载和{_format_platform_text(target_platforms)}发布。"
             )
-        if reused_candidates > 0:
+        if reused_candidates > 0 and not immediate_test_mode:
             next_step_items.append("其中有部分候选已存在历史预审记录，本轮未重复创建新的旧卡片。")
-        if fresh_candidates == 0 and reused_candidates > 0:
+        if fresh_candidates == 0 and reused_candidates > 0 and not immediate_test_mode:
             next_step_items.append("这次命中的都是已在处理或已处理过的候选；请查看最近的候选卡片继续操作。")
+        if immediate_test_mode:
+            next_step_items.append("测试模式已放宽候选匹配并强制重发新预审卡，后续仍会进入真实采集和发布链路。")
         if not next_step_items:
             next_step_items.append("候选已整理完成，请查看后续卡片。")
         _send_background_feedback(
@@ -9097,6 +9577,7 @@ def handle_callback_update(
     log_file: Path,
     telegram_bot_identifier: str = "",
     default_profile: str = DEFAULT_PROFILE,
+    immediate_test_mode: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(update, dict):
         return {"handled": False, "last_processed": int(last_processed)}
@@ -9162,6 +9643,7 @@ def handle_callback_update(
             audit_file=audit_file,
             update_id=update_id,
             default_profile=default_profile,
+            immediate_test_mode=immediate_test_mode,
         )
         return {
             "handled": bool(handled_home.get("handled", True)),
@@ -9312,13 +9794,17 @@ def handle_callback_update(
                     media_kind=str(updated_item.get("media_kind") or "video"),
                 )
             callback_reply = "📝 已选择原创发布，正在启动发布。" if declare_original else "⚡ 已选择普通发布，正在启动发布。"
+            if immediate_test_mode:
+                callback_reply += "（测试模式）"
             _answer_callback_immediately(callback_reply)
             started_item = _get_prefilter_item(workspace, item_id) or updated_item
             started_note = "已选择原创发布，后台任务正在排队，尚未确认平台发布成功。" if declare_original else "已选择普通发布，后台任务正在排队，尚未确认平台发布成功。"
+            if immediate_test_mode:
+                started_note = "测试模式已放宽候选与重复内容过滤，后台仍会继续真实采集和平台排队。"
             optimistic_card = _build_prefilter_status_card(
                 item=started_item,
-                title="即采即发任务已排队",
-                subtitle="当前卡片已锁定，等待后台下载素材并分平台执行",
+                title="即采即发测试已排队" if immediate_test_mode else "即采即发任务已排队",
+                subtitle="测试模式仅放宽前置过滤，后续仍走真实链路" if immediate_test_mode else "当前卡片已锁定，等待后台下载素材并分平台执行",
                 status="running",
                 result_section_title="执行状态",
                 result_items=[
@@ -9339,14 +9825,17 @@ def handle_callback_update(
                     telegram_bot_token=bot_token,
                     telegram_chat_id=chat_id,
                     item_id=item_id,
+                    immediate_test_mode=immediate_test_mode,
                 )
                 if not optimistic_card_sent:
                     started_item = _get_prefilter_item(workspace, item_id) or {}
                     final_note = "已选择原创发布，后台任务已提交，等待平台执行结果。" if declare_original else "已选择普通发布，后台任务已提交，等待平台执行结果。"
+                    if immediate_test_mode:
+                        final_note = "测试模式任务已提交，后续会继续真实采集和平台发布，只是放宽了前置筛选。"
                     card_update = _build_prefilter_status_card(
                         item=started_item,
-                        title="即采即发任务已排队",
-                        subtitle="当前卡片已锁定，等待后台下载素材并分平台执行",
+                        title="即采即发测试已排队" if immediate_test_mode else "即采即发任务已排队",
+                        subtitle="测试模式仅放宽前置过滤，后续仍走真实链路" if immediate_test_mode else "当前卡片已锁定，等待后台下载素材并分平台执行",
                         status="running",
                         result_section_title="执行状态",
                         result_items=[
@@ -9392,16 +9881,18 @@ def handle_callback_update(
                 },
             )
             callback_reply = "✅ 已保留本条，开始采集。"
+            if immediate_test_mode:
+                callback_reply += "（测试模式）"
             _answer_callback_immediately(callback_reply)
             optimistic_card = _build_prefilter_status_card(
                 item=updated_item,
-                title="图片采集已排队",
-                subtitle="当前卡片已锁定，等待后台下载素材",
+                title="图片采集测试已排队" if immediate_test_mode else "图片采集已排队",
+                subtitle="测试模式已放宽采集筛选，后续仍会真实下载" if immediate_test_mode else "当前卡片已锁定，等待后台下载素材",
                 status="running",
                 result_section_title="执行状态",
                 result_items=[
-                    "当前候选已进入采集队列。",
-                    "采集完成后会再回传结果卡片，不会自动进入发布。",
+                    "当前候选已进入测试模式采集链路。" if immediate_test_mode else "当前候选已进入采集队列。",
+                    "本轮会继续真实下载，只是放宽前置采集筛选，便于验证后续链路。" if immediate_test_mode else "采集完成后会再回传结果卡片，不会自动进入发布。",
                 ],
             )
             optimistic_card_sent = _try_update_card_immediately(optimistic_card)
@@ -9417,18 +9908,19 @@ def handle_callback_update(
                     telegram_bot_token=bot_token,
                     telegram_chat_id=chat_id,
                     item_id=item_id,
+                    immediate_test_mode=immediate_test_mode,
                 )
                 if not optimistic_card_sent:
                     latest_item = _get_prefilter_item(workspace, item_id) or updated_item
                     card_update = _build_prefilter_status_card(
                         item=latest_item,
-                        title="图片采集已排队",
-                        subtitle="当前卡片已锁定，等待后台下载素材",
+                        title="图片采集测试已排队" if immediate_test_mode else "图片采集已排队",
+                        subtitle="测试模式已放宽采集筛选，后续仍会真实下载" if immediate_test_mode else "当前卡片已锁定，等待后台下载素材",
                         status="running",
                         result_section_title="执行状态",
                         result_items=[
-                            "当前候选已进入采集队列。",
-                            "采集完成后会再回传结果卡片，不会自动进入发布。",
+                            "当前候选已进入测试模式采集链路。" if immediate_test_mode else "当前候选已进入采集队列。",
+                            "本轮会继续真实下载，只是放宽前置采集筛选，便于验证后续链路。" if immediate_test_mode else "采集完成后会再回传结果卡片，不会自动进入发布。",
                         ],
                     )
             except Exception as exc:
@@ -9683,6 +10175,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-immediate-publish-platform-job", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--publish-item-id", default="", help=argparse.SUPPRESS)
     parser.add_argument("--publish-platform", default="", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--immediate-test-mode",
+        action="store_true",
+        help="Relax immediate candidate matching and duplicate filtering for testing while keeping the real downstream collect and publish flow enabled.",
+    )
     return parser
 
 
@@ -9763,6 +10260,7 @@ def main() -> int:
             action=str(getattr(args, "home_action", "") or "").strip(),
             value=str(getattr(args, "home_action_value", "") or "").strip(),
             task_key=str(getattr(args, "home_action_task_key", "") or "").strip(),
+            immediate_test_mode=bool(getattr(args, "immediate_test_mode", False)),
         )
     if bool(getattr(args, "run_collect_publish_latest_job", False)):
         return _run_collect_publish_latest_job(
@@ -9778,6 +10276,7 @@ def main() -> int:
                 int(getattr(args, "job_candidate_limit", DEFAULT_IMMEDIATE_CANDIDATE_LIMIT) or DEFAULT_IMMEDIATE_CANDIDATE_LIMIT),
             ),
             media_kind=_normalize_immediate_collect_media_kind(str(getattr(args, "collect_publish_media_kind", "video") or "video")),
+            immediate_test_mode=bool(getattr(args, "immediate_test_mode", False)),
         )
     if bool(getattr(args, "run_comment_reply_job", False)):
         return _run_comment_reply_job(
@@ -9803,6 +10302,7 @@ def main() -> int:
             telegram_bot_token=bot_token,
             telegram_chat_id=allowed_chat_id,
             item_id=str(getattr(args, "publish_item_id", "") or "").strip(),
+            immediate_test_mode=bool(getattr(args, "immediate_test_mode", False)),
         )
     if bool(getattr(args, "run_immediate_collect_item_job", False)):
         runner, core = _load_runtime_modules()
@@ -9817,6 +10317,7 @@ def main() -> int:
             telegram_bot_token=bot_token,
             telegram_chat_id=allowed_chat_id,
             item_id=str(getattr(args, "publish_item_id", "") or "").strip(),
+            immediate_test_mode=bool(getattr(args, "immediate_test_mode", False)),
         )
     if bool(getattr(args, "run_immediate_publish_platform_job", False)):
         runner, core = _load_runtime_modules()
@@ -10037,6 +10538,7 @@ def main() -> int:
                         log_file=log_file,
                         telegram_bot_identifier=telegram_bot_identifier,
                         default_profile=default_profile,
+                        immediate_test_mode=bool(getattr(args, "immediate_test_mode", False)),
                     )
                     new_last_processed = max(
                         int(last_processed),

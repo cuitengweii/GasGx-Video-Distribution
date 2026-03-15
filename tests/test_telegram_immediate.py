@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,8 +22,14 @@ class FakeCore:
             processed_images=root / "2_Processed_Images",
         )
 
+    def _find_processed_target_by_source(self, workspace_ctx: object, *, source_url: str) -> tuple[None, None]:
+        return None, None
+
     def _is_uploaded_content_duplicate(self, workspace_ctx: object, target: Path, *, platform: str) -> tuple[bool, dict, None]:
         return False, {}, None
+
+    def _media_kind_from_path(self, target: Path) -> str:
+        return "image" if target.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"} else "video"
 
 
 class FakeRunner:
@@ -226,6 +234,52 @@ def test_handle_home_collect_publish_video_queues_task(tmp_path: Path, monkeypat
     assert task["loading_message_id"] == 901
     assert "\u5019\u9009" in str(task["detail"])
     assert "\u666e\u901a\u53d1\u5e03" in str(task["detail"])
+
+
+def test_handle_home_collect_publish_propagates_immediate_test_mode(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    _install_transport_mocks(monkeypatch)
+    spawned: list[dict[str, object]] = []
+
+    def spawn_home_action_job(**kwargs: object) -> dict[str, object]:
+        spawned.append(dict(kwargs))
+        return {"ok": True, "pid": 322, "log_path": str(workspace / "runtime" / "logs" / "home-video-test.log")}
+
+    monkeypatch.setattr(worker_impl, "_spawn_home_action_job", spawn_home_action_job)
+
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "collect_publish_latest", "video:1"),
+    )
+    commands.handle_callback_update(
+        update=update,
+        **_worker_kwargs(workspace, immediate_test_mode=True),
+    )
+
+    assert len(spawned) == 1
+    assert spawned[0]["immediate_test_mode"] is True
+
+
+def test_handle_home_collect_publish_default_mode_does_not_pass_immediate_test_mode(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    _install_transport_mocks(monkeypatch)
+    spawned: list[dict[str, object]] = []
+
+    def spawn_home_action_job(**kwargs: object) -> dict[str, object]:
+        spawned.append(dict(kwargs))
+        return {"ok": True, "pid": 323, "log_path": str(workspace / "runtime" / "logs" / "home-video-normal.log")}
+
+    monkeypatch.setattr(worker_impl, "_spawn_home_action_job", spawn_home_action_job)
+
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "collect_publish_latest", "video:1"),
+    )
+    commands.handle_callback_update(
+        update=update,
+        **_worker_kwargs(workspace),
+    )
+
+    assert len(spawned) == 1
+    assert spawned[0]["immediate_test_mode"] is False
 
 
 def test_handle_home_collect_publish_image_queues_task(tmp_path: Path, monkeypatch) -> None:
@@ -433,6 +487,131 @@ def test_run_collect_publish_latest_job_video_records_prefilter_items(tmp_path: 
     assert runner.sent_candidates[0]["mode"] == "immediate_manual_publish"
     assert feedbacks[0]["status"] == "running"
     assert feedbacks[-1]["status"] == "done"
+
+
+def test_run_collect_publish_latest_job_test_mode_forces_new_prefilter_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    discovered_kwargs: list[dict[str, object]] = []
+    candidate = {
+        "url": "https://x.test/post/video-reused",
+        "published_at": "2026-03-15 10:02:00",
+        "display_time": "8m",
+        "tweet_text": "video reused",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"], "video")
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                published_at=candidate["published_at"],
+                display_time=candidate["display_time"],
+                tweet_text=candidate["tweet_text"],
+                status="publish_partial",
+                action="publish",
+                message_id=812,
+                platform_results={"wechat": {"status": "success"}},
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+
+    def discover_latest_live_candidates(**kwargs: object) -> dict[str, object]:
+        discovered_kwargs.append(dict(kwargs))
+        return {"keyword": DEFAULT_PROFILE, "candidates": [candidate]}
+
+    monkeypatch.setattr(worker_impl, "_discover_latest_live_candidates", discover_latest_live_candidates)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+        immediate_test_mode=True,
+    )
+
+    assert exit_code == 0
+    assert discovered_kwargs[0]["allow_search_inferred_match"] is True
+    assert len(runner.sent_candidates) == 1
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "link_pending"
+    assert item["action"] == "sent"
+    assert int(item["message_id"]) > 0
+    assert item["platform_results"] == {}
+
+
+def test_run_collect_publish_latest_job_default_mode_reuses_existing_prefilter_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    discovered_kwargs: list[dict[str, object]] = []
+    candidate = {
+        "url": "https://x.test/post/video-reused-normal",
+        "published_at": "2026-03-15 10:03:00",
+        "display_time": "7m",
+        "tweet_text": "video reused normal",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"], "video")
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                published_at=candidate["published_at"],
+                display_time=candidate["display_time"],
+                tweet_text=candidate["tweet_text"],
+                status="publish_partial",
+                action="publish",
+                message_id=913,
+                platform_results={"wechat": {"status": "success"}},
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+
+    def discover_latest_live_candidates(**kwargs: object) -> dict[str, object]:
+        discovered_kwargs.append(dict(kwargs))
+        return {"keyword": DEFAULT_PROFILE, "candidates": [candidate]}
+
+    monkeypatch.setattr(worker_impl, "_discover_latest_live_candidates", discover_latest_live_candidates)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert discovered_kwargs[0]["allow_search_inferred_match"] is False
+    assert len(runner.sent_candidates) == 0
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "publish_partial"
+    assert item["action"] == "publish"
+    assert item["message_id"] == 913
+    assert item["platform_results"] == {"wechat": {"status": "success"}}
 
 
 def test_run_collect_publish_latest_job_image_records_review_only_items(tmp_path: Path, monkeypatch) -> None:
@@ -681,6 +860,32 @@ def test_handle_prefilter_publish_original_sets_wechat_original(tmp_path: Path, 
     assert updated["wechat_declare_original"] is True
 
 
+def test_handle_prefilter_publish_propagates_immediate_test_mode(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+    spawned: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_immediate_publish_item_job",
+        lambda **kwargs: spawned.append(dict(kwargs)) or {"ok": True, "pid": 412, "log_path": str(workspace / "runtime" / "logs" / "publish-test.log")},
+    )
+
+    item = _video_item()
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    commands.handle_callback_update(
+        update=_make_callback_update("ctpf|publish_normal|item-video"),
+        **_worker_kwargs(workspace, immediate_test_mode=True),
+    )
+
+    assert len(spawned) == 1
+    assert spawned[0]["immediate_test_mode"] is True
+    assert len(record.updated_cards) == 1
+    assert "\u6d4b\u8bd5\u6a21\u5f0f" in str(record.updated_cards[0]["card"]["text"])
+
+
 def test_handle_prefilter_image_up_queues_collect_job(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     record = _install_transport_mocks(monkeypatch)
@@ -756,6 +961,112 @@ def test_run_immediate_publish_item_job_queues_platform_results(tmp_path: Path, 
         assert platform_results[platform]["status"] == "queued"
 
 
+def test_run_immediate_publish_item_job_test_mode_bypasses_duplicate_filter(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    spawned_platforms: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(
+        worker_impl,
+        "_preflight_immediate_platform_login",
+        lambda **kwargs: {"ready": True},
+    )
+    monkeypatch.setattr(
+        fake_core,
+        "_is_uploaded_content_duplicate",
+        lambda workspace_ctx, target, *, platform: (True, {"_reason": "duplicate"}, None),
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_immediate_publish_platform_job",
+        lambda **kwargs: spawned_platforms.append(dict(kwargs))
+        or {"ok": True, "pid": 700 + len(spawned_platforms), "log_path": str(workspace / "runtime" / "logs" / f"{kwargs['platform']}.log")},
+    )
+
+    item = _video_item()
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_publish_item_job(
+        runner=object(),
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+        immediate_test_mode=True,
+    )
+
+    assert exit_code == 0
+    assert {entry["platform"] for entry in spawned_platforms} == {"wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"}
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_running"
+    platform_results = updated["platform_results"]
+    assert isinstance(platform_results, dict)
+    for platform in ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"]:
+        assert platform_results[platform]["status"] == "queued"
+
+
+def test_run_immediate_publish_item_job_default_mode_keeps_duplicate_filter(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    spawned_platforms: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(
+        worker_impl,
+        "_preflight_immediate_platform_login",
+        lambda **kwargs: {"ready": True},
+    )
+    monkeypatch.setattr(
+        fake_core,
+        "_is_uploaded_content_duplicate",
+        lambda workspace_ctx, target, *, platform: (True, {"_reason": "duplicate"}, None),
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_immediate_publish_platform_job",
+        lambda **kwargs: spawned_platforms.append(dict(kwargs))
+        or {"ok": True, "pid": 800 + len(spawned_platforms), "log_path": str(workspace / "runtime" / "logs" / f"{kwargs['platform']}.log")},
+    )
+
+    item = _video_item()
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_publish_item_job(
+        runner=object(),
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 2
+    assert spawned_platforms == []
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    platform_results = updated["platform_results"]
+    assert isinstance(platform_results, dict)
+    for platform in ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"]:
+        assert platform_results[platform]["status"] == "skipped_duplicate"
+
+
 def test_run_immediate_publish_item_job_requests_wechat_qr_when_login_required(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     video_path = workspace / "2_Processed" / "clip.mp4"
@@ -823,6 +1134,153 @@ def test_run_immediate_publish_item_job_requests_wechat_qr_when_login_required(t
     assert {entry["platform"] for entry in spawned_platforms} == {"douyin", "xiaohongshu", "kuaishou", "bilibili"}
 
 
+def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedbacks: list[dict[str, object]] = []
+    qr_requests: list[dict[str, object]] = []
+
+    fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
+        SimpleNamespace(success=False, error="publish blocked by login page")
+    )
+
+    monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
+    monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs)) or {"ok": True, "needs_login": True, "sent": True},
+    )
+
+    item = _video_item(target_platforms="wechat")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = worker_impl._publish_immediate_candidate_platform(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+        platform="wechat",
+    )
+
+    assert exit_code == 2
+    assert len(qr_requests) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_failed"
+    assert updated["platform_results"]["wechat"]["status"] == "login_required"
+    assert "二维码已发送到 Telegram" in str(updated["platform_results"]["wechat"]["error"])
+    assert len(feedbacks) == 2
+    assert "视频号需要重新登录" in str(feedbacks[0]["title"])
+    assert "即采即发发布失败" in str(feedbacks[1]["title"])
+
+
+def test_publish_platform_job_success_sends_platform_feedback_and_summary(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedbacks: list[dict[str, object]] = []
+
+    fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
+        SimpleNamespace(success=True, published_at="18:45:00", publish_id="CT-SUCCESS")
+    )
+
+    monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
+    monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+
+    item = _video_item(target_platforms="kuaishou")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = worker_impl._publish_immediate_candidate_platform(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+        platform="kuaishou",
+    )
+
+    assert exit_code == 0
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_done"
+    assert updated["platform_results"]["kuaishou"]["status"] == "success"
+    assert len(feedbacks) == 2
+    assert "快手发布已确认" in str(feedbacks[0]["title"])
+    assert "即采即发已全部完成" in str(feedbacks[1]["title"])
+
+
+def test_run_immediate_collect_item_job_test_mode_keeps_real_collect_and_adopts_download(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedback_cards: list[dict[str, object]] = []
+    approvals: list[dict[str, object]] = []
+    collect_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    def run_unified_once(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        downloaded = workspace / "1_Downloads_Images" / "fresh-image.jpg"
+        downloaded.parent.mkdir(parents=True, exist_ok=True)
+        downloaded.write_text("image", encoding="utf-8")
+        return {"status": "success"}
+
+    monkeypatch.setattr(worker_impl, "_run_unified_once", run_unified_once)
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedback_cards.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
+
+    item = _image_item()
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-image",
+        immediate_test_mode=True,
+    )
+
+    assert exit_code == 0
+    assert len(collect_calls) == 1
+    assert len(approvals) == 1
+    updated = _prefilter_items(workspace)["item-image"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "up_confirmed"
+    assert updated["immediate_test_mode"] is True
+    assert updated["processed_name"] == "fresh-image.jpg"
+    assert (workspace / "2_Processed_Images" / "fresh-image.jpg").exists()
+    assert len(feedback_cards) == 1
+    assert "\u56fe\u7247\u91c7\u96c6\u5df2\u5b8c\u6210" in str(feedback_cards[0]["title"])
+    assert "\u6d4b\u8bd5\u6a21\u5f0f" in str(feedback_cards[0]["subtitle"])
+
+
 def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     record = _install_transport_mocks(monkeypatch)
@@ -845,3 +1303,55 @@ def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monke
     assert "publish boom" in str(updated["last_error"])
     assert len(record.updated_cards) == 2
     assert "\u5373\u91c7\u5373\u53d1\u542f\u52a8\u5931\u8d25" in str(record.updated_cards[-1]["card"]["text"])
+
+
+def test_prefilter_queue_lock_recovers_when_owner_pid_is_dead(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    queue_path = state.prefilter_queue_path(workspace)
+    lock_dir = queue_path.with_name(f"{queue_path.name}.lock")
+    lock_dir.mkdir(parents=True)
+    owner_payload = {
+        "pid": 999999,
+        "host": worker_impl.socket.gethostname(),
+        "path": str(queue_path),
+        "created_at": "2026-03-15 00:00:00",
+        "acquired_epoch": 0,
+    }
+    (lock_dir / "owner.json").write_text(json.dumps(owner_payload), encoding="utf-8")
+
+    monkeypatch.setattr(worker_impl, "_pid_is_running", lambda pid: False)
+
+    result = worker_impl._with_prefilter_queue_lock(
+        workspace,
+        lambda queue: queue["items"].setdefault("item-video", {"id": "item-video", "status": "link_pending"}),
+        timeout_seconds=1,
+    )
+
+    assert result == {"id": "item-video", "status": "link_pending"}
+    payload = prefilter.load_queue(queue_path)
+    assert "item-video" in payload["items"]
+    assert not lock_dir.exists()
+
+
+def test_atomic_write_json_cleans_tmp_file_when_replace_fails(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "payload.json"
+    tmp_paths: list[Path] = []
+    original_replace = os.replace
+
+    def failing_replace(src: os.PathLike[str] | str, dst: os.PathLike[str] | str) -> None:
+        tmp_paths.append(Path(src))
+        raise PermissionError("replace blocked")
+
+    monkeypatch.setattr(worker_impl.os, "replace", failing_replace)
+
+    try:
+        worker_impl._atomic_write_json(path, {"ok": True})
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("expected PermissionError")
+    finally:
+        monkeypatch.setattr(worker_impl.os, "replace", original_replace)
+
+    assert tmp_paths, "temporary file path should be captured"
+    assert not tmp_paths[0].exists()
