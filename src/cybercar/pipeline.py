@@ -961,15 +961,20 @@ def _send_telegram_prefilter_for_candidate(
         ]
         if source_url:
             lines.append(f"链接：{source_url}")
-        fallback_ok = _send_telegram_text(
+        fallback_card = {
+            "text": "\n".join(lines),
+            "reply_markup": card.get("reply_markup"),
+            "parse_mode": "",
+        }
+        fallback_response = _send_telegram_card_message(
             email_settings,
-            "\n".join(lines),
+            fallback_card,
             disable_web_page_preview=False,
+            max_attempts=1,
+            api_retries=0,
         )
-        if fallback_ok:
-            core._log(f"[Prefilter] Candidate card send failed, fallback text sent: {item_id} ({exc})")
-            return {"ok": True, "result": {"message_id": 0, "chat": {"id": str(email_settings.telegram_chat_id or "")}}}
-        raise
+        core._log(f"[Prefilter] Candidate card send failed, fallback text sent: {item_id} ({exc})")
+        return fallback_response
 
 
 def _run_telegram_prefilter(ctx: CycleContext, args: argparse.Namespace, email_settings: EmailSettings) -> None:
@@ -1127,6 +1132,7 @@ def _send_telegram_card_message(
     disable_web_page_preview: bool = True,
     max_attempts: int = 3,
     api_retries: int = 2,
+    timeout_seconds_override: Optional[int] = None,
 ) -> dict[str, Any]:
     if not settings.enabled:
         raise RuntimeError("telegram settings not enabled")
@@ -1139,6 +1145,7 @@ def _send_telegram_card_message(
     parse_mode = str(card.get("parse_mode") or "").strip() or "HTML"
     image_value = str(card.get("image") or "").strip()
     image_path = Path(image_value) if image_value else None
+    timeout_seconds = max(3, int(timeout_seconds_override or settings.telegram_timeout_seconds or 20))
     if isinstance(image_path, Path) and image_path.exists() and image_path.is_file():
         return core._send_telegram_photo(
             bot_token=bot_token,
@@ -1146,7 +1153,7 @@ def _send_telegram_card_message(
             photo_bytes=image_path.read_bytes(),
             filename=image_path.name,
             caption=text,
-            timeout_seconds=max(8, int(settings.telegram_timeout_seconds or 20)),
+            timeout_seconds=timeout_seconds,
             api_base=str(settings.telegram_api_base or "").strip(),
             reply_markup=reply_markup,
             parse_mode=parse_mode,
@@ -1169,7 +1176,7 @@ def _send_telegram_card_message(
                 bot_token=bot_token,
                 method="sendMessage",
                 params=params,
-                timeout_seconds=max(8, int(settings.telegram_timeout_seconds or 20)),
+                timeout_seconds=timeout_seconds,
                 api_base=str(settings.telegram_api_base or "").strip(),
                 use_post=True,
                 max_retries=request_retries,

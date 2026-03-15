@@ -6869,6 +6869,7 @@ def _queue_immediate_platform_jobs(
                 telegram_bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
                 timeout_seconds=timeout_seconds,
+                log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
             )
             if not bool(login_probe.get("ready", True)):
                 error_text = str(login_probe.get("error") or "视频号未登录").strip() or "视频号未登录"
@@ -6958,6 +6959,7 @@ def _preflight_immediate_platform_login(
     telegram_bot_token: str,
     telegram_chat_id: str,
     timeout_seconds: int,
+    log_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
     normalized_platform = str(platform or "").strip().lower()
     if normalized_platform != "wechat":
@@ -6987,7 +6989,24 @@ def _preflight_immediate_platform_login(
         or str(result.get("current_url") or "").strip()
         or "视频号未登录"
     )
-    return {"ready": False, "error": error_text, "result": result}
+    qr_result: Dict[str, Any] = {}
+    if str(telegram_bot_token or "").strip() and str(telegram_chat_id or "").strip():
+        qr_result = _request_platform_login_qr(
+            platform_name=normalized_platform,
+            bot_token=str(telegram_bot_token or "").strip(),
+            chat_id=str(telegram_chat_id or "").strip(),
+            timeout_seconds=max(10, int(timeout_seconds or 20)),
+            log_file=Path(log_file) if log_file is not None else Path.cwd() / "runtime" / "logs" / "telegram_command_worker.log",
+            telegram_bot_identifier=str(telegram_bot_identifier or "").strip(),
+            refresh_page=True,
+        )
+        if bool(qr_result.get("sent")):
+            error_text = f"{error_text}；登录二维码已发送到 Telegram"
+        elif bool(qr_result.get("skipped")):
+            error_text = f"{error_text}；登录二维码已在近期发送"
+        elif str(qr_result.get("error") or "").strip():
+            error_text = f"{error_text}；二维码发送失败：{str(qr_result.get('error') or '').strip()}"
+    return {"ready": False, "error": error_text, "result": result, "qr_result": qr_result}
 
 
 def _finalize_immediate_collect_target(
@@ -8381,12 +8400,15 @@ def _run_collect_publish_latest_job(
             if not isinstance(result_payload, dict):
                 result_payload = {}
             chat_payload = result_payload.get("chat") if isinstance(result_payload.get("chat"), dict) else {}
+            message_id = int(result_payload.get("message_id") or 0)
+            if message_id <= 0:
+                raise RuntimeError("telegram candidate prefilter message_id missing")
             _update_prefilter_item(
                 workspace,
                 item_id,
                 updates={
                     "status": "link_pending",
-                    "message_id": int(result_payload.get("message_id") or 0),
+                    "message_id": message_id,
                     "chat_id": str(chat_payload.get("id") or telegram_chat_id or ""),
                     "action": "sent",
                 },

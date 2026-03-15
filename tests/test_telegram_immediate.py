@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from Collection.cybercar.cybercar_video_capture_and_publishing_module import telegram_command_worker as worker_impl
+from cybercar import pipeline
 from cybercar.telegram import actions, commands, prefilter, state
 
 
@@ -427,6 +428,106 @@ def test_run_collect_publish_latest_job_returns_failure_without_candidates(tmp_p
     assert feedbacks[-1]["status"] == "failed"
 
 
+def test_run_collect_publish_latest_job_fails_when_message_id_missing(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+
+    def send_prefilter_without_message_id(**kwargs: object) -> dict[str, object]:
+        runner.sent_candidates.append(dict(kwargs))
+        return {
+            "result": {
+                "message_id": 0,
+                "chat": {"id": runner.chat_id},
+            }
+        }
+
+    runner._send_telegram_prefilter_for_candidate = send_prefilter_without_message_id  # type: ignore[assignment]
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": DEFAULT_PROFILE,
+            "candidates": [
+                {
+                    "url": "https://x.test/post/video-1",
+                    "published_at": "2026-03-15 10:00:00",
+                    "display_time": "10m",
+                    "tweet_text": "video one",
+                },
+            ],
+        },
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 3
+    items = _prefilter_items(workspace)
+    assert len(items) == 1
+    failed_item = next(iter(items.values()))
+    assert isinstance(failed_item, dict)
+    assert failed_item["status"] == "send_failed"
+    assert failed_item["action"] == "send_failed"
+    assert "message_id missing" in str(failed_item["last_error"])
+    assert feedbacks[-1]["status"] == "failed"
+
+
+def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatch, tmp_path: Path) -> None:
+    attempts: list[dict[str, object]] = []
+
+    def send_card(settings: object, card: dict[str, object], **kwargs: object) -> dict[str, object]:
+        attempts.append({"card": dict(card), "kwargs": dict(kwargs)})
+        if len(attempts) == 1:
+            raise RuntimeError("primary send failed")
+        return {"result": {"message_id": 777, "chat": {"id": CHAT_ID}}}
+
+    monkeypatch.setattr(pipeline, "_send_telegram_card_message", send_card)
+    result = pipeline._send_telegram_prefilter_for_candidate(
+        workspace=SimpleNamespace(root=tmp_path),
+        email_settings=SimpleNamespace(
+            enabled=True,
+            telegram_bot_token=BOT_TOKEN,
+            telegram_chat_id=CHAT_ID,
+            telegram_timeout_seconds=20,
+            telegram_api_base="",
+        ),
+        source_url="https://x.test/post/video-1",
+        item_id="item-video",
+        idx=1,
+        total=3,
+        platform_hint="视频号 / 抖音",
+        mode="immediate_manual_publish",
+        tweet_text="video one <b>tag</b>",
+        published_at="2026-03-15 10:00:00",
+        display_time="10m",
+        target_platforms="wechat,douyin,xiaohongshu,kuaishou,bilibili",
+        fast_send=True,
+    )
+
+    assert result["result"]["message_id"] == 777
+    assert len(attempts) == 2
+    primary_card = attempts[0]["card"]
+    fallback_card = attempts[1]["card"]
+    assert isinstance(primary_card, dict)
+    assert isinstance(fallback_card, dict)
+    assert fallback_card["reply_markup"] == primary_card["reply_markup"]
+    assert fallback_card["parse_mode"] == ""
+    assert "链接：https://x.test/post/video-1" in str(fallback_card["text"])
+
+
 def test_handle_prefilter_publish_normal_queues_publish_job(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     record = _install_transport_mocks(monkeypatch)
@@ -563,6 +664,73 @@ def test_run_immediate_publish_item_job_queues_platform_results(tmp_path: Path, 
     assert isinstance(platform_results, dict)
     for platform in ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"]:
         assert platform_results[platform]["status"] == "queued"
+
+
+def test_run_immediate_publish_item_job_requests_wechat_qr_when_login_required(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    qr_requests: list[dict[str, object]] = []
+    spawned_platforms: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs)) or {"ok": True, "needs_login": True, "sent": True},
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_immediate_publish_platform_job",
+        lambda **kwargs: spawned_platforms.append(dict(kwargs)) or {
+            "ok": True,
+            "pid": 800 + len(spawned_platforms),
+            "log_path": str(workspace / "runtime" / "logs" / f"{kwargs['platform']}.log"),
+        },
+    )
+
+    monkeypatch.setattr(
+        fake_core,
+        "probe_platform_session_via_debug_port",
+        lambda **kwargs: {
+            "status": "login_required",
+            "reason": "login_url",
+            "current_url": "https://channels.weixin.qq.com/login.html",
+            "root_cause_hint": "login_url",
+        },
+        raising=False,
+    )
+
+    item = _video_item()
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_publish_item_job(
+        runner=object(),
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 0
+    assert len(qr_requests) == 1
+    assert qr_requests[0]["platform_name"] == "wechat"
+    assert qr_requests[0]["bot_token"] == BOT_TOKEN
+    assert qr_requests[0]["chat_id"] == CHAT_ID
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    platform_results = updated["platform_results"]
+    assert isinstance(platform_results, dict)
+    assert platform_results["wechat"]["status"] == "login_required"
+    assert "二维码已发送到 Telegram" in str(platform_results["wechat"]["error"])
+    assert {entry["platform"] for entry in spawned_platforms} == {"douyin", "xiaohongshu", "kuaishou", "bilibili"}
 
 
 def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monkeypatch) -> None:
