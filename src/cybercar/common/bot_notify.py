@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Mapping
 
 from .telegram_api import call_telegram_api
@@ -18,6 +19,58 @@ def _to_int(value: Any, default: int) -> int:
         return default
 
 
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    token = str(value or "").strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _split_items(value: Any) -> list[str]:
+    parts = [x.strip() for x in re.split(r"[,;\s]+", str(value or "")) if x.strip()]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in parts:
+        token = item.lower()
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(item)
+    return deduped
+
+
+def _resolve_telegram_bot_by_keyword(*, keyword: str, registry_file: str = "") -> dict[str, Any]:
+    token = str(keyword or "").strip()
+    if not token:
+        return {}
+    try:
+        from .telegram_bot_dispatch import resolve_bot_by_keyword
+        from .telegram_bot_registry import DEFAULT_REGISTRY_FILE
+    except Exception:
+        return {}
+    try:
+        result = resolve_bot_by_keyword(
+            keyword=token,
+            registry_file=str(registry_file or DEFAULT_REGISTRY_FILE),
+        )
+    except Exception:
+        return {}
+    if not isinstance(result, Mapping) or not bool(result.get("ok")):
+        return {}
+    bot = result.get("bot")
+    if not isinstance(bot, Mapping):
+        return {}
+    return {
+        "bot_token": str(bot.get("bot_token") or "").strip(),
+        "chat_id": str(bot.get("chat_id") or "").strip(),
+        "bot_username": str(bot.get("bot_username") or "").strip(),
+    }
+
+
 def resolve_telegram_bot_settings(
     raw: Mapping[str, Any] | None = None,
     *,
@@ -32,19 +85,52 @@ def resolve_telegram_bot_settings(
         return str(os.getenv(f"{prefix}{name}", "") or "").strip()
 
     bot_token = str(source.get("bot_token") or source.get("token") or "").strip()
-    if not bot_token:
-        bot_token = _env("TELEGRAM_BOT_TOKEN") or _env("TELEGRAM_TOKEN")
-    chat_id = str(source.get("chat_id") or "").strip() or _env("TELEGRAM_CHAT_ID")
+    chat_id = str(source.get("chat_id") or "").strip()
+    keyword = str(
+        source.get("keyword")
+        or source.get("bot_identifier")
+        or source.get("bot_name")
+        or ""
+    ).strip()
+    registry_file = str(source.get("registry_file") or source.get("registry_path") or "").strip()
+    strict_keyword = _to_bool(source.get("strict_keyword"), False)
     timeout_seconds = max(
         5,
         _to_int(source.get("timeout_seconds"), _to_int(_env("TELEGRAM_TIMEOUT_SECONDS"), DEFAULT_TELEGRAM_TIMEOUT_SECONDS)),
     )
     api_base = str(source.get("api_base") or "").strip() or _env("TELEGRAM_API_BASE") or DEFAULT_TELEGRAM_API_BASE
+    disable_web_page_preview = _to_bool(source.get("disable_web_page_preview"), False)
+    if not keyword:
+        keyword = _env("TELEGRAM_BOT_IDENTIFIER") or _env("TELEGRAM_KEYWORD")
+    if not registry_file:
+        registry_file = _env("TELEGRAM_REGISTRY_FILE")
+    if keyword:
+        resolved = _resolve_telegram_bot_by_keyword(keyword=keyword, registry_file=registry_file)
+        if resolved:
+            if strict_keyword:
+                bot_token = str(resolved.get("bot_token") or "").strip()
+                chat_id = str(resolved.get("chat_id") or "").strip()
+            else:
+                if not bot_token:
+                    bot_token = str(resolved.get("bot_token") or "").strip()
+                if not chat_id:
+                    chat_id = str(resolved.get("chat_id") or "").strip()
+        elif strict_keyword:
+            bot_token = ""
+            chat_id = ""
+    if not bot_token and not keyword:
+        bot_token = _env("TELEGRAM_BOT_TOKEN") or _env("TELEGRAM_TOKEN")
+    if not chat_id and not keyword:
+        chat_id = _env("TELEGRAM_CHAT_ID")
     return {
         "bot_token": bot_token,
         "chat_id": chat_id,
+        "keyword": keyword,
+        "registry_file": registry_file,
+        "strict_keyword": strict_keyword,
         "timeout_seconds": timeout_seconds,
         "api_base": api_base,
+        "disable_web_page_preview": disable_web_page_preview,
     }
 
 
@@ -81,7 +167,7 @@ def send_notification(
     params: dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
-        "disable_web_page_preview": "false",
+        "disable_web_page_preview": "true" if bool(settings.get("disable_web_page_preview")) else "false",
     }
     if isinstance(card_payload, Mapping):
         parse_mode = str(card_payload.get("parse_mode") or "").strip()

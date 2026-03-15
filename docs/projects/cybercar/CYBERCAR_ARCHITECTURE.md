@@ -10,6 +10,11 @@ Last updated: 2026-03-15
 - `src/cybercar/session.py`: new login/session command surface for `status`, `open`, and `qr`.
 - `src/cybercar/engagement.py`: new WeChat engagement command surface.
 - `src/cybercar/migrate.py`: legacy asset migration logic.
+- `src/cybercar/support/`: shared config, path, state, lock, browser, network, and text helpers for new code.
+- `src/cybercar/services/`: domain facades split by `collect`, `process`, `login`, `publish`, and `engagement`.
+- `src/cybercar/telegram/`: Telegram subsystem facades for transport, cards, state, locks, prefilter, home, commands, actions, bootstrap, and worker startup.
+- `src/cybercar/pipeline_core/`: low-risk wrappers around legacy pipeline cycle functions.
+- `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py`: vendored legacy Telegram worker runtime.
 
 ## Runtime Boundaries
 
@@ -22,9 +27,12 @@ Last updated: 2026-03-15
 
 - The standalone repo keeps local `Collection.*` compatibility wrappers under `src/Collection/...` so vendored legacy modules can run without depending on the old repository.
 - New entrypoints are exposed only through the `cybercar` package and thin PowerShell wrappers.
+- Telegram shared/common modules are now vendored locally under `src/cybercar/common/` and mirrored through `src/Collection/shared/common/` compatibility wrappers.
 
 ## Command Flow
 
 - `python -m cybercar immediate|collect|publish` -> `cybercar.cli` -> `cybercar.orchestrator` -> `cybercar.pipeline`
 - `python -m cybercar login ...` -> `cybercar.cli` -> `cybercar.session` -> `cybercar.engine`
 - `python -m cybercar engage wechat ...` -> `cybercar.cli` -> `cybercar.engagement` -> `cybercar.engine`
+- `python -m cybercar telegram worker` -> `cybercar.cli` -> `cybercar.telegram.worker` -> `cybercar.telegram.bootstrap` -> vendored legacy Telegram worker
+- `python -m cybercar telegram set-commands|home-refresh` -> `cybercar.cli` -> `cybercar.telegram.bootstrap` -> Telegram transport/home facades

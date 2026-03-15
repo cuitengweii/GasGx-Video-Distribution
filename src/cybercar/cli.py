@@ -9,6 +9,8 @@ from .engagement import run_wechat_engagement
 from .migrate import migrate_legacy_assets
 from .publish import immediate, publish
 from .session import capture_login_qr, login_status, open_login
+from .telegram.bootstrap import refresh_home_surface, set_clickable_commands
+from .telegram.worker import main as telegram_worker_main
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
     engage_wechat.add_argument("--like-only", action="store_true")
     engage_wechat.add_argument("--latest-only", action="store_true")
     engage_wechat.add_argument("--debug", action="store_true")
+
+    telegram = subparsers.add_parser("telegram")
+    telegram_sub = telegram.add_subparsers(dest="telegram_command", required=True)
+    telegram_sub.add_parser("worker", add_help=False)
+    telegram_sub.add_parser("set-commands")
+    telegram_sub.add_parser("home-refresh")
 
     subparsers.add_parser("migrate-legacy")
     return parser
@@ -93,6 +101,14 @@ def main() -> int:
         )
         _print_json(result)
         return 0 if bool(result.get("ok")) else 1
+    if command == "telegram":
+        if args.telegram_command == "worker":
+            return telegram_worker_main(passthrough)
+        if args.telegram_command == "set-commands":
+            _print_json(set_clickable_commands())
+            return 0
+        _print_json(refresh_home_surface())
+        return 0
     if command == "migrate-legacy":
         summary = migrate_legacy_assets()
         _print_json({"copied": summary.copied, "skipped": summary.skipped})
