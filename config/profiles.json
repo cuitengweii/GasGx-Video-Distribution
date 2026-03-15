@@ -1,0 +1,50 @@
+{
+  "default_profile": "cybertruck",
+  "profiles": {
+    "cybertruck": {
+      "keyword": "Cybertruck",
+      "exclude_keywords": [
+        "hero wars",
+        "rpg",
+        "role playing game",
+        "browser game",
+        "no downloads",
+        "click and go",
+        "点击即可开始",
+        "无需下载",
+        "角色扮演游戏",
+        "小游戏",
+        "游戏广告"
+      ],
+      "require_any_keywords": [
+        "cybertruck",
+        "tesla",
+        "赛博皮卡",
+        "特斯拉"
+      ],
+      "upload_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+      "collect_limit": 10,
+      "publish_limit": 3
+    },
+    "cybercar": {
+      "keyword": "CyberCar",
+      "exclude_keywords": [
+        "hero wars",
+        "rpg",
+        "role playing game",
+        "browser game",
+        "no downloads",
+        "click and go"
+      ],
+      "require_any_keywords": [
+        "cybercar",
+        "tesla",
+        "赛博",
+        "特斯拉"
+      ],
+      "upload_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+      "collect_limit": 10,
+      "publish_limit": 3
+    }
+  }
+}

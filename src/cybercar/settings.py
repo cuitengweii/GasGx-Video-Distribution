@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class AppPaths:
+    repo_root: Path
+    config_dir: Path
+    app_config_path: Path
+    profile_config_path: Path
+    runtime_root: Path
+    log_dir: Path
+    profiles_root: Path
+    default_profile_dir: Path
+    wechat_profile_dir: Path
+
+    def ensure(self) -> None:
+        self.runtime_root.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.profiles_root.mkdir(parents=True, exist_ok=True)
+        self.default_profile_dir.mkdir(parents=True, exist_ok=True)
+        self.wechat_profile_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    raw = path.read_text(encoding="utf-8-sig")
+    payload = json.loads(raw)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_path(root: Path, raw: Any, default: Path) -> Path:
+    token = str(raw or "").strip()
+    if not token:
+        return default
+    path = Path(token)
+    if not path.is_absolute():
+        path = (root / path).resolve()
+    return path
+
+
+@lru_cache(maxsize=1)
+def load_app_config() -> dict[str, Any]:
+    return _load_json(_repo_root() / "config" / "app.json")
+
+
+@lru_cache(maxsize=1)
+def load_profile_config() -> dict[str, Any]:
+    return _load_json(_repo_root() / "config" / "profiles.json")
+
+
+@lru_cache(maxsize=1)
+def get_paths() -> AppPaths:
+    repo_root = _repo_root()
+    config = load_app_config()
+    path_cfg = config.get("paths") if isinstance(config.get("paths"), dict) else {}
+    config_dir = repo_root / "config"
+    runtime_root = _resolve_path(repo_root, path_cfg.get("runtime_root"), repo_root / "runtime")
+    profiles_root = _resolve_path(repo_root, path_cfg.get("profiles_root"), repo_root / "profiles")
+    default_profile_dir = _resolve_path(profiles_root, path_cfg.get("default_profile_dir"), profiles_root / "default")
+    wechat_profile_dir = _resolve_path(profiles_root, path_cfg.get("wechat_profile_dir"), profiles_root / "wechat")
+    return AppPaths(
+        repo_root=repo_root,
+        config_dir=config_dir,
+        app_config_path=config_dir / "app.json",
+        profile_config_path=config_dir / "profiles.json",
+        runtime_root=runtime_root,
+        log_dir=runtime_root / "logs",
+        profiles_root=profiles_root,
+        default_profile_dir=default_profile_dir,
+        wechat_profile_dir=wechat_profile_dir,
+    )
+
+
+def apply_runtime_environment() -> AppPaths:
+    paths = get_paths()
+    paths.ensure()
+    os.environ.setdefault("CYBERCAR_CHROME_USER_DATA_DIR", str(paths.default_profile_dir))
+    os.environ.setdefault("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", str(paths.wechat_profile_dir))
+    chrome_cfg = load_app_config().get("chrome") if isinstance(load_app_config().get("chrome"), dict) else {}
+    default_port = str(chrome_cfg.get("default_debug_port") or "").strip()
+    wechat_port = str(chrome_cfg.get("wechat_debug_port") or "").strip()
+    if default_port:
+        os.environ.setdefault("CYBERCAR_CHROME_DEBUG_PORT", default_port)
+    if wechat_port:
+        os.environ.setdefault("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", wechat_port)
+    return paths

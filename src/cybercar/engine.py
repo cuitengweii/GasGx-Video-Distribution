@@ -1,0 +1,18582 @@
+from __future__ import annotations
+
+"""
+CyberCar 草稿助手（Windows 优先）。
+
+环境准备：
+1) Python 依赖：
+   pip install DrissionPage
+   （并确保 yt-dlp、ffmpeg 在 PATH 中）
+
+2) 工具安装：
+   - yt-dlp: https://github.com/yt-dlp/yt-dlp
+   - ffmpeg: https://ffmpeg.org/download.html
+
+3) 默认会自动启动 Chrome 调试模式并打开视频号发布页。
+   如需手动启动，可使用：
+   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ^
+     --remote-debugging-port=9333 ^
+     --user-data-dir="D:\\ChromeDebugProfile_CyberCar"
+
+4) 在该 Chrome 配置中登录微信视频号助手（首次需要）：
+   https://channels.weixin.qq.com/platform/post/create
+
+说明：
+- 本脚本用于授权内容处理流程。
+- 默认只负责上传与填写草稿；仅在显式即时发布模式下会点击发表。
+"""
+
+import argparse
+import base64
+import contextlib
+import hashlib
+import html
+import json
+import math
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Iterable, Optional, Sequence
+from urllib.parse import parse_qs, quote_plus, unquote, urlencode, urlparse
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
+
+import requests
+
+_PYTHON_ROOT = Path(__file__).resolve().parents[3]
+
+try:
+    from .settings import get_paths
+except Exception:  # pragma: no cover
+    get_paths = None  # type: ignore
+
+try:
+    from DrissionPage import ChromiumOptions, ChromiumPage
+except Exception:  # pragma: no cover - runtime dependency check
+    ChromiumOptions = None
+    ChromiumPage = None
+
+try:
+    import browser_cookie3
+except Exception:  # pragma: no cover - optional runtime dependency
+    browser_cookie3 = None
+
+try:
+    from Collection.shared.common.xfyun_spark import (
+        SparkAIClient as SharedSparkAIClient,
+        default_spark_settings as shared_default_spark_settings,
+        extract_json_object as shared_extract_json_object,
+        merge_spark_settings as shared_merge_spark_settings,
+        spark_settings_ready as shared_spark_settings_ready,
+    )
+except Exception:
+    if str(_PYTHON_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PYTHON_ROOT))
+    from Collection.shared.common.xfyun_spark import (  # type: ignore
+        SparkAIClient as SharedSparkAIClient,
+        default_spark_settings as shared_default_spark_settings,
+        extract_json_object as shared_extract_json_object,
+        merge_spark_settings as shared_merge_spark_settings,
+        spark_settings_ready as shared_spark_settings_ready,
+    )
+
+try:
+    from Collection.shared.common.bot_notify import (
+        resolve_telegram_bot_settings as shared_resolve_telegram_bot_settings,
+        send_notification as shared_send_notification,
+    )
+except Exception:
+    if str(_PYTHON_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PYTHON_ROOT))
+    from Collection.shared.common.bot_notify import (  # type: ignore
+        resolve_telegram_bot_settings as shared_resolve_telegram_bot_settings,
+        send_notification as shared_send_notification,
+    )
+
+try:
+    from Collection.shared.common.telegram_api import call_telegram_api as shared_call_telegram_api
+    from Collection.shared.common.telegram_ui import build_telegram_card
+except Exception:
+    if str(_PYTHON_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PYTHON_ROOT))
+    from Collection.shared.common.telegram_api import call_telegram_api as shared_call_telegram_api  # type: ignore
+    from Collection.shared.common.telegram_ui import build_telegram_card  # type: ignore
+
+
+
+def _default_workspace() -> str:
+    if callable(get_paths):
+        try:
+            return str(get_paths().runtime_root)
+        except Exception:
+            pass
+    if os.name == "nt":
+        return r"D:\code\Runtime\CyberCar_Workspace"
+    return str(Path.home() / "CyberCar_Workspace")
+
+
+DEFAULT_WORKSPACE = _default_workspace()
+DEFAULT_KEYWORD = "Cybertruck"
+DEFAULT_LIMIT = 3
+X_DOWNLOAD_BATCH_SIZE = 5
+X_DOWNLOAD_RETRY_BATCH_SIZE = 1
+X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS = 2.0
+MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS = 5.0
+MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS = 120.0
+WINDOWS_CHROME_WINDOW_MODE_DEFAULT = "minimized"
+WINDOWS_SW_SHOWMINNOACTIVE = 7
+WINDOWS_SW_FORCEMINIMIZE = 11
+WINDOWS_SW_SHOWNORMAL = 1
+WINDOWS_SW_RESTORE = 9
+
+
+def _default_debug_port() -> int:
+    raw = str(os.getenv("CYBERCAR_CHROME_DEBUG_PORT", "9333") or "").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        return 9333
+    if 1 <= value <= 65535:
+        return value
+    return 9333
+
+
+DEFAULT_PORT = _default_debug_port()
+REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#CyberCar", "#特斯拉Cybertruck"]
+REQUIRED_CAPTION_KEYWORD = "特斯拉 Cybertruck"
+DEFAULT_HASHTAGS = " ".join(REQUIRED_HASHTAGS)
+KUAISHOU_HASHTAG_LIMIT = 4
+KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#特斯拉Cybertruck"]
+DEFAULT_CAPTION = f"Cybertruck 赛博皮卡最新画面！\n\n{DEFAULT_HASHTAGS}"
+DEFAULT_COLLECTION_NAME = "赛博皮卡预定"
+CREATE_POST_URL = "https://channels.weixin.qq.com/platform/post/create"
+WECHAT_MICRO_CREATE_POST_URL = "https://channels.weixin.qq.com/micro/content/post/create"
+DOUYIN_CREATE_POST_URL = "https://creator.douyin.com/creator-micro/content/upload"
+DOUYIN_CREATE_IMAGE_POST_URL = (
+    "https://creator.douyin.com/creator-micro/content/post/image"
+    "?default-tab=3&enter_from=publish_page&media_type=image&type=new"
+)
+XIAOHONGSHU_CREATE_POST_URL = "https://creator.xiaohongshu.com/publish/publish"
+KUAISHOU_CREATE_POST_URL = "https://cp.kuaishou.com/article/publish/video"
+KUAISHOU_CREATE_IMAGE_POST_URL = "https://cp.kuaishou.com/article/publish/video?tabType=2"
+BILIBILI_CREATE_POST_URL = "https://member.bilibili.com/platform/upload/video/frame"
+X_LOGIN_URL = "https://x.com/i/flow/login"
+PLATFORM_CREATE_POST_URLS = {
+    "wechat": CREATE_POST_URL,
+    "douyin": DOUYIN_CREATE_POST_URL,
+    "xiaohongshu": XIAOHONGSHU_CREATE_POST_URL,
+    "kuaishou": KUAISHOU_CREATE_POST_URL,
+    "bilibili": BILIBILI_CREATE_POST_URL,
+}
+PLATFORM_LOGIN_ENTRY_URLS = {
+    "wechat": "https://channels.weixin.qq.com/login.html",
+    "douyin": DOUYIN_CREATE_POST_URL,
+    "xiaohongshu": "https://creator.xiaohongshu.com/login",
+    "kuaishou": "https://passport.kuaishou.com/pc/account/login",
+    "bilibili": "https://passport.bilibili.com/login",
+}
+PLATFORM_LOGIN_DISPLAY_NAMES = {
+    "wechat": "视频号",
+    "douyin": "抖音",
+    "xiaohongshu": "小红书",
+    "kuaishou": "快手",
+    "bilibili": "B站",
+}
+PLATFORM_LOGIN_PAGE_HINTS = {
+    "wechat": {
+        "url_tokens": ("channels.weixin.qq.com/login", "passport", "scan"),
+        "text_markers": (
+            "微信扫码登录",
+            "扫码登录",
+            "请使用微信扫码",
+            "请先登录",
+            "登录后继续",
+            "账号登录",
+            "帐号登录",
+            "手机验证码登录",
+        ),
+    },
+    "douyin": {
+        "url_tokens": ("login", "passport", "signin"),
+        "text_markers": (
+            "扫码登录",
+            "抖音扫码登录",
+            "登录创作者中心",
+            "登录后继续",
+            "手机号登录",
+            "验证码登录",
+        ),
+    },
+    "xiaohongshu": {
+        "url_tokens": ("login", "signin"),
+        "text_markers": (
+            "扫码登录",
+            "小红书登录",
+            "创作服务平台登录",
+            "验证码登录",
+            "手机号登录",
+        ),
+    },
+    "kuaishou": {
+        "url_tokens": ("login", "passport", "signin"),
+        "text_markers": (
+            "扫码登录",
+            "快手扫码登录",
+            "登录快手创作者平台",
+            "手机号登录",
+            "验证码登录",
+        ),
+    },
+    "bilibili": {
+        "url_tokens": ("login", "passport", "signin"),
+        "text_markers": (
+            "扫码登录",
+            "登录哔哩哔哩",
+            "创作中心登录",
+            "手机验证登录",
+            "短信登录",
+        ),
+    },
+}
+SUPPORTED_UPLOAD_PLATFORMS = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili")
+DEFAULT_UPLOAD_PLATFORMS = "wechat"
+UPLOAD_TIMEOUT_SECONDS = 420
+DRAFT_SAVE_TIMEOUT_SECONDS = 25
+DRAFT_SAVE_RETRY_COUNT = 3
+CHROME_LAUNCH_TIMEOUT_SECONDS = 60
+X_DISCOVERY_URL_LIMIT = 24
+X_DISCOVERY_SCROLL_ROUNDS = 8
+WECHAT_LOGIN_QR_REFRESH_CALLBACK_PREFIX = "ctqr"
+WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS = 120
+WECHAT_LOGIN_QR_NOTICE_CACHE: dict[str, tuple[str, float]] = {}
+PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS = 300
+PLATFORM_LOGIN_CONFIRM_POLL_SECONDS = 2.0
+PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS = 600
+WECHAT_RECENT_READY_ROUTE_ERROR_RECHECKS = 4
+WECHAT_RECENT_READY_ROUTE_ERROR_RECHECK_SLEEP_SECONDS = 2.0
+X_DISCOVERY_SCROLL_WAIT_SECONDS = 1.2
+DEFAULT_X_DISCOVERY_SEED_ACCOUNTS = ("cybertruck", "tesla", "elonmusk")
+DRAFTS_PER_RUN_DEFAULT = 0
+UPLOAD_INTERVAL_MIN_SECONDS = 45
+UPLOAD_INTERVAL_MAX_SECONDS = 120
+BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES = 121
+BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT = 240
+KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 150
+WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 90
+DEFAULT_AUTO_DELETE_SOURCE_FILES = False
+SPARK_CHAT_TIMEOUT_SECONDS = 20
+DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE = 12
+UPLOAD_RECORD_DB_MAX_ITEMS = 4000
+DEFAULT_EXCLUDE_KEYWORDS = [
+    "hero wars",
+    "rpg",
+    "role playing game",
+    "browser game",
+    "no downloads",
+    "click and go",
+    "点击即可开始",
+    "无需下载",
+    "角色扮演游戏",
+    "小游戏",
+    "游戏广告",
+]
+DEFAULT_REQUIRE_ANY_KEYWORDS = ["cybertruck", "tesla", "赛博皮卡", "特斯拉"]
+
+
+PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+NO_PROXY_ENV_KEYS = ("NO_PROXY", "no_proxy")
+LOCAL_NO_PROXY_ITEMS = ("127.0.0.1", "localhost", "::1")
+
+
+def _default_chrome_user_data_dir() -> str:
+    from_env = str(os.getenv("CYBERCAR_CHROME_USER_DATA_DIR", "") or "").strip()
+    if from_env:
+        return str(Path(from_env).expanduser())
+    if callable(get_paths):
+        try:
+            return str(get_paths().default_profile_dir)
+        except Exception:
+            pass
+    if os.name == "nt":
+        return r"D:\code\Runtime\ChromeDebugProfile_CyberCar"
+    return str(Path.home() / "CyberCarChromeDebug_CyberCar")
+
+
+DEFAULT_CHROME_USER_DATA_DIR = _default_chrome_user_data_dir()
+
+
+def _default_wechat_chrome_user_data_dir() -> str:
+    from_env = str(os.getenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", "") or "").strip()
+    if from_env:
+        return str(Path(from_env).expanduser())
+    if callable(get_paths):
+        try:
+            return str(get_paths().wechat_profile_dir)
+        except Exception:
+            pass
+    return DEFAULT_CHROME_USER_DATA_DIR + "_WeChat"
+
+
+DEFAULT_WECHAT_CHROME_USER_DATA_DIR = _default_wechat_chrome_user_data_dir()
+
+
+def _default_wechat_debug_port() -> int:
+    raw = str(os.getenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", "") or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except Exception:
+            value = 0
+        if 1 <= value <= 65535:
+            return value
+    fallback = DEFAULT_PORT + 1
+    if 1 <= fallback <= 65535:
+        return fallback
+    return 9334
+
+
+DEFAULT_WECHAT_DEBUG_PORT = _default_wechat_debug_port()
+
+
+def _default_config_path() -> str:
+    if callable(get_paths):
+        try:
+            return str(get_paths().app_config_path)
+        except Exception:
+            pass
+    return str(Path(__file__).with_name("config.json"))
+
+
+DEFAULT_CONFIG_PATH = _default_config_path()
+DEFAULT_REVIEW_STATE_FILE = "review_state.json"
+DEFAULT_NOTIFY_PROVIDER = "telegram_bot"
+DEFAULT_NOTIFY_ENV_PREFIX = "CYBERCAR_NOTIFY_"
+WECHAT_POST_LIST_URL = "https://channels.weixin.qq.com/platform/post/list"
+WECHAT_COMMENT_MANAGER_URL = "https://channels.weixin.qq.com/platform/interaction/comment?isImageMode=0"
+WECHAT_COMMENT_MANAGER_URL_TOKEN = "/platform/interaction/comment"
+DOUYIN_CONTENT_MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage"
+XIAOHONGSHU_NOTE_MANAGE_URL = "https://creator.xiaohongshu.com/note/manage"
+KUAISHOU_CONTENT_MANAGE_URL = "https://cp.kuaishou.com/article/manage"
+BILIBILI_UPLOAD_MANAGER_URL = "https://member.bilibili.com/platform/upload-manager"
+WECHAT_COMMENT_REPLY_STATE_FILE = "wechat_comment_reply_state.json"
+WECHAT_COMMENT_REPLY_RETENTION_DAYS = 30
+LEGACY_BROKEN_WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
+    "你是特斯拉 Cybertruck 社区管理者。"
+    "你必须只输出 JSON 对象，格式为 {\"reply\":\"...\"}。"
+    "reply 必须是中文、友好、鼓励、共鸣、20 字以内，不要换行，不要引导私信，不要外链。"
+)
+LEGACY_BROKEN_DEFAULT_COMMENT_REPLY_FALLBACKS = [
+    "谢谢喜欢，一起见证更多精彩",
+    "感谢关注，欢迎继续交流想法",
+    "很有共鸣，期待和你继续讨论",
+    "谢谢支持，后面还有更多惊喜",
+]
+LEGACY_BROKEN_DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE = (
+    "请你作为特斯拉 Cybertruck 社区管理者，根据粉丝评论生成一条中文回复。\n"
+    "视频标题：{post_title}\n"
+    "视频时间：{post_published_text}\n"
+    "粉丝评论：{comment_content}\n"
+    "要求：友好、鼓励、共鸣；20字以内；不要换行；不要引导私信；不要外链；只返回 JSON。"
+)
+WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
+    "你是特斯拉 Cybertruck 社区运营。"
+    "你必须只输出 JSON 对象，格式为 {\"reply\":\"...\"}。"
+    "reply 必须是中文、友好、积极、共鸣感强，20 字以内，不要换行，不要引导私信，不要外链。"
+)
+DEFAULT_COMMENT_REPLY_FALLBACKS = [
+    "谢谢喜欢，一起见证更多精彩。",
+    "感谢关注，欢迎继续交流想法。",
+    "很有共鸣，期待和你继续讨论。",
+    "谢谢支持，后面还有更多惊喜。",
+]
+DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE = (
+    "请你作为特斯拉 Cybertruck 社区运营，根据粉丝评论生成一条中文回复。\n"
+    "视频标题：{post_title}\n"
+    "发布时间：{post_published_text}\n"
+    "粉丝评论：{comment_content}\n"
+    "要求：友好、积极、有共鸣；20字以内；不要换行；不要引导私信；不要外链；只返回 JSON。"
+)
+PLATFORM_NOTIFY_NAME = {
+    "wechat": "视频号",
+    "douyin": "抖音",
+    "xiaohongshu": "小红书",
+    "kuaishou": "快手",
+    "bilibili": "哔哩哔哩",
+}
+PLATFORM_NOTIFY_LOGO = {
+    "wechat": "🟢",
+    "douyin": "🎵",
+    "xiaohongshu": "📕",
+    "kuaishou": "⚡",
+    "bilibili": "📺",
+}
+
+
+@dataclass(frozen=True)
+class Workspace:
+    root: Path
+    downloads: Path
+    processed: Path
+    archive: Path
+    history: Path
+    image_downloads: Path
+    image_processed: Path
+    image_history: Path
+
+
+@dataclass(frozen=True)
+class NotifySettings:
+    enabled: bool
+    provider: str
+    env_prefix: str
+    telegram_bot_token: str
+    telegram_chat_id: str
+    telegram_timeout_seconds: int
+    telegram_api_base: str
+
+
+def _log(message: str) -> None:
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    _console_print(f"[{ts}] {message}")
+
+
+def _console_print(message: Any) -> None:
+    text = str(message)
+    try:
+        print(text, flush=True)
+        return
+    except UnicodeEncodeError:
+        pass
+
+    stream = getattr(sys, "stdout", None)
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    payload = (text + "\n").encode(encoding, errors="replace")
+    buffer = getattr(stream, "buffer", None)
+    if buffer:
+        buffer.write(payload)
+        buffer.flush()
+        return
+
+    # Final fallback for unusual stdout implementations.
+    print(text.encode("utf-8", errors="replace").decode("utf-8"), flush=True)
+
+
+def _run_command_result(
+    cmd: Iterable[str],
+    step_name: str,
+    *,
+    env: Optional[dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
+    cmd_list = [str(x) for x in cmd]
+    _log(f"[{step_name}] Running command:\n  {' '.join(cmd_list)}")
+    result = subprocess.run(cmd_list, capture_output=True, text=True, env=env)
+    if result.stdout.strip():
+        _console_print(result.stdout.strip())
+    return result
+
+
+def _merge_completed_process_results(
+    results: Sequence[subprocess.CompletedProcess[str]],
+) -> subprocess.CompletedProcess[str]:
+    items = [result for result in results if isinstance(result, subprocess.CompletedProcess)]
+    if not items:
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    merged_stdout = "\n".join(str(result.stdout or "").strip() for result in items if str(result.stdout or "").strip())
+    merged_stderr = "\n".join(str(result.stderr or "").strip() for result in items if str(result.stderr or "").strip())
+    final_returncode = 0 if any(int(result.returncode or 0) == 0 for result in items) else int(items[-1].returncode or 1)
+    merged_args: list[str] = []
+    for result in items:
+        raw_args = result.args
+        if isinstance(raw_args, (list, tuple)):
+            merged_args.extend(str(part) for part in raw_args)
+        elif raw_args:
+            merged_args.append(str(raw_args))
+    return subprocess.CompletedProcess(
+        args=merged_args,
+        returncode=final_returncode,
+        stdout=merged_stdout,
+        stderr=merged_stderr,
+    )
+
+
+def _run_ytdlp_download_with_retries(
+    base_cmd: Sequence[str],
+    *,
+    selected_urls: Sequence[str],
+    step_name: str,
+    env: Optional[dict[str, str]] = None,
+    batch_size: int = X_DOWNLOAD_BATCH_SIZE,
+    retry_batch_size: int = X_DOWNLOAD_RETRY_BATCH_SIZE,
+    retry_sleep_seconds: float = X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    if not selected_urls:
+        return _run_command_result(base_cmd, step_name, env=env)
+
+    prefix = [str(part) for part in base_cmd]
+    urls = [str(url or "").strip() for url in selected_urls if str(url or "").strip()]
+    effective_batch_size = max(1, int(batch_size or 1))
+    effective_retry_batch_size = max(1, int(retry_batch_size or 1))
+    aggregated: list[subprocess.CompletedProcess[str]] = []
+    failed_urls: list[str] = []
+    transport_failed_urls: list[str] = []
+
+    for start in range(0, len(urls), effective_batch_size):
+        batch_urls = urls[start : start + effective_batch_size]
+        result = _run_command_result([*prefix, *batch_urls], step_name, env=env)
+        aggregated.append(result)
+        if int(result.returncode or 0) != 0:
+            failed_urls.extend(batch_urls)
+
+    if not failed_urls:
+        return _merge_completed_process_results(aggregated)
+
+    _log(
+        "[Downloader] yt-dlp batch download degraded; "
+        f"retrying {len(failed_urls)} URL(s) in smaller batches."
+    )
+    if retry_sleep_seconds > 0:
+        time.sleep(float(retry_sleep_seconds))
+
+    for start in range(0, len(failed_urls), effective_retry_batch_size):
+        retry_urls = failed_urls[start : start + effective_retry_batch_size]
+        retry_result = _run_command_result([*prefix, *retry_urls], step_name, env=env)
+        aggregated.append(retry_result)
+        if int(retry_result.returncode or 0) != 0:
+            if _looks_like_x_metadata_transport_failure(retry_result):
+                transport_failed_urls.extend(retry_urls)
+            _log(
+                "[Downloader] yt-dlp retry still failed: "
+                + ", ".join(retry_urls)
+            )
+
+    if transport_failed_urls:
+        deduped_transport_urls = list(dict.fromkeys(transport_failed_urls))
+        _log(
+            "[Downloader] X metadata transport retry enabled; "
+            f"retrying {len(deduped_transport_urls)} URL(s) once more."
+        )
+        if retry_sleep_seconds > 0:
+            time.sleep(float(retry_sleep_seconds))
+        for retry_url in deduped_transport_urls:
+            transport_result = _run_x_transport_fallback_command(
+                prefix,
+                retry_url=retry_url,
+                step_name=step_name,
+                env=env,
+            )
+            if int(transport_result.returncode or 0) != 0:
+                _log("[Downloader] X metadata transport retry failed: " + retry_url)
+            aggregated.append(transport_result)
+
+    return _merge_completed_process_results(aggregated)
+
+
+def _looks_like_x_metadata_transport_failure(result: subprocess.CompletedProcess[str]) -> bool:
+    if not isinstance(result, subprocess.CompletedProcess):
+        return False
+    text = "\n".join(
+        part.strip()
+        for part in (
+            str(getattr(result, "stdout", "") or ""),
+            str(getattr(result, "stderr", "") or ""),
+        )
+        if str(part or "").strip()
+    ).lower()
+    if not text:
+        return False
+    failure_markers = (
+        "unable to download json metadata",
+        "connectionreseterror(10054",
+        "connection aborted.",
+        "unexpected_eof_while_reading",
+        "read timed out",
+        "transporterror(",
+    )
+    return any(marker in text for marker in failure_markers)
+
+
+def _with_x_syndication_extractor_args(base_cmd: Sequence[str]) -> list[str]:
+    cmd = [str(part) for part in base_cmd]
+    lowered = [part.lower() for part in cmd]
+    if "--extractor-args" in lowered:
+        idx = lowered.index("--extractor-args")
+        if idx + 1 < len(cmd) and "twitter:api=syndication" in cmd[idx + 1].lower():
+            return cmd
+    return [*cmd, "--extractor-args", "twitter:api=syndication"]
+
+
+def _with_no_check_certificates(base_cmd: Sequence[str]) -> list[str]:
+    cmd = [str(part) for part in base_cmd]
+    lowered = [part.lower() for part in cmd]
+    if "--no-check-certificates" in lowered:
+        return cmd
+    return [*cmd, "--no-check-certificates"]
+
+
+def _run_x_transport_fallback_command(
+    base_cmd: Sequence[str],
+    *,
+    retry_url: str,
+    step_name: str,
+    env: Optional[dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
+    fallback_attempts: list[tuple[str, list[str]]] = [
+        ("syndication", _with_x_syndication_extractor_args(base_cmd)),
+        (
+            "syndication+no-check-certificates",
+            _with_no_check_certificates(_with_x_syndication_extractor_args(base_cmd)),
+        ),
+        ("no-check-certificates", _with_no_check_certificates(base_cmd)),
+    ]
+    last_result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+    for label, attempt_cmd in fallback_attempts:
+        _log(f"[Downloader] X transport fallback attempt={label}: {retry_url}")
+        result = _run_command_result([*attempt_cmd, retry_url], step_name, env=env)
+        if int(result.returncode or 0) == 0:
+            return result
+        last_result = result
+    return last_result
+
+
+def _run_command(cmd: Iterable[str], step_name: str) -> None:
+    result = _run_command_result(cmd, step_name)
+    if result.returncode != 0:
+        if result.stderr.strip():
+            _console_print(result.stderr.strip())
+        raise RuntimeError(f"{step_name} failed with exit code {result.returncode}")
+
+
+def _ensure_binary(name: str) -> None:
+    if shutil.which(name):
+        return
+    raise RuntimeError(f"Required command not found in PATH: {name}")
+
+
+def _env_first(*names: str, default: str = "") -> str:
+    for name in names:
+        token = str(name or "").strip()
+        if not token:
+            continue
+        value = str(os.getenv(token, "") or "").strip()
+        if value:
+            return value
+    return str(default or "").strip()
+
+
+def _env_int_first(names: list[str], default: int) -> int:
+    for name in names:
+        raw = str(os.getenv(str(name or "").strip(), "") or "").strip()
+        if not raw:
+            continue
+        try:
+            return int(raw)
+        except Exception:
+            continue
+    return int(default)
+
+
+def _parse_bool_token(raw: str, default: bool = False) -> bool:
+    token = str(raw or "").strip().lower()
+    if not token:
+        return default
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _env_bool_first(names: list[str], default: bool = False) -> bool:
+    for name in names:
+        key = str(name or "").strip()
+        if not key:
+            continue
+        raw = str(os.getenv(key, "") or "").strip()
+        if not raw:
+            continue
+        return _parse_bool_token(raw, default=default)
+    return bool(default)
+
+
+def _merge_no_proxy_items(raw_no_proxy: str, extras: Iterable[str]) -> str:
+    values = [str(raw_no_proxy or "").strip(), *[str(x or "").strip() for x in extras]]
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        for part in value.split(","):
+            token = str(part or "").strip()
+            if not token:
+                continue
+            lowered = token.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            items.append(token)
+    return ",".join(items)
+
+
+def _resolve_network_proxy(
+    proxy: Optional[str],
+    *,
+    use_system_proxy: bool = False,
+) -> tuple[Optional[str], bool]:
+    explicit_proxy = str(proxy or "").strip() or None
+    if explicit_proxy:
+        return explicit_proxy, False
+    return None, bool(use_system_proxy)
+
+
+def _build_network_opener(
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+):
+    effective_proxy, effective_use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    if effective_proxy:
+        return build_opener(ProxyHandler({"http": effective_proxy, "https": effective_proxy}))
+    if effective_use_system_proxy:
+        return build_opener()
+    return build_opener(ProxyHandler({}))
+
+
+def _build_subprocess_network_env(
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> Optional[dict[str, str]]:
+    effective_proxy, effective_use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    if effective_use_system_proxy:
+        return None
+
+    env = dict(os.environ)
+    for key in PROXY_ENV_KEYS:
+        env.pop(key, None)
+    if effective_proxy:
+        env["HTTP_PROXY"] = effective_proxy
+        env["HTTPS_PROXY"] = effective_proxy
+        env["ALL_PROXY"] = effective_proxy
+        env["http_proxy"] = effective_proxy
+        env["https_proxy"] = effective_proxy
+        env["all_proxy"] = effective_proxy
+
+    no_proxy_value = _merge_no_proxy_items(
+        env.get("NO_PROXY", "") or env.get("no_proxy", ""),
+        LOCAL_NO_PROXY_ITEMS,
+    )
+    if no_proxy_value:
+        for key in NO_PROXY_ENV_KEYS:
+            env[key] = no_proxy_value
+    return env
+
+
+def _configure_requests_session_proxy(
+    session: requests.Session,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> None:
+    effective_proxy, effective_use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    if effective_use_system_proxy:
+        session.trust_env = True
+        return
+    session.trust_env = False
+    session.proxies.clear()
+    if effective_proxy:
+        session.proxies.update({"http": effective_proxy, "https": effective_proxy})
+
+
+def _apply_runtime_network_env(
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> None:
+    effective_proxy, effective_use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    if effective_use_system_proxy:
+        return
+
+    for key in PROXY_ENV_KEYS:
+        os.environ.pop(key, None)
+    if effective_proxy:
+        os.environ["HTTP_PROXY"] = effective_proxy
+        os.environ["HTTPS_PROXY"] = effective_proxy
+        os.environ["ALL_PROXY"] = effective_proxy
+        os.environ["http_proxy"] = effective_proxy
+        os.environ["https_proxy"] = effective_proxy
+        os.environ["all_proxy"] = effective_proxy
+
+    no_proxy_value = _merge_no_proxy_items(
+        os.environ.get("NO_PROXY", "") or os.environ.get("no_proxy", ""),
+        LOCAL_NO_PROXY_ITEMS,
+    )
+    if no_proxy_value:
+        for key in NO_PROXY_ENV_KEYS:
+            os.environ[key] = no_proxy_value
+
+
+def _normalize_env_prefix(raw: str, default: str = DEFAULT_NOTIFY_ENV_PREFIX) -> str:
+    token = str(raw or "").strip()
+    if not token:
+        return default
+    return token if token.endswith("_") else f"{token}_"
+
+
+def _normalize_notify_provider(raw: str) -> str:
+    token = str(raw or "").strip().lower()
+    if token in {"wecom", "wecom_bot", "wecom-robot", "qywx", "wework"}:
+        # WeCom has been removed for CyberCar notification path; map legacy values to Telegram.
+        return "telegram_bot"
+    if token in {"telegram", "telegram_bot", "telegram-bot", "tg", "tg_bot", "tg-bot"}:
+        return "telegram_bot"
+    return token
+
+
+def _single_line_preview(text: str, limit: int = 180) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return ""
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3].rstrip() + "..."
+
+
+def _build_publish_identifier(
+    platform: str,
+    target_video: Path,
+    target_fp: str,
+    meta: dict[str, str],
+) -> str:
+    raw = "|".join(
+        [
+            str(platform or "").strip().lower(),
+            target_video.name,
+            str(meta.get("status_id", "") or "").strip(),
+            str(meta.get("media_id", "") or "").strip(),
+            str(meta.get("uploader", "") or "").strip(),
+            str(target_fp or "")[:64],
+        ]
+    )
+    return f"CT-{hashlib.sha1(raw.encode('utf-8', errors='ignore')).hexdigest()[:12].upper()}"
+
+
+def _resolve_caption_details_for_notify(target_video: Path, manual_caption: str) -> tuple[str, str]:
+    manual = str(manual_caption or "").strip()
+    if manual:
+        return manual, "manual_arg"
+    sidecar = _processed_caption_path(target_video)
+    if sidecar.exists():
+        text = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
+        if text:
+            return text, str(sidecar)
+    return "", "none"
+
+
+def _platform_notify_badge(platform: str) -> str:
+    token = str(platform or "").strip().lower()
+    name = PLATFORM_NOTIFY_NAME.get(token, token or "未知平台")
+    logo = PLATFORM_NOTIFY_LOGO.get(token, "📌")
+    return f"{logo} {name}"
+
+
+def _platform_display_name(platform: str) -> str:
+    token = str(platform or "").strip().lower()
+    return str(PLATFORM_NOTIFY_NAME.get(token, token or "未知平台"))
+
+
+def _platform_display_with_logo(platform: str) -> str:
+    token = str(platform or "").strip().lower()
+    logo = str(PLATFORM_NOTIFY_LOGO.get(token, "📌") or "📌")
+    return f"{logo} {_platform_display_name(token)}"
+
+
+def _is_unfinished_edit_state(text: str, action_texts: Optional[Sequence[str]] = None) -> bool:
+    normalized_text = _normalize_text(str(text or ""), limit=800)
+    normalized_actions = " ".join(str(item or "") for item in (action_texts or ()))
+    combined = f"{normalized_text}\n{normalized_actions}"
+    state_markers = (
+        "继续编辑",
+        "未发布的视频",
+        "未提交的视频",
+        "未完成视频",
+        "未完成作品",
+        "unfinished-video dialog",
+        "unfinished video dialog",
+        "continue editing",
+    )
+    return any(marker in combined for marker in state_markers)
+
+
+def classify_publish_failure_reason(platform_name: str, error_text: str) -> str:
+    raw = str(error_text or "").strip()
+    if not raw:
+        return "发布失败，请检查页面状态后重试"
+
+    text = _normalize_text(raw, limit=600)
+    lower = text.lower()
+
+    login_markers = (
+        "未登录",
+        "重新登录",
+        "登录已失效",
+        "登录后重试",
+        "登录二维码",
+        "扫码登录",
+        "扫码后重试",
+        "login gate",
+        "needs_login",
+        "login qr",
+        "signin",
+        "passport",
+        "scan code",
+        "scan qr",
+        "cannot get /micro/content/post/create",
+        "login.html",
+    )
+    no_media_markers = (
+        "no processed video found",
+        "no processed media found",
+        "no approved processed video found",
+        "没有可发布素材",
+        "未找到可发布素材",
+    )
+    draft_markers = (
+        "draft/compose state",
+        "draft-state",
+        "草稿页",
+        "草稿箱",
+        "保存为草稿",
+        "已回到草稿",
+    )
+    validation_markers = (
+        "请完善",
+        "不能为空",
+        "违规",
+        "未通过",
+        "驳回",
+        "标题过长",
+        "title too long",
+        "内容不符合规范",
+        "请填写",
+        "请补充",
+    )
+    network_markers = (
+        "网络异常",
+        "请求失败",
+        "ssl",
+        "connection",
+        "timeout",
+        "timed out",
+        "http_status",
+        "net::",
+    )
+    ambiguous_result_markers = (
+        "publish not confirmed within",
+        "publish was not confirmed",
+    )
+    page_state_markers = (
+        "failed to locate publish button",
+        "failed to locate draft button",
+        "could not find file input",
+        "upload failure marker",
+        "upload failed",
+        "caption fill verification failed",
+        "title fill verification failed",
+        "failed to locate title input",
+        "failed to locate caption input",
+    )
+    debug_markers = (
+        "chrome debug port",
+        "debug port",
+        "调试端口",
+        "未检测到 chrome",
+        "自动启动 chrome 后仍未就绪",
+    )
+
+    if _is_unfinished_edit_state(raw):
+        return "页面停留在继续编辑/未完成作品状态，请先处理弹窗后重试"
+    if any(marker in text for marker in login_markers) or any(marker in lower for marker in login_markers):
+        return "未登录，请先完成扫码登录后重试"
+    if any(marker in text for marker in no_media_markers) or any(marker in lower for marker in no_media_markers):
+        return "没有可发布素材"
+    if any(marker in text for marker in draft_markers) or any(marker in lower for marker in draft_markers):
+        return "发布未完成，平台已回到草稿页"
+    if any(marker in text for marker in validation_markers) or any(marker in lower for marker in validation_markers):
+        return "平台校验未通过，请检查标题、文案或素材"
+    if any(marker in text for marker in network_markers) or any(marker in lower for marker in network_markers):
+        return "网络异常，请稍后重试"
+    if any(marker in text for marker in debug_markers) or any(marker in lower for marker in debug_markers):
+        return "浏览器连接未就绪，请检查调试浏览器后重试"
+    if any(marker in text for marker in ambiguous_result_markers) or any(marker in lower for marker in ambiguous_result_markers):
+        return "发布结果未明确，需核实是否已提交到作品管理"
+    if any(marker in text for marker in page_state_markers) or any(marker in lower for marker in page_state_markers):
+        return "页面状态异常，未找到上传或发布入口"
+    return "发布失败，请检查页面状态后重试"
+
+
+def describe_publish_failure(platform_name: str, error_text: str) -> dict[str, str]:
+    raw = str(error_text or "").strip()
+    friendly_reason = classify_publish_failure_reason(platform_name, raw) if raw else ""
+    if not friendly_reason:
+        return {"reason": "", "category": "", "suggestion": "", "raw_signal": raw}
+
+    category = "发布失败"
+    suggestion = "请检查平台页面状态后重试"
+    if friendly_reason.startswith("未登录"):
+        category = "登录失效"
+        suggestion = "先完成扫码登录，再重新触发发布"
+    elif "草稿" in friendly_reason:
+        category = "回退草稿"
+        suggestion = "打开平台草稿箱核对内容，并重新执行发布"
+    elif "校验" in friendly_reason:
+        category = "平台校验失败"
+        suggestion = "检查标题、文案、封面或素材是否满足平台要求"
+    elif "结果未明确" in friendly_reason:
+        category = "发布结果未确认"
+        suggestion = "先到作品管理核实是否已提交，确认未发布后再重试"
+    elif "网络异常" in friendly_reason:
+        category = "网络异常"
+        suggestion = "检查网络连通性后重试"
+    elif "页面状态" in friendly_reason:
+        category = "页面状态异常"
+        suggestion = "确认发布页已正确加载，并且存在可点击的上传/发布入口"
+    elif "浏览器连接未就绪" in friendly_reason:
+        category = "浏览器未就绪"
+        suggestion = "确认 Chrome 调试端口可用后重试"
+
+    return {
+        "reason": friendly_reason,
+        "category": category,
+        "suggestion": suggestion,
+        "raw_signal": raw,
+    }
+
+
+def _notify_desc_prefix10(target_video: Path, manual_caption: str, meta: dict[str, str]) -> str:
+    caption_text, _ = _resolve_caption_details_for_notify(target_video, manual_caption)
+    candidates = [
+        str(caption_text or "").strip(),
+        str(meta.get("description", "") or "").strip(),
+        str(meta.get("title", "") or "").strip(),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        compact = re.sub(r"\s+", "", candidate)
+        if not compact:
+            continue
+        chinese_chars = re.findall(r"[\u4e00-\u9fff]", compact)
+        if chinese_chars:
+            return "".join(chinese_chars)[:10]
+    return "暂无中文描述"
+
+
+def _build_publish_notification_message(
+    workspace: Workspace,
+    platform: str,
+    target_video: Path,
+    manual_caption: str,
+    target_fp: str,
+    save_draft: bool,
+) -> tuple[str, dict[str, Any]]:
+    meta = _resolve_processed_video_metadata(workspace, target_video)
+    publish_id = _build_publish_identifier(platform, target_video, target_fp, meta)
+    platform_label = _platform_display_name(platform)
+    stage_text = "\u4fdd\u5b58\u8349\u7a3f" if save_draft else "\u7acb\u5373\u53d1\u5e03"
+    status = "draft" if save_draft else "success"
+    status_text = "\u5df2\u4fdd\u5b58\u8349\u7a3f" if save_draft else "\u5df2\u6210\u529f\u53d1\u5e03"
+    desc_prefix10 = _notify_desc_prefix10(target_video, manual_caption, meta)
+    source_url = _single_line_preview(str(meta.get("status_url", "") or ""), limit=180)
+    subject = f"[CyberCar][{platform_label}] {status_text}"
+    card = build_telegram_card(
+        "publish_result",
+        {
+            "status": status,
+            "title": f"{platform_label}\u53d1\u5e03\u7ed3\u679c",
+            "subtitle": f"{stage_text} \u00b7 {status_text}",
+            "sections": [
+                {
+                    "title": "\u7ed3\u679c\u6458\u8981",
+                    "emoji": "\U0001f4dd" if save_draft else "\U0001f680",
+                    "items": [
+                        {"label": "\u5e73\u53f0", "value": _platform_display_with_logo(platform)},
+                        {"label": "\u72b6\u6001", "value": status_text},
+                        {"label": "\u65f6\u95f4", "value": time.strftime('%Y-%m-%d %H:%M:%S')},
+                    ],
+                },
+                {
+                    "title": "\u7d20\u6750\u4fe1\u606f",
+                    "emoji": "\U0001f3ac",
+                    "items": [
+                        {"label": "\u6587\u6848\u524d\u7f00", "value": desc_prefix10},
+                        {"label": "\u53d1\u5e03ID", "value": publish_id, "style": "code"},
+                    ],
+                },
+                {
+                    "title": "\u6765\u6e90\u4e0e\u53bb\u5411",
+                    "emoji": "\U0001f517",
+                    "items": ([{"label": "\u539f\u5e16", "text": "\u70b9\u51fb\u67e5\u770b\u539f\u5e16", "url": source_url}] if source_url else ["\u672c\u6761\u672a\u8bb0\u5f55\u539f\u5e16\u94fe\u63a5"]),
+                },
+            ],
+        },
+        actions=([{"text": "\u67e5\u770b\u7ed3\u679c", "url": source_url, "row": 0}] if source_url else None),
+    )
+    return subject, card
+
+def _build_notify_settings(args: argparse.Namespace) -> NotifySettings:
+    env_prefix = _normalize_env_prefix(
+        str(getattr(args, "notify_env_prefix", "") or DEFAULT_NOTIFY_ENV_PREFIX),
+        DEFAULT_NOTIFY_ENV_PREFIX,
+    )
+    provider = _normalize_notify_provider(
+        str(getattr(args, "notify_provider", "") or DEFAULT_NOTIFY_PROVIDER).strip()
+    ) or "telegram_bot"
+    if provider != "telegram_bot":
+        _log(f"[Notify] Unsupported provider={provider} in main.py; fallback to telegram_bot.")
+        provider = "telegram_bot"
+
+    telegram_bot_identifier = str(
+        getattr(args, "telegram_bot_identifier", "") or getattr(args, "telegram_keyword", "") or ""
+    ).strip()
+    if not telegram_bot_identifier:
+        telegram_bot_identifier = _env_first(
+            f"{env_prefix}TELEGRAM_BOT_IDENTIFIER",
+            f"{env_prefix}TELEGRAM_KEYWORD",
+            "CYBERCAR_NOTIFY_TELEGRAM_BOT_IDENTIFIER",
+            "CYBERCAR_NOTIFY_TELEGRAM_KEYWORD",
+            "NOTIFY_TELEGRAM_BOT_IDENTIFIER",
+            "NOTIFY_TELEGRAM_KEYWORD",
+            default="cybercar",
+        )
+    telegram_registry_file = str(getattr(args, "telegram_registry_file", "") or "").strip()
+    if not telegram_registry_file:
+        telegram_registry_file = _env_first(
+            f"{env_prefix}TELEGRAM_REGISTRY_FILE",
+            "CYBERCAR_NOTIFY_TELEGRAM_REGISTRY_FILE",
+            "NOTIFY_TELEGRAM_REGISTRY_FILE",
+            default="",
+        )
+    telegram_bot_token = str(getattr(args, "telegram_bot_token", "") or "").strip()
+    telegram_chat_id = str(getattr(args, "telegram_chat_id", "") or "").strip()
+    telegram_timeout_seconds = max(5, int(getattr(args, "telegram_timeout_seconds", 20)))
+    telegram_api_base = str(getattr(args, "telegram_api_base", "") or "").strip()
+    if not telegram_api_base:
+        telegram_api_base = _env_first(
+            f"{env_prefix}TELEGRAM_API_BASE",
+            "CYBERCAR_NOTIFY_TELEGRAM_API_BASE",
+            "NOTIFY_TELEGRAM_API_BASE",
+            default="",
+        )
+    resolved_telegram = shared_resolve_telegram_bot_settings(
+        {
+            # 标识优先仍保留；但允许显式入参作为兜底（例如 Telegram 菜单触发时透传 chat_id）。
+            "bot_token": telegram_bot_token,
+            "chat_id": telegram_chat_id,
+            "keyword": telegram_bot_identifier,
+            "registry_file": telegram_registry_file,
+            "timeout_seconds": telegram_timeout_seconds,
+            "api_base": telegram_api_base,
+        },
+        env_prefix="",
+    )
+    telegram_bot_token = str(resolved_telegram.get("bot_token") or "").strip()
+    telegram_chat_id = str(resolved_telegram.get("chat_id") or "").strip()
+    telegram_timeout_seconds = max(5, int(resolved_telegram.get("timeout_seconds") or telegram_timeout_seconds))
+    telegram_api_base = str(resolved_telegram.get("api_base") or "").strip() or telegram_api_base
+
+    enabled = not bool(getattr(args, "disable_notify", False))
+    if enabled and provider == "telegram_bot" and (not telegram_bot_token or not telegram_chat_id):
+        _log(
+            "[Notify] Message disabled: missing Telegram config "
+            "(identifier="
+            f"{telegram_bot_identifier or '-'}; expected registry resolution or --telegram-bot-token / --telegram-chat-id)."
+        )
+        enabled = False
+
+    return NotifySettings(
+        enabled=enabled,
+        provider=provider,
+        env_prefix=env_prefix,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+    )
+
+
+def _resolve_runtime_telegram_notify_settings(
+    *,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> NotifySettings:
+    env_prefix = _normalize_env_prefix(str(notify_env_prefix or DEFAULT_NOTIFY_ENV_PREFIX), DEFAULT_NOTIFY_ENV_PREFIX)
+    explicit_token = str(telegram_bot_token or "").strip()
+    explicit_chat_id = str(telegram_chat_id or "").strip()
+    resolved_telegram = shared_resolve_telegram_bot_settings(
+        {
+            "bot_token": explicit_token,
+            "chat_id": explicit_chat_id,
+            "keyword": "" if (explicit_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip(),
+            "registry_file": str(telegram_registry_file or "").strip(),
+            "timeout_seconds": max(5, int(telegram_timeout_seconds or 20)),
+            "api_base": str(telegram_api_base or "").strip(),
+        },
+        env_prefix=env_prefix,
+    )
+    bot_token = str(resolved_telegram.get("bot_token") or "").strip()
+    chat_id = str(resolved_telegram.get("chat_id") or "").strip()
+    timeout_seconds = max(5, int(resolved_telegram.get("timeout_seconds") or telegram_timeout_seconds or 20))
+    api_base = str(resolved_telegram.get("api_base") or "").strip() or str(telegram_api_base or "").strip()
+    return NotifySettings(
+        enabled=bool(bot_token and chat_id),
+        provider="telegram_bot",
+        env_prefix=env_prefix,
+        telegram_bot_token=bot_token,
+        telegram_chat_id=chat_id,
+        telegram_timeout_seconds=timeout_seconds,
+        telegram_api_base=api_base,
+    )
+
+
+def _telegram_api_endpoint(api_base: str, bot_token: str, method: str) -> str:
+    base = str(api_base or "https://api.telegram.org").strip() or "https://api.telegram.org"
+    return f"{base.rstrip('/')}/bot{str(bot_token or '').strip()}/{str(method or '').strip()}"
+
+
+def _send_telegram_photo(
+    *,
+    bot_token: str,
+    chat_id: str,
+    photo_bytes: bytes,
+    filename: str,
+    caption: str,
+    timeout_seconds: int,
+    api_base: str,
+    reply_markup: Optional[dict[str, Any]] = None,
+    parse_mode: str = "",
+) -> dict[str, Any]:
+    endpoint = _telegram_api_endpoint(api_base, bot_token, "sendPhoto")
+    data: dict[str, Any] = {
+        "chat_id": str(chat_id or "").strip(),
+        "caption": str(caption or "").strip(),
+    }
+    if str(parse_mode or "").strip():
+        data["parse_mode"] = str(parse_mode or "").strip()
+    if isinstance(reply_markup, dict):
+        data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
+    resp = requests.post(
+        endpoint,
+        data=data,
+        files={"photo": (str(filename or "wechat_login_qr.png"), photo_bytes, "image/png")},
+        timeout=max(5, int(timeout_seconds or 20)),
+    )
+    try:
+        payload = resp.json() if (resp.text or "").strip() else {}
+    except Exception as exc:
+        raise RuntimeError(f"telegram sendPhoto invalid json response: http_status={resp.status_code}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("telegram sendPhoto invalid response")
+    if not bool(payload.get("ok")):
+        raise RuntimeError(f"telegram sendPhoto failed: {payload.get('description') or 'unknown'}")
+    return payload
+
+
+def _prepare_platform_login_qr_notice(
+    *,
+    platform_name: str,
+    open_url: str,
+    page: Optional[ChromiumPage] = None,
+    debug_port: Optional[int] = None,
+    chrome_user_data_dir: str = "",
+    chrome_path: Optional[str] = None,
+    auto_open_chrome: bool = True,
+    refresh_page: bool = False,
+    wait_token: str = "",
+) -> dict[str, Any]:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    default_profile_dir = DEFAULT_WECHAT_CHROME_USER_DATA_DIR if platform == "wechat" else DEFAULT_CHROME_USER_DATA_DIR
+    default_debug_port = DEFAULT_WECHAT_DEBUG_PORT if platform == "wechat" else DEFAULT_PORT
+    profile_dir = str(Path(chrome_user_data_dir or default_profile_dir).expanduser())
+    runtime_debug_port = int(debug_port or default_debug_port)
+    open_target_url = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip() or CREATE_POST_URL
+    display_name = str(PLATFORM_LOGIN_DISPLAY_NAMES.get(platform) or platform)
+    active_page = page
+    if active_page is None:
+        active_page = _connect_chrome(
+            debug_port=runtime_debug_port,
+            auto_open_chrome=auto_open_chrome,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=profile_dir,
+            startup_url=open_target_url,
+        )
+    if refresh_page:
+        try:
+            active_page.get(open_target_url)
+        except Exception:
+            try:
+                active_page.refresh()
+            except Exception:
+                pass
+        time.sleep(1.0)
+    if not _is_platform_login_gate(active_page, platform):
+        _mark_platform_session_ready(platform, profile_dir, url=str(getattr(active_page, "url", "") or open_target_url or ""))
+        return {"ok": False, "needs_login": False, "error": f"{platform} already logged in"}
+
+    qr_source = _extract_login_qr_source(active_page, platform_name=platform)
+    if (not qr_source) and platform == "wechat":
+        _log("[Uploader:wechat] Login QR not ready on initial scan; wait and retry once before fallback.")
+        time.sleep(2.0)
+        qr_source = _extract_login_qr_source(active_page, timeout_seconds=12.0, platform_name=platform)
+    if not qr_source:
+        login_entry_url = str(PLATFORM_LOGIN_ENTRY_URLS.get(platform) or "").strip()
+        if login_entry_url and login_entry_url != open_target_url:
+            _log(
+                f"[Uploader:{platform}] Login QR missing on business page; "
+                f"switch to dedicated login entry and retry: {login_entry_url}"
+            )
+            try:
+                active_page.get(login_entry_url)
+                time.sleep(1.5)
+            except Exception as exc:
+                _log(f"[Uploader:{platform}] Open dedicated login entry failed: {exc}")
+            else:
+                qr_source = _extract_login_qr_source(
+                    active_page,
+                    timeout_seconds=12.0 if platform == "wechat" else 8.0,
+                    platform_name=platform,
+                )
+    if not qr_source:
+        _mark_platform_session_login_required(
+            platform,
+            profile_dir,
+            url=str(getattr(active_page, "url", "") or open_target_url or ""),
+            reason="login_qr_not_found",
+        )
+        return {"ok": False, "needs_login": True, "error": f"{platform} login qr not found"}
+    mime = "image/png"
+    photo_bytes = b""
+    try:
+        photo_bytes = _capture_login_qr_screenshot(active_page, platform_name=platform)
+        if photo_bytes:
+            _log(f"[Uploader:{platform}] Login QR captured via screenshot.")
+    except Exception as exc:
+        _log(f"[Uploader:{platform}] Login QR screenshot capture failed, fallback to source extraction: {exc}")
+    if not photo_bytes:
+        mime, photo_bytes = _load_qr_image_source(qr_source)
+    if not photo_bytes:
+        _mark_platform_session_login_required(
+            platform,
+            profile_dir,
+            url=str(getattr(active_page, "url", "") or open_target_url or ""),
+            reason="login_qr_empty",
+        )
+        return {"ok": False, "needs_login": True, "error": f"{platform} login qr is empty"}
+
+    return {
+        "ok": True,
+        "needs_login": True,
+        "platform": platform,
+        "profile_dir": profile_dir,
+        "runtime_debug_port": runtime_debug_port,
+        "open_target_url": open_target_url,
+        "display_name": display_name,
+        "active_page": active_page,
+        "mime": mime,
+        "photo_bytes": photo_bytes,
+        "filename": f"{platform}_login_qr.png" if mime.endswith("png") else f"{platform}_login_qr.jpg",
+        "caption": _build_platform_login_qr_caption(display_name, profile_dir),
+        "reply_markup": _build_platform_login_qr_reply_markup(platform, open_target_url, wait_token),
+        "fingerprint": hashlib.sha1(photo_bytes).hexdigest(),
+        "cache_key": f"{platform}|{runtime_debug_port}|{profile_dir}",
+    }
+
+
+def _build_platform_login_qr_reply_markup(platform_name: str, open_url: str = "", wait_token: str = "") -> dict[str, Any]:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "刷新二维码",
+                    "callback_data": _platform_login_callback_data("refresh", platform, wait_token),
+                }
+            ]
+        ]
+    }
+
+def _build_wechat_login_qr_reply_markup() -> dict[str, Any]:
+    return _build_platform_login_qr_reply_markup("wechat")
+
+
+def _format_platform_login_qr_ttl(ttl_seconds: int) -> str:
+    total_seconds = max(1, int(ttl_seconds or 0))
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _build_platform_login_qr_caption(
+    display_name: str,
+    profile_dir: str,
+    *,
+    ttl_seconds: int = WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS,
+    generated_at: Optional[datetime] = None,
+) -> str:
+    platform_label = str(display_name or "\u5e73\u53f0").strip() or "\u5e73\u53f0"
+    profile_label = str(profile_dir or "").strip() or "\uff08\u672a\u63d0\u4f9b\uff09"
+    ttl_label = _format_platform_login_qr_ttl(ttl_seconds)
+    card = build_telegram_card(
+        "login_qr",
+        {
+            "subtitle": f"\u23f3 \u5269\u4f59 {ttl_label} \u8bf7\u5c3d\u5feb\u626b\u7801",
+            "qr_image": True,
+            "title": f"{platform_label}\u767b\u5f55",
+            "sections": [
+                {
+                    "title": "\u626b\u7801\u5012\u8ba1\u65f6",
+                    "emoji": "\u23f3",
+                    "items": [
+                        f"\u5269\u4f59 {ttl_label}",
+                    ],
+                },
+                {
+                    "title": "\u5904\u7406\u65b9\u5f0f",
+                    "emoji": "\U0001f510",
+                    "items": [
+                        "\u8bf7\u4f7f\u7528\u4e0b\u65b9\u4e8c\u7ef4\u7801\u626b\u7801\u767b\u5f55\u3002",
+                    ],
+                },
+                {
+                    "title": "\u4f1a\u8bdd\u4fe1\u606f",
+                    "emoji": "\U0001f9ed",
+                    "items": [
+                        {"label": "\u76ee\u5f55", "value": profile_label, "style": "code"},
+                    ],
+                },
+                {
+                    "title": "\u540e\u7eed\u8bf4\u660e",
+                    "emoji": "\U0001f504",
+                    "items": [
+                        "\u82e5\u4e8c\u7ef4\u7801\u5931\u6548\uff0c\u8bf7\u70b9\u51fb\u4e0b\u65b9\u201c\u5237\u65b0\u4e8c\u7ef4\u7801\u201d\u83b7\u53d6\u65b0\u56fe\u3002",
+                        "\u7cfb\u7edf\u4f1a\u81ea\u52a8\u68c0\u6d4b\u767b\u5f55\u6062\u590d\uff0c\u65e0\u9700\u624b\u52a8\u786e\u8ba4\u3002",
+                    ],
+                },
+            ],
+        },
+    )
+    return str(card.get("text") or "")
+
+
+def _describe_platform_login_reason(reason: str) -> str:
+    token = str(reason or "").strip().lower()
+    mapping = {
+        "login_url": "\u53d1\u5e03\u9875\u5df2\u8df3\u8f6c\u5230\u767b\u5f55\u9875\u3002",
+        "login_text": "\u53d1\u5e03\u9875\u63d0\u793a\u5f53\u524d\u8d26\u53f7\u9700\u8981\u91cd\u65b0\u767b\u5f55\u3002",
+        "wechat_micro_route_error": "\u89c6\u9891\u53f7\u53d1\u5e03\u9875\u8fd4\u56de\u4e86\u5f02\u5e38\u8def\u7531\u72b6\u6001\uff0c\u901a\u5e38\u610f\u5473\u7740\u4f1a\u8bdd\u5df2\u5931\u6548\u3002",
+        "wechat_qr_expired": "\u89c6\u9891\u53f7\u767b\u5f55\u4e8c\u7ef4\u7801\u5df2\u8fc7\u671f\uff0c\u9700\u8981\u91cd\u65b0\u767b\u5f55\u3002",
+        "login_qr_not_found": "\u5f53\u524d\u9875\u9762\u672a\u627e\u5230\u53ef\u7528\u7684\u767b\u5f55\u4e8c\u7ef4\u7801\u3002",
+        "login_qr_empty": "\u5f53\u524d\u9875\u9762\u7684\u767b\u5f55\u4e8c\u7ef4\u7801\u5185\u5bb9\u4e3a\u7a7a\u3002",
+        "login_confirmation_timeout": "\u767b\u5f55\u63d0\u9192\u5df2\u53d1\u51fa\uff0c\u4f46\u5728\u7b49\u5f85\u7a97\u53e3\u5185\u672a\u68c0\u6d4b\u5230\u767b\u5f55\u6062\u590d\u3002",
+    }
+    if token in mapping:
+        return mapping[token]
+    raw = str(reason or "").strip()
+    if not raw:
+        return "\u53d1\u5e03\u9875\u68c0\u6d4b\u5230\u5f53\u524d\u4f1a\u8bdd\u9700\u8981\u91cd\u65b0\u767b\u5f55\u3002"
+    return f"\u53d1\u5e03\u9875\u8fd4\u56de\u4e86\u767b\u5f55\u72b6\u6001\uff1a{raw}"
+
+
+def _describe_platform_login_qr_error(error: str) -> str:
+    token = str(error or "").strip().lower()
+    mapping = {
+        "wechat login qr not found": "\u672a\u80fd\u4ece\u5f53\u524d\u9875\u9762\u63d0\u53d6\u53ef\u53d1\u9001\u7684\u767b\u5f55\u4e8c\u7ef4\u7801\u3002",
+        "wechat login qr is empty": "\u767b\u5f55\u4e8c\u7ef4\u7801\u5df2\u88ab\u68c0\u6d4b\u5230\uff0c\u4f46\u56fe\u7247\u5185\u5bb9\u4e3a\u7a7a\u3002",
+        "telegram notify not configured": "Telegram \u901a\u77e5\u672a\u914d\u7f6e\uff0c\u65e0\u6cd5\u81ea\u52a8\u53d1\u9001\u4e8c\u7ef4\u7801\u3002",
+    }
+    if token in mapping:
+        return mapping[token]
+    raw = str(error or "").strip()
+    if not raw:
+        return "\u672a\u77e5\u539f\u56e0\uff0c\u6682\u65f6\u65e0\u6cd5\u81ea\u52a8\u53d1\u9001\u767b\u5f55\u4e8c\u7ef4\u7801\u3002"
+    return raw
+
+
+def _build_platform_login_text_card(
+    *,
+    platform_name: str,
+    display_name: str,
+    profile_dir: str,
+    open_url: str,
+    login_reason: str = "",
+    qr_error: str = "",
+    wait_token: str = "",
+    bot_name: str = "CyberCar",
+) -> dict[str, Any]:
+    platform_label = str(display_name or "\u5e73\u53f0").strip() or "\u5e73\u53f0"
+    profile_label = str(profile_dir or "").strip() or "\uff08\u672a\u63d0\u4f9b\uff09"
+    sections: list[dict[str, Any]] = [
+        {
+            "title": "\u5904\u7406\u65b9\u5f0f",
+            "emoji": "\U0001f4f1",
+            "items": [
+                "\u5f53\u524d\u767b\u5f55\u72b6\u6001\u5df2\u5931\u6548\uff0c\u4f46\u673a\u5668\u4eba\u8fd8\u6ca1\u62ff\u5230\u53ef\u53d1\u9001\u7684\u4e8c\u7ef4\u7801\u3002",
+                "\u8bf7\u5148\u6253\u5f00\u53d1\u5e03\u9875\u624b\u52a8\u5b8c\u6210\u767b\u5f55\uff0c\u7cfb\u7edf\u4f1a\u5728\u540e\u7eed\u6d41\u7a0b\u518d\u6b21\u81ea\u52a8\u63a8\u9001\u4e8c\u7ef4\u7801\u6216\u76f4\u63a5\u7ee7\u7eed\u3002",
+            ],
+        },
+        {
+            "title": "\u4f1a\u8bdd\u4fe1\u606f",
+            "emoji": "\U0001f9ed",
+            "items": [
+                {"label": "\u5e73\u53f0", "value": platform_label},
+                {"label": "\u53d1\u5e03\u9875", "value": open_url or "\uff08\u672a\u63d0\u4f9b\uff09", "url": open_url or ""},
+                {"label": "\u76ee\u5f55", "value": profile_label, "style": "code"},
+            ],
+        },
+    ]
+    reason_items: list[str] = []
+    if str(login_reason or "").strip():
+        reason_items.append(_describe_platform_login_reason(login_reason))
+    if str(qr_error or "").strip():
+        reason_items.append(f"\u7cfb\u7edf\u63d0\u793a\uff1a{_describe_platform_login_qr_error(qr_error)}")
+    if reason_items:
+        sections.append(
+            {
+                "title": "\u72b6\u6001\u8bf4\u660e",
+                "emoji": "\u26a0\ufe0f",
+                "items": reason_items,
+            }
+        )
+    return build_telegram_card(
+        "login_qr",
+        {
+            "status": "login_required",
+            "title": f"{platform_label}\u767b\u5f55\u63d0\u9192",
+            "subtitle": "\u672a\u80fd\u81ea\u52a8\u53d1\u9001\u4e8c\u7ef4\u7801\uff0c\u8bf7\u624b\u52a8\u767b\u5f55\u540e\u518d\u7ee7\u7eed\u53d1\u5e03",
+            "sections": sections,
+            "bot_name": bot_name,
+            "mode": "text",
+        },
+        [],
+    )
+
+
+def _send_platform_login_text_notification(
+    *,
+    platform_name: str,
+    open_url: str,
+    chrome_user_data_dir: str = "",
+    login_reason: str = "",
+    qr_error: str = "",
+    wait_token: str = "",
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    display_name = str(PLATFORM_LOGIN_DISPLAY_NAMES.get(platform) or platform)
+    settings = _resolve_runtime_telegram_notify_settings(
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+    if not settings.enabled:
+        return {"ok": False, "sent": False, "error": "telegram notify not configured"}
+    card = _build_platform_login_text_card(
+        platform_name=platform,
+        display_name=display_name,
+        profile_dir=chrome_user_data_dir,
+        open_url=open_url,
+        login_reason=login_reason,
+        qr_error=qr_error,
+        wait_token=wait_token,
+    )
+    params = {
+        "chat_id": settings.telegram_chat_id,
+        "text": str(card.get("text") or "").strip(),
+        "parse_mode": str(card.get("parse_mode") or "HTML"),
+        "disable_web_page_preview": "false",
+    }
+    reply_markup = card.get("reply_markup")
+    if isinstance(reply_markup, dict) and reply_markup.get("inline_keyboard"):
+        params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
+    shared_call_telegram_api(
+        bot_token=settings.telegram_bot_token,
+        method="sendMessage",
+        params=params,
+        timeout_seconds=settings.telegram_timeout_seconds,
+        api_base=settings.telegram_api_base,
+        use_post=True,
+    )
+    return {"ok": True, "sent": True, "card": card}
+
+def _decode_image_data_url(data_url: str) -> tuple[str, bytes]:
+    raw = str(data_url or "").strip()
+    match = re.match(r"^data:(image/[\w.+-]+);base64,(.+)$", raw, flags=re.I | re.S)
+    if not match:
+        raise RuntimeError("invalid image data url")
+    mime = str(match.group(1) or "image/png").strip().lower()
+    payload = re.sub(r"\s+", "", str(match.group(2) or ""))
+    return mime, base64.b64decode(payload)
+
+
+def _load_qr_image_source(source: str) -> tuple[str, bytes]:
+    raw = str(source or "").strip()
+    if not raw:
+        raise RuntimeError("empty qr source")
+    if raw.lower().startswith("data:image/"):
+        return _decode_image_data_url(raw)
+    resp = requests.get(raw, timeout=20)
+    if not (200 <= resp.status_code < 300):
+        raise RuntimeError(f"qr image download failed: http_status={resp.status_code}")
+    mime = str(resp.headers.get("Content-Type") or "image/png").split(";", 1)[0].strip().lower() or "image/png"
+    return mime, resp.content
+
+
+def _build_login_qr_extract_script(platform_name: str) -> str:
+    platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        return r"""
+        const selectors = [
+          'img.qrcode',
+          '.qrcode-wrap img.qrcode',
+          '.qrcode-area img.qrcode',
+          '.login-qrcode-wrap img.qrcode',
+          '.qrcode-wrap img',
+          '.qrcode-area img',
+          '.login-content img.qrcode',
+          '[class*="qrcode"] img',
+          '[class*="qr-code"] img',
+          '[data-testid*="qrcode"] img',
+          'img[alt*="二维码"]',
+          'img[alt*="qrcode" i]'
+        ];
+        const containerSelectors = [
+          '.qrcode',
+          '.qrcode-wrap',
+          '.qrcode-area',
+          '.login-qrcode-wrap',
+          '[class*="qrcode"]',
+          '[class*="qr-code"]',
+          '[data-testid*="qrcode"]'
+        ];
+        const isSquareEnough = (width, height) => {
+          if (width < 120 || height < 120) return false;
+          const delta = Math.abs(width - height);
+          const maxSide = Math.max(width, height);
+          return delta <= Math.max(24, Math.round(maxSide * 0.2));
+        };
+        const getNodeSize = (node) => {
+          if (!node) return { width: 0, height: 0 };
+          const rect = typeof node.getBoundingClientRect === 'function' ? node.getBoundingClientRect() : { width: 0, height: 0 };
+          return {
+            width: Number(node.naturalWidth || node.width || rect.width || 0),
+            height: Number(node.naturalHeight || node.height || rect.height || 0),
+          };
+        };
+        const captureRenderedImage = (node) => {
+          if (!node || String(node.tagName || '').toUpperCase() !== 'IMG') return '';
+          const width = Number(node.naturalWidth || node.width || 0);
+          const height = Number(node.naturalHeight || node.height || 0);
+          if (!isSquareEnough(width, height)) return '';
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return '';
+            ctx.drawImage(node, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL('image/png');
+            if (dataUrl && dataUrl.startsWith('data:image/')) return dataUrl;
+          } catch (e) {}
+          return '';
+        };
+        const roots = [];
+        const seenRoots = new Set();
+        const pushRoot = (root) => {
+          if (!root || seenRoots.has(root)) return;
+          seenRoots.add(root);
+          roots.push(root);
+          const allNodes = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+          for (const node of allNodes) {
+            const shadow = node && node.shadowRoot;
+            if (shadow && !seenRoots.has(shadow)) pushRoot(shadow);
+          }
+        };
+        pushRoot(document);
+        for (const root of roots) {
+          for (const selector of selectors) {
+            const nodes = Array.from(root.querySelectorAll ? root.querySelectorAll(selector) : []);
+            for (const node of nodes) {
+              const src = String(
+                (node && ((node.currentSrc || node.src || (node.getAttribute && node.getAttribute('src'))) || '')) || ''
+              ).trim();
+              if (!src) continue;
+              const size = getNodeSize(node);
+              if (!isSquareEnough(size.width, size.height)) continue;
+              const rendered = captureRenderedImage(node);
+              if (rendered) return rendered;
+              if (src.startsWith('data:image/') && src.includes('base64,')) return src;
+              if (/^https?:\/\//i.test(src)) return src;
+            }
+          }
+          for (const selector of containerSelectors) {
+            const nodes = Array.from(root.querySelectorAll ? root.querySelectorAll(selector) : []);
+            for (const node of nodes) {
+              const style = (() => {
+                try { return window.getComputedStyle(node); } catch (e) { return null; }
+              })();
+              const bg = String((style && style.backgroundImage) || node.style?.backgroundImage || '').trim();
+              if (!bg || bg === 'none') continue;
+              const match = bg.match(/url\((['"]?)(.*?)\1\)/i);
+              const src = String((match && match[2]) || '').trim();
+              if (!src) continue;
+              const size = getNodeSize(node);
+              if (!isSquareEnough(size.width, size.height)) continue;
+              if (src.startsWith('data:image/') && src.includes('base64,')) return src;
+              if (/^https?:\/\//i.test(src)) return src;
+            }
+          }
+        }
+        for (const root of roots) {
+          const canvases = Array.from(root.querySelectorAll ? root.querySelectorAll('canvas') : []);
+          for (const canvas of canvases) {
+            const size = getNodeSize(canvas);
+            if (!isSquareEnough(size.width, size.height)) continue;
+            try {
+              const dataUrl = canvas.toDataURL('image/png');
+              if (dataUrl && dataUrl.startsWith('data:image/')) return dataUrl;
+            } catch (e) {}
+          }
+        }
+        return '';
+        """
+    if platform == "bilibili":
+        return r"""
+        const selectors = [
+          '.login-scan__qrcode img',
+          '.login-scan__qrcode canvas',
+          '.login-scan__sns_bind_left_wp .login-scan__qrcode img',
+          '.login-scan__sns_bind_left_wp .login-scan__qrcode canvas',
+          'img[alt="Scan me!"]',
+          '[class*="login-scan"] img',
+          '[class*="login-scan"] canvas',
+          '[class*="qrcode"] img',
+          '[class*="qrcode"] canvas'
+        ];
+        const rootSelectors = [
+          '.login-scan__qrcode',
+          '.login-scan__sns_bind_left_wp',
+          '.login_main',
+          'body'
+        ];
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function isSquareEnough(width, height) {
+          if (width < 100 || height < 100) return false;
+          const delta = Math.abs(width - height);
+          return delta <= Math.max(24, Math.round(Math.max(width, height) * 0.25));
+        }
+        function roots() {
+          const list = [];
+          const seen = new Set();
+          for (const selector of rootSelectors) {
+            const nodes = selector === 'body' ? [document.body] : Array.from(document.querySelectorAll(selector));
+            for (const node of nodes) {
+              if (!node || seen.has(node)) continue;
+              if (selector !== 'body' && !isVisible(node)) continue;
+              seen.add(node);
+              list.push(node);
+            }
+          }
+          list.push(document);
+          return list;
+        }
+        for (const root of roots()) {
+          for (const selector of selectors) {
+            const nodes = Array.from(root.querySelectorAll ? root.querySelectorAll(selector) : []);
+            for (const node of nodes) {
+              const width = Number(node.naturalWidth || node.width || 0);
+              const height = Number(node.naturalHeight || node.height || 0);
+              if (node.tagName === 'CANVAS') {
+                if (!isSquareEnough(width, height)) continue;
+                try {
+                  const dataUrl = node.toDataURL('image/png');
+                  if (dataUrl && dataUrl.startsWith('data:image/')) return dataUrl;
+                } catch (e) {}
+                continue;
+              }
+              const src = String(node.currentSrc || node.src || node.getAttribute('src') || '').trim();
+              const cls = String(node.className || '');
+              if (cls.includes('css-wemwzq')) continue;
+              if (!src || !isSquareEnough(width, height)) continue;
+              if (!cls.includes('css-1lhmg90') && (width < 140 || height < 140)) continue;
+              if (src.startsWith('data:image/') && src.includes('base64,')) return src;
+              if (/^https?:\/\//i.test(src)) return src;
+            }
+          }
+        }
+        return '';
+        """
+    if platform == "douyin":
+        return r"""
+        const selectors = [
+          '#douyin_login_comp_scan_code img',
+          '#douyin_login_comp_scan_code canvas',
+          '.scan_qrcode_login_content img',
+          '.scan_qrcode_login_content canvas',
+          '.animate_qrcode_container img',
+          '.animate_qrcode_container canvas',
+          '.qrcode-vz0gH7 img',
+          '[id*="scan_code"] img',
+          '[class*="qrcode"] img',
+          '[class*="qrcode"] canvas',
+          'img[alt="二维码"]'
+        ];
+        const rootSelectors = [
+          '#douyin_login_comp_scan_code',
+          '.scan_qrcode_login_content',
+          '.animate_qrcode_container',
+          '.qrcode-vz0gH7',
+          'body'
+        ];
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function isSquareEnough(width, height) {
+          if (width < 120 || height < 120) return false;
+          const delta = Math.abs(width - height);
+          return delta <= Math.max(24, Math.round(Math.max(width, height) * 0.25));
+        }
+        function roots() {
+          const list = [];
+          const seen = new Set();
+          for (const selector of rootSelectors) {
+            const nodes = selector === 'body' ? [document.body] : Array.from(document.querySelectorAll(selector));
+            for (const node of nodes) {
+              if (!node || seen.has(node)) continue;
+              if (selector !== 'body' && !isVisible(node)) continue;
+              seen.add(node);
+              list.push(node);
+            }
+          }
+          list.push(document);
+          return list;
+        }
+        for (const root of roots()) {
+          for (const selector of selectors) {
+            const nodes = Array.from(root.querySelectorAll ? root.querySelectorAll(selector) : []);
+            for (const node of nodes) {
+              const width = Number(node.naturalWidth || node.width || 0);
+              const height = Number(node.naturalHeight || node.height || 0);
+              if (node.tagName === 'CANVAS') {
+                if (!isSquareEnough(width, height)) continue;
+                try {
+                  const dataUrl = node.toDataURL('image/png');
+                  if (dataUrl && dataUrl.startsWith('data:image/')) return dataUrl;
+                } catch (e) {}
+                continue;
+              }
+              const src = String(node.currentSrc || node.src || node.getAttribute('src') || '').trim();
+              if (!src || !isSquareEnough(width, height)) continue;
+              if (src.startsWith('data:image/') && src.includes('base64,')) return src;
+              if (/^https?:\/\//i.test(src)) return src;
+            }
+          }
+        }
+        return '';
+        """
+    if platform == "kuaishou":
+        return r"""
+        const selectors = [
+          '.qrcode.default img[alt="qrcode"]',
+          '.qrcode.default img',
+          '.q-login img[alt="qrcode"]',
+          '.q-login img',
+          'img[alt="qrcode"]',
+          '[class*="scan-login"] img',
+          '[class*="scan-login"] canvas',
+          '[class*="qrcode-login"] img',
+          '[class*="qrcode-login"] canvas',
+          '[class*="scan"] img',
+          '[class*="qrcode"] img',
+          '[class*="qr"] img',
+          '[class*="scan"] canvas',
+          '[class*="qrcode"] canvas',
+          'img[src^="data:image/"]'
+        ];
+        const rootSelectors = [
+          '[class*="scan-login"]',
+          '[class*="qrcode-login"]',
+          '[class*="login"]',
+          'form',
+          'body'
+        ];
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function isSquareEnough(width, height) {
+          if (width < 120 || height < 120) return false;
+          const delta = Math.abs(width - height);
+          return delta <= Math.max(24, Math.round(Math.max(width, height) * 0.25));
+        }
+        function roots() {
+          const list = [];
+          const seen = new Set();
+          for (const selector of rootSelectors) {
+            const nodes = selector === 'body' ? [document.body] : Array.from(document.querySelectorAll(selector));
+            for (const node of nodes) {
+              if (!node || seen.has(node)) continue;
+              if (selector !== 'body' && !isVisible(node)) continue;
+              seen.add(node);
+              list.push(node);
+            }
+          }
+          list.push(document);
+          return list;
+        }
+        for (const root of roots()) {
+          for (const selector of selectors) {
+            const nodes = Array.from(root.querySelectorAll ? root.querySelectorAll(selector) : []);
+            for (const node of nodes) {
+              const width = Number(node.naturalWidth || node.width || 0);
+              const height = Number(node.naturalHeight || node.height || 0);
+              if (node.tagName === 'CANVAS') {
+                if (!isSquareEnough(width, height)) continue;
+                try {
+                  const dataUrl = node.toDataURL('image/png');
+                  if (dataUrl && dataUrl.startsWith('data:image/')) return dataUrl;
+                } catch (e) {}
+                continue;
+              }
+              const src = String(node.currentSrc || node.src || node.getAttribute('src') || '').trim();
+              if (!src || !isSquareEnough(width, height)) continue;
+              if (src.startsWith('data:image/') && src.includes('base64,')) return src;
+              if (/^https?:\/\//i.test(src)) return src;
+            }
+          }
+        }
+        return '';
+        """
+    if platform == "xiaohongshu":
+        return r"""
+        const selectors = [
+          '.login-box-container img.css-1lhmg90',
+          '[data-v-eebd6f6e] .login-box-container img.css-1lhmg90',
+          '.login-box-container img[src^="data:image/"]',
+          '.login-box-container canvas',
+          '[class*="login-box"] img[src^="data:image/"]',
+          '[class*="login-box"] canvas',
+          '[class*="login-container"] img[src^="data:image/"]',
+          '[class*="login-container"] canvas',
+          '[class*="login"] img[src^="data:image/"]',
+          '[class*="login"] canvas',
+          '[class*="scan"] img[src^="data:image/"]',
+          '[class*="scan"] canvas',
+          '[class*="qrcode"] img[src^="data:image/"]',
+          '[class*="qrcode"] canvas',
+          'img[src^="data:image/"]'
+        ];
+        const rootSelectors = [
+          '.login-box-container',
+          '[class*="login-box"]',
+          '[class*="login-container"]',
+          '[class*="login"]',
+          'body'
+        ];
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function isSquareEnough(width, height) {
+          if (width < 120 || height < 120) return false;
+          const delta = Math.abs(width - height);
+          return delta <= Math.max(24, Math.round(Math.max(width, height) * 0.25));
+        }
+        function roots() {
+          const list = [];
+          const seen = new Set();
+          for (const selector of rootSelectors) {
+            const nodes = selector === 'body' ? [document.body] : Array.from(document.querySelectorAll(selector));
+            for (const node of nodes) {
+              if (!node || seen.has(node)) continue;
+              if (selector !== 'body' && !isVisible(node)) continue;
+              seen.add(node);
+              list.push(node);
+            }
+          }
+          list.push(document);
+          return list;
+        }
+        for (const root of roots()) {
+          for (const selector of selectors) {
+            const nodes = Array.from(root.querySelectorAll ? root.querySelectorAll(selector) : []);
+            for (const node of nodes) {
+              const width = Number(node.naturalWidth || node.width || 0);
+              const height = Number(node.naturalHeight || node.height || 0);
+              if (node.tagName === 'CANVAS') {
+                if (!isSquareEnough(width, height)) continue;
+                try {
+                  const dataUrl = node.toDataURL('image/png');
+                  if (dataUrl && dataUrl.startsWith('data:image/')) return dataUrl;
+                } catch (e) {}
+                continue;
+              }
+              const src = String(node.currentSrc || node.src || node.getAttribute('src') || '').trim();
+              if (!src || !isSquareEnough(width, height)) continue;
+              if (src.startsWith('data:image/') && src.includes('base64,')) return src;
+              if (/^https?:\/\//i.test(src)) return src;
+            }
+          }
+        }
+        return '';
+        """
+    return r"""
+    const selectors = [
+      'img.qrcode',
+      '.qrcode img',
+      '.qrcode-area img',
+      '.login-qrcode img',
+      '.login-box img',
+      '.scan-login img',
+      'img[src^="data:image/"]',
+      'img'
+    ];
+    for (const selector of selectors) {
+      const nodes = Array.from(document.querySelectorAll(selector));
+      for (const node of nodes) {
+        const src = String(
+          (node && ((node.currentSrc || node.src || (node.getAttribute && node.getAttribute('src'))) || '')) || ''
+        ).trim();
+        if (!src) continue;
+        const width = Number(node.naturalWidth || node.width || 0);
+        const height = Number(node.naturalHeight || node.height || 0);
+        if (src.startsWith('data:image/') && src.includes('base64,')) return src;
+        if (/^https?:\/\//i.test(src) && width >= 100 && height >= 100) return src;
+      }
+    }
+    const canvases = Array.from(document.querySelectorAll('canvas'));
+    for (const canvas of canvases) {
+      const width = Number(canvas.width || 0);
+      const height = Number(canvas.height || 0);
+      if (width < 100 || height < 100) continue;
+      try {
+        const dataUrl = canvas.toDataURL('image/png');
+        if (dataUrl && dataUrl.startsWith('data:image/')) return dataUrl;
+      } catch (e) {}
+    }
+    return '';
+    """
+
+
+
+def _extract_login_qr_source_from_context(ctx: Any, platform_name: str = "") -> str:
+    js = _build_login_qr_extract_script(platform_name)
+    try:
+        result = ctx.run_js(js)
+    except Exception:
+        result = ""
+    return str(result or "").strip()
+
+
+def _build_login_qr_rect_script(platform_name: str) -> str:
+    platform = str(platform_name or "").strip().lower()
+    selectors = [
+        "[class*='qrcode'] img",
+        "[class*='qrcode'] canvas",
+        "[class*='qr-code'] img",
+        "[class*='qr-code'] canvas",
+        ".qrcode img",
+        ".qrcode canvas",
+        ".qrcode-wrap img",
+        ".qrcode-wrap canvas",
+        ".qrcode-area img",
+        ".qrcode-area canvas",
+        ".login-qrcode-wrap img",
+        ".login-qrcode-wrap canvas",
+        "img.qrcode",
+        "canvas",
+    ]
+    if platform != "wechat":
+        selectors.extend(
+            [
+                "[class*='scan'] img",
+                "[class*='scan'] canvas",
+                "img[alt*='qrcode' i]",
+            ]
+        )
+    selector_json = json.dumps(selectors, ensure_ascii=False)
+    return f"""
+        const selectors = {selector_json};
+        const isVisible = (el) => {{
+          if (!el) return false;
+          const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+          if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) return false;
+          const rect = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
+          return !!rect && rect.width >= 80 && rect.height >= 80;
+        }};
+        const isSquareEnough = (rect) => {{
+          if (!rect) return false;
+          if (rect.width < 100 || rect.height < 100) return false;
+          const delta = Math.abs(rect.width - rect.height);
+          return delta <= Math.max(28, Math.round(Math.max(rect.width, rect.height) * 0.28));
+        }};
+        const frameOffset = () => {{
+          let left = 0;
+          let top = 0;
+          try {{
+            let frame = window.frameElement;
+            let depth = 0;
+            while (frame && depth < 4) {{
+              const r = frame.getBoundingClientRect();
+              left += Number(r.left || 0);
+              top += Number(r.top || 0);
+              try {{
+                frame = frame.ownerDocument.defaultView.frameElement;
+              }} catch (e) {{
+                frame = null;
+              }}
+              depth += 1;
+            }}
+          }} catch (e) {{}}
+          return {{ left, top }};
+        }};
+        let best = null;
+        for (const selector of selectors) {{
+          const nodes = Array.from(document.querySelectorAll(selector));
+          for (const node of nodes) {{
+            if (!isVisible(node)) continue;
+            const rect = node.getBoundingClientRect();
+            if (!isSquareEnough(rect)) continue;
+            const area = Number(rect.width || 0) * Number(rect.height || 0);
+            if (!best || area > best.area) {{
+              best = {{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, area }};
+            }}
+          }}
+          if (best) break;
+        }}
+        if (!best) return null;
+        const offset = frameOffset();
+        const padding = Math.max(12, Math.round(Math.max(best.width, best.height) * 0.08));
+        return {{
+          left: Math.max(0, Math.floor(best.left + offset.left - padding)),
+          top: Math.max(0, Math.floor(best.top + offset.top - padding)),
+          right: Math.ceil(best.left + offset.left + best.width + padding),
+          bottom: Math.ceil(best.top + offset.top + best.height + padding),
+        }};
+    """
+
+
+def _capture_login_qr_screenshot(page: ChromiumPage, platform_name: str = "") -> bytes:
+    platform = str(platform_name or "").strip().lower()
+    contexts: list[Any] = []
+    if platform == "wechat":
+        try:
+            contexts.extend(list(page.get_frames(timeout=1.5)))
+        except Exception:
+            pass
+        contexts.append(page)
+    else:
+        contexts.append(page)
+        try:
+            contexts.extend(list(page.get_frames(timeout=1.5)))
+        except Exception:
+            pass
+    js = _build_login_qr_rect_script(platform)
+    for ctx in contexts:
+        try:
+            rect = ctx.run_js(js)
+        except Exception:
+            continue
+        if not isinstance(rect, dict):
+            continue
+        left = int(rect.get("left") or 0)
+        top = int(rect.get("top") or 0)
+        right = int(rect.get("right") or 0)
+        bottom = int(rect.get("bottom") or 0)
+        if right - left < 80 or bottom - top < 80:
+            continue
+        try:
+            shot = page.get_screenshot(as_bytes="png", left_top=(left, top), right_bottom=(right, bottom))
+        except Exception:
+            continue
+        if isinstance(shot, (bytes, bytearray)) and shot:
+            return bytes(shot)
+    return b""
+
+
+def _build_login_qr_prepare_script(platform_name: str) -> str:
+    platform = str(platform_name or "").strip().lower()
+    if platform == "kuaishou":
+        return r"""
+        function norm(s) {
+          return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+        }
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function clickNode(node) {
+          if (!node) return false;
+          try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+          try { node.click(); return true; } catch (e) {}
+          try {
+            node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            return true;
+          } catch (e) {}
+          return false;
+        }
+        const preferredSelectors = [
+          '.platform-switch-tips.default',
+          '.platform-switch-pc.default',
+          '.platform-switch.default',
+          '.platform-switch-tips',
+          '[class*="scan-login"]',
+          '[class*="scanLogin"]',
+          '[class*="scan-tab"]',
+          '[class*="qrcode-login"]',
+          '[data-login-mode*="scan"]',
+          '[data-type*="scan"]'
+        ];
+        for (const selector of preferredSelectors) {
+          const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+          for (const node of nodes) {
+            if (clickNode(node)) return {clicked: true, reason: 'kuaishou-preferred-selector'};
+          }
+        }
+        const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
+        for (const node of nodes) {
+          if (!isVisible(node)) continue;
+          const text = norm(node.innerText || node.textContent || '');
+          const attrs = norm([
+            node.getAttribute('title') || '',
+            node.getAttribute('aria-label') || '',
+            String(node.className || '')
+          ].join(' '));
+          if (!/\u626b\u7801\u767b\u5f55|\u4e8c\u7ef4\u7801\u767b\u5f55|APP\u626b\u7801/.test(text) && !/scan|qr|qrcode|switch/i.test(attrs)) continue;
+          if (clickNode(node)) return {clicked: true, reason: 'kuaishou-scan-tab'};
+        }
+        return {clicked: false, reason: 'kuaishou-no-scan-tab'};
+        """
+    if platform == "xiaohongshu":
+        return r"""
+        function norm(s) {
+          return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+        }
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function clickNode(node) {
+          if (!node) return false;
+          try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+          try { node.click(); return true; } catch (e) {}
+          try {
+            node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            return true;
+          } catch (e) {}
+          return false;
+        }
+        const preferredSelectors = [
+          '.login-box-container img.css-wemwzq',
+          '[data-v-eebd6f6e] .login-box-container img.css-wemwzq',
+          '[data-testid*="scan"]',
+          '[class*="scan"]',
+          '[class*="qrcode"]',
+          '[class*="qr"]'
+        ];
+        for (const selector of preferredSelectors) {
+          const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+          for (const node of nodes) {
+            const rect = node.getBoundingClientRect();
+            if (rect.width < 12 || rect.height < 12) continue;
+            if (rect.width > 120 || rect.height > 120) continue;
+            if (clickNode(node)) return {clicked: true, reason: 'xiaohongshu-preferred-selector'};
+          }
+        }
+        const directNodes = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
+        for (const node of directNodes) {
+          if (!isVisible(node)) continue;
+          const text = norm(node.innerText || node.textContent || '');
+          const attrs = norm([node.getAttribute('title') || '', node.getAttribute('aria-label') || ''].join(' '));
+          if (/\u626b\u7801\u767b\u5f55|APP\u626b\u7801\u767b\u5f55/.test(text) || /\u626b\u7801|\u4e8c\u7ef4\u7801|scan|qr/i.test(attrs)) {
+            if (clickNode(node)) return {clicked: true, reason: 'xiaohongshu-direct-trigger'};
+          }
+        }
+        const containers = Array.from(document.querySelectorAll('div, section, form')).filter(isVisible).map(el => {
+          const text = norm(el.innerText || el.textContent || '');
+          const rect = el.getBoundingClientRect();
+          return {el, text, rect};
+        }).filter(item =>
+          /\u624b\u673a\u53f7|\u9a8c\u8bc1\u7801\u767b\u5f55|APP\u626b\u7801\u767b\u5f55|\u521b\u4f5c\u670d\u52a1\u5e73\u53f0|\u626b\u7801\u767b\u5f55/.test(item.text) &&
+          item.rect.width >= 220 &&
+          item.rect.height >= 180
+        );
+        let best = null;
+        let bestScore = -999;
+        for (const item of containers) {
+          const nodes = Array.from(item.el.querySelectorAll('button, a, [role="button"], div, span, i, svg, img')).filter(isVisible);
+          for (const node of nodes) {
+            const rect = node.getBoundingClientRect();
+            const text = norm(node.innerText || node.textContent || '');
+            const attrs = norm([
+              node.getAttribute('title') || '',
+              node.getAttribute('aria-label') || '',
+              node.getAttribute('data-testid') || '',
+              String(node.className || '')
+            ].join(' '));
+            let score = 0;
+            if (/\u626b\u7801\u767b\u5f55|APP\u626b\u7801\u767b\u5f55/.test(text)) score += 20;
+            if (/\u626b\u7801|\u4e8c\u7ef4\u7801|scan|qr/i.test(attrs)) score += 18;
+            if (rect.top <= item.rect.top + 96) score += 10;
+            if (rect.left >= item.rect.left + item.rect.width * 0.55) score += 12;
+            if (rect.width >= 16 && rect.width <= 96 && rect.height >= 16 && rect.height <= 96) score += 8;
+            if (score > bestScore) {
+              bestScore = score;
+              best = node;
+            }
+          }
+        }
+        if (best && bestScore >= 18 && clickNode(best)) return {clicked: true, reason: 'xiaohongshu-corner-trigger'};
+        return {clicked: false, reason: 'xiaohongshu-no-trigger'};
+        """
+    return "return {clicked:false, reason:'noop'};"
+
+
+def _prepare_login_qr_context(ctx: Any, platform_name: str = "") -> dict[str, Any]:
+    js = _build_login_qr_prepare_script(platform_name)
+    try:
+        result = ctx.run_js(js)
+    except Exception:
+        result = {}
+    return result if isinstance(result, dict) else {}
+
+
+def _prepare_platform_login_qr_surface(page: ChromiumPage, platform_name: str = "") -> None:
+    platform = str(platform_name or "").strip().lower()
+    if platform not in {"kuaishou", "xiaohongshu"}:
+        return
+    contexts: list[Any] = [page]
+    try:
+        contexts.extend(list(page.get_frames(timeout=1.2)))
+    except Exception:
+        pass
+    for ctx in contexts:
+        payload = _prepare_login_qr_context(ctx, platform)
+        if bool(payload.get("clicked")):
+            time.sleep(0.8)
+            return
+
+
+def _extract_login_qr_source(page: ChromiumPage, timeout_seconds: float = 6.0, platform_name: str = "") -> str:
+    end_at = time.time() + max(1.0, float(timeout_seconds or 0))
+    platform = str(platform_name or "").strip().lower()
+    next_prepare_at = 0.0
+    while time.time() < end_at:
+        if platform in {"kuaishou", "xiaohongshu"} and time.time() >= next_prepare_at:
+            _prepare_platform_login_qr_surface(page, platform)
+            next_prepare_at = time.time() + 1.0
+        contexts: list[Any] = []
+        try:
+            contexts.extend(list(page.get_frames(timeout=1.5)))
+        except Exception:
+            pass
+        if platform == "wechat":
+            contexts.append(page)
+        else:
+            contexts.insert(0, page)
+        for ctx in contexts:
+            source = _extract_login_qr_source_from_context(ctx, platform)
+            if source:
+                return source
+        time.sleep(0.4)
+    return ""
+
+
+
+def _platform_login_callback_data(action: str, platform_name: str, wait_token: str = "") -> str:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    callback = f"{WECHAT_LOGIN_QR_REFRESH_CALLBACK_PREFIX}|{str(action or '').strip().lower()}|{platform}"
+    token = str(wait_token or "").strip()
+    if token:
+        callback += f"|{token}"
+    return callback
+
+
+def _platform_login_signal_dir(profile_dir: str) -> Path:
+    base_dir = Path(str(profile_dir or DEFAULT_WECHAT_CHROME_USER_DATA_DIR).strip() or DEFAULT_WECHAT_CHROME_USER_DATA_DIR).expanduser()
+    runtime_dir = (base_dir.parent if base_dir.parent != Path("") else Path.cwd()) / "telegram_login_sync"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return runtime_dir
+
+
+def _platform_login_signal_path(platform_name: str, profile_dir: str) -> Path:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    profile_key = hashlib.sha1(str(Path(profile_dir).expanduser()).encode("utf-8")).hexdigest()[:12]
+    return _platform_login_signal_dir(profile_dir) / f"{platform}_{profile_key}.json"
+
+
+def _read_platform_login_signal(platform_name: str, profile_dir: str) -> dict[str, Any]:
+    path = _platform_login_signal_path(platform_name, profile_dir)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_platform_login_signal(platform_name: str, profile_dir: str, payload: dict[str, Any]) -> None:
+    path = _platform_login_signal_path(platform_name, profile_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _platform_session_state_path(platform_name: str, profile_dir: str) -> Path:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    profile_key = hashlib.sha1(str(Path(profile_dir).expanduser()).encode("utf-8")).hexdigest()[:12]
+    return _platform_login_signal_dir(profile_dir) / f"{platform}_{profile_key}.session.json"
+
+
+def _read_platform_session_state(platform_name: str, profile_dir: str) -> dict[str, Any]:
+    path = _platform_session_state_path(platform_name, profile_dir)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_platform_session_state(platform_name: str, profile_dir: str, payload: dict[str, Any]) -> None:
+    path = _platform_session_state_path(platform_name, profile_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _mark_platform_session_state(
+    platform_name: str,
+    profile_dir: str,
+    *,
+    status: str,
+    url: str = "",
+    reason: str = "",
+    diagnostics: Optional[dict[str, Any]] = None,
+) -> None:
+    now_ts = time.time()
+    payload = {
+        "platform": str(platform_name or "wechat").strip().lower() or "wechat",
+        "profile_dir": str(profile_dir or "").strip(),
+        "status": str(status or "").strip().lower(),
+        "url": str(url or "").strip(),
+        "reason": str(reason or "").strip(),
+        "updated_at": now_ts,
+    }
+    if isinstance(diagnostics, dict) and diagnostics:
+        payload["diagnostics"] = diagnostics
+    _write_platform_session_state(platform_name, profile_dir, payload)
+
+
+def _mark_platform_session_ready(
+    platform_name: str,
+    profile_dir: str,
+    *,
+    url: str = "",
+    diagnostics: Optional[dict[str, Any]] = None,
+) -> None:
+    _mark_platform_session_state(platform_name, profile_dir, status="ready", url=url, diagnostics=diagnostics)
+
+
+def _mark_platform_session_login_required(
+    platform_name: str,
+    profile_dir: str,
+    *,
+    url: str = "",
+    reason: str = "",
+    diagnostics: Optional[dict[str, Any]] = None,
+) -> None:
+    _mark_platform_session_state(
+        platform_name,
+        profile_dir,
+        status="login_required",
+        url=url,
+        reason=reason,
+        diagnostics=diagnostics,
+    )
+
+
+def _has_recent_platform_session_ready(platform_name: str, profile_dir: str, *, max_age_seconds: int = 21600) -> bool:
+    payload = _read_platform_session_state(platform_name, profile_dir)
+    if str(payload.get("status") or "").strip().lower() != "ready":
+        return False
+    updated_at = float(payload.get("updated_at") or 0.0)
+    if updated_at <= 0:
+        return False
+    return (time.time() - updated_at) <= max(60, int(max_age_seconds or 0))
+
+
+def _should_send_platform_login_monitor_notice(
+    platform_name: str,
+    profile_dir: str,
+    *,
+    reason: str = "",
+    current_url: str = "",
+    min_repeat_seconds: int = PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS,
+) -> bool:
+    payload = _read_platform_session_state(platform_name, profile_dir)
+    if str(payload.get("status") or "").strip().lower() != "login_required":
+        return True
+    previous_reason = str(payload.get("reason") or "").strip().lower()
+    previous_url = str(payload.get("url") or "").strip().lower()
+    current_reason = str(reason or "").strip().lower()
+    current_url_lower = str(current_url or "").strip().lower()
+    if previous_reason != current_reason or previous_url != current_url_lower:
+        return True
+    updated_at = float(payload.get("updated_at") or 0.0)
+    if updated_at <= 0:
+        return True
+    return (time.time() - updated_at) >= max(60, int(min_repeat_seconds or 0))
+
+
+def _trim_platform_debug_text(value: str, limit: int = 240) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _classify_platform_login_root_cause(
+    platform_name: str,
+    *,
+    reason: str = "",
+    current_url: str = "",
+    open_url: str = "",
+    recent_session_ready: bool = False,
+) -> str:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    normalized_reason = str(reason or "").strip().lower()
+    current_url_lower = str(current_url or "").strip().lower()
+    open_url_lower = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip().lower()
+
+    if normalized_reason in {"login_url", "login_text", "wechat_qr_expired"}:
+        return "upstream_session_expired"
+    if normalized_reason == "wechat_micro_route_error":
+        if recent_session_ready:
+            return "local_detection_or_route_anomaly"
+        return "upstream_session_or_route_error"
+    if current_url_lower and open_url_lower and open_url_lower in current_url_lower:
+        return "local_detection_or_page_state_anomaly"
+    if recent_session_ready:
+        return "likely_local_detection_or_profile_issue"
+    return "unknown"
+
+
+def _is_platform_session_monitor_relevant_url(platform_name: str, current_url: str, open_url: str = "") -> bool:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    url = str(current_url or "").strip().lower()
+    open_url_lower = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip().lower()
+    login_entry = str(PLATFORM_LOGIN_ENTRY_URLS.get(platform) or "").strip().lower()
+    if not url:
+        return False
+    if platform == "wechat":
+        return "channels.weixin.qq.com/" in url
+    if open_url_lower and open_url_lower in url:
+        return True
+    if login_entry and login_entry in url:
+        return True
+    return False
+
+
+def _build_platform_login_diagnostics(
+    platform_name: str,
+    *,
+    state: Optional[dict[str, Any]] = None,
+    open_url: str = "",
+    recent_session_ready: bool = False,
+    profile_dir: str = "",
+) -> dict[str, Any]:
+    payload = state if isinstance(state, dict) else {}
+    current_url = str(payload.get("url") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    text = str(payload.get("text") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    diagnostics = {
+        "platform": str(platform_name or "wechat").strip().lower() or "wechat",
+        "needs_login": bool(payload.get("needs_login")),
+        "reason": reason,
+        "root_cause_hint": _classify_platform_login_root_cause(
+            platform_name,
+            reason=reason,
+            current_url=current_url,
+            open_url=open_url,
+            recent_session_ready=recent_session_ready,
+        ),
+        "source": str(payload.get("source") or "page"),
+        "matched_marker": _trim_platform_debug_text(str(payload.get("matched_marker") or ""), limit=80),
+        "current_url": current_url,
+        "expected_open_url": str(open_url or "").strip(),
+        "recent_session_ready": bool(recent_session_ready),
+        "profile_dir": str(profile_dir or "").strip(),
+        "page_title_excerpt": _trim_platform_debug_text(title, limit=160),
+        "page_text_excerpt": _trim_platform_debug_text(text, limit=240),
+        "captured_at": time.time(),
+    }
+    return diagnostics
+
+
+def probe_platform_session_via_debug_port(
+    *,
+    platform_name: str,
+    open_url: str,
+    debug_port: int,
+    chrome_user_data_dir: str,
+    chrome_path: Optional[str] = None,
+    auto_open_chrome: bool = False,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    profile_dir = str(Path(chrome_user_data_dir).expanduser()) if chrome_user_data_dir else ""
+    resolved_open_url = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip() or CREATE_POST_URL
+    try:
+        page = _connect_chrome(
+            debug_port=debug_port,
+            auto_open_chrome=auto_open_chrome,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=profile_dir,
+            startup_url=resolved_open_url,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "platform": platform,
+            "profile_dir": profile_dir,
+            "open_url": resolved_open_url,
+            "error": str(exc),
+        }
+
+    login_state = inspect_platform_login_gate(page, platform)
+    current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
+    if not _is_platform_session_monitor_relevant_url(platform, current_url, resolved_open_url):
+        return {
+            "ok": True,
+            "status": "ignored",
+            "platform": platform,
+            "profile_dir": profile_dir,
+            "current_url": current_url,
+            "reason": str(login_state.get("reason") or "").strip(),
+        }
+
+    recent_session_ready = bool(profile_dir) and _has_recent_platform_session_ready(platform, profile_dir)
+    diagnostics = _build_platform_login_diagnostics(
+        platform,
+        state=login_state,
+        open_url=resolved_open_url,
+        recent_session_ready=recent_session_ready,
+        profile_dir=profile_dir,
+    )
+    if not bool(login_state.get("needs_login")):
+        if profile_dir:
+            _mark_platform_session_ready(
+                platform,
+                profile_dir,
+                url=current_url or resolved_open_url,
+                diagnostics=diagnostics,
+            )
+        return {
+            "ok": True,
+            "status": "ready",
+            "platform": platform,
+            "profile_dir": profile_dir,
+            "current_url": current_url,
+            "diagnostics": diagnostics,
+        }
+
+    login_reason = str(login_state.get("reason") or "").strip()
+    should_notify = bool(profile_dir) and _should_send_platform_login_monitor_notice(
+        platform,
+        profile_dir,
+        reason=login_reason,
+        current_url=current_url,
+    )
+    if profile_dir:
+        _mark_platform_session_login_required(
+            platform,
+            profile_dir,
+            url=current_url or resolved_open_url,
+            reason=login_reason,
+            diagnostics=diagnostics,
+        )
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": "login_required",
+        "platform": platform,
+        "profile_dir": profile_dir,
+        "current_url": current_url,
+        "reason": login_reason,
+        "diagnostics": diagnostics,
+        "notified": False,
+    }
+    if not should_notify:
+        result["notification_skipped"] = True
+        return result
+
+    qr_result = send_platform_login_qr_notification(
+        platform_name=platform,
+        open_url=resolved_open_url,
+        page=page,
+        debug_port=debug_port,
+        chrome_user_data_dir=profile_dir,
+        chrome_path=chrome_path,
+        auto_open_chrome=False,
+        refresh_page=False,
+        allow_duplicate=False,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+    result["qr_result"] = qr_result
+    if bool(qr_result.get("sent")):
+        result["notified"] = True
+        result["notification_mode"] = "qr"
+        return result
+
+    text_result = _send_platform_login_text_notification(
+        platform_name=platform,
+        open_url=resolved_open_url,
+        chrome_user_data_dir=profile_dir,
+        login_reason=login_reason,
+        qr_error=str(qr_result.get("error") or ""),
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+    result["text_result"] = text_result
+    if bool(text_result.get("sent")):
+        result["notified"] = True
+        result["notification_mode"] = "text"
+    return result
+
+
+def _begin_platform_login_wait(platform_name: str, profile_dir: str, open_url: str) -> str:
+    token = uuid.uuid4().hex
+    payload = {
+        "platform": str(platform_name or "wechat").strip().lower() or "wechat",
+        "profile_dir": str(profile_dir or "").strip(),
+        "open_url": str(open_url or "").strip(),
+        "status": "waiting",
+        "token": token,
+        "created_at": time.time(),
+        "confirmed_at": 0,
+    }
+    _write_platform_login_signal(platform_name, profile_dir, payload)
+    return token
+
+
+def confirm_platform_login_signal(platform_name: str, profile_dir: str, wait_token: str = "") -> dict[str, Any]:
+    payload = _read_platform_login_signal(platform_name, profile_dir)
+    now_ts = time.time()
+    if not isinstance(payload, dict) or not payload:
+        payload = {
+            "platform": str(platform_name or "wechat").strip().lower() or "wechat",
+            "profile_dir": str(profile_dir or "").strip(),
+            "status": "confirmed",
+            "token": str(wait_token or "").strip(),
+            "created_at": now_ts,
+        }
+    existing_token = str(payload.get("token") or "").strip()
+    incoming_token = str(wait_token or "").strip()
+    if incoming_token and existing_token and incoming_token != existing_token:
+        payload["last_rejected_token"] = incoming_token
+        payload["last_rejected_at"] = now_ts
+        _write_platform_login_signal(platform_name, profile_dir, payload)
+        return payload
+    if incoming_token and not existing_token:
+        payload["token"] = incoming_token
+    payload["status"] = "confirmed"
+    payload["confirmed_at"] = now_ts
+    payload["updated_at"] = now_ts
+    _write_platform_login_signal(platform_name, profile_dir, payload)
+    return payload
+
+
+def _clear_platform_login_signal(platform_name: str, profile_dir: str, wait_token: str = "") -> None:
+    path = _platform_login_signal_path(platform_name, profile_dir)
+    if not path.exists():
+        return
+    if wait_token:
+        payload = _read_platform_login_signal(platform_name, profile_dir)
+        existing_token = str(payload.get("token") or "").strip()
+        if existing_token and existing_token != str(wait_token or "").strip():
+            return
+    try:
+        path.unlink()
+    except Exception:
+        pass
+
+
+def _should_skip_wechat_qr_notice(cache_key: str, fingerprint: str, ttl_seconds: int) -> bool:
+    key = str(cache_key or "").strip().lower()
+    if not key or not fingerprint:
+        return False
+    cached = WECHAT_LOGIN_QR_NOTICE_CACHE.get(key)
+    if not cached:
+        return False
+    cached_fp, cached_ts = cached
+    now_ts = time.time()
+    if (cached_fp == fingerprint) and ((now_ts - float(cached_ts or 0.0)) < max(10, int(ttl_seconds or 0))):
+        return True
+    return False
+
+
+def _remember_wechat_qr_notice(cache_key: str, fingerprint: str) -> None:
+    key = str(cache_key or "").strip().lower()
+    if not key or not fingerprint:
+        return
+    WECHAT_LOGIN_QR_NOTICE_CACHE[key] = (fingerprint, time.time())
+
+
+def send_platform_login_qr_notification(
+    *,
+    platform_name: str,
+    open_url: str,
+    page: Optional[ChromiumPage] = None,
+    debug_port: Optional[int] = None,
+    chrome_user_data_dir: str = "",
+    chrome_path: Optional[str] = None,
+    auto_open_chrome: bool = True,
+    refresh_page: bool = False,
+    allow_duplicate: bool = False,
+    wait_token: str = "",
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    prepared = _prepare_platform_login_qr_notice(
+        platform_name=platform_name,
+        open_url=open_url,
+        page=page,
+        debug_port=debug_port,
+        chrome_user_data_dir=chrome_user_data_dir,
+        chrome_path=chrome_path,
+        auto_open_chrome=auto_open_chrome,
+        refresh_page=refresh_page,
+        wait_token=wait_token,
+    )
+    if not bool(prepared.get("ok")):
+        return prepared
+    platform = str(prepared.get("platform") or "").strip().lower() or "wechat"
+    profile_dir = str(prepared.get("profile_dir") or "").strip()
+    runtime_debug_port = int(prepared.get("runtime_debug_port") or 0)
+    open_target_url = str(prepared.get("open_target_url") or open_url or "").strip()
+    photo_bytes = bytes(prepared.get("photo_bytes") or b"")
+    mime = str(prepared.get("mime") or "image/png").strip() or "image/png"
+    fingerprint = str(prepared.get("fingerprint") or "").strip()
+    cache_key = str(prepared.get("cache_key") or "").strip()
+
+    settings = _resolve_runtime_telegram_notify_settings(
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+    if not settings.enabled:
+        return {"ok": False, "needs_login": True, "error": "telegram notify not configured"}
+
+    if (not allow_duplicate) and _should_skip_wechat_qr_notice(
+        cache_key,
+        fingerprint,
+        WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS,
+    ):
+        return {"ok": True, "needs_login": True, "sent": False, "skipped": True, "fingerprint": fingerprint}
+
+    response = _send_telegram_photo(
+        bot_token=settings.telegram_bot_token,
+        chat_id=settings.telegram_chat_id,
+        photo_bytes=photo_bytes,
+        filename=str(prepared.get("filename") or (f"{platform}_login_qr.png" if mime.endswith("png") else f"{platform}_login_qr.jpg")),
+        caption=str(prepared.get("caption") or ""),
+        timeout_seconds=settings.telegram_timeout_seconds,
+        api_base=settings.telegram_api_base,
+        reply_markup=prepared.get("reply_markup") if isinstance(prepared.get("reply_markup"), dict) else None,
+        parse_mode="HTML",
+    )
+    _remember_wechat_qr_notice(cache_key, fingerprint)
+    return {
+        "ok": True,
+        "needs_login": True,
+        "sent": True,
+        "skipped": False,
+        "fingerprint": fingerprint,
+        "response": response,
+    }
+
+
+def send_wechat_login_qr_notification(
+    *,
+    page: Optional[ChromiumPage] = None,
+    debug_port: Optional[int] = None,
+    chrome_user_data_dir: str = "",
+    chrome_path: Optional[str] = None,
+    auto_open_chrome: bool = True,
+    refresh_page: bool = False,
+    allow_duplicate: bool = False,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    return send_platform_login_qr_notification(
+        platform_name="wechat",
+        open_url=CREATE_POST_URL,
+        page=page,
+        debug_port=debug_port,
+        chrome_user_data_dir=chrome_user_data_dir,
+        chrome_path=chrome_path,
+        auto_open_chrome=auto_open_chrome,
+        refresh_page=refresh_page,
+        allow_duplicate=allow_duplicate,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+
+
+def check_platform_login_status(
+    *,
+    platform_name: str,
+    open_url: str,
+    page: Optional[ChromiumPage] = None,
+    debug_port: Optional[int] = None,
+    chrome_user_data_dir: str = "",
+    chrome_path: Optional[str] = None,
+    auto_open_chrome: bool = True,
+    refresh_page: bool = False,
+) -> dict[str, Any]:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    default_profile_dir = DEFAULT_WECHAT_CHROME_USER_DATA_DIR if platform == "wechat" else DEFAULT_CHROME_USER_DATA_DIR
+    default_debug_port = DEFAULT_WECHAT_DEBUG_PORT if platform == "wechat" else DEFAULT_PORT
+    profile_dir = str(Path(chrome_user_data_dir or default_profile_dir).expanduser())
+    runtime_debug_port = int(debug_port or default_debug_port)
+    open_target_url = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip() or CREATE_POST_URL
+    active_page = page
+    if active_page is None:
+        active_page = _connect_chrome(
+            debug_port=runtime_debug_port,
+            auto_open_chrome=auto_open_chrome,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=profile_dir,
+            startup_url=open_target_url,
+        )
+    if refresh_page:
+        try:
+            active_page.get(open_target_url)
+        except Exception:
+            try:
+                active_page.refresh()
+            except Exception:
+                pass
+        time.sleep(1.0)
+    state = inspect_platform_login_gate(active_page, platform)
+    diagnostics = _build_platform_login_diagnostics(
+        platform,
+        state=state,
+        open_url=open_target_url,
+        recent_session_ready=_has_recent_platform_session_ready(platform, profile_dir),
+        profile_dir=profile_dir,
+    )
+    if bool(state.get("needs_login")):
+        _mark_platform_session_login_required(
+            platform,
+            profile_dir,
+            url=str(state.get("url") or getattr(active_page, "url", "") or ""),
+            reason=str(state.get("reason") or ""),
+            diagnostics=diagnostics,
+        )
+    else:
+        _mark_platform_session_ready(
+            platform,
+            profile_dir,
+            url=str(state.get("url") or getattr(active_page, "url", "") or ""),
+            diagnostics=diagnostics,
+        )
+    return {
+        "ok": True,
+        "platform": platform,
+        "needs_login": bool(state.get("needs_login")),
+        "reason": str(state.get("reason") or "").strip(),
+        "matched_marker": str(state.get("matched_marker") or "").strip(),
+        "url": str(state.get("url") or getattr(active_page, "url", "") or ""),
+        "source": str(state.get("source") or "page"),
+        "profile_dir": profile_dir,
+        "debug_port": runtime_debug_port,
+        "root_cause_hint": str(diagnostics.get("root_cause_hint") or "").strip(),
+        "diagnostics": diagnostics,
+    }
+
+
+def _wait_for_platform_login_confirmation(
+    page: ChromiumPage,
+    *,
+    platform_name: str,
+    open_url: str,
+    chrome_user_data_dir: str,
+    wait_token: str,
+    timeout_seconds: int = PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS,
+) -> bool:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    profile_dir = str(Path(chrome_user_data_dir).expanduser())
+    deadline = time.time() + max(30, int(timeout_seconds or PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS))
+    last_confirmed_at = 0.0
+    next_auto_refresh_at = time.time() + max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
+    while time.time() < deadline:
+        # Always inspect the current page before forcing a navigation.
+        # After the user scans the QR code, some platforms clear the login gate
+        # on the current page first. Jumping back to open_url too early can keep
+        # the session stuck on the login page.
+        if not _is_platform_login_gate(page, platform):
+            _clear_platform_login_signal(platform, profile_dir, wait_token)
+            _mark_platform_session_ready(platform, profile_dir, url=str(_page_current_url(page) or open_url or ""))
+            return True
+        if time.time() >= next_auto_refresh_at:
+            try:
+                page.get(open_url)
+            except Exception:
+                try:
+                    page.refresh()
+                except Exception:
+                    pass
+            time.sleep(1.0)
+            if not _is_platform_login_gate(page, platform):
+                _clear_platform_login_signal(platform, profile_dir, wait_token)
+                _mark_platform_session_ready(platform, profile_dir, url=str(_page_current_url(page) or open_url or ""))
+                return True
+            next_auto_refresh_at = time.time() + max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
+        signal = _read_platform_login_signal(platform, profile_dir)
+        signal_token = str(signal.get("token") or "").strip()
+        signal_status = str(signal.get("status") or "").strip().lower()
+        confirmed_at = float(signal.get("confirmed_at") or 0.0)
+        if signal_status == "confirmed" and signal_token and signal_token == str(wait_token or "").strip() and confirmed_at > last_confirmed_at:
+            last_confirmed_at = confirmed_at
+            _log(f"[Uploader:{platform}] Login confirmation received via Telegram; rechecking session.")
+            try:
+                page.get(open_url)
+            except Exception:
+                try:
+                    page.refresh()
+                except Exception:
+                    pass
+            time.sleep(1.0)
+            if not _is_platform_login_gate(page, platform):
+                _clear_platform_login_signal(platform, profile_dir, wait_token)
+                _mark_platform_session_ready(platform, profile_dir, url=str(_page_current_url(page) or open_url or ""))
+                return True
+            _log(f"[Uploader:{platform}] Login still not ready after confirmation; continue automatic polling.")
+            next_auto_refresh_at = time.time() + max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
+        time.sleep(max(0.5, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS)))
+    _mark_platform_session_login_required(
+        platform,
+        profile_dir,
+        url=str(_page_current_url(page) or open_url or ""),
+        reason="login_confirmation_timeout",
+    )
+    return False
+
+
+def _send_publish_notification(settings: NotifySettings, subject: str, card: dict[str, Any]) -> None:
+    if not settings.enabled:
+        return
+    try:
+        shared_call_telegram_api(
+            bot_token=settings.telegram_bot_token,
+            method="sendMessage",
+            params={
+                "chat_id": settings.telegram_chat_id,
+                "text": str(card.get("text") or "").strip(),
+                "parse_mode": str(card.get("parse_mode") or "HTML"),
+                "disable_web_page_preview": "false",
+                "reply_markup": json.dumps(card.get("reply_markup") or {}, ensure_ascii=True),
+            },
+            timeout_seconds=settings.telegram_timeout_seconds,
+            api_base=settings.telegram_api_base,
+            use_post=True,
+            max_retries=4,
+        )
+        _log(f"[Notify] Message sent via telegram_bot: {subject}")
+    except Exception as exc:
+        _log(f"[Notify] Message send warning via telegram_bot: {exc}")
+
+def init_workspace(base_dir: str) -> Workspace:
+    root = Path(base_dir)
+    downloads = root / "1_Downloads"
+    processed = root / "2_Processed"
+    image_downloads = root / "1_Downloads_Images"
+    image_processed = root / "2_Processed_Images"
+    archive = root / "3_Archive"
+    history = root / "history.txt"
+    image_history = root / "history_images.txt"
+
+    for p in (root, downloads, processed, image_downloads, image_processed, archive):
+        p.mkdir(parents=True, exist_ok=True)
+    history.touch(exist_ok=True)
+    image_history.touch(exist_ok=True)
+
+    _log(f"[Init] Workspace ready: {root}")
+    return Workspace(
+        root=root,
+        downloads=downloads,
+        processed=processed,
+        archive=archive,
+        history=history,
+        image_downloads=image_downloads,
+        image_processed=image_processed,
+        image_history=image_history,
+    )
+
+
+def _normalize_media_kind(media_kind: str) -> str:
+    token = str(media_kind or "").strip().lower()
+    return "image" if token == "image" else "video"
+
+
+def _media_kind_from_path(path: Path) -> str:
+    return "image" if _is_image_file(path) else "video"
+
+
+def _workspace_download_dir(workspace: Workspace, media_kind: str = "video") -> Path:
+    return workspace.image_downloads if _normalize_media_kind(media_kind) == "image" else workspace.downloads
+
+
+def _workspace_processed_dir(workspace: Workspace, media_kind: str = "video") -> Path:
+    return workspace.image_processed if _normalize_media_kind(media_kind) == "image" else workspace.processed
+
+
+def _workspace_history_file(workspace: Workspace, media_kind: str = "video") -> Path:
+    return workspace.image_history if _normalize_media_kind(media_kind) == "image" else workspace.history
+
+
+def _iter_processed_dirs(workspace: Workspace, include_images: bool = True) -> list[Path]:
+    dirs = [workspace.processed]
+    if include_images:
+        dirs.append(workspace.image_processed)
+    return dirs
+
+
+def _resolve_processed_target_path(workspace: Workspace, processed_name: str, include_images: bool = True) -> Optional[Path]:
+    clean_name = str(processed_name or "").strip()
+    if not clean_name:
+        return None
+    for base_dir in _iter_processed_dirs(workspace, include_images=include_images):
+        candidate = base_dir / clean_name
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _default_runtime_config() -> dict[str, Any]:
+    return {
+        "collection_name": DEFAULT_COLLECTION_NAME,
+        "auto_delete_source_files": DEFAULT_AUTO_DELETE_SOURCE_FILES,
+        "exclude_keywords": DEFAULT_EXCLUDE_KEYWORDS.copy(),
+        "require_any_keywords": DEFAULT_REQUIRE_ANY_KEYWORDS.copy(),
+        "spark_ai": _default_spark_ai_config(),
+        "comment_reply": {
+            "enabled": True,
+            "max_posts_per_run": 50,
+            "max_replies_per_run": 20,
+            "reply_max_chars": 20,
+            "min_reply_interval_seconds": 90,
+            "max_reply_interval_seconds": 240,
+            "auto_like": True,
+            "prompt_template": DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE,
+            "fallback_replies": DEFAULT_COMMENT_REPLY_FALLBACKS.copy(),
+            "launch_background": True,
+            "debug": False,
+        },
+    }
+
+
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
+def _normalize_keyword_list(raw: Any, fallback: list[str]) -> list[str]:
+    values: list[str] = []
+    if isinstance(raw, str):
+        values.extend(re.split(r"[,\n\r]+", raw))
+    elif isinstance(raw, list):
+        values.extend(str(x) for x in raw)
+    else:
+        values.extend(fallback)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        token = re.sub(r"\s+", " ", str(value or "").strip())
+        if not token:
+            continue
+        lower = token.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        deduped.append(token)
+    return deduped
+
+
+def _normalize_upload_platforms(raw: str) -> list[str]:
+    tokens = [x.strip().lower() for x in re.split(r"[,\s]+", str(raw or "")) if x.strip()]
+    if not tokens:
+        tokens = [DEFAULT_UPLOAD_PLATFORMS]
+    result: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token == "weixin":
+            token = "wechat"
+        elif token in {"bili", "b站", "bilibili.com"}:
+            token = "bilibili"
+        if token in seen:
+            continue
+        if token not in SUPPORTED_UPLOAD_PLATFORMS:
+            supported = ", ".join(SUPPORTED_UPLOAD_PLATFORMS)
+            raise ValueError(f"Unsupported upload platform: {token}. Supported: {supported}")
+        seen.add(token)
+        result.append(token)
+    return result
+
+
+def _default_spark_ai_config() -> dict[str, Any]:
+    return shared_default_spark_settings()
+
+
+def _merge_spark_ai_config(raw: Any) -> dict[str, Any]:
+    return shared_merge_spark_settings(raw)
+
+
+def _merge_comment_reply_config(raw: Any) -> dict[str, Any]:
+    defaults = _default_runtime_config()["comment_reply"]
+    cfg = dict(defaults)
+    if not isinstance(raw, dict):
+        return cfg
+    cfg["enabled"] = _to_bool(raw.get("enabled"), default=bool(defaults["enabled"]))
+    try:
+        cfg["max_posts_per_run"] = max(1, int(raw.get("max_posts_per_run", defaults["max_posts_per_run"])))
+    except Exception:
+        cfg["max_posts_per_run"] = int(defaults["max_posts_per_run"])
+    try:
+        cfg["max_replies_per_run"] = max(1, int(raw.get("max_replies_per_run", defaults["max_replies_per_run"])))
+    except Exception:
+        cfg["max_replies_per_run"] = int(defaults["max_replies_per_run"])
+    try:
+        cfg["reply_max_chars"] = max(6, int(raw.get("reply_max_chars", defaults["reply_max_chars"])))
+    except Exception:
+        cfg["reply_max_chars"] = int(defaults["reply_max_chars"])
+    try:
+        cfg["min_reply_interval_seconds"] = max(
+            0,
+            int(raw.get("min_reply_interval_seconds", defaults["min_reply_interval_seconds"])),
+        )
+    except Exception:
+        cfg["min_reply_interval_seconds"] = int(defaults["min_reply_interval_seconds"])
+    try:
+        cfg["max_reply_interval_seconds"] = max(
+            cfg["min_reply_interval_seconds"],
+            int(raw.get("max_reply_interval_seconds", defaults["max_reply_interval_seconds"])),
+        )
+    except Exception:
+        cfg["max_reply_interval_seconds"] = max(
+            cfg["min_reply_interval_seconds"],
+            int(defaults["max_reply_interval_seconds"]),
+        )
+    cfg["auto_like"] = _to_bool(raw.get("auto_like"), default=bool(defaults["auto_like"]))
+    cfg["launch_background"] = _to_bool(raw.get("launch_background"), default=bool(defaults["launch_background"]))
+    cfg["debug"] = _to_bool(raw.get("debug"), default=bool(defaults["debug"]))
+    prompt_template = str(raw.get("prompt_template", "") or "").strip()
+    if prompt_template and not _looks_like_broken_comment_reply(prompt_template):
+        cfg["prompt_template"] = prompt_template
+    else:
+        cfg["prompt_template"] = str(defaults["prompt_template"])
+    fallback_replies = raw.get("fallback_replies")
+    if isinstance(fallback_replies, list):
+        clean = [
+            _single_line_preview(str(item or "").strip(), limit=60)
+            for item in fallback_replies
+            if str(item or "").strip() and not _looks_like_broken_comment_reply(str(item or "").strip())
+        ]
+        cfg["fallback_replies"] = clean or list(defaults["fallback_replies"])
+    else:
+        cfg["fallback_replies"] = list(defaults["fallback_replies"])
+    return cfg
+
+
+def _load_runtime_config(config_path: str) -> dict[str, Any]:
+    defaults = _default_runtime_config()
+    path = Path(config_path).expanduser()
+
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(defaults, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _log(f"[Config] Created default config: {path}")
+        return defaults.copy()
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _log(f"[Config] Failed to parse config, fallback to defaults: {path} ({exc})")
+        return defaults.copy()
+
+    if not isinstance(payload, dict):
+        _log(f"[Config] Config is not a JSON object, fallback to defaults: {path}")
+        return defaults.copy()
+
+    merged = defaults.copy()
+    collection_name = str(payload.get("collection_name", "") or "").strip()
+    if collection_name:
+        merged["collection_name"] = collection_name
+    merged["auto_delete_source_files"] = _to_bool(
+        payload.get("auto_delete_source_files"),
+        default=DEFAULT_AUTO_DELETE_SOURCE_FILES,
+    )
+    merged["exclude_keywords"] = _normalize_keyword_list(
+        payload.get("exclude_keywords"),
+        DEFAULT_EXCLUDE_KEYWORDS,
+    )
+    merged["require_any_keywords"] = _normalize_keyword_list(
+        payload.get("require_any_keywords"),
+        DEFAULT_REQUIRE_ANY_KEYWORDS,
+    )
+    merged["spark_ai"] = _merge_spark_ai_config(payload.get("spark_ai"))
+    merged["comment_reply"] = _merge_comment_reply_config(payload.get("comment_reply"))
+    return merged
+
+
+def _comment_reply_state_path(workspace: Workspace) -> Path:
+    return workspace.root / "runtime" / WECHAT_COMMENT_REPLY_STATE_FILE
+
+
+def _load_comment_reply_state(workspace: Workspace) -> dict[str, Any]:
+    path = _comment_reply_state_path(workspace)
+    if not path.exists():
+        return {"updated_at": "", "items": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"updated_at": "", "items": {}}
+    if not isinstance(payload, dict):
+        return {"updated_at": "", "items": {}}
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        items = {}
+    return {
+        "updated_at": str(payload.get("updated_at") or "").strip(),
+        "items": items,
+    }
+
+
+def _save_comment_reply_state(workspace: Workspace, state: dict[str, Any]) -> None:
+    path = _comment_reply_state_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _prune_comment_reply_state_items(items: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(items, dict):
+        return {}
+    cutoff = datetime.now() - timedelta(days=WECHAT_COMMENT_REPLY_RETENTION_DAYS)
+    kept: dict[str, Any] = {}
+    for fingerprint, raw in items.items():
+        if not isinstance(raw, dict):
+            continue
+        replied_at = str(raw.get("replied_at") or "").strip()
+        if not replied_at:
+            continue
+        try:
+            replied_dt = datetime.strptime(replied_at, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            kept[str(fingerprint)] = raw
+            continue
+        if replied_dt >= cutoff:
+            kept[str(fingerprint)] = raw
+    return kept
+
+
+def _comment_reply_fingerprint(post: dict[str, Any], comment: dict[str, Any]) -> str:
+    raw = "|".join(
+        [
+            str(post.get("post_key") or "").strip(),
+            str(comment.get("author") or "").strip(),
+            str(comment.get("time_text") or "").strip(),
+            str(comment.get("content") or "").strip(),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
+
+
+def _remember_comment_reply(
+    items: dict[str, Any],
+    *,
+    fingerprint: str,
+    post: dict[str, Any],
+    comment: dict[str, Any],
+    reply_text: str,
+) -> dict[str, Any]:
+    replied_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    record = {
+        "fingerprint": str(fingerprint or "").strip(),
+        "post_key": str(post.get("post_key") or "").strip(),
+        "post_title": str(post.get("title") or "").strip(),
+        "post_published_text": str(post.get("published_text") or "").strip(),
+        "comment_author": str(comment.get("author") or "").strip(),
+        "comment_time": str(comment.get("time_text") or "").strip(),
+        "comment_preview": _single_line_preview(str(comment.get("content") or "").strip(), limit=120),
+        "reply_text": str(reply_text or "").strip(),
+        "replied_at": replied_at,
+    }
+    items[str(fingerprint or "").strip()] = record
+    return record
+
+
+def _comment_reply_log(debug: bool, message: str) -> None:
+    if debug:
+        _log(f"[CommentReply] {message}")
+
+
+def _parse_comment_reply_timestamp(raw: Any) -> Optional[datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _latest_comment_reply_time(items: dict[str, Any]) -> Optional[datetime]:
+    latest: Optional[datetime] = None
+    if not isinstance(items, dict):
+        return None
+    for value in items.values():
+        if not isinstance(value, dict):
+            continue
+        parsed = _parse_comment_reply_timestamp(value.get("replied_at"))
+        if parsed is None:
+            continue
+        if latest is None or parsed > latest:
+            latest = parsed
+    return latest
+
+
+def _comment_reply_wait_plan(
+    comment_cfg: dict[str, Any],
+    *,
+    last_reply_at: Optional[datetime],
+    now: Optional[datetime] = None,
+) -> dict[str, float]:
+    min_interval = max(0.0, float(comment_cfg.get("min_reply_interval_seconds") or 0))
+    max_interval = max(min_interval, float(comment_cfg.get("max_reply_interval_seconds") or min_interval))
+    if last_reply_at is None or max_interval <= 0:
+        return {
+            "target_interval_seconds": 0.0,
+            "elapsed_seconds": 0.0,
+            "wait_seconds": 0.0,
+        }
+    current = now or datetime.now()
+    elapsed_seconds = max(0.0, (current - last_reply_at).total_seconds())
+    target_interval = min_interval if max_interval <= min_interval else random.uniform(min_interval, max_interval)
+    wait_seconds = max(0.0, target_interval - elapsed_seconds)
+    return {
+        "target_interval_seconds": float(target_interval),
+        "elapsed_seconds": float(elapsed_seconds),
+        "wait_seconds": float(wait_seconds),
+    }
+
+
+def _apply_comment_reply_wait(
+    comment_cfg: dict[str, Any],
+    *,
+    last_reply_at: Optional[datetime],
+    debug: bool,
+) -> Optional[datetime]:
+    plan = _comment_reply_wait_plan(comment_cfg, last_reply_at=last_reply_at)
+    wait_seconds = float(plan.get("wait_seconds") or 0.0)
+    if wait_seconds > 0:
+        _comment_reply_log(
+            debug,
+            "Humanized reply wait: "
+            f"wait={wait_seconds:.1f}s "
+            f"elapsed={float(plan.get('elapsed_seconds') or 0.0):.1f}s "
+            f"target={float(plan.get('target_interval_seconds') or 0.0):.1f}s",
+        )
+        time.sleep(wait_seconds)
+        return datetime.now()
+    if last_reply_at is not None and float(plan.get("target_interval_seconds") or 0.0) > 0:
+        _comment_reply_log(
+            debug,
+            "Humanized reply wait skipped: "
+            f"elapsed={float(plan.get('elapsed_seconds') or 0.0):.1f}s "
+            f">= target={float(plan.get('target_interval_seconds') or 0.0):.1f}s",
+        )
+    return last_reply_at
+
+
+WECHAT_COMMENT_DOC_HELPER_JS = """
+function resolveWechatCommentDoc() {
+  const frames = Array.from(document.querySelectorAll('iframe'));
+  for (const frame of frames) {
+    let doc = null;
+    let href = '';
+    try {
+      doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+      href = String(
+        (frame.contentWindow && frame.contentWindow.location && frame.contentWindow.location.href)
+        || frame.src
+        || ''
+      );
+    } catch (e) {
+      doc = null;
+    }
+    const name = String(frame.name || frame.id || frame.className || '');
+    if (!doc || !doc.querySelector) continue;
+    if (/micro\\/(interaction\\/comment|content\\/post\\/list)/.test(href) || /interaction|content/i.test(name)) {
+      return doc;
+    }
+  }
+  const host = document.querySelector('wujie-app');
+  const shadow = host && host.shadowRoot;
+  const shadowDoc = shadow && (shadow.querySelector('html') || shadow);
+  if (shadowDoc && shadowDoc.querySelector) return shadowDoc;
+  return document;
+}
+"""
+
+
+def _page_current_url(page: ChromiumPage) -> str:
+    try:
+        url = str(getattr(page, "url", "") or "").strip()
+    except Exception:
+        url = ""
+    if url:
+        return url
+    try:
+        return str(page.run_js("return String((location && location.href) || '');") or "").strip()
+    except Exception:
+        return ""
+
+
+def _wait_until(callback: Callable[[], Any], timeout_seconds: float = 10.0, poll_seconds: float = 0.3) -> Any:
+    deadline = time.time() + max(1.0, float(timeout_seconds))
+    last_value: Any = None
+    while time.time() < deadline:
+        last_value = callback()
+        if last_value:
+            return last_value
+        time.sleep(max(0.05, float(poll_seconds)))
+    return last_value
+
+
+def _wait_for_page_url_contains(page: ChromiumPage, token: str, timeout_seconds: float = 10.0) -> bool:
+    target = str(token or "").strip()
+    if not target:
+        return False
+    matched = _wait_until(lambda: target in _page_current_url(page), timeout_seconds=timeout_seconds, poll_seconds=0.35)
+    return bool(matched)
+
+
+def _scroll_wechat_post_list(page: ChromiumPage) -> None:
+    js = """
+    return (() => {
+      const host = document.querySelector('wujie-app');
+      const shadow = host && host.shadowRoot;
+      const doc = (shadow && (shadow.querySelector('html') || shadow)) || document;
+      const box = doc.querySelector('.scroll-list') || doc.querySelector('.scroll-list__wrp.feeds-container');
+      if (box) {
+        box.scrollTop += Math.max(box.clientHeight || 900, 900);
+        return true;
+      }
+      const root = doc.scrollingElement || doc.documentElement || doc.body || document.scrollingElement || document.documentElement || document.body;
+      if (!root) return false;
+      root.scrollTop += Math.max(window.innerHeight || 900, 900);
+      return true;
+    })();
+    """
+    try:
+        page.run_js(js)
+    except Exception:
+        pass
+
+
+def _scroll_wechat_comment_list(page: ChromiumPage) -> None:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return (() => {
+      const doc = resolveWechatCommentDoc();
+      const box = doc.querySelector('.comment-list')
+        || doc.querySelector('.comment-main-content')
+        || doc.querySelector('.scroll-list')
+        || doc.querySelector('.scroll-list__wrp')
+        || doc.querySelector('[class*="scroll-list"]');
+      if (box) {
+        box.scrollTop += Math.max(box.clientHeight || 600, 600);
+        return true;
+      }
+      const root = doc.scrollingElement || doc.documentElement || doc.body || document.scrollingElement || document.documentElement || document.body;
+      if (!root) return false;
+      root.scrollTop += Math.max(window.innerHeight || 900, 700);
+      return true;
+    })();
+    """
+    try:
+        page.run_js(js)
+    except Exception:
+        pass
+
+
+def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return (() => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function toInt(value) {
+        const raw = String(value || '').replace(/[^\\d]/g, '');
+        return raw ? parseInt(raw, 10) : 0;
+      }
+      function parseCommentMeta(card) {
+        const selectors = [
+          '.feed-comment-total',
+          '[class*="comment-total"]',
+          '[class*="commentTotal"]',
+          '[class*="comment-count"]',
+          '[class*="commentCount"]',
+          '[data-testid*="comment"]',
+          '[data-role*="comment"]',
+          '[aria-label*="评论"]',
+          '[title*="评论"]',
+        ];
+        for (const selector of selectors) {
+          const node = card.querySelector(selector);
+          const text = norm(node ? (node.innerText || node.textContent || '') : '');
+          const count = toInt(text);
+          if (count > 0) return { count, hasComments: true, source: text || selector };
+          if (/评论/.test(text)) return { count: 0, hasComments: true, source: text || selector };
+        }
+        const fullText = norm(card.innerText || card.textContent || '');
+        const explicitMatch = fullText.match(/(\\d+)\\s*(?:条)?评论/);
+        if (explicitMatch) {
+          const count = toInt(explicitMatch[1]);
+          return { count, hasComments: count > 0, source: explicitMatch[0] };
+        }
+        if (/有新评论|新评论|评论/.test(fullText) && !/关闭评论/.test(fullText)) {
+          return { count: 0, hasComments: true, source: fullText };
+        }
+        return { count: 0, hasComments: false, source: '' };
+      }
+      const doc = resolveWechatCommentDoc();
+      const cards = Array.from(doc.querySelectorAll('.comment-feed-wrap'));
+      return cards.map((card) => {
+        const title = norm(card.querySelector('.feed-title') ? card.querySelector('.feed-title').innerText : '');
+        const publishedText = norm(card.querySelector('.feed-time') ? card.querySelector('.feed-time').innerText : '');
+        const commentMeta = parseCommentMeta(card);
+        return {
+          title,
+          published_text: publishedText,
+          comment_count: commentMeta.count,
+          has_comments: commentMeta.hasComments,
+          comment_source: commentMeta.source,
+        };
+      }).filter((item) => item.title || item.published_text);
+    })();
+    """
+    try:
+        payload = page.run_js(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        published_text = str(item.get("published_text") or "").strip()
+        if not title and not published_text:
+            continue
+        try:
+            comment_count = max(0, int(item.get("comment_count") or 0))
+        except Exception:
+            comment_count = 0
+        has_comments = bool(item.get("has_comments")) or comment_count > 0
+        post_key_seed = f"{title}|{published_text}"
+        post_key = hashlib.sha1(post_key_seed.encode("utf-8", errors="ignore")).hexdigest()[:16]
+        result.append(
+            {
+                "post_key": post_key,
+                "title": title,
+                "published_text": published_text,
+                "comment_count": comment_count,
+                "has_comments": has_comments,
+                "comment_source": str(item.get("comment_source") or "").strip(),
+            }
+        )
+    return result
+
+
+def _normalize_wechat_post_title(text: str) -> str:
+    return re.sub(r"\s+", "", str(text or "")).strip()
+
+
+def _is_wechat_post_title_match(visible_title: str, expected_title: str) -> bool:
+    left = _normalize_wechat_post_title(visible_title)
+    right = _normalize_wechat_post_title(expected_title)
+    if not left or not right:
+        return False
+    if left == right or left.startswith(right) or right.startswith(left):
+        return True
+    min_prefix = min(len(left), len(right), 10)
+    return min_prefix >= 6 and left[:min_prefix] == right[:min_prefix]
+
+
+def _find_wechat_post_card_by_title(cards: list[dict[str, Any]], expected_title: str) -> Optional[dict[str, Any]]:
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        title = str(card.get("title") or "").strip()
+        if _is_wechat_post_title_match(title, expected_title):
+            return card
+    return None
+
+
+def _verify_wechat_publish_in_post_list(
+    page: ChromiumPage,
+    expected_title: str,
+    timeout_seconds: float = 18.0,
+) -> Optional[dict[str, Any]]:
+    title = str(expected_title or "").strip()
+    if not title:
+        return None
+
+    try:
+        current_url = _page_current_url(page)
+    except Exception:
+        current_url = ""
+
+    if "/platform/post/list" not in current_url and "/micro/content/post/list" not in current_url:
+        try:
+            page.get(WECHAT_POST_LIST_URL)
+        except Exception as exc:
+            _log(f"[Uploader:wechat] Failed to open post list for publish verification: {exc}")
+            return None
+        _wait_for_page_url_contains(page, "/platform/post/list", timeout_seconds=10.0)
+        time.sleep(1.2)
+
+    end_at = time.time() + max(6.0, float(timeout_seconds))
+    stagnant_rounds = 0
+    seen_any_cards = False
+    while time.time() < end_at:
+        cards = extract_wechat_post_cards(page)
+        if cards:
+            seen_any_cards = True
+        matched = _find_wechat_post_card_by_title(cards, title)
+        if matched:
+            _log(
+                "[Uploader:wechat] Publish verified in post list: "
+                f"title={matched.get('title') or '-'}, published={matched.get('published_text') or '-'}"
+            )
+            return matched
+        if seen_any_cards:
+            stagnant_rounds += 1
+        if stagnant_rounds >= 2:
+            _scroll_wechat_post_list(page)
+            stagnant_rounds = 0
+        time.sleep(1.0)
+    return None
+
+
+def _collect_recent_commented_posts(page: ChromiumPage, limit: int, debug: bool = False) -> list[dict[str, Any]]:
+    target = max(1, int(limit))
+    collected: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    stagnant_rounds = 0
+    for round_index in range(8):
+        cards = extract_wechat_post_cards(page)
+        before = len(collected)
+        for card in cards:
+            if int(card.get("comment_count") or 0) <= 0 and not bool(card.get("has_comments")):
+                continue
+            post_key = str(card.get("post_key") or "").strip()
+            if not post_key or post_key in seen_keys:
+                continue
+            seen_keys.add(post_key)
+            collected.append(card)
+        _comment_reply_log(debug, f"Visible commented posts: {len(collected)} after scroll round {round_index}")
+        if len(collected) >= target:
+            break
+        if len(collected) == before:
+            stagnant_rounds += 1
+        else:
+            stagnant_rounds = 0
+        if stagnant_rounds >= 2:
+            break
+        _scroll_wechat_post_list(page)
+        time.sleep(1.0)
+    return collected[:target]
+
+
+def open_comment_manager(page: ChromiumPage, post: dict[str, Any], timeout_seconds: float = 10.0) -> bool:
+    title = str(post.get("title") or "").strip()
+    published_text = str(post.get("published_text") or "").strip()
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((targetTitle, targetPublishedText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function digits(value) {
+        return norm(value).replace(/[^\\d]/g, '');
+      }
+      function samePublished(left, right) {
+        const a = norm(left);
+        const b = norm(right);
+        if (!a || !b) return !a && !b;
+        if (a === b || a.includes(b) || b.includes(a)) return true;
+        const da = digits(a);
+        const db = digits(b);
+        return !!da && !!db && (da === db || da.endsWith(db) || db.endsWith(da));
+      }
+      function fuzzyTitleMatch(left, right) {
+        const a = norm(left);
+        const b = norm(right);
+        if (!a || !b) return false;
+        if (a === b || a.includes(b) || b.includes(a)) return true;
+        const minPrefix = Math.min(a.length, b.length, 18);
+        return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
+      }
+      function click(el) {
+        if (!el) return false;
+        try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+        const eventInit = { bubbles: true, cancelable: true, view: window };
+        try { el.click(); return true; } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
+        return false;
+      }
+      function clickEntry(card) {
+        const candidates = [
+          ['comment-total', card && card.querySelector('.feed-comment-total')],
+          ['comment-icon', card && card.querySelector('.weui-icon-outlined-comment')],
+          ['comment-action', card && card.querySelector('.feed-tool-item.comment, .action-item.comment, [class*="comment"][class*="action"], [data-testid*="comment"], [data-role*="comment"]')],
+          ['feed-content', card && card.querySelector('.feed-content')],
+          ['feed-title', card && card.querySelector('.feed-title')],
+          ['feed-image', card && card.querySelector('.feed-img')],
+          ['feed-card', card],
+        ];
+        for (const pair of candidates) {
+          const name = pair[0];
+          const node = pair[1];
+          if (node && click(node)) return name;
+        }
+        return '';
+      }
+      const doc = resolveWechatCommentDoc();
+      const cards = Array.from(doc.querySelectorAll('.comment-feed-wrap'));
+      const targetTitleNorm = norm(targetTitle);
+      const targetPublishedNorm = norm(targetPublishedText);
+      const exactCard = cards.find((node) => {
+        const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
+        const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+        return title === targetTitleNorm && samePublished(published, targetPublishedNorm);
+      });
+      const fuzzyCard = exactCard || cards.find((node) => {
+        const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
+        const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+        if (targetPublishedNorm && !samePublished(published, targetPublishedNorm)) return false;
+        if (!targetTitleNorm) return !!published;
+        return fuzzyTitleMatch(title, targetTitleNorm);
+      });
+      const card = fuzzyCard;
+      const visibleCards = cards.slice(0, 5).map((node) => ({
+        title: norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : ''),
+        published_text: norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : ''),
+      }));
+      if (!card) return { ok: false, reason: 'feed_not_found', visible_cards: visibleCards };
+      const clickedTarget = clickEntry(card);
+      return {
+        ok: !!clickedTarget,
+        reason: clickedTarget ? 'feed_clicked' : 'feed_click_failed',
+        clicked_target: clickedTarget,
+        visible_cards: visibleCards,
+      };
+    })(arguments[0], arguments[1]);
+    """
+    try:
+        result = page.run_js(js, title, published_text)
+    except Exception as exc:
+        _log(f"[CommentReply] Open comment manager failed: {exc}")
+        return False
+    if isinstance(result, dict) and not bool(result.get("ok")):
+        _comment_reply_log(
+            True,
+            "[CommentReply] Native comment manager target not opened: "
+            f"reason={result.get('reason') or 'unknown'} title={title!r} published={published_text!r} "
+            f"clicked_target={result.get('clicked_target') or '-'} visible_cards={result.get('visible_cards')!r}",
+        )
+        return False
+    confirm_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return (() => {
+      const doc = resolveWechatCommentDoc();
+      return !!doc.querySelector('.feed-detail');
+    })();
+    """
+    try:
+      return bool(_wait_until(lambda: page.run_js(confirm_js), timeout_seconds=timeout_seconds, poll_seconds=0.35))
+    except Exception:
+      return False
+
+
+def _collect_native_comment_manager_diagnostics(page: ChromiumPage) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "page_url": _page_current_url(page),
+        "visible_cards": 0,
+        "cards_preview": [],
+        "has_feed_detail": False,
+        "has_comment_list": False,
+        "has_comment_surface": False,
+    }
+    cards = extract_wechat_post_cards(page)
+    diagnostics["visible_cards"] = len(cards)
+    diagnostics["cards_preview"] = [
+        {
+            "title": _single_line_preview(str(card.get("title") or ""), 80),
+            "published_text": str(card.get("published_text") or ""),
+            "comment_count": int(card.get("comment_count") or 0),
+            "has_comments": bool(card.get("has_comments")),
+        }
+        for card in cards[:5]
+        if isinstance(card, dict)
+    ]
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return (() => {
+      const doc = resolveWechatCommentDoc();
+      const hasFeedDetail = !!doc.querySelector('.feed-detail');
+      const hasCommentList = !!doc.querySelector('.comment-list, .comment-main-content');
+      const hasCommentSurface = !!doc.querySelector('.comment-feed-wrap, .feed-detail, .comment-list, .comment-main-content');
+      return {
+        has_feed_detail: hasFeedDetail,
+        has_comment_list: hasCommentList,
+        has_comment_surface: hasCommentSurface,
+      };
+    })();
+    """
+    try:
+        payload = page.run_js(js)
+    except Exception as exc:
+        diagnostics["js_error"] = _single_line_preview(str(exc), 200)
+        payload = {}
+    if isinstance(payload, dict):
+        diagnostics["has_feed_detail"] = bool(payload.get("has_feed_detail"))
+        diagnostics["has_comment_list"] = bool(payload.get("has_comment_list"))
+        diagnostics["has_comment_surface"] = bool(payload.get("has_comment_surface"))
+    return diagnostics
+
+
+def _maybe_notify_wechat_comment_login_required(
+    *,
+    page: ChromiumPage,
+    chrome_user_data_dir: str,
+    open_url: str,
+    login_reason: str,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    try:
+        login_state = inspect_platform_login_gate(page, "wechat")
+    except Exception as exc:
+        return {"ok": False, "sent": False, "error": f"inspect_login_gate_failed: {exc}"}
+    page_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
+    lowered_url = page_url.lower()
+    looks_like_login = bool(login_state.get("needs_login")) or "login.html" in lowered_url or "/platform/login" in lowered_url
+    if not looks_like_login:
+        return {"ok": True, "sent": False, "skipped": True, "reason": "not_login_gate", "url": page_url}
+    try:
+        result = _send_platform_login_text_notification(
+            platform_name="wechat",
+            open_url=open_url,
+            chrome_user_data_dir=chrome_user_data_dir,
+            login_reason=str(login_state.get("reason") or login_reason or "comment_manager_not_ready"),
+            qr_error="comment reply hit login gate while opening comment manager",
+            wait_token="",
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+    except Exception as exc:
+        return {"ok": False, "sent": False, "error": str(exc), "url": page_url}
+    payload = dict(result) if isinstance(result, dict) else {"ok": bool(result)}
+    payload["url"] = page_url
+    return payload
+
+
+def extract_comments(page: ChromiumPage) -> list[dict[str, Any]]:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return (() => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function isVisible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function fallbackContent(item, author, timeText) {
+        let reduced = norm(item.innerText || item.textContent || '');
+        const noise = [
+          author,
+          timeText,
+          '回复',
+          '删除',
+          '置顶',
+          '投诉',
+          '移入黑名单',
+          '仅能置顶一条评论',
+          '取消',
+          '替换置顶',
+          '作者赞过',
+          '点赞',
+        ].filter(Boolean);
+        for (const token of noise) {
+          reduced = reduced.split(norm(token)).join(' ');
+        }
+        reduced = norm(reduced.replace(/^\\d+\\s*/, ''));
+        if (reduced) return reduced;
+        return item.querySelector('img, emoji, [class*="emoji"], [data-type*="emoji"], svg') ? '[emoji]' : '';
+      }
+      const doc = resolveWechatCommentDoc();
+      const root = doc.querySelector('.feed-detail') || doc;
+      const items = Array.from(root.querySelectorAll('.comment-item'))
+        .filter((node) => !node.closest('.comment-reply-list'));
+      return items.map((item, index) => {
+        let content = norm(item.querySelector('.comment-content') ? item.querySelector('.comment-content').innerText : '');
+        let author = '';
+        let timeText = '';
+        const authorCandidate = item.querySelector('.comment-author, .comment-user-name, [class*="author"], [class*="name"]');
+        if (authorCandidate) author = norm(authorCandidate.innerText || authorCandidate.textContent || '');
+        const metaNodes = Array.from(item.querySelectorAll('span, div'));
+        for (const node of metaNodes) {
+          const text = norm(node.innerText || node.textContent || '');
+          if (!text) continue;
+          if (!timeText && /(\\d{4}[\\/-]\\d{1,2}[\\/-]\\d{1,2})|(\\d{1,2}:\\d{2})/.test(text)) {
+            timeText = text;
+          }
+          if (!author && text !== content && text.length <= 40 && !/回复|评论|作者回复过/.test(text)) {
+            author = text;
+          }
+          if (author && timeText) break;
+        }
+        if (!content) {
+          const altContent = item.querySelector('.comment-text, [class*="comment-content"], [class*="content"], [data-role*="content"]');
+          content = norm(altContent ? altContent.innerText || altContent.textContent || '' : '');
+        }
+        if (!content) {
+          content = fallbackContent(item, author, timeText);
+        }
+        const replyList = item.querySelector('.comment-reply-list');
+        const hasReply = !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]'));
+        const likeAction = item.querySelector('.like-action');
+        const useNode = likeAction ? likeAction.querySelector('use') : null;
+        const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
+        const liked = /fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction ? likeAction.className : ''));
+        return {
+          index,
+          author,
+          content,
+          time_text: timeText,
+          has_reply: hasReply,
+          liked,
+        };
+      }).filter((item) => item.content || item.author || item.time_text);
+    })();
+    """
+    try:
+        payload = page.run_js(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    comments: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = max(0, int(item.get("index") or 0))
+        except Exception:
+            index = 0
+        comments.append(
+            {
+                "index": index,
+                "author": str(item.get("author") or "").strip(),
+                "content": str(item.get("content") or "").strip(),
+                "time_text": str(item.get("time_text") or "").strip(),
+                "has_reply": bool(item.get("has_reply")),
+                "liked": bool(item.get("liked")),
+            }
+        )
+    return comments
+
+
+def like_comment_if_needed(page: ChromiumPage, comment_index: int) -> bool:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((commentIndex) => {
+      function click(el) {
+        if (!el) return false;
+        try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+        const eventInit = { bubbles: true, cancelable: true, view: window };
+        try { el.click(); return true; } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
+        return false;
+      }
+      const doc = resolveWechatCommentDoc();
+      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return { ok: false, reason: 'comment_not_found' };
+      const likeAction = item.querySelector('.like-action') || item.querySelector('.action-item.like-action');
+      if (!likeAction) return { ok: false, reason: 'like_action_not_found' };
+      const useNode = likeAction.querySelector('use');
+      const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
+      if (/fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction.className || ''))) {
+        return { ok: true, skipped: true };
+      }
+      return { ok: click(likeAction), skipped: false };
+    })(arguments[0]);
+    """
+    try:
+        result = page.run_js(js, int(comment_index))
+    except Exception:
+        return False
+    return bool(isinstance(result, dict) and result.get("ok"))
+
+
+def _open_comment_reply_box(page: ChromiumPage, comment_index: int) -> bool:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/\\s+/g, ' ').trim();
+      }
+      function click(el) {
+        if (!el) return false;
+        try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+        const eventInit = { bubbles: true, cancelable: true, view: window };
+        try { el.click(); return true; } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
+        return false;
+      }
+      const doc = resolveWechatCommentDoc();
+      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return { ok: false, reason: 'comment_not_found' };
+      const icon = item.querySelector('.weui-icon-outlined-comment');
+      const button = (icon && icon.closest('.action-item')) || Array.from(item.querySelectorAll('.action-item')).find((node) => /回复/.test(norm(node.innerText || node.textContent || '')));
+      if (!button) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(button), reason: 'clicked' };
+    })(arguments[0]);
+    """
+    try:
+        result = page.run_js(js, int(comment_index))
+    except Exception:
+        return False
+    if not isinstance(result, dict) or not result.get("ok"):
+        return False
+    editor_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((commentIndex) => {
+      const doc = resolveWechatCommentDoc();
+      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return false;
+      return !!(item.querySelector('textarea.create-input') || item.querySelector('textarea'));
+    })(arguments[0]);
+    """
+    return bool(_wait_until(lambda: page.run_js(editor_js, int(comment_index)), timeout_seconds=8.0, poll_seconds=0.3))
+
+
+def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> bool:
+    if not _open_comment_reply_box(page, comment_index):
+        return False
+    focus_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((commentIndex) => {
+      function clearValue(textarea) {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+        if (setter && setter.set) {
+          setter.set.call(textarea, '');
+        } else {
+          textarea.value = '';
+        }
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const doc = resolveWechatCommentDoc();
+      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return { ok: false, reason: 'comment_not_found' };
+      const textarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
+      if (!textarea) return { ok: false, reason: 'textarea_not_found' };
+      clearValue(textarea);
+      try { textarea.focus(); } catch (e) {}
+      try { textarea.click(); } catch (e) {}
+      try { textarea.setSelectionRange(0, 0); } catch (e) {}
+      return { ok: true, reason: 'focused' };
+    })(arguments[0]);
+    """
+    try:
+        focused = page.run_js(focus_js, int(comment_index))
+    except Exception:
+        focused = None
+    if not isinstance(focused, dict) or not focused.get("ok"):
+        return False
+
+    clean_reply_text = str(reply_text or "").strip()
+    try:
+        page.run_cdp("Input.insertText", text=clean_reply_text)
+    except Exception:
+        pass
+
+    verify_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/\\s+/g, ' ').trim();
+      }
+      const doc = resolveWechatCommentDoc();
+      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return false;
+      const textarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
+      if (!textarea) return false;
+      return norm(textarea.value) === norm(replyText);
+    })(arguments[0], arguments[1]);
+    """
+    typed = False
+    try:
+        typed = bool(
+            _wait_until(
+                lambda: page.run_js(verify_js, int(comment_index), clean_reply_text),
+                timeout_seconds=4.0,
+                poll_seconds=0.2,
+            )
+        )
+    except Exception:
+        typed = False
+    if not typed:
+        fallback_fill_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+        return ((commentIndex, replyText) => {
+          const doc = resolveWechatCommentDoc();
+          const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(commentIndex)];
+          if (!item) return false;
+          const textarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
+          if (!textarea) return false;
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+          if (setter && setter.set) {
+            setter.set.call(textarea, String(replyText || ''));
+          } else {
+            textarea.value = String(replyText || '');
+          }
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          textarea.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        })(arguments[0], arguments[1]);
+        """
+        try:
+            typed = bool(page.run_js(fallback_fill_js, int(comment_index), clean_reply_text))
+        except Exception:
+            typed = False
+    if not typed:
+        return False
+
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((commentIndex) => {
+      function click(el) {
+        if (!el) return false;
+        try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+        const eventInit = { bubbles: true, cancelable: true, view: window };
+        try { el.click(); return true; } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
+        return false;
+      }
+      const doc = resolveWechatCommentDoc();
+      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return { ok: false, reason: 'comment_not_found' };
+      const submit = item.querySelector('.tag-wrap.primary')
+        || Array.from(item.querySelectorAll('button, div, span')).find((node) => /primary/.test(String(node.className || '')));
+      if (!submit) return { ok: false, reason: 'submit_not_found' };
+      return { ok: click(submit), reason: 'submitted' };
+    })(arguments[0]);
+    """
+    try:
+        result = page.run_js(js, int(comment_index))
+    except Exception:
+        return False
+    return bool(isinstance(result, dict) and result.get("ok"))
+
+
+def wait_reply_confirm(page: ChromiumPage, comment_index: int, reply_text: str, timeout_seconds: float = 12.0) -> bool:
+    target_text = re.sub(r"\s+", "", str(reply_text or "").strip())
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((commentIndex, targetText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, '').trim();
+      }
+      const doc = resolveWechatCommentDoc();
+      const bodyText = norm(doc && (doc.innerText || doc.textContent || ''));
+      if (bodyText.includes(norm(targetText)) || bodyText.includes('已回复')) {
+        return true;
+      }
+      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return false;
+      const itemText = norm(item.innerText || item.textContent || '');
+      if (targetText && itemText.includes(norm(targetText))) return true;
+      const replyList = item.querySelector('.comment-reply-list');
+      return !!(replyList && replyList.querySelector('.comment-item, .comment-content'));
+    })(arguments[0], arguments[1]);
+    """
+    try:
+        matched = _wait_until(
+            lambda: page.run_js(js, int(comment_index), target_text),
+            timeout_seconds=timeout_seconds,
+            poll_seconds=0.4,
+        )
+    except Exception:
+        matched = False
+    return bool(matched)
+
+
+def _connect_playwright_wechat_comment_page(debug_port: int, target_url: str):
+    playwright = None
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return None
+    try:
+        playwright = sync_playwright().start()
+        browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{int(debug_port)}")
+        contexts = list(getattr(browser, "contexts", []) or [])
+        if not contexts:
+            browser.close()
+            playwright.stop()
+            return None
+        context = contexts[0]
+        pages = list(getattr(context, "pages", []) or [])
+        page = next((item for item in pages if "channels.weixin.qq.com" in str(getattr(item, "url", "") or "")), None)
+        if page is None:
+            page = context.new_page()
+        page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(2500)
+        return playwright, browser, page
+    except Exception:
+        try:
+            if playwright is not None:
+                playwright.stop()
+        except Exception:
+            pass
+        return None
+
+
+def _resolve_playwright_wechat_comment_frame(page: Any):
+    try:
+        frames = list(getattr(page, "frames", []) or [])
+    except Exception:
+        frames = []
+    preferred: list[Any] = []
+    fallback: list[Any] = []
+    for frame in frames:
+        url = str(getattr(frame, "url", "") or "")
+        if "/micro/interaction/comment" in url:
+            preferred.append(frame)
+        elif "/micro/content/post/list" in url:
+            fallback.append(frame)
+    for group in (preferred, fallback):
+        for frame in group:
+            try:
+                has_comment_surface = bool(
+                    frame.evaluate(
+                        """() => !!document.querySelector(
+                            '.comment-feed-wrap, .feed-detail, .comment-list, .comment-main-content'
+                        )"""
+                    )
+                )
+            except Exception:
+                has_comment_surface = False
+            if has_comment_surface:
+                return frame
+    if preferred:
+        return preferred[0]
+    if fallback:
+        return fallback[0]
+    return None
+
+
+def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
+    js = """
+    () => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function toInt(value) {
+        const raw = String(value || '').replace(/[^\\d]/g, '');
+        return raw ? parseInt(raw, 10) : 0;
+      }
+      function parseCommentMeta(card) {
+        const selectors = [
+          '.feed-comment-total',
+          '[class*="comment-total"]',
+          '[class*="commentTotal"]',
+          '[class*="comment-count"]',
+          '[class*="commentCount"]',
+          '[data-testid*="comment"]',
+          '[data-role*="comment"]',
+          '[aria-label*="评论"]',
+          '[title*="评论"]',
+        ];
+        for (const selector of selectors) {
+          const node = card.querySelector(selector);
+          const text = norm(node ? (node.innerText || node.textContent || '') : '');
+          const count = toInt(text);
+          if (count > 0) return { count, hasComments: true, source: text || selector };
+          if (/评论/.test(text)) return { count: 0, hasComments: true, source: text || selector };
+        }
+        const fullText = norm(card.innerText || card.textContent || '');
+        const explicitMatch = fullText.match(/(\\d+)\\s*(?:条)?评论/);
+        if (explicitMatch) {
+          const count = toInt(explicitMatch[1]);
+          return { count, hasComments: count > 0, source: explicitMatch[0] };
+        }
+        if (/有新评论|新评论|评论/.test(fullText) && !/关闭评论/.test(fullText)) {
+          return { count: 0, hasComments: true, source: fullText };
+        }
+        return { count: 0, hasComments: false, source: '' };
+      }
+      return Array.from(document.querySelectorAll('.comment-feed-wrap')).map((card) => {
+        const title = norm(card.querySelector('.feed-title') ? card.querySelector('.feed-title').innerText : '');
+        const publishedText = norm(card.querySelector('.feed-time') ? card.querySelector('.feed-time').innerText : '');
+        const commentMeta = parseCommentMeta(card);
+        return {
+          title,
+          published_text: publishedText,
+          comment_count: commentMeta.count,
+          has_comments: commentMeta.hasComments,
+          comment_source: commentMeta.source,
+        };
+      }).filter((item) => item.title || item.published_text);
+    }
+    """
+    try:
+        payload = frame.evaluate(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        published_text = str(item.get("published_text") or "").strip()
+        if not title and not published_text:
+            continue
+        try:
+            comment_count = max(0, int(item.get("comment_count") or 0))
+        except Exception:
+            comment_count = 0
+        has_comments = bool(item.get("has_comments")) or comment_count > 0
+        post_key_seed = f"{title}|{published_text}"
+        post_key = hashlib.sha1(post_key_seed.encode("utf-8", errors="ignore")).hexdigest()[:16]
+        result.append(
+            {
+                "post_key": post_key,
+                "title": title,
+                "published_text": published_text,
+                "comment_count": comment_count,
+                "has_comments": has_comments,
+                "comment_source": str(item.get("comment_source") or "").strip(),
+            }
+        )
+    return result
+
+
+def _playwright_scroll_wechat_list(frame: Any, selector_candidates: list[str]) -> None:
+    js = """
+    (selectors) => {
+      const list = Array.isArray(selectors) ? selectors : [];
+      let box = null;
+      for (const selector of list) {
+        box = document.querySelector(selector);
+        if (box) break;
+      }
+      if (box) {
+        box.scrollTop += Math.max(box.clientHeight || 800, 800);
+        return true;
+      }
+      const root = document.scrollingElement || document.documentElement || document.body;
+      if (!root) return false;
+      root.scrollTop += Math.max(window.innerHeight || 900, 900);
+      return true;
+    }
+    """
+    try:
+        frame.evaluate(js, selector_candidates)
+    except Exception:
+        pass
+
+
+def _playwright_collect_recent_commented_posts(frame: Any, limit: int, debug: bool = False) -> list[dict[str, Any]]:
+    target = max(1, int(limit))
+    collected: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    stagnant_rounds = 0
+    seen_any_cards = False
+    for round_index in range(8):
+        cards = _playwright_extract_wechat_post_cards(frame)
+        if cards:
+            seen_any_cards = True
+        before = len(collected)
+        for card in cards:
+            if int(card.get("comment_count") or 0) <= 0 and not bool(card.get("has_comments")):
+                continue
+            post_key = str(card.get("post_key") or "").strip()
+            if not post_key or post_key in seen_keys:
+                continue
+            seen_keys.add(post_key)
+            collected.append(card)
+        _comment_reply_log(debug, f"Playwright visible commented posts: {len(collected)} after scroll round {round_index}")
+        if len(collected) >= target:
+            break
+        if seen_any_cards and len(collected) == before:
+            stagnant_rounds += 1
+        else:
+            stagnant_rounds = 0
+        if stagnant_rounds >= 2:
+            break
+        _playwright_scroll_wechat_list(frame, [".scroll-list", ".scroll-list__wrp.feeds-container", ".feeds-container"])
+        try:
+            frame.page.wait_for_timeout(1000)
+        except Exception:
+            time.sleep(1.0)
+    return collected[:target]
+
+
+def _collect_playwright_comment_manager_diagnostics(page: Any, frame_hint: Any | None = None) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "page_url": "",
+        "frame_count": 0,
+        "frame_urls": [],
+        "active_frame_url": "",
+        "active_visible_cards": [],
+        "active_has_feed_detail": False,
+        "active_has_comment_list": False,
+        "active_has_comment_surface": False,
+    }
+    try:
+        diagnostics["page_url"] = str(getattr(page, "url", "") or "")
+    except Exception:
+        diagnostics["page_url"] = ""
+    try:
+        frames = list(getattr(page, "frames", []) or [])
+    except Exception:
+        frames = []
+    diagnostics["frame_count"] = len(frames)
+    diagnostics["frame_urls"] = [str(getattr(item, "url", "") or "") for item in frames[:8]]
+    active_frame = frame_hint or _resolve_playwright_wechat_comment_frame(page)
+    if active_frame is None:
+        return diagnostics
+    diagnostics["active_frame_url"] = str(getattr(active_frame, "url", "") or "")
+    js = """
+    () => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      const cards = Array.from(document.querySelectorAll('.comment-feed-wrap'));
+      return {
+        has_feed_detail: !!document.querySelector('.feed-detail'),
+        has_comment_list: !!document.querySelector('.comment-list, .comment-main-content'),
+        has_comment_surface: !!document.querySelector('.comment-feed-wrap, .feed-detail, .comment-list, .comment-main-content'),
+        visible_cards: cards.slice(0, 5).map((node) => ({
+          title: norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : ''),
+          published_text: norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : ''),
+        })),
+      };
+    }
+    """
+    try:
+        payload = active_frame.evaluate(js)
+    except Exception as exc:
+        diagnostics["active_frame_error"] = _single_line_preview(str(exc), 200)
+        payload = {}
+    if isinstance(payload, dict):
+        diagnostics["active_visible_cards"] = payload.get("visible_cards") if isinstance(payload.get("visible_cards"), list) else []
+        diagnostics["active_has_feed_detail"] = bool(payload.get("has_feed_detail"))
+        diagnostics["active_has_comment_list"] = bool(payload.get("has_comment_list"))
+        diagnostics["active_has_comment_surface"] = bool(payload.get("has_comment_surface"))
+    return diagnostics
+
+
+def _playwright_open_comment_manager(
+    page: Any,
+    post: dict[str, Any],
+    timeout_seconds: float = 14.0,
+    frame_hint: Any | None = None,
+) -> bool:
+    title = str(post.get("title") or "").strip()
+    published_text = str(post.get("published_text") or "").strip()
+    deadline = time.time() + max(2.0, float(timeout_seconds))
+    preferred_frame = frame_hint
+    last_retry_reason = ""
+    while time.time() < deadline:
+        frame = preferred_frame or _resolve_playwright_wechat_comment_frame(page)
+        preferred_frame = None
+        if frame is None:
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                time.sleep(0.5)
+            continue
+        js = """
+        (args) => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function digits(value) {
+            return norm(value).replace(/[^\\d]/g, '');
+          }
+          function samePublished(left, right) {
+            const a = norm(left);
+            const b = norm(right);
+            if (!a || !b) return !a && !b;
+            if (a === b || a.includes(b) || b.includes(a)) return true;
+            const da = digits(a);
+            const db = digits(b);
+            return !!da && !!db && (da === db || da.endsWith(db) || db.endsWith(da));
+          }
+          function fuzzyTitleMatch(left, right) {
+            const a = norm(left);
+            const b = norm(right);
+            if (!a || !b) return false;
+            if (a === b || a.includes(b) || b.includes(a)) return true;
+            const minPrefix = Math.min(a.length, b.length, 18);
+            return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
+          }
+          function click(el) {
+            if (!el) return false;
+            try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+            try { el.click(); return true; } catch (e) {}
+            try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+            return false;
+          }
+          function clickEntry(card) {
+            const candidates = [
+              ['comment-total', card && card.querySelector('.feed-comment-total')],
+              ['comment-icon', card && card.querySelector('.weui-icon-outlined-comment')],
+              ['comment-action', card && card.querySelector('.feed-tool-item.comment, .action-item.comment, [class*="comment"][class*="action"], [data-testid*="comment"], [data-role*="comment"]')],
+              ['feed-content', card && card.querySelector('.feed-content')],
+              ['feed-title', card && card.querySelector('.feed-title')],
+              ['feed-image', card && card.querySelector('.feed-img')],
+              ['feed-card', card],
+            ];
+            for (const pair of candidates) {
+              const name = pair[0];
+              const node = pair[1];
+              if (node && click(node)) return name;
+            }
+            return '';
+          }
+          const targetTitle = norm(args && args.title);
+          const targetPublished = norm(args && args.published_text);
+          const cards = Array.from(document.querySelectorAll('.comment-feed-wrap'));
+          const exactCard = cards.find((node) => {
+            const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
+            const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+            return title === targetTitle && samePublished(published, targetPublished);
+          });
+          const fuzzyCard = exactCard || cards.find((node) => {
+            const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
+            const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+            if (targetPublished && !samePublished(published, targetPublished)) return false;
+            if (!targetTitle) return !!published;
+            return fuzzyTitleMatch(title, targetTitle);
+          });
+          const card = fuzzyCard;
+          const visibleCards = cards.slice(0, 5).map((node) => ({
+            title: norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : ''),
+            published_text: norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : ''),
+          }));
+          if (!card) return {
+            ok: false,
+            reason: 'feed_not_found',
+            matched_title: '',
+            matched_published_text: '',
+            visible_cards: visibleCards,
+          };
+          const matchedTitle = norm(card.querySelector('.feed-title') ? card.querySelector('.feed-title').innerText : '');
+          const matchedPublished = norm(card.querySelector('.feed-time') ? card.querySelector('.feed-time').innerText : '');
+          const clickedTarget = clickEntry(card);
+          return {
+            ok: !!clickedTarget,
+            reason: clickedTarget ? 'feed_clicked' : 'feed_click_failed',
+            clicked_target: clickedTarget,
+            matched_title: matchedTitle,
+            matched_published_text: matchedPublished,
+            visible_cards: visibleCards,
+          };
+        }
+        """
+        try:
+            result = frame.evaluate(js, {"title": title, "published_text": published_text})
+        except Exception as exc:
+            message = str(exc)
+            if "Frame was detached" in message or "Execution context was destroyed" in message:
+                last_retry_reason = "frame_detached"
+                try:
+                    page.wait_for_timeout(500)
+                except Exception:
+                    time.sleep(0.5)
+                continue
+            _log(f"[CommentReply] Playwright open comment manager evaluate failed: {message}")
+            result = {"ok": False, "reason": "evaluate_failed"}
+        if not isinstance(result, dict):
+            result = {"ok": bool(result), "reason": "legacy_result"}
+        if not bool(result.get("ok")):
+            reason = str(result.get("reason") or "").strip()
+            visible_cards = result.get("visible_cards")
+            if reason == "feed_not_found" and not visible_cards:
+                last_retry_reason = "feed_not_found_empty_frame"
+                try:
+                    page.wait_for_timeout(500)
+                except Exception:
+                    time.sleep(0.5)
+                continue
+            _comment_reply_log(
+                True,
+                "[CommentReply] Playwright comment manager target not opened: "
+                f"reason={result.get('reason') or 'unknown'} title={title!r} published={published_text!r} "
+                f"clicked_target={result.get('clicked_target') or '-'} visible_cards={result.get('visible_cards')!r}"
+            )
+            _comment_reply_log(
+                True,
+                "[CommentReply] Playwright comment manager diagnostics: "
+                + json.dumps(_collect_playwright_comment_manager_diagnostics(page, frame), ensure_ascii=False),
+            )
+            return False
+        try:
+            page.wait_for_timeout(1200)
+        except Exception:
+            time.sleep(1.2)
+        confirm_deadline = time.time() + max(1.0, float(timeout_seconds) / 2.0)
+        while time.time() < confirm_deadline:
+            frame = _resolve_playwright_wechat_comment_frame(page)
+            if frame is not None:
+                try:
+                    ready = bool(
+                        frame.evaluate(
+                            """() => {
+                              const detail = document.querySelector('.feed-detail');
+                              if (!detail) return false;
+                              const comments = Array.from(detail.querySelectorAll('.comment-item'))
+                                .filter((node) => !node.closest('.comment-reply-list'));
+                              if (comments.length > 0) return true;
+                              return !!detail.querySelector('.action-item, textarea.create-input, textarea, .tag-wrap.primary');
+                            }"""
+                        )
+                    )
+                except Exception:
+                    ready = False
+                if ready:
+                    return True
+            try:
+                page.wait_for_timeout(350)
+            except Exception:
+                time.sleep(0.35)
+        _comment_reply_log(
+            True,
+            "[CommentReply] Playwright comment manager clicked but not ready: "
+            f"title={title!r} published={published_text!r} "
+            f"matched_title={result.get('matched_title')!r} matched_published={result.get('matched_published_text')!r} "
+            f"clicked_target={result.get('clicked_target') or '-'} retry_reason={last_retry_reason or '-'}"
+        )
+        _comment_reply_log(
+            True,
+            "[CommentReply] Playwright comment manager diagnostics: "
+            + json.dumps(_collect_playwright_comment_manager_diagnostics(page, frame), ensure_ascii=False),
+        )
+        return False
+    _comment_reply_log(
+        True,
+        "[CommentReply] Playwright comment manager open timeout: "
+        f"title={title!r} published={published_text!r} retry_reason={last_retry_reason or '-'} "
+        + json.dumps(_collect_playwright_comment_manager_diagnostics(page), ensure_ascii=False),
+    )
+    return False
+
+
+def _playwright_extract_comments(frame: Any) -> list[dict[str, Any]]:
+    js = """
+    () => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function isVisible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function fallbackContent(item, author, timeText) {
+        let reduced = norm(item.innerText || item.textContent || '');
+        const noise = [
+          author,
+          timeText,
+          '回复',
+          '删除',
+          '置顶',
+          '投诉',
+          '移入黑名单',
+          '仅能置顶一条评论',
+          '取消',
+          '替换置顶',
+          '作者赞过',
+          '点赞',
+        ].filter(Boolean);
+        for (const token of noise) {
+          reduced = reduced.split(norm(token)).join(' ');
+        }
+        reduced = norm(reduced.replace(/^\\d+\\s*/, ''));
+        if (reduced) return reduced;
+        return item.querySelector('img, emoji, [class*="emoji"], [data-type*="emoji"], svg') ? '[emoji]' : '';
+      }
+      const root = document.querySelector('.feed-detail') || document;
+      return Array.from(root.querySelectorAll('.comment-item'))
+        .filter((node) => !node.closest('.comment-reply-list'))
+        .map((item, index) => {
+          const author = norm((item.querySelector('.comment-author, .comment-user-name, [class*="author"], [class*="name"]') || {}).innerText || '');
+          const timeText = norm(Array.from(item.querySelectorAll('span, div')).map((node) => node.innerText || node.textContent || '').find((text) => /(\\d{4}[\\/-]\\d{1,2}[\\/-]\\d{1,2})|(\\d{1,2}:\\d{2})/.test(String(text || ''))) || '');
+          let content = norm(item.querySelector('.comment-content') ? item.querySelector('.comment-content').innerText : '');
+          if (!content) {
+            const altContent = item.querySelector('.comment-text, [class*="comment-content"], [class*="content"], [data-role*="content"]');
+            content = norm(altContent ? altContent.innerText || altContent.textContent || '' : '');
+          }
+          if (!content) {
+            content = fallbackContent(item, author, timeText);
+          }
+          const replyList = item.querySelector('.comment-reply-list');
+          const hasReply = !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]'));
+          const likeAction = item.querySelector('.like-action');
+          const useNode = likeAction ? likeAction.querySelector('use') : null;
+          const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
+          const liked = /fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction ? likeAction.className : ''));
+          return { index, author, content, time_text: timeText, has_reply: hasReply, liked };
+        }).filter((item) => item.content || item.author || item.time_text);
+    }
+    """
+    try:
+        payload = frame.evaluate(js)
+    except Exception:
+        payload = []
+    return payload if isinstance(payload, list) else []
+
+
+def _playwright_wait_comment_items_ready(page: Any, timeout_seconds: float = 6.0) -> bool:
+    deadline = time.time() + max(1.0, float(timeout_seconds))
+    js = """
+    () => {
+      function isVisible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      const root = document.querySelector('.feed-detail');
+      if (!root || !isVisible(root)) return false;
+      const items = Array.from(root.querySelectorAll('.comment-item'))
+        .filter((node) => !node.closest('.comment-reply-list'));
+      return items.length > 0;
+    }
+    """
+    while time.time() < deadline:
+      frame = _resolve_playwright_wechat_comment_frame(page)
+      if frame is not None:
+          try:
+              if bool(frame.evaluate(js)):
+                  return True
+          except Exception:
+              pass
+      try:
+          page.wait_for_timeout(300)
+      except Exception:
+          time.sleep(0.3)
+    return False
+
+
+def _playwright_reply_debug_state(frame: Any, comment_index: int) -> dict[str, Any]:
+    js = """
+    (commentIndex) => {
+      const root = document.querySelector('.feed-detail') || document;
+      const items = Array.from(root.querySelectorAll('.comment-item'))
+        .filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return { ok: false, reason: 'comment_not_found', item_count: items.length };
+      const textarea = item.querySelector('textarea.create-input, textarea');
+      const submit = item.querySelector('.tag-wrap.primary');
+      const actions = Array.from(item.querySelectorAll('.action-item')).map((node) => String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim());
+      return {
+        ok: true,
+        item_count: items.length,
+        item_text: String(item.innerText || item.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300),
+        action_texts: actions,
+        textarea_exists: !!textarea,
+        textarea_value: textarea ? String(textarea.value || '') : '',
+        submit_class: submit ? String(submit.className || '') : '',
+        submit_text: submit ? String(submit.innerText || submit.textContent || '').replace(/\\s+/g, ' ').trim() : '',
+      };
+    }
+    """
+    try:
+        payload = frame.evaluate(js, int(comment_index))
+    except Exception as exc:
+        return {"ok": False, "reason": f"evaluate_failed:{exc}"}
+    return payload if isinstance(payload, dict) else {"ok": False, "reason": "invalid_payload"}
+
+
+def _playwright_like_comment_if_needed(frame: Any, comment_index: int) -> bool:
+    js = """
+    (commentIndex) => {
+      function click(el) {
+        if (!el) return false;
+        try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+        try { el.click(); return true; } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return false;
+      const likeAction = item.querySelector('.like-action') || item.querySelector('.action-item.like-action');
+      if (!likeAction) return false;
+      const useNode = likeAction.querySelector('use');
+      const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
+      if (/fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction.className || ''))) return true;
+      return click(likeAction);
+    }
+    """
+    try:
+        return bool(frame.evaluate(js, int(comment_index)))
+    except Exception:
+        return False
+
+
+def _playwright_submit_reply(frame: Any, comment_index: int, reply_text: str) -> bool:
+    try:
+        clean_reply_text = str(reply_text or "").strip()
+        page = getattr(frame, "page", None)
+        if page is not None:
+            _playwright_wait_comment_items_ready(page, timeout_seconds=6.0)
+            refreshed = _resolve_playwright_wechat_comment_frame(page)
+            if refreshed is not None:
+                frame = refreshed
+        open_js = """
+        (args) => {
+          function click(el) {
+            if (!el) return false;
+            try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+            try { el.click(); return true; } catch (e) {}
+            try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+            return false;
+          }
+          const root = document.querySelector('.feed-detail') || document;
+          const items = Array.from(root.querySelectorAll('.comment-item'))
+            .filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(args && args.comment_index || 0)];
+          if (!item) return { ok: false, reason: 'comment_not_found' };
+          const actions = Array.from(item.querySelectorAll('.action-item'));
+          const replyButton = actions[1]
+            || (item.querySelector('.weui-icon-outlined-comment') ? item.querySelector('.weui-icon-outlined-comment').closest('.action-item') : null);
+          if (!replyButton) return { ok: false, reason: 'reply_button_not_found' };
+          return { ok: click(replyButton), reason: 'reply_clicked' };
+        }
+        """
+        result = frame.evaluate(open_js, {"comment_index": int(comment_index)})
+        if not isinstance(result, dict) or not result.get("ok"):
+            return False
+        deadline = time.time() + 6.0
+        textarea_ready_js = """
+        (commentIndex) => {
+          const root = document.querySelector('.feed-detail') || document;
+          const items = Array.from(root.querySelectorAll('.comment-item'))
+            .filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(commentIndex)];
+          if (!item) return false;
+          const textarea = item.querySelector('textarea.create-input, textarea');
+          return !!textarea;
+        }
+        """
+        while time.time() < deadline:
+            try:
+                if bool(frame.evaluate(textarea_ready_js, int(comment_index))):
+                    break
+            except Exception:
+                pass
+            if page is not None:
+                page.wait_for_timeout(250)
+            else:
+                time.sleep(0.25)
+        fill_js = """
+        (args) => {
+          function setTextareaValue(textarea, text) {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+            if (setter && setter.set) {
+              setter.set.call(textarea, text);
+            } else {
+              textarea.value = text;
+            }
+          }
+          function dispatchTyping(el, text) {
+            setTextareaValue(el, '');
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            try { el.focus(); } catch (e) {}
+            try { el.click(); } catch (e) {}
+            try { el.setSelectionRange(0, 0); } catch (e) {}
+            setTextareaValue(el, text);
+            el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+            el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          const root = document.querySelector('.feed-detail') || document;
+          const items = Array.from(root.querySelectorAll('.comment-item'))
+            .filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(args && args.comment_index || 0)];
+          if (!item) return { ok: false, reason: 'comment_not_found' };
+          const textarea = item.querySelector('textarea.create-input, textarea');
+          if (!textarea) return { ok: false, reason: 'textarea_not_found' };
+          dispatchTyping(textarea, String(args && args.reply_text || ''));
+          const submit = item.querySelector('.tag-wrap.primary');
+          return {
+            ok: true,
+            value: String(textarea.value || ''),
+            submit_class: String(submit ? submit.className || '' : ''),
+          };
+        }
+        """
+        filled = frame.evaluate(fill_js, {"comment_index": int(comment_index), "reply_text": clean_reply_text})
+        if not isinstance(filled, dict) or not filled.get("ok"):
+            return False
+        verify_js = """
+        (args) => {
+          function norm(value) {
+            return String(value || '').replace(/\\s+/g, ' ').trim();
+          }
+          const root = document.querySelector('.feed-detail') || document;
+          const items = Array.from(root.querySelectorAll('.comment-item'))
+            .filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(args && args.comment_index || 0)];
+          if (!item) return false;
+          const textarea = item.querySelector('textarea.create-input, textarea');
+          if (!textarea) return false;
+          return norm(textarea.value) === norm(String(args && args.reply_text || ''));
+        }
+        """
+        typed = False
+        typed_deadline = time.time() + 4.0
+        while time.time() < typed_deadline:
+            try:
+                if bool(frame.evaluate(verify_js, {"comment_index": int(comment_index), "reply_text": clean_reply_text})):
+                    typed = True
+                    break
+            except Exception:
+                pass
+            if page is not None:
+                page.wait_for_timeout(200)
+            else:
+                time.sleep(0.2)
+        if not typed:
+            fallback_fill_js = """
+            (args) => {
+              const root = document.querySelector('.feed-detail') || document;
+              const items = Array.from(root.querySelectorAll('.comment-item'))
+                .filter((node) => !node.closest('.comment-reply-list'));
+              const item = items[Number(args && args.comment_index || 0)];
+              if (!item) return false;
+              const textarea = item.querySelector('textarea.create-input, textarea');
+              if (!textarea) return false;
+              const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+              if (setter && setter.set) {
+                setter.set.call(textarea, String(args && args.reply_text || ''));
+              } else {
+                textarea.value = String(args && args.reply_text || '');
+              }
+              textarea.dispatchEvent(new Event('input', { bubbles: true }));
+              textarea.dispatchEvent(new Event('change', { bubbles: true }));
+              return true;
+            }
+            """
+            try:
+                frame.evaluate(
+                    fallback_fill_js,
+                    {"comment_index": int(comment_index), "reply_text": clean_reply_text},
+                )
+            except Exception:
+                pass
+            typed_deadline = time.time() + 2.0
+            while time.time() < typed_deadline:
+                try:
+                    if bool(frame.evaluate(verify_js, {"comment_index": int(comment_index), "reply_text": clean_reply_text})):
+                        typed = True
+                        break
+                except Exception:
+                    pass
+                if page is not None:
+                    page.wait_for_timeout(200)
+                else:
+                    time.sleep(0.2)
+        if not typed:
+            return False
+        submit_ready_js = """
+        (commentIndex) => {
+          const root = document.querySelector('.feed-detail') || document;
+          const items = Array.from(root.querySelectorAll('.comment-item'))
+            .filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(commentIndex)];
+          if (!item) return '';
+          const submit = item.querySelector('.tag-wrap.primary');
+          if (!submit) return '';
+          return String(submit.className || '');
+        }
+        """
+        submit_class = ""
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            try:
+                submit_class = str(frame.evaluate(submit_ready_js, int(comment_index)) or "")
+            except Exception:
+                submit_class = ""
+            if submit_class and "disabled" not in submit_class:
+                break
+            if page is not None:
+                page.wait_for_timeout(250)
+            else:
+                time.sleep(0.25)
+        if not submit_class or "disabled" in submit_class:
+            return False
+        click_submit_js = """
+        (commentIndex) => {
+          function click(el) {
+            if (!el) return false;
+            try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+            try { el.click(); return true; } catch (e) {}
+            try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+            return false;
+          }
+          const root = document.querySelector('.feed-detail') || document;
+          const items = Array.from(root.querySelectorAll('.comment-item'))
+            .filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(commentIndex)];
+          if (!item) return false;
+          const submit = item.querySelector('.tag-wrap.primary');
+          if (!submit || String(submit.className || '').includes('disabled')) return false;
+          return click(submit);
+        }
+        """
+        return bool(frame.evaluate(click_submit_js, int(comment_index)))
+    except Exception:
+        return False
+
+
+def _playwright_wait_reply_confirm(frame: Any, comment_index: int, reply_text: str, timeout_seconds: float = 12.0) -> bool:
+    target_text = re.sub(r"\s+", "", str(reply_text or "").strip())
+    js = """
+    (args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, '').trim();
+      }
+      const commentIndex = Number(args && args.comment_index || 0);
+      const targetText = norm(args && args.reply_text || '');
+      const bodyText = norm((document.body || document.documentElement).innerText || '');
+      if (targetText && bodyText.includes(targetText)) return true;
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[commentIndex];
+      if (!item) return false;
+      const itemText = norm(item.innerText || item.textContent || '');
+      if (targetText && itemText.includes(targetText)) return true;
+      const replyList = item.querySelector('.comment-reply-list');
+      return !!(replyList && replyList.querySelector('.comment-item, .comment-content'));
+    }
+    """
+    deadline = time.time() + max(2.0, float(timeout_seconds))
+    while time.time() < deadline:
+        try:
+            if bool(frame.evaluate(js, {"comment_index": int(comment_index), "reply_text": target_text})):
+                return True
+        except Exception:
+            pass
+        try:
+            frame.page.wait_for_timeout(400)
+        except Exception:
+            time.sleep(0.4)
+    return False
+
+
+def _sanitize_comment_reply_text(raw: str, max_chars: int) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"https?://\S+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.strip("\"'`“”‘’「」[]【】")
+    if len(text) > max_chars:
+        text = text[: max_chars].rstrip(" ，,。.!！?？")
+    return text.strip()
+
+
+def _looks_like_broken_comment_reply(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return True
+    question_count = value.count("?")
+    return bool(question_count and question_count >= max(3, math.ceil(len(value) * 0.5)))
+
+
+def generate_comment_reply(
+    *,
+    post: dict[str, Any],
+    comment: dict[str, Any],
+    spark_ai: Optional[dict[str, Any]],
+    prompt_template: str,
+    fallback_replies: list[str],
+    max_chars: int,
+) -> str:
+    fallback_pool = [str(item or "").strip() for item in fallback_replies if str(item or "").strip()]
+    if not fallback_pool:
+        fallback_pool = DEFAULT_COMMENT_REPLY_FALLBACKS.copy()
+    seed = hashlib.sha1(str(comment.get("content") or "").encode("utf-8", errors="ignore")).hexdigest()
+    fallback_text = fallback_pool[int(seed[:8], 16) % len(fallback_pool)]
+
+    client = SharedSparkAIClient(spark_ai, timeout_seconds=SPARK_CHAT_TIMEOUT_SECONDS)
+    if client.is_ready():
+        prompt = str(prompt_template or "").format(
+            post_title=str(post.get("title") or "").strip(),
+            post_published_text=str(post.get("published_text") or "").strip(),
+            comment_content=str(comment.get("content") or "").strip(),
+            comment_author=str(comment.get("author") or "").strip(),
+            comment_time=str(comment.get("time_text") or "").strip(),
+        )
+        raw = client.chat(prompt, system_prompt=WECHAT_COMMENT_REPLY_SYSTEM_PROMPT)
+        payload = shared_extract_json_object(raw or "")
+        candidate = ""
+        if isinstance(payload, dict):
+            candidate = str(payload.get("reply") or "").strip()
+        if not candidate:
+            candidate = str(raw or "").strip()
+        clean = _sanitize_comment_reply_text(candidate, max_chars=max_chars)
+        if clean and not _looks_like_broken_comment_reply(clean):
+            return clean
+    fallback_clean = _sanitize_comment_reply_text(fallback_text, max_chars=max_chars)
+    return "" if _looks_like_broken_comment_reply(fallback_clean) else fallback_clean
+
+
+def run_wechat_comment_reply(
+    *,
+    workspace: Workspace,
+    runtime_config: dict[str, Any],
+    debug_port: int = DEFAULT_WECHAT_DEBUG_PORT,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_WECHAT_CHROME_USER_DATA_DIR,
+    auto_open_chrome: bool = True,
+    max_posts_override: int = 0,
+    max_replies_override: int = 0,
+    latest_only: bool = False,
+    debug: bool = False,
+    telegram_bot_identifier: str = "",
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    comment_cfg = _merge_comment_reply_config(runtime_config.get("comment_reply"))
+    if not bool(comment_cfg.get("enabled")):
+        return {
+            "ok": False,
+            "reason": "comment_reply_disabled",
+            "state_path": str(_comment_reply_state_path(workspace)),
+            "records": [],
+            "posts_scanned": 0,
+            "posts_selected": 0,
+            "replies_sent": 0,
+        }
+
+    max_posts = max(1, int(max_posts_override or comment_cfg.get("max_posts_per_run") or 1))
+    max_replies = 1 if latest_only else max(1, int(max_replies_override or comment_cfg.get("max_replies_per_run") or 1))
+    reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
+    debug_enabled = bool(debug or comment_cfg.get("debug"))
+
+    state = _load_comment_reply_state(workspace)
+    items = _prune_comment_reply_state_items(state.get("items") if isinstance(state, dict) else {})
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    last_reply_at = _latest_comment_reply_time(items)
+
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=WECHAT_POST_LIST_URL,
+    )
+    page.get(WECHAT_COMMENT_MANAGER_URL)
+    _check_wechat_login_ready(
+        page,
+        chrome_user_data_dir=chrome_user_data_dir,
+        open_url=WECHAT_COMMENT_MANAGER_URL,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+
+    posts: list[dict[str, Any]] = []
+    reply_records: list[dict[str, Any]] = []
+    posts_scanned = 0
+    playwright_needs_native_retry = False
+    playwright_bundle = _connect_playwright_wechat_comment_page(debug_port, WECHAT_COMMENT_MANAGER_URL)
+    if playwright_bundle:
+        playwright, browser, pw_page = playwright_bundle
+        try:
+            pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+            if pw_frame is None:
+                playwright_needs_native_retry = True
+                _comment_reply_log(
+                    True,
+                    "[CommentReply] Playwright frame missing before post scan: "
+                    + json.dumps(_collect_playwright_comment_manager_diagnostics(pw_page), ensure_ascii=False),
+                )
+            else:
+                posts = _playwright_collect_recent_commented_posts(pw_frame, max_posts, debug=debug_enabled)
+                _comment_reply_log(debug_enabled, f"Selected commented posts via Playwright: {len(posts)}")
+                for post in posts:
+                    if len(reply_records) >= max_replies:
+                        break
+                    posts_scanned += 1
+                    pw_page.goto(WECHAT_COMMENT_MANAGER_URL, wait_until="domcontentloaded", timeout=15000)
+                    pw_page.wait_for_timeout(1200)
+                    if not _playwright_open_comment_manager(pw_page, post, frame_hint=pw_frame):
+                        playwright_needs_native_retry = True
+                        _comment_reply_log(debug_enabled, "Skip post: Playwright comment manager not opened")
+                        continue
+                    pw_page.wait_for_timeout(1500)
+                    _playwright_wait_comment_items_ready(pw_page, timeout_seconds=6.0)
+                    pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+                    if pw_frame is None:
+                        playwright_needs_native_retry = True
+                        _comment_reply_log(debug_enabled, "Skip post: Playwright frame missing after opening post")
+                        continue
+                    seen_comment_fingerprints: set[str] = set()
+                    stagnant_rounds = 0
+                    for _ in range(8):
+                        pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+                        if pw_frame is None:
+                            playwright_needs_native_retry = True
+                            _comment_reply_log(debug_enabled, "Playwright frame missing while reading comments")
+                            break
+                        comments = _playwright_extract_comments(pw_frame)
+                        _comment_reply_log(debug_enabled, f"Playwright visible comments in manager: {len(comments)}")
+                        sent_in_round = False
+                        for comment in comments:
+                            if len(reply_records) >= max_replies:
+                                break
+                            if not isinstance(comment, dict):
+                                continue
+                            fingerprint = _comment_reply_fingerprint(post, comment)
+                            if fingerprint in seen_comment_fingerprints:
+                                _comment_reply_log(
+                                    debug_enabled,
+                                    f"Skip comment: duplicate-in-round fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                                )
+                                continue
+                            seen_comment_fingerprints.add(fingerprint)
+                            if fingerprint in items:
+                                _comment_reply_log(
+                                    debug_enabled,
+                                    f"Skip comment: already-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                                )
+                                continue
+                            if bool(comment.get("has_reply")):
+                                _comment_reply_log(
+                                    debug_enabled,
+                                    f"Skip comment: has-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                                )
+                                continue
+                            reply_text = generate_comment_reply(
+                                post=post,
+                                comment=comment,
+                                spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
+                                prompt_template=str(comment_cfg.get("prompt_template") or DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
+                                fallback_replies=list(comment_cfg.get("fallback_replies") or DEFAULT_COMMENT_REPLY_FALLBACKS),
+                                max_chars=reply_max_chars,
+                            )
+                            if not reply_text:
+                                _comment_reply_log(
+                                    debug_enabled,
+                                    f"Skip comment: empty-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                                )
+                                continue
+                            last_reply_at = _apply_comment_reply_wait(
+                                comment_cfg,
+                                last_reply_at=last_reply_at,
+                                debug=debug_enabled,
+                            )
+                            if bool(comment_cfg.get("auto_like")):
+                                pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+                                if pw_frame is None:
+                                    playwright_needs_native_retry = True
+                                    break
+                                _playwright_like_comment_if_needed(pw_frame, int(comment.get("index") or 0))
+                                pw_page.wait_for_timeout(300)
+                            pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+                            if pw_frame is None:
+                                playwright_needs_native_retry = True
+                                _comment_reply_log(debug_enabled, "Playwright frame missing before submit")
+                                break
+                            if debug_enabled:
+                                _comment_reply_log(
+                                    True,
+                                    "Playwright pre-submit state: "
+                                    + json.dumps(
+                                        _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
+                                        ensure_ascii=False,
+                                    ),
+                                )
+                            if not _playwright_submit_reply(pw_frame, int(comment.get("index") or 0), reply_text):
+                                if debug_enabled:
+                                    _comment_reply_log(
+                                        True,
+                                        "Playwright submit reply failed with state: "
+                                        + json.dumps(
+                                            _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
+                                            ensure_ascii=False,
+                                        ),
+                                    )
+                                else:
+                                    _comment_reply_log(debug_enabled, "Playwright submit reply failed")
+                                continue
+                            pw_page.wait_for_timeout(500)
+                            pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+                            if pw_frame is None:
+                                playwright_needs_native_retry = True
+                                _comment_reply_log(debug_enabled, "Playwright frame missing after submit")
+                                continue
+                            if debug_enabled:
+                                _comment_reply_log(
+                                    True,
+                                    "Playwright post-submit state: "
+                                    + json.dumps(
+                                        _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
+                                        ensure_ascii=False,
+                                    ),
+                                )
+                            if not _playwright_wait_reply_confirm(pw_frame, int(comment.get("index") or 0), reply_text):
+                                _comment_reply_log(debug_enabled, "Playwright reply confirm timeout")
+                                continue
+                            record = _remember_comment_reply(
+                                items,
+                                fingerprint=fingerprint,
+                                post=post,
+                                comment=comment,
+                                reply_text=reply_text,
+                            )
+                            reply_records.append(record)
+                            state["items"] = items
+                            state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            _save_comment_reply_state(workspace, state)
+                            last_reply_at = _parse_comment_reply_timestamp(record.get("replied_at")) or datetime.now()
+                            sent_in_round = True
+                            pw_page.wait_for_timeout(1000)
+                            if latest_only or len(reply_records) >= max_replies:
+                                break
+                        if latest_only or len(reply_records) >= max_replies:
+                            break
+                        if sent_in_round:
+                            stagnant_rounds = 0
+                        else:
+                            stagnant_rounds += 1
+                        if stagnant_rounds >= 2:
+                            break
+                        _playwright_scroll_wechat_list(pw_frame, [".comment-list", ".comment-main-content", ".scroll-list", ".scroll-list__wrp", "[class*='scroll-list']"])
+                        pw_page.wait_for_timeout(1000)
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+            try:
+                playwright.stop()
+            except Exception:
+                pass
+    if (not playwright_bundle) or (playwright_needs_native_retry and not reply_records):
+        if playwright_needs_native_retry:
+            _comment_reply_log(debug_enabled, "Falling back to DrissionPage comment flow after Playwright instability")
+        matched = _wait_until(
+            lambda: bool(extract_wechat_post_cards(page)) and ("/platform/post/list" in _page_current_url(page) or True),
+            timeout_seconds=12.0,
+            poll_seconds=0.5,
+        )
+        if not matched:
+            _comment_reply_log(
+                True,
+                "[CommentReply] Native comment manager not ready diagnostics: "
+                + json.dumps(_collect_native_comment_manager_diagnostics(page), ensure_ascii=False),
+            )
+            login_notify_result = _maybe_notify_wechat_comment_login_required(
+                page=page,
+                chrome_user_data_dir=chrome_user_data_dir,
+                open_url=WECHAT_COMMENT_MANAGER_URL,
+                login_reason="comment_manager_not_ready",
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id,
+                telegram_bot_identifier=telegram_bot_identifier,
+                telegram_registry_file=telegram_registry_file,
+                telegram_timeout_seconds=telegram_timeout_seconds,
+                telegram_api_base=telegram_api_base,
+                notify_env_prefix=notify_env_prefix,
+            )
+            _comment_reply_log(
+                True,
+                "[CommentReply] Login reminder notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
+            )
+            return {
+                "ok": False,
+                "reason": "comment_manager_not_ready",
+                "state_path": str(_comment_reply_state_path(workspace)),
+                "records": [],
+                "posts_scanned": 0,
+                "posts_selected": 0,
+                "replies_sent": 0,
+            }
+
+        posts = _collect_recent_commented_posts(page, max_posts, debug=debug_enabled)
+        _comment_reply_log(debug_enabled, f"Selected commented posts: {len(posts)}")
+        for post in posts:
+            if len(reply_records) >= max_replies:
+                break
+            posts_scanned += 1
+            _comment_reply_log(
+                debug_enabled,
+                f"Open post '{_single_line_preview(str(post.get('title') or ''), 72)}' comments={post.get('comment_count')}",
+            )
+            page.get(WECHAT_COMMENT_MANAGER_URL)
+            time.sleep(1.0)
+            if not open_comment_manager(page, post):
+                _comment_reply_log(debug_enabled, "Skip post: comment manager not opened")
+                continue
+            time.sleep(1.0)
+
+            seen_comment_fingerprints: set[str] = set()
+            stagnant_rounds = 0
+            for _ in range(8):
+                comments = extract_comments(page)
+                _comment_reply_log(debug_enabled, f"Visible comments in manager: {len(comments)}")
+                sent_in_round = False
+                for comment in comments:
+                    if len(reply_records) >= max_replies:
+                        break
+                    fingerprint = _comment_reply_fingerprint(post, comment)
+                    if fingerprint in seen_comment_fingerprints:
+                        _comment_reply_log(
+                            debug_enabled,
+                            f"Skip comment: duplicate-in-round fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                        )
+                        continue
+                    seen_comment_fingerprints.add(fingerprint)
+                    if fingerprint in items:
+                        _comment_reply_log(
+                            debug_enabled,
+                            f"Skip comment: already-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                        )
+                        continue
+                    if bool(comment.get("has_reply")):
+                        _comment_reply_log(
+                            debug_enabled,
+                            f"Skip comment: has-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                        )
+                        continue
+
+                    reply_text = generate_comment_reply(
+                        post=post,
+                        comment=comment,
+                        spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
+                        prompt_template=str(comment_cfg.get("prompt_template") or DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
+                        fallback_replies=list(comment_cfg.get("fallback_replies") or DEFAULT_COMMENT_REPLY_FALLBACKS),
+                        max_chars=reply_max_chars,
+                    )
+                    if not reply_text:
+                        _comment_reply_log(
+                            debug_enabled,
+                            f"Skip comment: empty-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                        )
+                        continue
+                    last_reply_at = _apply_comment_reply_wait(
+                        comment_cfg,
+                        last_reply_at=last_reply_at,
+                        debug=debug_enabled,
+                    )
+                    if bool(comment_cfg.get("auto_like")):
+                        like_comment_if_needed(page, int(comment.get("index") or 0))
+                        time.sleep(0.3)
+                    if not submit_reply(page, int(comment.get("index") or 0), reply_text):
+                        _comment_reply_log(debug_enabled, "Submit reply failed")
+                        continue
+                    if not wait_reply_confirm(page, int(comment.get("index") or 0), reply_text):
+                        _comment_reply_log(debug_enabled, "Reply confirm timeout")
+                        continue
+
+                    record = _remember_comment_reply(
+                        items,
+                        fingerprint=fingerprint,
+                        post=post,
+                        comment=comment,
+                        reply_text=reply_text,
+                    )
+                    reply_records.append(record)
+                    state["items"] = items
+                    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    _save_comment_reply_state(workspace, state)
+                    last_reply_at = _parse_comment_reply_timestamp(record.get("replied_at")) or datetime.now()
+                    _comment_reply_log(
+                        debug_enabled,
+                        f"Replied: {_single_line_preview(str(comment.get('content') or ''), 60)} -> {reply_text}",
+                    )
+                    sent_in_round = True
+                    time.sleep(1.0)
+                    if latest_only or len(reply_records) >= max_replies:
+                        break
+
+                if latest_only or len(reply_records) >= max_replies:
+                    break
+                if sent_in_round:
+                    stagnant_rounds = 0
+                else:
+                    stagnant_rounds += 1
+                if stagnant_rounds >= 2:
+                    break
+                _scroll_wechat_comment_list(page)
+                time.sleep(1.0)
+
+    state["items"] = _prune_comment_reply_state_items(items)
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _save_comment_reply_state(workspace, state)
+    return {
+        "ok": True,
+        "reason": "",
+        "state_path": str(_comment_reply_state_path(workspace)),
+        "records": reply_records,
+        "posts_scanned": posts_scanned,
+        "posts_selected": len(posts),
+        "replies_sent": len(reply_records),
+    }
+
+
+def _is_video_file(path: Path) -> bool:
+    return path.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
+
+
+def _is_image_file(path: Path) -> bool:
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+
+def _dedupe_urls(urls: Iterable[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in urls:
+        url = (raw or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+    return deduped
+
+
+def _normalize_x_status_url(raw_url: str) -> Optional[str]:
+    m = re.search(r"https?://(?:www\.)?(?:x|twitter)\.com/([^/?#]+)/status/(\d+)", raw_url or "", re.IGNORECASE)
+    if not m:
+        return None
+    username = m.group(1)
+    status_id = m.group(2)
+    return f"https://x.com/{username}/status/{status_id}"
+
+
+def _dedupe_x_status_urls(urls: Iterable[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        normalized = _normalize_x_status_url(url)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _safe_filename_token(value: str, limit: int = 80) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or ""))
+    token = token.strip("._-")
+    if not token:
+        token = "x"
+    return token[: max(8, int(limit))]
+
+
+def _guess_image_suffix_from_url(raw_url: str) -> str:
+    url = str(raw_url or "").strip()
+    if not url:
+        return ".jpg"
+    parsed = urlparse(url)
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+        return suffix
+    query = parse_qs(parsed.query or "")
+    format_token = str((query.get("format") or [""])[0] or "").strip().lower()
+    if format_token in {"jpg", "jpeg", "png", "webp", "bmp"}:
+        return f".{format_token}"
+    return ".jpg"
+
+
+def _load_line_history(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        return {
+            line.strip()
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            if line.strip()
+        }
+    except Exception:
+        return set()
+
+
+def _append_line_history(path: Path, rows: Iterable[str]) -> None:
+    cleaned = [str(x or "").strip() for x in rows if str(x or "").strip()]
+    if not cleaned:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for item in cleaned:
+            fh.write(item + "\n")
+
+
+def _fetch_x_syndication_payload(
+    status_id: str,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> Optional[dict[str, Any]]:
+    sid = str(status_id or "").strip()
+    if not sid.isdigit():
+        return None
+    url = f"https://cdn.syndication.twimg.com/tweet-result?id={sid}&lang=en&token=a"
+    req = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": "https://x.com/",
+        },
+    )
+    opener = _build_network_opener(proxy=proxy, use_system_proxy=use_system_proxy)
+    try:
+        with opener.open(req, timeout=12) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _extract_x_photo_urls_from_payload(payload: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    photos = payload.get("photos")
+    if isinstance(photos, list):
+        for item in photos:
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.get("url", "") or item.get("media_url_https", "") or "").strip()
+            if raw:
+                urls.append(raw)
+    media_details = payload.get("mediaDetails")
+    if isinstance(media_details, list):
+        for item in media_details:
+            if not isinstance(item, dict):
+                continue
+            media_type = str(item.get("type", "") or "").strip().lower()
+            if media_type != "photo":
+                continue
+            raw = str(item.get("media_url_https", "") or item.get("media_url", "") or item.get("url", "") or "").strip()
+            if raw:
+                urls.append(raw)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in urls:
+        base = raw.split("?", 1)[0].strip()
+        key = base or raw
+        if (not key) or key in seen:
+            continue
+        seen.add(key)
+        # Prefer original-size endpoint for pbs image URLs.
+        if "pbs.twimg.com/" in base:
+            deduped.append(f"{base}?name=orig")
+        else:
+            deduped.append(raw)
+    return deduped
+
+
+def _extract_x_video_variants_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    variants: list[dict[str, Any]] = []
+
+    def _append_variant(raw_url: str, content_type: str, bitrate: int = 0) -> None:
+        url = str(raw_url or "").strip()
+        media_type = str(content_type or "").strip().lower()
+        if not url or not media_type:
+            return
+        variants.append(
+            {
+                "url": url,
+                "content_type": media_type,
+                "bitrate": max(0, int(bitrate or 0)),
+            }
+        )
+
+    media_details = payload.get("mediaDetails")
+    if isinstance(media_details, list):
+        for item in media_details:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type", "") or "").strip().lower() != "video":
+                continue
+            video_info = item.get("video_info") if isinstance(item.get("video_info"), dict) else {}
+            for variant in video_info.get("variants", []) if isinstance(video_info.get("variants"), list) else []:
+                if not isinstance(variant, dict):
+                    continue
+                _append_variant(
+                    str(variant.get("url") or ""),
+                    str(variant.get("content_type") or ""),
+                    int(variant.get("bitrate") or 0),
+                )
+
+    video_node = payload.get("video") if isinstance(payload.get("video"), dict) else {}
+    for variant in video_node.get("variants", []) if isinstance(video_node.get("variants"), list) else []:
+        if not isinstance(variant, dict):
+            continue
+        _append_variant(
+            str(variant.get("src") or variant.get("url") or ""),
+            str(variant.get("type") or variant.get("content_type") or ""),
+            int(variant.get("bitrate") or 0),
+        )
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in sorted(
+        variants,
+        key=lambda row: (
+            0 if str(row.get("content_type") or "").strip().lower() == "video/mp4" else 1,
+            -int(row.get("bitrate") or 0),
+        ),
+    ):
+        key = str(item.get("url") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _download_x_videos_from_status_urls(
+    workspace: Workspace,
+    status_urls: list[str],
+    limit: int,
+    keyword: str,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> list[Path]:
+    target = max(0, int(limit))
+    if target <= 0:
+        return []
+    normalized_statuses = _dedupe_x_status_urls(status_urls)
+    if not normalized_statuses:
+        return []
+
+    history_path = _workspace_history_file(workspace, "video")
+    history_keys = _load_line_history(history_path)
+    history_appends: list[str] = []
+    downloaded: list[Path] = []
+    opener = _build_network_opener(proxy=proxy, use_system_proxy=use_system_proxy)
+
+    for status_url in normalized_statuses:
+        if len(downloaded) >= target:
+            break
+        m = re.search(r"https?://(?:www\.)?(?:x|twitter)\.com/([^/?#]+)/status/(\d+)", status_url, re.IGNORECASE)
+        if not m:
+            continue
+        uploader_from_url = str(m.group(1) or "").strip()
+        status_id = str(m.group(2) or "").strip()
+        payload = _fetch_x_syndication_payload(
+            status_id,
+            proxy=proxy,
+            use_system_proxy=use_system_proxy,
+        )
+        if not isinstance(payload, dict):
+            continue
+        variants = _extract_x_video_variants_from_payload(payload)
+        if not variants:
+            continue
+
+        best_variant = next(
+            (item for item in variants if str(item.get("content_type") or "").strip().lower() == "video/mp4"),
+            variants[0],
+        )
+        video_url = str(best_variant.get("url") or "").strip()
+        if not video_url:
+            continue
+        key_seed = video_url.split("?", 1)[0].strip() or video_url
+        key = f"{status_id}:{hashlib.sha1(key_seed.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+        if key in history_keys:
+            continue
+
+        user_info = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        uploader = str(
+            (user_info or {}).get("screen_name", "")
+            or (user_info or {}).get("name", "")
+            or uploader_from_url
+            or "xuser"
+        ).strip()
+        title_raw = str(payload.get("text", "") or "").strip() or f"{keyword} video"
+        description_raw = str(payload.get("text", "") or "").strip()
+        duration_ms = int(
+            payload.get("video", {}).get("durationMs")
+            if isinstance(payload.get("video"), dict)
+            else 0
+        ) or 0
+
+        uploader_token = _safe_filename_token(uploader, limit=40)
+        title_token = _safe_filename_token(title_raw, limit=80)
+        stem = f"{status_id}__{uploader_token}__{title_token}"
+        dst = _workspace_download_dir(workspace, "video") / f"{stem}.mp4"
+        seq = 2
+        while dst.exists():
+            dst = _workspace_download_dir(workspace, "video") / f"{stem}_{seq}.mp4"
+            seq += 1
+
+        req = Request(
+            video_url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "*/*",
+                "Referer": status_url,
+            },
+        )
+        try:
+            with opener.open(req, timeout=30) as resp:
+                payload_bytes = resp.read()
+        except Exception:
+            continue
+        if len(payload_bytes) < 1024:
+            continue
+
+        dst.write_bytes(payload_bytes)
+        info_payload = {
+            "id": status_id,
+            "title": title_raw[:240],
+            "fulltitle": title_raw[:280],
+            "description": description_raw[:1200],
+            "uploader": uploader,
+            "uploader_id": uploader,
+            "webpage_url": status_url,
+            "original_url": status_url,
+            "extractor": "x-syndication-video",
+            "duration": round(max(0.0, float(duration_ms) / 1000.0), 3),
+        }
+        _sidecar_info_path(dst).write_text(
+            json.dumps(info_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        history_keys.add(key)
+        history_appends.append(key)
+        downloaded.append(dst)
+
+    if history_appends:
+        _append_line_history(history_path, history_appends)
+    if downloaded:
+        _log(f"[Downloader] X video fallback downloaded: {len(downloaded)}")
+        for item in downloaded:
+            _log(f"  - {item.name}")
+    return downloaded
+
+
+def _download_x_images_from_status_urls(
+    workspace: Workspace,
+    status_urls: list[str],
+    limit: int,
+    keyword: str,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> list[Path]:
+    target = max(0, int(limit))
+    if target <= 0:
+        return []
+    normalized_statuses = _dedupe_x_status_urls(status_urls)
+    if not normalized_statuses:
+        return []
+
+    history_path = _workspace_history_file(workspace, "image")
+    history_keys = _load_line_history(history_path)
+    history_appends: list[str] = []
+    downloaded: list[Path] = []
+    opener = _build_network_opener(proxy=proxy, use_system_proxy=use_system_proxy)
+
+    for status_url in normalized_statuses:
+        if len(downloaded) >= target:
+            break
+        m = re.search(r"https?://(?:www\.)?(?:x|twitter)\.com/([^/?#]+)/status/(\d+)", status_url, re.IGNORECASE)
+        if not m:
+            continue
+        uploader_from_url = str(m.group(1) or "").strip()
+        status_id = str(m.group(2) or "").strip()
+        payload = _fetch_x_syndication_payload(
+            status_id,
+            proxy=proxy,
+            use_system_proxy=use_system_proxy,
+        )
+        if not isinstance(payload, dict):
+            continue
+        image_urls = _extract_x_photo_urls_from_payload(payload)
+        if not image_urls:
+            continue
+
+        user_info = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        uploader = str(
+            (user_info or {}).get("screen_name", "")
+            or (user_info or {}).get("name", "")
+            or uploader_from_url
+            or "xuser"
+        ).strip()
+        title_raw = str(payload.get("text", "") or "").strip() or f"{keyword} image"
+        description_raw = str(payload.get("text", "") or "").strip()
+
+        for idx, image_url in enumerate(image_urls, 1):
+            if len(downloaded) >= target:
+                break
+            key_seed = image_url.split("?", 1)[0].strip() or image_url
+            key = f"{status_id}:{hashlib.sha1(key_seed.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+            if key in history_keys:
+                continue
+
+            media_id = f"{status_id}p{idx}"
+            uploader_token = _safe_filename_token(uploader, limit=40)
+            title_token = _safe_filename_token(title_raw, limit=80)
+            suffix = _guess_image_suffix_from_url(image_url)
+            stem = f"{media_id}__{uploader_token}__{title_token}"
+            dst = _workspace_download_dir(workspace, "image") / f"{stem}{suffix}"
+            seq = 2
+            while dst.exists():
+                dst = _workspace_download_dir(workspace, "image") / f"{stem}_{seq}{suffix}"
+                seq += 1
+
+            req = Request(
+                image_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                    "Referer": status_url,
+                },
+            )
+            try:
+                with opener.open(req, timeout=20) as resp:
+                    payload_bytes = resp.read()
+            except Exception:
+                continue
+            if len(payload_bytes) < 512:
+                continue
+
+            dst.write_bytes(payload_bytes)
+            info_payload = {
+                "id": media_id,
+                "title": title_raw[:240],
+                "fulltitle": title_raw[:280],
+                "description": description_raw[:1200],
+                "uploader": uploader,
+                "uploader_id": uploader,
+                "webpage_url": status_url,
+                "original_url": status_url,
+                "extractor": "x-syndication-photo",
+                "duration": 0,
+            }
+            _sidecar_info_path(dst).write_text(
+                json.dumps(info_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            history_keys.add(key)
+            history_appends.append(key)
+            downloaded.append(dst)
+
+    if history_appends:
+        _append_line_history(history_path, history_appends)
+    if downloaded:
+        _log(f"[Downloader] X image fallback downloaded: {len(downloaded)}")
+        for item in downloaded:
+            _log(f"  - {item.name}")
+    return downloaded
+
+
+def _check_x_login_ready(page: ChromiumPage) -> None:
+    url = (page.url or "").lower()
+    if "/i/flow/login" in url or "/login" in url:
+        raise RuntimeError("X 页面未登录。请先在该 Chrome 用户目录中登录 X 账号，再重试。")
+    for marker in ("text:Sign in", "text:Log in", "text:登录", "text:注册"):
+        try:
+            ele = page.ele(marker, timeout=0.6)
+            if ele and _is_visible_element(ele):
+                raise RuntimeError("X 页面未登录。请先在该 Chrome 用户目录中登录 X 账号，再重试。")
+        except RuntimeError:
+            raise
+        except Exception:
+            continue
+
+
+def _is_x_login_required_error(error_text: str) -> bool:
+    text = str(error_text or "").strip().lower()
+    if not text:
+        return False
+    markers = (
+        "x 页面未登录",
+        "登录 x 账号",
+        "x page is not logged in",
+        "/i/flow/login",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _read_platform_page_snapshot(ctx: Any) -> dict[str, str]:
+    js = """
+    return {
+      url: String((location && location.href) || ''),
+      title: String(document.title || ''),
+      text: String((document.body && document.body.innerText) || '')
+    };
+    """
+    try:
+        payload = ctx.run_js(js)
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "url": str(payload.get("url") or "").strip(),
+        "title": str(payload.get("title") or "").strip(),
+        "text": str(payload.get("text") or "").strip(),
+    }
+
+
+def _match_platform_login_gate_from_snapshot(
+    platform_name: str,
+    *,
+    url: str = "",
+    title: str = "",
+    text: str = "",
+) -> dict[str, Any]:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    cfg = PLATFORM_LOGIN_PAGE_HINTS.get(platform) or {}
+    url_text = str(url or "").strip()
+    url_lower = url_text.lower()
+    title_text = str(title or "").strip()
+    body_text = str(text or "").strip()
+    combined_text = "\n".join(part for part in (title_text, body_text) if part)
+    compact_text = re.sub(r"\s+", "", combined_text)
+    compact_lower = compact_text.lower()
+
+    domain_keyword = ""
+    try:
+        host = urlparse(str(PLATFORM_CREATE_POST_URLS.get(platform) or "")).netloc.lower()
+        parts = [part for part in host.split(".") if part]
+        domain_keyword = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    except Exception:
+        domain_keyword = ""
+
+    url_tokens = tuple(str(item or "").lower() for item in (cfg.get("url_tokens") or ()) if str(item or "").strip())
+    if url_tokens and any(token in url_lower for token in url_tokens):
+        if (not domain_keyword) or (domain_keyword in url_lower):
+            return {
+                "needs_login": True,
+                "reason": "login_url",
+                "matched_marker": next((token for token in url_tokens if token in url_lower), ""),
+                "url": url_text,
+            }
+
+    markers = tuple(str(item or "").strip() for item in (cfg.get("text_markers") or ()) if str(item or "").strip())
+    for marker in markers:
+        if marker and (marker in combined_text or marker in compact_text):
+            return {
+                "needs_login": True,
+                "reason": "login_text",
+                "matched_marker": marker,
+                "url": url_text,
+            }
+
+    if platform == "wechat":
+        if "二维码已过期" in compact_text or ("点击刷新" in compact_text and ("扫码登录" in compact_text or "微信扫码登录" in compact_text)):
+            return {
+                "needs_login": True,
+                "reason": "wechat_qr_expired",
+                "matched_marker": "二维码已过期",
+                "url": url_text,
+            }
+        if (
+            "cannot get /micro/content/post/create" in combined_text.lower()
+            or "cannotget/micro/content/post/create" in compact_lower
+            or ("errcode" in compact_lower and "errmsg" in compact_lower and "cannotget/micro/content/post/create" in compact_lower)
+        ):
+            return {
+                "needs_login": True,
+                "reason": "wechat_micro_route_error",
+                "matched_marker": "Cannot GET /micro/content/post/create",
+                "url": url_text,
+            }
+
+    return {
+        "needs_login": False,
+        "reason": "",
+        "matched_marker": "",
+        "url": url_text,
+    }
+
+
+def inspect_platform_login_gate(page: ChromiumPage, platform_name: str) -> dict[str, Any]:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    contexts: list[tuple[str, Any]] = [("page", page)]
+    try:
+        frames = list(page.get_frames(timeout=1.5))
+    except Exception:
+        frames = []
+    for idx, frame in enumerate(frames):
+        contexts.append((f"frame:{idx}", frame))
+
+    last_snapshot: dict[str, str] = {}
+    for source, ctx in contexts:
+        snapshot = _read_platform_page_snapshot(ctx)
+        if snapshot:
+            last_snapshot = snapshot
+        matched = _match_platform_login_gate_from_snapshot(
+            platform,
+            url=snapshot.get("url", ""),
+            title=snapshot.get("title", ""),
+            text=snapshot.get("text", ""),
+        )
+        if bool(matched.get("needs_login")):
+            matched["platform"] = platform
+            matched["source"] = source
+            matched["title"] = snapshot.get("title", "")
+            matched["text"] = snapshot.get("text", "")
+            return matched
+
+    return {
+        "needs_login": False,
+        "platform": platform,
+        "reason": "",
+        "matched_marker": "",
+        "source": "page",
+        "url": str(_page_current_url(page) or last_snapshot.get("url", "") or ""),
+        "title": last_snapshot.get("title", ""),
+        "text": last_snapshot.get("text", ""),
+    }
+
+
+def _is_platform_login_gate(page: ChromiumPage, platform_name: str) -> bool:
+    return bool(inspect_platform_login_gate(page, platform_name).get("needs_login"))
+
+
+def _is_wechat_login_gate(page: ChromiumPage) -> bool:
+    return _is_platform_login_gate(page, "wechat")
+
+
+def _current_page_matches_publish_entry(page: ChromiumPage, platform_name: str, open_url: str) -> bool:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    current_url = _page_current_url(page).strip().lower()
+    target_url = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip().lower()
+    if not current_url or not target_url:
+        return False
+    if _is_platform_login_gate(page, platform):
+        return False
+
+    hints_by_platform: dict[str, tuple[str, ...]] = {
+        "wechat": (
+            "channels.weixin.qq.com/platform/post/create",
+            "channels.weixin.qq.com/micro/content/post/create",
+        ),
+        "douyin": ("creator.douyin.com/creator-micro/content/upload",),
+        "xiaohongshu": ("creator.xiaohongshu.com/publish/publish",),
+        "kuaishou": ("cp.kuaishou.com/article/publish/video", "cp.kuaishou.com/article/publish"),
+        "bilibili": ("member.bilibili.com/platform/upload/video/frame", "member.bilibili.com/platform/upload/video"),
+    }
+    hints = hints_by_platform.get(platform) or tuple(filter(None, [target_url]))
+    return any(hint in current_url for hint in hints if hint)
+
+
+def _check_platform_login_ready(
+    page: ChromiumPage,
+    *,
+    platform_name: str,
+    open_url: str,
+    chrome_user_data_dir: str = "",
+    debug_port: Optional[int] = None,
+    chrome_path: Optional[str] = None,
+    max_refresh_retry: int = 1,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> None:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    resolved_open_url = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip() or CREATE_POST_URL
+    profile_dir = str(Path(chrome_user_data_dir).expanduser()) if chrome_user_data_dir else "(unknown)"
+    display_name = str(PLATFORM_LOGIN_DISPLAY_NAMES.get(platform) or platform)
+    recent_session_ready = bool(chrome_user_data_dir) and _has_recent_platform_session_ready(platform, chrome_user_data_dir)
+    for attempt in range(max(0, int(max_refresh_retry)) + 1):
+        login_state = inspect_platform_login_gate(page, platform)
+        diagnostics = _build_platform_login_diagnostics(
+            platform,
+            state=login_state,
+            open_url=resolved_open_url,
+            recent_session_ready=recent_session_ready,
+            profile_dir=chrome_user_data_dir,
+        )
+        if not bool(login_state.get("needs_login")):
+            if chrome_user_data_dir:
+                _mark_platform_session_ready(
+                    platform,
+                    chrome_user_data_dir,
+                    url=str(login_state.get("url") or _page_current_url(page) or resolved_open_url),
+                    diagnostics=diagnostics,
+                )
+            return
+        if (
+            platform == "wechat"
+            and recent_session_ready
+            and str(login_state.get("reason") or "").strip().lower() == "wechat_micro_route_error"
+        ):
+            recovered = False
+            _log(
+                "[Uploader:wechat] Micro create route returned transient login-like error "
+                "while recent ready session exists; rechecking before QR notice."
+            )
+            for _ in range(max(1, int(WECHAT_RECENT_READY_ROUTE_ERROR_RECHECKS))):
+                time.sleep(max(0.2, float(WECHAT_RECENT_READY_ROUTE_ERROR_RECHECK_SLEEP_SECONDS)))
+                login_state = inspect_platform_login_gate(page, platform)
+                diagnostics = _build_platform_login_diagnostics(
+                    platform,
+                    state=login_state,
+                    open_url=resolved_open_url,
+                    recent_session_ready=recent_session_ready,
+                    profile_dir=chrome_user_data_dir,
+                )
+                if not bool(login_state.get("needs_login")):
+                    if chrome_user_data_dir:
+                        _mark_platform_session_ready(
+                            platform,
+                            chrome_user_data_dir,
+                            url=str(login_state.get("url") or _page_current_url(page) or resolved_open_url),
+                            diagnostics=diagnostics,
+                        )
+                    recovered = True
+                    break
+                if str(login_state.get("reason") or "").strip().lower() != "wechat_micro_route_error":
+                    break
+            if recovered:
+                return
+        if attempt < max_refresh_retry:
+            if recent_session_ready:
+                _log(
+                    f"[Uploader:{platform}] Login gate detected "
+                    f"(reason={login_state.get('reason') or '-'}, source={login_state.get('source') or 'page'}, "
+                    f"root_cause_hint={diagnostics.get('root_cause_hint') or 'unknown'}), "
+                    "but recent ready session exists; skip aggressive refresh and re-evaluate."
+                )
+                time.sleep(1.5)
+            else:
+                _log(
+                    f"[Uploader:{platform}] Login gate detected "
+                    f"(reason={login_state.get('reason') or '-'}, source={login_state.get('source') or 'page'}, "
+                    f"root_cause_hint={diagnostics.get('root_cause_hint') or 'unknown'}), refresh and retry once."
+                )
+                try:
+                    page.refresh()
+                except Exception:
+                    pass
+                time.sleep(2.0)
+            continue
+        wait_token = ""
+        should_wait_for_confirmation = False
+        qr_notice_error = ""
+        if chrome_user_data_dir:
+            _mark_platform_session_login_required(
+                platform,
+                chrome_user_data_dir,
+                url=str(login_state.get("url") or _page_current_url(page) or resolved_open_url),
+                reason=str(login_state.get("reason") or ""),
+                diagnostics=diagnostics,
+            )
+        _log(
+            f"[Uploader:{platform}] Login required persisted "
+            f"(reason={login_state.get('reason') or '-'}, source={login_state.get('source') or 'page'}, "
+            f"root_cause_hint={diagnostics.get('root_cause_hint') or 'unknown'}, "
+            f"url={diagnostics.get('current_url') or '-'}, marker={diagnostics.get('matched_marker') or '-'})"
+        )
+        try:
+            if chrome_user_data_dir:
+                wait_token = _begin_platform_login_wait(platform, chrome_user_data_dir, resolved_open_url)
+            qr_result = send_platform_login_qr_notification(
+                platform_name=platform,
+                open_url=resolved_open_url,
+                page=page,
+                debug_port=debug_port,
+                chrome_user_data_dir=chrome_user_data_dir,
+                chrome_path=chrome_path,
+                auto_open_chrome=False,
+                refresh_page=False,
+                allow_duplicate=True,
+                wait_token=wait_token,
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id,
+                telegram_bot_identifier=telegram_bot_identifier,
+                telegram_registry_file=telegram_registry_file,
+                telegram_timeout_seconds=telegram_timeout_seconds,
+                telegram_api_base=telegram_api_base,
+                notify_env_prefix=notify_env_prefix,
+            )
+            should_wait_for_confirmation = bool(qr_result.get("sent"))
+            if bool(qr_result.get("sent")):
+                _log(f"[Uploader:{platform}] Login QR sent to Telegram.")
+            elif bool(qr_result.get("skipped")):
+                _log(f"[Uploader:{platform}] Login QR unchanged; duplicate Telegram notice skipped.")
+            elif str(qr_result.get("error") or "").strip():
+                qr_notice_error = str(qr_result.get("error") or "").strip()
+                _log(f"[Uploader:{platform}] Login QR notify skipped: {qr_notice_error}")
+        except Exception as exc:
+            qr_notice_error = str(exc or "").strip()
+            _log(f"[Uploader:{platform}] Login QR notify failed: {qr_notice_error}")
+        if wait_token and not should_wait_for_confirmation:
+            try:
+                text_notice_result = _send_platform_login_text_notification(
+                    platform_name=platform,
+                    open_url=resolved_open_url,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    login_reason=str(login_state.get("reason") or ""),
+                    qr_error=qr_notice_error,
+                    wait_token=wait_token,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_registry_file=telegram_registry_file,
+                    telegram_timeout_seconds=telegram_timeout_seconds,
+                    telegram_api_base=telegram_api_base,
+                    notify_env_prefix=notify_env_prefix,
+                )
+                should_wait_for_confirmation = bool(text_notice_result.get("sent"))
+                if should_wait_for_confirmation:
+                    _log(f"[Uploader:{platform}] Login text reminder sent to Telegram.")
+                elif str(text_notice_result.get("error") or "").strip():
+                    _log(
+                        f"[Uploader:{platform}] Login text reminder skipped: "
+                        f"{str(text_notice_result.get('error') or '').strip()}"
+                    )
+            except Exception as exc:
+                _log(f"[Uploader:{platform}] Login text reminder failed: {exc}")
+        if wait_token and should_wait_for_confirmation and _wait_for_platform_login_confirmation(
+            page,
+            platform_name=platform,
+            open_url=resolved_open_url,
+            chrome_user_data_dir=chrome_user_data_dir,
+            wait_token=wait_token,
+            timeout_seconds=PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS,
+        ):
+            _log(f"[Uploader:{platform}] Login restored after Telegram confirmation; continue publishing.")
+            return
+        _clear_platform_login_signal(platform, chrome_user_data_dir, wait_token)
+        raise RuntimeError(
+            f"{display_name}未登录，已通过 Telegram 发送登录提醒。"
+            f"请先完成登录后再重试。会话目录：{profile_dir}"
+        )
+
+
+def _check_wechat_login_ready(
+    page: ChromiumPage,
+    chrome_user_data_dir: str = "",
+    open_url: str = CREATE_POST_URL,
+    max_refresh_retry: int = 1,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> None:
+    _check_platform_login_ready(
+        page,
+        platform_name="wechat",
+        open_url=open_url,
+        chrome_user_data_dir=chrome_user_data_dir,
+        debug_port=DEFAULT_WECHAT_DEBUG_PORT,
+        max_refresh_retry=max_refresh_retry,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+
+
+def _discover_media_urls_in_x_page(
+    page: ChromiumPage,
+    keyword: str,
+    require_keyword: bool,
+    include_images: bool = False,
+) -> list[str]:
+    js = """
+    const key = String(arguments[0] || '').toLowerCase();
+    const needKeyword = Boolean(arguments[1]);
+    const includeImages = Boolean(arguments[2]);
+    const links = [];
+    const articles = Array.from(document.querySelectorAll('article[data-testid=\"tweet\"], article'));
+    for (const article of articles) {
+      const txt = (article.innerText || '').toLowerCase();
+      const promoted = txt.includes('promoted') || txt.includes('广告') || txt.includes('赞助');
+      if (promoted) continue;
+      if (needKeyword && key && !txt.includes(key)) continue;
+      const hasVideo = !!article.querySelector(
+        '[data-testid=\"videoPlayer\"], video, div[aria-label*=\"video\" i], div[data-testid*=\"video\" i]'
+      );
+      const hasImage = includeImages && !!article.querySelector(
+        '[data-testid=\"tweetPhoto\"] img, a[href*=\"/photo/\"] img, img[src*=\"pbs.twimg.com/media\"]'
+      );
+      if (!(hasVideo || hasImage)) continue;
+      const anchors = Array.from(article.querySelectorAll('a[href*=\"/status/\"]'));
+      for (const a of anchors) {
+        if (a && a.href) links.push(a.href);
+      }
+    }
+    return Array.from(new Set(links));
+    """
+    try:
+        result = page.run_js(js, keyword, require_keyword, include_images)
+    except Exception:
+        return []
+    if not isinstance(result, list):
+        return []
+    return _dedupe_x_status_urls([str(x) for x in result if x])
+
+
+def _parse_x_time_iso(raw: str) -> Optional[datetime]:
+    token = str(raw or "").strip()
+    if not token:
+        return None
+    normalized = token.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+def _normalize_x_live_candidate_rows(
+    raw_rows: Any,
+    *,
+    keyword: str,
+    require_keyword: bool,
+    discovery_source: str,
+    allow_search_inferred_match: bool = False,
+) -> list[dict[str, str]]:
+    if not isinstance(raw_rows, list):
+        return []
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw_rows:
+        if not isinstance(item, dict):
+            continue
+        raw_url = _normalize_x_status_url(str(item.get("url", "") or "")) or ""
+        if not raw_url or raw_url in seen:
+            continue
+        published_at = str(item.get("published_at", "") or "").strip()
+        tweet_text = re.sub(r"\s+", " ", str(item.get("tweet_text", "") or "").strip())
+        if not published_at:
+            continue
+        match_mode = "tweet_text"
+        matched_keyword = str(keyword or "").strip()
+        if tweet_text:
+            if require_keyword and not _match_keyword_in_text(keyword, tweet_text):
+                continue
+            if not require_keyword and not _match_keyword_in_text(keyword, tweet_text):
+                match_mode = "search_result_inferred"
+        else:
+            if require_keyword and not allow_search_inferred_match:
+                continue
+            match_mode = "search_result_inferred"
+        seen.add(raw_url)
+        deduped.append(
+            {
+                "url": raw_url,
+                "published_at": published_at,
+                "tweet_text": tweet_text,
+                "matched_keyword": matched_keyword,
+                "match_mode": match_mode,
+                "discovery_source": str(discovery_source or "").strip() or "keyword_live_search",
+                "display_time": str(item.get("display_time", "") or "").strip(),
+            }
+        )
+    return deduped
+
+
+def _take_latest_x_candidates(rows: Iterable[dict[str, str]], limit: int) -> list[dict[str, str]]:
+    ordered = [row for row in rows if isinstance(row, dict)]
+    fallback_dt = datetime.min.replace(tzinfo=timezone.utc)
+    ordered.sort(
+        key=lambda row: _parse_x_time_iso(str(row.get("published_at", "") or "")) or fallback_dt,
+        reverse=True,
+    )
+    return ordered[: max(1, int(limit))]
+
+
+def _log_x_candidate_event(
+    *,
+    reason: str,
+    row: Mapping[str, Any],
+    keyword: str,
+    matched: bool,
+) -> None:
+    preview = _single_line_preview(str(row.get("tweet_text", "") or ""), limit=120) or "-"
+    url = str(row.get("url", "") or "").strip() or "-"
+    published_at = str(row.get("published_at", "") or "").strip() or "-"
+    display_time = str(row.get("display_time", "") or "").strip() or "-"
+    match_mode = str(row.get("match_mode", "") or "").strip() or "tweet_text"
+    if matched:
+        _log(
+            f"[Downloader] X candidate matched: keyword={keyword or '-'}, "
+            f"match_mode={match_mode}, datetime={published_at}, display_time={display_time}, text={preview}, url={url}"
+        )
+        return
+    _log(
+        f"[Downloader] X candidate skipped: reason={reason}, "
+        f"match_mode={match_mode}, datetime={published_at}, display_time={display_time}, text={preview}, url={url}"
+    )
+
+
+
+def _extract_raw_x_live_candidate_rows(
+    page: ChromiumPage,
+    include_images: bool = False,
+) -> list[dict[str, str]]:
+    js = r"""
+    const includeImages = Boolean(arguments[0]);
+    const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const rows = [];
+    const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"], article'));
+    for (const article of articles) {
+      const txt = String(article.innerText || '').toLowerCase();
+      const promoted = txt.includes('promoted');
+      if (promoted) continue;
+      const hasVideo = !!article.querySelector(
+        '[data-testid="videoPlayer"], video, div[aria-label*="video" i], div[data-testid*="video" i]'
+      );
+      const hasImage = includeImages && !!article.querySelector(
+        '[data-testid="tweetPhoto"] img, a[href*="/photo/"] img, img[src*="pbs.twimg.com/media"]'
+      );
+      if (!(hasVideo || hasImage)) continue;
+      const timeNode = article.querySelector('time[datetime]');
+      const dt = String(timeNode?.getAttribute('datetime') || '').trim();
+      const timeText = norm(timeNode ? (timeNode.innerText || timeNode.textContent || '') : '');
+      const tweetTextNode = article.querySelector('div[data-testid="tweetText"]');
+      const tweetText = norm(tweetTextNode ? (tweetTextNode.innerText || tweetTextNode.textContent || '') : '');
+      let statusUrl = '';
+      const timeAnchor = timeNode && timeNode.closest ? timeNode.closest('a[href*="/status/"]') : null;
+      if (timeAnchor && timeAnchor.href) {
+        statusUrl = String(timeAnchor.href || '').trim();
+      }
+      if (!statusUrl) {
+        const firstAnchor = article.querySelector('a[href*="/status/"]');
+        if (firstAnchor && firstAnchor.href) {
+          statusUrl = String(firstAnchor.href || '').trim();
+        }
+      }
+      if (statusUrl) {
+        rows.push({
+          url: statusUrl,
+          published_at: dt,
+          display_time: timeText,
+          tweet_text: tweetText,
+        });
+      }
+    }
+    return rows;
+    """
+    try:
+        result = page.run_js(js, include_images)
+    except Exception:
+        return []
+    return result if isinstance(result, list) else []
+
+
+def _discover_media_candidates_in_x_page(
+    page: ChromiumPage,
+    keyword: str,
+    require_keyword: bool,
+    include_images: bool = False,
+    allow_search_inferred_match: bool = False,
+) -> list[dict[str, str]]:
+    result = _extract_raw_x_live_candidate_rows(page, include_images=include_images)
+    return _normalize_x_live_candidate_rows(
+        result,
+        keyword=keyword,
+        require_keyword=require_keyword,
+        discovery_source="keyword_live_search",
+        allow_search_inferred_match=(allow_search_inferred_match or not require_keyword),
+    )
+
+
+def discover_x_media_candidates(
+    keyword: str,
+    url_limit: int,
+    scroll_rounds: int,
+    scroll_wait_seconds: float,
+    debug_port: int,
+    auto_open_chrome: bool,
+    chrome_path: Optional[str],
+    chrome_user_data_dir: str,
+    include_images: bool = False,
+    allow_search_inferred_match: bool = False,
+    require_text_keyword_match: bool = False,
+) -> list[dict[str, str]]:
+    search_filter = "filter:media" if include_images else "filter:videos"
+    search_query = quote_plus(f"{keyword} {search_filter}")
+    search_url = f"https://x.com/search?q={search_query}&src=typed_query&f=live"
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=search_url,
+    )
+    work_page = _prepare_upload_tab(page)
+    try:
+        collected: list[dict[str, str]] = []
+        seen: set[str] = set()
+        skip_seen: set[str] = set()
+        max_rounds = max(2, int(scroll_rounds))
+        wait_seconds = max(0.3, float(scroll_wait_seconds))
+        limit = max(1, int(url_limit))
+        _log(f"[Downloader] X search page: {search_url}")
+        _run_page_action(work_page, "open x search", lambda: work_page.get(search_url))
+        time.sleep(1.2)
+        _check_x_login_ready(work_page)
+
+        for _ in range(max_rounds):
+            raw_rows = _extract_raw_x_live_candidate_rows(work_page, include_images=include_images)
+            found = _normalize_x_live_candidate_rows(
+                raw_rows,
+                keyword=keyword,
+                require_keyword=require_text_keyword_match,
+                discovery_source="keyword_live_search",
+                allow_search_inferred_match=(allow_search_inferred_match or not require_text_keyword_match),
+            )
+            if found:
+                for row in found:
+                    url = str(row.get("url", "") or "").strip()
+                    if not url or url in seen:
+                        continue
+                    seen.add(url)
+                    collected.append(row)
+                    _log_x_candidate_event(reason="", row=row, keyword=keyword, matched=True)
+                _log(f"[Downloader] X search discovered: {len(collected)} candidates")
+                if len(collected) >= limit:
+                    return _take_latest_x_candidates(collected, limit)
+            if isinstance(raw_rows, list):
+                for item in raw_rows:
+                    if not isinstance(item, dict):
+                        continue
+                    normalized_url = _normalize_x_status_url(str(item.get("url", "") or "")) or ""
+                    if not normalized_url or normalized_url in seen:
+                        continue
+                    row = {
+                        "url": normalized_url,
+                        "published_at": str(item.get("published_at", "") or "").strip(),
+                        "display_time": str(item.get("display_time", "") or "").strip(),
+                        "tweet_text": re.sub(r"\s+", " ", str(item.get("tweet_text", "") or "").strip()),
+                    }
+                    if not row["published_at"]:
+                        skip_key = f"{normalized_url}|missing_datetime"
+                        if skip_key not in skip_seen:
+                            skip_seen.add(skip_key)
+                            _log_x_candidate_event(reason="missing datetime", row=row, keyword=keyword, matched=False)
+                        continue
+                    if not row["tweet_text"]:
+                        if allow_search_inferred_match or not require_text_keyword_match:
+                            row["matched_keyword"] = str(keyword or "").strip()
+                            row["match_mode"] = "search_result_inferred"
+                            seen.add(normalized_url)
+                            collected.append(row)
+                            _log_x_candidate_event(reason="", row=row, keyword=keyword, matched=True)
+                            _log(f"[Downloader] X search discovered: {len(collected)} candidates")
+                            if len(collected) >= limit:
+                                return _take_latest_x_candidates(collected, limit)
+                            continue
+                        skip_key = f"{normalized_url}|missing_tweet_text"
+                        if skip_key not in skip_seen:
+                            skip_seen.add(skip_key)
+                            _log_x_candidate_event(reason="missing tweetText", row=row, keyword=keyword, matched=False)
+                        continue
+                    matched_text_keyword = _match_keyword_in_text(keyword, row["tweet_text"])
+                    if require_text_keyword_match and not matched_text_keyword:
+                        skip_key = f"{normalized_url}|keyword_miss"
+                        if skip_key not in skip_seen:
+                            skip_seen.add(skip_key)
+                            _log_x_candidate_event(reason="keyword mismatch", row=row, keyword=keyword, matched=False)
+                        continue
+                    row["matched_keyword"] = str(keyword or "").strip()
+                    row["match_mode"] = "tweet_text" if matched_text_keyword else "search_result_inferred"
+                    seen.add(normalized_url)
+                    collected.append(row)
+                    _log_x_candidate_event(reason="", row=row, keyword=keyword, matched=True)
+                    _log(f"[Downloader] X search discovered: {len(collected)} candidates")
+                    if len(collected) >= limit:
+                        return _take_latest_x_candidates(collected, limit)
+            try:
+                work_page.run_js("window.scrollBy(0, Math.max(window.innerHeight, 1100));")
+            except Exception:
+                pass
+            time.sleep(wait_seconds)
+
+        return _take_latest_x_candidates(collected, limit)
+    finally:
+        _close_work_tab(work_page, page, reason="x-discovery")
+
+
+def discover_latest_x_url_within_minutes(
+    keyword: str,
+    max_age_minutes: float,
+    debug_port: int,
+    auto_open_chrome: bool,
+    chrome_path: Optional[str],
+    chrome_user_data_dir: str,
+    include_images: bool = False,
+    url_limit: int = 20,
+    scroll_rounds: int = X_DISCOVERY_SCROLL_ROUNDS,
+    scroll_wait_seconds: float = X_DISCOVERY_SCROLL_WAIT_SECONDS,
+    allow_search_inferred_match: bool = False,
+) -> Optional[dict[str, str]]:
+    candidates = discover_x_media_candidates(
+        keyword=keyword,
+        url_limit=max(3, int(url_limit)),
+        scroll_rounds=scroll_rounds,
+        scroll_wait_seconds=scroll_wait_seconds,
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        include_images=include_images,
+        allow_search_inferred_match=allow_search_inferred_match,
+    )
+    if not candidates:
+        return None
+    max_age_seconds = max(1, int(round(float(max_age_minutes) * 60)))
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+    newest: Optional[dict[str, str]] = None
+    newest_dt: Optional[datetime] = None
+    for row in candidates:
+        published_at = _parse_x_time_iso(str(row.get("published_at", "") or ""))
+        if not published_at:
+            _log_x_candidate_event(reason="missing datetime", row=row, keyword=keyword, matched=False)
+            continue
+        if published_at < cutoff:
+            _log_x_candidate_event(
+                reason=f"outside {max_age_seconds}s window",
+                row=row,
+                keyword=keyword,
+                matched=False,
+            )
+            continue
+        if newest_dt is None or published_at > newest_dt:
+            newest = row
+            newest_dt = published_at
+    if newest is None:
+        return None
+    enriched = dict(newest)
+    enriched["published_at"] = newest_dt.isoformat() if newest_dt else str(newest.get("published_at", "") or "")
+    return enriched
+
+
+def discover_recent_x_urls_within_minutes(
+    keyword: str,
+    max_age_minutes: float,
+    debug_port: int,
+    auto_open_chrome: bool,
+    chrome_path: Optional[str],
+    chrome_user_data_dir: str,
+    include_images: bool = False,
+    url_limit: int = 20,
+    scroll_rounds: int = X_DISCOVERY_SCROLL_ROUNDS,
+    scroll_wait_seconds: float = X_DISCOVERY_SCROLL_WAIT_SECONDS,
+    allow_search_inferred_match: bool = False,
+) -> list[dict[str, str]]:
+    candidates = discover_x_media_candidates(
+        keyword=keyword,
+        url_limit=max(3, int(url_limit)),
+        scroll_rounds=scroll_rounds,
+        scroll_wait_seconds=scroll_wait_seconds,
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        include_images=include_images,
+        allow_search_inferred_match=allow_search_inferred_match,
+    )
+    max_age_seconds = max(1, int(round(float(max_age_minutes) * 60)))
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+    recent: list[tuple[datetime, dict[str, str]]] = []
+    for row in candidates:
+        published_at = _parse_x_time_iso(str(row.get("published_at", "") or ""))
+        if not published_at:
+            _log_x_candidate_event(reason="missing datetime", row=row, keyword=keyword, matched=False)
+            continue
+        if published_at < cutoff:
+            _log_x_candidate_event(
+                reason=f"outside {max_age_seconds}s window",
+                row=row,
+                keyword=keyword,
+                matched=False,
+            )
+            continue
+        enriched = dict(row)
+        enriched["published_at"] = published_at.isoformat()
+        recent.append((published_at, enriched))
+    recent.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in recent]
+
+
+def discover_x_video_urls(
+    keyword: str,
+    url_limit: int,
+    scroll_rounds: int,
+    scroll_wait_seconds: float,
+    debug_port: int,
+    auto_open_chrome: bool,
+    chrome_path: Optional[str],
+    chrome_user_data_dir: str,
+    include_images: bool = False,
+    allow_search_inferred_match: bool = False,
+    require_text_keyword_match: bool = False,
+) -> list[str]:
+    if include_images:
+        _log("[Downloader] Discovering X media posts by keyword search only (latest).")
+    else:
+        _log("[Downloader] Discovering X video posts by keyword search only (latest).")
+    search_filter = "filter:media" if include_images else "filter:videos"
+    search_query = quote_plus(f"{keyword} {search_filter}")
+    search_url = f"https://x.com/search?q={search_query}&src=typed_query&f=live"
+    return [
+        str(item.get("url", "") or "").strip()
+        for item in discover_x_media_candidates(
+            keyword=keyword,
+            url_limit=url_limit,
+            scroll_rounds=scroll_rounds,
+            scroll_wait_seconds=scroll_wait_seconds,
+            debug_port=debug_port,
+            auto_open_chrome=auto_open_chrome,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=chrome_user_data_dir,
+            include_images=include_images,
+            allow_search_inferred_match=allow_search_inferred_match,
+            require_text_keyword_match=require_text_keyword_match,
+        )
+        if str(item.get("url", "") or "").strip()
+    ]
+
+
+def _resolve_x_discovery_seed_accounts() -> list[str]:
+    raw = str(os.getenv("CYBERCAR_X_DISCOVERY_SEED_ACCOUNTS", "") or "").strip()
+    source = raw if raw else ",".join(DEFAULT_X_DISCOVERY_SEED_ACCOUNTS)
+    accounts: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,\s]+", source):
+        token = str(part or "").strip().lstrip("@").lower()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        accounts.append(token)
+    return accounts
+
+
+def _extract_x_graphql_query_ids(main_js_text: str) -> dict[str, str]:
+    query_ids: dict[str, str] = {}
+    for qid, op_name in re.findall(r'queryId:"([A-Za-z0-9_-]+)",operationName:"([A-Za-z0-9_]+)"', main_js_text):
+        query_ids[op_name] = qid
+    return query_ids
+
+
+def _build_x_cookie_context(
+    chrome_user_data_dir: str,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> Optional[tuple[requests.Session, str]]:
+    if browser_cookie3 is None:
+        _log("[Downloader] X API seed discovery skipped: browser_cookie3 is not available.")
+        return None
+
+    profile_dir = Path(chrome_user_data_dir).expanduser()
+    cookie_file = profile_dir / "Default" / "Network" / "Cookies"
+    key_file = profile_dir / "Local State"
+    if not cookie_file.exists() or not key_file.exists():
+        _log(
+            "[Downloader] X API seed discovery skipped: X Chrome profile cookie files not found "
+            f"(cookie={cookie_file}, key={key_file})."
+        )
+        return None
+
+    try:
+        cookie_jar = browser_cookie3.chrome(
+            cookie_file=str(cookie_file),
+            key_file=str(key_file),
+            domain_name="x.com",
+        )
+    except Exception as exc:
+        _log(f"[Downloader] X API seed discovery skipped: failed to decrypt X cookies ({exc}).")
+        return None
+
+    ct0 = ""
+    auth_token = ""
+    for cookie in cookie_jar:
+        if cookie.name == "ct0" and cookie.value:
+            ct0 = cookie.value
+        elif cookie.name == "auth_token" and cookie.value:
+            auth_token = cookie.value
+    if not ct0 or not auth_token:
+        _log(
+            "[Downloader] X API seed discovery skipped: missing auth_token/ct0 cookie in Chrome profile. "
+            "Please login X once in that profile."
+        )
+        return None
+
+    session = requests.Session()
+    _configure_requests_session_proxy(session, proxy=proxy, use_system_proxy=use_system_proxy)
+    session.cookies.update(cookie_jar)
+    return session, ct0
+
+
+def _export_x_cookies_for_ytdlp(
+    chrome_user_data_dir: str,
+) -> Optional[Path]:
+    if browser_cookie3 is None:
+        _log("[Downloader] yt-dlp cookie export skipped: browser_cookie3 is not available.")
+        return None
+
+    profile_dir = Path(chrome_user_data_dir).expanduser()
+    cookie_file = profile_dir / "Default" / "Network" / "Cookies"
+    key_file = profile_dir / "Local State"
+    if not cookie_file.exists() or not key_file.exists():
+        _log(
+            "[Downloader] yt-dlp cookie export skipped: Chrome cookie files not found "
+            f"(cookie={cookie_file}, key={key_file})."
+        )
+        return None
+
+    try:
+        cookie_jar = browser_cookie3.chrome(
+            cookie_file=str(cookie_file),
+            key_file=str(key_file),
+            domain_name="x.com",
+        )
+    except Exception as exc:
+        _log(f"[Downloader] yt-dlp cookie export skipped: failed to decrypt X cookies ({exc}).")
+        return None
+
+    cookies = [
+        cookie
+        for cookie in cookie_jar
+        if str(getattr(cookie, "value", "") or "").strip()
+        and str(getattr(cookie, "domain", "") or "").strip()
+        and "x.com" in str(getattr(cookie, "domain", "") or "").lower()
+    ]
+    if not cookies:
+        _log("[Downloader] yt-dlp cookie export skipped: no usable X cookies found.")
+        return None
+
+    tmp = tempfile.NamedTemporaryFile(prefix="cybercar-x-cookies-", suffix=".txt", delete=False, mode="w", encoding="utf-8")
+    try:
+        tmp.write("# Netscape HTTP Cookie File\n")
+        for cookie in cookies:
+            domain = str(cookie.domain or "").strip()
+            include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
+            path = str(cookie.path or "/").strip() or "/"
+            secure = "TRUE" if bool(getattr(cookie, "secure", False)) else "FALSE"
+            expires = str(int(getattr(cookie, "expires", 0) or 0))
+            name = str(cookie.name or "").strip()
+            value = str(cookie.value or "")
+            tmp.write("\t".join([domain, include_subdomains, path, secure, expires, name, value]) + "\n")
+    finally:
+        tmp.close()
+    _log(f"[Downloader] Exported X cookies for yt-dlp: {tmp.name}")
+    return Path(tmp.name)
+
+
+def _build_x_graphql_headers(session: requests.Session, ct0: str) -> Optional[tuple[dict[str, str], dict[str, str]]]:
+    ua = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+    )
+    try:
+        search_page = session.get(
+            "https://x.com/search?q=Cybertruck&src=typed_query&f=live",
+            headers={"User-Agent": ua},
+            timeout=25,
+        )
+    except Exception as exc:
+        _log(f"[Downloader] X API seed discovery skipped: failed to open X page ({exc}).")
+        return None
+
+    html = search_page.text or ""
+    m_main = re.search(
+        r'https://abs\.twimg\.com/responsive-web/client-web/main\.[A-Za-z0-9]+\.js',
+        html,
+        flags=re.IGNORECASE,
+    )
+    if not m_main:
+        _log("[Downloader] X API seed discovery skipped: main.js URL not found in X page.")
+        return None
+    main_js_url = m_main.group(0)
+
+    try:
+        main_js = session.get(main_js_url, headers={"User-Agent": ua}, timeout=25).text
+    except Exception as exc:
+        _log(f"[Downloader] X API seed discovery skipped: failed to fetch main.js ({exc}).")
+        return None
+
+    bearer_match = re.search(r'(AAAAAA[A-Za-z0-9%]{60,})', main_js)
+    if not bearer_match:
+        _log("[Downloader] X API seed discovery skipped: bearer token not found in main.js.")
+        return None
+    bearer_token = unquote(bearer_match.group(1))
+
+    query_ids = _extract_x_graphql_query_ids(main_js)
+    required_ops = ("UserByScreenName", "UserTweets")
+    missing = [op for op in required_ops if not query_ids.get(op)]
+    if missing:
+        _log(
+            "[Downloader] X API seed discovery skipped: required GraphQL ops missing "
+            f"({','.join(missing)})."
+        )
+        return None
+
+    headers = {
+        "User-Agent": ua,
+        "authorization": f"Bearer {bearer_token}",
+        "x-csrf-token": ct0,
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-active-user": "yes",
+        "x-twitter-client-language": "en",
+        "origin": "https://x.com",
+        "referer": "https://x.com/",
+        "accept": "*/*",
+    }
+    return headers, query_ids
+
+
+def _x_graphql_get(
+    session: requests.Session,
+    headers: dict[str, str],
+    query_id: str,
+    operation_name: str,
+    variables: dict[str, Any],
+    features: Optional[dict[str, Any]] = None,
+) -> Optional[requests.Response]:
+    params = {
+        "variables": json.dumps(variables, ensure_ascii=False, separators=(",", ":")),
+        "features": json.dumps(features or {}, ensure_ascii=False, separators=(",", ":")),
+    }
+    url = f"https://x.com/i/api/graphql/{query_id}/{operation_name}"
+    try:
+        return session.get(url, headers=headers, params=params, timeout=30)
+    except Exception:
+        return None
+
+
+def _extract_x_tweets_from_graphql_payload(payload: Any, fallback_screen_name: str = "") -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("__typename") == "Tweet":
+                rest_id = str(node.get("rest_id") or "")
+                legacy = node.get("legacy") if isinstance(node.get("legacy"), dict) else {}
+                text = str(legacy.get("full_text") or legacy.get("text") or "")
+                core = node.get("core") if isinstance(node.get("core"), dict) else {}
+                screen_name = ""
+                try:
+                    screen_name = str(
+                        core.get("user_results", {})
+                        .get("result", {})
+                        .get("legacy", {})
+                        .get("screen_name", "")
+                    )
+                except Exception:
+                    screen_name = ""
+                if not screen_name:
+                    screen_name = fallback_screen_name
+
+                media_nodes = []
+                ext = legacy.get("extended_entities")
+                if isinstance(ext, dict):
+                    media_nodes = ext.get("media") if isinstance(ext.get("media"), list) else []
+                media_types: list[str] = []
+                for media in media_nodes:
+                    if not isinstance(media, dict):
+                        continue
+                    media_type = str(media.get("type") or "").strip().lower()
+                    if media_type:
+                        media_types.append(media_type)
+
+                items.append(
+                    {
+                        "rest_id": rest_id,
+                        "screen_name": screen_name,
+                        "text": text,
+                        "media_types": media_types,
+                    }
+                )
+            for value in node.values():
+                _walk(value)
+            return
+
+        if isinstance(node, list):
+            for value in node:
+                _walk(value)
+
+    _walk(payload)
+    return items
+
+
+def _keyword_tokens(keyword: str) -> list[str]:
+    cleaned = re.sub(r"filter:(videos|media)", " ", str(keyword or ""), flags=re.IGNORECASE)
+    cleaned = re.sub(r"[\"']", " ", cleaned)
+    tokens = [token.strip().lower() for token in re.split(r"\s+", cleaned) if token.strip()]
+    return tokens
+
+
+def _match_keyword_in_text(keyword: str, text: str) -> bool:
+    tokens = _keyword_tokens(keyword)
+    if not tokens:
+        return True
+    normalized_text = str(text or "").lower()
+    return all(token in normalized_text for token in tokens)
+
+
+def discover_x_urls_via_seed_accounts(
+    keyword: str,
+    url_limit: int,
+    chrome_user_data_dir: str,
+    include_images: bool = False,
+    proxy: Optional[str] = None,
+    use_system_proxy: bool = False,
+) -> list[str]:
+    accounts = _resolve_x_discovery_seed_accounts()
+    if not accounts:
+        return []
+
+    cookie_ctx = _build_x_cookie_context(
+        chrome_user_data_dir,
+        proxy=proxy,
+        use_system_proxy=use_system_proxy,
+    )
+    if not cookie_ctx:
+        return []
+    session, ct0 = cookie_ctx
+
+    gql_ctx = _build_x_graphql_headers(session, ct0)
+    if not gql_ctx:
+        return []
+    headers, query_ids = gql_ctx
+
+    user_by_screen_name_qid = str(query_ids.get("UserByScreenName") or "").strip()
+    user_tweets_qid = str(query_ids.get("UserTweets") or "").strip()
+    user_media_qid = str(query_ids.get("UserMedia") or "").strip()
+    if not user_by_screen_name_qid or not user_tweets_qid:
+        return []
+
+    limit = max(1, int(url_limit))
+    collected: list[str] = []
+    for account in accounts:
+        if len(collected) >= limit:
+            break
+        user_resp = _x_graphql_get(
+            session=session,
+            headers=headers,
+            query_id=user_by_screen_name_qid,
+            operation_name="UserByScreenName",
+            variables={"screen_name": account, "withSafetyModeUserFields": True},
+            features={},
+        )
+        if not user_resp or user_resp.status_code != 200:
+            continue
+        try:
+            user_id = str(
+                user_resp.json()
+                .get("data", {})
+                .get("user", {})
+                .get("result", {})
+                .get("rest_id", "")
+            ).strip()
+        except Exception:
+            user_id = ""
+        if not user_id:
+            continue
+
+        for op_name, qid in (("UserMedia", user_media_qid), ("UserTweets", user_tweets_qid)):
+            if not qid:
+                continue
+            timeline_resp = _x_graphql_get(
+                session=session,
+                headers=headers,
+                query_id=qid,
+                operation_name=op_name,
+                variables={
+                    "userId": user_id,
+                    "count": 40,
+                    "includePromotedContent": False,
+                    "withQuickPromoteEligibilityTweetFields": True,
+                    "withVoice": True,
+                    "withV2Timeline": True,
+                },
+                features={},
+            )
+            if not timeline_resp or timeline_resp.status_code != 200:
+                continue
+            try:
+                payload = timeline_resp.json()
+            except Exception:
+                continue
+            for tweet in _extract_x_tweets_from_graphql_payload(payload, fallback_screen_name=account):
+                if len(collected) >= limit:
+                    break
+                status_id = str(tweet.get("rest_id") or "").strip()
+                screen_name = str(tweet.get("screen_name") or "").strip()
+                if not status_id or not screen_name:
+                    continue
+                media_types = {str(x).strip().lower() for x in tweet.get("media_types", []) if str(x).strip()}
+                if include_images:
+                    if not media_types.intersection({"video", "animated_gif", "photo"}):
+                        continue
+                else:
+                    if not media_types.intersection({"video", "animated_gif"}):
+                        continue
+                if not _match_keyword_in_text(keyword, str(tweet.get("text") or "")):
+                    continue
+
+                url = _normalize_x_status_url(f"https://x.com/{screen_name}/status/{status_id}") or ""
+                if not url or url in collected:
+                    continue
+                collected.append(url)
+
+    if collected:
+        _log(
+            "[Downloader] X API seed discovery succeeded: "
+            f"accounts={len(accounts)}, urls={len(collected)}"
+        )
+    else:
+        _log("[Downloader] X API seed discovery yielded no url.")
+    return collected[:limit]
+
+
+def _load_urls_file(path: str) -> list[str]:
+    file_path = Path(path)
+    if not file_path.exists():
+        raise RuntimeError(f"tweet-url 文件不存在: {file_path}")
+
+    urls: list[str] = []
+    for line in file_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        urls.append(line)
+    return urls
+
+
+def _sidecar_info_path(video_path: Path) -> Path:
+    return video_path.with_suffix(".info.json")
+
+
+def _processed_caption_path(processed_video_path: Path) -> Path:
+    return processed_video_path.with_suffix(".caption.txt")
+
+
+def _resolve_review_state_path(workspace: Workspace, review_state_file: str = "") -> Path:
+    custom = str(review_state_file or "").strip()
+    if custom:
+        return Path(custom).expanduser()
+    return workspace.root / DEFAULT_REVIEW_STATE_FILE
+
+
+def _make_review_state_key(processed_name: str, media_kind: str = "video") -> str:
+    clean_processed_name = str(processed_name or "").strip()
+    if not clean_processed_name:
+        return ""
+    return f"{_normalize_media_kind(media_kind)}|{clean_processed_name}"
+
+
+def _parse_review_state_key(raw_key: str) -> tuple[str, str]:
+    token = str(raw_key or "").strip()
+    if not token:
+        return "", ""
+    media_kind, sep, processed_name = token.partition("|")
+    if sep and str(media_kind or "").strip().lower() in {"video", "image"}:
+        return _normalize_media_kind(media_kind), str(processed_name or "").strip()
+    return "", token
+
+
+def _review_state_lookup_keys(processed_name: str, media_kind: str = "") -> list[str]:
+    clean_processed_name = str(processed_name or "").strip()
+    if not clean_processed_name:
+        return []
+    keys: list[str] = []
+    normalized_kind = str(media_kind or "").strip().lower()
+    if normalized_kind in {"video", "image"}:
+        keys.append(_make_review_state_key(clean_processed_name, normalized_kind))
+        if normalized_kind == "video":
+            keys.append(clean_processed_name)
+    else:
+        keys.append(clean_processed_name)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
+def _load_review_state_entries(state_path: Path) -> dict[str, dict[str, Any]]:
+    if not state_path.exists():
+        return {}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    items = payload.get("items", payload)
+    if not isinstance(items, dict):
+        return {}
+
+    result: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_entry in items.items():
+        raw_key = str(raw_name or "").strip()
+        media_kind_from_key, processed_name = _parse_review_state_key(raw_key)
+        if not processed_name:
+            continue
+        if isinstance(raw_entry, str):
+            result[raw_key] = {
+                "status": raw_entry.strip().lower(),
+                "note": "",
+                "updated_at": "",
+                "media_kind": media_kind_from_key,
+                "processed_name": processed_name,
+                "review_key": raw_key,
+            }
+            continue
+        if isinstance(raw_entry, dict):
+            media_kind = _normalize_media_kind(str(raw_entry.get("media_kind", "") or media_kind_from_key or "video"))
+            result[raw_key] = {
+                "status": str(raw_entry.get("status", "") or "").strip().lower(),
+                "note": str(raw_entry.get("note", "") or ""),
+                "updated_at": str(raw_entry.get("updated_at", "") or ""),
+                "media_kind": media_kind,
+                "processed_name": str(raw_entry.get("processed_name", "") or processed_name).strip() or processed_name,
+                "review_key": raw_key,
+            }
+    return result
+
+
+def _get_review_state_entry(
+    entries: dict[str, dict[str, Any]],
+    processed_name: str,
+    media_kind: str = "",
+) -> dict[str, Any]:
+    for key in _review_state_lookup_keys(processed_name, media_kind=media_kind):
+        entry = entries.get(key, {})
+        if isinstance(entry, dict) and entry:
+            return entry
+    return {}
+
+
+def _filter_targets_by_review_approval(
+    targets: list[Path],
+    workspace: Workspace,
+    review_state_file: str = "",
+) -> list[Path]:
+    state_path = _resolve_review_state_path(workspace, review_state_file=review_state_file)
+    entries = _load_review_state_entries(state_path)
+    if not entries:
+        _log(f"[Review] No review state found or empty: {state_path}")
+        return []
+
+    approved: list[Path] = []
+    rejected_count = 0
+    unknown_count = 0
+    for target in targets:
+        entry = _get_review_state_entry(entries, target.name, media_kind=_media_kind_from_path(target))
+        status = str(entry.get("status", "") or "").strip().lower()
+        if status == "approved":
+            approved.append(target)
+        elif status in {"rejected", "blocked"}:
+            rejected_count += 1
+        else:
+            unknown_count += 1
+
+    _log(
+        "[Review] Approval filter: "
+        f"approved={len(approved)}, rejected={rejected_count}, unreviewed={unknown_count}, "
+        f"state_file={state_path}"
+    )
+    return approved
+
+
+def _content_fingerprint_index_path(workspace: Workspace, media_kind: str = "") -> Path:
+    normalized_kind = _normalize_media_kind(media_kind or "video")
+    if normalized_kind == "image":
+        return workspace.root / "content_fingerprint_index_images.json"
+    return workspace.root / "content_fingerprint_index.json"
+
+
+def _normalize_text(text: str, limit: int = 180) -> str:
+    cleaned = re.sub(r"https?://\S+", "", text or "", flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
+    if not cleaned:
+        return ""
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
+def _normalize_metadata_text(text: str, limit: int = 420) -> str:
+    cleaned = (text or "").strip().lower()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"https?://\S+", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.replace("&amp;", " and ")
+    cleaned = cleaned.replace("_", " ")
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].strip()
+
+
+def _split_source_name_tokens(file_name: str) -> tuple[str, str, str]:
+    stem = Path(file_name).stem
+    if stem.startswith("DRAFT_"):
+        stem = stem[len("DRAFT_") :]
+    parts = stem.split("__", 2)
+    if len(parts) == 3:
+        return parts[0].strip(), parts[1].strip(), parts[2].strip()
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip(), ""
+    if len(parts) == 1:
+        return parts[0].strip(), "", ""
+    return "", "", ""
+
+
+def _extract_status_id_from_url(url: str) -> str:
+    m = re.search(r"/status/(\d+)", url or "", re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def _safe_duration_seconds(raw: Any) -> int:
+    try:
+        seconds = float(raw)
+    except Exception:
+        return 0
+    if seconds <= 0:
+        return 0
+    return int(round(seconds))
+
+
+def _is_publishable_video_duration(seconds: float) -> bool:
+    return MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS <= seconds <= MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS
+
+
+def _probe_media_duration_seconds(media_path: Path) -> float:
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-i",
+        str(media_path),
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except Exception as exc:
+        _log(f"[Processor] Failed to probe media duration ({media_path.name}): {exc}")
+        return 0.0
+
+    probe_output = "\n".join(
+        part for part in ((result.stderr or "").strip(), (result.stdout or "").strip()) if part
+    )
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", probe_output)
+    if not match:
+        return 0.0
+
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    seconds = float(match.group(3))
+    duration = hours * 3600 + minutes * 60 + seconds
+    if duration <= 0:
+        return 0.0
+    return duration
+
+
+def _build_video_metadata(file_name: str, info: Optional[dict[str, Any]] = None) -> dict[str, str]:
+    media_id, uploader_from_name, title_from_name = _split_source_name_tokens(file_name)
+    info_payload = info if isinstance(info, dict) else {}
+    info_keys = ("title", "fulltitle", "description", "uploader", "uploader_id", "webpage_url", "original_url")
+    has_info_values = any(str(info_payload.get(k, "") or "").strip() for k in info_keys)
+    metadata_source = "info" if has_info_values else "filename"
+
+    raw_title = str(info_payload.get("title", "") or "").strip()
+    raw_fulltitle = str(info_payload.get("fulltitle", "") or "").strip()
+    raw_description = str(info_payload.get("description", "") or "").strip()
+    raw_uploader = str(info_payload.get("uploader_id", "") or info_payload.get("uploader", "") or "").strip()
+
+    title = raw_fulltitle or raw_title or title_from_name
+    description = raw_description
+    uploader = raw_uploader or uploader_from_name
+
+    status_url = _normalize_x_status_url(
+        str(info_payload.get("webpage_url", "") or info_payload.get("original_url", "") or "")
+    ) or ""
+    status_id = _extract_status_id_from_url(status_url)
+    duration_seconds = _safe_duration_seconds(info_payload.get("duration"))
+
+    title_norm = _normalize_metadata_text(title, limit=240)
+    desc_norm = _normalize_metadata_text(description, limit=360)
+    uploader_norm = _normalize_metadata_text(uploader, limit=80)
+    search_text = _normalize_metadata_text(" ".join(x for x in (title, description, uploader) if x), limit=960)
+
+    title_signature = hashlib.sha1(title_norm.encode("utf-8")).hexdigest()[:16] if len(title_norm) >= 12 else ""
+    uploader_signature = hashlib.sha1(uploader_norm.encode("utf-8")).hexdigest()[:12] if uploader_norm else ""
+    text_signature = ""
+    if len(title_norm) + len(desc_norm) >= 20:
+        text_signature = hashlib.sha1(
+            f"{uploader_norm}|{title_norm}|{desc_norm}|{duration_seconds}".encode("utf-8")
+        ).hexdigest()[:20]
+
+    return {
+        "media_id": media_id,
+        "status_url": status_url,
+        "status_id": status_id,
+        "title": title,
+        "description": description,
+        "uploader": uploader,
+        "search_text": search_text,
+        "metadata_source": metadata_source,
+        "duration_seconds": str(duration_seconds),
+        "title_signature": title_signature,
+        "uploader_signature": uploader_signature,
+        "text_signature": text_signature,
+    }
+
+
+def _load_info_payload(info_path: Path) -> dict[str, Any]:
+    if not info_path.exists():
+        return {}
+    try:
+        payload = json.loads(info_path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _metadata_duplicate_keys(meta: dict[str, str]) -> list[str]:
+    keys: list[str] = []
+    status_id = str(meta.get("status_id", "") or "").strip()
+    if status_id:
+        keys.append(f"status:{status_id}")
+
+    text_signature = str(meta.get("text_signature", "") or "").strip()
+    if text_signature:
+        keys.append(f"text:{text_signature}")
+
+    uploader_signature = str(meta.get("uploader_signature", "") or "").strip()
+    title_signature = str(meta.get("title_signature", "") or "").strip()
+    if uploader_signature and title_signature:
+        keys.append(f"title:{uploader_signature}:{title_signature}")
+    return keys
+
+
+def _metadata_fields_for_index(meta: dict[str, str]) -> dict[str, str]:
+    return {
+        "status_url": str(meta.get("status_url", "") or ""),
+        "status_id": str(meta.get("status_id", "") or ""),
+        "media_id": str(meta.get("media_id", "") or ""),
+        "metadata_source": str(meta.get("metadata_source", "") or ""),
+        "title_text": _normalize_text(str(meta.get("title", "") or ""), limit=220),
+        "description_text": _normalize_text(str(meta.get("description", "") or ""), limit=280),
+        "uploader_text": _normalize_text(str(meta.get("uploader", "") or ""), limit=120),
+        "title_signature": str(meta.get("title_signature", "") or ""),
+        "uploader_signature": str(meta.get("uploader_signature", "") or ""),
+        "text_signature": str(meta.get("text_signature", "") or ""),
+    }
+
+
+def _metadata_from_index_item(item: dict[str, Any]) -> dict[str, str]:
+    file_name = str(item.get("source_name", "") or item.get("processed_name", "") or "").strip()
+    seed_info: dict[str, Any] = {
+        "title": str(item.get("title_text", "") or ""),
+        "description": str(item.get("description_text", "") or ""),
+        "uploader": str(item.get("uploader_text", "") or ""),
+        "webpage_url": str(item.get("status_url", "") or ""),
+    }
+    base = _build_video_metadata(file_name, info=seed_info)
+    merged = {
+        **base,
+        "metadata_source": str(item.get("metadata_source", "") or base.get("metadata_source", "") or ""),
+        "status_url": str(item.get("status_url", "") or base.get("status_url", "") or ""),
+        "status_id": str(item.get("status_id", "") or base.get("status_id", "") or ""),
+        "media_id": str(item.get("media_id", "") or base.get("media_id", "") or ""),
+        "title_signature": str(item.get("title_signature", "") or base.get("title_signature", "") or ""),
+        "uploader_signature": str(item.get("uploader_signature", "") or base.get("uploader_signature", "") or ""),
+        "text_signature": str(item.get("text_signature", "") or base.get("text_signature", "") or ""),
+    }
+    return merged
+
+
+def _collect_metadata_key_map(items: Iterable[dict[str, Any]], default_name_key: str = "processed_name") -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        meta = _metadata_from_index_item(item)
+        ref_name = str(item.get(default_name_key, "") or item.get("source_name", "") or "").strip() or "unknown"
+        for key in _metadata_duplicate_keys(meta):
+            result.setdefault(key, ref_name)
+    return result
+
+
+def _match_keyword(search_text: str, keywords: list[str]) -> Optional[str]:
+    for raw in keywords:
+        token = _normalize_metadata_text(raw, limit=64)
+        if token and token in search_text:
+            return raw.strip()
+    return None
+
+
+def _should_skip_by_metadata(
+    meta: dict[str, str],
+    exclude_keywords: list[str],
+    require_any_keywords: list[str],
+    enforce_require_any_keywords: bool = True,
+) -> tuple[bool, str]:
+    search_text = str(meta.get("search_text", "") or "")
+    if not search_text:
+        return False, ""
+
+    blocked = _match_keyword(search_text, exclude_keywords)
+    if blocked:
+        return True, f"matched exclude keyword: {blocked}"
+
+    if enforce_require_any_keywords and require_any_keywords and str(meta.get("metadata_source", "") or "") == "info":
+        matched = _match_keyword(search_text, require_any_keywords)
+        if not matched:
+            return True, "missing required topic keywords"
+
+    return False, ""
+
+
+def _translate_to_zh_cn(
+    text: str,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> Optional[str]:
+    if not text:
+        return None
+
+    query = urlencode(
+        {
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "zh-CN",
+            "dt": "t",
+            "q": text,
+        }
+    )
+    req = Request(
+        f"https://translate.googleapis.com/translate_a/single?{query}",
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    opener = _build_network_opener(proxy=proxy, use_system_proxy=use_system_proxy)
+
+    try:
+        with opener.open(req, timeout=12) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        translated = "".join(
+            seg[0] for seg in (payload[0] if isinstance(payload, list) and payload else []) if seg and seg[0]
+        )
+        return _normalize_text(translated, limit=180) if translated else None
+    except Exception as exc:
+        _log(f"[Caption] Translation fallback to original text: {exc}")
+        return None
+
+
+def _translate_to_en(
+    text: str,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> Optional[str]:
+    if not text:
+        return None
+
+    query = urlencode(
+        {
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "en",
+            "dt": "t",
+            "q": text,
+        }
+    )
+    req = Request(
+        f"https://translate.googleapis.com/translate_a/single?{query}",
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    opener = _build_network_opener(proxy=proxy, use_system_proxy=use_system_proxy)
+    try:
+        with opener.open(req, timeout=12) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        translated = "".join(
+            seg[0] for seg in (payload[0] if isinstance(payload, list) and payload else []) if seg and seg[0]
+        )
+        return _normalize_text(translated, limit=180) if translated else None
+    except Exception as exc:
+        _log(f"[Caption] EN translation fallback to original text: {exc}")
+        return None
+
+
+def _spark_config_ready(spark_ai: Optional[dict[str, Any]]) -> bool:
+    return shared_spark_settings_ready(spark_ai)
+
+
+def _extract_json_object(raw: str) -> Optional[dict[str, Any]]:
+    return shared_extract_json_object(raw)
+
+
+def _generate_bilingual_caption_with_spark(base_text: str, spark_ai: Optional[dict[str, Any]]) -> Optional[tuple[str, str]]:
+    client = SharedSparkAIClient(spark_ai, timeout_seconds=SPARK_CHAT_TIMEOUT_SECONDS)
+    if not client.is_ready():
+        return None
+    system_prompt = (
+        "你是短视频文案助手。输出必须是严格 JSON，不要输出任何额外文字。"
+    )
+    user_prompt = (
+        "根据素材信息生成短视频描述，返回 JSON：{\"zh\":\"...\",\"en\":\"...\"}。\n"
+        "要求：\n"
+        "1) zh 为中文，en 为英文；都要贴合素材内容。\n"
+        "2) zh 必须包含完整关键词：特斯拉 Cybertruck。\n"
+        "3) en 必须包含关键词：Tesla Cybertruck。\n"
+        "4) 禁止加 #话题、禁止引号、禁止换行。\n"
+        "5) 每个字段建议 30-80 个字符。\n"
+        f"素材信息：{base_text}"
+    )
+    response = client.chat(user_prompt, system_prompt=system_prompt)
+    payload = _extract_json_object(response or "")
+    if not payload:
+        return None
+    zh = _normalize_text(str(payload.get("zh", "") or ""), limit=180)
+    en = _normalize_text(str(payload.get("en", "") or ""), limit=180)
+    if not zh or not en:
+        return None
+    return zh, en
+
+
+def _build_bilingual_caption(
+    base_text: str,
+    proxy: Optional[str],
+    spark_ai: Optional[dict[str, Any]],
+    *,
+    use_system_proxy: bool = False,
+) -> tuple[str, str]:
+    spark_result = _generate_bilingual_caption_with_spark(base_text, spark_ai)
+    if spark_result:
+        zh, en = spark_result
+    else:
+        zh = _normalize_text(
+            _translate_to_zh_cn(base_text, proxy=proxy, use_system_proxy=use_system_proxy) or base_text,
+            limit=180,
+        )
+        en = _normalize_text(
+            _translate_to_en(base_text, proxy=proxy, use_system_proxy=use_system_proxy) or base_text,
+            limit=180,
+        )
+    if REQUIRED_CAPTION_KEYWORD not in zh:
+        zh = _normalize_text(f"{zh} {REQUIRED_CAPTION_KEYWORD}".strip(), limit=180)
+    if "tesla cybertruck" not in en.lower():
+        en = _normalize_text(f"{en} Tesla Cybertruck".strip(), limit=180)
+    return zh, en
+
+
+def _strip_social_noise(text: str) -> str:
+    t = text or ""
+    t = re.sub(r"https?://\S+", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"@\w+", " ", t)
+    t = re.sub(r"#\w+", " ", t)
+    t = re.sub(r"\s+", " ", t)
+    return t.strip(" -:|")
+
+
+def _split_caption_candidates(text: str) -> list[str]:
+    if not text:
+        return []
+    cleaned = _strip_social_noise(text)
+    if not cleaned:
+        return []
+    segments: list[str] = []
+    for part in re.split(r"[\n\r]+", cleaned):
+        part = part.strip()
+        if not part:
+            continue
+        sub_parts = re.split(r"(?<=[。！？.!?;；])\s*", part)
+        for seg in sub_parts:
+            seg = _normalize_text(seg, limit=200)
+            if len(seg) >= 10:
+                segments.append(seg)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for seg in segments:
+        key = seg.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(seg)
+    return deduped
+
+
+def _score_caption_candidate(text: str) -> float:
+    lower = text.lower()
+    score = min(len(text), 220) / 40.0
+    if "cybertruck" in lower:
+        score += 4.0
+    if "tesla" in lower or "特斯拉" in text:
+        score += 2.0
+    for kw in (
+        "review",
+        "test",
+        "drive",
+        "driving",
+        "delivery",
+        "launch",
+        "snow",
+        "off-road",
+        "offroad",
+        "highway",
+        "charging",
+        "factory",
+        "walkaround",
+        "range",
+        "battery",
+        "performance",
+    ):
+        if kw in lower:
+            score += 0.7
+    if re.search(r"\d{4}", text):
+        score += 0.5
+    if "subscribe" in lower or "follow" in lower:
+        score -= 1.2
+    if len(text) > 240:
+        score -= 1.0
+    if len(text.split()) <= 6 and "," not in text and "，" not in text and "。" not in text:
+        score -= 0.8
+    return score
+
+
+def _extract_semantic_caption_from_info(info: dict[str, Any]) -> str:
+    weighted_candidates: list[tuple[str, float]] = []
+    source_weight = {"description": 2.0, "fulltitle": 1.2, "title": 1.0, "tags": -1.4}
+
+    for key in ("description", "fulltitle", "title"):
+        value = str(info.get(key, "") or "")
+        for cand in _split_caption_candidates(value):
+            weighted_candidates.append((cand, source_weight[key]))
+
+    tags = info.get("tags")
+    if isinstance(tags, list):
+        tag_texts = [str(t).strip("# ").strip() for t in tags if str(t).strip()]
+        tag_texts = [t for t in tag_texts if 1 < len(t) <= 30]
+        if tag_texts:
+            for cand in _split_caption_candidates(" ".join(tag_texts[:10])):
+                weighted_candidates.append((cand, source_weight["tags"]))
+
+    if not weighted_candidates:
+        return ""
+
+    scored = sorted(
+        weighted_candidates,
+        key=lambda item: _score_caption_candidate(item[0]) + item[1],
+        reverse=True,
+    )
+    best = _normalize_text(scored[0][0], limit=180)
+    if not best:
+        return ""
+
+    # 过短时拼接次优候选，尽量贴近视频内容。
+    if len(best) < 26 and len(scored) > 1:
+        extra = _normalize_text(scored[1][0], limit=80)
+        if extra and extra.lower() != best.lower():
+            best = _normalize_text(f"{best}，{extra}", limit=180)
+    return best
+
+
+def _caption_from_info_json(
+    info_path: Path,
+    proxy: Optional[str] = None,
+    spark_ai: Optional[dict[str, Any]] = None,
+    *,
+    use_system_proxy: bool = False,
+) -> str:
+    base_text = ""
+    if info_path.exists():
+        try:
+            info = json.loads(info_path.read_text(encoding="utf-8", errors="ignore"))
+            if isinstance(info, dict):
+                base_text = _extract_semantic_caption_from_info(info)
+        except Exception as exc:
+            _log(f"[Caption] Failed to parse info json {info_path.name}: {exc}")
+
+    if not base_text:
+        base_text = "Cybertruck 最新画面"
+
+    zh_text, en_text = _build_bilingual_caption(
+        base_text,
+        proxy=proxy,
+        spark_ai=spark_ai,
+        use_system_proxy=use_system_proxy,
+    )
+    return f"{zh_text}\n{en_text}"
+
+
+def _compute_video_content_fingerprint(video_path: Path) -> Optional[str]:
+    """
+    通过采样低分辨率灰度帧构建内容指纹。
+    同视频不同作者转发、重复搬运时可较稳定识别。
+    """
+
+    width = 12
+    height = 12
+    frame_size = width * height
+    cmd = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        str(video_path),
+        "-t",
+        "24",
+        "-vf",
+        f"fps=1/2,scale={width}:{height}:flags=bilinear,format=gray",
+        "-an",
+        "-sn",
+        "-dn",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, check=False)
+    except Exception as exc:
+        _log(f"[Processor] Fingerprint sampling failed ({video_path.name}): {exc}")
+        return None
+    if result.returncode != 0:
+        return None
+
+    data = result.stdout or b""
+    if len(data) < frame_size * 2:
+        return None
+
+    frame_count = len(data) // frame_size
+    if frame_count <= 0:
+        return None
+
+    bit_count = height * (width - 1)
+    votes = [0] * bit_count
+
+    for i in range(frame_count):
+        frame = data[i * frame_size : (i + 1) * frame_size]
+        k = 0
+        for y in range(height):
+            row_offset = y * width
+            for x in range(width - 1):
+                left = frame[row_offset + x]
+                right = frame[row_offset + x + 1]
+                if left > right:
+                    votes[k] += 1
+                k += 1
+
+    threshold = frame_count / 2.0
+    bits = ["1" if v >= threshold else "0" for v in votes]
+    bit_str = "".join(bits)
+    digest = hashlib.sha1(bit_str.encode("ascii")).hexdigest()[:24]
+    return f"{len(bit_str)}:{digest}:{bit_str}"
+
+
+def _hamming_distance_bits(bit_str_a: str, bit_str_b: str) -> int:
+    size = min(len(bit_str_a), len(bit_str_b))
+    distance = sum(1 for i in range(size) if bit_str_a[i] != bit_str_b[i])
+    distance += abs(len(bit_str_a) - len(bit_str_b))
+    return distance
+
+
+def _parse_fingerprint_bits(fingerprint: str) -> str:
+    if not fingerprint:
+        return ""
+    parts = str(fingerprint).split(":")
+    if len(parts) >= 3:
+        return parts[-1]
+    return ""
+
+
+def _metadata_duplicate_reason(meta_key: str) -> str:
+    token = str(meta_key or "").strip().lower()
+    if token.startswith("status:"):
+        return "metadata_status_id"
+    if token.startswith("text:"):
+        return "metadata_text_signature"
+    if token.startswith("title:"):
+        return "metadata_uploader_title"
+    return "metadata"
+
+
+def _fingerprint_duplicate_reason(match: Optional[dict[str, Any]]) -> str:
+    distance_raw = None if not isinstance(match, dict) else match.get("_distance")
+    try:
+        distance = int(distance_raw)
+    except Exception:
+        distance = None
+    if distance == 0:
+        return "fingerprint_exact"
+    if distance is not None:
+        return "fingerprint_near"
+    return "fingerprint"
+
+
+def _load_fingerprint_index(workspace: Workspace, media_kind: str = "") -> list[dict[str, Any]]:
+    normalized_kind = str(media_kind or "").strip().lower()
+    paths: list[Path]
+    if normalized_kind in {"video", "image"}:
+        paths = [_content_fingerprint_index_path(workspace, normalized_kind)]
+    else:
+        paths = [
+            _content_fingerprint_index_path(workspace, "video"),
+            _content_fingerprint_index_path(workspace, "image"),
+        ]
+    items: list[dict[str, Any]] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, list):
+            items.extend(x for x in payload if isinstance(x, dict))
+    return items
+
+
+def _save_fingerprint_index(workspace: Workspace, items: list[dict[str, Any]], media_kind: str = "video") -> None:
+    path = _content_fingerprint_index_path(workspace, media_kind)
+    path.write_text(json.dumps(items[-2000:], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _match_duplicate_by_fingerprint(
+    fingerprint: str,
+    index_items: list[dict[str, Any]],
+    max_hamming_distance: int = DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE,
+) -> Optional[dict[str, Any]]:
+    curr_bits = _parse_fingerprint_bits(fingerprint)
+    if not curr_bits:
+        return None
+
+    best: Optional[dict[str, Any]] = None
+    best_distance: Optional[int] = None
+    for item in index_items:
+        other_bits = _parse_fingerprint_bits(str(item.get("fingerprint", "")))
+        if not other_bits:
+            continue
+        distance = _hamming_distance_bits(curr_bits, other_bits)
+        if distance <= max_hamming_distance and (best_distance is None or distance < best_distance):
+            best = item
+            best_distance = distance
+    if best is not None:
+        best["_distance"] = best_distance
+    return best
+
+
+def _ensure_required_hashtags(caption: str) -> str:
+    text = (caption or "").strip()
+    if not text:
+        text = "Cybertruck 赛博皮卡最新画面！"
+    if REQUIRED_CAPTION_KEYWORD not in text:
+        text = f"{text}\n{REQUIRED_CAPTION_KEYWORD}"
+
+    lower_text = text.lower()
+    missing = [tag for tag in REQUIRED_HASHTAGS if tag.lower() not in lower_text]
+    if not missing:
+        return text
+    return f"{text}\n\n{' '.join(missing)}"
+
+
+def _extract_caption_hashtags(text: str) -> list[str]:
+    raw = re.findall(r"#[0-9A-Za-z_\u4e00-\u9fff]+", str(text or ""))
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in raw:
+        t = str(tag or "").strip()
+        if not t:
+            continue
+        if not t.startswith("#"):
+            t = f"#{t}"
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out
+
+
+def _rebuild_caption_with_hashtags(text: str, hashtags: list[str]) -> str:
+    body = re.sub(r"#[0-9A-Za-z_\u4e00-\u9fff]+", " ", str(text or ""))
+    body = re.sub(r"[ \t]+", " ", body)
+    body = re.sub(r" *\n *", "\n", body)
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    body = body.strip()
+    clean_tags: list[str] = []
+    seen: set[str] = set()
+    for tag in hashtags:
+        t = str(tag or "").strip()
+        if not t:
+            continue
+        if not t.startswith("#"):
+            t = f"#{t}"
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        clean_tags.append(t)
+    if not clean_tags:
+        return body
+    if body:
+        return f"{body}\n\n{' '.join(clean_tags)}"
+    return " ".join(clean_tags)
+
+
+def _prepare_caption_for_platform(caption: str, platform_name: str) -> str:
+    text = _ensure_required_hashtags(caption)
+    if platform_name != "kuaishou":
+        return text
+
+    existing = _extract_caption_hashtags(text)
+    chosen: list[str] = []
+    seen: set[str] = set()
+    for tag in (*KUAISHOU_REQUIRED_HASHTAGS, *existing):
+        t = str(tag or "").strip()
+        if not t:
+            continue
+        if not t.startswith("#"):
+            t = f"#{t}"
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        chosen.append(t)
+        if len(chosen) >= KUAISHOU_HASHTAG_LIMIT:
+            break
+    return _rebuild_caption_with_hashtags(text, chosen)
+
+
+def _archive_with_sidecar(src: Path, workspace: Workspace, auto_delete_source_files: bool = False) -> None:
+    for file_path in (src, _sidecar_info_path(src)):
+        if not file_path.exists():
+            continue
+        if auto_delete_source_files:
+            file_path.unlink()
+            continue
+        dst = workspace.archive / file_path.name
+        if dst.exists():
+            dst.unlink()
+        shutil.move(str(file_path), str(dst))
+
+
+def download_from_x(
+    workspace: Workspace,
+    keyword: str = DEFAULT_KEYWORD,
+    limit: int = DEFAULT_LIMIT,
+    tweet_urls: Optional[list[str]] = None,
+    proxy: Optional[str] = None,
+    use_system_proxy: bool = False,
+    include_images: bool = False,
+    image_min_target: int = 0,
+    auto_discover_x: bool = True,
+    x_discovery_url_limit: int = X_DISCOVERY_URL_LIMIT,
+    x_discovery_scroll_rounds: int = X_DISCOVERY_SCROLL_ROUNDS,
+    x_discovery_scroll_wait: float = X_DISCOVERY_SCROLL_WAIT_SECONDS,
+    debug_port: int = DEFAULT_PORT,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    require_x_live_discovery: bool = False,
+    require_text_keyword_match: bool = False,
+) -> list[Path]:
+    _log("[Downloader] Starting X download task")
+    download_media_kind = "image" if include_images else "video"
+    download_dir = _workspace_download_dir(workspace, download_media_kind)
+    history_file = _workspace_history_file(workspace, download_media_kind)
+    effective_proxy, effective_use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    network_mode = "explicit_proxy" if effective_proxy else ("system_proxy" if effective_use_system_proxy else "direct_tun")
+    _log(f"[Network] mode={network_mode} (proxy={'set' if effective_proxy else 'none'})")
+    if include_images:
+        _log("[Downloader] X media mode enabled: video + image (for Xiaohongshu).")
+    _ensure_binary("yt-dlp")
+    before = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+    media_filter_args = [] if include_images else ["--match-filter", "duration > 10 & duration < 60"]
+    network_retry_args = [
+        "--socket-timeout",
+        "45",
+        "--extractor-retries",
+        "3",
+        "--retries",
+        "3",
+        "--fragment-retries",
+        "3",
+        "--retry-sleep",
+        "2",
+    ]
+    selected_urls: list[str] = []
+    image_status_candidates: list[str] = []
+    cookie_export_path = _export_x_cookies_for_ytdlp(chrome_user_data_dir)
+
+    cleaned_urls = _dedupe_urls(tweet_urls or [])
+    if cleaned_urls:
+        filtered_urls, skipped_urls = _filter_already_processed_x_urls(workspace, cleaned_urls)
+        if skipped_urls:
+            skipped_names = ", ".join(item["processed_name"] for item in skipped_urls[:3] if item.get("processed_name"))
+            suffix = f" examples={skipped_names}" if skipped_names else ""
+            _log(f"[Downloader] Skip already-collected tweet URLs: {len(skipped_urls)}.{suffix}")
+        selected_urls = filtered_urls[: max(1, int(limit))]
+        if not selected_urls:
+            _log("[Downloader] All provided tweet URLs already exist in processed registry; skip download.")
+            return []
+        image_status_candidates = _dedupe_x_status_urls(selected_urls)
+        _log(f"[Downloader] Using provided tweet URLs: {len(selected_urls)}")
+        cmd = [
+            "yt-dlp",
+            *media_filter_args,
+            *network_retry_args,
+            "--download-archive",
+            str(history_file),
+            "--write-info-json",
+            "-P",
+            str(download_dir),
+            "-o",
+            "%(id)s__%(uploader)s__%(title).80s.%(ext)s",
+            "--restrict-filenames",
+            "--no-overwrites",
+        ]
+    else:
+        discovered_urls: list[str] = []
+        discovery_source = ""
+        live_discovery_error: Optional[str] = None
+        if auto_discover_x:
+            discover_limit = max(max(1, int(limit)) * 6, int(x_discovery_url_limit))
+            try:
+                discovered_urls = discover_x_video_urls(
+                    keyword=keyword,
+                    url_limit=discover_limit,
+                    scroll_rounds=x_discovery_scroll_rounds,
+                    scroll_wait_seconds=x_discovery_scroll_wait,
+                    debug_port=debug_port,
+                    auto_open_chrome=auto_open_chrome,
+                    chrome_path=chrome_path,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    include_images=include_images,
+                    require_text_keyword_match=require_text_keyword_match,
+                )
+                if discovered_urls:
+                    discovery_source = "keyword_live_search"
+            except Exception as exc:
+                _log(f"[Downloader] X auto-discovery failed: {exc}")
+                live_discovery_error = str(exc)
+                if _is_x_login_required_error(live_discovery_error):
+                    if auto_open_chrome:
+                        try:
+                            _open_visible_x_login_page(
+                                debug_port=debug_port,
+                                chrome_user_data_dir=chrome_user_data_dir,
+                                chrome_path=chrome_path,
+                            )
+                        except Exception as login_exc:
+                            _log(f"[Downloader] Failed to open visible X login page: {login_exc}")
+                    raise RuntimeError(
+                        "X 页面未登录，已停止自动回退下载。"
+                        "请先在可见 Chrome 窗口中完成登录，然后重试。"
+                        f" profile={chrome_user_data_dir}, port={debug_port}"
+                    ) from exc
+                discovered_urls = []
+            if not discovered_urls:
+                if require_x_live_discovery:
+                    reason = live_discovery_error or "keyword live discovery returned no URLs"
+                    raise RuntimeError(
+                        "X keyword live discovery is required for this run, "
+                        f"but it failed before any URL was collected: {reason}"
+                    )
+                discovered_urls = discover_x_urls_via_seed_accounts(
+                    keyword=keyword,
+                    url_limit=discover_limit,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    include_images=include_images,
+                    proxy=effective_proxy,
+                    use_system_proxy=effective_use_system_proxy,
+                )
+                if discovered_urls:
+                    discovery_source = "seed_accounts_fallback"
+                    _log(
+                        "[Downloader] WARNING: keyword-page discovery is unavailable; "
+                        "falling back to seed-account discovery only. Fresh posts visible on "
+                        "the live X search page may be missed in this run."
+                    )
+
+        if discovered_urls:
+            discovered_urls, skipped_urls = _filter_already_processed_x_urls(workspace, discovered_urls)
+            if skipped_urls:
+                skipped_names = ", ".join(item["processed_name"] for item in skipped_urls[:3] if item.get("processed_name"))
+                suffix = f" examples={skipped_names}" if skipped_names else ""
+                _log(f"[Downloader] Skip already-collected discovered URLs: {len(skipped_urls)}.{suffix}")
+        if discovered_urls:
+            target_limit = max(1, int(limit))
+            # Image discovery already uses filter:media and falls back to direct image download,
+            # so it does not need the same oversized candidate window as video collection.
+            candidate_multiplier = 3 if include_images else 8
+            candidate_url_count = min(len(discovered_urls), max(target_limit * candidate_multiplier, 12))
+            selected_urls = discovered_urls[:candidate_url_count]
+            image_status_candidates = _dedupe_x_status_urls(discovered_urls)
+            _log(
+                f"[Downloader] Using discovered X URLs: {len(selected_urls)} "
+                f"(discovered={len(discovered_urls)}, target_limit={target_limit}, "
+                f"source={discovery_source or 'unknown'})"
+            )
+            cmd = [
+                "yt-dlp",
+                *media_filter_args,
+                *network_retry_args,
+                "--download-archive",
+                str(history_file),
+                "--write-info-json",
+                "-P",
+                str(download_dir),
+                "-o",
+                "%(id)s__%(uploader)s__%(title).80s.%(ext)s",
+                "--restrict-filenames",
+                "--no-overwrites",
+            ]
+        else:
+            search_url = f"https://x.com/search?q={quote_plus(keyword)}&src=typed_query&f=live"
+            _log("[Downloader] Fallback to direct X search URL (compatibility may be unstable)")
+            cmd = [
+                "yt-dlp",
+                search_url,
+                "--playlist-end",
+                str(max(1, int(limit))),
+                *media_filter_args,
+                *network_retry_args,
+                "--download-archive",
+                str(history_file),
+                "--write-info-json",
+                "-P",
+                str(download_dir),
+                "-o",
+                "%(id)s__%(uploader)s__%(title).80s.%(ext)s",
+                "--restrict-filenames",
+                "--no-overwrites",
+            ]
+    if effective_proxy:
+        cmd.extend(["--proxy", effective_proxy])
+    if isinstance(cookie_export_path, Path) and cookie_export_path.exists():
+        cmd.extend(["--cookies", str(cookie_export_path)])
+    command_env = _build_subprocess_network_env(
+        proxy=effective_proxy,
+        use_system_proxy=effective_use_system_proxy,
+    )
+    try:
+        result = _run_ytdlp_download_with_retries(
+            cmd,
+            selected_urls=selected_urls,
+            step_name="Downloader",
+            env=command_env,
+        )
+    finally:
+        if isinstance(cookie_export_path, Path):
+            with contextlib.suppress(Exception):
+                cookie_export_path.unlink(missing_ok=True)
+    if result.returncode != 0 and result.stderr.strip():
+        _console_print(result.stderr.strip())
+
+    after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+    new_files = sorted(Path(p) for p in (after - before))
+
+    if include_images and image_status_candidates:
+        target_images = max(0, int(image_min_target))
+        if target_images > 0:
+            current_new_images = [p for p in new_files if _is_image_file(p)]
+            need_images = max(0, target_images - len(current_new_images))
+            if need_images > 0:
+                _log(
+                    "[Downloader] X image fallback enabled: "
+                    f"target={target_images}, current={len(current_new_images)}, need={need_images}"
+                )
+                extra_images = _download_x_images_from_status_urls(
+                    workspace=workspace,
+                    status_urls=image_status_candidates,
+                    limit=need_images,
+                    keyword=keyword,
+                    proxy=effective_proxy,
+                    use_system_proxy=effective_use_system_proxy,
+                )
+                if extra_images:
+                    after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+                    new_files = sorted(Path(p) for p in (after - before))
+    elif (not include_images) and image_status_candidates and result.returncode != 0 and not new_files:
+        extra_videos = _download_x_videos_from_status_urls(
+            workspace=workspace,
+            status_urls=image_status_candidates,
+            limit=max(1, int(limit)),
+            keyword=keyword,
+            proxy=effective_proxy,
+            use_system_proxy=effective_use_system_proxy,
+        )
+        if extra_videos:
+            after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+            new_files = sorted(Path(p) for p in (after - before))
+
+    if result.returncode != 0:
+        stderr_text = (result.stderr or "").lower()
+        nonfatal_markers = (
+            "no video could be found in this tweet",
+            "this tweet has no video",
+            "unsupported url: https://x.com/search",
+        )
+        if new_files:
+            _log(
+                f"[Downloader] Warning: yt-dlp exited with {result.returncode}, "
+                f"but downloaded {len(new_files)} new file(s). Continue."
+            )
+        elif any(marker in stderr_text for marker in nonfatal_markers):
+            _log(
+                f"[Downloader] Warning: yt-dlp exited with {result.returncode} and no new files. "
+                "Likely invalid/non-video/duplicate candidates; continue."
+            )
+        elif not cleaned_urls:
+            raise RuntimeError(
+                "X 自动下载失败。可选方案："
+                "1) 先在调试 Chrome 登录 X；"
+                "2) 使用 --tweet-url / --tweet-url-file 手动提供帖子链接。"
+            )
+        else:
+            raise RuntimeError(f"Downloader failed with exit code {result.returncode}")
+
+    if new_files:
+        _log(f"[Downloader] New files: {len(new_files)}")
+        for p in new_files:
+            _log(f"  - {p.name}")
+    else:
+        _log("[Downloader] No new files downloaded (archive dedupe may have skipped all).")
+    return new_files
+
+
+def process_video_fingerprint(
+    workspace: Workspace,
+    proxy: Optional[str] = None,
+    use_system_proxy: bool = False,
+    auto_delete_source_files: bool = False,
+    spark_ai: Optional[dict[str, Any]] = None,
+    exclude_keywords: Optional[list[str]] = None,
+    require_any_keywords: Optional[list[str]] = None,
+    include_images: bool = False,
+    on_output_ready: Optional[Callable[[Path, dict[str, Any]], None]] = None,
+) -> list[Path]:
+    """
+    保持用户要求的函数名。
+    该实现只做兼容性转码和元数据清理，不包含规避检测逻辑。
+    """
+
+    _log("[Processor] Starting video processing")
+    video_download_dir = _workspace_download_dir(workspace, "video")
+    image_download_dir = _workspace_download_dir(workspace, "image")
+    if auto_delete_source_files:
+        _log("[Processor] Source cleanup mode: delete files from download buckets after processing.")
+    else:
+        _log("[Processor] Source cleanup mode: move files from download buckets to 3_Archive.")
+    effective_exclude_keywords = _normalize_keyword_list(
+        exclude_keywords if exclude_keywords is not None else DEFAULT_EXCLUDE_KEYWORDS,
+        DEFAULT_EXCLUDE_KEYWORDS,
+    )
+    effective_require_any_keywords = _normalize_keyword_list(
+        require_any_keywords if require_any_keywords is not None else DEFAULT_REQUIRE_ANY_KEYWORDS,
+        DEFAULT_REQUIRE_ANY_KEYWORDS,
+    )
+    if effective_exclude_keywords:
+        _log(f"[Processor] Metadata exclude keywords enabled: {len(effective_exclude_keywords)}")
+    if effective_require_any_keywords:
+        _log(f"[Processor] Metadata required-topic keywords enabled: {len(effective_require_any_keywords)}")
+    candidates = sorted(
+        [
+            p
+            for base_dir in ([video_download_dir, image_download_dir] if include_images else [video_download_dir])
+            for p in base_dir.iterdir()
+            if p.is_file() and (_is_video_file(p) or (include_images and _is_image_file(p)))
+        ]
+    )
+    if not candidates:
+        _log("[Processor] No source media in download buckets.")
+        return []
+    if any(_is_video_file(p) for p in candidates):
+        _ensure_binary("ffmpeg")
+
+    video_fingerprint_index = _load_fingerprint_index(workspace, "video")
+    image_fingerprint_index = _load_fingerprint_index(workspace, "image")
+    fingerprint_index = [*video_fingerprint_index, *image_fingerprint_index]
+    known_meta_key_map = _collect_metadata_key_map(fingerprint_index, default_name_key="processed_name")
+    new_fingerprint_items_by_kind: dict[str, list[dict[str, Any]]] = {"video": [], "image": []}
+    new_meta_key_map: dict[str, str] = {}
+    duplicate_count = 0
+    duplicate_reasons: dict[str, int] = {}
+    filtered_count = 0
+    outputs: list[Path] = []
+
+    def bump_duplicate_reason(reason: str) -> None:
+        token = str(reason or "").strip() or "unknown"
+        duplicate_reasons[token] = int(duplicate_reasons.get(token, 0)) + 1
+
+    def remember_meta_keys(meta: dict[str, str], ref_name: str) -> None:
+        for key in _metadata_duplicate_keys(meta):
+            new_meta_key_map.setdefault(key, ref_name)
+
+    for src in candidates:
+        is_video_src = _is_video_file(src)
+        media_kind = "video" if is_video_src else "image"
+        dst_suffix = ".mp4" if is_video_src else src.suffix.lower()
+        dst_dir = _workspace_processed_dir(workspace, media_kind)
+        dst = dst_dir / f"DRAFT_{src.stem}{dst_suffix}"
+        caption_sidecar = _processed_caption_path(dst)
+        src_info_path = _sidecar_info_path(src)
+        src_info = _load_info_payload(src_info_path)
+        source_meta = _build_video_metadata(src.name, src_info)
+
+        should_skip, skip_reason = _should_skip_by_metadata(
+            source_meta,
+            effective_exclude_keywords,
+            effective_require_any_keywords,
+            enforce_require_any_keywords=is_video_src,
+        )
+        if should_skip:
+            filtered_count += 1
+            _log(f"[Processor] Skip by metadata filter: {src.name} ({skip_reason})")
+            _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+            continue
+
+        if is_video_src:
+            metadata_duration_seconds = float(_safe_duration_seconds(src_info.get("duration")))
+            actual_duration_seconds = _probe_media_duration_seconds(src)
+            if actual_duration_seconds > 0 and metadata_duration_seconds > 0:
+                duration_delta = abs(actual_duration_seconds - metadata_duration_seconds)
+                if duration_delta >= 2.0:
+                    _log(
+                        "[Processor] Duration metadata mismatch detected: "
+                        f"{src.name} (info={metadata_duration_seconds:.1f}s, "
+                        f"actual={actual_duration_seconds:.2f}s)"
+                    )
+
+            effective_duration_seconds = actual_duration_seconds or metadata_duration_seconds
+            if effective_duration_seconds <= 0:
+                filtered_count += 1
+                _log(
+                    f"[Processor] Skip by duration probe: {src.name} "
+                    "(unable to determine actual media duration)"
+                )
+                _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+                continue
+            if not _is_publishable_video_duration(effective_duration_seconds):
+                filtered_count += 1
+                source_label = "actual" if actual_duration_seconds > 0 else "metadata"
+                _log(
+                    f"[Processor] Skip by duration filter: {src.name} "
+                    f"({source_label} duration={effective_duration_seconds:.2f}s, expected "
+                    f"{MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f}-"
+                    f"{MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f}s)"
+                )
+                _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+                continue
+
+        meta_dup_key = next(
+            (
+                key
+                for key in _metadata_duplicate_keys(source_meta)
+                if key in known_meta_key_map or key in new_meta_key_map
+            ),
+            "",
+        )
+        if meta_dup_key:
+            duplicate_count += 1
+            reason = _metadata_duplicate_reason(meta_dup_key)
+            bump_duplicate_reason(reason)
+            match_name = new_meta_key_map.get(meta_dup_key) or known_meta_key_map.get(meta_dup_key) or "unknown"
+            _log(
+                "[Processor] Duplicate metadata detected, skip source: "
+                f"{src.name} (match={match_name}, key={meta_dup_key}, reason={reason})"
+            )
+            _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+            continue
+
+        source_fingerprint = _compute_video_content_fingerprint(src) if is_video_src else ""
+        if source_fingerprint:
+            pending_fingerprint_items = [
+                *new_fingerprint_items_by_kind["video"],
+                *new_fingerprint_items_by_kind["image"],
+            ]
+            match = _match_duplicate_by_fingerprint(
+                source_fingerprint,
+                [*fingerprint_index, *pending_fingerprint_items],
+                max_hamming_distance=DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE,
+            )
+            if match:
+                duplicate_count += 1
+                reason = _fingerprint_duplicate_reason(match)
+                bump_duplicate_reason(reason)
+                _log(
+                    "[Processor] Duplicate content detected, skip source: "
+                    f"{src.name} (match={match.get('source_name', 'unknown')}, "
+                    f"distance={match.get('_distance')}, reason={reason})"
+                )
+                _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+                continue
+
+        if dst.exists():
+            if is_video_src:
+                existing_duration_seconds = _probe_media_duration_seconds(dst)
+                if not _is_publishable_video_duration(existing_duration_seconds):
+                    _log(
+                        f"[Processor] Rebuilding invalid existing output: {dst.name} "
+                        f"(actual duration={existing_duration_seconds:.2f}s)"
+                    )
+                    dst.unlink(missing_ok=True)
+                    caption_sidecar.unlink(missing_ok=True)
+            if dst.exists():
+                _log(f"[Processor] Processed file already exists, archiving source: {src.name}")
+                if not caption_sidecar.exists():
+                    caption_text = _caption_from_info_json(
+                        src_info_path,
+                        proxy=proxy,
+                        spark_ai=spark_ai,
+                        use_system_proxy=use_system_proxy,
+                    )
+                    caption_sidecar.write_text(caption_text, encoding="utf-8")
+                    _log(f"[Processor] Caption sidecar ready: {caption_sidecar.name}")
+                _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+                new_fingerprint_items_by_kind[media_kind].append(
+                    {
+                        "fingerprint": source_fingerprint or "",
+                        "source_name": src.name,
+                        "processed_name": dst.name,
+                        "media_kind": media_kind,
+                        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        **_metadata_fields_for_index(source_meta),
+                    }
+                )
+                remember_meta_keys(source_meta, dst.name)
+                outputs.append(dst)
+                if is_video_src and on_output_ready is not None:
+                    try:
+                        on_output_ready(dst, dict(source_meta))
+                    except Exception as exc:
+                        _log(f"[Processor] on_output_ready callback failed: {exc}")
+                continue
+
+        if is_video_src:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(src),
+                "-map_metadata",
+                "-1",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "20",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                str(dst),
+            ]
+            _run_command(cmd, "Processor")
+            processed_duration_seconds = _probe_media_duration_seconds(dst)
+            if not _is_publishable_video_duration(processed_duration_seconds):
+                filtered_count += 1
+                _log(
+                    f"[Processor] Skip invalid processed output: {dst.name} "
+                    f"(actual duration={processed_duration_seconds:.2f}s, expected "
+                    f"{MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f}-"
+                    f"{MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f}s)"
+                )
+                if dst.exists():
+                    dst.unlink()
+                _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+                continue
+        else:
+            if dst.exists():
+                dst.unlink()
+            shutil.copy2(src, dst)
+        caption_text = _caption_from_info_json(
+            src_info_path,
+            proxy=proxy,
+            spark_ai=spark_ai,
+            use_system_proxy=use_system_proxy,
+        )
+        caption_sidecar.write_text(caption_text, encoding="utf-8")
+        _log(f"[Processor] Caption sidecar ready: {caption_sidecar.name}")
+        _archive_with_sidecar(src, workspace, auto_delete_source_files=auto_delete_source_files)
+        new_fingerprint_items_by_kind[media_kind].append(
+            {
+                "fingerprint": source_fingerprint or "",
+                "source_name": src.name,
+                "processed_name": dst.name,
+                "media_kind": media_kind,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                **_metadata_fields_for_index(source_meta),
+            }
+        )
+        remember_meta_keys(source_meta, dst.name)
+        outputs.append(dst)
+        if is_video_src and on_output_ready is not None:
+            try:
+                on_output_ready(dst, dict(source_meta))
+            except Exception as exc:
+                _log(f"[Processor] on_output_ready callback failed: {exc}")
+        _log(f"[Processor] Ready: {dst.name}")
+
+    total_new_fingerprint_items = 0
+    for media_kind, new_items in new_fingerprint_items_by_kind.items():
+        if not new_items:
+            continue
+        existing_items = video_fingerprint_index if media_kind == "video" else image_fingerprint_index
+        existing_items.extend(new_items)
+        _save_fingerprint_index(workspace, existing_items, media_kind=media_kind)
+        total_new_fingerprint_items += len(new_items)
+    if total_new_fingerprint_items:
+        _log(f"[Processor] Fingerprint index updated: +{total_new_fingerprint_items}")
+
+    if duplicate_reasons:
+        reason_summary = ", ".join(
+            f"{name}={count}" for name, count in sorted(duplicate_reasons.items(), key=lambda item: item[0])
+        )
+        _log(f"[Processor] Duplicate reason summary: {reason_summary}")
+
+    _log(
+        "[Processor] Completed. "
+        f"Processed files: {len(outputs)}, duplicates skipped: {duplicate_count}, filtered: {filtered_count}"
+    )
+    return outputs
+
+
+def _is_chrome_debug_port_ready(debug_port: int, timeout: float = 1.5) -> bool:
+    version_url = f"http://127.0.0.1:{debug_port}/json/version"
+    try:
+        # Do not use env/system proxy for localhost devtools endpoint.
+        opener = build_opener(ProxyHandler({}))
+        req = Request(version_url, headers={"User-Agent": "Mozilla/5.0"})
+        with opener.open(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            return bool(payload.get("Browser"))
+    except Exception:
+        return False
+
+
+def _resolve_chrome_executable(chrome_path: Optional[str] = None) -> str:
+    if chrome_path:
+        candidate = Path(chrome_path).expanduser()
+        if candidate.exists():
+            return str(candidate)
+        found = shutil.which(chrome_path)
+        if found:
+            return found
+        raise RuntimeError(f"指定的 chrome 路径不可用: {chrome_path}")
+
+    candidates: list[str] = []
+    if os.name == "nt":
+        candidates.extend(
+            [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            ]
+        )
+        for bin_name in ("google-chrome", "chromium", "chrome"):
+            found = shutil.which(bin_name)
+            if found:
+                candidates.append(found)
+
+    for item in candidates:
+        if item and Path(item).exists():
+            return item
+
+    raise RuntimeError("未找到 Chrome 可执行文件。请安装 Chrome 或通过 --chrome-path 指定路径。")
+
+
+def _manual_chrome_launch_cmd(
+    debug_port: int,
+    chrome_user_data_dir: str,
+    chrome_path: Optional[str] = None,
+    startup_url: str = CREATE_POST_URL,
+) -> str:
+    chrome_exec = chrome_path
+    if not chrome_exec:
+        if os.name == "nt":
+            chrome_exec = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        else:
+            chrome_exec = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    return (
+        f'"{chrome_exec}" --remote-debugging-port={debug_port} '
+        f'--user-data-dir="{chrome_user_data_dir}" {startup_url}'
+    )
+
+
+def _get_windows_chrome_window_mode() -> str:
+    raw = str(os.getenv("CYBERCAR_CHROME_WINDOW_MODE", WINDOWS_CHROME_WINDOW_MODE_DEFAULT) or "").strip().lower()
+    if raw in {"normal", "minimized"}:
+        return raw
+    return WINDOWS_CHROME_WINDOW_MODE_DEFAULT
+
+
+def _resolve_windows_chrome_window_mode(window_mode_override: Optional[str] = None) -> str:
+    raw = str(window_mode_override or os.getenv("CYBERCAR_CHROME_WINDOW_MODE", WINDOWS_CHROME_WINDOW_MODE_DEFAULT) or "").strip().lower()
+    if raw in {"normal", "minimized"}:
+        return raw
+    return WINDOWS_CHROME_WINDOW_MODE_DEFAULT
+
+
+def _build_chrome_launch_popen_kwargs(window_mode_override: Optional[str] = None) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "start_new_session": True,
+    }
+    if os.name != "nt":
+        return kwargs
+    if _resolve_windows_chrome_window_mode(window_mode_override) != "minimized":
+        return kwargs
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = WINDOWS_SW_SHOWMINNOACTIVE
+    kwargs["startupinfo"] = startupinfo
+    return kwargs
+
+
+def _maybe_enforce_windows_chrome_minimized(
+    process: subprocess.Popen,
+    timeout_seconds: float = 5.0,
+    window_mode_override: Optional[str] = None,
+) -> None:
+    if os.name != "nt":
+        return
+    if _resolve_windows_chrome_window_mode(window_mode_override) != "minimized":
+        return
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return
+
+    pid = int(getattr(process, "pid", 0) or 0)
+    if pid <= 0:
+        return
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    enum_windows = user32.EnumWindows
+    enum_windows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+    enum_windows.restype = wintypes.BOOL
+    get_window_thread_process_id = user32.GetWindowThreadProcessId
+    get_window_thread_process_id.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    get_window_thread_process_id.restype = wintypes.DWORD
+    is_window_visible = user32.IsWindowVisible
+    is_window_visible.argtypes = [wintypes.HWND]
+    is_window_visible.restype = wintypes.BOOL
+    show_window_async = user32.ShowWindowAsync
+    show_window_async.argtypes = [wintypes.HWND, ctypes.c_int]
+    show_window_async.restype = wintypes.BOOL
+
+    end_at = time.time() + max(0.5, float(timeout_seconds))
+    while time.time() < end_at:
+        hwnds: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _callback(hwnd: int, _lparam: int) -> bool:
+            window_pid = wintypes.DWORD()
+            get_window_thread_process_id(hwnd, ctypes.byref(window_pid))
+            if int(window_pid.value) == pid and bool(is_window_visible(hwnd)):
+                hwnds.append(int(hwnd))
+                return False
+            return True
+
+        try:
+            enum_windows(_callback, 0)
+        except Exception:
+            return
+        if hwnds:
+            for hwnd in hwnds:
+                try:
+                    show_window_async(hwnd, WINDOWS_SW_FORCEMINIMIZE)
+                    show_window_async(hwnd, WINDOWS_SW_SHOWMINNOACTIVE)
+                except Exception:
+                    pass
+        time.sleep(0.2)
+
+
+def _start_windows_chrome_minimize_guard(
+    process: subprocess.Popen,
+    timeout_seconds: float = 20.0,
+    window_mode_override: Optional[str] = None,
+) -> None:
+    if os.name != "nt":
+        return
+    if _resolve_windows_chrome_window_mode(window_mode_override) != "minimized":
+        return
+
+    thread = threading.Thread(
+        target=_maybe_enforce_windows_chrome_minimized,
+        args=(process, timeout_seconds, window_mode_override),
+        name="cybercar-chrome-minimize-guard",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _set_windows_process_window_mode(pid: int, mode: str) -> bool:
+    if os.name != "nt":
+        return False
+    requested_mode = str(mode or "").strip().lower()
+    if requested_mode not in {"normal", "minimized"}:
+        return False
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return False
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    enum_windows = user32.EnumWindows
+    enum_windows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+    enum_windows.restype = wintypes.BOOL
+    get_window_thread_process_id = user32.GetWindowThreadProcessId
+    get_window_thread_process_id.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    get_window_thread_process_id.restype = wintypes.DWORD
+    is_window_visible = user32.IsWindowVisible
+    is_window_visible.argtypes = [wintypes.HWND]
+    is_window_visible.restype = wintypes.BOOL
+    show_window_async = user32.ShowWindowAsync
+    show_window_async.argtypes = [wintypes.HWND, ctypes.c_int]
+    show_window_async.restype = wintypes.BOOL
+    set_foreground_window = user32.SetForegroundWindow
+    set_foreground_window.argtypes = [wintypes.HWND]
+    set_foreground_window.restype = wintypes.BOOL
+
+    hwnds: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _callback(hwnd: int, _lparam: int) -> bool:
+        window_pid = wintypes.DWORD()
+        get_window_thread_process_id(hwnd, ctypes.byref(window_pid))
+        if int(window_pid.value) == int(pid) and bool(is_window_visible(hwnd)):
+            hwnds.append(int(hwnd))
+        return True
+
+    try:
+        enum_windows(_callback, 0)
+    except Exception:
+        return False
+    if not hwnds:
+        return False
+
+    show_mode = WINDOWS_SW_FORCEMINIMIZE if requested_mode == "minimized" else WINDOWS_SW_RESTORE
+    for hwnd in hwnds:
+        try:
+            show_window_async(hwnd, show_mode)
+            if requested_mode == "normal":
+                show_window_async(hwnd, WINDOWS_SW_SHOWNORMAL)
+                set_foreground_window(hwnd)
+        except Exception:
+            continue
+    return True
+
+
+def _start_windows_process_window_mode_guard(pid: int, mode: str, timeout_seconds: float = 25.0) -> None:
+    if os.name != "nt":
+        return
+    requested_mode = str(mode or "").strip().lower()
+    if requested_mode not in {"normal", "minimized"}:
+        return
+
+    def _runner() -> None:
+        end_at = time.time() + max(1.0, float(timeout_seconds))
+        while time.time() < end_at:
+            _set_windows_process_window_mode(pid, requested_mode)
+            time.sleep(0.5)
+
+    thread = threading.Thread(
+        target=_runner,
+        name=f"cybercar-chrome-window-{requested_mode}-guard",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _terminate_windows_process_tree(pid: int, timeout_seconds: float = 8.0) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            check=False,
+        )
+    except Exception:
+        return False
+    end_at = time.time() + max(1.0, float(timeout_seconds))
+    while time.time() < end_at:
+        try:
+            os.kill(int(pid), 0)
+        except OSError:
+            break
+        time.sleep(0.2)
+    return True
+
+
+def _launch_chrome_debug(
+    debug_port: int,
+    chrome_user_data_dir: str,
+    chrome_path: Optional[str] = None,
+    startup_url: str = CREATE_POST_URL,
+    window_mode_override: Optional[str] = None,
+) -> subprocess.Popen:
+    chrome_exec = _resolve_chrome_executable(chrome_path)
+    user_dir = str(Path(chrome_user_data_dir).expanduser())
+    Path(user_dir).mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        chrome_exec,
+        f"--remote-debugging-port={debug_port}",
+        f"--user-data-dir={user_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        startup_url,
+    ]
+    _log(f"[Uploader] Auto launching Chrome: {chrome_exec}")
+    process = subprocess.Popen(cmd, **_build_chrome_launch_popen_kwargs(window_mode_override=window_mode_override))
+    _start_windows_chrome_minimize_guard(process, window_mode_override=window_mode_override)
+    return process
+
+
+def _wait_chrome_debug_port(debug_port: int, timeout_seconds: int = CHROME_LAUNCH_TIMEOUT_SECONDS) -> bool:
+    end_at = time.time() + timeout_seconds
+    while time.time() < end_at:
+        if _is_chrome_debug_port_ready(debug_port):
+            return True
+        time.sleep(0.8)
+    return False
+
+
+def _normalize_user_data_dir(path_value: str) -> str:
+    normalized = str(Path(path_value).expanduser()).rstrip("\\/")
+    if os.name == "nt":
+        normalized = normalized.lower()
+    return normalized
+
+
+def _extract_cli_flag_value(command_line: str, flag_name: str) -> Optional[str]:
+    pattern = rf"--{re.escape(flag_name)}=(\"[^\"]+\"|'[^']+'|[^\s]+)"
+    matched = re.search(pattern, command_line)
+    if not matched:
+        return None
+    value = matched.group(1).strip()
+    if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
+        value = value[1:-1]
+    return value.strip()
+
+
+def _iter_chrome_command_lines() -> list[str]:
+    if os.name == "nt":
+        cmd_lines: list[str] = []
+        try:
+            result = subprocess.run(
+                ["wmic", "process", "where", "name='chrome.exe'", "get", "CommandLine", "/format:list"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                check=False,
+            )
+            for raw in (result.stdout or "").splitlines():
+                line = raw.strip()
+                if not line.lower().startswith("commandline="):
+                    continue
+                command = line.split("=", 1)[1].strip()
+                if command:
+                    cmd_lines.append(command)
+        except Exception:
+            pass
+        if cmd_lines:
+            return cmd_lines
+
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                    "ForEach-Object { $_.CommandLine }",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                check=False,
+            )
+            for raw in (result.stdout or "").splitlines():
+                command = raw.strip()
+                if command:
+                    cmd_lines.append(command)
+        except Exception:
+            pass
+        return cmd_lines
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-fal", "chrome"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    cmd_lines = []
+    for raw in (result.stdout or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        command = parts[1] if len(parts) == 2 else parts[0]
+        if command:
+            cmd_lines.append(command)
+    return cmd_lines
+
+
+def _find_existing_debug_port_by_profile(chrome_user_data_dir: str) -> Optional[int]:
+    user_dir = _normalize_user_data_dir(chrome_user_data_dir)
+
+    for command_line in _iter_chrome_command_lines():
+        if "--remote-debugging-port=" not in command_line or "--user-data-dir=" not in command_line:
+            continue
+        running_dir_raw = _extract_cli_flag_value(command_line, "user-data-dir")
+        running_port_raw = _extract_cli_flag_value(command_line, "remote-debugging-port")
+        if not running_dir_raw or not running_port_raw:
+            continue
+        running_dir = _normalize_user_data_dir(running_dir_raw)
+        if running_dir != user_dir:
+            continue
+        try:
+            port = int(running_port_raw)
+        except Exception:
+            continue
+        if _is_chrome_debug_port_ready(port):
+            return port
+    return None
+
+
+def _has_debug_chrome_process(debug_port: int, chrome_user_data_dir: str) -> bool:
+    target_dir = _normalize_user_data_dir(chrome_user_data_dir)
+    for command_line in _iter_chrome_command_lines():
+        if "--remote-debugging-port=" not in command_line or "--user-data-dir=" not in command_line:
+            continue
+        running_dir_raw = _extract_cli_flag_value(command_line, "user-data-dir")
+        running_port_raw = _extract_cli_flag_value(command_line, "remote-debugging-port")
+        if not running_dir_raw or not running_port_raw:
+            continue
+        try:
+            running_port = int(running_port_raw)
+        except Exception:
+            continue
+        if running_port != debug_port:
+            continue
+        running_dir = _normalize_user_data_dir(running_dir_raw)
+        if running_dir == target_dir:
+            return True
+    return False
+
+
+def _find_debug_chrome_process_pid(debug_port: int, chrome_user_data_dir: str) -> Optional[int]:
+    if os.name != "nt":
+        return None
+    target_dir = _normalize_user_data_dir(chrome_user_data_dir)
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                "Select-Object ProcessId,CommandLine | ConvertTo-Json -Depth 3",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            check=False,
+        )
+        payload = json.loads(result.stdout or "[]")
+        if isinstance(payload, dict):
+            payload = [payload]
+        for item in payload:
+            command_line = str(item.get("CommandLine") or "")
+            if "--type=" in command_line:
+                continue
+            if f"--remote-debugging-port={debug_port}" not in command_line:
+                continue
+            running_dir_raw = _extract_cli_flag_value(command_line, "user-data-dir")
+            if not running_dir_raw:
+                continue
+            if _normalize_user_data_dir(running_dir_raw) != target_dir:
+                continue
+            process_id = item.get("ProcessId")
+            if process_id is None:
+                continue
+            return int(process_id)
+    except Exception:
+        return None
+    return None
+
+
+def _open_visible_x_login_page(
+    debug_port: int,
+    chrome_user_data_dir: str,
+    chrome_path: Optional[str] = None,
+) -> None:
+    existing_pid = _find_debug_chrome_process_pid(debug_port, chrome_user_data_dir)
+    if existing_pid:
+        _terminate_windows_process_tree(existing_pid)
+        time.sleep(0.8)
+    _launch_chrome_debug(
+        debug_port=debug_port,
+        chrome_user_data_dir=chrome_user_data_dir,
+        chrome_path=chrome_path,
+        startup_url=X_LOGIN_URL,
+        window_mode_override="normal",
+    )
+    _log("[Downloader] Opened a visible X login Chrome window for manual sign-in.")
+
+
+def _has_non_debug_primary_chrome_process(chrome_user_data_dir: str) -> bool:
+    target_dir = _normalize_user_data_dir(chrome_user_data_dir)
+    for command_line in _iter_chrome_command_lines():
+        if "--type=" in command_line:
+            continue
+        if "--remote-debugging-port=" in command_line:
+            continue
+        running_dir_raw = _extract_cli_flag_value(command_line, "user-data-dir")
+        if not running_dir_raw:
+            continue
+        running_dir = _normalize_user_data_dir(running_dir_raw)
+        if running_dir == target_dir:
+            return True
+    return False
+
+
+def _build_debug_profile_conflict_message(
+    debug_port: int,
+    chrome_user_data_dir: str,
+    launch_cmd: str,
+) -> str:
+    return (
+        "Detected a normal Chrome window already using the same user-data-dir "
+        f"({chrome_user_data_dir}) without --remote-debugging-port. "
+        "Chrome will swallow the new launch request, so keyword-page discovery will fail "
+        "and collection may silently fall back to seed-account mode. "
+        f"Close that Chrome profile first, then relaunch debug Chrome on port {debug_port}:\n"
+        f"{launch_cmd}"
+    )
+
+
+def _resolve_debug_port(preferred_port: int, chrome_user_data_dir: str) -> int:
+    if _is_chrome_debug_port_ready(preferred_port):
+        return preferred_port
+
+    existing_port = _find_existing_debug_port_by_profile(chrome_user_data_dir)
+    if existing_port:
+        _log(
+            f"[Uploader] Found existing debug Chrome with same profile on port {existing_port}, "
+            "will reuse it."
+        )
+        return existing_port
+    return preferred_port
+
+
+def _ensure_chrome_debug_port(
+    debug_port: int,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    startup_url: str = CREATE_POST_URL,
+) -> None:
+    if _is_chrome_debug_port_ready(debug_port):
+        return
+
+    launch_cmd = _manual_chrome_launch_cmd(
+        debug_port,
+        chrome_user_data_dir,
+        chrome_path,
+        startup_url=startup_url,
+    )
+    conflict_message = ""
+    if _has_non_debug_primary_chrome_process(chrome_user_data_dir):
+        conflict_message = _build_debug_profile_conflict_message(
+            debug_port,
+            chrome_user_data_dir,
+            launch_cmd,
+        )
+    if not auto_open_chrome:
+        if _has_debug_chrome_process(debug_port, chrome_user_data_dir):
+            _log(
+                f"[Uploader] Debug Chrome process detected on port {debug_port} "
+                "even though /json/version is not ready yet; continue with best-effort connect."
+            )
+            return
+        if conflict_message:
+            raise RuntimeError(conflict_message)
+        raise RuntimeError(f"未检测到 Chrome 调试端口 {debug_port}。请先启动 Chrome：\n{launch_cmd}")
+
+    if conflict_message:
+        raise RuntimeError(conflict_message)
+
+    _launch_chrome_debug(
+        debug_port,
+        chrome_user_data_dir,
+        chrome_path,
+        startup_url=startup_url,
+    )
+    if _wait_chrome_debug_port(debug_port):
+        _log(f"[Uploader] Chrome debug port ready: {debug_port}")
+        return
+
+    if _has_debug_chrome_process(debug_port, chrome_user_data_dir):
+        _log(
+            f"[Uploader] Debug Chrome process exists on port {debug_port}, "
+            "but /json/version probe is still not ready; continue trying to connect."
+        )
+        return
+
+    raise RuntimeError(
+        f"自动启动 Chrome 后仍未就绪 (port {debug_port})。"
+        f"\n请手动执行：\n{launch_cmd}"
+    )
+
+
+def _connect_chrome(
+    debug_port: int,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    startup_url: str = CREATE_POST_URL,
+) -> ChromiumPage:
+    if ChromiumPage is None or ChromiumOptions is None:
+        raise RuntimeError("DrissionPage is not installed. Run: pip install DrissionPage")
+
+    resolved_port = _resolve_debug_port(debug_port, chrome_user_data_dir)
+    if resolved_port != debug_port:
+        _log(f"[Uploader] Switch debug port: {debug_port} -> {resolved_port}")
+    debug_port = resolved_port
+
+    _ensure_chrome_debug_port(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=startup_url,
+    )
+    addr = f"127.0.0.1:{debug_port}"
+    last_error: Optional[Exception] = None
+
+    # 部分环境下 DrissionPage 在子线程中初始化 ChromiumPage 会卡住，
+    # 先在主线程直连一次，失败再走带超时的回退模式。
+    try:
+        return ChromiumPage(addr)
+    except Exception as exc:
+        last_error = exc
+        _log(f"[Uploader] Chrome direct connect fallback: {exc}")
+
+    def _call_with_timeout(factory: Callable[[], ChromiumPage], timeout_seconds: int = 12) -> ChromiumPage:
+        holder: dict[str, Any] = {}
+
+        def _runner() -> None:
+            try:
+                holder["result"] = factory()
+            except Exception as exc:  # pragma: no cover - depends on runtime/browser state
+                holder["error"] = exc
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join(timeout_seconds)
+        if thread.is_alive():
+            raise TimeoutError(f"connect timeout ({timeout_seconds}s)")
+        if "error" in holder:
+            raise holder["error"]
+        if "result" not in holder:
+            raise RuntimeError("connect failed without result")
+        return holder["result"]
+
+    for mode_name in ("opts_address", "opts_port"):
+        try:
+            opts = ChromiumOptions()
+            if mode_name == "opts_address" and hasattr(opts, "set_address"):
+                opts = opts.set_address(addr)
+            if mode_name == "opts_port" and hasattr(opts, "set_local_port"):
+                opts = opts.set_local_port(debug_port)
+            try:
+                return _call_with_timeout(lambda: ChromiumPage(addr_or_opts=opts))
+            except TypeError:
+                return _call_with_timeout(lambda: ChromiumPage(opts))
+        except TimeoutError as exc:
+            last_error = exc
+            _log(f"[Uploader] Chrome connect timeout on mode: {mode_name}")
+        except Exception as exc:
+            last_error = exc
+            _log(f"[Uploader] Chrome connect failed on mode {mode_name}: {exc}")
+
+    raise RuntimeError(
+        f"无法连接到 Chrome 调试端口 {debug_port}。"
+        "请关闭所有调试 Chrome 后重新按命令启动，再重试。"
+    ) from last_error
+
+
+def _is_alert_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return "未处理的提示框" in msg or "alert" in msg.lower()
+
+
+def _dismiss_alerts(page: ChromiumPage, max_rounds: int = 5) -> int:
+    # DrissionPage 在部分“遗留弹窗”状态下，handle_alert 可能阻塞。
+    # 这里保留函数接口，但不主动调用阻塞式处理。
+    return 0
+
+
+def _run_page_action(page: ChromiumPage, action_name: str, action: Callable[[], object], retries: int = 3) -> object:
+    last_exc: Optional[Exception] = None
+    for _ in range(retries):
+        try:
+            return action()
+        except Exception as exc:
+            last_exc = exc
+            if not _is_alert_error(exc):
+                raise
+            _log(f"[Uploader] Alert detected during {action_name}, retrying...")
+            time.sleep(0.2)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"{action_name} failed.")
+
+
+def _find_latest_processed(workspace: Workspace, include_images: bool = False) -> Optional[Path]:
+    files = [
+        p
+        for base_dir in _iter_processed_dirs(workspace, include_images=include_images)
+        for p in base_dir.iterdir()
+        if p.is_file() and (_is_video_file(p) or (include_images and _is_image_file(p)))
+    ]
+    if not files:
+        return None
+    return max(files, key=lambda p: p.stat().st_mtime)
+
+
+def _platform_token(platform: str = "wechat") -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", (platform or "wechat").strip().lower()) or "wechat"
+
+
+def _draft_upload_history_path(workspace: Workspace, platform: str = "wechat", media_kind: str = "video") -> Path:
+    platform_token = _platform_token(platform)
+    normalized_kind = _normalize_media_kind(media_kind)
+    if platform_token == "wechat" and normalized_kind == "video":
+        return workspace.root / "draft_upload_history.txt"
+    if normalized_kind == "image":
+        return workspace.root / f"draft_upload_history_{platform_token}_images.txt"
+    return workspace.root / f"draft_upload_history_{platform_token}.txt"
+
+
+def _uploaded_fingerprint_index_path(workspace: Workspace, platform: str = "wechat", media_kind: str = "video") -> Path:
+    platform_token = _platform_token(platform)
+    normalized_kind = _normalize_media_kind(media_kind)
+    if platform_token == "wechat" and normalized_kind == "video":
+        return workspace.root / "uploaded_content_fingerprint_index.json"
+    if normalized_kind == "image":
+        return workspace.root / f"uploaded_content_fingerprint_index_{platform_token}_images.json"
+    return workspace.root / f"uploaded_content_fingerprint_index_{platform_token}.json"
+
+
+def _platform_upload_db_path(workspace: Workspace, platform: str = "wechat") -> Path:
+    platform_token = _platform_token(platform)
+    return workspace.root / f"uploaded_records_{platform_token}.jsonl"
+
+
+def _load_draft_upload_history(workspace: Workspace, platform: str = "wechat", media_kind: str = "video") -> set[str]:
+    path = _draft_upload_history_path(workspace, platform=platform, media_kind=media_kind)
+    if not path.exists():
+        return set()
+    values: set[str] = set()
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if line:
+            values.add(line)
+    return values
+
+
+def _append_draft_upload_history(
+    workspace: Workspace,
+    processed_video_name: str,
+    platform: str = "wechat",
+    media_kind: str = "video",
+) -> None:
+    name = processed_video_name.strip()
+    if not name:
+        return
+    if name in _load_draft_upload_history(workspace, platform=platform, media_kind=media_kind):
+        return
+    path = _draft_upload_history_path(workspace, platform=platform, media_kind=media_kind)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(name + "\n")
+
+
+def _sanitize_uploaded_index_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        has_fingerprint = bool(str(item.get("fingerprint", "")).strip())
+        has_meta = bool(_metadata_duplicate_keys(_metadata_from_index_item(item)))
+        if has_fingerprint or has_meta:
+            result.append(item)
+    return result
+
+
+def _uploaded_item_unique_key(item: dict[str, Any]) -> str:
+    media_kind = _normalize_media_kind(str(item.get("media_kind", "") or "video"))
+    processed_name = str(item.get("processed_name", "")).strip().lower()
+    fingerprint = str(item.get("fingerprint", "")).strip().lower()
+    status_id = str(item.get("status_id", "")).strip().lower()
+    text_signature = str(item.get("text_signature", "")).strip().lower()
+    uploader_signature = str(item.get("uploader_signature", "")).strip().lower()
+    title_signature = str(item.get("title_signature", "")).strip().lower()
+    return "|".join([media_kind, processed_name, fingerprint, status_id, text_signature, uploader_signature, title_signature])
+
+
+def _merge_uploaded_index_items(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in (primary, secondary):
+        for item in source:
+            key = _uploaded_item_unique_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
+def _load_platform_upload_db(workspace: Workspace, platform: str = "wechat") -> list[dict[str, Any]]:
+    path = _platform_upload_db_path(workspace, platform=platform)
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            item = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(item, dict):
+            rows.append(item)
+    return _sanitize_uploaded_index_items(rows)
+
+
+def _rewrite_platform_upload_db(workspace: Workspace, platform: str, items: list[dict[str, Any]]) -> None:
+    path = _platform_upload_db_path(workspace, platform=platform)
+    snapshot = items[-UPLOAD_RECORD_DB_MAX_ITEMS :]
+    lines = [json.dumps(item, ensure_ascii=False) for item in snapshot if isinstance(item, dict)]
+    payload = ("\n".join(lines) + "\n") if lines else ""
+    path.write_text(payload, encoding="utf-8")
+
+
+def _load_uploaded_fingerprint_index_legacy(
+    workspace: Workspace,
+    platform: str = "wechat",
+    media_kind: str = "video",
+) -> list[dict[str, Any]]:
+    path = _uploaded_fingerprint_index_path(workspace, platform=platform, media_kind=media_kind)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return _sanitize_uploaded_index_items(payload)
+
+
+def _load_uploaded_fingerprint_index(
+    workspace: Workspace,
+    platform: str = "wechat",
+    media_kind: str = "video",
+) -> list[dict[str, Any]]:
+    normalized_kind = _normalize_media_kind(media_kind)
+    db_items = [
+        dict(item)
+        for item in _load_platform_upload_db(workspace, platform=platform)
+        if _normalize_media_kind(str(item.get("media_kind", "") or normalized_kind)) == normalized_kind
+    ]
+    legacy_items = _load_uploaded_fingerprint_index_legacy(workspace, platform=platform, media_kind=normalized_kind)
+    if db_items and legacy_items:
+        return _merge_uploaded_index_items(db_items, legacy_items)
+    if db_items:
+        return db_items
+    return legacy_items
+
+
+def _save_uploaded_fingerprint_index(
+    workspace: Workspace,
+    items: list[dict[str, Any]],
+    platform: str = "wechat",
+    media_kind: str = "video",
+) -> None:
+    normalized_kind = _normalize_media_kind(media_kind)
+    path = _uploaded_fingerprint_index_path(workspace, platform=platform, media_kind=normalized_kind)
+    snapshot = items[-UPLOAD_RECORD_DB_MAX_ITEMS :]
+    path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    persisted = [dict(item, media_kind=_normalize_media_kind(str(item.get("media_kind", "") or normalized_kind))) for item in snapshot]
+    existing_db_items = _load_platform_upload_db(workspace, platform=platform)
+    merged_db_items = [
+        dict(item)
+        for item in existing_db_items
+        if _normalize_media_kind(str(item.get("media_kind", "") or "video")) != normalized_kind
+    ]
+    merged_db_items.extend(persisted)
+    _rewrite_platform_upload_db(workspace, platform=platform, items=merged_db_items)
+
+
+def _processed_index_lookup(workspace: Workspace) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for item in _load_fingerprint_index(workspace):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("processed_name", "")).strip()
+        if name and name not in lookup:
+            lookup[name] = item
+    return lookup
+
+
+def _find_processed_item_by_source(
+    workspace: Workspace,
+    *,
+    source_url: str = "",
+    status_id: str = "",
+) -> Optional[dict[str, Any]]:
+    normalized_url = _normalize_x_status_url(str(source_url or "").strip()) or ""
+    normalized_status_id = str(status_id or "").strip()
+    if not normalized_status_id and normalized_url:
+        normalized_status_id = _extract_status_id_from_url(normalized_url)
+    if not normalized_url and not normalized_status_id:
+        return None
+
+    for item in reversed(_load_fingerprint_index(workspace)):
+        if not isinstance(item, dict):
+            continue
+        item_status_url = _normalize_x_status_url(str(item.get("status_url", "") or "").strip()) or ""
+        item_status_id = str(item.get("status_id", "") or "").strip()
+        if normalized_url and item_status_url and item_status_url == normalized_url:
+            return dict(item)
+        if normalized_status_id and item_status_id and item_status_id == normalized_status_id:
+            return dict(item)
+    return None
+
+
+def _find_processed_target_by_source(
+    workspace: Workspace,
+    *,
+    source_url: str = "",
+    status_id: str = "",
+) -> tuple[Optional[Path], Optional[dict[str, Any]]]:
+    item = _find_processed_item_by_source(workspace, source_url=source_url, status_id=status_id)
+    if not isinstance(item, dict):
+        return None, None
+    processed_name = str(item.get("processed_name", "") or "").strip()
+    if not processed_name:
+        return None, item
+    target = _resolve_processed_target_path(workspace, processed_name)
+    if target is None or not target.exists() or not target.is_file():
+        return None, item
+    return target, item
+
+
+def _filter_already_processed_x_urls(
+    workspace: Workspace,
+    urls: Iterable[str],
+) -> tuple[list[str], list[dict[str, str]]]:
+    remaining: list[str] = []
+    skipped: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    seen_keys: set[str] = set()
+    for raw_url in urls:
+        url = str(raw_url or "").strip()
+        if not url:
+            continue
+        normalized_url = _normalize_x_status_url(url) or url
+        if normalized_url in seen_urls:
+            continue
+        seen_urls.add(normalized_url)
+        target, item = _find_processed_target_by_source(workspace, source_url=normalized_url)
+        if target is None:
+            remaining.append(url)
+            continue
+        processed_name = str((item or {}).get("processed_name", "") or "").strip() or target.name
+        status_id = str((item or {}).get("status_id", "") or "").strip() or _extract_status_id_from_url(normalized_url)
+        skip_key = f"{normalized_url}|{processed_name}|{status_id}"
+        if skip_key in seen_keys:
+            continue
+        seen_keys.add(skip_key)
+        skipped.append(
+            {
+                "url": normalized_url,
+                "processed_name": processed_name,
+                "status_id": status_id,
+            }
+        )
+    return remaining, skipped
+
+
+def build_content_coordination_snapshot(
+    workspace: Workspace,
+    *,
+    source_url: str = "",
+    status_id: str = "",
+    processed_name: str = "",
+    media_kind: str = "",
+    review_state_file: str = "",
+    platforms: Optional[Iterable[str]] = None,
+) -> dict[str, Any]:
+    normalized_source_url = _normalize_x_status_url(str(source_url or "").strip()) or str(source_url or "").strip()
+    resolved_status_id = str(status_id or "").strip()
+    clean_processed_name = str(processed_name or "").strip()
+    resolved_media_kind = _normalize_media_kind(media_kind or "video")
+    target: Optional[Path] = None
+    process_item: Optional[dict[str, Any]] = None
+
+    if clean_processed_name:
+        candidate = _resolve_processed_target_path(workspace, clean_processed_name)
+        if candidate is not None and candidate.exists() and candidate.is_file():
+            target = candidate
+        process_lookup = _processed_index_lookup(workspace)
+        process_item = dict(process_lookup.get(clean_processed_name, {}) or {}) or None
+
+    if target is None:
+        target, process_item = _find_processed_target_by_source(
+            workspace,
+            source_url=normalized_source_url,
+            status_id=resolved_status_id,
+        )
+
+    if process_item is None and target is not None:
+        process_lookup = _processed_index_lookup(workspace)
+        process_item = dict(process_lookup.get(target.name, {}) or {}) or None
+
+    resolved_processed_name = clean_processed_name or (target.name if isinstance(target, Path) else "")
+    if isinstance(process_item, dict):
+        resolved_processed_name = str(process_item.get("processed_name", "") or "").strip() or resolved_processed_name
+        resolved_media_kind = _normalize_media_kind(str(process_item.get("media_kind", "") or resolved_media_kind))
+        if not normalized_source_url:
+            normalized_source_url = _normalize_x_status_url(str(process_item.get("status_url", "") or "").strip()) or normalized_source_url
+        if not resolved_status_id:
+            resolved_status_id = str(process_item.get("status_id", "") or "").strip() or resolved_status_id
+    if target is not None:
+        resolved_media_kind = _media_kind_from_path(target)
+
+    review_status = ""
+    review_note = ""
+    review_updated_at = ""
+    if resolved_processed_name:
+        review_entries = _load_review_state_entries(_resolve_review_state_path(workspace, review_state_file=review_state_file))
+        review_entry = _get_review_state_entry(review_entries, resolved_processed_name, media_kind=resolved_media_kind)
+        review_status = str(review_entry.get("status", "") or "").strip().lower()
+        review_note = str(review_entry.get("note", "") or "")
+        review_updated_at = str(review_entry.get("updated_at", "") or "")
+
+    requested_platforms = list(platforms or ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"])
+    platform_status: dict[str, dict[str, Any]] = {}
+    published_platforms: list[str] = []
+    unpublished_platforms: list[str] = []
+    if target is not None:
+        for platform in _normalize_upload_platforms(",".join(requested_platforms)):
+            is_dup, dup_match, target_fp = _is_uploaded_content_duplicate(workspace, target, platform=platform)
+            if is_dup:
+                published_platforms.append(platform)
+            else:
+                unpublished_platforms.append(platform)
+            platform_status[platform] = {
+                "published": bool(is_dup),
+                "reason": str((dup_match or {}).get("_reason", "") or "").strip(),
+                "matched_processed_name": str((dup_match or {}).get("processed_name", "") or "").strip(),
+                "fingerprint": str(target_fp or "").strip(),
+            }
+
+    summary_bits: list[str] = []
+    summary_bits.append("已采" if target is not None else "未采")
+    if review_status:
+        review_map = {
+            "approved": "已审核通过",
+            "rejected": "已审核拒绝",
+            "blocked": "待审核",
+        }
+        summary_bits.append(review_map.get(review_status, f"审核状态:{review_status}"))
+    if published_platforms:
+        summary_bits.append("已发:" + ",".join(published_platforms))
+
+    return {
+        "source_url": normalized_source_url,
+        "status_id": resolved_status_id,
+        "processed_name": resolved_processed_name,
+        "media_kind": resolved_media_kind,
+        "review_key": _make_review_state_key(resolved_processed_name, resolved_media_kind) if resolved_processed_name else "",
+        "processed_exists": bool(target is not None),
+        "review_status": review_status,
+        "review_note": review_note,
+        "review_updated_at": review_updated_at,
+        "published_platforms": published_platforms,
+        "unpublished_platforms": unpublished_platforms,
+        "platform_status": platform_status,
+        "summary": " | ".join(summary_bits),
+    }
+
+
+def _resolve_processed_video_metadata(
+    workspace: Workspace,
+    target_video: Path,
+    processed_lookup: Optional[dict[str, dict[str, Any]]] = None,
+) -> dict[str, str]:
+    lookup = processed_lookup if processed_lookup is not None else _processed_index_lookup(workspace)
+    item = lookup.get(target_video.name)
+    if item:
+        return _metadata_from_index_item(item)
+    return _build_video_metadata(target_video.name, info=None)
+
+
+def _backfill_uploaded_fingerprint_index(
+    workspace: Workspace,
+    platform: str = "wechat",
+    media_kind: str = "video",
+) -> None:
+    normalized_kind = _normalize_media_kind(media_kind)
+    uploaded_names = _load_draft_upload_history(workspace, platform=platform, media_kind=normalized_kind)
+    if not uploaded_names:
+        return
+
+    uploaded_items = _load_uploaded_fingerprint_index(workspace, platform=platform, media_kind=normalized_kind)
+    indexed_names = {str(x.get("processed_name", "")).strip() for x in uploaded_items if str(x.get("processed_name", "")).strip()}
+    process_lookup = _processed_index_lookup(workspace)
+    uploaded_meta_key_map = _collect_metadata_key_map(uploaded_items)
+
+    added = 0
+    for name in sorted(uploaded_names):
+        if name in indexed_names:
+            continue
+
+        process_item = process_lookup.get(name, {})
+        meta = _metadata_from_index_item(process_item if process_item else {"processed_name": name})
+        meta_dup_key = next((key for key in _metadata_duplicate_keys(meta) if key in uploaded_meta_key_map), "")
+        if meta_dup_key:
+            indexed_names.add(name)
+            continue
+
+        fp = str(process_item.get("fingerprint", "") if isinstance(process_item, dict) else "").strip()
+        if not fp:
+            target = _resolve_processed_target_path(workspace, name, include_images=False)
+            if target and target.exists() and target.is_file() and _is_video_file(target):
+                fp = _compute_video_content_fingerprint(target) or ""
+        if fp and _match_duplicate_by_fingerprint(
+            fp,
+            uploaded_items,
+            max_hamming_distance=DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE,
+        ):
+            indexed_names.add(name)
+            continue
+
+        if not fp and not _metadata_duplicate_keys(meta):
+            continue
+
+        entry: dict[str, Any] = {
+            "fingerprint": fp,
+            "processed_name": name,
+            "uploaded_at": "history_backfill",
+            "media_kind": normalized_kind,
+            **_metadata_fields_for_index(meta),
+        }
+        uploaded_items.append(entry)
+        for key in _metadata_duplicate_keys(meta):
+            uploaded_meta_key_map.setdefault(key, name)
+        indexed_names.add(name)
+        added += 1
+
+    if added > 0:
+        _save_uploaded_fingerprint_index(workspace, uploaded_items, platform=platform, media_kind=normalized_kind)
+        _log(f"[Uploader:{platform}] Backfilled uploaded fingerprint index: +{added}")
+
+
+def _is_uploaded_content_duplicate(
+    workspace: Workspace,
+    target_video: Path,
+    platform: str = "wechat",
+) -> tuple[bool, Optional[dict[str, Any]], Optional[str]]:
+    media_kind = _media_kind_from_path(target_video)
+    uploaded_items = _load_uploaded_fingerprint_index(workspace, platform=platform, media_kind=media_kind)
+    processed_lookup = _processed_index_lookup(workspace)
+    target_meta = _resolve_processed_video_metadata(workspace, target_video, processed_lookup=processed_lookup)
+    uploaded_meta_key_map = _collect_metadata_key_map(uploaded_items)
+
+    meta_dup_key = next((key for key in _metadata_duplicate_keys(target_meta) if key in uploaded_meta_key_map), "")
+    if meta_dup_key:
+        return (
+            True,
+            {
+                "processed_name": uploaded_meta_key_map.get(meta_dup_key, "unknown"),
+                "_reason": _metadata_duplicate_reason(meta_dup_key),
+                "_key": meta_dup_key,
+            },
+            None,
+        )
+
+    fingerprint = _compute_video_content_fingerprint(target_video)
+    if not fingerprint:
+        return False, None, None
+    match = _match_duplicate_by_fingerprint(
+        fingerprint,
+        uploaded_items,
+        max_hamming_distance=DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE,
+    )
+    if match is None:
+        return False, None, fingerprint
+    enriched_match = dict(match)
+    enriched_match["_reason"] = _fingerprint_duplicate_reason(enriched_match)
+    return True, enriched_match, fingerprint
+
+
+def _record_uploaded_content_fingerprint(
+    workspace: Workspace,
+    target_video: Path,
+    fingerprint: Optional[str] = None,
+    platform: str = "wechat",
+) -> None:
+    media_kind = _media_kind_from_path(target_video)
+    uploaded_items = _load_uploaded_fingerprint_index(workspace, platform=platform, media_kind=media_kind)
+    processed_lookup = _processed_index_lookup(workspace)
+    target_meta = _resolve_processed_video_metadata(workspace, target_video, processed_lookup=processed_lookup)
+    uploaded_meta_key_map = _collect_metadata_key_map(uploaded_items)
+    meta_dup_key = next((key for key in _metadata_duplicate_keys(target_meta) if key in uploaded_meta_key_map), "")
+    if meta_dup_key:
+        return
+
+    fp = fingerprint or _compute_video_content_fingerprint(target_video) or ""
+    if fp and _match_duplicate_by_fingerprint(
+        fp,
+        uploaded_items,
+        max_hamming_distance=DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE,
+    ):
+        return
+
+    if not fp and not _metadata_duplicate_keys(target_meta):
+        _log(
+            "[Uploader] Warning: cannot compute upload fingerprint and metadata signature is empty: "
+            f"{target_video.name}"
+        )
+        return
+
+    uploaded_items.append(
+        {
+            "fingerprint": fp,
+            "processed_name": target_video.name,
+            "media_kind": media_kind,
+            "uploaded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            **_metadata_fields_for_index(target_meta),
+        }
+    )
+    _save_uploaded_fingerprint_index(workspace, uploaded_items, platform=platform, media_kind=media_kind)
+
+
+def _should_record_publish_fingerprint(platform: str, target: Path, *, save_draft: bool, publish_now: bool) -> bool:
+    if not (save_draft or publish_now):
+        return False
+    return True
+
+
+def _dedupe_targets_by_content(
+    workspace: Workspace,
+    files: list[Path],
+    platform: str = "wechat",
+    exclude_keywords: Optional[list[str]] = None,
+    require_any_keywords: Optional[list[str]] = None,
+) -> list[Path]:
+    result: list[Path] = []
+    local_fp_items: list[dict[str, Any]] = []
+    local_meta_key_map: dict[str, str] = {}
+    processed_lookup = _processed_index_lookup(workspace)
+    effective_exclude_keywords = _normalize_keyword_list(
+        exclude_keywords if exclude_keywords is not None else DEFAULT_EXCLUDE_KEYWORDS,
+        DEFAULT_EXCLUDE_KEYWORDS,
+    )
+    effective_require_any_keywords = _normalize_keyword_list(
+        require_any_keywords if require_any_keywords is not None else DEFAULT_REQUIRE_ANY_KEYWORDS,
+        DEFAULT_REQUIRE_ANY_KEYWORDS,
+    )
+
+    for target in files:
+        media_kind = _media_kind_from_path(target)
+        uploaded_items = _load_uploaded_fingerprint_index(workspace, platform=platform, media_kind=media_kind)
+        uploaded_meta_key_map = _collect_metadata_key_map(uploaded_items)
+        target_meta = _resolve_processed_video_metadata(workspace, target, processed_lookup=processed_lookup)
+        should_skip, skip_reason = _should_skip_by_metadata(
+            target_meta,
+            effective_exclude_keywords,
+            effective_require_any_keywords,
+            enforce_require_any_keywords=_is_video_file(target),
+        )
+        if should_skip:
+            _log(f"[Uploader] Skip by metadata filter: {target.name} ({skip_reason})")
+            continue
+        target_meta_keys = _metadata_duplicate_keys(target_meta)
+
+        uploaded_meta_dup_key = next((key for key in target_meta_keys if key in uploaded_meta_key_map), "")
+        if uploaded_meta_dup_key:
+            _log(
+                "[Uploader] Skip duplicate by uploaded metadata: "
+                f"{target.name} (match={uploaded_meta_key_map.get(uploaded_meta_dup_key, 'unknown')}, "
+                f"key={uploaded_meta_dup_key})"
+            )
+            continue
+
+        batch_meta_dup_key = next((key for key in target_meta_keys if key in local_meta_key_map), "")
+        if batch_meta_dup_key:
+            _log(
+                "[Uploader] Skip duplicate within this batch by metadata: "
+                f"{target.name} (match={local_meta_key_map.get(batch_meta_dup_key, 'unknown')}, "
+                f"key={batch_meta_dup_key})"
+            )
+            continue
+
+        fp = _compute_video_content_fingerprint(target)
+        if not fp:
+            # 指纹失败时仍允许上传，避免误伤可用视频；仍会由 filename history 防止重复。
+            for key in target_meta_keys:
+                local_meta_key_map.setdefault(key, target.name)
+            result.append(target)
+            continue
+        uploaded_match = _match_duplicate_by_fingerprint(
+            fp,
+            uploaded_items,
+            max_hamming_distance=DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE,
+        )
+        if uploaded_match:
+            _log(
+                "[Uploader] Skip duplicate by uploaded fingerprint: "
+                f"{target.name} (match={uploaded_match.get('processed_name', 'unknown')}, "
+                f"distance={uploaded_match.get('_distance')})"
+            )
+            continue
+        batch_match = _match_duplicate_by_fingerprint(
+            fp,
+            local_fp_items,
+            max_hamming_distance=DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE,
+        )
+        if batch_match:
+            _log(
+                "[Uploader] Skip duplicate within this batch: "
+                f"{target.name} (match={batch_match.get('processed_name', 'unknown')}, "
+                f"distance={batch_match.get('_distance')})"
+            )
+            continue
+        local_fp_items.append({"fingerprint": fp, "processed_name": target.name})
+        for key in target_meta_keys:
+            local_meta_key_map.setdefault(key, target.name)
+        result.append(target)
+    return result
+
+
+def _find_pending_processed(
+    workspace: Workspace,
+    limit: int,
+    platform: str = "wechat",
+    exclude_keywords: Optional[list[str]] = None,
+    require_any_keywords: Optional[list[str]] = None,
+) -> list[Path]:
+    files = sorted(
+        [
+            p
+            for p in _iter_processed_dirs(workspace, include_images=False)[0].iterdir()
+            if p.is_file() and _is_video_file(p)
+        ],
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not files:
+        return []
+
+    uploaded = _load_draft_upload_history(workspace, platform=platform)
+    pending = [p for p in files if p.name not in uploaded]
+    pending = _dedupe_targets_by_content(
+        workspace,
+        pending,
+        platform=platform,
+        exclude_keywords=exclude_keywords,
+        require_any_keywords=require_any_keywords,
+    )
+    if not pending:
+        return []
+    return pending[: max(1, int(limit))]
+
+
+def _build_shared_source_targets(
+    workspace: Workspace,
+    processed_outputs: list[Path],
+    pool_size: int,
+    exclude_keywords: Optional[list[str]] = None,
+    require_any_keywords: Optional[list[str]] = None,
+    include_images: bool = False,
+) -> list[Path]:
+    max_count = int(pool_size)
+    shared_platform = "shared_source"
+    candidates: list[Path] = []
+
+    if processed_outputs:
+        this_run = [
+            p
+            for p in processed_outputs
+            if p.exists() and (_is_video_file(p) or (include_images and _is_image_file(p)))
+        ]
+        if this_run:
+            deduped = _dedupe_targets_by_content(
+                workspace,
+                this_run,
+                platform=shared_platform,
+                exclude_keywords=exclude_keywords,
+                require_any_keywords=require_any_keywords,
+            )
+            if deduped:
+                candidates = deduped
+                _log(f"[Uploader] Shared source prefer this-run processed files: {len(candidates)}")
+
+    if not candidates:
+        files = sorted(
+            [
+                p
+                for base_dir in _iter_processed_dirs(workspace, include_images=include_images)
+                for p in base_dir.iterdir()
+                if p.is_file() and (_is_video_file(p) or (include_images and _is_image_file(p)))
+            ],
+            key=lambda p: p.stat().st_mtime,
+        )
+        candidates = _dedupe_targets_by_content(
+            workspace,
+            files,
+            platform=shared_platform,
+            exclude_keywords=exclude_keywords,
+            require_any_keywords=require_any_keywords,
+        )
+        if candidates:
+            _log(f"[Uploader] Shared source candidates from 2_Processed: {len(candidates)}")
+
+    if not candidates:
+        latest = _find_latest_processed(workspace, include_images=include_images)
+        if latest:
+            candidates = [latest]
+            _log("[Uploader] Shared source fallback to latest processed file.")
+
+    if max_count <= 0:
+        return candidates
+    return candidates[: max(1, max_count)]
+
+
+def _load_caption_for_video(target: Path) -> Optional[str]:
+    sidecar = _processed_caption_path(target)
+    if not sidecar.exists():
+        return None
+    caption = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
+    return caption or None
+
+
+def _extract_upload_progress(content: str) -> str:
+    for pattern in (
+        r"(上传中[^\n]{0,48}\d{1,3}%)",
+        r"(处理中[^\n]{0,48}\d{1,3}%)",
+        r"(转码中[^\n]{0,48}\d{1,3}%)",
+        r"((?:上传中|处理中|转码中)[^\n]{0,80})",
+    ):
+        match = re.search(pattern, content or "")
+        if match:
+            return _normalize_text(match.group(1), limit=80)
+    return ""
+
+
+def _is_visible_element(ele: Any) -> bool:
+    if not ele:
+        return False
+    try:
+        visible = ele.run_js(
+            """
+            const st = window.getComputedStyle(this);
+            if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+            const r = this.getBoundingClientRect();
+            return r.width > 6 && r.height > 6;
+            """
+        )
+        return bool(visible)
+    except Exception:
+        return False
+
+
+def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) -> Any:
+    # 视频号发布页内容在 iframe 中，这里带重试锁定可用 iframe，避免命中顶层隐藏控件。
+    end_at = time.time() + max(1, timeout_seconds)
+    last_frames: list[Any] = []
+
+    while time.time() < end_at:
+        try:
+            frames = list(page.get_frames(timeout=2))
+        except Exception:
+            frames = []
+        last_frames = frames
+
+        candidates: list[tuple[int, Any, str]] = []
+        for frame in frames:
+            try:
+                info = frame.run_js(
+                    """
+                    const text = (document.body && document.body.innerText) || '';
+                    const hasDescLabel = !!Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+                      .find(el => ((el.textContent || '').trim() === '视频描述'));
+                    const hasSaveBtn = !!Array.from(document.querySelectorAll('button, .form-btns *'))
+                      .find(el => /保存草稿/.test((el.innerText || '').trim()));
+                    const hasUploadInput = !!document.querySelector('input[type=\"file\"]');
+                    return {
+                      url: location.href,
+                      text: text.slice(0, 1200),
+                      hasDescLabel,
+                      hasSaveBtn,
+                      hasUploadInput
+                    };
+                    """
+                )
+            except Exception:
+                continue
+            if not isinstance(info, dict):
+                continue
+            url = str(info.get("url", ""))
+            text = str(info.get("text", ""))
+            has_desc = bool(info.get("hasDescLabel"))
+            has_save = bool(info.get("hasSaveBtn"))
+            has_upload = bool(info.get("hasUploadInput"))
+            score = 0
+            if "micro/content/post/create" in url:
+                score += 3
+            if has_desc or ("视频描述" in text):
+                score += 2
+            if has_save or ("保存草稿" in text):
+                score += 2
+            if has_upload:
+                score += 1
+            if "发表动态" in text:
+                score += 1
+            if score > 0:
+                candidates.append((score, frame, url))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            best = candidates[0]
+            _log(f"[Uploader] Editor iframe selected: {best[2] or 'unknown'}")
+            return best[1]
+
+        try:
+            top_level_info = page.run_js(
+                """
+                const text = (document.body && document.body.innerText) || '';
+                const url = String(location.href || '');
+                return {
+                  url,
+                  text: text.slice(0, 1200),
+                  hasUploadInput: !!document.querySelector('input[type="file"]'),
+                  hasImageEditor: /作品描述|封面设置|选择一张图片作为封面|添加位置|同步至头条/.test(text),
+                  hasVideoEditor: /视频描述|发布设置|保存草稿/.test(text),
+                };
+                """
+            )
+        except Exception:
+            top_level_info = {}
+        if isinstance(top_level_info, dict):
+            top_url = str(top_level_info.get("url", "") or "")
+            top_text = str(top_level_info.get("text", "") or "")
+            has_top_upload = bool(top_level_info.get("hasUploadInput"))
+            has_image_editor = bool(top_level_info.get("hasImageEditor"))
+            has_video_editor = bool(top_level_info.get("hasVideoEditor"))
+            if (
+                "creator.douyin.com/creator-micro/content/post/image" in top_url
+                or "creator.douyin.com/creator-micro/content/upload" in top_url
+                or "creator.douyin.com/creator-micro/content/post/create" in top_url
+                or has_top_upload
+                or has_image_editor
+                or has_video_editor
+                or ("作品描述" in top_text)
+            ):
+                _log(f"[Uploader] Top-level editor context selected: {top_url or 'unknown'}")
+                return page
+
+        preferred_micro_frame = None
+        for frame in frames:
+            try:
+                frame_url = str(frame.url or "")
+            except Exception:
+                frame_url = ""
+            if "/micro/" in frame_url:
+                preferred_micro_frame = frame
+                break
+
+        if frames:
+            # ????? frame URL ??????????????????????? frame?
+            if preferred_micro_frame is not None:
+                _log("[Uploader] Editor iframe fallback to first /micro/ frame.")
+                return preferred_micro_frame
+            _log("[Uploader] Editor iframe detected but metadata not ready, retrying...")
+        time.sleep(0.6)
+
+    if last_frames:
+        _log("[Uploader] Editor iframe fallback to first available frame.")
+        return last_frames[0]
+
+    _log("[Uploader] Editor iframe not found, fallback to top-level page context.")
+    return page
+
+
+def _wechat_context_looks_like_task_center(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+    if not actions:
+        return False
+    joined = " ".join(str(item or "") for item in actions)
+    markers = (
+        "任务管理",
+        "任务完成进度",
+        "任务奖励",
+        "可查看具体任务说明",
+    )
+    return any(marker in joined for marker in markers)
+
+
+def _read_editor_status(ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    const bodyText = (document.body && document.body.innerText) || '';
+    const uploadRoot = document.querySelector('.post-edit-wrap .material .upload')
+      || document.querySelector('.material .upload')
+      || document.querySelector('.upload');
+    const uploadHidden = uploadRoot ? window.getComputedStyle(uploadRoot).display === 'none' : false;
+    const formBtnsReady = Array.from(document.querySelectorAll('.form-btns button, .form-btns, button'))
+      .some(el => isVisible(el) && /(保存草稿|发表)/.test((el.innerText || '').trim()));
+    const descLabelReady = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .some(el => isVisible(el) && (el.textContent || '').trim() === '视频描述');
+    const descEditorReady = Array.from(document.querySelectorAll(
+      '.post-desc-box [contenteditable], div.input-editor[contenteditable], [contenteditable][data-placeholder*="描述"]'
+    )).some(el => isVisible(el));
+    const mediaReady = Array.from(document.querySelectorAll('.cover-preview-wrap img, .post-media-wrap, .post-media-preview-wrap'))
+      .some(el => isVisible(el));
+    const progressMatch = bodyText.match(/(上传中[^\\n]{0,48}[0-9]{1,3}%|处理中[^\\n]{0,48}[0-9]{1,3}%|转码中[^\\n]{0,48}[0-9]{1,3}%)/);
+    const busy = /(上传中|处理中|转码中|正在上传|正在处理|上传视频)/.test(bodyText);
+    const done = !!(uploadHidden && formBtnsReady && descLabelReady && descEditorReady && mediaReady && !busy);
+    return {
+      text: bodyText,
+      progress: progressMatch ? progressMatch[1] : '',
+      uploadHidden,
+      formBtnsReady,
+      descLabelReady,
+      descEditorReady,
+      mediaReady,
+      busy,
+      done
+    };
+    """
+    try:
+        result = ctx.run_js(js)
+    except Exception:
+        result = {}
+    return result if isinstance(result, dict) else {}
+
+
+def _wait_upload_ready(page: ChromiumPage, ctx: Any, timeout_seconds: int = UPLOAD_TIMEOUT_SECONDS) -> Any:
+    failure_markers = ("上传失败", "上传出错", "网络异常", "请重新上传", "上传异常", "处理失败")
+    end_at = time.time() + timeout_seconds
+    last_status = ""
+    active_ctx = ctx
+    while time.time() < end_at:
+        status = _read_editor_status(active_ctx)
+        if not status:
+            active_ctx = _resolve_post_editor_context(page, timeout_seconds=6)
+            status = _read_editor_status(active_ctx)
+
+        text = str(status.get("text", ""))
+
+        if any(m in text for m in failure_markers):
+            raise RuntimeError("Upload failed marker detected on page. Please check page status manually.")
+
+        if status.get("done"):
+            _log("[Uploader] Upload appears completed by editor state.")
+            return active_ctx
+
+        progress = str(status.get("progress", "")) or _extract_upload_progress(text)
+        if progress and progress != last_status:
+            last_status = progress
+            _log(f"[Uploader] Waiting upload: {progress}")
+        else:
+            _log(
+                "[Uploader] Waiting for upload completion... "
+                f"(hidden={status.get('uploadHidden')}, busy={status.get('busy')})"
+            )
+        time.sleep(2)
+    raise TimeoutError(
+        f"Upload timeout ({timeout_seconds}s). "
+        "页面可能仍在上传/转码。请检查发布页当前状态文案。"
+    )
+
+
+def _read_caption_text(ctx: Any) -> str:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    const item = Array.from(document.querySelectorAll('.form-item'))
+      .find(el => /视频描述/.test((el.querySelector('.label')?.textContent || '').trim()));
+    if (item) {
+      const local = item.querySelector('[contenteditable], textarea, input');
+      if (local && isVisible(local)) {
+        return ((local.isContentEditable ? local.innerText : local.value) || '').trim();
+      }
+    }
+    const fallback = Array.from(document.querySelectorAll('.post-desc-box [contenteditable], div.input-editor[contenteditable], [contenteditable]'))
+      .find(el => isVisible(el));
+    if (!fallback) return '';
+    return ((fallback.isContentEditable ? fallback.innerText : fallback.value) || '').trim();
+    """
+    try:
+        val = ctx.run_js(js)
+    except Exception:
+        val = ""
+    return _normalize_text(str(val or ""), limit=500)
+
+
+def _read_element_text(ele: Any) -> str:
+    try:
+        val = ele.run_js(
+            """
+            if (this.isContentEditable) return (this.innerText || this.textContent || '').trim();
+            return (this.value || this.innerText || this.textContent || '').trim();
+            """
+        )
+    except Exception:
+        val = ""
+    return _normalize_text(str(val or ""), limit=500)
+
+
+def _is_bad_caption_field(ele: Any) -> bool:
+    try:
+        attrs = ele.run_js(
+            """
+            return [
+              this.getAttribute('placeholder') || '',
+              this.getAttribute('data-placeholder') || '',
+              this.getAttribute('aria-label') || '',
+              String(this.className || ''),
+            ].join(' ').toLowerCase();
+            """
+        )
+    except Exception:
+        attrs = ""
+    text = str(attrs or "")
+    return ("textarea-body" in text) or bool(
+        re.search(r"search|product|goods|location|link|topic|tag|商品|链接|位置|搜索", text, re.IGNORECASE)
+    )
+
+
+def _find_visible_caption_editor(ctx: Any) -> Optional[Any]:
+    selectors = (
+        "css:.post-desc-box .input-editor[contenteditable]",
+        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and normalize-space()='视频描述']]//*[@contenteditable='true'][1]",
+        "css:div.input-editor[contenteditable]",
+        "xpath://div[contains(@class,'post-desc-box')]//*[@contenteditable='true'][1]",
+        "css:div[contenteditable='true']",
+        "xpath://div[@contenteditable='true']",
+    )
+    for selector in selectors:
+        try:
+            ele = ctx.ele(selector, timeout=2.5)
+        except Exception:
+            ele = None
+        if not ele:
+            continue
+        if not _is_visible_element(ele):
+            continue
+        if _is_bad_caption_field(ele):
+            continue
+        return ele
+    return None
+
+
+def _input_caption_with_keyboard(ele: Any, caption: str) -> bool:
+    try:
+        ele.click(by_js=True)
+    except Exception:
+        pass
+    try:
+        ele.run_js(
+            """
+            this.focus();
+            if (this.isContentEditable) {
+                try {
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('delete', false, null);
+                } catch (e) {}
+                this.innerHTML = '';
+                this.innerText = '';
+            } else if ('value' in this) {
+                this.value = '';
+            }
+            this.dispatchEvent(new Event('input', {bubbles: true}));
+            """
+        )
+    except Exception:
+        pass
+
+    for by_js in (False, True):
+        try:
+            ele.input(caption, by_js=by_js)
+            ele.run_js(
+                """
+                this.dispatchEvent(new Event('change', {bubbles: true}));
+                this.dispatchEvent(new Event('blur', {bubbles: true}));
+                """
+            )
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _input_text_field_with_keyboard(ele: Any, value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        ele.click(by_js=True)
+    except Exception:
+        pass
+    try:
+        ele.run_js(
+            """
+            this.focus();
+            if ('value' in this) {
+                this.value = '';
+            } else if (this.isContentEditable) {
+                this.innerHTML = '';
+                this.innerText = '';
+            }
+            this.dispatchEvent(new Event('input', {bubbles: true}));
+            """
+        )
+    except Exception:
+        pass
+
+    for by_js in (False, True):
+        try:
+            ele.input(text, by_js=by_js)
+            ele.run_js(
+                """
+                this.dispatchEvent(new Event('input', {bubbles: true}));
+                this.dispatchEvent(new Event('change', {bubbles: true}));
+                this.dispatchEvent(new Event('blur', {bubbles: true}));
+                """
+            )
+            return True
+        except Exception:
+            continue
+    return False
+
+
+WECHAT_SHORT_TITLE_FALLBACK = "赛博皮卡最新实拍"
+
+
+def _wechat_short_title_chinese_only(text: str) -> str:
+    return "".join(re.findall(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _normalize_wechat_short_title_candidate(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"https?://\S+", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"#[^\s#]+", " ", cleaned)
+    cleaned = re.sub(r"@[^\s@]+", " ", cleaned)
+    replacements = (
+        (r"(?i)tesla\s*cybertruck", "特斯拉赛博皮卡"),
+        (r"(?i)cybertruck", "赛博皮卡"),
+        (r"(?i)tesla", "特斯拉"),
+        (r"(?i)elon\s*musk", "马斯克"),
+        (r"(?i)\bmusk\b", "马斯克"),
+    )
+    for pattern, repl in replacements:
+        cleaned = re.sub(pattern, repl, cleaned)
+    cleaned = re.sub(r"[\u200B-\u200D\uFEFF]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return _wechat_short_title_chinese_only(cleaned)
+
+
+def _fit_wechat_short_title_length(text: str) -> str:
+    chinese = _wechat_short_title_chinese_only(text)
+    if not chinese:
+        return ""
+    if 6 <= len(chinese) <= 16:
+        return chinese
+    if len(chinese) > 16:
+        return chinese[:16]
+    suffix = _wechat_short_title_chinese_only(WECHAT_SHORT_TITLE_FALLBACK)
+    if suffix.startswith(chinese):
+        return suffix
+    padded = f"{chinese}{suffix}"
+    return padded[:16] if len(padded) >= 6 else suffix
+
+
+def _build_wechat_short_title(caption: str) -> str:
+    raw = str(caption or "").strip()
+    candidates: list[str] = []
+    if raw:
+        for line in re.split(r"[\r\n]+", raw):
+            line = str(line or "").strip()
+            if not line:
+                continue
+            for part in re.split(r"[。！？!?；;：:，,|/]+", line):
+                candidate = _normalize_wechat_short_title_candidate(part)
+                if candidate:
+                    candidates.append(candidate)
+        fallback_candidate = _normalize_wechat_short_title_candidate(raw)
+        if fallback_candidate:
+            candidates.append(fallback_candidate)
+
+    seen: set[str] = set()
+    best = ""
+    best_score = -1.0
+    for candidate in candidates:
+        normalized = _fit_wechat_short_title_length(candidate)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        score = 0.0
+        length = len(normalized)
+        if 6 <= length <= 16:
+            score += 10.0
+        score -= abs(length - 10) * 0.35
+        if "赛博皮卡" in normalized:
+            score += 4.0
+        if "特斯拉" in normalized:
+            score += 2.0
+        for keyword in ("实拍", "测试", "越野", "雪地", "交付", "续航", "充电", "评测"):
+            if keyword in normalized:
+                score += 0.8
+        if score > best_score:
+            best = normalized
+            best_score = score
+
+    final_title = _fit_wechat_short_title_length(best or WECHAT_SHORT_TITLE_FALLBACK)
+    if not final_title:
+        final_title = WECHAT_SHORT_TITLE_FALLBACK
+    return final_title[:16]
+
+
+def _find_wechat_short_title_input(ctx: Any) -> Optional[Any]:
+    selectors = (
+        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and contains(normalize-space(.), '短标题')]]//input[not(@type='hidden')][1]",
+        "xpath://input[contains(@placeholder,'概括视频主要内容')][1]",
+        "xpath://div[contains(@class,'post-short-title-wrap')]//input[not(@type='hidden')][1]",
+        "css:.post-short-title-wrap input[type='text']",
+        "css:input[placeholder*='概括视频主要内容']",
+        "css:input[placeholder*='字数建议6-16个字符']",
+    )
+    for selector in selectors:
+        try:
+            ele = ctx.ele(selector, timeout=2.5)
+        except Exception:
+            ele = None
+        if not ele:
+            continue
+        if not _is_visible_element(ele):
+            continue
+        return ele
+    return None
+
+
+def _fill_wechat_short_title(ctx: Any, short_title: str) -> str:
+    final_title = _build_wechat_short_title(short_title)
+    editor = _find_wechat_short_title_input(ctx)
+    if not editor:
+        raise RuntimeError("Failed to locate WeChat short title input.")
+    if not _input_text_field_with_keyboard(editor, final_title):
+        raise RuntimeError("WeChat short title keyboard input failed.")
+    time.sleep(0.3)
+    current = _read_element_text(editor)
+    if re.sub(r"\s+", "", current) == final_title:
+        _log(f"[Uploader] WeChat short title filled: {final_title}")
+        return final_title
+    raise RuntimeError(f"WeChat short title fill verification failed: expected={final_title}, current={current or '-'}")
+
+
+def _fill_caption(ctx: Any, caption: str) -> None:
+    caption = _ensure_required_hashtags(caption)
+    editor = _find_visible_caption_editor(ctx)
+    if not editor:
+        raise RuntimeError("Failed to locate visible caption input element.")
+
+    if not _input_caption_with_keyboard(editor, caption):
+        raise RuntimeError("Caption keyboard input failed on visible editor.")
+
+    time.sleep(0.4)
+    current = _read_element_text(editor) or _read_caption_text(ctx)
+    if REQUIRED_HASHTAGS[0].lower() in current.lower():
+        tag_name = "unknown"
+        class_name = ""
+        try:
+            tag_name = str(editor.tag)
+        except Exception:
+            pass
+        try:
+            class_name = str(editor.attr("class") or "")
+        except Exception:
+            pass
+        _log(f"[Uploader] Caption filled by visible editor: {tag_name} {class_name}".strip())
+        return
+
+    raise RuntimeError("Caption fill verification failed: target input text does not contain required hashtags.")
+
+
+def _wait_draft_saved(ctx: Any, timeout_seconds: int = DRAFT_SAVE_TIMEOUT_SECONDS) -> bool:
+    success_markers = ("已保存", "保存成功", "草稿已保存", "已存为草稿")
+    blocker_markers = ("无法保存草稿", "若要保存草稿，需先取消定时发表", "定时发表将无法保存草稿")
+    failure_markers = ("保存失败", "保存出错", "网络异常", "请求失败")
+    end_at = time.time() + timeout_seconds
+    warned = False
+    while time.time() < end_at:
+        text = str(_read_editor_status(ctx).get("text", ""))
+        if any(m in text for m in blocker_markers):
+            raise RuntimeError("当前页面开启了定时发表，无法保存草稿，请先切换为“不定时”。")
+        if any(m in text for m in failure_markers):
+            raise RuntimeError("页面提示保存草稿失败，请检查网络或页面状态。")
+        if any(m in text for m in success_markers):
+            _log("[Uploader] Draft save success marker detected.")
+            return True
+        if not warned:
+            warned = True
+            _log("[Uploader] Waiting draft-save confirmation...")
+        time.sleep(1)
+    _log("[Uploader] Draft save confirmation timeout (no success marker).")
+    return False
+
+
+def _reset_wechat_draft_save_probe(ctx: Any) -> None:
+    js = """
+    (() => {
+      const key = '__cybercarWechatDraftSaveProbe';
+      const state = window[key] || (window[key] = {events: []});
+      function record(evt) {
+        try {
+          state.events.push(Object.assign({ts: Date.now()}, evt || {}));
+          if (state.events.length > 80) state.events = state.events.slice(-80);
+        } catch (e) {}
+      }
+      if (!state.fetchPatched && typeof window.fetch === 'function') {
+        const origFetch = window.fetch.bind(window);
+        window.fetch = async function(input, init) {
+          const method = String((init && init.method) || (input && input.method) || 'GET');
+          const url = String(typeof input === 'string' ? input : ((input && input.url) || ''));
+          try {
+            const resp = await origFetch(input, init);
+            let body = '';
+            try { body = await resp.clone().text(); } catch (e) {}
+            record({api: 'fetch', method, url, status: Number(resp.status) || 0, ok: !!resp.ok, body: String(body || '').slice(0, 800)});
+            return resp;
+          } catch (err) {
+            record({api: 'fetch', method, url, status: 0, ok: false, error: String(err || '')});
+            throw err;
+          }
+        };
+        state.fetchPatched = true;
+      }
+      if (!state.xhrPatched && window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+        const proto = window.XMLHttpRequest.prototype;
+        const origOpen = proto.open;
+        const origSend = proto.send;
+        proto.open = function(method, url) {
+          this.__cybercarMethod = String(method || 'GET');
+          this.__cybercarUrl = String(url || '');
+          return origOpen.apply(this, arguments);
+        };
+        proto.send = function() {
+          const xhr = this;
+          const onDone = function() {
+            let body = '';
+            try { body = xhr.responseText || ''; } catch (e) {}
+            record({
+              api: 'xhr',
+              method: String(xhr.__cybercarMethod || 'GET'),
+              url: String(xhr.__cybercarUrl || ''),
+              status: Number(xhr.status) || 0,
+              ok: xhr.status >= 200 && xhr.status < 300,
+              body: String(body || '').slice(0, 800),
+            });
+          };
+          try { xhr.addEventListener('loadend', onDone, {once: true}); } catch (e) { xhr.addEventListener('loadend', onDone); }
+          return origSend.apply(this, arguments);
+        };
+        state.xhrPatched = true;
+      }
+      state.events = [];
+      state.lastResetAt = Date.now();
+      return true;
+    })();
+    """
+    try:
+        ctx.run_js(js)
+    except Exception:
+        pass
+
+
+def _read_wechat_draft_save_probe(ctx: Any) -> list[dict[str, Any]]:
+    js = """
+    (() => {
+      const state = window.__cybercarWechatDraftSaveProbe;
+      if (!state) return [];
+      const events = Array.isArray(state.events) ? state.events.slice(-30) : [];
+      return events.map(evt => ({
+        api: String((evt && evt.api) || ''),
+        method: String((evt && evt.method) || ''),
+        url: String((evt && evt.url) || ''),
+        status: Number((evt && evt.status) || 0),
+        ok: !!(evt && evt.ok),
+        body: String((evt && evt.body) || ''),
+        error: String((evt && evt.error) || ''),
+        ts: Number((evt && evt.ts) || 0),
+      }));
+    })();
+    """
+    try:
+        payload = ctx.run_js(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    events: list[dict[str, Any]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
+def _detect_wechat_draft_save_via_network(ctx: Any) -> tuple[bool, str]:
+    events = _read_wechat_draft_save_probe(ctx)
+    if not events:
+        return False, ""
+
+    success_body_markers = (
+        '"ret":0',
+        '"code":0',
+        '"errcode":0',
+        '"errmsg":"ok"',
+        '"message":"success"',
+        '"success":true',
+    )
+    failure_body_markers = (
+        '"ret":-',
+        '"errcode":-',
+        '"success":false',
+        '"errmsg":"fail"',
+        '"message":"fail"',
+    )
+    save_url_markers = ("draft", "save", "post", "create", "finder")
+
+    for item in reversed(events):
+        method = str(item.get("method", "") or "").upper()
+        url = str(item.get("url", "") or "")
+        body = str(item.get("body", "") or "")
+        status = int(item.get("status", 0) or 0)
+        signal = f"{url}\n{body}".lower()
+        if method not in {"POST", "PUT"}:
+            continue
+        if not any(token in signal for token in save_url_markers):
+            continue
+        if any(marker in signal for marker in failure_body_markers):
+            return False, f"network failure marker: status={status}, url={url}"
+        if status >= 200 and status < 300 and any(marker in signal for marker in success_body_markers):
+            return True, f"network success marker: status={status}, url={url}"
+        if status >= 200 and status < 300 and "draft" in signal:
+            return True, f"draft network request succeeded: status={status}, url={url}"
+    return False, ""
+
+
+def _reset_bilibili_publish_probe(ctx: Any) -> None:
+    js = """
+    (() => {
+      const key = '__cybercarBilibiliPublishProbe';
+      const state = window[key] || (window[key] = {events: []});
+      function record(evt) {
+        try {
+          state.events.push(Object.assign({ts: Date.now()}, evt || {}));
+          if (state.events.length > 80) state.events = state.events.slice(-80);
+        } catch (e) {}
+      }
+      if (!state.fetchPatched && typeof window.fetch === 'function') {
+        const origFetch = window.fetch.bind(window);
+        window.fetch = async function(input, init) {
+          const method = String((init && init.method) || (input && input.method) || 'GET');
+          const url = String(typeof input === 'string' ? input : ((input && input.url) || ''));
+          try {
+            const resp = await origFetch(input, init);
+            let body = '';
+            try { body = await resp.clone().text(); } catch (e) {}
+            record({api: 'fetch', method, url, status: Number(resp.status) || 0, ok: !!resp.ok, body: String(body || '').slice(0, 800)});
+            return resp;
+          } catch (err) {
+            record({api: 'fetch', method, url, status: 0, ok: false, error: String(err || '')});
+            throw err;
+          }
+        };
+        state.fetchPatched = true;
+      }
+      if (!state.xhrPatched && window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+        const proto = window.XMLHttpRequest.prototype;
+        const origOpen = proto.open;
+        const origSend = proto.send;
+        proto.open = function(method, url) {
+          this.__cybercarMethod = String(method || 'GET');
+          this.__cybercarUrl = String(url || '');
+          return origOpen.apply(this, arguments);
+        };
+        proto.send = function() {
+          const xhr = this;
+          const onDone = function() {
+            let body = '';
+            try { body = xhr.responseText || ''; } catch (e) {}
+            record({
+              api: 'xhr',
+              method: String(xhr.__cybercarMethod || 'GET'),
+              url: String(xhr.__cybercarUrl || ''),
+              status: Number(xhr.status) || 0,
+              ok: xhr.status >= 200 && xhr.status < 300,
+              body: String(body || '').slice(0, 800),
+            });
+          };
+          try { xhr.addEventListener('loadend', onDone, {once: true}); } catch (e) { xhr.addEventListener('loadend', onDone); }
+          return origSend.apply(this, arguments);
+        };
+        state.xhrPatched = true;
+      }
+      state.events = [];
+      state.lastResetAt = Date.now();
+      return true;
+    })();
+    """
+    try:
+        ctx.run_js(js)
+    except Exception:
+        pass
+
+
+def _read_bilibili_publish_probe(ctx: Any) -> list[dict[str, Any]]:
+    js = """
+    (() => {
+      const state = window.__cybercarBilibiliPublishProbe;
+      if (!state) return [];
+      const events = Array.isArray(state.events) ? state.events.slice(-30) : [];
+      return events.map(evt => ({
+        api: String((evt && evt.api) || ''),
+        method: String((evt && evt.method) || ''),
+        url: String((evt && evt.url) || ''),
+        status: Number((evt && evt.status) || 0),
+        ok: !!(evt && evt.ok),
+        body: String((evt && evt.body) || ''),
+        error: String((evt && evt.error) || ''),
+        ts: Number((evt && evt.ts) || 0),
+      }));
+    })();
+    """
+    try:
+        payload = ctx.run_js(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    events: list[dict[str, Any]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
+def _summarize_bilibili_publish_probe_events(
+    events: list[dict[str, Any]],
+    *,
+    limit: int = 5,
+) -> str:
+    if not events:
+        return ""
+
+    summaries: list[str] = []
+    for item in reversed(events):
+        method = str(item.get("method", "") or "").upper()
+        url = str(item.get("url", "") or "")
+        status = int(item.get("status", 0) or 0)
+        body = _normalize_text(str(item.get("body", "") or ""), limit=120)
+        signal = f"{url}\n{body}".lower()
+        if method not in {"POST", "PUT"}:
+            continue
+        if not any(token in signal for token in ("archive", "submit", "publish", "add")):
+            continue
+        summaries.append(
+            f"{method} {status} {url} body={body or '-'}"
+        )
+        if len(summaries) >= max(1, int(limit)):
+            break
+    return " | ".join(summaries)
+
+
+def _detect_bilibili_publish_via_network(ctx: Any) -> tuple[bool, str]:
+    events = _read_bilibili_publish_probe(ctx)
+    if not events:
+        return False, ""
+
+    success_body_markers = (
+        '"code":0',
+        '"message":"0"',
+        '"ttl":1',
+        '"aid":',
+        '"bvid":"BV',
+        '"bvid":"bv',
+    )
+    failure_body_markers = (
+        '"code":-',
+        '"code":210',
+        '"code":211',
+        '"code":352',
+        '"message":"error"',
+        '"message":"fail"',
+        '"success":false',
+    )
+    publish_url_markers = ("archive", "submit", "publish", "稿件", "add")
+
+    for item in reversed(events):
+        method = str(item.get("method", "") or "").upper()
+        url = str(item.get("url", "") or "")
+        body = str(item.get("body", "") or "")
+        status = int(item.get("status", 0) or 0)
+        signal = f"{url}\n{body}".lower()
+        if method not in {"POST", "PUT"}:
+            continue
+        if not any(token in signal for token in publish_url_markers):
+            continue
+        if any(marker in signal for marker in failure_body_markers):
+            return False, f"network failure marker: status={status}, url={url}"
+        if status >= 200 and status < 300 and any(marker in signal for marker in success_body_markers):
+            return True, f"network success marker: status={status}, url={url}"
+        if status >= 200 and status < 300 and "archive" in signal:
+            return True, f"archive publish request succeeded: status={status}, url={url}"
+    return False, ""
+
+
+def _diagnose_bilibili_publish_attempt(
+    ctx: Any,
+    primary_ctx: Any,
+    fallback_ctx: Any,
+) -> str:
+    events = _read_bilibili_publish_probe(ctx)
+    relevant_events: list[dict[str, Any]] = []
+    for item in events:
+        method = str(item.get("method", "") or "").upper()
+        url = str(item.get("url", "") or "")
+        body = str(item.get("body", "") or "")
+        signal = f"{url}\n{body}".lower()
+        if method not in {"POST", "PUT"}:
+            continue
+        if not any(token in signal for token in ("archive", "submit", "publish", "稿件", "add")):
+            continue
+        relevant_events.append(item)
+
+    actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+    if not relevant_events:
+        suffix = f"; actions={actions}" if actions else ""
+        return f"no bilibili publish request observed after click{suffix}"
+
+    latest = relevant_events[-1]
+    method = str(latest.get("method", "") or "").upper() or "POST"
+    url = str(latest.get("url", "") or "") or "-"
+    status = int(latest.get("status", 0) or 0)
+    body = _normalize_text(str(latest.get("body", "") or ""), limit=160)
+    error = _normalize_text(str(latest.get("error", "") or ""), limit=120)
+    summary = f"last publish request: {method} {status} {url}"
+    if body:
+        summary += f" body={body}"
+    if error:
+        summary += f" error={error}"
+    if actions:
+        summary += f"; actions={actions}"
+    return summary
+
+
+def _click_save_draft_button(ctx: Any) -> bool:
+    selectors = (
+        "css:.form-btns button.weui-desktop-btn_default",
+        "xpath://button[contains(., '保存草稿')]",
+        "text:保存草稿",
+    )
+    for selector in selectors:
+        try:
+            btn = ctx.ele(selector, timeout=3)
+            if not btn:
+                continue
+            if not _is_visible_element(btn):
+                continue
+            try:
+                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+            except Exception:
+                pass
+            try:
+                btn.click()
+            except Exception:
+                btn.click(by_js=True)
+            _log(f"[Uploader] Clicked save draft by selector: {selector}")
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, timeout_seconds: int = 20) -> bool:
+    js_click = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function isDisabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      const cls = String(el.className || '');
+      if (/(^|\\s)weui-desktop-btn_disabled(\\s|$)/.test(cls)) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      return false;
+    }
+    const nodes = Array.from(document.querySelectorAll(
+      '.form-btns button, .form-btns [role="button"], .weui-desktop-popover_target button, button, [role="button"], a, div, span'
+    )).filter(isVisible);
+    let best = null;
+    let bestScore = -999;
+    for (const el of nodes) {
+      const text = norm(el.innerText || el.textContent || '');
+      if (!text || text.length > 18) continue;
+      if (!/^(发表|发布|立即发表|立即发布)$/.test(text)) continue;
+      const attrs = [
+        String(el.className || ''),
+        String(el.getAttribute('type') || ''),
+        String(el.getAttribute('data-type') || ''),
+      ].join(' ').toLowerCase();
+      const wrap = el.closest('.form-btns, .weui-desktop-btn_wrp, .weui-desktop-popover_target, form, section, div') || el.parentElement || el;
+      const wrapText = norm((wrap && wrap.innerText) || '');
+      let score = 0;
+      if (text === '发表') score += 18;
+      else if (text === '立即发表') score += 16;
+      else if (text === '发布') score += 12;
+      else score += 10;
+      if (/primary/.test(attrs)) score += 12;
+      if (/form-btns/.test(String((wrap && wrap.className) || ''))) score += 8;
+      if (/保存草稿|手机预览/.test(wrapText)) score += 4;
+      if (isDisabled(el)) score -= 40;
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    if (!best) return {state: 'not_found'};
+    if (isDisabled(best)) {
+      return {
+        state: 'disabled',
+        text: norm(best.innerText || best.textContent || ''),
+        className: String(best.className || ''),
+      };
+    }
+    best.click();
+    return {
+      state: 'clicked',
+      text: norm(best.innerText || best.textContent || ''),
+      className: String(best.className || ''),
+    };
+    """
+    end_at = time.time() + max(3, int(timeout_seconds))
+    warned_disabled = False
+    while time.time() < end_at:
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                result = owner.run_js(js_click)
+            except Exception:
+                result = {}
+            if not isinstance(result, dict):
+                continue
+            state = str(result.get("state", "") or "").strip().lower()
+            if state == "clicked":
+                text = str(result.get("text", "") or "").strip() or "发表"
+                _log(f"[Uploader:wechat] Clicked publish button: {text}")
+                return True
+            if state == "disabled" and not warned_disabled:
+                warned_disabled = True
+                btn_text = str(result.get("text", "") or "").strip() or "发表"
+                _log(f"[Uploader:wechat] Publish button still disabled, waiting: {btn_text}")
+        time.sleep(0.8)
+    return False
+
+
+def _save_draft(ctx: Any, retry_count: int = DRAFT_SAVE_RETRY_COUNT) -> None:
+    """
+    只点击一次“保存草稿”，其余重试仅做被动确认。
+    微信页面在弱网或 toast 丢失时二次点击可能产生重复草稿。
+    """
+    tries = max(1, int(retry_count))
+    _reset_wechat_draft_save_probe(ctx)
+    clicked = _click_save_draft_button(ctx)
+    if not clicked:
+        raise RuntimeError("Failed to locate '保存草稿' button. Please save draft manually on page.")
+
+    if _wait_draft_saved(ctx):
+        return
+
+    for attempt in range(2, tries + 1):
+        _log(f"[Uploader] Save not confirmed yet, passive re-check ({attempt}/{tries}) without re-click.")
+        time.sleep(1.0)
+        if _wait_draft_saved(ctx, timeout_seconds=max(8, DRAFT_SAVE_TIMEOUT_SECONDS // 2)):
+            return
+
+    net_ok, net_reason = _detect_wechat_draft_save_via_network(ctx)
+    if net_ok:
+        _log(f"[Uploader] Draft save accepted by network probe: {net_reason}")
+        return
+    if net_reason:
+        _log(f"[Uploader] Draft save network probe did not confirm success: {net_reason}")
+
+    raise RuntimeError("保存草稿未确认成功，请检查页面后重试。")
+
+
+def _read_wechat_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '')
+        .replace(/[\\u200B-\\u200D\\uFEFF]/g, '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    }
+    const url = String((location && location.href) || '');
+    const text = norm((document.body && document.body.innerText) || '');
+    const actions = [];
+    const seen = new Set();
+    const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const t = norm(node.innerText || node.textContent || '');
+      if (!t || t.length > 24) continue;
+      if (seen.has(t)) continue;
+      seen.add(t);
+      actions.push(t);
+      if (actions.length >= 32) break;
+    }
+    const hasPublishAction = actions.some(t => /^(发表|发布|立即发表|立即发布|确认发表|确认发布|继续发表|继续发布)$/.test(t));
+    const hasDraftAction = actions.some(t => /草稿|暂存|保存草稿|保存为草稿/.test(t));
+    const successHint = /(发表成功|发布成功|发表完成|发布完成|已发表|已发布|已提交审核|提交成功|内容已发布|作品已发布|发表后可在.*查看|去发表记录查看|发表记录)/.test(text);
+    const progressHint = /(发表中|发布中|提交中|处理中|正在发表|正在发布|正在提交|审核中)/.test(text);
+    const failureHint = /(发表失败|发布失败|提交失败|网络异常|请完善|不能为空|违规|未通过|驳回)/.test(text);
+    const manageHint = /(发表记录|内容管理|创作中心|作品管理|内容已发布|查看已发表|发表成功)/.test(text)
+      || /\\/platform\\/(post|content)\\/(list|manage|history)/.test(url);
+    const composeHint = /(短标题|视频描述|保存草稿|手机预览|发表动态|添加到合集|声明原创|定时发表)/.test(text)
+      || /\\/platform\\/post\\/create/.test(url)
+      || /\\/micro\\/content\\/post\\/create/.test(url);
+    return {
+      url,
+      action_texts: actions.slice(0, 18),
+      success_hint: successHint,
+      progress_hint: progressHint,
+      failure_hint: failureHint,
+      has_publish_action: hasPublishAction,
+      has_draft_action: hasDraftAction,
+      manage_hint: manageHint,
+      compose_hint: composeHint,
+    };
+    """
+    merged: dict[str, Any] = {
+        "url": "",
+        "action_texts": [],
+        "success_hint": False,
+        "progress_hint": False,
+        "failure_hint": False,
+        "has_publish_action": False,
+        "has_draft_action": False,
+        "manage_hint": False,
+        "compose_hint": False,
+    }
+    seen_actions: set[str] = set()
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        url = str(payload.get("url", "") or "").strip()
+        if url and not merged["url"]:
+            merged["url"] = url
+        actions = payload.get("action_texts")
+        if isinstance(actions, list):
+            for raw in actions:
+                text = str(raw or "").strip()
+                if not text or text in seen_actions:
+                    continue
+                seen_actions.add(text)
+                merged["action_texts"].append(text)
+                if len(merged["action_texts"]) >= 18:
+                    break
+        for key in (
+            "success_hint",
+            "progress_hint",
+            "failure_hint",
+            "has_publish_action",
+            "has_draft_action",
+            "manage_hint",
+            "compose_hint",
+        ):
+            merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+    return merged
+
+
+def _is_wechat_publish_confirmed_from_state(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if bool(state.get("failure_hint")):
+        return False
+    if bool(state.get("success_hint")):
+        return True
+    if bool(state.get("progress_hint")):
+        return False
+    url = str(state.get("url", "") or "").lower()
+    if (
+        any(
+            token in url
+            for token in (
+                "/platform/post/list",
+                "/platform/post/history",
+                "/platform/content/manage",
+                "/platform/content/list",
+                "/micro/content/post/list",
+                "/micro/content/post/history",
+            )
+        )
+        and (not bool(state.get("has_publish_action")))
+    ):
+        return True
+    if bool(state.get("manage_hint")) and (not bool(state.get("has_publish_action"))) and (not bool(state.get("compose_hint"))):
+        return True
+    return False
+
+
+def _merge_wechat_original_state(base: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base or {})
+    for key in (
+        "pageCheckboxFound",
+        "pageCheckboxChecked",
+        "dialogVisible",
+        "dialogAgreementFound",
+        "dialogAgreementChecked",
+        "dialogConfirmFound",
+        "dialogConfirmEnabled",
+    ):
+        merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+    for key in ("url", "pageCheckboxText", "dialogText", "dialogAgreementText"):
+        if (not merged.get(key)) and payload.get(key):
+            merged[key] = payload.get(key)
+    return merged
+
+
+def _is_wechat_original_dialog_open_from_state(state: dict[str, Any]) -> bool:
+    return bool(isinstance(state, dict) and state.get("dialogVisible"))
+
+
+def _is_wechat_original_declared_from_state(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    return bool(state.get("pageCheckboxChecked")) and (not bool(state.get("dialogVisible")))
+
+
+def _can_confirm_wechat_original_from_state(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    return (
+        bool(state.get("dialogVisible"))
+        and bool(state.get("dialogAgreementChecked"))
+        and bool(state.get("dialogConfirmFound"))
+        and bool(state.get("dialogConfirmEnabled"))
+    )
+
+
+def _read_wechat_original_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function isChecked(input, container) {
+      if (input && input.checked) return true;
+      const nodes = [container, input, input && input.parentElement, input && input.closest('.ant-checkbox'), input && input.closest('.ant-checkbox-wrapper')];
+      return nodes.some(node => {
+        const cls = String((node && node.className) || '');
+        return /(^|\\s)ant-checkbox-checked(\\s|$)/.test(cls) || /(^|\\s)ant-checkbox-wrapper-checked(\\s|$)/.test(cls);
+      });
+    }
+    function isDisabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const cls = String(el.className || '');
+      return /(\\bdisabled\\b|weui-desktop-btn_disabled)/i.test(cls);
+    }
+    function checkboxInfo(container) {
+      if (!container) return {found:false, checked:false, text:''};
+      const input = (
+        (container.matches && container.matches('input[type="checkbox"]') && container) ||
+        container.querySelector('input[type="checkbox"]')
+      );
+      const label = container.closest('label') || container.querySelector('label') || container;
+      const text = norm((label && (label.innerText || label.textContent)) || container.innerText || container.textContent || '');
+      const found = !!(input || container.querySelector('.ant-checkbox, .ant-checkbox-wrapper'));
+      return {found, checked:isChecked(input, container), text};
+    }
+    function bestCandidate(candidates, scorer) {
+      let best = null;
+      let bestScore = -999;
+      for (const el of candidates) {
+        const score = scorer(el);
+        if (score > bestScore) {
+          bestScore = score;
+          best = el;
+        }
+      }
+      return best;
+    }
+    const pageCandidates = Array.from(document.querySelectorAll(
+      '.declare-original-checkbox, .form-item, label.ant-checkbox-wrapper, label, div, span'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => !el.closest('.declare-original-dialog'))
+      .filter(el => /声明原创/.test(norm(el.innerText || el.textContent || '')))
+      .slice(0, 80);
+    const pageContainer = bestCandidate(pageCandidates, el => {
+      const text = norm(el.innerText || el.textContent || '');
+      let score = 0;
+      if (el.closest('.declare-original-checkbox')) score += 20;
+      if (el.querySelector('input[type="checkbox"]')) score += 10;
+      if (/声明原创/.test(text)) score += 8;
+      if (/原创标记|广告收入/.test(text)) score += 4;
+      return score;
+    });
+    const pageInfo = checkboxInfo(pageContainer);
+
+    const dialogCandidates = Array.from(document.querySelectorAll(
+      '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .slice(0, 40);
+    const dialog = bestCandidate(dialogCandidates, el => {
+      const text = norm(el.innerText || el.textContent || '');
+      let score = 0;
+      if (/原创权益/.test(text)) score += 20;
+      if (/原创声明须知|使用条款/.test(text)) score += 10;
+      if (/declare-original-dialog/.test(String(el.className || ''))) score += 8;
+      return score;
+    });
+
+    let agreementInfo = {found:false, checked:false, text:''};
+    let confirmFound = false;
+    let confirmEnabled = false;
+    if (dialog) {
+      const agreementCandidates = Array.from(dialog.querySelectorAll(
+        '.original-proto-wrapper, label.ant-checkbox-wrapper, label, div, span'
+      ))
+        .filter(el => isVisible(el))
+        .filter(el => /我已阅读并同意|原创声明须知|使用条款/.test(norm(el.innerText || el.textContent || '')))
+        .slice(0, 40);
+      const agreementContainer = bestCandidate(agreementCandidates, el => {
+        const text = norm(el.innerText || el.textContent || '');
+        let score = 0;
+        if (el.closest('.original-proto-wrapper')) score += 20;
+        if (el.querySelector('input[type="checkbox"]')) score += 10;
+        if (/我已阅读并同意/.test(text)) score += 8;
+        return score;
+      });
+      agreementInfo = checkboxInfo(agreementContainer);
+
+      const confirmCandidates = Array.from(dialog.querySelectorAll('button, [role="button"], a, div, span'))
+        .filter(el => isVisible(el))
+        .filter(el => norm(el.innerText || el.textContent || '') === '声明原创')
+        .slice(0, 20);
+      const confirmButton = bestCandidate(confirmCandidates, el => {
+        let score = 0;
+        if (el.tagName === 'BUTTON') score += 12;
+        if (/primary/.test(String(el.className || '').toLowerCase())) score += 10;
+        return score;
+      });
+      confirmFound = !!confirmButton;
+      confirmEnabled = !!confirmButton && !isDisabled(confirmButton);
+    }
+
+    return {
+      url: String(location.href || ''),
+      pageCheckboxFound: !!pageInfo.found,
+      pageCheckboxChecked: !!pageInfo.checked,
+      pageCheckboxText: String(pageInfo.text || ''),
+      dialogVisible: !!dialog,
+      dialogText: dialog ? norm(dialog.innerText || dialog.textContent || '').slice(0, 160) : '',
+      dialogAgreementFound: !!agreementInfo.found,
+      dialogAgreementChecked: !!agreementInfo.checked,
+      dialogAgreementText: String(agreementInfo.text || ''),
+      dialogConfirmFound: !!confirmFound,
+      dialogConfirmEnabled: !!confirmEnabled,
+    };
+    """
+    state: dict[str, Any] = {}
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            state = _merge_wechat_original_state(state, payload)
+    return state
+
+
+def _click_wechat_original_page_checkbox(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function isChecked(input, container) {
+      if (input && input.checked) return true;
+      const nodes = [container, input, input && input.parentElement, input && input.closest('.ant-checkbox'), input && input.closest('.ant-checkbox-wrapper')];
+      return nodes.some(node => {
+        const cls = String((node && node.className) || '');
+        return /(^|\\s)ant-checkbox-checked(\\s|$)/.test(cls) || /(^|\\s)ant-checkbox-wrapper-checked(\\s|$)/.test(cls);
+      });
+    }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      return false;
+    }
+    let best = null;
+    let bestScore = -999;
+    const candidates = Array.from(document.querySelectorAll(
+      '.declare-original-checkbox, .form-item, label.ant-checkbox-wrapper, label, div, span'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => !el.closest('.declare-original-dialog'))
+      .filter(el => /声明原创/.test(norm(el.innerText || el.textContent || '')))
+      .slice(0, 80);
+    for (const el of candidates) {
+      let score = 0;
+      const text = norm(el.innerText || el.textContent || '');
+      if (el.closest('.declare-original-checkbox')) score += 20;
+      if (el.querySelector('input[type="checkbox"]')) score += 10;
+      if (/声明原创/.test(text)) score += 8;
+      if (/原创标记|广告收入/.test(text)) score += 4;
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    if (!best) return {state:'not_found'};
+    const input = best.matches && best.matches('input[type="checkbox"]') ? best : best.querySelector('input[type="checkbox"]');
+    if (isChecked(input, best)) return {state:'already_checked'};
+    const targets = [
+      best.querySelector('label.ant-checkbox-wrapper'),
+      best.querySelector('.ant-checkbox'),
+      input,
+      best,
+    ].filter(Boolean);
+    for (const target of targets) {
+      if (clickNode(target)) return {state:'clicked'};
+    }
+    return {state:'click_failed'};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = {}
+        state = str((result or {}).get("state", "") or "").strip().lower()
+        if state in {"clicked", "already_checked"}:
+            _log("[Uploader:wechat] Original declaration checkbox enabled.")
+            return True
+    return False
+
+
+def _click_wechat_original_dialog_agreement(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function isChecked(input, container) {
+      if (input && input.checked) return true;
+      const nodes = [container, input, input && input.parentElement, input && input.closest('.ant-checkbox'), input && input.closest('.ant-checkbox-wrapper')];
+      return nodes.some(node => {
+        const cls = String((node && node.className) || '');
+        return /(^|\\s)ant-checkbox-checked(\\s|$)/.test(cls) || /(^|\\s)ant-checkbox-wrapper-checked(\\s|$)/.test(cls);
+      });
+    }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      return false;
+    }
+    const dialogs = Array.from(document.querySelectorAll(
+      '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .slice(0, 20);
+    const dialog = dialogs[0];
+    if (!dialog) return {state:'dialog_not_found'};
+    let best = null;
+    let bestScore = -999;
+    const candidates = Array.from(dialog.querySelectorAll(
+      '.original-proto-wrapper, label.ant-checkbox-wrapper, label, div, span'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => /我已阅读并同意|原创声明须知|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .slice(0, 40);
+    for (const el of candidates) {
+      let score = 0;
+      const text = norm(el.innerText || el.textContent || '');
+      if (el.closest('.original-proto-wrapper')) score += 20;
+      if (el.querySelector('input[type="checkbox"]')) score += 10;
+      if (/我已阅读并同意/.test(text)) score += 8;
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    if (!best) return {state:'checkbox_not_found'};
+    const input = best.matches && best.matches('input[type="checkbox"]') ? best : best.querySelector('input[type="checkbox"]');
+    if (isChecked(input, best)) return {state:'already_checked'};
+    const targets = [
+      best.querySelector('label.ant-checkbox-wrapper'),
+      best.querySelector('.ant-checkbox'),
+      input,
+      best,
+    ].filter(Boolean);
+    for (const target of targets) {
+      if (clickNode(target)) return {state:'clicked'};
+    }
+    return {state:'click_failed'};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = {}
+        state = str((result or {}).get("state", "") or "").strip().lower()
+        if state in {"clicked", "already_checked"}:
+            _log("[Uploader:wechat] Original declaration agreement enabled.")
+            return True
+    return False
+
+
+def _click_wechat_original_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function isDisabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const cls = String(el.className || '');
+      return /(\\bdisabled\\b|weui-desktop-btn_disabled)/i.test(cls);
+    }
+    const dialogs = Array.from(document.querySelectorAll(
+      '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .slice(0, 20);
+    const dialog = dialogs[0];
+    if (!dialog) return {state:'dialog_not_found'};
+    let best = null;
+    let bestScore = -999;
+    const candidates = Array.from(dialog.querySelectorAll('button, [role="button"], a, div, span'))
+      .filter(el => isVisible(el))
+      .filter(el => norm(el.innerText || el.textContent || '') === '声明原创')
+      .slice(0, 20);
+    for (const el of candidates) {
+      let score = 0;
+      if (el.tagName === 'BUTTON') score += 12;
+      if (/primary/.test(String(el.className || '').toLowerCase())) score += 10;
+      if (!isDisabled(el)) score += 6;
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    if (!best) return {state:'not_found'};
+    if (isDisabled(best)) return {state:'disabled'};
+    try { best.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+    try { best.click(); } catch (e) { return {state:'click_failed'}; }
+    return {state:'clicked'};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = {}
+        if str((result or {}).get("state", "") or "").strip().lower() == "clicked":
+            _log("[Uploader:wechat] Original declaration confirmed.")
+            return True
+    return False
+
+
+def _dismiss_wechat_original_dialog(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    if _click_first_matching_button(primary_ctx, fallback_ctx, ("取消",), platform_name="wechat"):
+        return True
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    const dialogs = Array.from(document.querySelectorAll(
+      '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .slice(0, 20);
+    const dialog = dialogs[0];
+    if (!dialog) return false;
+    const closeNode = dialog.querySelector('.weui-desktop-icon-btn__close, .weui-desktop-dialog__hd button, .weui-desktop-dialog__hd [role="button"]');
+    if (!closeNode) return false;
+    try { closeNode.click(); return true; } catch (e) {}
+    return false;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            if bool(owner.run_js(js)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _declare_wechat_original(primary_ctx: Any, fallback_ctx: Any, timeout_seconds: int = 20) -> bool:
+    end_at = time.time() + max(6, int(timeout_seconds))
+
+    def _fail(message: str) -> bool:
+        state = _read_wechat_original_state(primary_ctx, fallback_ctx)
+        if _is_wechat_original_dialog_open_from_state(state):
+            _dismiss_wechat_original_dialog(primary_ctx, fallback_ctx)
+            time.sleep(0.5)
+        _log(f"[Uploader:wechat] {message}")
+        return False
+
+    try:
+        state = _read_wechat_original_state(primary_ctx, fallback_ctx)
+        if _is_wechat_original_declared_from_state(state):
+            _log("[Uploader:wechat] Original declaration already enabled.")
+            return True
+        if (not bool(state.get("pageCheckboxFound"))) and (not _is_wechat_original_dialog_open_from_state(state)):
+            return _fail("Original declaration checkbox not found, continue without it.")
+
+        if not _is_wechat_original_dialog_open_from_state(state):
+            if not bool(state.get("pageCheckboxChecked")):
+                if not _click_wechat_original_page_checkbox(primary_ctx, fallback_ctx):
+                    return _fail("Failed to toggle original declaration checkbox, continue without it.")
+                time.sleep(0.6)
+            while time.time() < end_at:
+                state = _read_wechat_original_state(primary_ctx, fallback_ctx)
+                if _is_wechat_original_dialog_open_from_state(state):
+                    break
+                if _is_wechat_original_declared_from_state(state):
+                    _log("[Uploader:wechat] Original declaration enabled without extra dialog.")
+                    return True
+                time.sleep(0.4)
+            if not _is_wechat_original_dialog_open_from_state(state):
+                return _fail("Original declaration dialog did not appear, continue without it.")
+
+        while time.time() < end_at:
+            state = _read_wechat_original_state(primary_ctx, fallback_ctx)
+            if not _is_wechat_original_dialog_open_from_state(state):
+                if _is_wechat_original_declared_from_state(state):
+                    _log("[Uploader:wechat] Original declaration flow completed.")
+                    return True
+                return _fail("Original declaration dialog closed unexpectedly, continue without it.")
+            if not bool(state.get("dialogAgreementFound")):
+                time.sleep(0.4)
+                continue
+            if not bool(state.get("dialogAgreementChecked")):
+                if not _click_wechat_original_dialog_agreement(primary_ctx, fallback_ctx):
+                    return _fail("Failed to confirm original declaration agreement, continue without it.")
+                time.sleep(0.5)
+                continue
+            if not _can_confirm_wechat_original_from_state(state):
+                time.sleep(0.4)
+                continue
+            if not _click_wechat_original_confirm_button(primary_ctx, fallback_ctx):
+                return _fail("Failed to click original declaration confirm button, continue without it.")
+            confirm_end_at = time.time() + 6
+            while time.time() < confirm_end_at:
+                state = _read_wechat_original_state(primary_ctx, fallback_ctx)
+                if not _is_wechat_original_dialog_open_from_state(state):
+                    if _is_wechat_original_declared_from_state(state):
+                        _log("[Uploader:wechat] Original declaration flow completed.")
+                        return True
+                    return _fail("Original declaration dialog closed but checkbox did not stick, continue without it.")
+                time.sleep(0.4)
+            return _fail("Original declaration dialog did not close after confirm, continue without it.")
+        return _fail("Original declaration timed out, continue without it.")
+    except Exception as exc:
+        return _fail(f"Original declaration failed with unexpected error: {exc}")
+
+
+def _wait_wechat_publish_feedback(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    expected_title: str = "",
+    timeout_seconds: int = WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS,
+) -> None:
+    end_at = time.time() + max(10, int(timeout_seconds))
+    warned = False
+    no_tip_clicked = False
+    while time.time() < end_at:
+        if not no_tip_clicked:
+            no_tip_clicked = _click_first_matching_button(
+                primary_ctx,
+                fallback_ctx,
+                ("不再提醒",),
+                platform_name="wechat",
+            )
+        _click_first_matching_button(
+            primary_ctx,
+            fallback_ctx,
+            ("直接发表", "确认发表", "确认发布", "继续发表", "继续发布"),
+            platform_name="wechat",
+        )
+        state = _read_wechat_publish_state(primary_ctx, fallback_ctx)
+        if _is_wechat_publish_confirmed_from_state(state):
+            _log("[Uploader:wechat] Publish feedback inferred by post-submit state.")
+            return
+        if bool(state.get("failure_hint")):
+            state_actions = state.get("action_texts")
+            raise RuntimeError(
+                "wechat page shows publish failure marker: "
+                f"url={state.get('url') or '-'}, actions={state_actions if isinstance(state_actions, list) else []}"
+            )
+        if not warned:
+            warned = True
+            _log("[Uploader:wechat] Waiting publish feedback...")
+        time.sleep(1.0)
+
+    actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+    if actions:
+        _log(f"[Uploader:wechat] Visible action texts after publish click: {actions}")
+    state = _read_wechat_publish_state(primary_ctx, fallback_ctx)
+    if _is_wechat_publish_confirmed_from_state(state):
+        _log("[Uploader:wechat] Publish feedback inferred by final state check.")
+        return
+    state_actions = state.get("action_texts")
+    if isinstance(state_actions, list) and state_actions:
+        _log(f"[Uploader:wechat] Final publish-state actions: {state_actions}")
+    state_url = str(state.get("url", "") or "").strip()
+    if state_url:
+        _log(f"[Uploader:wechat] Final publish-state url: {state_url}")
+    verify_page = fallback_ctx if hasattr(fallback_ctx, "get") and hasattr(fallback_ctx, "run_js") else None
+    if verify_page is not None:
+        verified_card = _verify_wechat_publish_in_post_list(
+            verify_page,
+            expected_title=expected_title,
+            timeout_seconds=min(24.0, max(10.0, float(timeout_seconds) / 3.0)),
+        )
+        if verified_card:
+            return
+    raise RuntimeError(f"wechat publish not confirmed within {timeout_seconds}s.")
+
+
+def _get_location_state(ctx: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .find(el => isVisible(el) && norm(el.textContent) === '位置');
+    if (!label) return {hasLocationField: false, current: '', isNone: true};
+    const item = label.closest('.form-item') || label.parentElement;
+    const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
+    const nameEl = wrap && (wrap.querySelector('.location-name') || wrap.querySelector('.place') || wrap.querySelector('.position-display-wrap'));
+    const currentRaw = norm(nameEl ? nameEl.innerText : '');
+    const current = currentRaw.replace(/^位置/, '').trim();
+    return {hasLocationField: true, current, isNone: (!current || /不显示位置|不显示/.test(current))};
+    """
+    try:
+        state = ctx.run_js(js)
+    except Exception:
+        state = {}
+    return state if isinstance(state, dict) else {}
+
+
+def _clear_location_if_selected(ctx: Any) -> None:
+    """
+    尝试将“位置”设置为不显示。找不到可用选项时不阻塞主流程。
+    """
+    before = _get_location_state(ctx)
+    if not before.get("hasLocationField"):
+        _log("[Uploader] Location field not found, skip clear.")
+        return
+
+    if before.get("isNone"):
+        _log("[Uploader] Location already set to '不显示位置'.")
+        return
+
+    js_click_none = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .find(el => isVisible(el) && norm(el.textContent) === '位置');
+    if (!label) return {state: 'missing_field'};
+    const item = label.closest('.form-item') || label.parentElement;
+    const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
+    const display = wrap && (wrap.querySelector('.position-display-wrap') || wrap.querySelector('.position-display') || wrap);
+    if (!display) return {state: 'missing_trigger'};
+    display.click();
+
+    const pool = Array.from((wrap || document).querySelectorAll('.option-item, .location-item, .name, div, span'))
+      .filter(el => isVisible(el));
+    let target = pool.find(el => /^不显示位置$/.test(norm(el.innerText)));
+    if (!target) target = pool.find(el => /不显示位置|不显示|不添加位置/.test(norm(el.innerText)));
+    if (!target) {
+      const globalPool = Array.from(document.querySelectorAll('.option-item, .location-item, .name, div, span'))
+        .filter(el => isVisible(el));
+      target = globalPool.find(el => /^不显示位置$/.test(norm(el.innerText)))
+        || globalPool.find(el => /不显示位置|不显示|不添加位置/.test(norm(el.innerText)));
+    }
+    if (!target) return {state: 'option_not_found'};
+    target.click();
+    return {state: 'clicked', option: norm(target.innerText)};
+    """
+
+    for _ in range(4):
+        try:
+            action = ctx.run_js(js_click_none)
+        except Exception:
+            action = None
+        time.sleep(0.6)
+        after = _get_location_state(ctx)
+        if after.get("isNone"):
+            _log("[Uploader] Location cleared to '不显示位置'.")
+            return
+        if isinstance(action, dict) and action.get("state") in {"missing_field", "missing_trigger", "option_not_found"}:
+            continue
+
+    _log("[Uploader] Could not find '不显示位置' option, keep current location.")
+
+
+def _get_collection_state(ctx: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    function isPlaceholderText(txt) {
+      return txt === '选择合集' || txt === '请选择合集' || txt === '添加到合集';
+    }
+    function stripPickerNodes(root) {
+      if (!root) return root;
+      const clone = root.cloneNode(true);
+      Array.from(clone.querySelectorAll(
+        '.option-item, .option-list, .weui-desktop-dialog, .weui-desktop-popover, ' +
+        '.weui-desktop-dropdown, .selector-panel, [role=\"listbox\"], [role=\"option\"], ul, li'
+      )).forEach(el => el.remove());
+      return clone;
+    }
+
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .find(el => isVisible(el) && norm(el.textContent) === '添加到合集');
+    if (!label) return {hasField: false, current: ''};
+    const item = label.closest('.form-item') || label.parentElement;
+    if (!item) return {hasField: true, current: ''};
+    const trigger = (
+      item.querySelector('.post-album-wrap .post-album-display-wrap, .post-album-wrap .post-album-display') ||
+      item.querySelector('.post-album-display-wrap, .post-album-display') ||
+      item.querySelector('.weui-desktop-form__dropdown, .selector, .select, .dropdown') ||
+      item.querySelector('.weui-desktop-form__control-group') ||
+      item
+    );
+    if (!trigger) return {hasField: true, current: ''};
+
+    const textNodes = Array.from(trigger.querySelectorAll(
+      '.post-album-display-wrap .name, .post-album-display .name, .post-album-display-wrap .value, ' +
+      '.weui-desktop-form__dropdown__value, .weui-desktop-form__dropdown__text, .selector-value, .value, .name, .display, .selected'
+    ))
+      .filter(el => isVisible(el))
+      .filter(el => !el.closest(
+        '.option-item, .option-list, .weui-desktop-dialog, .weui-desktop-popover, ' +
+        '.weui-desktop-dropdown, .selector-panel, [role=\"listbox\"], [role=\"option\"]'
+      ))
+      .map(el => norm(el.innerText || el.textContent))
+      .filter(txt => !!txt && txt.length <= 40);
+    const direct = Array.from(new Set(textNodes)).find(txt => !isPlaceholderText(txt));
+    if (direct) return {hasField: true, current: direct, source: 'direct'};
+
+    const cloned = stripPickerNodes(trigger);
+    const triggerText = norm(cloned ? (cloned.innerText || cloned.textContent || '') : '');
+    if (!triggerText || isPlaceholderText(triggerText)) return {hasField: true, current: '', source: 'empty'};
+
+    const cleaned = triggerText
+      .replace(/添加到合集/g, '')
+      .replace(/选择合集/g, '')
+      .replace(/请选择合集/g, '')
+      .replace(/展开|收起|更多/g, '')
+      .replace(/\\s+/g, ' ')
+      .trim();
+    if (!cleaned || isPlaceholderText(cleaned)) return {hasField: true, current: '', source: 'cleaned-empty'};
+    return {hasField: true, current: cleaned, source: 'fallback'};
+    """
+    try:
+        state = ctx.run_js(js)
+    except Exception:
+        state = {}
+    return state if isinstance(state, dict) else {}
+
+
+def _is_collection_match(current: str, target: str) -> bool:
+    norm_current = re.sub(r"\s+", "", current or "")
+    norm_target = re.sub(r"\s+", "", target or "")
+    if not norm_current or not norm_target:
+        return False
+    return norm_current == norm_target
+
+
+def _select_collection(ctx: Any, collection_name: str) -> None:
+    target = (collection_name or "").strip()
+    if not target:
+        _log("[Uploader] Collection name empty, skip collection selection.")
+        return
+
+    before = _get_collection_state(ctx)
+    if not before.get("hasField"):
+        raise RuntimeError("发布页未找到“添加到合集”字段，无法选择目标合集。")
+
+    current = str(before.get("current", "") or "")
+    if _is_collection_match(current, target):
+        _log(f"[Uploader] Collection already selected: {target}")
+        return
+
+    js_select = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    const target = norm(arguments[0] || '');
+    if (!target) return {state: 'skip'};
+
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .find(el => isVisible(el) && norm(el.textContent) === '添加到合集');
+    if (!label) return {state: 'missing_field'};
+    const item = label.closest('.form-item') || label.parentElement;
+    if (!item) return {state: 'missing_field'};
+
+    const trigger =
+      item.querySelector('.post-album-wrap .post-album-display-wrap, .post-album-wrap .post-album-display, .post-album-wrap') ||
+      item.querySelector('.weui-desktop-form__dropdown, .selector, .select, .dropdown') ||
+      item.querySelector('.weui-desktop-form__control-group') ||
+      item;
+    if (!trigger) return {state: 'missing_trigger'};
+    try {
+      trigger.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+      trigger.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+    } catch (e) {}
+    trigger.click();
+
+    // 部分页面下拉内容在 post-album-wrap 内但默认隐藏，直接点击 option-item 也可生效。
+    const inlineNameNodes = Array.from(item.querySelectorAll('.post-album-wrap .option-item .name'));
+    const inlineExact = inlineNameNodes.find(el => norm(el.innerText || el.textContent) === target);
+    if (inlineExact) {
+      const inlineClick = inlineExact.closest('.option-item') || inlineExact;
+      inlineClick.click();
+      return {state: 'clicked_inline_exact', option: norm(inlineExact.innerText || inlineExact.textContent)};
+    }
+
+    const inlinePartial = inlineNameNodes.find(el => {
+      const txt = norm(el.innerText || el.textContent);
+      return !!txt && (txt.includes(target) || target.includes(txt));
+    });
+    if (inlinePartial) {
+      const inlineClick = inlinePartial.closest('.option-item') || inlinePartial;
+      inlineClick.click();
+      return {state: 'clicked_inline_partial', option: norm(inlinePartial.innerText || inlinePartial.textContent)};
+    }
+
+    const pools = [];
+    const popups = Array.from(document.querySelectorAll(
+      '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown, .selector-panel'
+    )).filter(isVisible);
+    if (popups.length) pools.push(...popups);
+    pools.push(document);
+
+    const score = (txt) => {
+      if (txt === target) return 3;
+      if (txt.includes(target)) return 2;
+      if (target.includes(txt) && txt.length >= 2) return 1;
+      return 0;
+    };
+
+    let best = null;
+    let bestScore = 0;
+    for (const root of pools) {
+      const nodes = Array.from(root.querySelectorAll('.option-item, .name, li, button, div, span, a'))
+        .filter(isVisible);
+      for (const node of nodes) {
+        const txt = norm(node.innerText || node.textContent);
+        if (!txt || txt.length > 40) continue;
+        const s = score(txt);
+        if (s > bestScore) {
+          bestScore = s;
+          best = node;
+        }
+      }
+      if (bestScore >= 3) break;
+    }
+    if (!best || bestScore <= 0) return {state: 'option_not_found'};
+
+    const clickNode =
+      best.closest('.option-item, li, button, a, .name') ||
+      best.parentElement ||
+      best;
+    clickNode.click();
+    return {state: 'clicked', option: norm(clickNode.innerText || clickNode.textContent), score: bestScore};
+    """
+
+    js_collapse_picker = """
+    function blurAndEsc() {
+      try {
+        if (document.activeElement && typeof document.activeElement.blur === 'function') {
+          document.activeElement.blur();
+        }
+      } catch (e) {}
+      try {
+        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+        document.dispatchEvent(new KeyboardEvent('keyup', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+      } catch (e) {}
+      try {
+        if (document.body) document.body.click();
+      } catch (e) {}
+      return true;
+    }
+    return blurAndEsc();
+    """
+
+    confirm_texts = ("\u786e\u5b9a", "\u5b8c\u6210", "\u786e\u8ba4")
+    for attempt in range(1, 7):
+        try:
+            action = ctx.run_js(js_select, target)
+        except Exception:
+            action = None
+        if isinstance(action, dict) and str(action.get("state", "")).startswith("clicked"):
+            # Some picker variants require an explicit confirm button click.
+            _click_first_matching_button(ctx, ctx, confirm_texts, platform_name="wechat")
+        try:
+            ctx.run_js(js_collapse_picker)
+        except Exception:
+            pass
+        time.sleep(0.6)
+        after = _get_collection_state(ctx)
+        current = str(after.get("current", "") or "")
+        if _is_collection_match(current, target):
+            # Re-check once to avoid transient reads from the expanded option panel.
+            time.sleep(0.5)
+            try:
+                ctx.run_js(js_collapse_picker)
+            except Exception:
+                pass
+            stable = _get_collection_state(ctx)
+            stable_current = str(stable.get("current", "") or "")
+            if _is_collection_match(stable_current, target):
+                _log(f"[Uploader] Collection selected: {target}")
+                return
+        action_state = str((action or {}).get("state", "")) if isinstance(action, dict) else ""
+        action_option = str((action or {}).get("option", "")) if isinstance(action, dict) else ""
+        after_source = str(after.get("source", "") or "")
+        _log(
+            f"[Uploader] Collection select retry {attempt}/6: "
+            f"action={action_state or 'none'}, option={action_option or '-'}, "
+            f"current={current or '-'}, source={after_source or '-'}"
+        )
+        if isinstance(action, dict) and action.get("state") in {"missing_field", "missing_trigger"}:
+            break
+
+    final_state = _get_collection_state(ctx)
+    final_current = str(final_state.get("current", "") or "")
+    final_source = str(final_state.get("source", "") or "")
+    raise RuntimeError(
+        f"未能确认合集选择成功: {target}; "
+        f"当前字段值={final_current or '-'}; 读取来源={final_source or '-'}"
+    )
+
+
+def _is_same_tab(a: Any, b: Any) -> bool:
+    if a is b:
+        return True
+    if not a or not b:
+        return False
+    try:
+        return str(getattr(a, "tab_id", "") or "") == str(getattr(b, "tab_id", "") or "")
+    except Exception:
+        return False
+
+
+def _close_work_tab(work_page: Any, root_page: ChromiumPage, reason: str) -> None:
+    if not work_page or _is_same_tab(work_page, root_page):
+        return
+    try:
+        work_page.set.auto_handle_alert(on_off=True, accept=True)
+    except Exception:
+        pass
+    try:
+        work_page.close()
+        _log(f"[Uploader] Closed work tab ({reason}) to release memory.")
+    except Exception as exc:
+        _log(f"[Uploader] Warning: failed to close work tab ({reason}), retry once: {exc}")
+        try:
+            time.sleep(0.4)
+            work_page.close()
+            _log(f"[Uploader] Closed work tab on retry ({reason}).")
+            return
+        except Exception as retry_exc:
+            _log(f"[Uploader] Warning: failed to close work tab ({reason}) after retry: {retry_exc}")
+
+
+def _prepare_upload_tab(page: ChromiumPage, auto_accept_alert: bool = True) -> ChromiumPage:
+    try:
+        tab = page.new_tab(background=False)
+        try:
+            tab.set.auto_handle_alert(on_off=True, accept=bool(auto_accept_alert))
+        except Exception:
+            pass
+        return tab
+    except Exception:
+        try:
+            page.set.auto_handle_alert(on_off=True, accept=bool(auto_accept_alert))
+        except Exception:
+            pass
+        return page
+
+
+def _find_upload_file_input(primary_ctx: Any, fallback_ctx: Any) -> Any:
+    selectors = (
+        "xpath://input[@type='file']",
+        "css:input[type='file']",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        for selector in selectors:
+            try:
+                ele = owner.ele(selector, timeout=8)
+                if ele:
+                    return ele
+            except Exception:
+                continue
+    return None
+
+
+def _fill_draft_once(
+    page: ChromiumPage,
+    target: Path,
+    final_caption: str,
+    collection_name: str,
+    save_draft: bool,
+    publish_now: bool,
+    declare_original: bool,
+    upload_timeout: int,
+    chrome_user_data_dir: str = "",
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Any:
+    if _current_page_matches_publish_entry(page, "wechat", CREATE_POST_URL):
+        _log(f"[Uploader:wechat] Reusing current publish page: {getattr(page, 'url', '')}")
+    else:
+        _log(f"[Uploader] Opening draft page: {CREATE_POST_URL}")
+        _run_page_action(page, "open draft page", lambda: page.get(CREATE_POST_URL))
+    _check_wechat_login_ready(
+        page,
+        chrome_user_data_dir=chrome_user_data_dir,
+        open_url=CREATE_POST_URL,
+        max_refresh_retry=1,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+    editor_ctx = _resolve_post_editor_context(page)
+
+    file_input = _run_page_action(
+        page,
+        "find file input",
+        lambda: _find_upload_file_input(editor_ctx, page),
+    )
+    if not file_input:
+        _activate_upload_trigger_generic(editor_ctx, page, platform_name="wechat")
+        time.sleep(1.0)
+        editor_ctx = _resolve_post_editor_context(page, timeout_seconds=8)
+        file_input = _run_page_action(
+            page,
+            "refind file input",
+            lambda: _find_upload_file_input(editor_ctx, page) or _find_upload_file_input_generic(editor_ctx, page),
+            retries=2,
+        )
+    if not file_input and _wechat_context_looks_like_task_center(editor_ctx, page):
+        _log("[Uploader:wechat] Task-center context detected; reopening micro create page.")
+        _run_page_action(page, "open wechat micro create page", lambda: page.get(WECHAT_MICRO_CREATE_POST_URL))
+        time.sleep(1.0)
+        _check_wechat_login_ready(
+            page,
+            chrome_user_data_dir=chrome_user_data_dir,
+            open_url=WECHAT_MICRO_CREATE_POST_URL,
+            max_refresh_retry=0,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        editor_ctx = _resolve_post_editor_context(page, timeout_seconds=8)
+        file_input = _run_page_action(
+            page,
+            "find file input after micro create reopen",
+            lambda: _find_upload_file_input(editor_ctx, page) or _find_upload_file_input_generic(editor_ctx, page),
+            retries=2,
+        )
+
+    if not file_input:
+        _check_wechat_login_ready(
+            page,
+            chrome_user_data_dir=chrome_user_data_dir,
+            open_url=str(getattr(page, "url", "") or WECHAT_MICRO_CREATE_POST_URL),
+            max_refresh_retry=0,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        try:
+            _log(f"[Uploader:wechat] Current page URL on failure: {page.url}")
+        except Exception:
+            pass
+        top_actions = _collect_visible_action_texts(page, page)
+        if top_actions:
+            _log(f"[Uploader:wechat] Top-level action texts on failure: {top_actions}")
+        actions = _collect_visible_action_texts(editor_ctx, page)
+        if actions:
+            _log(f"[Uploader:wechat] Visible action texts: {actions}")
+        raise RuntimeError("Could not find file input on WeChat draft page.")
+
+    _log(f"[Uploader] Uploading file: {target}")
+    _run_page_action(page, "upload file", lambda: file_input.input(str(target)))
+    editor_ctx = _wait_upload_ready(page, editor_ctx, timeout_seconds=upload_timeout)
+
+    # 上传完成后重新解析上下文，避免 frame 重绘后句柄失效。
+    editor_ctx = _resolve_post_editor_context(page)
+
+    _log("[Uploader] Location strategy: 不主动选择位置，沿用当前浏览器网络/代理环境。")
+    _clear_location_if_selected(editor_ctx)
+    _fill_caption(editor_ctx, final_caption)
+    wechat_short_title = _fill_wechat_short_title(editor_ctx, final_caption)
+    _select_collection(editor_ctx, collection_name)
+    if declare_original:
+        _declare_wechat_original(editor_ctx, page)
+    # 等待前端把描述字段变更同步到页面状态后再保存草稿。
+    time.sleep(0.8)
+    if save_draft:
+        _save_draft(editor_ctx)
+        _log("[Success] 草稿已保存。请到草稿箱检查后手动发布。")
+    elif publish_now:
+        if not _click_wechat_primary_publish_button(editor_ctx, page):
+            actions = _collect_visible_action_texts(editor_ctx, page)
+            if actions:
+                _log(f"[Uploader:wechat] Visible action texts: {actions}")
+            raise RuntimeError("Failed to locate publish button on wechat page.")
+        _click_first_matching_button(
+            editor_ctx,
+            page,
+            ("确认发表", "确认发布", "继续发表", "继续发布"),
+            platform_name="wechat",
+        )
+        _wait_wechat_publish_feedback(editor_ctx, page, expected_title=wechat_short_title)
+        _log("[Success:wechat] 发布已确认。")
+    else:
+        _log("[Success] 视频已上传并填写文案（未保存草稿）。请在当前页手动保存或发布。")
+    return editor_ctx
+
+
+def _should_retry_platform_publish_fill(exc: Exception, platform_name: str) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    if "upload timeout" in message or "could not find file input" in message:
+        return True
+    if platform_name == "douyin":
+        return "failed to verify caption input on douyin" in message
+    if platform_name == "wechat":
+        return (
+            "caption fill verification failed" in message
+            or "visible caption input element" in message
+            or "wechat short title" in message
+            or "short title input" in message
+        )
+    return False
+
+
+def fill_draft_wechat(
+    workspace: Workspace,
+    caption: Optional[str] = None,
+    target_video: Optional[Path] = None,
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    debug_port: int = DEFAULT_PORT,
+    save_draft: bool = True,
+    publish_now: bool = False,
+    declare_original: bool = False,
+    upload_timeout: int = UPLOAD_TIMEOUT_SECONDS,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Path:
+    _log("[Uploader] Connecting Chrome")
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=CREATE_POST_URL,
+    )
+
+    target = target_video or _find_latest_processed(workspace, include_images=True)
+    if not target:
+        raise RuntimeError("No processed media found in 2_Processed / 2_Processed_Images.")
+
+    raw_caption = (caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION
+    final_caption = _ensure_required_hashtags(raw_caption)
+    effective_publish_now = bool(publish_now)
+    effective_save_draft = bool(save_draft) and not effective_publish_now
+
+    # Use a dedicated work tab and close it after upload to avoid lingering
+    # "Leave site?" dialogs occupying the desktop.
+    work_page = _prepare_upload_tab(page, auto_accept_alert=True)
+    try:
+        for attempt in range(2):
+            try:
+                _fill_draft_once(
+                    work_page,
+                    target,
+                    final_caption,
+                    collection_name,
+                    effective_save_draft,
+                    effective_publish_now,
+                    bool(declare_original),
+                    upload_timeout,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_registry_file=telegram_registry_file,
+                    telegram_timeout_seconds=telegram_timeout_seconds,
+                    telegram_api_base=telegram_api_base,
+                    notify_env_prefix=notify_env_prefix,
+                )
+                return target
+            except Exception as exc:
+                if _is_alert_error(exc) and attempt == 0:
+                    _log("[Uploader:wechat] Alert detected; recreate work tab and retry once.")
+                    _close_work_tab(work_page, page, reason="wechat-alert-retry")
+                    work_page = _prepare_upload_tab(page, auto_accept_alert=True)
+                    continue
+                if _should_retry_platform_publish_fill(exc, "wechat") and attempt == 0:
+                    _log(f"[Uploader:wechat] Retry after transient publish-fill failure: {exc}")
+                    _close_work_tab(work_page, page, reason="wechat-fill-retry")
+                    work_page = _prepare_upload_tab(page, auto_accept_alert=True)
+                    continue
+                raise
+        return target
+    finally:
+        _close_work_tab(work_page, page, reason="wechat-draft-finish")
+
+def _wait_upload_ready_generic(
+    page: ChromiumPage,
+    ctx: Any,
+    platform_name: str,
+    timeout_seconds: int = UPLOAD_TIMEOUT_SECONDS,
+    upload_target: Optional[Path] = None,
+) -> Any:
+    busy_markers = ("上传中", "处理中", "转码中", "正在上传", "正在处理")
+    failure_markers = ("上传失败", "上传出错", "网络异常", "请重新上传", "处理失败")
+    bilibili_ready_markers = (
+        "标题",
+        "分区",
+        "标签",
+        "简介",
+        "加入合集",
+        "二创设置",
+        "更多设置",
+        "立即投稿",
+        "存草稿",
+        "稿件设置",
+        "视频封面",
+        "创作声明",
+        "转载",
+    )
+    bilibili_upload_entry_markers = ("点击上传或将视频拖拽到此区域", "当前审核队列快速", "视频大小16G以内", "拖拽到此区域")
+    end_at = time.time() + max(30, int(timeout_seconds))
+    bilibili_entry_since = 0.0
+    bilibili_busy_since = 0.0
+    bilibili_reupload_attempted = False
+
+    def _retry_bilibili_upload_once(reason: str) -> bool:
+        nonlocal ctx, bilibili_entry_since, bilibili_busy_since, bilibili_reupload_attempted
+        if platform_name != "bilibili" or bilibili_reupload_attempted:
+            return False
+        if not upload_target:
+            return False
+        bilibili_reupload_attempted = True
+        target_path = str(upload_target)
+        _log(f"[Uploader:{platform_name}] Retry selecting upload file ({reason}): {Path(target_path).name}")
+        try:
+            _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
+            time.sleep(0.4)
+            retry_input = _find_bilibili_upload_file_input(ctx, page) or _find_upload_file_input_generic(ctx, page)
+            if not retry_input:
+                _log(f"[Uploader:{platform_name}] Retry upload input not found.")
+                return False
+            retry_input.input(target_path)
+            bilibili_entry_since = 0.0
+            bilibili_busy_since = 0.0
+            _log(f"[Uploader:{platform_name}] Retry file input submitted, continue waiting.")
+            return True
+        except Exception as exc:
+            _log(f"[Uploader:{platform_name}] Retry file select failed: {exc}")
+            return False
+
+    while time.time() < end_at:
+        try:
+            text = str(ctx.run_js("return (document.body && document.body.innerText) || '';") or "")
+        except Exception:
+            ctx = _resolve_post_editor_context(page, timeout_seconds=6)
+            text = str(ctx.run_js("return (document.body && document.body.innerText) || '';") or "")
+        if any(x in text for x in failure_markers):
+            raise RuntimeError(f"{platform_name} page shows upload failure marker.")
+        if platform_name == "bilibili":
+            js_state = """
+            function isVisible(el) {
+              if (!el) return false;
+              const st = window.getComputedStyle(el);
+              if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+              const r = el.getBoundingClientRect();
+              return r.width > 8 && r.height > 8;
+            }
+            function hasVisibleSelector(selectors) {
+              for (const selector of selectors) {
+                const nodes = Array.from(document.querySelectorAll(selector));
+                if (nodes.some(isVisible)) return true;
+              }
+              return false;
+            }
+            function hasVisibleText(pattern) {
+              const nodes = Array.from(document.querySelectorAll('button, [role="button"], div, span, a, label'));
+              for (const node of nodes) {
+                if (!isVisible(node)) continue;
+                const t = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (pattern.test(t)) return true;
+              }
+              return false;
+            }
+            const text = String((document.body && document.body.innerText) || '');
+            const titleInput = hasVisibleSelector([
+              'input[placeholder*="标题"]',
+              'input[aria-label*="标题"]',
+              '.form-item input[type="text"]',
+              '.bcc-form-item input[type="text"]',
+              'input[maxlength="80"]',
+            ]);
+            const descInput = hasVisibleSelector([
+              'textarea[placeholder*="简介"]',
+              'textarea[placeholder*="描述"]',
+              '.ql-editor[contenteditable="true"]',
+              '[contenteditable="true"]',
+            ]);
+            const publishBtn = hasVisibleText(/(立即投稿|投稿|发布|存草稿|定时发布)/);
+            const uploadAreaVisible = hasVisibleSelector([
+              '.upload-area',
+              '.upload-wrp',
+              '.bcc-upload',
+            ]);
+            const uploadEntry = uploadAreaVisible && hasVisibleText(/(上传视频|点击上传|拖拽到此区域|拖拽)/);
+            const fileCount = Array.from(document.querySelectorAll("input[type='file']")).reduce((acc, el) => {
+              const n = (el && el.files && Number(el.files.length || 0)) || 0;
+              return n > acc ? n : acc;
+            }, 0);
+            const busy = /\\b\\d{1,3}%\\b/.test(text) || /(上传中|正在上传|处理中|正在处理|转码中|校验中|等待转码|排队中?)/.test(text);
+            const success = /(上传成功|上传完成|完成上传|已上传)/.test(text);
+            const ready = ((titleInput || descInput) && publishBtn) || (success && publishBtn);
+            return {
+              ready: !!ready,
+              busy: !!busy,
+              upload_entry: !!uploadEntry,
+              success: !!success,
+              title_input: !!titleInput,
+              publish_btn: !!publishBtn,
+              file_selected: fileCount > 0,
+              file_count: fileCount,
+            };
+            """
+            state: dict[str, Any] = {}
+            for owner in (ctx, page):
+                if not owner:
+                    continue
+                try:
+                    payload = owner.run_js(js_state)
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict) and payload:
+                    state = payload
+                    break
+            if "未提交的视频" in text and ("继续编辑" in text or "不用了" in text):
+                _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name)
+                time.sleep(1.0)
+                continue
+            ready_hit = bool(state.get("ready")) or any(marker in text for marker in bilibili_ready_markers)
+            if ready_hit:
+                _log(f"[Uploader:{platform_name}] Upload appears completed.")
+                return ctx
+            upload_entry_hit = bool(state.get("upload_entry")) or any(marker in text for marker in bilibili_upload_entry_markers)
+            if upload_entry_hit:
+                if bilibili_entry_since <= 0:
+                    bilibili_entry_since = time.time()
+                bilibili_busy_since = 0.0
+                _log(f"[Uploader:{platform_name}] Waiting for editor form readiness...")
+                if (time.time() - bilibili_entry_since) >= 18 and (not bool(state.get("file_selected"))):
+                    if _retry_bilibili_upload_once("upload entry but no file selected"):
+                        time.sleep(2.0)
+                        continue
+                wait_cap = min(max(90, int(timeout_seconds) // 2), 240)
+                if (time.time() - bilibili_entry_since) >= float(wait_cap):
+                    if _retry_bilibili_upload_once(f"editor readiness missing for {wait_cap}s"):
+                        time.sleep(2.0)
+                        continue
+                    _log(
+                        f"[Uploader:{platform_name}] Editor readiness still missing after {wait_cap}s; "
+                        "continue with best-effort fallback."
+                    )
+                    return ctx
+                time.sleep(2.0)
+                continue
+            percent_hit = bool(re.search(r"\\b\\d{1,3}%\\b", text))
+            busy_hit = bool(state.get("busy")) or bool(
+                re.search(r"(上传中|正在上传|处理中|正在处理|转码中|等待转码|排队中?|校验中|上传校验中)", text)
+            ) or percent_hit
+            if busy_hit:
+                if bilibili_busy_since <= 0:
+                    bilibili_busy_since = time.time()
+                _log(f"[Uploader:{platform_name}] Waiting for upload completion...")
+                # Some B站 pages keep static busy words (e.g. "转码") even without active progress.
+                # If we still have no progress percentage for a while, continue with best-effort fallback.
+                no_progress_cap = min(max(120, int(timeout_seconds) // 3), 240)
+                if (not percent_hit) and ((time.time() - bilibili_busy_since) >= float(no_progress_cap)):
+                    if _retry_bilibili_upload_once(f"busy-without-progress for {no_progress_cap}s"):
+                        time.sleep(2.0)
+                        continue
+                    _log(
+                        f"[Uploader:{platform_name}] Busy markers without progress ratio for {no_progress_cap}s; "
+                        "continue with best-effort fallback."
+                    )
+                    return ctx
+                time.sleep(2.0)
+                continue
+            bilibili_entry_since = 0.0
+            bilibili_busy_since = 0.0
+        else:
+            busy_hit = any(x in text for x in busy_markers)
+        if busy_hit:
+            _log(f"[Uploader:{platform_name}] Waiting for upload completion...")
+            time.sleep(2)
+            continue
+        _log(f"[Uploader:{platform_name}] Upload appears completed.")
+        return ctx
+    raise TimeoutError(f"{platform_name} upload timeout ({timeout_seconds}s).")
+
+
+def _find_upload_file_input_generic(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    prefer_video: Optional[bool] = None,
+) -> Any:
+    video_selectors = (
+        "xpath://input[@type='file' and contains(translate(@accept,'VIDEO','video'),'video')]",
+        "xpath://input[@type='file' and contains(@accept,'video')]",
+    )
+    image_selectors = (
+        "xpath://input[@type='file' and contains(translate(@accept,'IMAGE','image'),'image')]",
+        "xpath://input[@type='file' and contains(@accept,'image')]",
+    )
+    common_selectors = (
+        "xpath://input[@type='file' and contains(translate(@name,'UPLOAD','upload'),'upload')]",
+        "xpath://input[@type='file' and contains(translate(@id,'UPLOAD','upload'),'upload')]",
+        "xpath://input[@type='file' and (contains(@accept,'video') or contains(@accept,'image') or contains(@class,'upload') or not(@accept))]",
+        "xpath://input[@type='file']",
+        "css:input[type='file']",
+    )
+    if prefer_video is False:
+        selectors = (*image_selectors, *video_selectors, *common_selectors)
+    else:
+        selectors = (*video_selectors, *image_selectors, *common_selectors)
+    fallback_candidate = None
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                ele = owner.ele(selector, timeout=3)
+                if not ele:
+                    continue
+                if _is_visible_element(ele):
+                    return ele
+                if fallback_candidate is None:
+                    fallback_candidate = ele
+            except Exception:
+                continue
+    return fallback_candidate
+
+
+def _ensure_xiaohongshu_upload_mode(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    prefer_video: bool,
+    max_rounds: int = 3,
+) -> bool:
+    target_text = "上传视频" if prefer_video else "上传图文"
+    other_text = "上传图文" if prefer_video else "上传视频"
+    js_switch = f"""
+    const target = {json.dumps(target_text)};
+    const other = {json.dumps(other_text)};
+    function norm(s) {{
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }}
+    function isVisible(el) {{
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }}
+    function isActive(el) {{
+      if (!el) return false;
+      const cls = String(el.className || '').toLowerCase();
+      if (/(active|current|selected|is-active|tab-active|on)/.test(cls)) return true;
+      const aria = String(el.getAttribute('aria-selected') || '').toLowerCase();
+      if (aria === 'true') return true;
+      const tab = el.closest('[role=\"tab\"]');
+      if (tab && String(tab.getAttribute('aria-selected') || '').toLowerCase() === 'true') return true;
+      return false;
+    }}
+    const candidates = Array.from(document.querySelectorAll('a,button,div,span'))
+      .filter(isVisible)
+      .map(el => {{ return {{ el, text: norm(el.innerText || el.textContent || '') }}; }})
+      .filter(item => item.text === target || item.text === other);
+    if (!candidates.length) {{
+      return {{ state: 'not_found', target, other, current: '', available: [] }};
+    }}
+    let current = '';
+    for (const item of candidates) {{
+      if (isActive(item.el)) {{
+        current = item.text;
+        break;
+      }}
+    }}
+    if (!current) {{
+      const bodyText = norm((document.body && document.body.innerText) || '');
+      if (target === '上传图文' && /(上传图文|上传图片|选择图片|拖拽图片)/.test(bodyText)) current = target;
+      if (target === '上传视频' && /(上传视频|拖拽视频)/.test(bodyText)) current = target;
+    }}
+    const targetItem = candidates.find(item => item.text === target);
+    const available = candidates.map(item => item.text);
+    if (!targetItem) {{
+      return {{ state: 'target_missing', target, other, current, available }};
+    }}
+    if (current === target) {{
+      return {{ state: 'already', target, other, current, available }};
+    }}
+    let clicked = false;
+    try {{
+      targetItem.el.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+    }} catch (e) {{}}
+    try {{
+      targetItem.el.click();
+      clicked = true;
+    }} catch (e) {{
+      try {{
+        targetItem.el.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true }}));
+        clicked = true;
+      }} catch (ee) {{}}
+    }}
+    return {{ state: clicked ? 'clicked' : 'click_fail', target, other, current, available }};
+    """
+
+    rounds = max(1, int(max_rounds))
+    for round_idx in range(rounds):
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                payload = owner.run_js(js_switch)
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                continue
+            state = str(payload.get("state") or "").strip().lower()
+            if state == "already":
+                if round_idx == 0:
+                    _log(f"[Uploader:xiaohongshu] Upload mode already on: {target_text}")
+                return True
+            if state == "clicked":
+                _log(f"[Uploader:xiaohongshu] Switched upload mode to: {target_text}")
+                time.sleep(0.8)
+                break
+        else:
+            time.sleep(0.6)
+            continue
+    _log(f"[Uploader:xiaohongshu] Unable to confirm upload mode: {target_text}")
+    return False
+
+
+def _ensure_douyin_publish_mode(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    prefer_video: bool,
+    max_rounds: int = 3,
+) -> bool:
+    target_text = "上传视频" if prefer_video else "发布图文"
+    other_text = "发布图文" if prefer_video else "上传视频"
+    expected_url_markers = (
+        ("creator.douyin.com/creator-micro/content/upload", "creator.douyin.com/creator-micro/content/post/create")
+        if prefer_video
+        else ("creator.douyin.com/creator-micro/content/post/image",)
+    )
+    body_patterns = (
+        r"(上传视频|发布视频|选择视频|拖拽视频)"
+        if prefer_video
+        else r"(发布图文|上传图文|上传图片|选择图片|拖拽图片|已添加\d+张图片)"
+    )
+    js_switch = f"""
+    const target = {json.dumps(target_text)};
+    const other = {json.dumps(other_text)};
+    const bodyPattern = new RegExp({json.dumps(body_patterns)});
+    function norm(s) {{
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }}
+    function isVisible(el) {{
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }}
+    function isActive(el) {{
+      if (!el) return false;
+      const cls = String(el.className || '').toLowerCase();
+      if (/(active|current|selected|is-active|tab-active|on)/.test(cls)) return true;
+      const aria = String(el.getAttribute('aria-selected') || '').toLowerCase();
+      if (aria === 'true') return true;
+      const tab = el.closest('[role="tab"]');
+      if (tab && String(tab.getAttribute('aria-selected') || '').toLowerCase() === 'true') return true;
+      return false;
+    }}
+    const candidates = Array.from(document.querySelectorAll('a,button,div,span'))
+      .filter(isVisible)
+      .map(el => {{ return {{ el, text: norm(el.innerText || el.textContent || '') }}; }})
+      .filter(item => item.text === target || item.text === other);
+    if (!candidates.length) {{
+      const bodyText = norm((document.body && document.body.innerText) || '');
+      if (bodyPattern.test(bodyText)) {{
+        return {{ state: 'already', target, other, current: target, available: [] }};
+      }}
+      return {{ state: 'not_found', target, other, current: '', available: [] }};
+    }}
+    let current = '';
+    for (const item of candidates) {{
+      if (isActive(item.el)) {{
+        current = item.text;
+        break;
+      }}
+    }}
+    if (!current) {{
+      const bodyText = norm((document.body && document.body.innerText) || '');
+      if (bodyPattern.test(bodyText)) current = target;
+    }}
+    const targetItem = candidates.find(item => item.text === target);
+    const available = candidates.map(item => item.text);
+    if (!targetItem) {{
+      return {{ state: 'target_missing', target, other, current, available }};
+    }}
+    if (current === target) {{
+      return {{ state: 'already', target, other, current, available }};
+    }}
+    let clicked = false;
+    try {{
+      targetItem.el.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+    }} catch (e) {{}}
+    try {{
+      targetItem.el.click();
+      clicked = true;
+    }} catch (e) {{
+      try {{
+        targetItem.el.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true }}));
+        clicked = true;
+      }} catch (ee) {{}}
+    }}
+    return {{ state: clicked ? 'clicked' : 'click_fail', target, other, current, available }};
+    """
+
+    rounds = max(1, int(max_rounds))
+    for round_idx in range(rounds):
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                owner_url = str(getattr(owner, "url", "") or "")
+            except Exception:
+                owner_url = ""
+            if owner_url and any(marker in owner_url for marker in expected_url_markers):
+                if round_idx == 0:
+                    _log(f"[Uploader:douyin] Publish mode already on by URL: {target_text}")
+                return True
+            try:
+                payload = owner.run_js(js_switch)
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                continue
+            state = str(payload.get("state") or "").strip().lower()
+            if state == "already":
+                if round_idx == 0:
+                    _log(f"[Uploader:douyin] Publish mode already on: {target_text}")
+                return True
+            if state == "clicked":
+                _log(f"[Uploader:douyin] Switched publish mode to: {target_text}")
+                time.sleep(0.8)
+                break
+        else:
+            time.sleep(0.6)
+            continue
+    _log(f"[Uploader:douyin] Unable to confirm publish mode: {target_text}")
+    return False
+
+
+def _ensure_kuaishou_publish_mode(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    prefer_video: bool,
+    max_rounds: int = 3,
+) -> bool:
+    target_text = "上传视频" if prefer_video else "上传图文"
+    other_text = "上传图文" if prefer_video else "上传视频"
+    expected_url_markers = (
+        ("cp.kuaishou.com/article/publish/video?tabtype=2",)
+        if not prefer_video
+        else ("cp.kuaishou.com/article/publish/video",)
+    )
+    body_patterns = (
+        r"(上传视频|拖拽视频|选择视频|发布视频)"
+        if prefer_video
+        else r"(上传图文|发布图文|上传图片|拖拽图片|选择图片|添加图片|已添加\d+张图片)"
+    )
+    js_switch = f"""
+    const target = {json.dumps(target_text)};
+    const other = {json.dumps(other_text)};
+    const bodyPattern = new RegExp({json.dumps(body_patterns)});
+    function norm(s) {{
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }}
+    function isVisible(el) {{
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }}
+    function isActive(el) {{
+      if (!el) return false;
+      const cls = String(el.className || '').toLowerCase();
+      if (/(active|current|selected|is-active|tab-active|on)/.test(cls)) return true;
+      const aria = String(el.getAttribute('aria-selected') || '').toLowerCase();
+      if (aria === 'true') return true;
+      if (String(el.getAttribute('data-active') || '').toLowerCase() === 'true') return true;
+      const tab = el.closest('[role="tab"]');
+      if (tab && String(tab.getAttribute('aria-selected') || '').toLowerCase() === 'true') return true;
+      return false;
+    }}
+    const candidates = Array.from(document.querySelectorAll('a,button,div,span,li'))
+      .filter(isVisible)
+      .map(el => {{ return {{ el, text: norm(el.innerText || el.textContent || '') }}; }})
+      .filter(item => item.text === target || item.text === other);
+    if (!candidates.length) {{
+      const bodyText = norm((document.body && document.body.innerText) || '');
+      if (bodyPattern.test(bodyText)) {{
+        return {{ state: 'already', target, other, current: target, available: [] }};
+      }}
+      return {{ state: 'not_found', target, other, current: '', available: [] }};
+    }}
+    let current = '';
+    for (const item of candidates) {{
+      if (isActive(item.el)) {{
+        current = item.text;
+        break;
+      }}
+    }}
+    if (!current) {{
+      const bodyText = norm((document.body && document.body.innerText) || '');
+      if (bodyPattern.test(bodyText)) current = target;
+    }}
+    const targetItem = candidates.find(item => item.text === target);
+    const available = candidates.map(item => item.text);
+    if (!targetItem) {{
+      return {{ state: 'target_missing', target, other, current, available }};
+    }}
+    if (current === target) {{
+      return {{ state: 'already', target, other, current, available }};
+    }}
+    let clicked = false;
+    try {{
+      targetItem.el.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+    }} catch (e) {{}}
+    try {{
+      targetItem.el.click();
+      clicked = true;
+    }} catch (e) {{
+      try {{
+        targetItem.el.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true }}));
+        clicked = true;
+      }} catch (ee) {{}}
+    }}
+    return {{ state: clicked ? 'clicked' : 'click_fail', target, other, current, available }};
+    """
+
+    rounds = max(1, int(max_rounds))
+    for round_idx in range(rounds):
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                owner_url = str(getattr(owner, "url", "") or "").strip().lower()
+            except Exception:
+                owner_url = ""
+            if owner_url and any(marker in owner_url for marker in expected_url_markers):
+                if prefer_video or "tabtype=2" in owner_url:
+                    if round_idx == 0:
+                        _log(f"[Uploader:kuaishou] Publish mode already on by URL: {target_text}")
+                    return True
+            try:
+                payload = owner.run_js(js_switch)
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                continue
+            state = str(payload.get("state") or "").strip().lower()
+            if state == "already":
+                if round_idx == 0:
+                    _log(f"[Uploader:kuaishou] Publish mode already on: {target_text}")
+                return True
+            if state == "clicked":
+                _log(f"[Uploader:kuaishou] Switched publish mode to: {target_text}")
+                time.sleep(0.8)
+                break
+        else:
+            time.sleep(0.6)
+            continue
+    _log(f"[Uploader:kuaishou] Unable to confirm publish mode: {target_text}")
+    return False
+
+
+def _find_bilibili_upload_file_input(primary_ctx: Any, fallback_ctx: Any) -> Any:
+    js_pick_index = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    const list = Array.from(document.querySelectorAll("input[type='file']"));
+    if (!list.length) return -1;
+    let bestIdx = -1;
+    let bestScore = -1e9;
+    for (let i = 0; i < list.length; i++) {
+      const el = list[i];
+      const name = String(el.getAttribute('name') || '').toLowerCase();
+      const accept = String(el.getAttribute('accept') || '').toLowerCase();
+      const wrap = el.closest('.upload-wrp, .upload-area, .bcc-upload, .upload, form, section, div');
+      const wrapText = String((wrap && wrap.innerText) || '').replace(/\\s+/g, ' ').trim();
+      let score = 0;
+      if (accept.includes('.mp4') || accept.includes('video')) score += 16;
+      if (accept.includes('.txt') && !accept.includes('.mp4')) score -= 12;
+      if (accept.includes('.zip')) score -= 12;
+      if (!name) score += 18;
+      if (name === 'buploader') score += 4;
+      if (el.hasAttribute('multiple')) score += 3;
+      if (wrap && isVisible(wrap)) score += 12;
+      if (isVisible(el)) score += 2;
+      if (/(上传视频|点击上传|拖拽到此区域|拖拽上传)/.test(wrapText)) score += 8;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+    """
+    selectors = (
+        "css:input[type='file'][accept*='.mp4']:not([name])",
+        "xpath://input[@type='file' and contains(@accept,'.mp4') and (not(@name) or normalize-space(@name)='')]",
+        "css:input[type='file'][accept*='.mp4']",
+        "xpath://input[@type='file' and contains(@accept,'.mp4')]",
+        "css:input[type='file'][name='buploader'][accept*='.mp4']",
+        "xpath://input[@type='file' and @name='buploader' and contains(@accept,'.mp4')]",
+        "xpath://input[@type='file' and @name='buploader' and not(contains(@accept,'.txt'))]",
+        "xpath://input[@type='file' and @name='buploader']",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            picked_idx = owner.run_js(js_pick_index)
+        except Exception:
+            picked_idx = -1
+        if isinstance(picked_idx, (int, float)) and int(picked_idx) >= 0:
+            idx = int(picked_idx) + 1
+            try:
+                ele = owner.ele(f"xpath:(//input[@type='file'])[{idx}]", timeout=1.2)
+            except Exception:
+                ele = None
+            if ele:
+                return ele
+        for selector in selectors:
+            try:
+                ele = owner.ele(selector, timeout=1.8)
+            except Exception:
+                ele = None
+            if ele:
+                try:
+                    accept = str(ele.attr("accept") or "").lower()
+                except Exception:
+                    accept = ""
+                if accept and ".txt" in accept and ".mp4" not in accept and "video" not in accept:
+                    continue
+                return ele
+    return _find_upload_file_input_generic(primary_ctx, fallback_ctx)
+
+
+def _read_file_input_binding_state(file_input: Any) -> dict[str, Any]:
+    if not file_input:
+        return {}
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    const files = Array.from(this.files || []);
+    const names = files.map(f => String(f && f.name || '')).filter(Boolean);
+    const size = files.reduce((acc, f) => acc + Number((f && f.size) || 0), 0);
+    return {
+      count: files.length,
+      names: names.slice(0, 3),
+      bytes: size,
+      accept: String(this.getAttribute('accept') || ''),
+      name: String(this.getAttribute('name') || ''),
+      id: String(this.getAttribute('id') || ''),
+      visible: isVisible(this),
+    };
+    """
+    try:
+        payload = file_input.run_js(js)
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_bilibili_file_inputs_snapshot(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    const items = Array.from(document.querySelectorAll("input[type='file'][name='buploader'], input[type='file']"))
+      .map(el => {
+        const files = Array.from(el.files || []);
+        return {
+          name: String(el.getAttribute('name') || ''),
+          accept: String(el.getAttribute('accept') || ''),
+          visible: isVisible(el),
+          count: files.length,
+          names: files.map(f => String((f && f.name) || '')).filter(Boolean).slice(0, 2),
+        };
+      });
+    const maxCount = items.reduce((acc, item) => Math.max(acc, Number(item.count || 0)), 0);
+    return {
+      total: items.length,
+      max_count: maxCount,
+      sample: items.slice(0, 6),
+    };
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload:
+            return payload
+    return {}
+
+
+def _stage_bilibili_upload_via_page_set(page: ChromiumPage, primary_ctx: Any, fallback_ctx: Any, target: Path) -> bool:
+    setter = getattr(page, "set", None)
+    upload_fn = getattr(setter, "upload_files", None) if setter else None
+    if not callable(upload_fn):
+        return False
+
+    target_path = str(target)
+    try:
+        upload_fn(target_path)
+    except Exception as exc:
+        _log(f"[Uploader:bilibili] page.set.upload_files unavailable: {exc}")
+        return False
+
+    for trigger_round in range(2):
+        _activate_upload_trigger_generic(primary_ctx, fallback_ctx, platform_name="bilibili")
+        time.sleep(0.45)
+        snapshot = _read_bilibili_file_inputs_snapshot(primary_ctx, fallback_ctx)
+        max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
+        total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
+        _log(f"[Uploader:bilibili] page.set.upload_files staged check {trigger_round + 1}/2: max_count={max_count}, total_inputs={total}")
+        if max_count > 0:
+            return True
+    return False
+
+
+def _read_generic_file_inputs_snapshot(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = """
+    function collect(root) {
+      const inputs = Array.from(root.querySelectorAll("input[type='file']"));
+      let maxCount = 0;
+      const sample = [];
+      for (const el of inputs) {
+        const count = Number((el && el.files && el.files.length) || 0);
+        if (count > maxCount) maxCount = count;
+        if (sample.length < 6) {
+          sample.push({
+            count,
+            accept: String(el.getAttribute('accept') || ''),
+            name: String(el.getAttribute('name') || ''),
+            id: String(el.id || ''),
+            cls: String(el.className || ''),
+          });
+        }
+      }
+      return {
+        total: inputs.length,
+        max_count: maxCount,
+        sample,
+      };
+    }
+    return collect(document);
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload:
+            return payload
+    return {}
+
+
+def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
+    contexts: list[Any] = []
+    seen: set[int] = set()
+
+    def _add(ctx: Any) -> None:
+        if not ctx:
+            return
+        key = id(ctx)
+        if key in seen:
+            return
+        seen.add(key)
+        contexts.append(ctx)
+
+    for owner in (primary_ctx, fallback_ctx):
+        _add(owner)
+        if not owner:
+            continue
+        try:
+            frames = list(owner.get_frames(timeout=1.5))
+        except Exception:
+            frames = []
+        for frame in frames:
+            _add(frame)
+    return contexts
+
+
+def _read_upload_surface_snapshot(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }
+    function norm(s) {
+      return String(s || '').replace(/\s+/g, ' ').trim();
+    }
+    function wrapText(el) {
+      const wrap = el && (el.closest('label, button, [role="button"], div, section, form') || el.parentElement);
+      return norm((wrap && (wrap.innerText || wrap.textContent)) || '').slice(0, 220);
+    }
+    function rectInfo(el) {
+      const r = (el && el.getBoundingClientRect) ? el.getBoundingClientRect() : { width: 0, height: 0 };
+      return {
+        width: Math.round(Number(r.width || 0)),
+        height: Math.round(Number(r.height || 0)),
+      };
+    }
+    const fileInputs = Array.from(document.querySelectorAll("input[type='file']")).slice(0, 12).map((el, idx) => ({
+      idx,
+      visible: isVisible(el),
+      accept: String(el.getAttribute('accept') || ''),
+      name: String(el.getAttribute('name') || ''),
+      id: String(el.getAttribute('id') || ''),
+      cls: String(el.className || ''),
+      multiple: el.hasAttribute('multiple'),
+      files: Number((el.files && el.files.length) || 0),
+      wrap: wrapText(el),
+    }));
+    const clickables = Array.from(document.querySelectorAll('button, label, [role="button"], div, span, a'))
+      .filter(el => isVisible(el))
+      .map((el, idx) => ({
+        idx,
+        tag: String(el.tagName || ''),
+        text: norm(el.innerText || el.textContent || ''),
+        cls: String(el.className || ''),
+        aria: String(el.getAttribute('aria-label') || ''),
+        wrap: wrapText(el),
+      }))
+      .filter(item => /(上传|图片|图文|拖拽|选择|本地|添加|upload|image|drop)/i.test([item.text, item.cls, item.aria, item.wrap].join(' ')))
+      .slice(0, 40);
+    const uploadZones = Array.from(document.querySelectorAll('div, label, section, article'))
+      .filter(el => isVisible(el))
+      .map((el, idx) => {
+        const text = norm(el.innerText || el.textContent || '');
+        const cls = String(el.className || '');
+        const attrs = Array.from(el.attributes || [])
+          .filter(attr => /^data-|^aria-/.test(String(attr.name || '')))
+          .slice(0, 8)
+          .map(attr => `${String(attr.name || '')}=${String(attr.value || '')}`);
+        const info = rectInfo(el);
+        const clickableAncestor = el.closest('button, label, [role="button"], a, div');
+        return {
+          idx,
+          tag: String(el.tagName || ''),
+          text,
+          cls,
+          attrs: attrs.join(' | '),
+          width: info.width,
+          height: info.height,
+          clickable_tag: String((clickableAncestor && clickableAncestor.tagName) || ''),
+          clickable_cls: String((clickableAncestor && clickableAncestor.className) || ''),
+        };
+      })
+      .filter(item => /(点击上传|直接将图片文件拖入此区域|拖入此区域|上传图片|上传图文|选择图片|添加图片|drop|upload)/i.test([item.text, item.cls, item.attrs, item.clickable_cls].join(' ')))
+      .slice(0, 16);
+    const iframes = Array.from(document.querySelectorAll('iframe')).slice(0, 12).map((el, idx) => ({
+      idx,
+      src: String(el.getAttribute('src') || ''),
+      name: String(el.getAttribute('name') || ''),
+      visible: isVisible(el),
+    }));
+    const shadowHosts = [];
+    const walker = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      const el = walker.currentNode;
+      if (el && el.shadowRoot) {
+        shadowHosts.push({
+          tag: String(el.tagName || ''),
+          cls: String(el.className || ''),
+          text: norm(el.innerText || el.textContent || '').slice(0, 120),
+        });
+        if (shadowHosts.length >= 20) break;
+      }
+    }
+    return {
+      url: location.href,
+      title: document.title,
+      file_inputs: fileInputs,
+      clickables,
+      upload_zones: uploadZones,
+      iframes,
+      shadow_hosts: shadowHosts,
+      body_preview: norm((document.body && document.body.innerText) || '').slice(0, 1200),
+    };
+    """
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload:
+            return payload
+    return {}
+
+
+def _log_upload_surface_snapshot(primary_ctx: Any, fallback_ctx: Any, platform_name: str, reason: str) -> None:
+    snapshot = _read_upload_surface_snapshot(primary_ctx, fallback_ctx)
+    if not snapshot:
+        return
+    try:
+        body_preview = _single_line_preview(str(snapshot.get("body_preview") or ""), limit=400)
+    except Exception:
+        body_preview = ""
+    _log(
+        f"[Uploader:{platform_name}] Upload surface snapshot ({reason}): "
+        f"url={snapshot.get('url') or '-'}, "
+        f"file_inputs={len(snapshot.get('file_inputs') or [])}, "
+        f"iframes={len(snapshot.get('iframes') or [])}, "
+        f"clickables={len(snapshot.get('clickables') or [])}, "
+        f"upload_zones={len(snapshot.get('upload_zones') or [])}, "
+        f"shadow_hosts={len(snapshot.get('shadow_hosts') or [])}, "
+        f"body={body_preview or '-'}"
+    )
+    for item in list(snapshot.get("file_inputs") or [])[:8]:
+        _log(
+            f"[Uploader:{platform_name}] file-input idx={item.get('idx')} visible={item.get('visible')} "
+            f"files={item.get('files')} accept={_single_line_preview(str(item.get('accept') or ''), limit=80) or '-'} "
+            f"name={_single_line_preview(str(item.get('name') or ''), limit=40) or '-'} "
+            f"wrap={_single_line_preview(str(item.get('wrap') or ''), limit=160) or '-'}"
+        )
+    for item in list(snapshot.get("clickables") or [])[:12]:
+        _log(
+            f"[Uploader:{platform_name}] clickable tag={item.get('tag') or '-'} "
+            f"text={_single_line_preview(str(item.get('text') or ''), limit=80) or '-'} "
+            f"aria={_single_line_preview(str(item.get('aria') or ''), limit=60) or '-'} "
+            f"cls={_single_line_preview(str(item.get('cls') or ''), limit=80) or '-'}"
+        )
+    for item in list(snapshot.get("upload_zones") or [])[:8]:
+        _log(
+            f"[Uploader:{platform_name}] upload-zone tag={item.get('tag') or '-'} "
+            f"size={item.get('width') or 0}x{item.get('height') or 0} "
+            f"text={_single_line_preview(str(item.get('text') or ''), limit=120) or '-'} "
+            f"cls={_single_line_preview(str(item.get('cls') or ''), limit=80) or '-'} "
+            f"attrs={_single_line_preview(str(item.get('attrs') or ''), limit=120) or '-'} "
+            f"clickable_tag={item.get('clickable_tag') or '-'} "
+            f"clickable_cls={_single_line_preview(str(item.get('clickable_cls') or ''), limit=80) or '-'}"
+        )
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if owner in (primary_ctx, fallback_ctx):
+            continue
+        try:
+            frame_url = str(getattr(owner, "url", "") or "")
+        except Exception:
+            frame_url = ""
+        try:
+            frame_body = str(owner.run_js("return (document.body && document.body.innerText) || '';") or "")
+        except Exception:
+            frame_body = ""
+        if frame_url or frame_body:
+            _log(
+                f"[Uploader:{platform_name}] iframe snapshot: "
+                f"url={frame_url or '-'} "
+                f"body={_single_line_preview(frame_body, limit=260) or '-'}"
+            )
+
+
+def _stage_generic_upload_via_page_set(
+    page: ChromiumPage,
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    target: Path,
+    platform_name: str,
+) -> bool:
+    setter = getattr(page, "set", None)
+    upload_fn = getattr(setter, "upload_files", None) if setter else None
+    if not callable(upload_fn):
+        return False
+
+    target_path = str(target)
+    try:
+        upload_fn(target_path)
+    except Exception as exc:
+        _log(f"[Uploader:{platform_name}] page.set.upload_files unavailable: {exc}")
+        return False
+
+    for trigger_round in range(2):
+        _activate_upload_trigger_generic(primary_ctx, fallback_ctx, platform_name=platform_name)
+        time.sleep(0.6)
+        snapshot = _read_generic_file_inputs_snapshot(primary_ctx, fallback_ctx)
+        max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
+        total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
+        _log(
+            f"[Uploader:{platform_name}] page.set.upload_files staged check "
+            f"{trigger_round + 1}/2: max_count={max_count}, total_inputs={total}"
+        )
+        if max_count <= 0 and trigger_round == 0:
+            _log_upload_surface_snapshot(primary_ctx, fallback_ctx, platform_name, reason="page-set-stage-empty")
+        if max_count > 0:
+            return True
+    return False
+
+
+def _read_click_effect_snapshot(owner: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }
+    function norm(s) {
+      return String(s || '').replace(/\s+/g, ' ').trim();
+    }
+    const body = document.body || document.documentElement;
+    const bodyText = norm((body && body.innerText) || '');
+    const visibleDialogs = Array.from(document.querySelectorAll('[role="dialog"], .semi-portal, .semi-modal, .modal, .dialog, .popup, .drawer'))
+      .filter(isVisible)
+      .slice(0, 8)
+      .map(el => ({
+        tag: String(el.tagName || ''),
+        cls: String(el.className || ''),
+        text: norm(el.innerText || el.textContent || '').slice(0, 180),
+      }));
+    const uploadHints = Array.from(document.querySelectorAll('div, span, p, button, label'))
+      .filter(isVisible)
+      .map(el => ({
+        tag: String(el.tagName || ''),
+        cls: String(el.className || ''),
+        text: norm(el.innerText || el.textContent || ''),
+      }))
+      .filter(item => /(点击上传|直接将图片文件拖入此区域|拖入此区域|上传图片|上传图文|选择图片|添加图片|本地上传|upload|drop)/i.test([item.text, item.cls].join(' ')))
+      .slice(0, 8);
+    return {
+      url: String(location.href || ''),
+      body_len: bodyText.length,
+      body_hash: bodyText.slice(0, 800),
+      file_inputs: document.querySelectorAll("input[type='file']").length,
+      iframe_count: document.querySelectorAll('iframe').length,
+      dialog_count: visibleDialogs.length,
+      dialogs: visibleDialogs,
+      hints: uploadHints,
+    };
+    """
+    try:
+        payload = owner.run_js(js)
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _log_click_effect_delta(before: dict[str, Any], after: dict[str, Any], platform_name: str) -> None:
+    if not before or not after:
+        return
+    before_dialogs = int(before.get("dialog_count", 0) or 0)
+    after_dialogs = int(after.get("dialog_count", 0) or 0)
+    before_files = int(before.get("file_inputs", 0) or 0)
+    after_files = int(after.get("file_inputs", 0) or 0)
+    before_iframes = int(before.get("iframe_count", 0) or 0)
+    after_iframes = int(after.get("iframe_count", 0) or 0)
+    body_changed = str(before.get("body_hash") or "") != str(after.get("body_hash") or "")
+    _log(
+        f"[Uploader:{platform_name}] Upload click delta: "
+        f"file_inputs={before_files}->{after_files}, "
+        f"dialogs={before_dialogs}->{after_dialogs}, "
+        f"iframes={before_iframes}->{after_iframes}, "
+        f"body_changed={body_changed}"
+    )
+    for item in list(after.get("dialogs") or [])[:4]:
+        _log(
+            f"[Uploader:{platform_name}] dialog-after tag={item.get('tag') or '-'} "
+            f"cls={_single_line_preview(str(item.get('cls') or ''), limit=80) or '-'} "
+            f"text={_single_line_preview(str(item.get('text') or ''), limit=120) or '-'}"
+        )
+    for item in list(after.get("hints") or [])[:4]:
+        _log(
+            f"[Uploader:{platform_name}] hint-after tag={item.get('tag') or '-'} "
+            f"cls={_single_line_preview(str(item.get('cls') or ''), limit=80) or '-'} "
+            f"text={_single_line_preview(str(item.get('text') or ''), limit=120) or '-'}"
+        )
+
+
+def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> None:
+    if platform_name == "bilibili":
+        # Prefer stable upload-area/button selectors to match B站页面结构。
+        bilibili_selectors = (
+            "css:div.upload-wrp div.upload-area",
+            "css:div.bcc-upload.upload div.upload-area",
+            "css:div.upload-area",
+            "xpath://div[contains(@class,'upload-area') and contains(normalize-space(.), '上传视频')]",
+            "xpath://button[normalize-space(.)='上传视频']",
+            "text:上传视频",
+        )
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            for selector in bilibili_selectors:
+                try:
+                    ele = owner.ele(selector, timeout=0.8)
+                except Exception:
+                    ele = None
+                if not ele or (not _is_visible_element(ele)):
+                    continue
+                try:
+                    ele.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+                except Exception:
+                    pass
+                try:
+                    ele.click()
+                except Exception:
+                    try:
+                        ele.click(by_js=True)
+                    except Exception:
+                        continue
+                _log(f"[Uploader:bilibili] Upload trigger clicked by selector: {selector}")
+                return
+
+        js_bili = """
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function norm(s) {
+          return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+        }
+        const nodes = Array.from(document.querySelectorAll('div, button, label, span, a'))
+          .filter(isVisible)
+          .map(el => {
+            const text = norm(el.innerText || el.textContent || '');
+            const cls = String(el.className || '').toLowerCase();
+            let score = 0;
+            if (/upload-area|bcc-upload/.test(cls)) score += 12;
+            if (text === '上传视频') score += 10;
+            if (text.includes('上传视频')) score += 8;
+            if (/点击上传|拖拽到此区域/.test(text)) score += 6;
+            if (el.tagName && el.tagName.toLowerCase() === 'button') score += 4;
+            return {el, score};
+          })
+          .filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score);
+        if (!nodes.length) return 'not_found';
+        nodes[0].el.click();
+        return 'clicked';
+        """
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                state = owner.run_js(js_bili)
+            except Exception:
+                state = ""
+            if str(state or "") == "clicked":
+                _log("[Uploader:bilibili] Upload trigger clicked by bilibili JS fallback.")
+                return
+
+    trigger_pattern = (
+        "(上传图文|上传图片|选择图片|拖拽图片|添加图片|图片上传|图文|上传|选择视频|发布视频|拖拽|点击上传|添加视频|本地上传|投稿|upload|select|video|image|drop)"
+        if platform_name in {"xiaohongshu", "douyin", "kuaishou"}
+        else "(上传|选择视频|发布视频|拖拽|点击上传|添加视频|本地上传|投稿|upload|select|video|drop)"
+    )
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    const patterns = new RegExp(__TRIGGER_PATTERN__, 'i');
+    const nodes = Array.from(document.querySelectorAll('button, label, div, span, a, section'))
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        const cls = String(el.className || '');
+        const aria = String(el.getAttribute('aria-label') || '');
+        const data = Array.from(el.attributes || [])
+          .filter(attr => /^data-|^aria-/.test(String(attr.name || '')))
+          .map(attr => `${String(attr.name || '')}=${String(attr.value || '')}`)
+          .join(' ');
+        if (!patterns.test([text, cls, aria, data].join(' '))) return null;
+        const rect = el.getBoundingClientRect();
+        const area = Number(rect.width || 0) * Number(rect.height || 0);
+        let score = 0;
+        if (/点击上传/.test(text)) score += 80;
+        if (/直接将图片文件拖入此区域|拖入此区域/.test(text)) score += 60;
+        if (/上传图片|上传图文|选择图片|添加图片/.test(text)) score += 50;
+        if (/upload|drop/.test([text, cls, aria, data].join(' ').toLowerCase())) score += 24;
+        if (el.tagName === 'LABEL' || String(el.getAttribute('role') || '').toLowerCase() === 'button') score += 12;
+        if (/upload|drop|drag|image/.test(cls.toLowerCase())) score += 12;
+        if (area > 0 && area < 700000) score += 8;
+        if (area > 700000) score -= 24;
+        if (text.length > 0 && text.length <= 80) score += 6;
+        if (text.length > 200) score -= 20;
+        return { el, text, cls, area, score };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    const target = nodes[0];
+    if (!target) return 'not_found';
+    try {
+      target.el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } catch (e) {}
+    try {
+      target.el.click();
+    } catch (e) {
+      try {
+        target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      } catch (ee) {
+        return 'click_failed';
+      }
+    }
+    return `clicked:${target.text.slice(0, 80)}|${target.cls.slice(0, 80)}|${Math.round(target.area)}`;
+    """
+    js = js.replace("__TRIGGER_PATTERN__", json.dumps(trigger_pattern))
+    clicked = False
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        before_snapshot = _read_click_effect_snapshot(owner) if platform_name == "douyin" else {}
+        try:
+            state = owner.run_js(js)
+        except Exception:
+            state = ""
+        if str(state or "").startswith("clicked:"):
+            _log(f"[Uploader:{platform_name}] Upload trigger clicked: {str(state or '')[8:]}")
+            if platform_name == "douyin":
+                time.sleep(0.5)
+                after_snapshot = _read_click_effect_snapshot(owner)
+                _log_click_effect_delta(before_snapshot, after_snapshot, platform_name)
+            clicked = True
+            break
+
+    if clicked:
+        return
+
+
+def _caption_verification_marker(caption: str) -> str:
+    normalized = _normalize_metadata_text(caption, limit=420)
+    if not normalized:
+        return ""
+
+    stop_tokens = {
+        "cybertruck",
+        "tesla",
+        "cybercar",
+        "video",
+        "shorts",
+        "short",
+        "viral",
+        "china",
+        "trend",
+        "with",
+        "that",
+        "this",
+    }
+    stop_cn = {"赛博皮卡", "特斯拉", "视频", "作品", "发布"}
+
+    # 优先从非 hashtag 正文中抽取验证锚点，避免命中文件名/页面固定文本导致误判。
+    no_hashtag = re.sub(r"#[^\s#]+", " ", normalized)
+    no_hashtag = re.sub(r"\s+", " ", no_hashtag).strip()
+
+    english_candidates: list[str] = []
+    for token in re.findall(r"[a-z0-9_]{5,}", no_hashtag):
+        t = token.lower().strip("_")
+        if not t or t in stop_tokens:
+            continue
+        english_candidates.append(t)
+    if english_candidates:
+        english_candidates.sort(key=len, reverse=True)
+        return english_candidates[0]
+
+    for token in re.findall(r"[\u4e00-\u9fff]{2,10}", no_hashtag):
+        t = token.strip()
+        if t and t not in stop_cn:
+            return t
+
+    for token in re.findall(r"[a-z0-9_]{4,}", normalized):
+        t = token.lower().strip("_")
+        if t and t not in stop_tokens:
+            return t
+    for token in re.findall(r"[\u4e00-\u9fff]{2,}", normalized):
+        t = token.strip()
+        if t and t not in stop_cn:
+            return t
+    return ""
+
+
+def _read_caption_snapshot_generic(owner: Any) -> str:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function badField(el) {
+      const attrs = [
+        el.getAttribute('placeholder') || '',
+        el.getAttribute('data-placeholder') || '',
+        el.getAttribute('aria-label') || '',
+        String(el.className || ''),
+      ].join(' ').toLowerCase();
+      return /search|product|goods|location|link|topic|tag|商品|链接|位置|搜索/.test(attrs);
+    }
+    const nodes = Array.from(document.querySelectorAll('textarea, [contenteditable=\"true\"], input[type=\"text\"]'));
+    const values = [];
+    for (const node of nodes) {
+      if (!isVisible(node) || badField(node)) continue;
+      const val = (node.isContentEditable ? node.innerText : (node.value || node.textContent || '')).trim();
+      if (val) values.push(val);
+      if (values.length >= 10) break;
+    }
+    return values.join('\\n');
+    """
+    try:
+        value = owner.run_js(js)
+    except Exception:
+        value = ""
+    return _normalize_text(str(value or ""), limit=1200)
+
+
+def _read_kuaishou_caption_snapshot(owner: Any) -> str:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function valOf(el) {
+      if (!el) return '';
+      return (el.isContentEditable ? (el.innerText || el.textContent || '') : (el.value || el.textContent || '')).trim();
+    }
+    const fields = Array.from(document.querySelectorAll('textarea, [contenteditable=\"true\"], input[type=\"text\"]'))
+      .filter(isVisible)
+      .map(el => {
+        const attrs = [
+          el.getAttribute('placeholder') || '',
+          el.getAttribute('data-placeholder') || '',
+          el.getAttribute('aria-label') || '',
+          String(el.className || ''),
+          String(el.name || ''),
+        ].join(' ');
+        const wrap = el.closest('form, section, .publish, .video, .editor, div') || el.parentElement || el;
+        const wrapText = String((wrap && wrap.innerText) || '').slice(0, 260);
+        let score = 0;
+        if (/作品描述|描述|文案/.test(attrs)) score += 10;
+        if (/作品描述|描述|文案/.test(wrapText)) score += 7;
+        if (/search|keyword|location|topic|tag|商品|链接|位置|搜索/.test(attrs.toLowerCase())) score -= 10;
+        if (/textarea/i.test(el.tagName)) score += 3;
+        return {el, score};
+      })
+      .sort((a, b) => b.score - a.score);
+    for (const item of fields) {
+      if (item.score < 1) continue;
+      const v = valOf(item.el);
+      if (v) return v;
+    }
+    return '';
+    """
+    try:
+        value = owner.run_js(js)
+    except Exception:
+        value = ""
+    return _normalize_text(str(value or ""), limit=1200)
+
+
+def _caption_marker_exists(text: str, marker: str) -> bool:
+    normalized = _normalize_metadata_text(text, limit=1200)
+    if not normalized:
+        return False
+    if marker:
+        return marker.lower() in normalized
+    return len(normalized) >= 8
+
+
+def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, platform_name: str) -> None:
+    caption = _prepare_caption_for_platform(caption, platform_name=platform_name)
+    verify_marker = _caption_verification_marker(caption)
+    selectors: tuple[str, ...] = (
+        "css:textarea",
+        "xpath://textarea",
+        "css:[contenteditable='true']",
+        "xpath://*[@contenteditable='true']",
+        "css:input[type='text']",
+    )
+    if platform_name == "douyin":
+        selectors = (
+            "xpath://textarea[contains(@placeholder,'描述') or contains(@placeholder,'作品')]",
+            "xpath://div[contains(normalize-space(.), '作品描述')]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '作品描述')]/following::*[@contenteditable='true'][1]",
+            *selectors,
+        )
+    elif platform_name == "xiaohongshu":
+        selectors = (
+            "xpath://textarea[contains(@placeholder,'描述') or contains(@placeholder,'文案')]",
+            "xpath://div[contains(normalize-space(.), '正文')]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '正文')]/following::*[@contenteditable='true'][1]",
+            "xpath://*[@contenteditable='true' and (contains(@data-placeholder,'正文') or contains(@placeholder,'正文'))]",
+            "css:.ql-editor[contenteditable='true']",
+            "css:div[contenteditable='true'][data-placeholder*='正文']",
+            "css:div[contenteditable='true'][placeholder*='正文']",
+            *selectors,
+        )
+    elif platform_name == "kuaishou":
+        selectors = (
+            "xpath://textarea[contains(@placeholder,'作品描述') or contains(@placeholder,'描述')]",
+            "xpath://div[contains(normalize-space(.), '作品描述')]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '作品描述')]/following::*[@contenteditable='true'][1]",
+            *selectors,
+        )
+    elif platform_name == "bilibili":
+        selectors = (
+            "xpath://textarea[contains(@placeholder,'简介') or contains(@placeholder,'描述')]",
+            "xpath://div[contains(normalize-space(.), '简介')]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '简介')]/following::*[@contenteditable='true'][1]",
+            *selectors,
+        )
+
+    strict_verify = platform_name in {"douyin", "xiaohongshu"}
+    tried_candidates = 0
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                ele = owner.ele(selector, timeout=2.0)
+            except Exception:
+                ele = None
+            if not ele or not _is_visible_element(ele):
+                continue
+            if _is_bad_caption_field(ele):
+                continue
+            tried_candidates += 1
+            if not _input_caption_with_keyboard(ele, caption):
+                continue
+            time.sleep(0.35)
+            current = _read_element_text(ele)
+            if not _caption_marker_exists(current, verify_marker):
+                if platform_name == "kuaishou":
+                    current = _read_kuaishou_caption_snapshot(owner)
+                else:
+                    current = _read_caption_snapshot_generic(owner)
+            if _caption_marker_exists(current, verify_marker):
+                _log(f"[Uploader:{platform_name}] Caption filled and verified.")
+                return
+            _log(f"[Uploader:{platform_name}] Caption candidate rejected after verification: {selector}")
+
+    if strict_verify:
+        snapshot = ""
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            if platform_name == "kuaishou":
+                snapshot = _read_kuaishou_caption_snapshot(owner)
+            else:
+                snapshot = _read_caption_snapshot_generic(owner)
+            if snapshot:
+                break
+        raise RuntimeError(
+            f"Failed to verify caption input on {platform_name} "
+            f"(candidates={tried_candidates}, preview={_normalize_text(snapshot, limit=120) or '-'})"
+        )
+
+    if platform_name in {"bilibili", "kuaishou"}:
+        _log(f"[Uploader:{platform_name}] Caption field not found or not verifiable, skip caption fill and continue.")
+        return
+
+    raise RuntimeError(f"Failed to locate caption input on {platform_name}.")
+
+
+def _trim_bilibili_title_candidate(text: str, limit: int = 80) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"https?://\S+", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"#[^\s#]+", " ", cleaned)
+    cleaned = re.sub(r"[\u200B-\u200D\uFEFF]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n-_|,，。!！?？;；:：")
+    if not cleaned:
+        return ""
+    max_len = max(8, int(limit))
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip(" \t\r\n-_|,，。!！?？;；:：")
+    return cleaned
+
+
+def _build_bilibili_title_from_caption(caption: str, limit: int = 80) -> str:
+    raw = str(caption or "").strip()
+    if not raw:
+        return ""
+
+    candidates: list[str] = []
+    for line in re.split(r"[\r\n]+", raw):
+        line = _trim_bilibili_title_candidate(line, limit=max(limit * 2, 120))
+        if not line:
+            continue
+        first_sentence = re.split(r"[。！？!?；;]+", line, maxsplit=1)[0].strip()
+        first_sentence = _trim_bilibili_title_candidate(first_sentence or line, limit=limit)
+        if first_sentence:
+            candidates.append(first_sentence)
+
+    if not candidates:
+        fallback = _trim_bilibili_title_candidate(raw, limit=max(limit * 2, 120))
+        if fallback:
+            first_sentence = re.split(r"[。！？!?；;]+", fallback, maxsplit=1)[0].strip()
+            candidates.append(_trim_bilibili_title_candidate(first_sentence or fallback, limit=limit))
+
+    for candidate in candidates:
+        title = _trim_bilibili_title_candidate(candidate, limit=limit)
+        if title:
+            return title
+    return ""
+
+
+def _build_xiaohongshu_title_from_caption(caption: str, limit: int = 20) -> str:
+    raw = str(caption or "").strip()
+    if not raw:
+        return ""
+
+    candidates: list[str] = []
+    for line in re.split(r"[\r\n]+", raw):
+        cleaned = _trim_bilibili_title_candidate(line, limit=max(limit * 3, 60))
+        if not cleaned:
+            continue
+        first_sentence = re.split(r"[。！？!?；;]+", cleaned, maxsplit=1)[0].strip()
+        title = _trim_bilibili_title_candidate(first_sentence or cleaned, limit=limit)
+        if title:
+            candidates.append(title)
+    if not candidates:
+        fallback = _trim_bilibili_title_candidate(raw, limit=max(limit * 3, 60))
+        if fallback:
+            candidates.append(_trim_bilibili_title_candidate(fallback, limit=limit))
+    for candidate in candidates:
+        title = str(candidate or "").strip().strip("#")
+        if title:
+            return title[: max(8, int(limit))]
+    return ""
+
+
+def _build_image_post_body_from_caption(caption: str, title: str = "") -> str:
+    raw = str(caption or "").strip()
+    if not raw:
+        return ""
+
+    title_norm = re.sub(r"\s+", "", str(title or "")).strip().strip("#").lower()
+    lines = [str(line or "").strip() for line in re.split(r"[\r\n]+", raw) if str(line or "").strip()]
+    if not lines:
+        return raw
+
+    kept: list[str] = []
+    skipped_title = False
+    for line in lines:
+        line_norm = re.sub(r"\s+", "", line).strip().strip("#").lower()
+        if (
+            title_norm
+            and not skipped_title
+            and line_norm
+            and (line_norm == title_norm or title_norm in line_norm or line_norm in title_norm)
+        ):
+            skipped_title = True
+            continue
+        kept.append(line)
+
+    body = "\n".join(kept).strip()
+    return body or raw
+
+
+def _fill_optional_platform_title_field(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    *,
+    platform_name: str,
+    title: str,
+    timeout_seconds: int = 12,
+    strict: bool = False,
+) -> str:
+    final_title = str(title or "").strip()
+    if not final_title:
+        return ""
+
+    selectors: tuple[str, ...] = ()
+    if platform_name == "xiaohongshu":
+        selectors = (
+            "xpath://input[contains(@placeholder,'标题')]",
+            "css:input[placeholder*='标题']",
+            "xpath://textarea[contains(@placeholder,'标题')]",
+            "css:textarea[placeholder*='标题']",
+            "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
+            "xpath://div[contains(normalize-space(.), '标题')]/following::textarea[1]",
+        )
+    elif platform_name == "douyin":
+        selectors = (
+            "xpath://input[contains(@placeholder,'标题')]",
+            "css:input[placeholder*='标题']",
+            "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
+            "xpath://div[contains(normalize-space(.), '封面标题')]/following::input[1]",
+            "xpath://input[@maxlength='30' or @maxlength='40' or @maxlength='50']",
+        )
+    elif platform_name == "kuaishou":
+        selectors = (
+            "xpath://input[contains(@placeholder,'标题')]",
+            "css:input[placeholder*='标题']",
+            "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
+            "xpath://div[contains(normalize-space(.), '作品标题')]/following::input[1]",
+            "xpath://input[@maxlength='30' or @maxlength='40' or @maxlength='50']",
+        )
+    else:
+        return ""
+
+    expect = re.sub(r"\s+", "", final_title).lower()
+    deadline = time.time() + max(4, int(timeout_seconds))
+    tried = 0
+    while time.time() < deadline:
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            for selector in selectors:
+                try:
+                    ele = owner.ele(selector, timeout=1.2)
+                except Exception:
+                    ele = None
+                if not ele or not _is_visible_element(ele):
+                    continue
+                if _is_bad_caption_field(ele):
+                    continue
+                tried += 1
+                try:
+                    ok = _input_text_field_with_keyboard(ele, final_title)
+                except Exception:
+                    ok = False
+                if not ok:
+                    continue
+                time.sleep(0.25)
+                current = re.sub(r"\s+", "", _read_element_text(ele)).lower()
+                if expect and expect in current:
+                    _log(
+                        f"[Uploader:{platform_name}] Title filled: "
+                        f"{_single_line_preview(final_title, limit=40)}"
+                    )
+                    return final_title
+        time.sleep(0.4)
+
+    message = (
+        f"{platform_name} title fill verification failed "
+        f"(candidates={tried}, title={_single_line_preview(final_title, limit=40) or '-'})"
+    )
+    if strict:
+        raise RuntimeError(message)
+    _log(f"[Uploader:{platform_name}] {message}; continue.")
+    return ""
+
+
+def _prepare_image_post_text_payload(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    *,
+    platform_name: str,
+    caption: str,
+) -> str:
+    if str(platform_name or "").strip().lower() not in {"douyin", "xiaohongshu", "kuaishou"}:
+        return str(caption or "").strip()
+
+    title_limit = 20 if platform_name == "xiaohongshu" else 30
+    title = _build_xiaohongshu_title_from_caption(caption, limit=title_limit)
+    if title:
+        _fill_optional_platform_title_field(
+            primary_ctx,
+            fallback_ctx,
+            platform_name=platform_name,
+            title=title,
+            timeout_seconds=10,
+            strict=False,
+        )
+    body = _build_image_post_body_from_caption(caption, title=title)
+    return body or str(caption or "").strip()
+
+
+def _build_publish_verification_tokens(platform_name: str, caption: str) -> list[str]:
+    tokens: list[str] = []
+    title_candidate = _trim_bilibili_title_candidate(caption, limit=32)
+    if title_candidate:
+        tokens.append(title_candidate)
+    marker = _caption_verification_marker(caption)
+    if marker:
+        tokens.append(marker)
+    if str(platform_name or "").strip().lower() == "bilibili":
+        bili_title = _build_bilibili_title_from_caption(caption, limit=32)
+        if bili_title:
+            tokens.insert(0, bili_title)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in tokens:
+        token = re.sub(r"\s+", "", str(raw or "")).strip().lower()
+        if len(token) < 2 or token in seen:
+            continue
+        seen.add(token)
+        deduped.append(str(raw or "").strip())
+    return deduped[:3]
+
+
+def _fill_xiaohongshu_title_from_caption(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    caption: str,
+    timeout_seconds: int = 30,
+) -> str:
+    title = _build_xiaohongshu_title_from_caption(caption, limit=20)
+    if not title:
+        return ""
+
+    expect = re.sub(r"\s+", "", title).lower()
+    selectors = (
+        "xpath://input[contains(@placeholder,'标题')]",
+        "css:input[placeholder*='标题']",
+        "xpath://textarea[contains(@placeholder,'标题')]",
+        "css:textarea[placeholder*='标题']",
+        "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
+        "xpath://div[contains(normalize-space(.), '标题')]/following::textarea[1]",
+        "css:input[type='text']",
+    )
+    deadline = time.time() + max(6, int(timeout_seconds))
+    tried = 0
+    while time.time() < deadline:
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            for selector in selectors:
+                try:
+                    ele = owner.ele(selector, timeout=1.2)
+                except Exception:
+                    ele = None
+                if not ele or not _is_visible_element(ele):
+                    continue
+                tried += 1
+                try:
+                    _input_caption_with_keyboard(ele, title)
+                except Exception:
+                    continue
+                time.sleep(0.25)
+                current = re.sub(r"\s+", "", _read_element_text(ele)).lower()
+                if expect and expect in current:
+                    _log(f"[Uploader:xiaohongshu] Title filled from caption: {_single_line_preview(title, limit=40)}")
+                    return title
+        time.sleep(0.4)
+    _log(f"[Uploader:xiaohongshu] Title field not confirmed after {tried} candidate(s); continue with body only.")
+    return ""
+
+
+def _platform_manage_url(platform_name: str) -> str:
+    token = str(platform_name or "").strip().lower()
+    mapping = {
+        "douyin": DOUYIN_CONTENT_MANAGE_URL,
+        "xiaohongshu": XIAOHONGSHU_NOTE_MANAGE_URL,
+        "kuaishou": KUAISHOU_CONTENT_MANAGE_URL,
+        "bilibili": BILIBILI_UPLOAD_MANAGER_URL,
+    }
+    return str(mapping.get(token, "") or "")
+
+
+def _page_contains_publish_verification_tokens(page: ChromiumPage, expected_tokens: Sequence[str]) -> Optional[str]:
+    tokens = [str(item or "").strip() for item in expected_tokens if str(item or "").strip()]
+    if not tokens:
+        return None
+    js = """
+    (tokens) => {
+      function norm(value) {
+        return String(value || '')
+          .replace(/[\\u200B-\\u200D\\uFEFF]/g, '')
+          .replace(/\\s+/g, '')
+          .trim()
+          .toLowerCase();
+      }
+      const bodyText = norm((document.body && document.body.innerText) || '');
+      for (const raw of (Array.isArray(tokens) ? tokens : [])) {
+        const token = norm(raw);
+        if (!token || token.length < 2) continue;
+        if (bodyText.includes(token)) return raw;
+      }
+      return '';
+    }
+    """
+    try:
+        matched = page.run_js(js, tokens)
+    except Exception:
+        matched = ""
+    result = str(matched or "").strip()
+    return result or None
+
+
+def _verify_platform_publish_in_manage_page(
+    page: ChromiumPage,
+    platform_name: str,
+    expected_tokens: Sequence[str],
+    timeout_seconds: float = 18.0,
+) -> Optional[str]:
+    tokens = [str(item or "").strip() for item in expected_tokens if str(item or "").strip()]
+    if not tokens:
+        return None
+
+    manage_url = _platform_manage_url(platform_name)
+    try:
+        current_url = _page_current_url(page)
+    except Exception:
+        current_url = ""
+    if manage_url and manage_url not in current_url:
+        try:
+            page.get(manage_url)
+        except Exception as exc:
+            _log(f"[Uploader:{platform_name}] Failed to open manage page for publish verification: {exc}")
+            return None
+        time.sleep(1.2)
+
+    end_at = time.time() + max(6.0, float(timeout_seconds))
+    while time.time() < end_at:
+        matched = _page_contains_publish_verification_tokens(page, tokens)
+        if matched:
+            _log(f"[Uploader:{platform_name}] Publish verified in manage page by token: {matched}")
+            return matched
+        time.sleep(1.0)
+    return None
+
+
+def _fill_bilibili_title_from_caption(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    caption: str,
+    timeout_seconds: int = 150,
+) -> str:
+    title = _build_bilibili_title_from_caption(caption, limit=80)
+    if not title:
+        raise RuntimeError("Failed to build Bilibili title from caption.")
+
+    expect = re.sub(r"\s+", "", title).lower()
+
+    def _is_title_match(value: str) -> bool:
+        token = re.sub(r"\s+", "", str(value or "")).lower()
+        if not token or not expect:
+            return False
+        if token == expect:
+            return True
+        prefix_len = min(18, len(expect), len(token))
+        return prefix_len >= 8 and token[:prefix_len] == expect[:prefix_len]
+
+    selectors = (
+        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and contains(normalize-space(.), '标题')]]//input[not(@type='hidden')][1]",
+        "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
+        "xpath://input[contains(@placeholder,'标题')]",
+        "xpath://input[@maxlength='80']",
+        "xpath://input[@maxlength='100']",
+        "css:input[placeholder*='标题']",
+        "css:input[maxlength='80']",
+        "css:input[maxlength='100']",
+        "css:.bcc-form-item input[type='text']",
+        "css:.form-item input[type='text']",
+    )
+
+    js_set = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    const target = norm(arguments[0] || '');
+    if (!target) return {state: 'skip'};
+    const nodes = Array.from(document.querySelectorAll('input[type=\"text\"], input:not([type])'))
+      .filter(isVisible)
+      .map(el => {
+        const attrs = [
+          String(el.getAttribute('placeholder') || ''),
+          String(el.getAttribute('aria-label') || ''),
+          String(el.className || ''),
+          String(el.name || ''),
+          String(el.id || ''),
+          String(el.getAttribute('maxlength') || ''),
+        ].join(' ').toLowerCase();
+        const wrap = el.closest('.form-item, form, section, .publish, .video, .editor, div') || el.parentElement || el;
+        const wrapText = norm((wrap && wrap.innerText) || '');
+        let score = 0;
+        if (/标题/.test(wrapText)) score += 14;
+        if (/标题|title/.test(attrs)) score += 12;
+        if (/80/.test(attrs)) score += 4;
+        if (/标签|简介|描述|合集|分区|search|keyword|tag|topic/.test(wrapText.toLowerCase())) score -= 10;
+        if (/tag|topic|search|keyword/.test(attrs)) score -= 10;
+        return {el, score};
+      })
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+    if (!nodes.length) return {state: 'not_found'};
+    const el = nodes[0].el;
+    try { el.focus(); } catch (e) {}
+    try {
+      if ('value' in el) {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (setter && el instanceof HTMLInputElement) {
+          setter.call(el, '');
+          setter.call(el, target);
+        } else {
+          el.value = '';
+          el.value = target;
+        }
+      }
+      el.dispatchEvent(new Event('input', {bubbles: true}));
+      el.dispatchEvent(new Event('change', {bubbles: true}));
+      el.dispatchEvent(new Event('blur', {bubbles: true}));
+    } catch (e) {
+      return {state: 'set_failed', error: String(e || '')};
+    }
+    return {state: 'set', value: norm(el.value || el.innerText || el.textContent || '')};
+    """
+    deadline = time.time() + max(30, int(timeout_seconds))
+    waited_log_at = 0.0
+    last_js_state = ""
+    last_js_value = ""
+    loop_count = 0
+
+    while time.time() < deadline:
+        loop_count += 1
+
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            for selector in selectors:
+                try:
+                    ele = owner.ele(selector, timeout=1.0)
+                except Exception:
+                    ele = None
+                if not ele or not _is_visible_element(ele):
+                    continue
+                if _is_bad_caption_field(ele):
+                    continue
+                if not _input_caption_with_keyboard(ele, title):
+                    continue
+                time.sleep(0.25)
+                current = _read_element_text(ele)
+                if _is_title_match(current):
+                    _log(f"[Uploader:bilibili] Title filled from caption: {_single_line_preview(title, limit=80)}")
+                    return title
+
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                result = owner.run_js(js_set, title)
+            except Exception:
+                result = None
+            if not isinstance(result, dict):
+                continue
+            state = str(result.get("state", "") or "")
+            value = str(result.get("value", "") or "")
+            if state:
+                last_js_state = state
+            if value:
+                last_js_value = value
+            if state == "set" and _is_title_match(value):
+                _log(f"[Uploader:bilibili] Title filled by JS fallback: {_single_line_preview(title, limit=80)}")
+                return title
+
+        now = time.time()
+        if (now - waited_log_at) >= 8.0:
+            waited_log_at = now
+            remain = max(0, int(deadline - now))
+            _log(f"[Uploader:bilibili] Waiting for title input readiness... ({remain}s left)")
+
+        if loop_count % 3 == 0:
+            try:
+                refreshed_ctx = _resolve_post_editor_context(fallback_ctx, timeout_seconds=6)
+            except Exception:
+                refreshed_ctx = None
+            if refreshed_ctx:
+                primary_ctx = refreshed_ctx
+
+        time.sleep(1.2)
+
+    raise RuntimeError(
+        "Failed to fill Bilibili title from caption "
+        f"within {int(timeout_seconds)}s: {title} "
+        f"(last_state={last_js_state or '-'}, last_value={_single_line_preview(last_js_value, limit=60) or '-'})"
+    )
+
+
+def _normalize_bilibili_collection_value(text: str) -> str:
+    value = re.sub(r"\s+", "", str(text or ""))
+    value = value.replace("加入合集", "").replace("添加到合集", "")
+    value = value.replace("请选择合集", "").replace("选择合集", "")
+    return value.strip()
+
+
+def _read_bilibili_collection_state(owner: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/\\s+/g, ' ').trim(); }
+    function clean(s) {
+      return norm(s).replace(/^(加入合集|添加到合集)/, '').replace(/请选择合集|选择合集/g, '').trim();
+    }
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .find(el => isVisible(el) && /^(加入合集|添加到合集)$/.test(norm(el.textContent)));
+    if (!label) return {hasField: false, current: '', source: 'missing_label'};
+    const item = label.closest('.form-item') || label.parentElement || label;
+    const cloned = item.cloneNode(true);
+    Array.from(cloned.querySelectorAll(
+      '.option-item, .option-list, .weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, ' +
+      '.dropdown-menu, [role=\"listbox\"], [role=\"option\"], ul, li'
+    )).forEach(el => el.remove());
+    const text = clean(cloned.innerText || cloned.textContent || '');
+    return {hasField: true, current: text, source: 'item_text'};
+    """
+    try:
+        payload = owner.run_js(js)
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_name: str) -> None:
+    target = str(collection_name or "").strip()
+    if not target:
+        _log("[Uploader:bilibili] Collection name empty, skip selection.")
+        return
+    target_norm = _normalize_bilibili_collection_value(target)
+    if not target_norm:
+        _log("[Uploader:bilibili] Collection name normalized empty, skip selection.")
+        return
+
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        state = _read_bilibili_collection_state(owner)
+        current = _normalize_bilibili_collection_value(str(state.get("current", "") or ""))
+        if bool(state.get("hasField")) and current == target_norm:
+            _log(f"[Uploader:bilibili] Collection already selected: {target}")
+            return
+
+    js_select = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/\\s+/g, ' ').trim(); }
+    const target = norm(arguments[0] || '');
+    if (!target) return {state: 'skip'};
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .find(el => isVisible(el) && /^(加入合集|添加到合集)$/.test(norm(el.textContent)));
+    if (!label) return {state: 'missing_label'};
+    const item = label.closest('.form-item') || label.parentElement || label;
+    const trigger = (
+      item.querySelector('input[placeholder*=\"合集\"]') ||
+      item.querySelector('.post-album-wrap .post-album-display-wrap, .post-album-wrap .post-album-display') ||
+      item.querySelector('.weui-desktop-form__dropdown, .selector, .select, .dropdown') ||
+      item.querySelector('[class*=\"album\"], [class*=\"select\"], [class*=\"dropdown\"]') ||
+      item
+    );
+    try {
+      trigger.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+      trigger.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+    } catch (e) {}
+    try { trigger.click(); } catch (e) {}
+
+    const roots = [];
+    roots.push(item);
+    Array.from(document.querySelectorAll('.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown-menu, [role=\"listbox\"]'))
+      .filter(isVisible)
+      .forEach(el => roots.push(el));
+    roots.push(document);
+
+    function score(txt) {
+      if (!txt) return 0;
+      if (txt === target) return 3;
+      if (txt.includes(target) || target.includes(txt)) return 2;
+      return 0;
+    }
+
+    let bestNode = null;
+    let bestText = '';
+    let bestScore = 0;
+    for (const root of roots) {
+      const nodes = Array.from(root.querySelectorAll('.option-item, [role=\"option\"], li, button, .name, div, span, a'))
+        .filter(isVisible);
+      for (const node of nodes) {
+        const txt = norm(node.innerText || node.textContent || '');
+        if (!txt || txt.length > 40) continue;
+        if (/加入合集|添加到合集|请选择合集|选择合集/.test(txt)) continue;
+        const s = score(txt);
+        if (s > bestScore) {
+          bestScore = s;
+          bestNode = node;
+          bestText = txt;
+        }
+      }
+      if (bestScore >= 3) break;
+    }
+    if (!bestNode || bestScore <= 0) return {state: 'option_not_found'};
+    const clickNode = bestNode.closest('.option-item, [role=\"option\"], li, button, a, .name') || bestNode;
+    try { clickNode.click(); } catch (e) {}
+    return {state: 'clicked', option: bestText};
+    """
+
+    js_collapse = """
+    try {
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
+    } catch (e) {}
+    try {
+      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+      document.dispatchEvent(new KeyboardEvent('keyup', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+    } catch (e) {}
+    return true;
+    """
+
+    for attempt in range(1, 7):
+        action_states: list[str] = []
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                action = owner.run_js(js_select, target)
+            except Exception:
+                action = {}
+            if isinstance(action, dict):
+                action_states.append(str(action.get("state", "") or ""))
+            else:
+                action_states.append("none")
+            try:
+                owner.run_js(js_collapse)
+            except Exception:
+                pass
+        time.sleep(0.5)
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            state = _read_bilibili_collection_state(owner)
+            current = _normalize_bilibili_collection_value(str(state.get("current", "") or ""))
+            if bool(state.get("hasField")) and current == target_norm:
+                _log(f"[Uploader:bilibili] Collection selected: {target}")
+                return
+        _log(
+            f"[Uploader:bilibili] Collection select retry {attempt}/6: "
+            f"states={','.join(action_states) or '-'}, target={target}"
+        )
+
+    _log(
+        f"[Uploader:bilibili] Collection verify failed after retries, continue without blocking: "
+        f"target={target}"
+    )
+    return
+
+
+def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tuple[str, ...], platform_name: str) -> bool:
+    def _js_click(owner: Any, keyword: str) -> bool:
+        js = """
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function norm(s) {
+          return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+        }
+        const kw = String(arguments[0] || '').trim();
+        if (!kw) return false;
+        const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], div, span, a'))
+          .filter(el => isVisible(el))
+          .filter(el => (el.innerText || el.textContent || '').includes(kw))
+          .slice(0, 120);
+        if (!nodes.length) return false;
+        const isDraftKw = /草稿|暂存|保存/.test(kw);
+        let preferred = null;
+        if (isDraftKw) {
+          preferred = nodes.find(el => /草稿|暂存|保存/.test(el.innerText || el.textContent || '')) || null;
+        }
+        if (!preferred) {
+          preferred = nodes.find(el => norm(el.innerText || el.textContent || '') === kw) || null;
+        }
+        if (!preferred) preferred = nodes[0];
+        preferred.click();
+        return true;
+        """
+        try:
+            return bool(owner.run_js(js, keyword))
+        except Exception:
+            return False
+
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for text in texts:
+            text = str(text or "").strip()
+            if not text:
+                continue
+            selectors = (
+                f"text:{text}",
+                f"xpath://button[contains(normalize-space(.), '{text}')]",
+                f"xpath://*[contains(@role,'button') and contains(normalize-space(.), '{text}')]",
+            )
+            for selector in selectors:
+                try:
+                    btn = owner.ele(selector, timeout=1.8)
+                except Exception:
+                    btn = None
+                if btn and _is_visible_element(btn):
+                    try:
+                        btn.click()
+                    except Exception:
+                        btn.click(by_js=True)
+                    _log(f"[Uploader:{platform_name}] Clicked button by selector: {selector}")
+                    return True
+            if _js_click(owner, text):
+                _log(f"[Uploader:{platform_name}] Clicked button by JS keyword: {text}")
+                return True
+    return False
+
+
+def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "css:button.button-dhlUZE.primary-cECiOJ.fixed-J9O8Yw",
+        "xpath://button[normalize-space(.)='发布']",
+        "xpath://button[contains(@class,'semi-button') and normalize-space(.)='发布']",
+        "xpath://button[contains(@class,'semi-button') and contains(normalize-space(.), '发布')]",
+        "xpath://div[contains(@class,'container-')]//button[normalize-space(.)='发布']",
+        "xpath://button[contains(@class,'primary-cECiOJ') and contains(normalize-space(.), '发布')]",
+        "xpath://button[contains(@class,'primary') and contains(normalize-space(.), '发布')]",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.6)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+            except Exception:
+                pass
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:douyin] Clicked publish button by dedicated selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function disabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === 'none') return true;
+      return false;
+    }
+    const candidates = Array.from(document.querySelectorAll('button, [role=\"button\"], a, div, span'))
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        const attrs = [
+          String(el.className || ''),
+          String(el.getAttribute('aria-label') || ''),
+          String(el.getAttribute('data-e2e') || ''),
+        ].join(' ');
+        const wrap = el.closest('form, section, footer, .container, .publish, .setting, div') || el.parentElement || el;
+        const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 260);
+        let score = 0;
+        if (text === '发布') score += 20;
+        if (text === '立即发布' || text === '发布作品') score += 12;
+        if (/button/i.test(el.tagName || '')) score += 8;
+        if (/primary|publish|semi-button/.test(attrs.toLowerCase())) score += 6;
+        if (/暂存离开|发布时间|谁可以看|同步至头条/.test(wrapText)) score += 8;
+        if (text === '鍙戝竷浣滃搧' && !/发布时间|立即发布|定时发布|取消/.test(wrapText)) score -= 12;
+        return {el, text, score};
+      })
+      .filter(item => item.text)
+      .filter(item => /发布|立即发布|发布作品/.test(item.text))
+      .filter(item => !/高清发布|发布设置|同时发布|暂存|草稿|保存/.test(item.text))
+      .filter(item => !disabled(item.el));
+    if (!candidates.length) return false;
+    candidates.sort((a, b) => b.score - a.score);
+    const preferred = candidates.find(item => /^(发布|立即发布|发布作品)$/.test(item.text))
+      || candidates[0];
+    preferred.el.click();
+    return true;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            ok = bool(owner.run_js(js))
+        except Exception:
+            ok = False
+        if ok:
+            _log("[Uploader:douyin] Clicked publish button by dedicated selector.")
+            return True
+    return False
+
+
+def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "css:button.custom-button.bg-red",
+        "xpath://button[contains(@class,'custom-button') and contains(@class,'bg-red')]",
+        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[last()]",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.8)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+            except Exception:
+                pass
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:xiaohongshu] Clicked publish button by dedicated selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function disabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === 'none') return true;
+      return false;
+    }
+    const candidates = Array.from(document.querySelectorAll('button'))
+      .filter(el => isVisible(el))
+      .filter(el => !disabled(el))
+      .map(el => {
+        const text = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+        const cls = String(el.className || '');
+        const parentCls = String((el.parentElement && el.parentElement.className) || '');
+        let score = 0;
+        if (cls.includes('bg-red')) score += 16;
+        if (cls.includes('custom-button')) score += 8;
+        if (parentCls.includes('publish-page-publish-btn')) score += 6;
+        if (text.length > 0 && text.length <= 6) score += 3;
+        return {el, score};
+      })
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    if (candidates[0].score < 8) return false;
+    candidates[0].el.click();
+    return true;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            ok = bool(owner.run_js(js))
+        except Exception:
+            ok = False
+        if ok:
+            _log("[Uploader:xiaohongshu] Clicked publish button by dedicated JS fallback.")
+            return True
+    return False
+
+
+def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "xpath://button[normalize-space(.)='发布']",
+        "xpath://button[contains(@class,'primary') and normalize-space(.)='发布']",
+        "xpath://button[contains(@class,'btn') and normalize-space(.)='发布']",
+        "xpath://button[normalize-space(.)='发布作品']",
+        "xpath://button[normalize-space(.)='确认发布']",
+    )
+    skip_wrap_tokens = (
+        "上传视频",
+        "上传图文",
+        "上传全景视频",
+        "首页",
+        "内容管理",
+        "互动管理",
+        "数据中心",
+        "成长中心",
+        "创作服务",
+    )
+    allow_wrap_tokens = (
+        "发布时间",
+        "立即发布",
+        "定时发布",
+        "发布设置",
+        "发布 取消",
+        "取消 发布",
+        "确认发布",
+    )
+    strong_wrap_tokens = (
+        "发布 取消",
+        "取消 发布",
+        "确认发布",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.8)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                wrap_state = btn.run_js(
+                    r"""
+                    const norm = (s) => String(s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
+                    const nodes = [];
+                    let cur = this;
+                    for (let i = 0; cur && i < 6; i += 1) {
+                      nodes.push(cur);
+                      cur = cur.parentElement;
+                    }
+                    const texts = nodes
+                      .map(node => norm((node && node.innerText) || '').slice(0, 320))
+                      .filter(Boolean);
+                    const strongTokens = ['发布 取消', '取消 发布', '确认发布'];
+                    const strong = texts.find(text => strongTokens.some(token => text.includes(token))) || '';
+                    const chosen = strong || texts[0] || '';
+                    return {wrap: chosen.slice(0, 240), texts};
+                    """
+                )
+                if isinstance(wrap_state, dict):
+                    wrapper_text = str(wrap_state.get("wrap") or "").strip()
+                    wrapper_texts = tuple(wrap_state.get("texts") or ())
+                else:
+                    wrapper_text = str(wrap_state or "").strip()
+                    wrapper_texts = ()
+            except Exception:
+                wrapper_text = ""
+                wrapper_texts = ()
+            strong_matched = any(
+                any(token in text for token in strong_wrap_tokens)
+                for text in ((wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,))
+            )
+            if not strong_matched and any(
+                any(token in text for token in skip_wrap_tokens)
+                for text in ((wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,))
+            ):
+                continue
+            if not any(
+                any(token in text for token in allow_wrap_tokens)
+                for text in ((wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,))
+            ):
+                continue
+            try:
+                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+            except Exception:
+                pass
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:kuaishou] Clicked publish button by dedicated selector: {selector}")
+            return True
+
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function disabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === 'none') return true;
+      return false;
+    }
+    const allowWrapTokens = ['发布时间', '立即发布', '定时发布', '发布设置', '发布 取消', '取消 发布', '确认发布'];
+    const strongWrapTokens = ['发布 取消', '取消 发布', '确认发布'];
+    const skipWrapTokens = ['上传视频', '上传图文', '上传全景视频', '首页', '内容管理', '互动管理', '数据中心', '成长中心', '创作服务'];
+    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        if (!/^(发布|发布作品|确认发布)$/.test(text)) return null;
+        if (disabled(el)) return null;
+        const attrs = [
+          String(el.className || ''),
+          String(el.getAttribute('aria-label') || ''),
+        ].join(' ');
+        const wrapTexts = [];
+        let cur = el;
+        for (let i = 0; cur && i < 6; i += 1) {
+          wrapTexts.push(norm(String((cur && cur.innerText) || '').slice(0, 320)));
+          cur = cur.parentElement;
+        }
+        const strongWrap = wrapTexts.find(wrapText => strongWrapTokens.some(token => wrapText.includes(token))) || '';
+        const wrapText = strongWrap || wrapTexts.find(Boolean) || '';
+        if (!wrapTexts.some(candidate => allowWrapTokens.some(token => candidate.includes(token)))) return null;
+        if (!strongWrap && wrapTexts.some(candidate => skipWrapTokens.some(token => candidate.includes(token)))) return null;
+        let score = 0;
+        if (text === '发布') score += 14;
+        if (text === '确认发布') score += 12;
+        if (text === '发布作品') score += 8;
+        if (/button/i.test(el.tagName || '')) score += 10;
+        if (/primary|btn|publish/.test(attrs.toLowerCase())) score += 6;
+        if (wrapText.includes('发布 取消') || wrapText.includes('取消 发布')) score += 8;
+        if (wrapText.includes('发布时间') || wrapText.includes('立即发布') || wrapText.includes('定时发布')) score += 4;
+        return {el, text, score, wrapText: wrapText.slice(0, 160)};
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    const chosen = candidates[0];
+    chosen.el.click();
+    return {clicked: true, text: chosen.text, wrap: chosen.wrapText};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = False
+        if isinstance(result, dict) and result.get("clicked"):
+            text = str(result.get("text", "") or "").strip() or "?"
+            wrap = str(result.get("wrap", "") or "").strip()
+            suffix = f" text={text}"
+            if wrap:
+                suffix += f" wrap={wrap}"
+            _log(f"[Uploader:kuaishou] Clicked publish button by dedicated selector.{suffix}")
+            return True
+        if bool(result):
+            _log("[Uploader:kuaishou] Clicked publish button by dedicated selector.")
+            return True
+    return False
+
+
+
+def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "xpath://button[normalize-space(.)='立即投稿']",
+        "xpath://span[normalize-space(.)='立即投稿']/ancestor::button[1]",
+        "xpath://span[normalize-space(.)='立即投稿']/ancestor::*[@role='button'][1]",
+        "xpath://div[contains(@class,'button') and normalize-space(.)='立即投稿']",
+        "xpath://span[normalize-space(.)='立即投稿']/ancestor::*[self::button or self::div][1]",
+        "xpath://button[contains(@class,'bcc-button') and contains(normalize-space(.), '立即投稿')]",
+        "text:确认定时发布",
+        "text:确认定时投稿",
+        "text:定时投稿",
+        "xpath://button[normalize-space(.)='投稿']",
+        "xpath://button[contains(normalize-space(.), '立即投稿')]",
+        "xpath://button[contains(normalize-space(.), '确认定时发布')]",
+        "xpath://button[contains(normalize-space(.), '确认定时投稿')]",
+        "xpath://button[contains(normalize-space(.), '定时投稿')]",
+        "xpath://span[contains(normalize-space(.), '立即投稿')]/ancestor::button[1]",
+        "xpath://span[normalize-space(.)='投稿']/ancestor::button[1]",
+        "xpath://span[contains(normalize-space(.), '确认定时发布')]/ancestor::button[1]",
+        "xpath://span[contains(normalize-space(.), '确认定时投稿')]/ancestor::button[1]",
+        "xpath://span[contains(normalize-space(.), '定时投稿')]/ancestor::button[1]",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=1.0)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+            except Exception:
+                pass
+            try:
+                txt = str(btn.text or "").strip()
+            except Exception:
+                txt = ""
+            if txt in {"投稿", "视频投稿"}:
+                continue
+            try:
+                tag_name = str(btn.run_js("return String((this.tagName || '')).toLowerCase();") or "").strip().lower()
+            except Exception:
+                tag_name = ""
+            try:
+                role_name = str(btn.run_js("return String(this.getAttribute('role') || '');") or "").strip().lower()
+            except Exception:
+                role_name = ""
+            try:
+                cls_name = str(btn.run_js("return String(this.className || '');") or "").strip().lower()
+            except Exception:
+                cls_name = ""
+            if txt == "立即投稿" and tag_name not in {"button", "a"} and role_name != "button":
+                if not any(token in cls_name for token in ("button", "btn", "submit", "publish")):
+                    continue
+            try:
+                btn.run_js(
+                    """
+                    const target = this.closest('button, [role="button"], a') || this;
+                    target.scrollIntoView({block:'center', inline:'nearest'});
+                    target.click();
+                    """
+                )
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:bilibili] Clicked publish button by dedicated selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function disabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === 'none') return true;
+      return false;
+    }
+    window.scrollTo(0, document.body.scrollHeight);
+    const candidates = Array.from(document.querySelectorAll('button, [role=\"button\"], a, div, span'))
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        if (!text) return null;
+        if (/视频投稿|短剧投稿|专栏投稿|互动视频投稿|音频投稿|贴纸投稿|视频素材投稿/.test(text)) return null;
+        if (text === '定时发布') return null;
+        if (/草稿|取消|预览|上传封面|转载|编辑稿件/.test(text)) return null;
+        if (!/(立即投稿|投稿|发布|定时投稿)/.test(text)) return null;
+        if (disabled(el)) return null;
+        const rect = el.getBoundingClientRect();
+        if (rect.top < 120) return null;
+        if (rect.width < 60 || rect.height < 24) return null;
+        const attrs = [
+          String(el.className || ''),
+          String(el.getAttribute('aria-label') || ''),
+          String(el.getAttribute('role') || ''),
+        ].join(' ');
+        if (text === '立即投稿') {
+          const tag = String(el.tagName || '').toLowerCase();
+          const role = String(el.getAttribute('role') || '').toLowerCase();
+          if (!['button', 'a'].includes(tag) && role !== 'button' && !/button|btn|submit|publish/.test(attrs.toLowerCase())) {
+            return null;
+          }
+        }
+        const wrap = el.closest('form, section, .publish, .submit, .footer, div') || el.parentElement || el;
+        const wrapText = String((wrap && wrap.innerText) || '').slice(0, 260);
+        let score = 0;
+        if (/定时发布|加入合集|更多设置|存草稿|立即投稿|二创设置/.test(wrapText)) score += 8;
+        if (text === '确认定时发布') score += 18;
+        if (text === '确认定时投稿' || text === '定时投稿') score += 16;
+        if (text === '立即投稿') score += 14;
+        if (text === '投稿') score += 2;
+        if (text.includes('确认定时发布')) score += 16;
+        if (text.includes('确认定时投稿') || text.includes('定时投稿')) score += 14;
+        if (text.includes('立即投稿')) score += 12;
+        if (text.includes('投稿')) score += 4;
+        if (/button/i.test(el.tagName || '')) score += 10;
+        if (/bcc-button|submit|footer|publish/.test(attrs.toLowerCase())) score += 8;
+        if (/primary|submit|publish|btn/.test(attrs.toLowerCase())) score += 6;
+        if (/稿件|发布|投稿/.test(wrapText)) score += 4;
+        return {el, text, score};
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    const chosen = candidates[0];
+    chosen.el.click();
+    return true;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            ok = bool(owner.run_js(js))
+        except Exception:
+            ok = False
+        if ok:
+            _log("[Uploader:bilibili] Clicked publish button by dedicated selector.")
+            return True
+    return False
+
+
+def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
+        "xpath://button[normalize-space(.)='确认发布']",
+        "xpath://button[normalize-space(.)='确认定时发布']",
+        "xpath://button[normalize-space(.)='继续发布']",
+        "xpath://button[normalize-space(.)='确定发布']",
+        "xpath://button[normalize-space(.)='仍要发布']",
+        "xpath://button[normalize-space(.)='去发布']",
+        "xpath://span[normalize-space(.)='发布']/ancestor::button[1]",
+        "text:确认发布",
+        "text:确认定时发布",
+        "text:继续发布",
+        "text:确定发布",
+        "text:仍要发布",
+        "text:去发布",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.35)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                wrap_text = str(
+                    btn.run_js(
+                        """
+                        const wrap = this.closest('form, section, .modal, .dialog, .popup, .publish, div')
+                          || this.parentElement
+                          || this;
+                        return String((wrap && wrap.innerText) || '').replace(/\\s+/g, ' ').trim();
+                        """
+                    )
+                    or ""
+                )
+            except Exception:
+                wrap_text = ""
+            if wrap_text and "取消" not in wrap_text and "确认发布" not in wrap_text:
+                continue
+            try:
+                btn.run_js(
+                    """
+                    const target = this.closest('button, [role="button"], a') || this;
+                    target.scrollIntoView({block:'center', inline:'nearest'});
+                    target.click();
+                    """
+                )
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:kuaishou] Clicked publish confirm button by selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function clickable(el) {
+      if (!el) return null;
+      return el.closest('button, [role="button"], a') || el;
+    }
+    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        if (!text) return null;
+        if (!/^(发布|确认发布|确认定时发布|继续发布|确定发布|仍要发布|去发布)$/.test(text)) return null;
+        const target = clickable(el);
+        const wrap = target.closest('form, section, .modal, .dialog, .popup, .publish, div') || target.parentElement || target;
+        const wrapText = norm((wrap && wrap.innerText) || '');
+        if (!/取消|确认发布|确认定时发布|继续发布/.test(wrapText)) return null;
+        let score = 0;
+        if (text === '发布') score += 18;
+        if (text === '确认发布') score += 16;
+        if (text === '继续发布' || text === '确定发布') score += 14;
+        if ((target.tagName || '').toLowerCase() === 'button') score += 8;
+        if (/取消/.test(wrapText)) score += 10;
+        if (/立即发布|定时发布/.test(wrapText)) score += 4;
+        return {target, text, score};
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    const chosen = candidates[0];
+    chosen.target.click();
+    return chosen.text || '发布';
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = False
+        if isinstance(result, str) and result.strip():
+            _log(f"[Uploader:kuaishou] Clicked publish confirm button by JS keyword: {result.strip()}")
+            return True
+        if bool(result):
+            _log("[Uploader:kuaishou] Clicked publish confirm button by JS fallback.")
+            return True
+    return False
+
+
+def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
+    lowered = (text or "").lower()
+    success_markers = (
+        "投稿成功",
+        "投稿中",
+        "已投稿",
+        "已提交",
+        "审核中",
+        "提交成功",
+    )
+    if any(marker in text for marker in success_markers):
+        return False
+    if any(marker in lowered for marker in ("publish success", "submit success")):
+        return False
+    actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+    if not actions:
+        return False
+    has_publish_action = any("立即投稿" in item or item == "投稿" for item in actions)
+    has_draft_action = any("草稿" in item for item in actions)
+    has_upload_done_hint = any("上传完成" in item for item in actions)
+    if not has_publish_action or not has_draft_action or not has_upload_done_hint:
+        return False
+    _log(
+        f"[Uploader:bilibili] Publish still looks unsubmitted, retrying click once: "
+        f"url={url or '-'}, actions={actions}"
+    )
+    if not _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx):
+        return False
+    _click_first_matching_button(
+        primary_ctx,
+        fallback_ctx,
+        ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+        platform_name="bilibili",
+    )
+    return True
+
+
+
+def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    # Keep this lightweight: this function is called repeatedly during feedback polling.
+    selectors = (
+        "text:确认发布",
+        "text:继续发布",
+        "text:仍要发布",
+        "text:去发布",
+        "text:确认定时发布",
+        "text:确定发布",
+        "xpath://button[contains(normalize-space(.), '确认发布')]",
+        "xpath://button[contains(normalize-space(.), '继续发布')]",
+        "xpath://button[contains(normalize-space(.), '确认定时发布')]",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.35)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:douyin] Clicked publish confirm button by selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    }
+    const keywords = ['确认发布', '继续发布', '仍要发布', '去发布', '确认定时发布', '确定发布'];
+    const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], a, div, span'))
+      .filter(el => isVisible(el));
+    for (const node of nodes) {
+      const text = norm(node.innerText || node.textContent || '');
+      if (!text) continue;
+      if (!keywords.some(k => text.includes(k))) continue;
+      node.click();
+      return true;
+    }
+    return false;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            ok = bool(owner.run_js(js))
+        except Exception:
+            ok = False
+        if ok:
+            _log("[Uploader:douyin] Clicked publish confirm button.")
+            return True
+    return False
+
+
+def _click_xiaohongshu_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '确认发布')]",
+        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '继续发布')]",
+        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '确认发布')]",
+        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '继续发布')]",
+        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '确认发布')]",
+        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '继续发布')]",
+        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '发布')]",
+        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '发布')]",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.35)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:xiaohongshu] Clicked publish confirm button by selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '')
+        .replace(/[\\u200B-\\u200D\\uFEFF]/g, '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    }
+    const modalRoots = Array.from(document.querySelectorAll('[role="dialog"], .dialog, .modal, [class*="dialog"], [class*="modal"]'))
+      .filter(el => isVisible(el));
+    const keywords = ['确认发布', '继续发布', '立即发布', '仍要发布', '去发布', '确认定时发布', '确定发布'];
+    for (const root of modalRoots) {
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], a, div, span'))
+        .filter(el => isVisible(el));
+      for (const node of nodes) {
+        const text = norm(node.innerText || node.textContent || '');
+        if (!text) continue;
+        if (!keywords.some(k => text.includes(k))) continue;
+        node.click();
+        return true;
+      }
+    }
+    return false;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            ok = bool(owner.run_js(js))
+        except Exception:
+            ok = False
+        if ok:
+            _log("[Uploader:xiaohongshu] Clicked publish confirm button.")
+            return True
+    return False
+
+
+def _collect_visible_action_texts(primary_ctx: Any, fallback_ctx: Any) -> list[str]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    const pattern = /(草稿|暂存|保存|发布|下一步|完成|继续)/;
+    const seen = new Set();
+    const out = [];
+    const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], div, span, a'));
+    for (const n of nodes) {
+      if (!isVisible(n)) continue;
+      const txt = (n.innerText || n.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (!txt || txt.length > 32) continue;
+      if (!pattern.test(txt)) continue;
+      if (seen.has(txt)) continue;
+      seen.add(txt);
+      out.push(txt);
+      if (out.length >= 30) break;
+    }
+    return out;
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            values = owner.run_js(js)
+        except Exception:
+            values = []
+        if not isinstance(values, list):
+            continue
+        for val in values:
+            text = str(val or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+    return merged
+
+
+def _collect_visible_button_texts(primary_ctx: Any, fallback_ctx: Any) -> list[str]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    const seen = new Set();
+    const out = [];
+    const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], div, span, a, label'));
+    for (const n of nodes) {
+      if (!isVisible(n)) continue;
+      const txt = (n.innerText || n.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (!txt || txt.length > 48) continue;
+      if (seen.has(txt)) continue;
+      seen.add(txt);
+      out.push(txt);
+      if (out.length >= 40) break;
+    }
+    return out;
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            values = owner.run_js(js)
+        except Exception:
+            values = []
+        if not isinstance(values, list):
+            continue
+        for val in values:
+            text = str(val or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+    return merged
+
+
+def _read_page_snapshot(primary_ctx: Any, fallback_ctx: Any) -> tuple[str, str]:
+    js = """
+    const url = String((location && location.href) || '');
+    const text = String((document.body && document.body.innerText) || '');
+    return {url, text: text.slice(0, 20000)};
+    """
+    merged_url = ""
+    merged_text_parts: list[str] = []
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            data = owner.run_js(js)
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            continue
+        url = str(data.get("url", "") or "").strip()
+        text = str(data.get("text", "") or "").strip()
+        if url and not merged_url:
+            merged_url = url
+        if text:
+            merged_text_parts.append(text)
+    merged_text = "\n".join(merged_text_parts)
+    return merged_url, merged_text
+
+
+def _read_xiaohongshu_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    const url = String((location && location.href) || '');
+    const text = norm((document.body && document.body.innerText) || '');
+    const mediaSelectors = [
+      '.post-media-wrap .post-media-preview-wrap',
+      '.post-media-wrap img',
+      '.cover-preview-wrap img',
+      '.upload-list img',
+      '.upload-list video',
+      'video'
+    ];
+    let mediaCount = 0;
+    for (const selector of mediaSelectors) {
+      const list = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+      mediaCount += list.length;
+    }
+    let editorLen = 0;
+    const editorNodes = Array.from(
+      document.querySelectorAll("textarea, input[type='text'], [contenteditable='true'], .ql-editor, .notranslate")
+    ).filter(isVisible);
+    for (const el of editorNodes) {
+      const val = String((el.value || el.innerText || el.textContent || '')).trim();
+      if (val.length > editorLen) editorLen = val.length;
+    }
+    const seen = new Set();
+    const actions = [];
+    const actionNodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
+    for (const node of actionNodes) {
+      if (!isVisible(node)) continue;
+      const val = norm(node.innerText || node.textContent || '');
+      if (!val || val.length > 32) continue;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      actions.push(val);
+      if (actions.length >= 24) break;
+    }
+    const hasPublishAction = actions.some(t => /^(发布|发布笔记|立即发布|继续发布|确认发布|定时发布)$/.test(t) || /发布笔记|立即发布|确认发布/.test(t));
+    const hasDraftAction = actions.some(t => /草稿|暂存|保存为草稿|暂存离开/.test(t));
+    const hasRetryAction = actions.some(t => /重试|重新发布|继续/.test(t));
+    const successHint = /(发布成功|提交成功|审核中|发布完成|查看笔记|笔记已发布|发布后可在创作中心查看)/.test(text);
+    const progressHint = /(上传中|处理中|发布中|正在发布|保存中|提交中)/.test(text);
+    const failureHint = /(发布失败|发布出错|网络异常|请完善|不能为空|违规|未通过|驳回)/.test(text);
+    const publishEntry = /(发布笔记|上传图文|上传视频|添加话题|作品描述|标题|定时发布|发布)/.test(text) || hasPublishAction;
+    const draftEntry = /草稿箱|草稿|暂存|保存为草稿/.test(text) || hasDraftAction;
+    const manageUrlHint = /\/publish\/(success|result)/.test(url)
+      || /\/(note|works|publish|content)\/manage/.test(url);
+    const manageTextHint = /(创作中心|笔记管理|内容管理|作品管理|全部笔记|全部作品|查看笔记)/.test(text);
+    return {
+      url,
+      media_count: mediaCount,
+      editor_len: editorLen,
+      action_texts: actions,
+      has_publish_action: hasPublishAction,
+      has_draft_action: hasDraftAction,
+      has_retry_action: hasRetryAction,
+      publish_entry: publishEntry,
+      draft_entry: draftEntry,
+      success_hint: successHint,
+      progress_hint: progressHint,
+      failure_hint: failureHint,
+      manage_url_hint: manageUrlHint,
+      manage_text_hint: manageTextHint,
+    };
+    """
+    merged: dict[str, Any] = {
+        "url": "",
+        "media_count": 0,
+        "editor_len": 0,
+        "action_texts": [],
+        "has_publish_action": False,
+        "has_draft_action": False,
+        "has_retry_action": False,
+        "publish_entry": False,
+        "draft_entry": False,
+        "success_hint": False,
+        "progress_hint": False,
+        "failure_hint": False,
+        "manage_url_hint": False,
+        "manage_text_hint": False,
+    }
+    seen_actions: set[str] = set()
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        url = str(payload.get("url", "") or "").strip()
+        if url and not merged["url"]:
+            merged["url"] = url
+        merged["media_count"] = max(int(merged.get("media_count", 0) or 0), int(payload.get("media_count", 0) or 0))
+        merged["editor_len"] = max(int(merged.get("editor_len", 0) or 0), int(payload.get("editor_len", 0) or 0))
+        actions = payload.get("action_texts")
+        if isinstance(actions, list):
+            for raw in actions:
+                action_text = str(raw or "").strip()
+                if not action_text or action_text in seen_actions:
+                    continue
+                seen_actions.add(action_text)
+                merged["action_texts"].append(action_text)
+                if len(merged["action_texts"]) >= 24:
+                    break
+        for key in (
+            "has_publish_action",
+            "has_draft_action",
+            "has_retry_action",
+            "publish_entry",
+            "draft_entry",
+            "success_hint",
+            "progress_hint",
+            "failure_hint",
+            "manage_url_hint",
+            "manage_text_hint",
+        ):
+            merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+    return merged
+
+
+def _is_xiaohongshu_publish_draft_state(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if bool(state.get("success_hint")) or bool(state.get("progress_hint")):
+        return False
+    if bool(state.get("manage_url_hint")) and not bool(state.get("has_publish_action")):
+        return False
+    if not bool(state.get("draft_entry")):
+        return False
+    media_count = int(state.get("media_count", 0) or 0)
+    editor_len = int(state.get("editor_len", 0) or 0)
+    return media_count <= 0 and editor_len <= 2 and bool(state.get("publish_entry"))
+
+
+def _is_xiaohongshu_publish_confirmed_from_state(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if bool(state.get("failure_hint")):
+        return False
+    url = str(state.get("url", "") or "").lower()
+    if "/publish/publish" in url and bool(state.get("publish_entry")):
+        return False
+    if _is_xiaohongshu_publish_draft_state(state):
+        return False
+    if bool(state.get("success_hint")):
+        return True
+    if bool(state.get("progress_hint")):
+        return False
+    if any(marker in url for marker in ("creator.xiaohongshu.com/publish/success", "creator.xiaohongshu.com/publish/result", "published=true")):
+        return True
+    media_count = int(state.get("media_count", 0) or 0)
+    editor_len = int(state.get("editor_len", 0) or 0)
+    if (
+        bool(state.get("manage_url_hint"))
+        and bool(state.get("manage_text_hint"))
+        and (not bool(state.get("has_publish_action")))
+        and (not bool(state.get("has_draft_action")))
+        and (not bool(state.get("has_retry_action")))
+        and media_count <= 0
+        and editor_len <= 2
+    ):
+        return True
+    return False
+
+
+def _is_xiaohongshu_publish_confirmed_by_heuristic(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    state = _read_xiaohongshu_publish_state(primary_ctx, fallback_ctx)
+    return _is_xiaohongshu_publish_confirmed_from_state(state)
+
+
+def _recover_xiaohongshu_publish_after_missing_file_input(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    *,
+    expected_tokens: Optional[Sequence[str]] = None,
+) -> bool:
+    state = _read_xiaohongshu_publish_state(primary_ctx, fallback_ctx)
+    if _is_xiaohongshu_publish_confirmed_from_state(state):
+        _log(
+            "[Uploader:xiaohongshu] Missing file input but final state already looks published: "
+            f"url={state.get('url') or '-'}, "
+            f"manage_url_hint={bool(state.get('manage_url_hint'))}, "
+            f"manage_text_hint={bool(state.get('manage_text_hint'))}, "
+            f"actions={state.get('action_texts') or []}"
+        )
+        return True
+    verify_page = fallback_ctx if hasattr(fallback_ctx, "get") and hasattr(fallback_ctx, "run_js") else None
+    if verify_page is not None:
+        matched = _verify_platform_publish_in_manage_page(
+            verify_page,
+            platform_name="xiaohongshu",
+            expected_tokens=expected_tokens or (),
+            timeout_seconds=18.0,
+        )
+        if matched:
+            _log("[Uploader:xiaohongshu] Missing file input but manage-page verification matched published note.")
+            return True
+    return False
+
+
+
+def _read_kuaishou_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '')
+        .replace(/[\\u200B-\\u200D\\uFEFF]/g, '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    }
+    const url = String((location && location.href) || '');
+    const text = norm((document.body && document.body.innerText) || '');
+    const actions = [];
+    const seen = new Set();
+    let publishActionCandidate = false;
+    const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], a, div, span'));
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const t = norm(node.innerText || node.textContent || '');
+      if (!t || t.length > 24) continue;
+      const tag = String(node.tagName || '').toLowerCase();
+      const role = String(node.getAttribute('role') || '').toLowerCase();
+      const cls = String(node.className || '');
+      const wrap = node.closest('form, section, .publish, .content, .editor, .modal, .dialog, div') || node.parentElement || node;
+      const wrapText = norm((wrap && wrap.innerText) || '');
+      const clickable = tag === 'button' || role === 'button' || /btn|button|submit|primary|publish/i.test(cls);
+      if (
+        /^(发布|立即发布|确认发布|确认定时发布|继续发布|确定发布)$/.test(t)
+        || (
+          t === '发布作品'
+          && (clickable || /发布时间|立即发布|定时发布|保存草稿|添加话题|选择封面/.test(wrapText))
+        )
+      ) {
+        publishActionCandidate = true;
+      }
+      if (seen.has(t)) continue;
+      seen.add(t);
+      actions.push(t);
+      if (actions.length >= 40) break;
+    }
+    const successHint = /(发布成功|发布完成|已提交审核|提交成功|作品已提交|作品提交成功|发布任务已创建|已创建发布任务|已预约发布|预约成功|定时发布成功|定时任务已创建|审核中|去作品管理查看)/.test(text);
+    const progressHint = /(发布中|提交中|上传中|处理中|正在发布|正在审核|审核中|排队中)/.test(text);
+    const failureHint = /(发布失败|发布出错|网络异常|请完善|不能为空|违规|未通过|驳回)/.test(text);
+    const hasPublishAction = actions.some(t => /^(发布|发布作品|立即发布|确认发布|确认定时发布|继续发布|确定发布)$/.test(t));
+    const manageHint = /(作品管理|内容管理|发布记录|创作中心|全部作品|我的作品)/.test(text)
+      || /\\/article\\/(manage|list)/.test(url)
+      || /\\/video\\/(manage|list)/.test(url)
+      || /\\/content\\/manage/.test(url);
+    const composeHint = /(作品描述|发布作品|立即发布|定时发布|保存草稿|添加话题)/.test(text);
+    return {
+      url,
+      action_texts: actions.slice(0, 18),
+      success_hint: successHint,
+      progress_hint: progressHint,
+      failure_hint: failureHint,
+      has_publish_action: publishActionCandidate,
+      manage_hint: manageHint,
+      compose_hint: composeHint || actions.some(t => /^(绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|淇濆瓨鑽夌|纭鍙戝竷|纭瀹氭椂鍙戝竷)$/.test(t)),
+    };
+    """
+    merged: dict[str, Any] = {
+        "url": "",
+        "action_texts": [],
+        "success_hint": False,
+        "progress_hint": False,
+        "failure_hint": False,
+        "has_publish_action": False,
+        "manage_hint": False,
+        "compose_hint": False,
+    }
+    seen_actions: set[str] = set()
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        url = str(payload.get("url", "") or "").strip()
+        if url and not merged["url"]:
+            merged["url"] = url
+        actions = payload.get("action_texts")
+        if isinstance(actions, list):
+            for raw in actions:
+                text = str(raw or "").strip()
+                if not text or text in seen_actions:
+                    continue
+                seen_actions.add(text)
+                merged["action_texts"].append(text)
+                if len(merged["action_texts"]) >= 18:
+                    break
+        for key in ("success_hint", "progress_hint", "failure_hint", "has_publish_action", "manage_hint", "compose_hint"):
+            merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+    return merged
+
+
+def _is_kuaishou_publish_confirmed_by_heuristic(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    state = _read_kuaishou_publish_state(primary_ctx, fallback_ctx)
+    if bool(state.get("failure_hint")):
+        return False
+    if bool(state.get("success_hint")):
+        return True
+    if bool(state.get("progress_hint")):
+        return True
+    url = str(state.get("url", "") or "").lower()
+    actions_raw = state.get("action_texts")
+    actions = [str(item or "").strip() for item in actions_raw] if isinstance(actions_raw, list) else []
+    shell_tokens = ("发布作品", "发布视频", "发布图文", "发布全景视频")
+    shell_like_actions = [item for item in actions if item and any(token in item for token in shell_tokens)]
+    if (
+        "cp.kuaishou.com/article/publish/video" in url
+        and "tabtype=2" not in url
+        and not bool(state.get("compose_hint"))
+        and len(actions) <= 8
+        and len(shell_like_actions) >= 3
+    ):
+        return True
+    if "cp.kuaishou.com" in url and "/article/publish" not in url:
+        return True
+    if bool(state.get("manage_hint")) and not bool(state.get("has_publish_action")):
+        return True
+    if bool(state.get("manage_hint")) and not bool(state.get("compose_hint")):
+        return True
+    return False
+
+
+def _ensure_kuaishou_not_in_unfinished_edit_state(primary_ctx: Any, fallback_ctx: Any) -> None:
+    state = _read_kuaishou_publish_state(primary_ctx, fallback_ctx)
+    state_actions = state.get("action_texts")
+    actions = [str(item or "").strip() for item in state_actions] if isinstance(state_actions, list) else []
+    if not _is_unfinished_edit_state("", actions):
+        snapshot_url, snapshot_text = _read_page_snapshot(primary_ctx, fallback_ctx)
+        if not _is_unfinished_edit_state(snapshot_text, actions):
+            return
+        state_url = snapshot_url
+    else:
+        state_url = str(state.get("url", "") or "").strip()
+
+    if actions:
+        _log(f"[Uploader:kuaishou] Unfinished-edit actions: {actions}")
+    if state_url:
+        _log(f"[Uploader:kuaishou] Unfinished-edit snapshot url: {state_url}")
+    raise RuntimeError("kuaishou page is blocked by unfinished-video dialog / continue editing state.")
+
+
+def _wait_publish_feedback(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    platform_name: str,
+    expected_tokens: Optional[Sequence[str]] = None,
+    timeout_seconds: int = 25,
+) -> None:
+    success_text_markers: dict[str, tuple[str, ...]] = {
+        "douyin": (
+            "发布成功",
+            "发布中",
+            "发布完成",
+            "提交成功",
+            "已提交",
+            "审核中",
+            "投稿成功",
+            "定时发布成功",
+            "预约成功",
+            "已预约发布",
+            "已设置定时发布",
+        ),
+        "xiaohongshu": (
+            "发布成功",
+            "发布中",
+            "已发布",
+            "审核中",
+            "提交成功",
+            "发布完成",
+            "已提交",
+            "笔记已发布",
+            "发布后可在创作中心查看",
+        ),
+        "kuaishou": (
+            "发布成功",
+            "发布中",
+            "已发布",
+            "审核中",
+            "提交成功",
+            "已提交审核",
+            "作品已提交",
+            "作品提交成功",
+            "已创建发布任务",
+            "预约成功",
+            "已预约发布",
+            "定时发布成功",
+            "定时任务已创建",
+            "发布任务已创建",
+        ),
+        "bilibili": (
+            "投稿成功",
+            "投稿中",
+            "已投稿",
+            "已提交",
+            "审核中",
+            "提交成功",
+            "稿件已创建",
+            "稿件投递成功",
+            "定时投稿成功",
+            "定时发布成功",
+            "已设置定时发布",
+            "已设置定时投稿",
+            "预约投稿成功",
+            "已预约投稿",
+        ),
+    }
+    failure_text_markers: dict[str, tuple[str, ...]] = {
+        "douyin": (
+            "发布失败",
+            "发布出错",
+            "网络异常",
+            "请完善",
+            "不能为空",
+            "违规",
+            "请选择发布时间",
+            "发布时间必须",
+            "发布时间需在",
+        ),
+        "xiaohongshu": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
+        "kuaishou": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
+        "bilibili": (
+            "投稿失败",
+            "发布失败",
+            "提交失败",
+            "网络异常",
+            "请完善",
+            "不能为空",
+            "违规",
+            "未通过",
+            "驳回",
+        ),
+    }
+    success_url_markers: dict[str, tuple[str, ...]] = {
+        "douyin": ("creator-micro/content/manage", "/content/manage"),
+        "xiaohongshu": (
+            "creator.xiaohongshu.com/publish/success",
+            "creator.xiaohongshu.com/publish/result",
+            "published=true",
+        ),
+        "kuaishou": ("/article/manage", "/article/list", "/video/manage", "/video/list", "/content/manage"),
+        "bilibili": ("member.bilibili.com/platform/upload-manager", "member.bilibili.com/platform/home"),
+    }
+
+    success_markers = success_text_markers.get(platform_name, ("发布成功", "提交成功", "审核中"))
+    failure_markers = failure_text_markers.get(platform_name, ("发布失败", "网络异常", "请完善", "不能为空"))
+    url_markers = success_url_markers.get(platform_name, ())
+
+    end_at = time.time() + max(8, int(timeout_seconds))
+    warned = False
+    republish_attempts = 0
+    bilibili_reclick_attempts = 0
+    loop_started = time.time()
+    while time.time() < end_at:
+        url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
+
+        if platform_name == "douyin":
+            # Best effort: some accounts show a delayed confirm dialog.
+            _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
+
+            if "未发布的视频" in text and "继续编辑" in text:
+                if republish_attempts >= 2:
+                    raise RuntimeError("douyin blocked by unfinished-video dialog repeatedly.")
+                if _dismiss_unfinished_dialog(primary_ctx, fallback_ctx, platform_name=platform_name):
+                    republish_attempts += 1
+                    _log(f"[Uploader:douyin] Unfinished-video dialog dismissed, republish attempt {republish_attempts}/2.")
+                    time.sleep(0.8)
+                    _click_douyin_primary_publish_button(primary_ctx, fallback_ctx)
+                    _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
+                    continue
+        elif platform_name == "kuaishou":
+            # Best effort: some accounts show delayed confirm dialogs after first publish click.
+            _click_kuaishou_publish_confirm_button(primary_ctx, fallback_ctx)
+        elif platform_name == "bilibili":
+            _click_first_matching_button(
+                primary_ctx,
+                fallback_ctx,
+                ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+                platform_name=platform_name,
+            )
+            if bilibili_reclick_attempts < 3 and (time.time() - loop_started) >= (12 * (bilibili_reclick_attempts + 1)):
+                if _retry_bilibili_publish_if_still_editing(primary_ctx, fallback_ctx):
+                    bilibili_reclick_attempts += 1
+
+        if any(marker in text for marker in success_markers):
+            _log(f"[Uploader:{platform_name}] Publish feedback detected by text marker.")
+            return
+        if url and any(marker in url for marker in url_markers):
+            if platform_name == "xiaohongshu":
+                _log(f"[Uploader:{platform_name}] Publish feedback detected by URL marker: {url}")
+                return
+            if "publish" not in url.lower() or "manage" in url.lower():
+                _log(f"[Uploader:{platform_name}] Publish feedback detected by URL marker: {url}")
+                return
+        if platform_name == "xiaohongshu" and (time.time() - loop_started) >= 12:
+            xiaohongshu_state = _read_xiaohongshu_publish_state(primary_ctx, fallback_ctx)
+            if _is_xiaohongshu_publish_confirmed_from_state(xiaohongshu_state):
+                _log(
+                    "[Uploader:xiaohongshu] Publish feedback inferred by post-submit state: "
+                    f"url={xiaohongshu_state.get('url') or '-'}, "
+                    f"success_hint={bool(xiaohongshu_state.get('success_hint'))}, "
+                    f"manage_url_hint={bool(xiaohongshu_state.get('manage_url_hint'))}, "
+                    f"manage_text_hint={bool(xiaohongshu_state.get('manage_text_hint'))}, "
+                    f"actions={xiaohongshu_state.get('action_texts') or []}"
+                )
+                return
+            if _is_xiaohongshu_publish_draft_state(xiaohongshu_state):
+                _log(
+                    f"[Uploader:xiaohongshu] Draft-state detected after publish click: "
+                    f"url={xiaohongshu_state.get('url') or '-'}, actions={xiaohongshu_state.get('action_texts') or []}"
+                )
+                raise RuntimeError("xiaohongshu publish was not confirmed; page returned to draft/compose state.")
+        if (
+            platform_name == "kuaishou"
+            and (time.time() - loop_started) >= 10
+        ):
+            if _is_kuaishou_publish_confirmed_by_heuristic(primary_ctx, fallback_ctx):
+                _log("[Uploader:kuaishou] Publish feedback inferred by heuristic.")
+                return
+            _ensure_kuaishou_not_in_unfinished_edit_state(primary_ctx, fallback_ctx)
+        failure_hit = next((marker for marker in failure_markers if marker in text), "")
+        if failure_hit:
+            idx = text.find(failure_hit)
+            if idx >= 0:
+                raw_snippet = text[max(0, idx - 120) : idx + 220]
+            else:
+                raw_snippet = text[:240]
+            snippet = _normalize_text(raw_snippet, limit=260)
+            raise RuntimeError(
+                f"{platform_name} page shows publish failure marker: {failure_hit}; "
+                f"context={snippet or '-'}"
+            )
+        if not warned:
+            warned = True
+            _log(f"[Uploader:{platform_name}] Waiting publish feedback...")
+        time.sleep(1.0)
+
+    actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+    if actions:
+        _log(f"[Uploader:{platform_name}] Visible action texts after publish click: {actions}")
+    if platform_name == "xiaohongshu":
+        xiaohongshu_state = _read_xiaohongshu_publish_state(primary_ctx, fallback_ctx)
+        if _is_xiaohongshu_publish_confirmed_from_state(xiaohongshu_state):
+            _log(
+                "[Uploader:xiaohongshu] Publish feedback inferred by final state check: "
+                f"url={xiaohongshu_state.get('url') or '-'}, "
+                f"success_hint={bool(xiaohongshu_state.get('success_hint'))}, "
+                f"manage_url_hint={bool(xiaohongshu_state.get('manage_url_hint'))}, "
+                f"manage_text_hint={bool(xiaohongshu_state.get('manage_text_hint'))}, "
+                f"actions={xiaohongshu_state.get('action_texts') or []}"
+            )
+            return
+        if _is_xiaohongshu_publish_draft_state(xiaohongshu_state):
+            _log(
+                f"[Uploader:xiaohongshu] Final draft-state snapshot: "
+                f"url={xiaohongshu_state.get('url') or '-'}, actions={xiaohongshu_state.get('action_texts') or []}"
+            )
+            raise RuntimeError("xiaohongshu publish was not confirmed; page returned to draft/compose state.")
+    if platform_name == "kuaishou":
+        if _is_kuaishou_publish_confirmed_by_heuristic(primary_ctx, fallback_ctx):
+            _log("[Uploader:kuaishou] Publish feedback inferred by final heuristic check.")
+            return
+        _ensure_kuaishou_not_in_unfinished_edit_state(primary_ctx, fallback_ctx)
+        state = _read_kuaishou_publish_state(primary_ctx, fallback_ctx)
+        state_actions = state.get("action_texts")
+        if isinstance(state_actions, list) and state_actions:
+            _log(f"[Uploader:kuaishou] Heuristic snapshot actions: {state_actions}")
+        state_url = str(state.get("url", "") or "").strip()
+        if state_url:
+            _log(f"[Uploader:kuaishou] Heuristic snapshot url: {state_url}")
+    verify_page = fallback_ctx if hasattr(fallback_ctx, "get") and hasattr(fallback_ctx, "run_js") else None
+    if verify_page is not None:
+        matched = _verify_platform_publish_in_manage_page(
+            verify_page,
+            platform_name=platform_name,
+            expected_tokens=expected_tokens or (),
+            timeout_seconds=min(24.0, max(10.0, float(timeout_seconds) / 3.0)),
+        )
+        if matched:
+            return
+    raise RuntimeError(f"{platform_name} publish not confirmed within {timeout_seconds}s.")
+
+def _set_douyin_schedule_default_time(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    min_lead_minutes: int = 61,
+) -> str:
+    lead_minutes = max(61, int(min_lead_minutes))
+    schedule_ts = time.time() + lead_minutes * 60
+    schedule_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(schedule_ts))
+    schedule_iso = time.strftime("%Y-%m-%dT%H:%M", time.localtime(schedule_ts))
+
+    js_set = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    const textVal = String(arguments[0] || '');
+    const isoVal = String(arguments[1] || '');
+    const candidates = Array.from(document.querySelectorAll('input')).filter(isVisible);
+    let best = null;
+    let bestScore = -999;
+    for (const inp of candidates) {
+      const attrs = [
+        inp.placeholder || '',
+        inp.getAttribute('aria-label') || '',
+        inp.getAttribute('data-placeholder') || '',
+        String(inp.className || ''),
+        inp.type || '',
+      ].join(' ');
+      const wrap = inp.closest('form, section, .publish, .setting, .schedule, div') || inp.parentElement || inp;
+      const wrapText = (wrap.innerText || '').slice(0, 260);
+      let score = 0;
+      if (/时间|日期|定时|发布时间/.test(attrs)) score += 8;
+      if (/时间|日期|定时|发布时间/.test(wrapText)) score += 6;
+      if ((inp.type || '').toLowerCase() === 'datetime-local') score += 7;
+      if (/search|keyword|查询/.test(attrs.toLowerCase())) score -= 9;
+      if (score > bestScore) {
+        bestScore = score;
+        best = inp;
+      }
+    }
+    if (!best || bestScore < 1) return {ok: false, reason: 'no_schedule_input'};
+
+    const current = String(best.value || '').trim();
+    if (current) return {ok: true, value: current, source: 'page_default'};
+
+    try { best.removeAttribute('readonly'); } catch (e) {}
+    const useIso = (best.type || '').toLowerCase() === 'datetime-local';
+    const value = useIso ? isoVal : textVal;
+    best.focus();
+    best.value = '';
+    best.dispatchEvent(new Event('input', {bubbles: true}));
+    best.value = value;
+    best.dispatchEvent(new Event('input', {bubbles: true}));
+    best.dispatchEvent(new Event('change', {bubbles: true}));
+    best.blur();
+    return {ok: true, value, source: 'script_set'};
+    """
+
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js_set, schedule_text, schedule_iso)
+        except Exception:
+            result = {}
+        if isinstance(result, dict) and result.get("ok"):
+            value = str(result.get("value", "") or "").strip()
+            return value or schedule_text
+    return ""
+
+
+def _configure_douyin_random_publish_mode(primary_ctx: Any, fallback_ctx: Any) -> str:
+    # 立即发布/定时发布二选一，尽量模拟人工操作随机性。
+    want_scheduled = bool(random.randint(0, 1))
+    if not want_scheduled:
+        _log("[Uploader:douyin] Publish mode(random): immediate")
+        return "immediate"
+
+    if not _click_first_matching_button(primary_ctx, fallback_ctx, ("定时发布",), platform_name="douyin"):
+        _log("[Uploader:douyin] Publish mode(random): scheduled requested but toggle not found, fallback immediate.")
+        return "immediate"
+
+    time.sleep(0.4)
+    scheduled_value = _set_douyin_schedule_default_time(primary_ctx, fallback_ctx, min_lead_minutes=61)
+    if scheduled_value:
+        _log(f"[Uploader:douyin] Publish mode(random): scheduled (default time={scheduled_value})")
+    else:
+        _log("[Uploader:douyin] Publish mode(random): scheduled (use page default time)")
+    return "scheduled"
+
+
+def _finalize_douyin_publish(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    mode: str,
+    expected_tokens: Optional[Sequence[str]] = None,
+) -> str:
+    current_mode = str(mode or "immediate")
+    _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
+    try:
+        _wait_publish_feedback(
+            primary_ctx,
+            fallback_ctx,
+            platform_name="douyin",
+            expected_tokens=expected_tokens,
+            timeout_seconds=(90 if current_mode == "scheduled" else 45),
+        )
+        return current_mode
+    except Exception as exc:
+        if current_mode != "scheduled":
+            raise
+        _log(f"[Uploader:douyin] Scheduled publish not confirmed, fallback to immediate: {exc}")
+        _click_first_matching_button(primary_ctx, fallback_ctx, ("立即发布",), platform_name="douyin")
+        time.sleep(0.4)
+        if not _click_douyin_primary_publish_button(primary_ctx, fallback_ctx):
+            raise RuntimeError("douyin immediate fallback failed: publish button not clickable.") from exc
+        _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
+        _wait_publish_feedback(
+            primary_ctx,
+            fallback_ctx,
+            platform_name="douyin",
+            expected_tokens=expected_tokens,
+            timeout_seconds=45,
+        )
+        return "immediate_fallback"
+
+
+def _dismiss_unfinished_dialog(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> bool:
+    selectors: tuple[str, ...]
+    if platform_name == "douyin":
+        selectors = (
+            "text:继续编辑",
+            "xpath://button[contains(normalize-space(.), '继续编辑')]",
+            "text:放弃",
+            "xpath://button[contains(normalize-space(.), '放弃')]",
+        )
+    elif platform_name == "bilibili":
+        selectors = (
+            "text:不用了",
+            "xpath://button[contains(normalize-space(.), '不用了')]",
+            "text:继续编辑",
+            "xpath://button[contains(normalize-space(.), '继续编辑')]",
+        )
+    else:
+        selectors = (
+            "text:继续编辑",
+            "xpath://button[contains(normalize-space(.), '继续编辑')]",
+        )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                ele = owner.ele(selector, timeout=1.5)
+            except Exception:
+                ele = None
+            if not ele or not _is_visible_element(ele):
+                continue
+            try:
+                ele.click()
+            except Exception:
+                ele.click(by_js=True)
+            _log(f"[Uploader:{platform_name}] Dismissed unfinished-video dialog.")
+            time.sleep(0.8)
+            return True
+    return False
+
+
+def _guard_kuaishou_unfinished_dialog(primary_ctx: Any, fallback_ctx: Any) -> None:
+    _dismiss_unfinished_dialog(primary_ctx, fallback_ctx, platform_name="kuaishou")
+
+
+def _set_kuaishou_random_publish_time(primary_ctx: Any, fallback_ctx: Any, max_minutes: int) -> str:
+    window_minutes = max(1, int(max_minutes))
+    delay_minutes = random.randint(1, window_minutes)
+    scheduled_ts = time.time() + delay_minutes * 60
+    schedule_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(scheduled_ts))
+    schedule_iso = time.strftime("%Y-%m-%dT%H:%M", time.localtime(scheduled_ts))
+
+    # 先切到“定时发布”，再写入时间输入框。
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("定时发布",), platform_name="kuaishou")
+
+    js_set = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    const textVal = String(arguments[0] || '');
+    const isoVal = String(arguments[1] || '');
+    const inputs = Array.from(document.querySelectorAll('input')).filter(isVisible);
+    let best = null;
+    let bestScore = -999;
+    for (const inp of inputs) {
+      const attrs = [
+        inp.placeholder || '',
+        inp.getAttribute('aria-label') || '',
+        String(inp.className || ''),
+        inp.type || '',
+      ].join(' ');
+      const wrap = inp.closest('form, section, .publish, .setting, div') || inp.parentElement || inp;
+      const wrapText = (wrap.innerText || '').slice(0, 220);
+      let score = 0;
+      if (/时间|日期|定时|发布时间/.test(attrs)) score += 6;
+      if (/时间|日期|定时|发布时间/.test(wrapText)) score += 5;
+      if ((inp.type || '').toLowerCase() === 'datetime-local') score += 7;
+      if (/search|keyword|查询/.test(attrs.toLowerCase())) score -= 8;
+      if (score > bestScore) {
+        bestScore = score;
+        best = inp;
+      }
+    }
+    if (!best) return {ok: false, reason: 'no_input'};
+    try { best.removeAttribute('readonly'); } catch (e) {}
+    const useIso = (best.type || '').toLowerCase() === 'datetime-local';
+    const value = useIso ? isoVal : textVal;
+    best.focus();
+    best.value = '';
+    best.dispatchEvent(new Event('input', {bubbles: true}));
+    best.value = value;
+    best.dispatchEvent(new Event('input', {bubbles: true}));
+    best.dispatchEvent(new Event('change', {bubbles: true}));
+    best.blur();
+    return {ok: true, value, type: best.type || '', placeholder: best.placeholder || ''};
+    """
+
+    result: Any = {}
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js_set, schedule_text, schedule_iso)
+        except Exception:
+            result = {}
+        if isinstance(result, dict) and result.get("ok"):
+            _log(f"[Uploader:kuaishou] Random schedule set: {result.get('value')} (+{delay_minutes}m)")
+            return schedule_text
+
+    raise RuntimeError("Failed to set Kuaishou scheduled publish time.")
+
+
+def _set_bilibili_random_publish_time(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    max_minutes: int,
+    min_lead_minutes: int = BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
+) -> str:
+    lead_minutes = max(BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES, int(min_lead_minutes))
+    window_minutes = max(lead_minutes, int(max_minutes))
+    delay_minutes = random.randint(lead_minutes, window_minutes)
+    scheduled_ts = time.time() + delay_minutes * 60
+    schedule_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(scheduled_ts))
+    schedule_iso = time.strftime("%Y-%m-%dT%H:%M", time.localtime(scheduled_ts))
+
+    # B站定时发布要求时间至少在当前2小时后，这里先切换“定时发布”再写入随机时间。
+    js_toggle = """
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function visible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    window.scrollTo(0, document.body.scrollHeight);
+    const nodes = Array.from(document.querySelectorAll('label, button, [role=\"switch\"], input[type=\"checkbox\"], span, div'));
+    let best = null;
+    let bestScore = -999;
+    for (const node of nodes) {
+      const text = norm(node.innerText || node.textContent || '');
+      if (!text || !text.includes('定时发布')) continue;
+      const wrap = node.closest('form, section, .publish, .submit, .setting, div') || node.parentElement || node;
+      const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 360);
+      let score = 0;
+      if (text === '定时发布') score += 10;
+      if (text.includes('定时发布')) score += 6;
+      if (/2小时|15天|发布时间/.test(wrapText)) score += 8;
+      if (node.tagName === 'INPUT') score += 4;
+      if (String(node.getAttribute('role') || '') === 'switch') score += 6;
+      if (visible(node)) score += 3;
+      if (score > bestScore) {
+        bestScore = score;
+        best = node;
+      }
+    }
+    if (!best) return {ok:false, reason:'toggle_not_found'};
+    try { best.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+    if (best.tagName === 'INPUT' && String(best.type || '').toLowerCase() === 'checkbox') {
+      if (!best.checked) best.click();
+    } else if (String(best.getAttribute('role') || '').toLowerCase() === 'switch') {
+      const checked = String(best.getAttribute('aria-checked') || '').toLowerCase() === 'true';
+      if (!checked) best.click();
+    } else {
+      best.click();
+    }
+    return {ok:true, score:bestScore};
+    """
+
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("定时发布",), platform_name="bilibili")
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            owner.run_js(js_toggle)
+        except Exception:
+            continue
+    time.sleep(0.6)
+
+    js_set = """
+    const textVal = String(arguments[0] || '');
+    const isoVal = String(arguments[1] || '');
+    const inputs = Array.from(document.querySelectorAll('input'));
+    let best = null;
+    let bestScore = -999;
+    for (const inp of inputs) {
+      const attrs = [
+        inp.placeholder || '',
+        inp.getAttribute('aria-label') || '',
+        inp.getAttribute('data-placeholder') || '',
+        String(inp.className || ''),
+        inp.type || '',
+      ].join(' ');
+      const wrap = inp.closest('form, section, .publish, .submit, .setting, div') || inp.parentElement || inp;
+      const wrapText = (wrap.innerText || '').slice(0, 320);
+      let score = 0;
+      if (/时间|日期|定时|发布时间|投稿时间/.test(attrs)) score += 8;
+      if (/时间|日期|定时|发布时间|投稿时间/.test(wrapText)) score += 8;
+      if (/2小时|15天/.test(wrapText)) score += 8;
+      if ((inp.type || '').toLowerCase() === 'datetime-local') score += 8;
+      if (/标题|标签|简介|合集/.test(wrapText)) score -= 10;
+      if (/title|tag|search|keyword/.test(attrs.toLowerCase())) score -= 8;
+      if (score > bestScore) {
+        bestScore = score;
+        best = inp;
+      }
+    }
+    if (!best || bestScore < 2) return {ok: false, reason: 'no_schedule_input'};
+    try { best.removeAttribute('readonly'); } catch (e) {}
+    const useIso = (best.type || '').toLowerCase() === 'datetime-local';
+    const value = useIso ? isoVal : textVal;
+    best.focus();
+    best.value = '';
+    best.dispatchEvent(new Event('input', {bubbles: true}));
+    best.value = value;
+    best.dispatchEvent(new Event('input', {bubbles: true}));
+    best.dispatchEvent(new Event('change', {bubbles: true}));
+    best.blur();
+    return {ok: true, value, type: best.type || '', placeholder: best.placeholder || ''};
+    """
+
+    result: Any = {}
+    for _ in range(3):
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                result = owner.run_js(js_set, schedule_text, schedule_iso)
+            except Exception:
+                result = {}
+            if isinstance(result, dict) and result.get("ok"):
+                value = str(result.get("value", "") or "").strip() or schedule_text
+                _log(f"[Uploader:bilibili] Random schedule set: {value} (+{delay_minutes}m)")
+                return value
+        time.sleep(0.5)
+
+    debug_js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function clip(s, n) {
+      s = String(s || '').replace(/\\s+/g, ' ').trim();
+      return s.length > n ? s.slice(0, n) : s;
+    }
+    const body = clip((document.body && document.body.innerText) || '', 500);
+    const buttons = Array.from(document.querySelectorAll('button,[role=\"button\"],a,span,div,label'))
+      .filter(isVisible)
+      .map(el => clip(el.innerText || el.textContent || '', 80))
+      .filter(Boolean)
+      .filter(text => /定时|投稿|发布|时间|日期|立即/.test(text))
+      .slice(0, 30);
+    const inputs = Array.from(document.querySelectorAll('input,textarea'))
+      .map(el => {
+        const wrap = el.closest('form, section, div') || el.parentElement || el;
+        return {
+          type: String(el.type || ''),
+          placeholder: clip(el.placeholder || '', 50),
+          value: clip(el.value || '', 40),
+          wrap: clip((wrap && wrap.innerText) || '', 120),
+        };
+      })
+      .filter(item => /定时|投稿|发布|时间|日期/.test(item.placeholder + ' ' + item.wrap))
+      .slice(0, 20);
+    return {url: location.href, body, buttons, inputs};
+    """
+    debug_info: dict[str, Any] = {}
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            data = owner.run_js(debug_js)
+        except Exception:
+            data = {}
+        if isinstance(data, dict) and data:
+            debug_info = data
+            break
+    raise RuntimeError(
+        "Failed to set Bilibili scheduled publish time. "
+        f"debug={_normalize_text(str(debug_info), limit=600)}"
+    )
+
+
+def _configure_bilibili_random_publish_mode(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    max_minutes: int = BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
+) -> str:
+    # 与抖音/快手保持一致：随机二选一（立即发布 / 定时发布）。
+    choose_scheduled = bool(random.getrandbits(1))
+    if not choose_scheduled:
+        _log("[Uploader:bilibili] Publish mode(random): immediate")
+        return "immediate"
+
+    try:
+        scheduled = _set_bilibili_random_publish_time(
+            primary_ctx,
+            fallback_ctx,
+            max_minutes=max(BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES, int(max_minutes)),
+        )
+    except Exception as exc:
+        _log(f"[Uploader:bilibili] Publish mode(random): scheduled failed, fallback immediate: {exc}")
+        return "immediate_fallback"
+
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="bilibili")
+    _log(f"[Uploader:bilibili] Publish mode(random): scheduled ({scheduled})")
+    return "scheduled"
+
+
+def _configure_kuaishou_random_publish_mode(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    max_minutes: int = 45,
+) -> str:
+    # 与抖音一致：随机二选一（立即发布 / 定时发布）。
+    choose_scheduled = bool(random.getrandbits(1))
+    if not choose_scheduled:
+        _click_first_matching_button(primary_ctx, fallback_ctx, ("立即发布",), platform_name="kuaishou")
+        _log("[Uploader:kuaishou] Publish mode(random): immediate")
+        return "immediate"
+
+    scheduled = _set_kuaishou_random_publish_time(
+        primary_ctx,
+        fallback_ctx,
+        max_minutes=max(1, int(max_minutes)),
+    )
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="kuaishou")
+    _log(f"[Uploader:kuaishou] Publish mode(random): scheduled ({scheduled})")
+    return "scheduled"
+
+
+def _publish_kuaishou_with_random_schedule(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    max_minutes: int,
+    expected_tokens: Optional[Sequence[str]] = None,
+) -> str:
+    scheduled = _set_kuaishou_random_publish_time(primary_ctx, fallback_ctx, max_minutes=max_minutes)
+    # 有些时间选择器需要先确认，再点击发布
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="kuaishou")
+    clicked_publish = _click_kuaishou_primary_publish_button(primary_ctx, fallback_ctx)
+    if not clicked_publish:
+        clicked_publish = _click_first_matching_button(
+            primary_ctx,
+            fallback_ctx,
+            ("发布", "发布作品"),
+            platform_name="kuaishou",
+        )
+    if not clicked_publish:
+        clicked_publish = _click_kuaishou_primary_publish_button(primary_ctx, fallback_ctx)
+    if not clicked_publish:
+        actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+        if actions:
+            _log(f"[Uploader:kuaishou] Visible action texts: {actions}")
+        raise RuntimeError("Failed to click Kuaishou publish button.")
+    _click_first_matching_button(
+        primary_ctx,
+        fallback_ctx,
+        ("确认发布", "确认定时发布", "继续发布", "确定发布"),
+        platform_name="kuaishou",
+    )
+    _wait_publish_feedback(
+        primary_ctx,
+        fallback_ctx,
+        platform_name="kuaishou",
+        expected_tokens=expected_tokens,
+        timeout_seconds=KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS,
+    )
+    _log(f"[Success:kuaishou] 已设置随机定时并确认发布：{scheduled}")
+    return scheduled
+
+
+def _publish_bilibili_with_random_schedule(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    max_minutes: int,
+    expected_tokens: Optional[Sequence[str]] = None,
+) -> str:
+    scheduled = _set_bilibili_random_publish_time(
+        primary_ctx,
+        fallback_ctx,
+        max_minutes=max(BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES, int(max_minutes)),
+    )
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="bilibili")
+    clicked_publish = _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx)
+    if not clicked_publish:
+        clicked_publish = _click_first_matching_button(
+            primary_ctx,
+            fallback_ctx,
+            ("确认定时发布", "确认定时投稿", "定时投稿", "立即投稿", "投稿", "发布"),
+            platform_name="bilibili",
+        )
+    if not clicked_publish:
+        actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+        if actions:
+            _log(f"[Uploader:bilibili] Visible action texts: {actions}")
+        raise RuntimeError("Failed to click Bilibili publish button.")
+    _click_first_matching_button(
+        primary_ctx,
+        fallback_ctx,
+        ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+        platform_name="bilibili",
+    )
+    _wait_publish_feedback(
+        primary_ctx,
+        fallback_ctx,
+        platform_name="bilibili",
+        expected_tokens=expected_tokens,
+        timeout_seconds=180,
+    )
+    _log(f"[Success:bilibili] 已设置随机定时并确认发布：{scheduled}")
+    return scheduled
+
+
+def _fill_draft_once_generic(
+    page: ChromiumPage,
+    target: Path,
+    final_caption: str,
+    open_url: str,
+    platform_name: str,
+    save_draft: bool,
+    publish_now: bool,
+    upload_timeout: int,
+    draft_button_texts: tuple[str, ...],
+    publish_button_texts: tuple[str, ...],
+    before_upload_hook: Optional[Callable[[Any, Any], None]] = None,
+    kuaishou_random_schedule_max_minutes: int = 45,
+    bilibili_random_schedule_max_minutes: int = BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
+    collection_name: str = "",
+    debug_port: Optional[int] = None,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = "",
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Any:
+    publish_verify_tokens = _build_publish_verification_tokens(platform_name, final_caption)
+    if _current_page_matches_publish_entry(page, platform_name, open_url):
+        _log(f"[Uploader:{platform_name}] Reusing current publish page: {getattr(page, 'url', '')}")
+    else:
+        _log(f"[Uploader:{platform_name}] Opening page: {open_url}")
+        _run_page_action(page, f"open {platform_name} page", lambda: page.get(open_url))
+    _check_platform_login_ready(
+        page,
+        platform_name=platform_name,
+        open_url=open_url,
+        chrome_user_data_dir=chrome_user_data_dir,
+        debug_port=debug_port,
+        chrome_path=chrome_path,
+        max_refresh_retry=1,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+    prefer_top_level_ctx = platform_name in {"bilibili"}
+    ctx = page if prefer_top_level_ctx else _resolve_post_editor_context(page, timeout_seconds=12)
+    if platform_name == "bilibili":
+        _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name)
+    if before_upload_hook:
+        before_upload_hook(ctx, page)
+    prefer_video_input: Optional[bool] = True
+    if platform_name in {"xiaohongshu", "douyin", "kuaishou"} and _is_image_file(target):
+        prefer_video_input = False
+    if platform_name == "xiaohongshu":
+        _ensure_xiaohongshu_upload_mode(ctx, page, prefer_video=bool(prefer_video_input))
+    elif platform_name == "douyin":
+        _ensure_douyin_publish_mode(ctx, page, prefer_video=bool(prefer_video_input))
+    elif platform_name == "kuaishou":
+        _ensure_kuaishou_publish_mode(ctx, page, prefer_video=bool(prefer_video_input))
+    # For Bilibili, do not click upload trigger eagerly.
+    # Clicking trigger may open native file dialog and block automation.
+    file_input = _run_page_action(
+        page,
+        f"find {platform_name} file input",
+        lambda: (
+            _find_bilibili_upload_file_input(ctx, page)
+            if platform_name == "bilibili"
+            else _find_upload_file_input_generic(ctx, page, prefer_video=prefer_video_input)
+        ),
+    )
+    if not file_input:
+        retry_rounds = 3 if platform_name == "bilibili" else 1
+        for retry_idx in range(retry_rounds):
+            _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
+            time.sleep(1.0 + (retry_idx * 0.4))
+            ctx = page if prefer_top_level_ctx else _resolve_post_editor_context(page, timeout_seconds=8)
+            if before_upload_hook:
+                before_upload_hook(ctx, page)
+            if platform_name == "xiaohongshu":
+                _ensure_xiaohongshu_upload_mode(ctx, page, prefer_video=bool(prefer_video_input), max_rounds=2)
+            elif platform_name == "douyin":
+                _ensure_douyin_publish_mode(ctx, page, prefer_video=bool(prefer_video_input), max_rounds=2)
+            elif platform_name == "kuaishou":
+                _ensure_kuaishou_publish_mode(ctx, page, prefer_video=bool(prefer_video_input), max_rounds=2)
+            file_input = _run_page_action(
+                page,
+                f"refind {platform_name} file input",
+                lambda: (
+                    _find_bilibili_upload_file_input(ctx, page)
+                    if platform_name == "bilibili"
+                    else _find_upload_file_input_generic(ctx, page, prefer_video=prefer_video_input)
+                ),
+                retries=2,
+            )
+            if file_input:
+                break
+    staged_with_page_set = False
+    if not file_input:
+        if before_upload_hook:
+            before_upload_hook(ctx, page)
+        if platform_name == "xiaohongshu":
+            _ensure_xiaohongshu_upload_mode(ctx, page, prefer_video=bool(prefer_video_input), max_rounds=2)
+        elif platform_name == "douyin":
+            _ensure_douyin_publish_mode(ctx, page, prefer_video=bool(prefer_video_input), max_rounds=2)
+        elif platform_name == "xiaohongshu":
+            _click_xiaohongshu_publish_confirm_button(primary_ctx, fallback_ctx)
+        elif platform_name == "kuaishou":
+            _ensure_kuaishou_publish_mode(ctx, page, prefer_video=bool(prefer_video_input), max_rounds=2)
+        actions = _collect_visible_action_texts(ctx, page)
+        if actions:
+            _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
+        snapshot_url, snapshot_text = _read_page_snapshot(ctx, page)
+        if platform_name == "kuaishou":
+            raw_actions = _collect_visible_button_texts(ctx, page)
+            if raw_actions:
+                _log(f"[Uploader:{platform_name}] Visible texts snapshot: {raw_actions}")
+            if _is_unfinished_edit_state(snapshot_text, [*actions, *raw_actions]):
+                if snapshot_url:
+                    _log(f"[Uploader:{platform_name}] Unfinished-edit snapshot url: {snapshot_url}")
+                raise RuntimeError(
+                    "kuaishou page is blocked by unfinished-video dialog / continue editing state."
+                )
+        if platform_name == "xiaohongshu" and _is_image_file(target):
+            if _recover_xiaohongshu_publish_after_missing_file_input(
+                ctx,
+                page,
+                expected_tokens=publish_verify_tokens,
+            ):
+                _log("[Success:xiaohongshu] Publish confirmed after missing-file-input final-state recovery.")
+                return ctx
+        if platform_name != "bilibili":
+            _log(f"[Uploader:{platform_name}] No DOM file input found, try page.set.upload_files fallback.")
+            staged_with_page_set = _stage_generic_upload_via_page_set(page, ctx, page, target, platform_name)
+            if staged_with_page_set:
+                _log(f"[Uploader:{platform_name}] Upload file staged via page.set.upload_files fallback.")
+        if platform_name != "bilibili":
+            if not staged_with_page_set:
+                _log_upload_surface_snapshot(ctx, page, platform_name, reason="missing-file-input-final")
+                raise RuntimeError(f"Could not find file input on {platform_name} page.")
+    _log(f"[Uploader:{platform_name}] Uploading file: {target}")
+    bilibili_staged = False
+    prefer_direct_bilibili_input = platform_name == "bilibili" and bool(file_input)
+    if prefer_direct_bilibili_input:
+        try:
+            _run_page_action(page, f"upload file ({platform_name})", lambda: file_input.input(str(target)))
+        except Exception as exc:
+            _log(f"[Uploader:{platform_name}] Direct file-input upload failed, fallback to page.set.upload_files: {exc}")
+            bilibili_staged = _stage_bilibili_upload_via_page_set(page, ctx, page, target)
+    else:
+        if platform_name == "bilibili":
+            bilibili_staged = _stage_bilibili_upload_via_page_set(page, ctx, page, target)
+        elif not file_input and not staged_with_page_set:
+            staged_with_page_set = _stage_generic_upload_via_page_set(page, ctx, page, target, platform_name)
+        if not bilibili_staged:
+            if staged_with_page_set:
+                _log(f"[Uploader:{platform_name}] Continue with page.set.upload_files staged result.")
+            else:
+                if not file_input:
+                    raise RuntimeError(f"Could not find file input on {platform_name} page.")
+                _run_page_action(page, f"upload file ({platform_name})", lambda: file_input.input(str(target)))
+    if platform_name != "bilibili" and staged_with_page_set:
+        snapshot = _read_generic_file_inputs_snapshot(ctx, page)
+        max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
+        total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
+        _log(
+            f"[Uploader:{platform_name}] Generic staged bind state: "
+            f"max_count={max_count}, total_inputs={total}"
+        )
+    if platform_name == "bilibili":
+        bind_state = _read_file_input_binding_state(file_input) if file_input else {}
+        if bind_state:
+            _log(
+                f"[Uploader:{platform_name}] File input bind state: "
+                f"count={bind_state.get('count', 0)}, "
+                f"visible={bind_state.get('visible')}, "
+                f"name={bind_state.get('name') or '-'}, "
+                f"accept={_single_line_preview(str(bind_state.get('accept') or ''), limit=60) or '-'}, "
+                f"files={_single_line_preview(','.join([str(x) for x in (bind_state.get('names') or [])]), limit=80) or '-'}"
+            )
+        snapshot = _read_bilibili_file_inputs_snapshot(ctx, page)
+        max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
+        if max_count <= 0:
+            _log(f"[Uploader:{platform_name}] No file bound on page after initial input, retry immediate rebind.")
+            for rebind_idx in range(2):
+                _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
+                time.sleep(0.5)
+                retry_input = _find_bilibili_upload_file_input(ctx, page) or _find_upload_file_input_generic(ctx, page)
+                if not retry_input:
+                    continue
+                try:
+                    retry_input.input(str(target))
+                except Exception:
+                    continue
+                retry_state = _read_file_input_binding_state(retry_input)
+                retry_count = int(retry_state.get("count", 0) or 0) if isinstance(retry_state, dict) else 0
+                _log(
+                    f"[Uploader:{platform_name}] Rebind attempt {rebind_idx + 1}/2: "
+                    f"count={retry_count}, files={_single_line_preview(','.join([str(x) for x in (retry_state.get('names') or [])]), limit=80) or '-'}"
+                )
+                if retry_count > 0:
+                    file_input = retry_input
+                    break
+    ctx = _wait_upload_ready_generic(
+        page,
+        ctx,
+        platform_name=platform_name,
+        timeout_seconds=upload_timeout,
+        upload_target=(target if platform_name == "bilibili" else None),
+    )
+    if platform_name in {"douyin", "kuaishou", "bilibili"}:
+        _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name)
+    text_payload = final_caption
+    if platform_name in {"douyin", "xiaohongshu", "kuaishou"} and _is_image_file(target):
+        text_payload = _prepare_image_post_text_payload(
+            ctx,
+            page,
+            platform_name=platform_name,
+            caption=final_caption,
+        )
+    _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
+    if platform_name == "xiaohongshu" and not _is_image_file(target):
+        _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)
+    if platform_name == "bilibili":
+        _fill_bilibili_title_from_caption(ctx, page, final_caption)
+        _log("[Uploader:bilibili] Skip collection selection by design.")
+    if save_draft:
+        if not _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
+            if platform_name in {"douyin", "kuaishou", "bilibili"} and _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name):
+                if _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
+                    _log(f"[Success:{platform_name}] 草稿保存按钮已点击，请在平台草稿箱确认。")
+                    return ctx
+            actions = _collect_visible_action_texts(ctx, page)
+            if actions:
+                _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
+            raise RuntimeError(f"Failed to locate draft button on {platform_name} page.")
+        _log(f"[Success:{platform_name}] 草稿保存按钮已点击，请在平台草稿箱确认。")
+    elif publish_now:
+        douyin_mode = "immediate"
+        kuaishou_mode = "immediate"
+        bilibili_mode = "immediate"
+        if platform_name == "douyin":
+            _click_first_matching_button(
+                ctx,
+                page,
+                ("\u7acb\u5373\u53d1\u5e03", "\u7acb\u5373\u6295\u7a3f", "\u53d1\u5e03"),
+                platform_name="douyin",
+            )
+            douyin_mode = "immediate"
+            _log("[Uploader:douyin] Publish mode(fixed): immediate")
+        elif platform_name == "kuaishou":
+            _click_first_matching_button(
+                ctx,
+                page,
+                ("\u7acb\u5373\u53d1\u5e03",),
+                platform_name="kuaishou",
+            )
+            kuaishou_mode = "immediate"
+            _log("[Uploader:kuaishou] Publish mode(fixed): immediate")
+        elif platform_name == "bilibili":
+            bilibili_mode = "immediate"
+            _log("[Uploader:bilibili] Publish mode(fixed): immediate")
+
+        def _confirm_publish() -> None:
+            nonlocal douyin_mode
+            if platform_name == "douyin":
+                douyin_mode = _finalize_douyin_publish(ctx, page, douyin_mode, expected_tokens=publish_verify_tokens)
+                return
+            if platform_name == "kuaishou":
+                _click_kuaishou_publish_confirm_button(ctx, page)
+            if platform_name == "xiaohongshu":
+                _click_xiaohongshu_publish_confirm_button(ctx, page)
+            if platform_name == "bilibili":
+                _click_first_matching_button(
+                    ctx,
+                    page,
+                    ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+                    platform_name=platform_name,
+                )
+            # 非抖音平台同样要等待页面回执，避免“点击发布即成功”的误判。
+            if platform_name == "bilibili":
+                wait_seconds = 180
+            elif platform_name == "kuaishou":
+                wait_seconds = KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS
+            elif platform_name == "xiaohongshu":
+                wait_seconds = 90
+            else:
+                wait_seconds = 60
+            _wait_publish_feedback(
+                ctx,
+                page,
+                platform_name=platform_name,
+                expected_tokens=publish_verify_tokens,
+                timeout_seconds=wait_seconds,
+            )
+
+        if platform_name == "bilibili":
+            _reset_bilibili_publish_probe(ctx)
+        clicked_publish = (
+            _click_douyin_primary_publish_button(ctx, page)
+            if platform_name == "douyin"
+            else (
+                _click_kuaishou_primary_publish_button(ctx, page)
+                if platform_name == "kuaishou"
+                else (
+                    _click_bilibili_primary_publish_button(ctx, page)
+                    if platform_name == "bilibili"
+                    else (
+                        _click_xiaohongshu_primary_publish_button(ctx, page)
+                        if platform_name == "xiaohongshu"
+                        else _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
+                    )
+                )
+            )
+        )
+        if not clicked_publish:
+            if platform_name in {"douyin", "kuaishou", "bilibili"} and _dismiss_unfinished_dialog(
+                ctx,
+                page,
+                platform_name=platform_name,
+            ):
+                retry_clicked = (
+                    _click_douyin_primary_publish_button(ctx, page)
+                    if platform_name == "douyin"
+                    else (
+                        _click_kuaishou_primary_publish_button(ctx, page)
+                        if platform_name == "kuaishou"
+                        else (
+                            _click_bilibili_primary_publish_button(ctx, page)
+                            if platform_name == "bilibili"
+                            else (
+                                _click_xiaohongshu_primary_publish_button(ctx, page)
+                                if platform_name == "xiaohongshu"
+                                else _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
+                            )
+                        )
+                    )
+                )
+                if retry_clicked:
+                    _confirm_publish()
+                    if platform_name == "douyin":
+                        _log(f"[Success:{platform_name}] 发布已确认（mode={douyin_mode}）。")
+                    elif platform_name == "kuaishou":
+                        _log(f"[Success:{platform_name}] 发布已确认（mode={kuaishou_mode}）。")
+                    elif platform_name == "bilibili":
+                        _log(f"[Success:{platform_name}] 发布已确认（mode={bilibili_mode}）。")
+                    else:
+                        _log(f"[Success:{platform_name}] 发布已确认。")
+                    return ctx
+            if platform_name == "bilibili":
+                _log(
+                    "[Uploader:bilibili] Publish button not located; "
+                    "trying publish-feedback wait for possible manual click."
+                )
+                try:
+                    _wait_publish_feedback(
+                        ctx,
+                        page,
+                        platform_name="bilibili",
+                        expected_tokens=publish_verify_tokens,
+                        timeout_seconds=180,
+                    )
+                    _log("[Success:bilibili] 发布已确认（manual-or-auto detected without button click）。")
+                    return ctx
+                except Exception as feedback_exc:
+                    _log(f"[Uploader:bilibili] Manual publish fallback not confirmed: {feedback_exc}")
+            actions = _collect_visible_action_texts(ctx, page)
+            if actions:
+                _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
+            raise RuntimeError(f"Failed to locate publish button on {platform_name} page.")
+        try:
+            _confirm_publish()
+        except Exception as exc:
+            if platform_name == "xiaohongshu":
+                _log(f"[Uploader:{platform_name}] Publish not confirmed, retrying publish once: {exc}")
+                retry_clicked = _click_xiaohongshu_primary_publish_button(ctx, page) or _click_first_matching_button(
+                    ctx,
+                    page,
+                    publish_button_texts,
+                    platform_name=platform_name,
+                )
+                if retry_clicked:
+                    _click_xiaohongshu_publish_confirm_button(ctx, page)
+                    _wait_publish_feedback(
+                        ctx,
+                        page,
+                        platform_name=platform_name,
+                        expected_tokens=publish_verify_tokens,
+                        timeout_seconds=90,
+                    )
+                    _log(f"[Success:{platform_name}] Publish confirmed after one retry.")
+                    return ctx
+            if platform_name == "bilibili":
+                net_ok, net_reason = _detect_bilibili_publish_via_network(ctx)
+                probe_summary = _summarize_bilibili_publish_probe_events(_read_bilibili_publish_probe(ctx))
+                probe_diagnosis = _diagnose_bilibili_publish_attempt(ctx, ctx, page)
+                if net_ok:
+                    _log(f"[Uploader:bilibili] Publish accepted by network probe: {net_reason}")
+                    if probe_summary:
+                        _log(f"[Uploader:bilibili] Publish probe summary: {probe_summary}")
+                    _log("[Success:bilibili] Publish confirmed via network probe.")
+                    return ctx
+                if net_reason:
+                    _log(f"[Uploader:bilibili] Publish network probe did not confirm success: {net_reason}")
+                if probe_summary:
+                    _log(f"[Uploader:bilibili] Publish probe summary: {probe_summary}")
+                if probe_diagnosis:
+                    _log(f"[Uploader:bilibili] Publish probe diagnosis: {probe_diagnosis}")
+                _log(f"[Uploader:{platform_name}] Publish not confirmed, fallback to save draft: {exc}")
+                if _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
+                    _log(f"[Uploader:{platform_name}] Publish unconfirmed; draft save was used as failure fallback.")
+                    raise RuntimeError(
+                        f"{platform_name} publish was not confirmed; automatically saved as draft / returned to draft-state."
+                    ) from exc
+            raise
+        if platform_name == "douyin":
+            _log(f"[Success:{platform_name}] 发布已确认（mode={douyin_mode}）。")
+        elif platform_name == "kuaishou":
+            _log(f"[Success:{platform_name}] 发布已确认（mode={kuaishou_mode}）。")
+        elif platform_name == "bilibili":
+            _log(f"[Success:{platform_name}] 发布已确认（mode={bilibili_mode}）。")
+        else:
+            _log(f"[Success:{platform_name}] 发布已确认。")
+    return ctx
+
+
+def fill_draft_douyin(
+    workspace: Workspace,
+    caption: Optional[str] = None,
+    target_video: Optional[Path] = None,
+    debug_port: int = DEFAULT_PORT,
+    save_draft: bool = True,
+    publish_now: bool = False,
+    upload_timeout: int = UPLOAD_TIMEOUT_SECONDS,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    check_duplicate_before_upload: bool = True,
+    record_after_success: bool = True,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Path:
+    _log("[Uploader:douyin] Connecting Chrome")
+    target = target_video or _find_latest_processed(workspace)
+    if not target:
+        raise RuntimeError("No processed video found in 2_Processed.")
+    open_url = DOUYIN_CREATE_IMAGE_POST_URL if _is_image_file(target) else DOUYIN_CREATE_POST_URL
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=open_url,
+    )
+    target_fp: Optional[str] = None
+    if check_duplicate_before_upload:
+        is_dup, dup_match, target_fp = _is_uploaded_content_duplicate(workspace, target, platform="douyin")
+        if is_dup:
+            reason = str((dup_match or {}).get("_reason", "fingerprint"))
+            key_text = str((dup_match or {}).get("_key", "") or "")
+            key_suffix = f", key={key_text}" if key_text else ""
+            raise RuntimeError(
+                f"douyin duplicate target blocked: {target.name} "
+                f"(match={dup_match.get('processed_name', 'unknown') if dup_match else 'unknown'}, "
+                f"reason={reason}{key_suffix})"
+            )
+    final_caption = _prepare_caption_for_platform(
+        (caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION,
+        platform_name="douyin",
+    )
+    work_page = _prepare_upload_tab(page)
+    try:
+        for attempt in range(2):
+            try:
+                _fill_draft_once_generic(
+                    work_page,
+                    target,
+                    final_caption,
+                    open_url=open_url,
+                    platform_name="douyin",
+                    save_draft=save_draft,
+                    publish_now=publish_now,
+                    upload_timeout=upload_timeout,
+                    draft_button_texts=("保存草稿", "草稿箱", "草稿"),
+                    publish_button_texts=("发布", "立即发布", "确认发布"),
+                    debug_port=debug_port,
+                    chrome_path=chrome_path,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_registry_file=telegram_registry_file,
+                    telegram_timeout_seconds=telegram_timeout_seconds,
+                    telegram_api_base=telegram_api_base,
+                    notify_env_prefix=notify_env_prefix,
+                )
+                break
+            except Exception as exc:
+                if _should_retry_platform_publish_fill(exc, "douyin") and attempt == 0:
+                    _log(f"[Uploader:douyin] Retry after transient publish-fill failure: {exc}")
+                    _close_work_tab(work_page, page, reason="douyin-fill-retry")
+                    work_page = _prepare_upload_tab(page)
+                    continue
+                raise
+        should_record = bool(record_after_success) and bool(save_draft or publish_now)
+        if should_record:
+            _append_draft_upload_history(workspace, target.name, platform="douyin", media_kind=_media_kind_from_path(target))
+            _record_uploaded_content_fingerprint(
+                workspace,
+                target,
+                fingerprint=target_fp,
+                platform="douyin",
+            )
+        return target
+    finally:
+        _close_work_tab(work_page, page, reason="douyin-finish")
+
+
+def fill_draft_xiaohongshu(
+    workspace: Workspace,
+    caption: Optional[str] = None,
+    target_video: Optional[Path] = None,
+    debug_port: int = DEFAULT_PORT,
+    save_draft: bool = True,
+    publish_now: bool = False,
+    upload_timeout: int = UPLOAD_TIMEOUT_SECONDS,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Path:
+    _log("[Uploader:xiaohongshu] Connecting Chrome")
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=XIAOHONGSHU_CREATE_POST_URL,
+    )
+    target = target_video or _find_latest_processed(workspace, include_images=True)
+    if not target:
+        raise RuntimeError("No processed media found in 2_Processed.")
+    final_caption = _ensure_required_hashtags((caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION)
+    work_page = _prepare_upload_tab(page)
+    try:
+        _fill_draft_once_generic(
+            work_page,
+            target,
+            final_caption,
+            open_url=XIAOHONGSHU_CREATE_POST_URL,
+            platform_name="xiaohongshu",
+            save_draft=save_draft,
+            publish_now=publish_now,
+            upload_timeout=upload_timeout,
+            draft_button_texts=("暂存离开", "保存为草稿", "存草稿", "草稿"),
+            publish_button_texts=("发布", "发布笔记", "立即发布"),
+            debug_port=debug_port,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=chrome_user_data_dir,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        return target
+    finally:
+        _close_work_tab(work_page, page, reason="xiaohongshu-finish")
+
+
+def fill_draft_bilibili(
+    workspace: Workspace,
+    caption: Optional[str] = None,
+    target_video: Optional[Path] = None,
+    debug_port: int = DEFAULT_PORT,
+    save_draft: bool = True,
+    publish_now: bool = False,
+    auto_publish_random_schedule: bool = False,
+    random_schedule_max_minutes: int = BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
+    upload_timeout: int = UPLOAD_TIMEOUT_SECONDS,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Path:
+    _log("[Uploader:bilibili] Connecting Chrome")
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=BILIBILI_CREATE_POST_URL,
+    )
+    target = target_video or _find_latest_processed(workspace)
+    if not target:
+        raise RuntimeError("No processed video found in 2_Processed.")
+    final_caption = _ensure_required_hashtags((caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION)
+    work_page = _prepare_upload_tab(page)
+    try:
+        ctx = _fill_draft_once_generic(
+            work_page,
+            target,
+            final_caption,
+            open_url=BILIBILI_CREATE_POST_URL,
+            platform_name="bilibili",
+            collection_name=collection_name,
+            save_draft=(save_draft and not auto_publish_random_schedule),
+            publish_now=(publish_now and not auto_publish_random_schedule),
+            upload_timeout=upload_timeout,
+            draft_button_texts=("存草稿", "保存草稿", "草稿"),
+            publish_button_texts=("立即投稿", "投稿", "发布", "立即发布"),
+            bilibili_random_schedule_max_minutes=max(
+                BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
+                int(random_schedule_max_minutes),
+            ),
+            debug_port=debug_port,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=chrome_user_data_dir,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        if auto_publish_random_schedule:
+            _publish_bilibili_with_random_schedule(
+                primary_ctx=ctx,
+                fallback_ctx=work_page,
+                max_minutes=max(
+                    BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
+                    int(random_schedule_max_minutes),
+                ),
+                expected_tokens=_build_publish_verification_tokens("bilibili", final_caption),
+            )
+        return target
+    finally:
+        _close_work_tab(work_page, page, reason="bilibili-finish")
+
+
+def fill_draft_kuaishou(
+    workspace: Workspace,
+    caption: Optional[str] = None,
+    target_video: Optional[Path] = None,
+    debug_port: int = DEFAULT_PORT,
+    save_draft: bool = True,
+    publish_now: bool = False,
+    auto_publish_random_schedule: bool = False,
+    random_schedule_max_minutes: int = 45,
+    upload_timeout: int = UPLOAD_TIMEOUT_SECONDS,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Path:
+    _log("[Uploader:kuaishou] Connecting Chrome")
+    target = target_video or _find_latest_processed(workspace, include_images=True)
+    if not target:
+        raise RuntimeError("No processed media found in 2_Processed.")
+    open_url = KUAISHOU_CREATE_IMAGE_POST_URL if _is_image_file(target) else KUAISHOU_CREATE_POST_URL
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=open_url,
+    )
+    final_caption = _prepare_caption_for_platform(
+        (caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION,
+        platform_name="kuaishou",
+    )
+    work_page = _prepare_upload_tab(page)
+    try:
+        ctx = _fill_draft_once_generic(
+            work_page,
+            target,
+            final_caption,
+            open_url=open_url,
+            platform_name="kuaishou",
+            save_draft=(save_draft and not auto_publish_random_schedule),
+            publish_now=(publish_now and not auto_publish_random_schedule),
+            upload_timeout=upload_timeout,
+            before_upload_hook=_guard_kuaishou_unfinished_dialog,
+            draft_button_texts=("保存草稿", "暂存离开", "存草稿", "草稿"),
+            publish_button_texts=("发布", "发布作品", "立即发布"),
+            kuaishou_random_schedule_max_minutes=max(1, int(random_schedule_max_minutes)),
+            debug_port=debug_port,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=chrome_user_data_dir,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        if auto_publish_random_schedule:
+            _publish_kuaishou_with_random_schedule(
+                primary_ctx=ctx,
+                fallback_ctx=work_page,
+                max_minutes=max(1, int(random_schedule_max_minutes)),
+                expected_tokens=_build_publish_verification_tokens("kuaishou", final_caption),
+            )
+        return target
+    finally:
+        _close_work_tab(work_page, page, reason="kuaishou-finish")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="X 短视频采集与多平台草稿上传助手（人工发布）")
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG_PATH,
+        help=f"配置文件路径（JSON），默认 {DEFAULT_CONFIG_PATH}",
+    )
+    parser.add_argument("--workspace", default=DEFAULT_WORKSPACE)
+    parser.add_argument("--keyword", default=DEFAULT_KEYWORD)
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    parser.add_argument("--tweet-url", action="append", default=[], help="指定 X 帖子链接，可重复传入")
+    parser.add_argument("--tweet-url-file", help="包含 X 帖子链接的文本文件（每行一个）")
+    parser.add_argument("--no-x-auto-discover", action="store_true", help="Disable X keyword-search auto discovery")
+    parser.add_argument(
+        "--x-discovery-url-limit",
+        type=int,
+        default=X_DISCOVERY_URL_LIMIT,
+        help=f"X 自动发现 URL 数量上限，默认 {X_DISCOVERY_URL_LIMIT}",
+    )
+    parser.add_argument(
+        "--x-discovery-scroll-rounds",
+        type=int,
+        default=X_DISCOVERY_SCROLL_ROUNDS,
+        help=f"X 自动发现滚动轮数，默认 {X_DISCOVERY_SCROLL_ROUNDS}",
+    )
+    parser.add_argument(
+        "--x-discovery-scroll-wait",
+        type=float,
+        default=X_DISCOVERY_SCROLL_WAIT_SECONDS,
+        help=f"X 自动发现每轮滚动等待秒数，默认 {X_DISCOVERY_SCROLL_WAIT_SECONDS}",
+    )
+    parser.add_argument("--caption", default="", help="手动文案；不传则自动从采集视频元数据生成")
+    parser.add_argument("--proxy", default="", help="代理地址，例如 http://127.0.0.1:PORT")
+    parser.add_argument(
+        "--use-system-proxy",
+        action="store_true",
+        default=_env_bool_first(["CYBERCAR_USE_SYSTEM_PROXY"], default=False),
+        help="当 --proxy 为空时启用系统/环境代理；默认关闭（TUN/直连模式）。",
+    )
+    parser.add_argument("--debug-port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--wechat-debug-port", type=int, default=DEFAULT_WECHAT_DEBUG_PORT)
+    parser.add_argument("--chrome-path", default="", help="Chrome 可执行文件路径（可选）")
+    parser.add_argument(
+        "--chrome-user-data-dir",
+        default=DEFAULT_CHROME_USER_DATA_DIR,
+        help=f"Chrome 调试用户目录，默认 {DEFAULT_CHROME_USER_DATA_DIR}",
+    )
+    parser.add_argument("--no-auto-open-chrome", action="store_true", help="不自动启动 Chrome")
+    parser.add_argument(
+        "--upload-platforms",
+        default=DEFAULT_UPLOAD_PLATFORMS,
+        help="上传平台，逗号分隔：wechat,douyin,xiaohongshu,kuaishou,bilibili；默认 wechat",
+    )
+    parser.add_argument(
+        "--kuaishou-auto-publish-random-schedule",
+        action="store_true",
+        help="快手上传后自动设置随机定时并点击发布（非草稿）",
+    )
+    parser.add_argument(
+        "--kuaishou-random-schedule-max-minutes",
+        type=int,
+        default=45,
+        help="快手随机定时发布窗口（分钟），默认 45",
+    )
+    parser.add_argument(
+        "--bilibili-auto-publish-random-schedule",
+        action="store_true",
+        help="哔哩哔哩上传后自动设置随机定时并点击发布（非草稿）",
+    )
+    parser.add_argument(
+        "--bilibili-random-schedule-max-minutes",
+        type=int,
+        default=BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
+        help=(
+            f"哔哩哔哩随机定时发布时间窗口上限（分钟），"
+            f"会自动保证至少 {BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES} 分钟后，"
+            f"默认 {BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT}"
+        ),
+    )
+    parser.add_argument(
+        "--upload-timeout",
+        type=int,
+        default=UPLOAD_TIMEOUT_SECONDS,
+        help=f"上传完成等待秒数，默认 {UPLOAD_TIMEOUT_SECONDS}",
+    )
+    parser.add_argument(
+        "--drafts-per-run",
+        type=int,
+        default=DRAFTS_PER_RUN_DEFAULT,
+        help=f"单次运行写入草稿条数；0 表示全部可用视频都上传，默认 {DRAFTS_PER_RUN_DEFAULT}",
+    )
+    parser.add_argument(
+        "--upload-interval-min",
+        type=int,
+        default=UPLOAD_INTERVAL_MIN_SECONDS,
+        help=f"多条草稿时最小间隔秒数，默认 {UPLOAD_INTERVAL_MIN_SECONDS}",
+    )
+    parser.add_argument(
+        "--upload-interval-max",
+        type=int,
+        default=UPLOAD_INTERVAL_MAX_SECONDS,
+        help=f"多条草稿时最大间隔秒数，默认 {UPLOAD_INTERVAL_MAX_SECONDS}",
+    )
+    parser.add_argument(
+        "--collection-name",
+        default="",
+        help="发布页“添加到合集”的目标合集名；不传时读取配置文件 collection_name",
+    )
+    parser.add_argument(
+        "--wechat-declare-original",
+        action="store_true",
+        help="Enable WeChat original declaration before saving draft or publishing.",
+    )
+    source_cleanup_group = parser.add_mutually_exclusive_group()
+    source_cleanup_group.add_argument(
+        "--auto-delete-source-files",
+        action="store_true",
+        help="处理完成后删除 1_Downloads 源文件和 info.json（不归档到 3_Archive）",
+    )
+    source_cleanup_group.add_argument(
+        "--keep-source-files",
+        action="store_true",
+        help="强制保留源文件到 3_Archive（覆盖配置中的 auto_delete_source_files）",
+    )
+    parser.add_argument(
+        "--upload-only-approved",
+        action="store_true",
+        help="Only upload videos marked approved in review state file.",
+    )
+    parser.add_argument(
+        "--review-state-file",
+        default="",
+        help="Path to review state JSON file; default is <workspace>/review_state.json",
+    )
+    parser.add_argument(
+        "--notify-provider",
+        default=_env_first("CYBERCAR_NOTIFY_PROVIDER", "NOTIFY_PROVIDER", default=DEFAULT_NOTIFY_PROVIDER),
+        help="Notification provider; default telegram_bot.",
+    )
+    parser.add_argument("--disable-notify", action="store_true", help="Disable publish notifications.")
+    parser.add_argument(
+        "--notify-env-prefix",
+        default=_normalize_env_prefix(
+            _env_first("CYBERCAR_NOTIFY_ENV_PREFIX", "NOTIFY_ENV_PREFIX", default=DEFAULT_NOTIFY_ENV_PREFIX),
+            DEFAULT_NOTIFY_ENV_PREFIX,
+        ),
+        help="Env prefix used by notification module.",
+    )
+    parser.add_argument(
+        "--wecom-webhook-url",
+        default=_env_first("CYBERCAR_NOTIFY_WECOM_WEBHOOK_URL", "NOTIFY_WECOM_WEBHOOK_URL", default=""),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--wecom-timeout-seconds",
+        type=int,
+        default=_env_int_first(["CYBERCAR_NOTIFY_WECOM_TIMEOUT_SECONDS", "NOTIFY_WECOM_TIMEOUT_SECONDS"], 20),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--wecom-mentioned-list",
+        default=_env_first("CYBERCAR_NOTIFY_WECOM_MENTIONED_LIST", "NOTIFY_WECOM_MENTIONED_LIST", default=""),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--wecom-mentioned-mobile-list",
+        default=_env_first(
+            "CYBERCAR_NOTIFY_WECOM_MENTIONED_MOBILE_LIST",
+            "NOTIFY_WECOM_MENTIONED_MOBILE_LIST",
+            default="",
+        ),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--telegram-bot-identifier",
+        default=_env_first(
+            "CYBERCAR_NOTIFY_TELEGRAM_BOT_IDENTIFIER",
+            "CYBERCAR_NOTIFY_TELEGRAM_KEYWORD",
+            "NOTIFY_TELEGRAM_BOT_IDENTIFIER",
+            "NOTIFY_TELEGRAM_KEYWORD",
+            default="cybercar",
+        ),
+        help="Telegram bot identifier keyword (resolved from telegram_bot_registry).",
+    )
+    parser.add_argument(
+        "--telegram-registry-file",
+        default=_env_first(
+            "CYBERCAR_NOTIFY_TELEGRAM_REGISTRY_FILE",
+            "NOTIFY_TELEGRAM_REGISTRY_FILE",
+            default="",
+        ),
+        help="Optional telegram bot registry file for identifier resolution.",
+    )
+    parser.add_argument(
+        "--telegram-bot-token",
+        default="",
+        help="Telegram bot token.",
+    )
+    parser.add_argument(
+        "--telegram-chat-id",
+        default="",
+        help="Telegram chat id.",
+    )
+    parser.add_argument(
+        "--telegram-timeout-seconds",
+        type=int,
+        default=_env_int_first(
+            ["CYBERCAR_NOTIFY_TELEGRAM_TIMEOUT_SECONDS", "NOTIFY_TELEGRAM_TIMEOUT_SECONDS"],
+            20,
+        ),
+        help="Telegram bot timeout seconds.",
+    )
+    parser.add_argument(
+        "--telegram-api-base",
+        default=_env_first("CYBERCAR_NOTIFY_TELEGRAM_API_BASE", "NOTIFY_TELEGRAM_API_BASE", default=""),
+        help="Telegram Bot API base URL. Default https://api.telegram.org.",
+    )
+    parser.add_argument("--no-save-draft", action="store_true", help="上传后不点击保存草稿")
+    parser.add_argument("--skip-download", action="store_true")
+    parser.add_argument("--skip-process", action="store_true")
+    parser.add_argument("--skip-upload", action="store_true")
+    parser.add_argument("--wechat-comment-reply", action="store_true", help="仅执行视频号评论点赞与回复。")
+    parser.add_argument("--comment-max-posts", type=int, default=0, help="最近处理的有评论视频数量上限。")
+    parser.add_argument("--comment-max-replies", type=int, default=0, help="单次自动回复评论数量上限。")
+    parser.add_argument("--comment-test-latest", action="store_true", help="仅测试回复最新一条评论。")
+    parser.add_argument("--comment-debug", action="store_true", help="输出评论回复调试日志。")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    workspace = init_workspace(args.workspace)
+    proxy = (args.proxy or "").strip() or None
+    use_system_proxy = bool(getattr(args, "use_system_proxy", False))
+    proxy, use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    _apply_runtime_network_env(proxy=proxy, use_system_proxy=use_system_proxy)
+    network_mode = "explicit_proxy" if proxy else ("system_proxy" if use_system_proxy else "direct_tun")
+    chrome_path = (args.chrome_path or "").strip() or None
+    runtime_config = _load_runtime_config(args.config or DEFAULT_CONFIG_PATH)
+    if bool(getattr(args, "wechat_comment_reply", False)):
+        result = run_wechat_comment_reply(
+            workspace=workspace,
+            runtime_config=runtime_config,
+            debug_port=max(1, int(getattr(args, "wechat_debug_port", DEFAULT_WECHAT_DEBUG_PORT) or DEFAULT_WECHAT_DEBUG_PORT)),
+            chrome_path=chrome_path,
+            chrome_user_data_dir=(
+                (getattr(args, "wechat_chrome_user_data_dir", "") or "").strip() or DEFAULT_WECHAT_CHROME_USER_DATA_DIR
+            ),
+            auto_open_chrome=not bool(getattr(args, "no_auto_open_chrome", False)),
+            max_posts_override=max(0, int(getattr(args, "comment_max_posts", 0) or 0)),
+            max_replies_override=max(0, int(getattr(args, "comment_max_replies", 0) or 0)),
+            latest_only=bool(getattr(args, "comment_test_latest", False)),
+            debug=bool(getattr(args, "comment_debug", False)),
+            telegram_bot_identifier=str(getattr(args, "telegram_bot_identifier", "") or "").strip(),
+            telegram_bot_token=str(getattr(args, "telegram_bot_token", "") or "").strip(),
+            telegram_chat_id=str(getattr(args, "telegram_chat_id", "") or "").strip(),
+            telegram_registry_file=str(getattr(args, "telegram_registry_file", "") or "").strip(),
+            telegram_timeout_seconds=max(10, int(getattr(args, "telegram_timeout_seconds", 20) or 20)),
+            telegram_api_base=str(getattr(args, "telegram_api_base", "") or "").strip(),
+            notify_env_prefix=str(getattr(args, "notify_env_prefix", DEFAULT_NOTIFY_ENV_PREFIX) or DEFAULT_NOTIFY_ENV_PREFIX),
+        )
+        _log(
+            "[CommentReply] Result: "
+            + json.dumps(
+                {
+                    "ok": bool(result.get("ok")),
+                    "reason": str(result.get("reason") or ""),
+                    "posts_scanned": int(result.get("posts_scanned") or 0),
+                    "posts_selected": int(result.get("posts_selected") or 0),
+                    "replies_sent": int(result.get("replies_sent") or 0),
+                    "state_path": str(result.get("state_path") or ""),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0 if bool(result.get("ok")) else 1
+    spark_ai_config = runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {}
+    exclude_keywords = _normalize_keyword_list(runtime_config.get("exclude_keywords"), DEFAULT_EXCLUDE_KEYWORDS)
+    require_any_keywords = _normalize_keyword_list(
+        runtime_config.get("require_any_keywords"),
+        DEFAULT_REQUIRE_ANY_KEYWORDS,
+    )
+    chrome_user_data_dir = (args.chrome_user_data_dir or "").strip() or DEFAULT_CHROME_USER_DATA_DIR
+    configured_collection_name = str(runtime_config.get("collection_name", "") or "").strip()
+    resolved_collection_name = (args.collection_name or "").strip() or configured_collection_name or DEFAULT_COLLECTION_NAME
+    if args.auto_delete_source_files:
+        auto_delete_source_files = True
+    elif args.keep_source_files:
+        auto_delete_source_files = False
+    else:
+        auto_delete_source_files = bool(runtime_config.get("auto_delete_source_files", DEFAULT_AUTO_DELETE_SOURCE_FILES))
+    drafts_per_run_arg = int(args.drafts_per_run)
+    upload_all_drafts = drafts_per_run_arg <= 0
+    drafts_per_run = max(1, drafts_per_run_arg)
+    drafts_per_run_label = "all" if upload_all_drafts else str(drafts_per_run)
+    upload_interval_min = max(0, int(args.upload_interval_min))
+    upload_interval_max = max(upload_interval_min, int(args.upload_interval_max))
+    try:
+        upload_platforms = _normalize_upload_platforms(args.upload_platforms)
+    except ValueError as exc:
+        _log(f"[Error] {exc}")
+        return 1
+    image_publish_enabled = bool({"xiaohongshu", "douyin", "kuaishou"} & set(upload_platforms))
+    notify_settings = _build_notify_settings(args)
+    _log(
+        "[Config] "
+        f"collection_name={resolved_collection_name}, "
+        f"network_mode={network_mode}, "
+        f"auto_delete_source_files={auto_delete_source_files}, "
+        f"spark_ai_ready={_spark_config_ready(spark_ai_config)}, "
+        f"exclude_keywords={len(exclude_keywords)}, "
+        f"require_any_keywords={len(require_any_keywords)}, "
+        f"image_publish_enabled={image_publish_enabled}, "
+        f"drafts_per_run={drafts_per_run_label}, "
+        f"notify_enabled={notify_settings.enabled}, "
+        f"notify_provider={notify_settings.provider}"
+    )
+    extra_urls: list[str] = []
+    if args.tweet_url_file:
+        extra_urls.extend(_load_urls_file(args.tweet_url_file))
+    if args.tweet_url:
+        extra_urls.extend(args.tweet_url)
+    extra_urls = _dedupe_urls(extra_urls)
+    processed_outputs: list[Path] = []
+
+    try:
+        if not args.skip_download:
+            download_from_x(
+                workspace,
+                keyword=args.keyword,
+                limit=args.limit,
+                tweet_urls=extra_urls,
+                proxy=proxy,
+                use_system_proxy=use_system_proxy,
+                include_images=image_publish_enabled,
+                image_min_target=(max(1, int(args.limit)) if image_publish_enabled else 0),
+                auto_discover_x=not args.no_x_auto_discover,
+                x_discovery_url_limit=max(1, int(args.x_discovery_url_limit)),
+                x_discovery_scroll_rounds=max(2, int(args.x_discovery_scroll_rounds)),
+                x_discovery_scroll_wait=max(0.3, float(args.x_discovery_scroll_wait)),
+                debug_port=args.debug_port,
+                auto_open_chrome=not args.no_auto_open_chrome,
+                chrome_path=chrome_path,
+                chrome_user_data_dir=chrome_user_data_dir,
+            )
+        if not args.skip_process:
+            processed_outputs = process_video_fingerprint(
+                workspace,
+                proxy=proxy,
+                use_system_proxy=use_system_proxy,
+                auto_delete_source_files=auto_delete_source_files,
+                spark_ai=spark_ai_config,
+                exclude_keywords=exclude_keywords,
+                require_any_keywords=require_any_keywords,
+                include_images=image_publish_enabled,
+            )
+        if not args.skip_upload:
+            shared_pool_size = 0 if upload_all_drafts else max(drafts_per_run * 8, drafts_per_run, 12)
+            shared_source_targets = _build_shared_source_targets(
+                workspace,
+                processed_outputs,
+                pool_size=shared_pool_size,
+                exclude_keywords=exclude_keywords,
+                require_any_keywords=require_any_keywords,
+                include_images=image_publish_enabled,
+            )
+            if args.upload_only_approved:
+                shared_source_targets = _filter_targets_by_review_approval(
+                    shared_source_targets,
+                    workspace,
+                    review_state_file=(args.review_state_file or "").strip(),
+                )
+                if not shared_source_targets:
+                    raise RuntimeError("No approved processed video found by review state.")
+            if not shared_source_targets:
+                raise RuntimeError("No processed video found in 2_Processed.")
+            _log(
+                "[Uploader] Shared source pool ready: "
+                f"{len(shared_source_targets)} files for platforms={','.join(upload_platforms)}"
+            )
+
+            for platform in upload_platforms:
+                if platform in {"xiaohongshu", "douyin", "kuaishou"}:
+                    _backfill_uploaded_fingerprint_index(workspace, platform=platform, media_kind="video")
+                    _backfill_uploaded_fingerprint_index(workspace, platform=platform, media_kind="image")
+                else:
+                    _backfill_uploaded_fingerprint_index(workspace, platform=platform, media_kind="video")
+                if platform in {"xiaohongshu", "douyin", "kuaishou"}:
+                    targets = [
+                        p
+                        for p in shared_source_targets
+                        if p.exists() and (_is_video_file(p) or _is_image_file(p))
+                    ]
+                else:
+                    targets = [p for p in shared_source_targets if p.exists() and _is_video_file(p)]
+                if not targets:
+                    _log(f"[Uploader:{platform}] No eligible source files in shared pool, skip this platform.")
+                    continue
+                _log(f"[Uploader:{platform}] Use shared source pool: {len(targets)} candidates.")
+
+                success_count = 0
+                for idx, target in enumerate(targets):
+                    if (not upload_all_drafts) and success_count >= drafts_per_run:
+                        break
+                    is_dup, dup_match, target_fp = _is_uploaded_content_duplicate(workspace, target, platform=platform)
+                    if is_dup:
+                        reason = str((dup_match or {}).get("_reason", "fingerprint"))
+                        key_text = str((dup_match or {}).get("_key", "") or "")
+                        key_suffix = f", key={key_text}" if key_text else ""
+                        _log(
+                            f"[Uploader:{platform}] Skip duplicate before upload: "
+                            f"{target.name} (match={dup_match.get('processed_name', 'unknown') if dup_match else 'unknown'}, "
+                            f"reason={reason}{key_suffix})"
+                        )
+                        continue
+                    _log(
+                        f"[Uploader:{platform}] Draft enqueue {success_count + 1}/{drafts_per_run_label}: "
+                        f"{target.name} (candidate {idx + 1}/{len(targets)})"
+                    )
+                    if platform == "wechat":
+                        used_target = fill_draft_wechat(
+                            workspace,
+                            caption=(args.caption or "").strip() or None,
+                            target_video=target,
+                            collection_name=resolved_collection_name,
+                            debug_port=args.debug_port,
+                            save_draft=not args.no_save_draft,
+                            declare_original=bool(getattr(args, "wechat_declare_original", False)),
+                            upload_timeout=max(30, int(args.upload_timeout)),
+                            auto_open_chrome=not args.no_auto_open_chrome,
+                            chrome_path=chrome_path,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            telegram_bot_token=notify_settings.telegram_bot_token,
+                            telegram_chat_id=notify_settings.telegram_chat_id,
+                            telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
+                            telegram_api_base=notify_settings.telegram_api_base,
+                            notify_env_prefix=notify_settings.env_prefix,
+                        )
+                    elif platform == "douyin":
+                        used_target = fill_draft_douyin(
+                            workspace,
+                            caption=(args.caption or "").strip() or None,
+                            target_video=target,
+                            debug_port=args.debug_port,
+                            save_draft=not args.no_save_draft,
+                            upload_timeout=max(30, int(args.upload_timeout)),
+                            auto_open_chrome=not args.no_auto_open_chrome,
+                            chrome_path=chrome_path,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            telegram_bot_token=notify_settings.telegram_bot_token,
+                            telegram_chat_id=notify_settings.telegram_chat_id,
+                            telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
+                            telegram_api_base=notify_settings.telegram_api_base,
+                            notify_env_prefix=notify_settings.env_prefix,
+                        )
+                    elif platform == "xiaohongshu":
+                        used_target = fill_draft_xiaohongshu(
+                            workspace,
+                            caption=(args.caption or "").strip() or None,
+                            target_video=target,
+                            debug_port=args.debug_port,
+                            save_draft=not args.no_save_draft,
+                            upload_timeout=max(30, int(args.upload_timeout)),
+                            auto_open_chrome=not args.no_auto_open_chrome,
+                            chrome_path=chrome_path,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            telegram_bot_token=notify_settings.telegram_bot_token,
+                            telegram_chat_id=notify_settings.telegram_chat_id,
+                            telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
+                            telegram_api_base=notify_settings.telegram_api_base,
+                            notify_env_prefix=notify_settings.env_prefix,
+                        )
+                    elif platform == "kuaishou":
+                        used_target = fill_draft_kuaishou(
+                            workspace,
+                            caption=(args.caption or "").strip() or None,
+                            target_video=target,
+                            debug_port=args.debug_port,
+                            save_draft=not args.no_save_draft,
+                            auto_publish_random_schedule=bool(args.kuaishou_auto_publish_random_schedule),
+                            random_schedule_max_minutes=max(1, int(args.kuaishou_random_schedule_max_minutes)),
+                            upload_timeout=max(30, int(args.upload_timeout)),
+                            auto_open_chrome=not args.no_auto_open_chrome,
+                            chrome_path=chrome_path,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            telegram_bot_token=notify_settings.telegram_bot_token,
+                            telegram_chat_id=notify_settings.telegram_chat_id,
+                            telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
+                            telegram_api_base=notify_settings.telegram_api_base,
+                            notify_env_prefix=notify_settings.env_prefix,
+                        )
+                    elif platform == "bilibili":
+                        used_target = fill_draft_bilibili(
+                            workspace,
+                            caption=(args.caption or "").strip() or None,
+                            target_video=target,
+                            collection_name=resolved_collection_name,
+                            debug_port=args.debug_port,
+                            save_draft=not args.no_save_draft,
+                            auto_publish_random_schedule=bool(args.bilibili_auto_publish_random_schedule),
+                            random_schedule_max_minutes=max(
+                                BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
+                                int(args.bilibili_random_schedule_max_minutes),
+                            ),
+                            upload_timeout=max(600, int(args.upload_timeout)),
+                            auto_open_chrome=not args.no_auto_open_chrome,
+                            chrome_path=chrome_path,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            telegram_bot_token=notify_settings.telegram_bot_token,
+                            telegram_chat_id=notify_settings.telegram_chat_id,
+                            telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
+                            telegram_api_base=notify_settings.telegram_api_base,
+                            notify_env_prefix=notify_settings.env_prefix,
+                        )
+                    else:
+                        raise RuntimeError(f"Unsupported platform in dispatcher: {platform}")
+
+                    should_record_publish_fingerprint = _should_record_publish_fingerprint(
+                        platform,
+                        used_target,
+                        save_draft=not args.no_save_draft,
+                        publish_now=bool(args.publish_now),
+                    )
+                    if not args.no_save_draft:
+                        _append_draft_upload_history(
+                            workspace,
+                            used_target.name,
+                            platform=platform,
+                            media_kind=_media_kind_from_path(used_target),
+                        )
+                        if should_record_publish_fingerprint:
+                            _record_uploaded_content_fingerprint(
+                                workspace,
+                                used_target,
+                                fingerprint=target_fp,
+                                platform=platform,
+                            )
+
+                    publish_fp = str(target_fp or "").strip()
+                    if not publish_fp:
+                        publish_fp = _compute_video_content_fingerprint(used_target) or ""
+                    notify_subject, notify_card = _build_publish_notification_message(
+                        workspace=workspace,
+                        platform=platform,
+                        target_video=used_target,
+                        manual_caption=(args.caption or "").strip(),
+                        target_fp=publish_fp,
+                        save_draft=not args.no_save_draft,
+                    )
+                    _send_publish_notification(notify_settings, notify_subject, notify_card)
+
+                    success_count += 1
+                    has_more_quota = upload_all_drafts or (success_count < drafts_per_run)
+                    if has_more_quota and idx < len(targets) - 1:
+                        delay = random.randint(upload_interval_min, upload_interval_max) if upload_interval_max > 0 else 0
+                        if delay > 0:
+                            _log(f"[Uploader:{platform}] Waiting {delay}s before next draft (human-like rhythm).")
+                            time.sleep(delay)
+
+                if success_count == 0:
+                    _log(f"[Uploader:{platform}] No eligible media uploaded from shared source pool this run.")
+    except Exception as exc:
+        _log(f"[Error] {exc}")
+        return 1
+
+    _log("[Done] Workflow completed.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
