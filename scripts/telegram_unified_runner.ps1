@@ -8,7 +8,6 @@ param(
     [string]$Priority = "",
     [string]$Proxy = "",
     [switch]$UseSystemProxy,
-    [string]$TelegramBotIdentifier = "",
     [string]$TelegramChatId = "",
     [int]$Limit = 0,
     [string]$UploadPlatforms = "",
@@ -39,9 +38,6 @@ if ($Limit -gt 0) {
 $extraArgs = @()
 if ($Workspace) {
     $extraArgs += @("--workspace", [System.IO.Path]::GetFullPath($Workspace))
-}
-if ($TelegramBotIdentifier) {
-    $extraArgs += @("--telegram-bot-identifier", $TelegramBotIdentifier)
 }
 if ($TelegramChatId) {
     $extraArgs += @("--telegram-chat-id", $TelegramChatId)

@@ -26,6 +26,7 @@ Last updated: 2026-03-16
 - The vendored worker lives under `src/Collection/.../telegram_command_worker.py`, while new code should enter through `src/cybercar/telegram/`.
 - Shared Telegram dependencies that used to live only in the old repo are now vendored under `src/cybercar/common/` and mirrored through `src/Collection/shared/common/`.
 - Windows Task Scheduler is no longer a supported entry layer for CyberCar standalone operation.
+- Local Telegram runtime now uses a single-bot registry under `runtime/secrets/telegram_bot_registry.json`; no manager bot or shared multi-bot routing remains in the supported path.
 
 ## Open Work
 
@@ -33,6 +34,7 @@ Last updated: 2026-03-16
 - The vendored pipeline and worker still carry legacy internal complexity; future threads should continue moving logic out of `engine.py`, `pipeline.py`, and the legacy worker into the new domain packages.
 - If legacy config or platform selectors drift, the new standalone repo must be updated locally rather than patched back through the old monorepo.
 - The old repo's machine-level Telegram manager/guard scripts have not been ported into this repo as supported entrypoints; only the CyberCar worker path is supported.
+- Common helper code still contains backward-compatible multi-bot parsing paths, but the active runtime configuration is now single-bot only.
 
 ## Next Step
 
@@ -41,3 +43,4 @@ Last updated: 2026-03-16
 - Verify `python -m cybercar telegram set-commands` and `python -m cybercar telegram home-refresh` with the real bot config.
 - Start one real `python -m cybercar telegram worker` session and confirm `/start`, home refresh, prefilter feedback, manual review, and WeChat comment-reply callbacks work end to end.
 - Validate one manual collect/publish run from the Telegram review flow without any scheduled task involvement.
+- Continue deleting dead multi-bot helper code once the single-bot worker path has been validated through a few real sessions.

@@ -4603,7 +4603,7 @@ def _request_platform_login_qr(
             allow_duplicate=bool(refresh_page),
             telegram_bot_token=bot_token,
             telegram_chat_id=chat_id,
-            telegram_bot_identifier="" if (bot_token and chat_id) else telegram_bot_identifier,
+            telegram_bot_identifier=telegram_bot_identifier,
             telegram_timeout_seconds=timeout_seconds,
         )
         _append_log(
@@ -4655,7 +4655,7 @@ def _refresh_platform_login_qr_message(
         notify_settings = core._resolve_runtime_telegram_notify_settings(
             telegram_bot_token=bot_token,
             telegram_chat_id=chat_id,
-            telegram_bot_identifier="" if (bot_token and chat_id) else telegram_bot_identifier,
+            telegram_bot_identifier=telegram_bot_identifier,
             telegram_timeout_seconds=timeout_seconds,
         )
         api_base = str(getattr(notify_settings, "telegram_api_base", "") or "").strip()
@@ -5179,7 +5179,7 @@ def _probe_platform_login_after_publish_failure(
     workspace: Path,
     item_id: str,
     platform: str,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
     timeout_seconds: int,
@@ -5801,9 +5801,6 @@ def _run_unified_once(
         cmd += ["-Proxy", resolved_proxy]
     elif resolved_use_system_proxy:
         cmd += ["-UseSystemProxy"]
-    bot_identifier = str(telegram_bot_identifier or "").strip()
-    if bot_identifier:
-        cmd += ["-TelegramBotIdentifier", bot_identifier]
     notify_chat_id = str(telegram_chat_id or "").strip()
     if notify_chat_id:
         cmd += ["-TelegramChatId", notify_chat_id]
@@ -5878,7 +5875,6 @@ def _spawn_home_action_job(
     module_root = repo_root_path
     explicit_bot_token = str(telegram_bot_token or "").strip()
     explicit_chat_id = str(telegram_chat_id or "").strip()
-    effective_identifier = "" if (explicit_bot_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip()
     task_identifier = _build_task_identifier(action=action_token, value=value, log_path=str(log_path))
     menu_label = _menu_breadcrumb_for_action(action_token, value)
     cmd = [
@@ -5907,8 +5903,6 @@ def _spawn_home_action_job(
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
         cmd += ["--telegram-chat-id", explicit_chat_id]
-    if effective_identifier:
-        cmd += ["--telegram-bot-identifier", effective_identifier]
     child_env = _build_child_worker_env(repo_root_path)
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     with log_path.open("a", encoding="utf-8") as stream:
@@ -5953,7 +5947,6 @@ def _spawn_comment_reply_job(
     module_root = repo_root_path
     explicit_bot_token = str(telegram_bot_token or "").strip()
     explicit_chat_id = str(telegram_chat_id or "").strip()
-    effective_identifier = "" if (explicit_bot_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip()
     task_identifier = _build_task_identifier(action="comment_reply_run", value=str(max(1, int(post_limit))), log_path=str(log_path))
     menu_label = _menu_breadcrumb_for_action("comment_reply_run", str(max(1, int(post_limit))))
     cmd = [
@@ -5976,8 +5969,6 @@ def _spawn_comment_reply_job(
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
         cmd += ["--telegram-chat-id", explicit_chat_id]
-    if effective_identifier:
-        cmd += ["--telegram-bot-identifier", effective_identifier]
     child_env = _build_child_worker_env(repo_root_path)
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     with log_path.open("a", encoding="utf-8") as stream:
@@ -6024,7 +6015,6 @@ def _spawn_collect_publish_latest_job(
     module_root = repo_root_path
     explicit_bot_token = str(telegram_bot_token or "").strip()
     explicit_chat_id = str(telegram_chat_id or "").strip()
-    effective_identifier = "" if (explicit_bot_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip()
     normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind)
     task_identifier = _build_task_identifier(
         action="collect_publish_latest",
@@ -6056,8 +6046,6 @@ def _spawn_collect_publish_latest_job(
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
         cmd += ["--telegram-chat-id", explicit_chat_id]
-    if effective_identifier:
-        cmd += ["--telegram-bot-identifier", effective_identifier]
     child_env = _build_child_worker_env(repo_root_path)
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     with log_path.open("a", encoding="utf-8") as stream:
@@ -6104,7 +6092,6 @@ def _spawn_immediate_publish_item_job(
     module_root = repo_root_path
     explicit_bot_token = str(telegram_bot_token or "").strip()
     explicit_chat_id = str(telegram_chat_id or "").strip()
-    effective_identifier = "" if (explicit_bot_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip()
     task_identifier = _build_task_identifier(action="collect_publish_latest", item_id=str(item_id or "").strip())
     cmd = [
         sys.executable,
@@ -6128,8 +6115,6 @@ def _spawn_immediate_publish_item_job(
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
         cmd += ["--telegram-chat-id", explicit_chat_id]
-    if effective_identifier:
-        cmd += ["--telegram-bot-identifier", effective_identifier]
     child_env = _build_child_worker_env(repo_root_path)
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     with log_path.open("a", encoding="utf-8") as stream:
@@ -6175,7 +6160,6 @@ def _spawn_immediate_collect_item_job(
     module_root = repo_root_path
     explicit_bot_token = str(telegram_bot_token or "").strip()
     explicit_chat_id = str(telegram_chat_id or "").strip()
-    effective_identifier = "" if (explicit_bot_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip()
     task_identifier = _build_task_identifier(action="collect_publish_latest", item_id=str(item_id or "").strip())
     cmd = [
         sys.executable,
@@ -6199,8 +6183,6 @@ def _spawn_immediate_collect_item_job(
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
         cmd += ["--telegram-chat-id", explicit_chat_id]
-    if effective_identifier:
-        cmd += ["--telegram-bot-identifier", effective_identifier]
     child_env = _build_child_worker_env(repo_root_path)
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     with log_path.open("a", encoding="utf-8") as stream:
@@ -6242,7 +6224,6 @@ def _spawn_immediate_publish_platform_job(
     module_root = repo_root_path
     explicit_bot_token = str(telegram_bot_token or "").strip()
     explicit_chat_id = str(telegram_chat_id or "").strip()
-    effective_identifier = "" if (explicit_bot_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip()
     task_identifier = _build_task_identifier(action="collect_publish_latest", item_id=str(item_id or "").strip())
     menu_label = "即采即发 / 视频 / " + _menu_platform_label(platform_token)
     cmd = [
@@ -6267,8 +6248,6 @@ def _spawn_immediate_publish_platform_job(
         cmd += ["--telegram-bot-token", explicit_bot_token]
     if explicit_chat_id:
         cmd += ["--telegram-chat-id", explicit_chat_id]
-    if effective_identifier:
-        cmd += ["--telegram-bot-identifier", effective_identifier]
     child_env = _build_child_worker_env(repo_root_path)
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     with log_path.open("a", encoding="utf-8") as stream:
@@ -6410,7 +6389,7 @@ def _run_direct_xiaohongshu_image_publish(
     workspace: Path,
     timeout_seconds: int,
     profile: str,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
 ) -> Dict[str, Any]:
@@ -6438,7 +6417,6 @@ def _run_direct_xiaohongshu_image_publish(
     args = _build_immediate_publish_args(
         runner=runner,
         workspace=workspace,
-        telegram_bot_identifier=telegram_bot_identifier,
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
     )
@@ -6551,7 +6529,7 @@ def _run_direct_kuaishou_image_publish(
     workspace: Path,
     timeout_seconds: int,
     profile: str,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
 ) -> Dict[str, Any]:
@@ -6579,7 +6557,6 @@ def _run_direct_kuaishou_image_publish(
     args = _build_immediate_publish_args(
         runner=runner,
         workspace=workspace,
-        telegram_bot_identifier=telegram_bot_identifier,
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
     )
@@ -7131,7 +7108,7 @@ def _build_immediate_publish_args(
     *,
     runner: Any,
     workspace: Path,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
 ) -> Any:
@@ -7147,7 +7124,6 @@ def _build_immediate_publish_args(
     args.no_telegram_collect_notify = True
     args.telegram_prefilter_skip_only = True
     args.no_publish_skip_notify = True
-    args.telegram_bot_identifier = str(telegram_bot_identifier or "").strip()
     args.telegram_bot_token = str(telegram_bot_token or "").strip()
     args.telegram_chat_id = str(telegram_chat_id or "").strip()
     return args
@@ -7743,7 +7719,7 @@ def _run_immediate_collect_item_job(
     workspace: Path,
     timeout_seconds: int,
     profile: str,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
@@ -7764,7 +7740,6 @@ def _run_immediate_collect_item_job(
     args = _build_immediate_publish_args(
         runner=runner,
         workspace=workspace,
-        telegram_bot_identifier=telegram_bot_identifier,
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
     )
@@ -7958,7 +7933,7 @@ def _publish_immediate_candidate_platform(
     workspace: Path,
     timeout_seconds: int,
     profile: str,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
@@ -8004,7 +7979,6 @@ def _publish_immediate_candidate_platform(
         args = _build_immediate_publish_args(
             runner=runner,
             workspace=workspace,
-            telegram_bot_identifier=telegram_bot_identifier,
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
         )
@@ -8120,7 +8094,6 @@ def _publish_immediate_candidate_platform(
         args = _build_immediate_publish_args(
             runner=runner,
             workspace=workspace,
-            telegram_bot_identifier=telegram_bot_identifier,
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
         )
@@ -8173,7 +8146,7 @@ def _run_immediate_publish_item_job(
     workspace: Path,
     timeout_seconds: int,
     profile: str,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
     item_id: str,
@@ -8533,7 +8506,7 @@ def _run_home_action_job(
                 workspace=workspace,
                 timeout_seconds=timeout_seconds,
                 profile=resolved_profile,
-                telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
+                telegram_bot_identifier=telegram_bot_identifier,
                 telegram_chat_id=telegram_chat_id,
                 media_kind=media_kind,
                 count=count if count > 0 else None,
@@ -8551,7 +8524,6 @@ def _run_home_action_job(
                     workspace=workspace,
                     timeout_seconds=timeout_seconds,
                     profile=resolved_profile,
-                    telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
                     telegram_bot_token=telegram_bot_token,
                     telegram_chat_id=telegram_chat_id,
                 )
@@ -8561,7 +8533,6 @@ def _run_home_action_job(
                     workspace=workspace,
                     timeout_seconds=timeout_seconds,
                     profile=resolved_profile,
-                    telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
                     telegram_bot_token=telegram_bot_token,
                     telegram_chat_id=telegram_chat_id,
                 )
@@ -8572,7 +8543,7 @@ def _run_home_action_job(
                     timeout_seconds=timeout_seconds,
                     platforms=platforms,
                     profile=resolved_profile,
-                    telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
+                    telegram_bot_identifier=telegram_bot_identifier,
                     telegram_chat_id=telegram_chat_id,
                     publish_only=True,
                     media_kind=media_kind,
@@ -8593,7 +8564,7 @@ def _run_home_action_job(
                 timeout_seconds=timeout_seconds,
                 platforms=platforms,
                 profile=resolved_profile,
-                telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
+                    telegram_bot_identifier=telegram_bot_identifier,
                 telegram_chat_id=telegram_chat_id,
                 schedule_minutes=minutes,
                 publish_only=True,
@@ -8613,7 +8584,7 @@ def _run_home_action_job(
                 chat_id=telegram_chat_id,
                 timeout_seconds=timeout_seconds,
                 log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-                telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
+                telegram_bot_identifier=telegram_bot_identifier,
                 refresh_page=True,
             )
             if bool(result.get("sent")):
@@ -8636,7 +8607,6 @@ def _run_home_action_job(
                 workspace=workspace,
                 timeout_seconds=timeout_seconds,
                 profile=resolved_profile,
-                telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
                 telegram_bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
                 candidate_limit=max(1, candidate_limit),
@@ -8651,7 +8621,7 @@ def _run_home_action_job(
                 workspace=workspace,
                 timeout_seconds=timeout_seconds,
                 profile=resolved_profile,
-                telegram_bot_identifier="" if (telegram_bot_token and telegram_chat_id) else telegram_bot_identifier,
+                telegram_bot_identifier=telegram_bot_identifier,
                 telegram_bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
                 post_limit=max(1, _parse_comment_reply_post_limit(value)),
@@ -8825,7 +8795,7 @@ def _run_collect_publish_latest_job(
     workspace: Path,
     timeout_seconds: int,
     profile: str,
-    telegram_bot_identifier: str,
+    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
     candidate_limit: int,
@@ -8836,7 +8806,6 @@ def _run_collect_publish_latest_job(
     args = _build_immediate_publish_args(
         runner=runner,
         workspace=workspace,
-        telegram_bot_identifier=telegram_bot_identifier,
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
     )
@@ -10176,24 +10145,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE))
     parser.add_argument("--audit-file", default=str(DEFAULT_AUDIT_FILE))
     parser.add_argument(
-        "--telegram-bot-identifier",
-        default=_env_first(
-            "CYBERCAR_NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "CYBERCAR_NOTIFY_TELEGRAM_KEYWORD",
-            "NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "NOTIFY_TELEGRAM_KEYWORD",
-            default="",
-        ),
-    )
-    parser.add_argument(
-        "--telegram-registry-file",
-        default=_env_first(
-            "CYBERCAR_NOTIFY_TELEGRAM_REGISTRY_FILE",
-            "NOTIFY_TELEGRAM_REGISTRY_FILE",
-            default="",
-        ),
-    )
-    parser.add_argument(
         "--telegram-bot-token",
         default="",
     )
@@ -10279,7 +10230,6 @@ def main() -> int:
     audit_file = (workspace / Path(str(args.audit_file))).resolve()
     log_file = workspace / DEFAULT_LOG_SUBDIR / f"telegram_command_worker_{datetime.now().strftime('%Y%m%d')}.log"
 
-    telegram_bot_identifier = str(args.telegram_bot_identifier or "").strip()
     explicit_bot_token = str(args.telegram_bot_token or "").strip()
     explicit_chat_id = str(args.telegram_chat_id or "").strip()
     resolved_telegram: Dict[str, Any] = {}
@@ -10291,8 +10241,6 @@ def main() -> int:
             {
                 "bot_token": "",
                 "chat_id": "",
-                "keyword": telegram_bot_identifier,
-                "registry_file": str(args.telegram_registry_file or "").strip(),
                 "timeout_seconds": max(10, int(args.poll_timeout_seconds) + 15),
             },
             env_prefix="",
@@ -10301,10 +10249,11 @@ def main() -> int:
     if not bot_token:
         _append_log(
             log_file,
-            f"[Worker] Missing telegram bot token; identifier={telegram_bot_identifier or '-'} unresolved; exit.",
+            "[Worker] Missing telegram bot token; explicit token or single-bot registry resolution failed; exit.",
         )
         return 1
     allowed_chat_id = str(explicit_chat_id or resolved_telegram.get("chat_id") or "").strip()
+    telegram_bot_identifier = ""
     command_password = str(args.command_password or "").strip()
     poll_interval = max(0, int(args.poll_interval_seconds))
     poll_timeout = max(1, int(args.poll_timeout_seconds))
@@ -10341,7 +10290,6 @@ def main() -> int:
             workspace=workspace,
             timeout_seconds=timeout_seconds,
             profile=default_profile,
-            telegram_bot_identifier=telegram_bot_identifier,
             telegram_bot_token=bot_token,
             telegram_chat_id=allowed_chat_id,
             candidate_limit=max(

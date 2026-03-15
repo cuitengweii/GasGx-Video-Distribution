@@ -71,6 +71,29 @@ def _resolve_telegram_bot_by_keyword(*, keyword: str, registry_file: str = "") -
     }
 
 
+def _resolve_single_telegram_bot(*, registry_file: str = "") -> dict[str, Any]:
+    try:
+        from .telegram_bot_registry import DEFAULT_REGISTRY_FILE, load_registry
+    except Exception:
+        return {}
+    try:
+        registry = load_registry(str(registry_file or DEFAULT_REGISTRY_FILE))
+    except Exception:
+        return {}
+    rows = registry.get("bots")
+    if not isinstance(rows, list):
+        return {}
+    enabled = [row for row in rows if isinstance(row, Mapping) and bool(row.get("enabled", True))]
+    if len(enabled) != 1:
+        return {}
+    bot = enabled[0]
+    return {
+        "bot_token": str(bot.get("bot_token") or "").strip(),
+        "chat_id": str(bot.get("chat_id") or "").strip(),
+        "bot_username": str(bot.get("bot_username") or "").strip(),
+    }
+
+
 def resolve_telegram_bot_settings(
     raw: Mapping[str, Any] | None = None,
     *,
@@ -104,6 +127,13 @@ def resolve_telegram_bot_settings(
         keyword = _env("TELEGRAM_BOT_IDENTIFIER") or _env("TELEGRAM_KEYWORD")
     if not registry_file:
         registry_file = _env("TELEGRAM_REGISTRY_FILE")
+    if (not bot_token or not chat_id) and registry_file and not keyword:
+        resolved = _resolve_single_telegram_bot(registry_file=registry_file)
+        if resolved:
+            if not bot_token:
+                bot_token = str(resolved.get("bot_token") or "").strip()
+            if not chat_id:
+                chat_id = str(resolved.get("chat_id") or "").strip()
     if keyword:
         resolved = _resolve_telegram_bot_by_keyword(keyword=keyword, registry_file=registry_file)
         if resolved:

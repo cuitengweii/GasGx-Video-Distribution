@@ -1224,19 +1224,6 @@ def _build_notify_settings(args: argparse.Namespace) -> NotifySettings:
         _log(f"[Notify] Unsupported provider={provider} in main.py; fallback to telegram_bot.")
         provider = "telegram_bot"
 
-    telegram_bot_identifier = str(
-        getattr(args, "telegram_bot_identifier", "") or getattr(args, "telegram_keyword", "") or ""
-    ).strip()
-    if not telegram_bot_identifier:
-        telegram_bot_identifier = _env_first(
-            f"{env_prefix}TELEGRAM_BOT_IDENTIFIER",
-            f"{env_prefix}TELEGRAM_KEYWORD",
-            "CYBERCAR_NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "CYBERCAR_NOTIFY_TELEGRAM_KEYWORD",
-            "NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "NOTIFY_TELEGRAM_KEYWORD",
-            default="cybercar",
-        )
     telegram_registry_file = str(getattr(args, "telegram_registry_file", "") or "").strip()
     if not telegram_registry_file:
         telegram_registry_file = _env_first(
@@ -1261,7 +1248,6 @@ def _build_notify_settings(args: argparse.Namespace) -> NotifySettings:
             # 标识优先仍保留；但允许显式入参作为兜底（例如 Telegram 菜单触发时透传 chat_id）。
             "bot_token": telegram_bot_token,
             "chat_id": telegram_chat_id,
-            "keyword": telegram_bot_identifier,
             "registry_file": telegram_registry_file,
             "timeout_seconds": telegram_timeout_seconds,
             "api_base": telegram_api_base,
@@ -1277,8 +1263,7 @@ def _build_notify_settings(args: argparse.Namespace) -> NotifySettings:
     if enabled and provider == "telegram_bot" and (not telegram_bot_token or not telegram_chat_id):
         _log(
             "[Notify] Message disabled: missing Telegram config "
-            "(identifier="
-            f"{telegram_bot_identifier or '-'}; expected registry resolution or --telegram-bot-token / --telegram-chat-id)."
+            "(expected single-bot registry resolution or --telegram-bot-token / --telegram-chat-id)."
         )
         enabled = False
 
@@ -1310,7 +1295,6 @@ def _resolve_runtime_telegram_notify_settings(
         {
             "bot_token": explicit_token,
             "chat_id": explicit_chat_id,
-            "keyword": "" if (explicit_token and explicit_chat_id) else str(telegram_bot_identifier or "").strip(),
             "registry_file": str(telegram_registry_file or "").strip(),
             "timeout_seconds": max(5, int(telegram_timeout_seconds or 20)),
             "api_base": str(telegram_api_base or "").strip(),
@@ -18530,17 +18514,6 @@ def parse_args() -> argparse.Namespace:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
-        "--telegram-bot-identifier",
-        default=_env_first(
-            "CYBERCAR_NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "CYBERCAR_NOTIFY_TELEGRAM_KEYWORD",
-            "NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "NOTIFY_TELEGRAM_KEYWORD",
-            default="cybercar",
-        ),
-        help="Telegram bot identifier keyword (resolved from telegram_bot_registry).",
-    )
-    parser.add_argument(
         "--telegram-registry-file",
         default=_env_first(
             "CYBERCAR_NOTIFY_TELEGRAM_REGISTRY_FILE",
@@ -18609,7 +18582,6 @@ def main() -> int:
             max_replies_override=max(0, int(getattr(args, "comment_max_replies", 0) or 0)),
             latest_only=bool(getattr(args, "comment_test_latest", False)),
             debug=bool(getattr(args, "comment_debug", False)),
-            telegram_bot_identifier=str(getattr(args, "telegram_bot_identifier", "") or "").strip(),
             telegram_bot_token=str(getattr(args, "telegram_bot_token", "") or "").strip(),
             telegram_chat_id=str(getattr(args, "telegram_chat_id", "") or "").strip(),
             telegram_registry_file=str(getattr(args, "telegram_registry_file", "") or "").strip(),

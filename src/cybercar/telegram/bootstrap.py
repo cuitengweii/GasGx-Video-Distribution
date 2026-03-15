@@ -20,6 +20,7 @@ def build_worker_argv(passthrough: list[str] | None = None) -> list[str]:
     apply_runtime_environment()
     paths = get_paths()
     telegram_cfg = load_telegram_config()
+    target = _resolve_target()
     argv = list(passthrough or [])
     if not _contains_flag(argv, "--repo-root"):
         argv = ["--repo-root", str(paths.repo_root), *argv]
@@ -37,14 +38,14 @@ def build_worker_argv(passthrough: list[str] | None = None) -> list[str]:
             str(int(telegram_cfg.get("restart_threshold") or 6)),
             *argv,
         ]
-    if not _contains_flag(argv, "--telegram-bot-identifier"):
-        bot_identifier = str(telegram_cfg.get("default_bot_identifier") or "").strip()
-        if bot_identifier:
-            argv = ["--telegram-bot-identifier", bot_identifier, *argv]
-    if not _contains_flag(argv, "--telegram-registry-file"):
-        registry_file = str(telegram_cfg.get("registry_file") or "").strip()
-        if registry_file:
-            argv = ["--telegram-registry-file", registry_file, *argv]
+    if not _contains_flag(argv, "--telegram-bot-token"):
+        bot_token = str(target.get("bot_token") or "").strip()
+        if bot_token:
+            argv = ["--telegram-bot-token", bot_token, *argv]
+    if not _contains_flag(argv, "--telegram-chat-id"):
+        chat_id = str(target.get("chat_id") or "").strip()
+        if chat_id:
+            argv = ["--telegram-chat-id", chat_id, *argv]
     return argv
 
 
@@ -55,10 +56,8 @@ def _resolve_target() -> dict[str, object]:
     telegram_cfg = load_telegram_config()
     resolved = resolve_telegram_bot_settings(
         {
-            "keyword": str(telegram_cfg.get("default_bot_identifier") or "").strip(),
             "registry_file": str(telegram_cfg.get("registry_file") or "").strip(),
             "timeout_seconds": int(telegram_cfg.get("poll_timeout_seconds") or 10) + 15,
-            "strict_keyword": False,
         },
         env_prefix=str(notify_cfg.get("env_prefix") or "CYBERCAR_NOTIFY_"),
     )

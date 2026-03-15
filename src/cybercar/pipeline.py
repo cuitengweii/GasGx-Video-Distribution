@@ -2066,19 +2066,6 @@ def _build_email_settings(args: argparse.Namespace) -> EmailSettings:
     resend_from_email = str(args.resend_from_email or "").strip()
     resend_endpoint = str(args.resend_endpoint or "").strip()
     resend_timeout_seconds = max(5, int(args.resend_timeout_seconds))
-    telegram_bot_identifier = str(
-        getattr(args, "telegram_bot_identifier", "") or getattr(args, "telegram_keyword", "") or ""
-    ).strip()
-    if not telegram_bot_identifier:
-        telegram_bot_identifier = _env_first(
-            f"{env_prefix}TELEGRAM_BOT_IDENTIFIER",
-            f"{env_prefix}TELEGRAM_KEYWORD",
-            "CYBERCAR_NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "CYBERCAR_NOTIFY_TELEGRAM_KEYWORD",
-            "NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "NOTIFY_TELEGRAM_KEYWORD",
-            default="cybercar",
-        )
     telegram_registry_file = str(getattr(args, "telegram_registry_file", "") or "").strip()
     if not telegram_registry_file:
         telegram_registry_file = _env_first(
@@ -2127,7 +2114,6 @@ def _build_email_settings(args: argparse.Namespace) -> EmailSettings:
             # 鏍囪瘑浼樺厛浠嶄繚鐣欙紱浣嗗厑璁告樉寮忓叆鍙備綔涓哄厹搴曪紙渚嬪 Telegram 鑿滃崟瑙﹀彂鏃堕€忎紶 chat_id锛夈€?
             "bot_token": telegram_bot_token,
             "chat_id": telegram_chat_id,
-            "keyword": telegram_bot_identifier,
             "registry_file": telegram_registry_file,
             "timeout_seconds": telegram_timeout_seconds,
             "api_base": telegram_api_base,
@@ -2144,7 +2130,7 @@ def _build_email_settings(args: argparse.Namespace) -> EmailSettings:
     if enabled and provider == "telegram_bot" and not has_telegram:
         core._log(
             "[Notify] Telegram channel not configured: "
-            f"identifier={telegram_bot_identifier or '-'} unresolved; missing registry match or explicit --telegram-bot-token / --telegram-chat-id."
+            "missing single-bot registry match or explicit --telegram-bot-token / --telegram-chat-id."
         )
     if enabled and (not has_telegram) and (not has_resend):
         core._log("[Notify] No notification channel configured: all channels will be skipped.")
@@ -3872,17 +3858,6 @@ def _build_parser() -> argparse.ArgumentParser:
             default="",
         ),
         help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--telegram-bot-identifier",
-        default=_env_first(
-            "CYBERCAR_NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "CYBERCAR_NOTIFY_TELEGRAM_KEYWORD",
-            "NOTIFY_TELEGRAM_BOT_IDENTIFIER",
-            "NOTIFY_TELEGRAM_KEYWORD",
-            default="cybercar",
-        ),
-        help="Telegram bot identifier keyword (resolved from telegram_bot_registry).",
     )
     parser.add_argument(
         "--telegram-registry-file",
