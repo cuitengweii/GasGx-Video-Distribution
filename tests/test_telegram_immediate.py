@@ -754,14 +754,30 @@ def test_run_collect_publish_latest_job_fails_when_message_id_missing(tmp_path: 
     assert feedbacks[-1]["status"] == "failed"
 
 
-def test_build_immediate_fast_x_download_args() -> None:
-    extra_args = worker_impl._build_immediate_fast_x_download_args()
+def test_build_immediate_fast_x_download_args(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        worker_impl.core,
+        "_load_runtime_config",
+        lambda path: {
+            "x_download": {
+                "socket_timeout_seconds": 25,
+                "extractor_retries": 2,
+                "download_retries": 2,
+                "fragment_retries": 2,
+                "retry_sleep_seconds": 1.0,
+                "batch_retry_sleep_seconds": 1.0,
+            }
+        },
+    )
 
-    assert extra_args[extra_args.index("--x-download-socket-timeout") + 1] == "12"
-    assert extra_args[extra_args.index("--x-download-extractor-retries") + 1] == "1"
-    assert extra_args[extra_args.index("--x-download-retries") + 1] == "1"
-    assert extra_args[extra_args.index("--x-download-fragment-retries") + 1] == "1"
-    assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "0"
+    extra_args = worker_impl._build_immediate_fast_x_download_args(tmp_path)
+
+    assert extra_args[extra_args.index("--x-download-socket-timeout") + 1] == "25"
+    assert extra_args[extra_args.index("--x-download-extractor-retries") + 1] == "2"
+    assert extra_args[extra_args.index("--x-download-retries") + 1] == "2"
+    assert extra_args[extra_args.index("--x-download-fragment-retries") + 1] == "2"
+    assert extra_args[extra_args.index("--x-download-retry-sleep") + 1] == "1"
+    assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "1"
 
 
 def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatch, tmp_path: Path) -> None:
@@ -1464,9 +1480,11 @@ def test_run_immediate_collect_item_job_passes_fast_x_download_args(tmp_path: Pa
     assert exit_code == 0
     assert len(approvals) == 1
     extra_args = list(collect_calls[0]["extra_args"])
-    assert extra_args[extra_args.index("--x-download-socket-timeout") + 1] == "12"
-    assert extra_args[extra_args.index("--x-download-extractor-retries") + 1] == "1"
-    assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "0"
+    assert extra_args[extra_args.index("--x-download-socket-timeout") + 1] == "25"
+    assert extra_args[extra_args.index("--x-download-extractor-retries") + 1] == "2"
+    assert extra_args[extra_args.index("--x-download-retries") + 1] == "2"
+    assert extra_args[extra_args.index("--x-download-fragment-retries") + 1] == "2"
+    assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "1"
 
 
 def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monkeypatch) -> None:

@@ -1,6 +1,6 @@
 # CyberCar Lessons
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
 
 ## 2026-03-15
 
@@ -18,3 +18,8 @@ Last updated: 2026-03-15
 - Root cause: the worker hardcoded repo root, workspace root, config paths, runner script paths, and child-process working-directory assumptions.
 - Earlier detection: search path constants and subprocess spawn points before treating the worker as a simple file copy.
 - Prevention: keep the legacy worker behavior, but patch its defaults to the new repo and insert a dedicated compatibility runner script for child jobs.
+
+- Symptom: after the standalone extraction, Telegram automation still effectively depended on the old repo.
+- Root cause: Windows scheduled tasks and a startup worker process were still registered against `D:\code\Python`, even though the new repo already had a local worker entry.
+- Earlier detection: audit Task Scheduler and live process command lines, not just tracked files in the new repo.
+- Prevention: when splitting a repo, remove or replace machine-level startup tasks in the same thread as the code migration.

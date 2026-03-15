@@ -45,6 +45,14 @@
     "赛博皮卡",
     "特斯拉"
   ],
+  "x_download": {
+    "socket_timeout_seconds": 25,
+    "extractor_retries": 2,
+    "download_retries": 2,
+    "fragment_retries": 2,
+    "retry_sleep_seconds": 1.0,
+    "batch_retry_sleep_seconds": 1.0
+  },
   "spark_ai": {
     "enabled": true,
     "url": "",

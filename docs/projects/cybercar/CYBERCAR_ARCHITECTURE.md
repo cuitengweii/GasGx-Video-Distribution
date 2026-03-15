@@ -1,6 +1,6 @@
 # CyberCar Architecture
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
 
 ## Top-Level Structure
 
@@ -22,6 +22,7 @@ Last updated: 2026-03-15
 - Workspace root is `runtime/`.
 - Browser state root is `profiles/`.
 - Logs are written under `runtime/logs/`.
+- No Windows scheduled-task layer is part of the supported standalone runtime path.
 
 ## Compatibility Strategy
 
@@ -36,3 +37,9 @@ Last updated: 2026-03-15
 - `python -m cybercar engage wechat ...` -> `cybercar.cli` -> `cybercar.engagement` -> `cybercar.engine`
 - `python -m cybercar telegram worker` -> `cybercar.cli` -> `cybercar.telegram.worker` -> `cybercar.telegram.bootstrap` -> vendored legacy Telegram worker
 - `python -m cybercar telegram set-commands|home-refresh` -> `cybercar.cli` -> `cybercar.telegram.bootstrap` -> Telegram transport/home facades
+
+## Operator Model
+
+- The supported long-running process is the manual Telegram worker only.
+- Scheduled-task registration scripts were removed from the standalone repo to avoid reintroducing the old unattended execution model.
+- Collect/publish jobs may still run as child actions from the Telegram review flow, but they are not launched by Task Scheduler.

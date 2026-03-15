@@ -107,12 +107,6 @@ DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS = 12
 DEFAULT_IMMEDIATE_COLLECT_LOCK_MAX_WAIT_SECONDS = 240
 DEFAULT_IMMEDIATE_PUBLISH_LOCK_RETRY_SECONDS = 15
 DEFAULT_IMMEDIATE_PUBLISH_LOCK_MAX_WAIT_SECONDS = 180
-DEFAULT_IMMEDIATE_X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 12
-DEFAULT_IMMEDIATE_X_DOWNLOAD_EXTRACTOR_RETRIES = 1
-DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRIES = 1
-DEFAULT_IMMEDIATE_X_DOWNLOAD_FRAGMENT_RETRIES = 1
-DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRY_SLEEP_SECONDS = 0
-DEFAULT_IMMEDIATE_X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS = 0
 COLLECT_PUBLISH_CANDIDATE_OPTIONS = [1, 3, 5, 10, 15, 30]
 COMMENT_REPLY_POST_OPTIONS = [3, 5, 7, 10]
 COLLECT_PUBLISH_DISCOVERY_MULTIPLIER = 4
@@ -5829,21 +5823,17 @@ def _run_unified_once(
     return _run_cmd(cmd, timeout_seconds=timeout_seconds)
 
 
-def _build_immediate_fast_x_download_args() -> list[str]:
-    return [
-        "--x-download-socket-timeout",
-        str(max(5, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS))),
-        "--x-download-extractor-retries",
-        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_EXTRACTOR_RETRIES))),
-        "--x-download-retries",
-        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRIES))),
-        "--x-download-fragment-retries",
-        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_FRAGMENT_RETRIES))),
-        "--x-download-retry-sleep",
-        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_RETRY_SLEEP_SECONDS))),
-        "--x-download-batch-retry-sleep",
-        str(max(0, int(DEFAULT_IMMEDIATE_X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS))),
-    ]
+def _build_immediate_fast_x_download_args(repo_root: Optional[Path] = None) -> list[str]:
+    resolved_repo_root = Path(repo_root).resolve() if repo_root is not None else Path(DEFAULT_REPO_ROOT).resolve()
+    load_runtime_config = getattr(core, "_load_runtime_config", None)
+    resolve_policy = getattr(core, "resolve_x_download_policy", None)
+    if callable(load_runtime_config) and callable(resolve_policy):
+        runtime_config = load_runtime_config(str(_default_runtime_config_path(resolved_repo_root)))
+        return resolve_policy(runtime_config=runtime_config).to_cli_args()
+    from cybercar import engine as cybercar_engine
+
+    runtime_config = cybercar_engine._load_runtime_config(str(_default_runtime_config_path(resolved_repo_root)))
+    return cybercar_engine.resolve_x_download_policy(runtime_config=runtime_config).to_cli_args()
 
 
 def _build_child_worker_env(repo_root: Optional[Path] = None) -> dict[str, str]:
@@ -7061,7 +7051,7 @@ def _run_collect_publish_latest_once(
                 "--require-x-live-discovery",
                 "--no-telegram-collect-notify",
                 "--no-telegram-prefilter",
-                *_build_immediate_fast_x_download_args(),
+                *_build_immediate_fast_x_download_args(repo_root),
                 *(
                     [
                         "--collect-media-kind",
@@ -7819,7 +7809,7 @@ def _run_immediate_collect_item_job(
             "--no-telegram-collect-notify",
             "--no-telegram-prefilter",
             "--no-publish-skip-notify",
-            *_build_immediate_fast_x_download_args(),
+            *_build_immediate_fast_x_download_args(repo_root),
         ]
         if media_kind == "image":
             collect_extra_args += [

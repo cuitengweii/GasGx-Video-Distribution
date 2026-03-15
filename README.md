@@ -4,11 +4,22 @@ Standalone CyberCar workspace extracted from the legacy monorepo.
 
 ## Core scope
 
-- Immediate collect and publish
+- Manual collect/publish review through the Telegram bot
 - Five-platform login/session checks
 - WeChat like/comment automation
+- No scheduled collect/publish tasks in the standalone repo
 
-## Commands
+## Primary entry
+
+```powershell
+python -m cybercar telegram set-commands
+python -m cybercar telegram home-refresh
+python -m cybercar telegram worker
+```
+
+Use the Telegram worker as the only operator entry. Keep collect/publish manual and trigger them from the bot review flow or explicit CLI runs.
+
+## Supporting commands
 
 ```powershell
 python -m cybercar immediate --profile cybertruck --platforms wechat,douyin,xiaohongshu,kuaishou,bilibili --limit 3

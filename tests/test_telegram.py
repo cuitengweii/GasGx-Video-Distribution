@@ -24,8 +24,6 @@ def test_telegram_scripts_exist() -> None:
     required = [
         root / "scripts" / "telegram_worker.ps1",
         root / "scripts" / "telegram_set_commands.ps1",
-        root / "scripts" / "register_telegram_worker_task.ps1",
-        root / "scripts" / "unregister_telegram_worker_task.ps1",
         root / "scripts" / "telegram_unified_runner.ps1",
     ]
     missing = [str(path) for path in required if not path.exists()]

@@ -44,7 +44,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 from urllib.parse import parse_qs, quote_plus, unquote, urlencode, urlparse
@@ -127,9 +127,20 @@ def _default_workspace() -> str:
 DEFAULT_WORKSPACE = _default_workspace()
 DEFAULT_KEYWORD = "Cybertruck"
 DEFAULT_LIMIT = 3
+X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 45
+X_DOWNLOAD_EXTRACTOR_RETRIES = 3
+X_DOWNLOAD_RETRIES = 3
+X_DOWNLOAD_FRAGMENT_RETRIES = 3
+X_DOWNLOAD_RETRY_SLEEP_SECONDS = 2.0
 X_DOWNLOAD_BATCH_SIZE = 5
 X_DOWNLOAD_RETRY_BATCH_SIZE = 1
 X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS = 2.0
+X_DOWNLOAD_CONFIG_SOCKET_TIMEOUT_SECONDS = 25
+X_DOWNLOAD_CONFIG_EXTRACTOR_RETRIES = 2
+X_DOWNLOAD_CONFIG_RETRIES = 2
+X_DOWNLOAD_CONFIG_FRAGMENT_RETRIES = 2
+X_DOWNLOAD_CONFIG_RETRY_SLEEP_SECONDS = 1.0
+X_DOWNLOAD_CONFIG_BATCH_RETRY_SLEEP_SECONDS = 1.0
 MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS = 5.0
 MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS = 120.0
 WINDOWS_CHROME_WINDOW_MODE_DEFAULT = "minimized"
@@ -451,6 +462,44 @@ class NotifySettings:
     telegram_api_base: str
 
 
+@dataclass(frozen=True)
+class XDownloadPolicy:
+    socket_timeout_seconds: int
+    extractor_retries: int
+    download_retries: int
+    fragment_retries: int
+    retry_sleep_seconds: float
+    batch_retry_sleep_seconds: float
+
+    def to_cli_args(self) -> list[str]:
+        return [
+            "--x-download-socket-timeout",
+            str(max(5, int(self.socket_timeout_seconds))),
+            "--x-download-extractor-retries",
+            str(max(0, int(self.extractor_retries))),
+            "--x-download-retries",
+            str(max(0, int(self.download_retries))),
+            "--x-download-fragment-retries",
+            str(max(0, int(self.fragment_retries))),
+            "--x-download-retry-sleep",
+            f"{max(0.0, float(self.retry_sleep_seconds)):g}",
+            "--x-download-batch-retry-sleep",
+            f"{max(0.0, float(self.batch_retry_sleep_seconds)):g}",
+        ]
+
+
+@dataclass(frozen=True)
+class XDownloadRetryStats:
+    initial_batch_failures: int = 0
+    initial_failed_urls: tuple[str, ...] = field(default_factory=tuple)
+    retry_batch_failures: int = 0
+    retry_failed_urls: tuple[str, ...] = field(default_factory=tuple)
+    transport_fallback_attempts: int = 0
+    transport_recovered_urls: tuple[str, ...] = field(default_factory=tuple)
+    transport_failed_urls: tuple[str, ...] = field(default_factory=tuple)
+    final_failed_urls: tuple[str, ...] = field(default_factory=tuple)
+
+
 def _log(message: str) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     _console_print(f"[{ts}] {message}")
@@ -524,9 +573,9 @@ def _run_ytdlp_download_with_retries(
     batch_size: int = X_DOWNLOAD_BATCH_SIZE,
     retry_batch_size: int = X_DOWNLOAD_RETRY_BATCH_SIZE,
     retry_sleep_seconds: float = X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[subprocess.CompletedProcess[str], XDownloadRetryStats]:
     if not selected_urls:
-        return _run_command_result(base_cmd, step_name, env=env)
+        return _run_command_result(base_cmd, step_name, env=env), XDownloadRetryStats()
 
     prefix = [str(part) for part in base_cmd]
     urls = [str(url or "").strip() for url in selected_urls if str(url or "").strip()]
@@ -535,16 +584,21 @@ def _run_ytdlp_download_with_retries(
     aggregated: list[subprocess.CompletedProcess[str]] = []
     failed_urls: list[str] = []
     transport_failed_urls: list[str] = []
+    initial_batch_failures = 0
+    retry_batch_failures = 0
+    transport_recovered_urls: list[str] = []
+    final_failed_urls: list[str] = []
 
     for start in range(0, len(urls), effective_batch_size):
         batch_urls = urls[start : start + effective_batch_size]
         result = _run_command_result([*prefix, *batch_urls], step_name, env=env)
         aggregated.append(result)
         if int(result.returncode or 0) != 0:
+            initial_batch_failures += 1
             failed_urls.extend(batch_urls)
 
     if not failed_urls:
-        return _merge_completed_process_results(aggregated)
+        return _merge_completed_process_results(aggregated), XDownloadRetryStats()
 
     _log(
         "[Downloader] yt-dlp batch download degraded; "
@@ -558,6 +612,8 @@ def _run_ytdlp_download_with_retries(
         retry_result = _run_command_result([*prefix, *retry_urls], step_name, env=env)
         aggregated.append(retry_result)
         if int(retry_result.returncode or 0) != 0:
+            retry_batch_failures += 1
+            final_failed_urls.extend(retry_urls)
             if _looks_like_x_metadata_transport_failure(retry_result):
                 transport_failed_urls.extend(retry_urls)
             _log(
@@ -582,9 +638,26 @@ def _run_ytdlp_download_with_retries(
             )
             if int(transport_result.returncode or 0) != 0:
                 _log("[Downloader] X metadata transport retry failed: " + retry_url)
+            else:
+                transport_recovered_urls.append(retry_url)
             aggregated.append(transport_result)
 
-    return _merge_completed_process_results(aggregated)
+    final_failed_urls = [
+        url for url in dict.fromkeys(final_failed_urls) if url not in set(transport_recovered_urls)
+    ]
+    stats = XDownloadRetryStats(
+        initial_batch_failures=initial_batch_failures,
+        initial_failed_urls=tuple(dict.fromkeys(failed_urls)),
+        retry_batch_failures=retry_batch_failures,
+        retry_failed_urls=tuple(dict.fromkeys(final_failed_urls + transport_recovered_urls)),
+        transport_fallback_attempts=len(dict.fromkeys(transport_failed_urls)),
+        transport_recovered_urls=tuple(dict.fromkeys(transport_recovered_urls)),
+        transport_failed_urls=tuple(
+            url for url in dict.fromkeys(transport_failed_urls) if url not in set(transport_recovered_urls)
+        ),
+        final_failed_urls=tuple(final_failed_urls),
+    )
+    return _merge_completed_process_results(aggregated), stats
 
 
 def _looks_like_x_metadata_transport_failure(result: subprocess.CompletedProcess[str]) -> bool:
@@ -3258,6 +3331,14 @@ def _default_runtime_config() -> dict[str, Any]:
         "auto_delete_source_files": DEFAULT_AUTO_DELETE_SOURCE_FILES,
         "exclude_keywords": DEFAULT_EXCLUDE_KEYWORDS.copy(),
         "require_any_keywords": DEFAULT_REQUIRE_ANY_KEYWORDS.copy(),
+        "x_download": {
+            "socket_timeout_seconds": X_DOWNLOAD_CONFIG_SOCKET_TIMEOUT_SECONDS,
+            "extractor_retries": X_DOWNLOAD_CONFIG_EXTRACTOR_RETRIES,
+            "download_retries": X_DOWNLOAD_CONFIG_RETRIES,
+            "fragment_retries": X_DOWNLOAD_CONFIG_FRAGMENT_RETRIES,
+            "retry_sleep_seconds": X_DOWNLOAD_CONFIG_RETRY_SLEEP_SECONDS,
+            "batch_retry_sleep_seconds": X_DOWNLOAD_CONFIG_BATCH_RETRY_SLEEP_SECONDS,
+        },
         "spark_ai": _default_spark_ai_config(),
         "comment_reply": {
             "enabled": True,
@@ -3310,6 +3391,113 @@ def _normalize_keyword_list(raw: Any, fallback: list[str]) -> list[str]:
         seen.add(lower)
         deduped.append(token)
     return deduped
+
+
+def _coerce_int(value: Any, default: int, *, minimum: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = default
+    return max(minimum, parsed)
+
+
+def _coerce_float(value: Any, default: float, *, minimum: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = default
+    return max(minimum, parsed)
+
+
+def _merge_x_download_config(raw: Any) -> dict[str, Any]:
+    payload = raw if isinstance(raw, dict) else {}
+    return {
+        "socket_timeout_seconds": _coerce_int(
+            payload.get("socket_timeout_seconds"),
+            X_DOWNLOAD_CONFIG_SOCKET_TIMEOUT_SECONDS,
+            minimum=5,
+        ),
+        "extractor_retries": _coerce_int(
+            payload.get("extractor_retries"),
+            X_DOWNLOAD_CONFIG_EXTRACTOR_RETRIES,
+            minimum=0,
+        ),
+        "download_retries": _coerce_int(
+            payload.get("download_retries"),
+            X_DOWNLOAD_CONFIG_RETRIES,
+            minimum=0,
+        ),
+        "fragment_retries": _coerce_int(
+            payload.get("fragment_retries"),
+            X_DOWNLOAD_CONFIG_FRAGMENT_RETRIES,
+            minimum=0,
+        ),
+        "retry_sleep_seconds": _coerce_float(
+            payload.get("retry_sleep_seconds"),
+            X_DOWNLOAD_CONFIG_RETRY_SLEEP_SECONDS,
+            minimum=0.0,
+        ),
+        "batch_retry_sleep_seconds": _coerce_float(
+            payload.get("batch_retry_sleep_seconds"),
+            X_DOWNLOAD_CONFIG_BATCH_RETRY_SLEEP_SECONDS,
+            minimum=0.0,
+        ),
+    }
+
+
+def resolve_x_download_policy(
+    *,
+    runtime_config: Optional[dict[str, Any]] = None,
+    args: Any = None,
+) -> XDownloadPolicy:
+    config_payload = runtime_config if isinstance(runtime_config, dict) else {}
+    config_x_download = config_payload.get("x_download") if isinstance(config_payload.get("x_download"), dict) else {}
+
+    def _value(name: str, config_key: str, default: Any) -> Any:
+        if args is not None:
+            cli_value = getattr(args, name, None) if not isinstance(args, dict) else args.get(name)
+            if cli_value is not None:
+                return cli_value
+        if config_key in config_x_download:
+            return config_x_download.get(config_key)
+        return default
+
+    return XDownloadPolicy(
+        socket_timeout_seconds=_coerce_int(
+            _value("x_download_socket_timeout", "socket_timeout_seconds", X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS),
+            X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS,
+            minimum=5,
+        ),
+        extractor_retries=_coerce_int(
+            _value("x_download_extractor_retries", "extractor_retries", X_DOWNLOAD_EXTRACTOR_RETRIES),
+            X_DOWNLOAD_EXTRACTOR_RETRIES,
+            minimum=0,
+        ),
+        download_retries=_coerce_int(
+            _value("x_download_retries", "download_retries", X_DOWNLOAD_RETRIES),
+            X_DOWNLOAD_RETRIES,
+            minimum=0,
+        ),
+        fragment_retries=_coerce_int(
+            _value("x_download_fragment_retries", "fragment_retries", X_DOWNLOAD_FRAGMENT_RETRIES),
+            X_DOWNLOAD_FRAGMENT_RETRIES,
+            minimum=0,
+        ),
+        retry_sleep_seconds=_coerce_float(
+            _value("x_download_retry_sleep", "retry_sleep_seconds", X_DOWNLOAD_RETRY_SLEEP_SECONDS),
+            X_DOWNLOAD_RETRY_SLEEP_SECONDS,
+            minimum=0.0,
+        ),
+        batch_retry_sleep_seconds=_coerce_float(
+            _value(
+                "x_download_batch_retry_sleep",
+                "batch_retry_sleep_seconds",
+                X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
+            ),
+            X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
+            minimum=0.0,
+        ),
+    )
 
 
 def _normalize_upload_platforms(raw: str) -> list[str]:
@@ -3433,6 +3621,7 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
         payload.get("require_any_keywords"),
         DEFAULT_REQUIRE_ANY_KEYWORDS,
     )
+    merged["x_download"] = _merge_x_download_config(payload.get("x_download"))
     merged["spark_ai"] = _merge_spark_ai_config(payload.get("spark_ai"))
     merged["comment_reply"] = _merge_comment_reply_config(payload.get("comment_reply"))
     return merged
@@ -7184,10 +7373,10 @@ def _build_x_cookie_context(
 
 def _export_x_cookies_for_ytdlp(
     chrome_user_data_dir: str,
-) -> Optional[Path]:
+) -> tuple[Optional[Path], str]:
     if browser_cookie3 is None:
         _log("[Downloader] yt-dlp cookie export skipped: browser_cookie3 is not available.")
-        return None
+        return None, "skipped-no-lib"
 
     profile_dir = Path(chrome_user_data_dir).expanduser()
     cookie_file = profile_dir / "Default" / "Network" / "Cookies"
@@ -7197,7 +7386,7 @@ def _export_x_cookies_for_ytdlp(
             "[Downloader] yt-dlp cookie export skipped: Chrome cookie files not found "
             f"(cookie={cookie_file}, key={key_file})."
         )
-        return None
+        return None, "skipped-no-files"
 
     try:
         cookie_jar = browser_cookie3.chrome(
@@ -7207,7 +7396,7 @@ def _export_x_cookies_for_ytdlp(
         )
     except Exception as exc:
         _log(f"[Downloader] yt-dlp cookie export skipped: failed to decrypt X cookies ({exc}).")
-        return None
+        return None, "skipped-decrypt-failed"
 
     cookies = [
         cookie
@@ -7218,7 +7407,7 @@ def _export_x_cookies_for_ytdlp(
     ]
     if not cookies:
         _log("[Downloader] yt-dlp cookie export skipped: no usable X cookies found.")
-        return None
+        return None, "skipped-empty"
 
     tmp = tempfile.NamedTemporaryFile(prefix="cybercar-x-cookies-", suffix=".txt", delete=False, mode="w", encoding="utf-8")
     try:
@@ -7235,7 +7424,7 @@ def _export_x_cookies_for_ytdlp(
     finally:
         tmp.close()
     _log(f"[Downloader] Exported X cookies for yt-dlp: {tmp.name}")
-    return Path(tmp.name)
+    return Path(tmp.name), "exported"
 
 
 def _build_x_graphql_headers(session: requests.Session, ct0: str) -> Optional[tuple[dict[str, str], dict[str, str]]]:
@@ -8456,14 +8645,15 @@ def download_from_x(
     chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
     require_x_live_discovery: bool = False,
     require_text_keyword_match: bool = False,
-    x_download_socket_timeout: int = 45,
-    x_download_extractor_retries: int = 3,
-    x_download_retries: int = 3,
-    x_download_fragment_retries: int = 3,
-    x_download_retry_sleep: float = 2.0,
+    x_download_socket_timeout: int = X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS,
+    x_download_extractor_retries: int = X_DOWNLOAD_EXTRACTOR_RETRIES,
+    x_download_retries: int = X_DOWNLOAD_RETRIES,
+    x_download_fragment_retries: int = X_DOWNLOAD_FRAGMENT_RETRIES,
+    x_download_retry_sleep: float = X_DOWNLOAD_RETRY_SLEEP_SECONDS,
     x_download_batch_retry_sleep: float = X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
 ) -> list[Path]:
     _log("[Downloader] Starting X download task")
+    started_at = time.monotonic()
     download_media_kind = "image" if include_images else "video"
     download_dir = _workspace_download_dir(workspace, download_media_kind)
     history_file = _workspace_history_file(workspace, download_media_kind)
@@ -8475,7 +8665,7 @@ def download_from_x(
     _ensure_binary("yt-dlp")
     before = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
     media_filter_args = [] if include_images else ["--match-filter", "duration > 10 & duration < 60"]
-    effective_socket_timeout = max(5, int(x_download_socket_timeout or 45))
+    effective_socket_timeout = max(5, int(x_download_socket_timeout or X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS))
     effective_extractor_retries = max(0, int(x_download_extractor_retries or 0))
     effective_download_retries = max(0, int(x_download_retries or 0))
     effective_fragment_retries = max(0, int(x_download_fragment_retries or 0))
@@ -8504,7 +8694,9 @@ def download_from_x(
     ]
     selected_urls: list[str] = []
     image_status_candidates: list[str] = []
-    cookie_export_path = _export_x_cookies_for_ytdlp(chrome_user_data_dir)
+    discovery_source = "provided_tweet_urls" if tweet_urls else ""
+    cookie_export_path, cookie_export_status = _export_x_cookies_for_ytdlp(chrome_user_data_dir)
+    discovery_started_at = time.monotonic()
 
     cleaned_urls = _dedupe_urls(tweet_urls or [])
     if cleaned_urls:
@@ -8535,7 +8727,6 @@ def download_from_x(
         ]
     else:
         discovered_urls: list[str] = []
-        discovery_source = ""
         live_discovery_error: Optional[str] = None
         if auto_discover_x:
             discover_limit = max(max(1, int(limit)) * 6, int(x_discovery_url_limit))
@@ -8632,6 +8823,7 @@ def download_from_x(
         else:
             search_url = f"https://x.com/search?q={quote_plus(keyword)}&src=typed_query&f=live"
             _log("[Downloader] Fallback to direct X search URL (compatibility may be unstable)")
+            discovery_source = "compat_search_url"
             cmd = [
                 "yt-dlp",
                 search_url,
@@ -8657,8 +8849,17 @@ def download_from_x(
         proxy=effective_proxy,
         use_system_proxy=effective_use_system_proxy,
     )
+    discovery_elapsed = time.monotonic() - discovery_started_at
+    _log(
+        "[Downloader] X discovery summary: "
+        f"source={discovery_source or 'unknown'}, "
+        f"selected_urls={len(selected_urls)}, "
+        f"status_candidates={len(image_status_candidates)}, "
+        f"cookie_export_status={cookie_export_status}"
+    )
+    download_started_at = time.monotonic()
     try:
-        result = _run_ytdlp_download_with_retries(
+        result, retry_stats = _run_ytdlp_download_with_retries(
             cmd,
             selected_urls=selected_urls,
             step_name="Downloader",
@@ -8669,11 +8870,15 @@ def download_from_x(
         if isinstance(cookie_export_path, Path):
             with contextlib.suppress(Exception):
                 cookie_export_path.unlink(missing_ok=True)
+    download_elapsed = time.monotonic() - download_started_at
     if result.returncode != 0 and result.stderr.strip():
         _console_print(result.stderr.strip())
 
     after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
     new_files = sorted(Path(p) for p in (after - before))
+    direct_status_fallback_attempts = 0
+    direct_status_fallback_downloaded = 0
+    fallback_elapsed = 0.0
 
     if include_images and image_status_candidates:
         target_images = max(0, int(image_min_target))
@@ -8696,18 +8901,32 @@ def download_from_x(
                 if extra_images:
                     after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
                     new_files = sorted(Path(p) for p in (after - before))
-    elif (not include_images) and image_status_candidates and result.returncode != 0 and not new_files:
-        extra_videos = _download_x_videos_from_status_urls(
-            workspace=workspace,
-            status_urls=image_status_candidates,
-            limit=max(1, int(limit)),
-            keyword=keyword,
-            proxy=effective_proxy,
-            use_system_proxy=effective_use_system_proxy,
-        )
-        if extra_videos:
-            after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
-            new_files = sorted(Path(p) for p in (after - before))
+    elif not include_images:
+        target_videos = max(1, int(limit))
+        current_new_videos = [p for p in new_files if _is_video_file(p)]
+        fallback_status_urls = _dedupe_x_status_urls(list(retry_stats.final_failed_urls))
+        need_videos = max(0, target_videos - len(current_new_videos))
+        if fallback_status_urls and need_videos > 0:
+            direct_status_fallback_attempts = len(fallback_status_urls)
+            _log(
+                "[Downloader] X direct status fallback enabled: "
+                f"target={target_videos}, current={len(current_new_videos)}, need={need_videos}, "
+                f"failed_status_urls={direct_status_fallback_attempts}"
+            )
+            fallback_started_at = time.monotonic()
+            extra_videos = _download_x_videos_from_status_urls(
+                workspace=workspace,
+                status_urls=fallback_status_urls,
+                limit=need_videos,
+                keyword=keyword,
+                proxy=effective_proxy,
+                use_system_proxy=effective_use_system_proxy,
+            )
+            fallback_elapsed = time.monotonic() - fallback_started_at
+            direct_status_fallback_downloaded = len(extra_videos)
+            if extra_videos:
+                after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+                new_files = sorted(Path(p) for p in (after - before))
 
     if result.returncode != 0:
         stderr_text = (result.stderr or "").lower()
@@ -8741,6 +8960,19 @@ def download_from_x(
             _log(f"  - {p.name}")
     else:
         _log("[Downloader] No new files downloaded (archive dedupe may have skipped all).")
+    _log(
+        "[Downloader] X stage summary: "
+        f"initial_batch_failures={retry_stats.initial_batch_failures}, "
+        f"retry_batch_failures={retry_stats.retry_batch_failures}, "
+        f"transport_fallback_attempts={retry_stats.transport_fallback_attempts}, "
+        f"direct_status_fallback_attempts={direct_status_fallback_attempts}, "
+        f"direct_status_fallback_downloaded={direct_status_fallback_downloaded}, "
+        f"discovery_elapsed={discovery_elapsed:.1f}s, "
+        f"download_elapsed={download_elapsed:.1f}s, "
+        f"fallback_elapsed={fallback_elapsed:.1f}s, "
+        f"total_elapsed={time.monotonic() - started_at:.1f}s, "
+        f"output_files={len(new_files)}"
+    )
     return new_files
 
 
