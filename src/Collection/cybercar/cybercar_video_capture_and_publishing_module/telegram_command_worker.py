@@ -1502,6 +1502,9 @@ def _compact_log_mentions(text: str) -> str:
 _NON_FINAL_BACKGROUND_FEEDBACK_STATUSES = {"running", "queued"}
 DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_LIMIT = 2
 DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_SECONDS = 3.0
+DEFAULT_PENDING_PREFILTER_RETRY_COOLDOWN_SECONDS = 45.0
+DEFAULT_PENDING_PREFILTER_RETRY_BATCH_SIZE = 2
+DEFAULT_PENDING_PREFILTER_RETRY_MAX_ATTEMPTS = 6
 
 
 def _should_send_background_feedback(status: str) -> bool:
@@ -4012,6 +4015,149 @@ def _flush_pending_background_feedback(
             _save_pending_background_feedback(path, payload)
 
 
+def _pending_prefilter_retry_candidates(workspace: Path) -> list[dict[str, Any]]:
+    queue = _load_prefilter_queue(_prefilter_queue_path(workspace))
+    items = queue.get("items", {})
+    if not isinstance(items, dict):
+        return []
+    now = time.time()
+    candidates: list[dict[str, Any]] = []
+    for item_id, row in items.items():
+        if not isinstance(row, dict):
+            continue
+        workflow = str(row.get("workflow") or "").strip().lower()
+        if workflow not in {"immediate_manual_publish", IMMEDIATE_COLLECT_REVIEW_WORKFLOW}:
+            continue
+        if int(row.get("message_id") or 0) > 0:
+            continue
+        if not bool(row.get("prefilter_retry_pending")) and str(row.get("status") or "").strip().lower() != "send_failed":
+            continue
+        try:
+            retry_count = int(row.get("prefilter_retry_count") or 0)
+        except Exception:
+            retry_count = 0
+        if retry_count >= int(DEFAULT_PENDING_PREFILTER_RETRY_MAX_ATTEMPTS):
+            _update_prefilter_item(
+                workspace,
+                str(item_id),
+                updates={
+                    "prefilter_retry_pending": False,
+                    "action": "send_retry_exhausted",
+                },
+            )
+            continue
+        try:
+            last_retry_epoch = float(row.get("prefilter_last_retry_epoch") or 0.0)
+        except Exception:
+            last_retry_epoch = 0.0
+        if last_retry_epoch > 0 and (now - last_retry_epoch) < float(DEFAULT_PENDING_PREFILTER_RETRY_COOLDOWN_SECONDS):
+            continue
+        payload = dict(row)
+        payload["id"] = str(item_id)
+        candidates.append(payload)
+    candidates.sort(
+        key=lambda row: (
+            float(row.get("prefilter_last_retry_epoch") or 0.0),
+            str(row.get("updated_at") or row.get("created_at") or ""),
+            str(row.get("id") or ""),
+        )
+    )
+    return candidates[: int(DEFAULT_PENDING_PREFILTER_RETRY_BATCH_SIZE)]
+
+
+def _flush_pending_prefilter_retries(
+    *,
+    workspace: Path,
+    bot_token: str,
+    chat_id: str,
+    timeout_seconds: int,
+    log_file: Path,
+) -> None:
+    if not str(bot_token or "").strip() or not str(chat_id or "").strip():
+        return
+    candidates = _pending_prefilter_retry_candidates(workspace)
+    if not candidates:
+        return
+    runner, core = _load_runtime_modules()
+    args = _build_immediate_publish_args(
+        runner=runner,
+        workspace=workspace,
+        telegram_bot_token=bot_token,
+        telegram_chat_id=chat_id,
+    )
+    email_settings = runner._build_email_settings(args)
+    workspace_ctx = core.init_workspace(str(workspace))
+    for item in candidates:
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            continue
+        try:
+            retry_count = int(item.get("prefilter_retry_count") or 0) + 1
+        except Exception:
+            retry_count = 1
+        now_epoch = time.time()
+        _update_prefilter_item(
+            workspace,
+            item_id,
+            updates={
+                "prefilter_retry_pending": True,
+                "prefilter_retry_count": retry_count,
+                "prefilter_last_retry_epoch": now_epoch,
+                "prefilter_last_retry_at": _now_text(),
+                "action": "send_retry_running",
+            },
+        )
+        try:
+            response = _send_immediate_candidate_prefilter_card(
+                runner=runner,
+                email_settings=email_settings,
+                workspace=workspace,
+                item=item,
+                workspace_ctx=workspace_ctx,
+                fast_send=False,
+            )
+            result_payload = response.get("result") if isinstance(response, dict) else {}
+            if not isinstance(result_payload, dict):
+                result_payload = {}
+            chat_payload = result_payload.get("chat") if isinstance(result_payload.get("chat"), dict) else {}
+            message_id = int(result_payload.get("message_id") or 0)
+            if message_id <= 0:
+                raise RuntimeError("telegram candidate prefilter message_id missing")
+            _update_prefilter_item(
+                workspace,
+                item_id,
+                updates={
+                    "status": "link_pending",
+                    "message_id": message_id,
+                    "chat_id": str(chat_payload.get("id") or chat_id or ""),
+                    "action": "resent",
+                    "last_error": "",
+                    "prefilter_retry_pending": False,
+                    "prefilter_last_retry_epoch": now_epoch,
+                    "prefilter_last_retry_at": _now_text(),
+                },
+            )
+            _append_log(log_file, f"[Worker] pending prefilter delivered: {item_id}")
+        except Exception as exc:
+            retryable = retry_count < int(DEFAULT_PENDING_PREFILTER_RETRY_MAX_ATTEMPTS)
+            _update_prefilter_item(
+                workspace,
+                item_id,
+                updates={
+                    "status": "send_failed",
+                    "action": "send_retry_failed" if retryable else "send_retry_exhausted",
+                    "last_error": str(exc),
+                    "prefilter_retry_pending": retryable,
+                    "prefilter_last_retry_epoch": now_epoch,
+                    "prefilter_last_retry_at": _now_text(),
+                },
+            )
+            _append_log(
+                log_file,
+                f"[Worker] pending prefilter retry failed: {item_id} ({exc})",
+            )
+
+
 def _load_prefilter_queue(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {"version": 1, "updated_at": "", "items": {}}
@@ -4308,12 +4454,21 @@ def _upsert_immediate_candidate_item(
             row["platform_results"] = {}
             row["publish_success_count"] = 0
             row["publish_failed_count"] = 0
+            row["prefilter_retry_pending"] = False
+            row["prefilter_retry_count"] = 0
+            row["prefilter_last_retry_epoch"] = 0.0
         elif existing_status == "publish_done":
             row["status"] = "link_pending"
             row["action"] = "resent_after_terminal_state"
             row["message_id"] = 0
+            row["prefilter_retry_pending"] = False
+            row["prefilter_retry_count"] = 0
+            row["prefilter_last_retry_epoch"] = 0.0
         elif existing_status not in IMMEDIATE_CANDIDATE_REUSE_STATUSES:
             row["status"] = "link_pending"
+            row["prefilter_retry_pending"] = False
+            row["prefilter_retry_count"] = 0
+            row["prefilter_last_retry_epoch"] = 0.0
         row = _apply_coordination_snapshot(row, workspace)
         items[item_id] = row
         return {
@@ -5842,15 +5997,19 @@ def _build_immediate_fast_x_download_args(repo_root: Optional[Path] = None) -> l
     resolved_repo_root = Path(repo_root).resolve() if repo_root is not None else Path(DEFAULT_REPO_ROOT).resolve()
     load_runtime_config = getattr(core, "_load_runtime_config", None)
     resolve_policy = getattr(core, "resolve_x_download_policy", None)
+    def _normalize_fast_args(args: list[str]) -> list[str]:
+        normalized = [arg for arg in args if str(arg) != "--x-download-fail-fast"]
+        normalized.append("--no-x-download-fail-fast")
+        return normalized
     if callable(load_runtime_config) and callable(resolve_policy):
         runtime_config = load_runtime_config(str(_default_runtime_config_path(resolved_repo_root)))
         args = resolve_policy(runtime_config=runtime_config).to_cli_args()
-        return [arg for arg in args if str(arg) != "--x-download-fail-fast"]
+        return _normalize_fast_args(args)
     from cybercar import engine as cybercar_engine
 
     runtime_config = cybercar_engine._load_runtime_config(str(_default_runtime_config_path(resolved_repo_root)))
     args = cybercar_engine.resolve_x_download_policy(runtime_config=runtime_config).to_cli_args()
-    return [arg for arg in args if str(arg) != "--x-download-fail-fast"]
+    return _normalize_fast_args(args)
 
 
 def _override_cli_arg(args: list[str], option: str, value: str) -> list[str]:
@@ -6928,8 +7087,6 @@ def _extract_attempt_reason(result: Dict[str, Any]) -> str:
         return "素材已在历史归档中，系统未重复下载。"
     if "previous pipeline still running" in lower or ("skip run" in lower and "still running" in lower):
         return "上一条采集流程仍在处理中，请稍后再试。"
-    if "no new files" in lower:
-        return "未下载到新的可用素材。"
     if "unable to download json metadata" in lower:
         if "unexpected_eof_while_reading" in lower or "eof occurred in violation of protocol" in lower:
             return "X 元数据下载失败：SSL 连接被对端中断（UNEXPECTED_EOF_WHILE_READING）。"
@@ -6938,6 +7095,8 @@ def _extract_attempt_reason(result: Dict[str, Any]) -> str:
         if "read timed out" in lower:
             return "X 元数据下载失败：请求超时。"
         return "X 元数据下载失败，未拿到可用素材。"
+    if "no new files" in lower:
+        return "未下载到新的可用素材。"
     if "unable to download" in lower or "download failed" in lower:
         return "下载失败，未拿到可用素材。"
     if "timeout" in lower:
@@ -7309,6 +7468,7 @@ def _send_immediate_candidate_prefilter_card(
     workspace: Path,
     item: Dict[str, Any],
     workspace_ctx: Any = None,
+    fast_send: bool = True,
 ) -> Dict[str, Any]:
     resolved_workspace_ctx = workspace_ctx if workspace_ctx is not None else runner.core.init_workspace(str(workspace))
     platforms = _resolve_item_target_platforms(item)
@@ -7325,7 +7485,7 @@ def _send_immediate_candidate_prefilter_card(
         published_at=str(item.get("published_at") or "").strip(),
         display_time=str(item.get("display_time") or "").strip(),
         target_platforms=str(item.get("target_platforms") or "").strip(),
-        fast_send=True,
+        fast_send=bool(fast_send),
     )
 def _queue_immediate_platform_jobs(
     *,
@@ -9095,19 +9255,64 @@ def _run_collect_publish_latest_job(
                     "message_id": message_id,
                     "chat_id": str(chat_payload.get("id") or telegram_chat_id or ""),
                     "action": "sent",
+                    "last_error": "",
+                    "prefilter_retry_pending": False,
+                    "prefilter_last_retry_epoch": 0.0,
+                    "prefilter_last_retry_at": "",
                 },
             )
             sent_candidates += 1
             fresh_candidates += 1
         except Exception as exc:
-            last_send_error = _preview_text(str(exc), limit=160)
+            retry_exc: Exception = exc
+            try:
+                retry_response = _send_immediate_candidate_prefilter_card(
+                    runner=runner,
+                    email_settings=email_settings,
+                    workspace=workspace,
+                    item=item,
+                    workspace_ctx=workspace_ctx,
+                    fast_send=False,
+                )
+                retry_result_payload = retry_response.get("result") if isinstance(retry_response, dict) else {}
+                if not isinstance(retry_result_payload, dict):
+                    retry_result_payload = {}
+                retry_chat_payload = retry_result_payload.get("chat") if isinstance(retry_result_payload.get("chat"), dict) else {}
+                retry_message_id = int(retry_result_payload.get("message_id") or 0)
+                if retry_message_id <= 0:
+                    raise RuntimeError("telegram candidate prefilter message_id missing")
+                _update_prefilter_item(
+                    workspace,
+                    item_id,
+                    updates={
+                        "status": "link_pending",
+                        "message_id": retry_message_id,
+                        "chat_id": str(retry_chat_payload.get("id") or telegram_chat_id or ""),
+                        "action": "sent_after_retry",
+                        "last_error": "",
+                        "prefilter_retry_pending": False,
+                        "prefilter_last_retry_epoch": 0.0,
+                        "prefilter_last_retry_at": "",
+                    },
+                )
+                sent_candidates += 1
+                fresh_candidates += 1
+                continue
+            except Exception as delayed_exc:
+                retry_exc = delayed_exc
+            last_send_error = _preview_text(str(retry_exc), limit=160)
             _update_prefilter_item(
                 workspace,
                 item_id,
                 updates={
                     "status": "send_failed",
                     "action": "send_failed",
-                    "last_error": str(exc),
+                    "last_error": str(retry_exc),
+                    "message_id": 0,
+                    "prefilter_retry_pending": True,
+                    "prefilter_retry_count": 0,
+                    "prefilter_last_retry_epoch": 0.0,
+                    "prefilter_last_retry_at": "",
                 },
             )
             skipped_duplicates += 1
@@ -9175,6 +9380,7 @@ def _run_collect_publish_latest_job(
                     [
                         f"已尝试发送前 {max(1, attempted_new_candidates)} 条新候选，但 Telegram 预审卡未成功送达。",
                         "当前更像 Telegram 网络抖动，而不是 X 候选扫描失败。",
+                        "失败候选已保留到待补发队列；worker 轮询恢复后会自动重试送达预审卡。",
                     ]
                     + ([f"最后错误：{last_send_error}"] if last_send_error else [])
                 ),
@@ -10663,6 +10869,13 @@ def main() -> int:
                 if pruned_tasks > 0:
                     _append_log(log_file, f"[Worker] home action tasks pruned: {pruned_tasks}")
                 _flush_pending_background_feedback(
+                    workspace=workspace,
+                    bot_token=bot_token,
+                    chat_id=allowed_chat_id,
+                    timeout_seconds=api_timeout_seconds,
+                    log_file=log_file,
+                )
+                _flush_pending_prefilter_retries(
                     workspace=workspace,
                     bot_token=bot_token,
                     chat_id=allowed_chat_id,

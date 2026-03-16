@@ -745,6 +745,9 @@ def test_run_collect_publish_latest_job_fails_when_message_id_missing(tmp_path: 
     assert failed_item["status"] == "send_failed"
     assert failed_item["action"] == "send_failed"
     assert "message_id missing" in str(failed_item["last_error"])
+    assert failed_item["prefilter_retry_pending"] is True
+    assert failed_item["prefilter_retry_count"] == 0
+    assert int(failed_item["message_id"]) == 0
     assert feedbacks[-1]["status"] == "failed"
 
 
@@ -802,10 +805,15 @@ def test_run_collect_publish_latest_job_stops_after_requested_failed_new_candida
     )
 
     assert exit_code == 3
-    assert len(attempts) == 2
+    assert len(attempts) == 4
+    assert attempts[0]["fast_send"] is True
+    assert attempts[1]["fast_send"] is False
+    assert attempts[2]["fast_send"] is True
+    assert attempts[3]["fast_send"] is False
     items = _prefilter_items(workspace)
     assert len(items) == 2
     assert all(isinstance(item, dict) and item["status"] == "send_failed" for item in items.values())
+    assert all(isinstance(item, dict) and item["prefilter_retry_pending"] is True for item in items.values())
     failed_feedback = feedbacks[-1]
     assert failed_feedback["status"] == "failed"
     sections = failed_feedback["sections"]
@@ -813,7 +821,72 @@ def test_run_collect_publish_latest_job_stops_after_requested_failed_new_candida
     failure_items = sections[-1]["items"]
     assert "已尝试发送前 2 条新候选，但 Telegram 预审卡未成功送达。" in failure_items
     assert "当前更像 Telegram 网络抖动，而不是 X 候选扫描失败。" in failure_items
-    assert any("telegram send failed 2" in str(item) for item in failure_items)
+    assert "失败候选已保留到待补发队列；worker 轮询恢复后会自动重试送达预审卡。" in failure_items
+    assert any("telegram send failed 4" in str(item) for item in failure_items)
+
+
+def test_run_collect_publish_latest_job_succeeds_after_immediate_retry(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    attempts: list[dict[str, object]] = []
+
+    def send_prefilter_retry_once(**kwargs: object) -> dict[str, object]:
+        attempts.append(dict(kwargs))
+        if len(attempts) == 1:
+            raise RuntimeError("telegram fast send failed")
+        return {
+            "result": {
+                "message_id": 889,
+                "chat": {"id": CHAT_ID},
+            }
+        }
+
+    runner._send_telegram_prefilter_for_candidate = send_prefilter_retry_once  # type: ignore[assignment]
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": DEFAULT_PROFILE,
+            "candidates": [
+                {
+                    "url": "https://x.test/post/video-retry-success",
+                    "published_at": "2026-03-15 10:00:00",
+                    "display_time": "10m",
+                    "tweet_text": "video retry success",
+                },
+            ],
+        },
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert len(attempts) == 2
+    assert attempts[0]["fast_send"] is True
+    assert attempts[1]["fast_send"] is False
+    items = _prefilter_items(workspace)
+    assert len(items) == 1
+    item = next(iter(items.values()))
+    assert isinstance(item, dict)
+    assert item["status"] == "link_pending"
+    assert item["action"] == "sent_after_retry"
+    assert item["last_error"] == ""
+    assert item["prefilter_retry_pending"] is False
+    assert int(item["message_id"]) == 889
+    assert feedbacks[-1]["status"] == "done"
 
 
 def test_build_immediate_fast_x_download_args(monkeypatch, tmp_path: Path) -> None:
@@ -840,6 +913,58 @@ def test_build_immediate_fast_x_download_args(monkeypatch, tmp_path: Path) -> No
     assert extra_args[extra_args.index("--x-download-fragment-retries") + 1] == "2"
     assert extra_args[extra_args.index("--x-download-retry-sleep") + 1] == "1"
     assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "1"
+    assert "--no-x-download-fail-fast" in extra_args
+    assert "--x-download-fail-fast" not in extra_args
+
+
+def test_extract_attempt_reason_prefers_x_metadata_failure_over_no_new_files() -> None:
+    result = {
+        "stdout": "Warning: yt-dlp exited with 1 and no new files.",
+        "stderr": "ERROR: [twitter] 2033332422322897018: Unable to download JSON metadata: HTTPSConnectionPool(host='x.com', port=443): Read timed out. (read timeout=25.0)",
+    }
+
+    reason = worker_impl._extract_attempt_reason(result)
+
+    assert reason == "X 元数据下载失败：请求超时。"
+
+
+def test_flush_pending_prefilter_retries_resends_failed_candidate(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    log_file = workspace / "runtime" / "logs" / "telegram_worker.log"
+
+    item = _video_item(
+        "item-video",
+        status="send_failed",
+        action="send_failed",
+        message_id=0,
+        prefilter_retry_pending=True,
+        prefilter_retry_count=0,
+        prefilter_last_retry_epoch=0.0,
+        last_error="telegram timeout",
+    )
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+
+    worker_impl._flush_pending_prefilter_retries(
+        workspace=workspace,
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=log_file,
+    )
+
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "link_pending"
+    assert updated["action"] == "resent"
+    assert updated["prefilter_retry_pending"] is False
+    assert updated["prefilter_retry_count"] == 1
+    assert int(updated["message_id"]) > 0
+    assert len(runner.sent_candidates) == 1
+    assert runner.sent_candidates[0]["fast_send"] is False
 
 
 def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatch, tmp_path: Path) -> None:

@@ -3682,7 +3682,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--x-download-fail-fast",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=None,
         help=argparse.SUPPRESS,
     )
