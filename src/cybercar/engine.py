@@ -1404,6 +1404,12 @@ def _prepare_platform_login_qr_notice(
             chrome_user_data_dir=profile_dir,
             startup_url=open_target_url,
         )
+    active_page = _stabilize_platform_session_page(
+        active_page,
+        platform_name=platform,
+        open_url=open_target_url,
+        close_stale_login_tabs=True,
+    )
     if refresh_page:
         try:
             active_page.get(open_target_url)
@@ -2712,6 +2718,129 @@ def _is_platform_session_monitor_relevant_url(platform_name: str, current_url: s
     return False
 
 
+def _platform_tab_url(tab: Any) -> str:
+    try:
+        return str(getattr(tab, "url", "") or _page_current_url(tab) or "").strip()
+    except Exception:
+        return str(getattr(tab, "url", "") or "").strip()
+
+
+def _browser_tabs(page: ChromiumPage) -> list[Any]:
+    tabs: list[Any] = []
+    seen: set[str] = set()
+    for tab in [page]:
+        if not tab:
+            continue
+        key = str(getattr(tab, "tab_id", "") or id(tab))
+        if key in seen:
+            continue
+        seen.add(key)
+        tabs.append(tab)
+    getter = getattr(page, "get_tabs", None)
+    if not callable(getter):
+        return tabs
+    try:
+        raw_tabs = list(getter(tab_type="page"))
+    except TypeError:
+        raw_tabs = list(getter())
+    except Exception:
+        raw_tabs = []
+    for tab in raw_tabs:
+        if not tab:
+            continue
+        key = str(getattr(tab, "tab_id", "") or id(tab))
+        if key in seen:
+            continue
+        seen.add(key)
+        tabs.append(tab)
+    return tabs
+
+
+def _wechat_session_tab_score(url: str, open_url: str = "") -> int:
+    lowered = str(url or "").strip().lower()
+    if not lowered or "channels.weixin.qq.com/" not in lowered:
+        return -1
+    if "login.html" in lowered:
+        return 0
+    open_url_lower = str(open_url or "").strip().lower()
+    if "/platform/post/list" in lowered or "/micro/content/post/list" in lowered:
+        return 50
+    if "/platform/content/manage" in lowered or "/platform/content/list" in lowered:
+        return 45
+    if open_url_lower and open_url_lower in lowered:
+        return 40
+    if "/platform/post/create" in lowered or "/micro/content/post/create" in lowered:
+        return 35
+    if "/platform/interaction/" in lowered or "/platform/post/" in lowered or "/micro/content/" in lowered:
+        return 20
+    return 10
+
+
+def _stabilize_platform_session_page(
+    page: ChromiumPage,
+    *,
+    platform_name: str,
+    open_url: str = "",
+    close_stale_login_tabs: bool = False,
+) -> ChromiumPage:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    if platform != "wechat":
+        return page
+    tabs = _browser_tabs(page)
+    if len(tabs) <= 1:
+        return page
+    chosen = page
+    chosen_score = _wechat_session_tab_score(_platform_tab_url(page), open_url)
+    stale_login_tabs: list[Any] = []
+    for tab in tabs:
+        url = _platform_tab_url(tab)
+        lowered = url.lower()
+        if "channels.weixin.qq.com/" not in lowered:
+            continue
+        if "login.html" in lowered:
+            stale_login_tabs.append(tab)
+            continue
+        score = _wechat_session_tab_score(url, open_url)
+        if score > chosen_score:
+            chosen = tab
+            chosen_score = score
+    if not _is_same_tab(page, chosen):
+        try:
+            page.activate_tab(chosen)
+        except Exception:
+            try:
+                page.activate_tab(getattr(chosen, "tab_id", chosen))
+            except Exception:
+                pass
+        chosen_url = _platform_tab_url(chosen)
+        if chosen_url:
+            _log(f"[Uploader:wechat] Session probe switched to existing business tab: {chosen_url}")
+    if close_stale_login_tabs and stale_login_tabs and chosen_score > 0:
+        close_ids = [
+            getattr(tab, "tab_id", tab)
+            for tab in stale_login_tabs
+            if not _is_same_tab(tab, chosen)
+        ]
+        if close_ids:
+            try:
+                page.close_tabs(close_ids)
+                _log(f"[Uploader:wechat] Closed {len(close_ids)} stale login tab(s).")
+            except Exception as exc:
+                _log(f"[Uploader:wechat] Failed to close stale login tab(s) via browser API: {exc}")
+                closed = 0
+                for tab in stale_login_tabs:
+                    if _is_same_tab(tab, chosen):
+                        continue
+                    try:
+                        tab.close()
+                        closed += 1
+                    except Exception:
+                        pass
+                if closed > 0:
+                    _log(f"[Uploader:wechat] Closed {closed} stale login tab(s) via tab.close().")
+    return chosen
+
+
 def _build_platform_login_diagnostics(
     platform_name: str,
     *,
@@ -2785,6 +2914,12 @@ def probe_platform_session_via_debug_port(
             "open_url": resolved_open_url,
             "error": str(exc),
         }
+    page = _stabilize_platform_session_page(
+        page,
+        platform_name=platform,
+        open_url=resolved_open_url,
+        close_stale_login_tabs=True,
+    )
 
     login_state = inspect_platform_login_gate(page, platform)
     current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
@@ -3121,6 +3256,12 @@ def check_platform_login_status(
             chrome_user_data_dir=profile_dir,
             startup_url=open_target_url,
         )
+    active_page = _stabilize_platform_session_page(
+        active_page,
+        platform_name=platform,
+        open_url=open_target_url,
+        close_stale_login_tabs=True,
+    )
     if refresh_page:
         try:
             active_page.get(open_target_url)

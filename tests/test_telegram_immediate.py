@@ -1081,6 +1081,37 @@ def test_flush_pending_prefilter_retries_resends_failed_candidate(tmp_path: Path
     assert runner.sent_candidates[0]["fast_send"] is False
 
 
+def test_cleanup_prefilter_queue_removes_old_send_failed_and_polluted_rows(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    _save_prefilter_items(
+        workspace,
+        {
+            "old-send-failed": _video_item(
+                "old-send-failed",
+                status="send_failed",
+                action="send_failed",
+                message_id=0,
+                created_at="2000-01-01 00:00:00",
+                updated_at="2000-01-01 00:00:00",
+            ),
+            "polluted-item": {
+                "id": "polluted-item",
+                "workflow": "immediate_manual_publish",
+                "status": "link_pending",
+                "message_id": 0,
+            },
+            "active-item": _video_item("active-item", status="link_pending", updated_at="2099-01-01 00:00:00"),
+        },
+    )
+
+    summary = worker_impl._cleanup_prefilter_queue(workspace)
+    items = _prefilter_items(workspace)
+
+    assert summary["removed_terminal"] == 1
+    assert summary["removed_polluted"] == 1
+    assert set(items) == {"active-item"}
+
+
 def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatch, tmp_path: Path) -> None:
     attempts: list[dict[str, object]] = []
 
@@ -1549,6 +1580,61 @@ def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_p
     assert len(feedbacks) == 2
     assert "视频号需要重新登录" in str(feedbacks[0]["title"])
     assert "即采即发发布失败" in str(feedbacks[1]["title"])
+
+
+def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_required(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedbacks: list[dict[str, object]] = []
+    qr_requests: list[dict[str, object]] = []
+
+    fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
+        SimpleNamespace(success=False, error="publish blocked by login page")
+    )
+
+    monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
+    monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs))
+        or {
+            "ok": False,
+            "needs_login": True,
+            "transport_error": True,
+            "sent": False,
+            "error": "ConnectionResetError(10054)",
+        },
+    )
+
+    item = _video_item(target_platforms="wechat")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = worker_impl._publish_immediate_candidate_platform(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+        platform="wechat",
+    )
+
+    assert exit_code == 2
+    assert len(qr_requests) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["platform_results"]["wechat"]["status"] == "login_required"
+    assert "Telegram" in str(updated["platform_results"]["wechat"]["error"])
+    assert len(feedbacks) == 2
 
 
 def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_fails(tmp_path: Path, monkeypatch) -> None:

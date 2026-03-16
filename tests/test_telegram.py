@@ -112,7 +112,7 @@ def test_call_telegram_api_resets_session_after_connection_error(monkeypatch) ->
     def session_factory() -> object:
         return created_sessions.pop(0)
 
-    monkeypatch.setattr(telegram_api, "_SESSION", None)
+    monkeypatch.setattr(telegram_api, "_SESSIONS", {})
     monkeypatch.setattr(telegram_api.requests, "Session", session_factory)
     monkeypatch.setattr(telegram_api.time, "sleep", lambda seconds: None)
 
@@ -128,3 +128,79 @@ def test_call_telegram_api_resets_session_after_connection_error(monkeypatch) ->
     assert response["ok"] is True
     assert failing_session.closed is True
     assert success_session.calls
+
+
+def test_call_telegram_api_keeps_get_and_post_sessions_isolated(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+        text = '{"ok": true, "result": []}'
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True, "result": []}
+
+    class FailingGetSession:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def mount(self, prefix: str, adapter: object) -> None:
+            return None
+
+        def get(self, endpoint: str, params: dict[str, object], timeout: int) -> FakeResponse:
+            raise requests.exceptions.ConnectionError("ConnectionResetError(10054)")
+
+        def close(self) -> None:
+            self.closed = True
+
+    class PostSession:
+        def __init__(self) -> None:
+            self.closed = False
+            self.calls: list[tuple[str, dict[str, object], int]] = []
+
+        def mount(self, prefix: str, adapter: object) -> None:
+            return None
+
+        def post(self, endpoint: str, data: dict[str, object], timeout: int) -> FakeResponse:
+            self.calls.append((endpoint, data, timeout))
+            return FakeResponse()
+
+        def close(self) -> None:
+            self.closed = True
+
+    get_session = FailingGetSession()
+    post_session = PostSession()
+    created_sessions: list[object] = [get_session, post_session]
+
+    def session_factory() -> object:
+        return created_sessions.pop(0)
+
+    monkeypatch.setattr(telegram_api, "_SESSIONS", {})
+    monkeypatch.setattr(telegram_api.requests, "Session", session_factory)
+    monkeypatch.setattr(telegram_api.time, "sleep", lambda seconds: None)
+
+    try:
+        telegram_api.call_telegram_api(
+            bot_token="123456:token",
+            method="getUpdates",
+            params={"timeout": 1},
+            timeout_seconds=5,
+            use_post=False,
+            max_retries=0,
+        )
+    except requests.exceptions.ConnectionError:
+        pass
+    else:
+        raise AssertionError("expected getUpdates transport failure")
+
+    response = telegram_api.call_telegram_api(
+        bot_token="123456:token",
+        method="sendMessage",
+        params={"chat_id": "1", "text": "hello"},
+        timeout_seconds=8,
+        use_post=True,
+        max_retries=0,
+    )
+
+    assert response["ok"] is True
+    assert get_session.closed is False
+    assert post_session.closed is False
+    assert post_session.calls
