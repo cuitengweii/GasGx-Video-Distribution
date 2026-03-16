@@ -4400,6 +4400,18 @@ def _failure_requires_login(failure: Dict[str, str], error_text: str) -> bool:
     return "登录" in raw and "无需登录" not in raw
 
 
+def _should_probe_platform_login_after_publish_failure(platform: str, error_text: str) -> bool:
+    platform_token = str(platform or "").strip().lower()
+    raw = str(error_text or "").strip().lower()
+    if platform_token != "wechat":
+        return False
+    if not raw:
+        return False
+    if "timed out waiting for lock" in raw and "wechat.lockdir" in raw:
+        return False
+    return True
+
+
 def _upsert_immediate_candidate_item(
     *,
     workspace: Path,
@@ -7378,6 +7390,91 @@ def _collect_result_indicates_success(result: Optional[Dict[str, Any]]) -> bool:
         return False
 
 
+def _extract_x_status_id_from_url(source_url: str) -> str:
+    match = re.search(r"/status/(\d+)", str(source_url or "").strip(), re.IGNORECASE)
+    return str(match.group(1) or "").strip() if match else ""
+
+
+def _normalize_x_status_url_for_match(source_url: str) -> str:
+    match = re.search(
+        r"https?://(?:www\.)?(?:x|twitter)\.com/([^/?#]+)/status/(\d+)",
+        str(source_url or "").strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return f"https://x.com/{match.group(1)}/{ 'status' }/{match.group(2)}".replace("//status", "/status")
+
+
+def _immediate_target_matches_source(
+    *,
+    core: Any,
+    workspace_ctx: Any,
+    target: Path,
+    source_url: str,
+) -> bool:
+    expected_status_id = _extract_x_status_id_from_url(source_url)
+    expected_status_url = _normalize_x_status_url_for_match(source_url)
+    if not expected_status_id and not expected_status_url:
+        return True
+
+    target_name = target.name
+    if expected_status_id and expected_status_id in target_name:
+        return True
+
+    resolver = getattr(core, "_resolve_processed_video_metadata", None)
+    if not callable(resolver):
+        return False
+    try:
+        metadata = resolver(workspace_ctx, target)
+    except Exception:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    target_status_url = _normalize_x_status_url_for_match(str(metadata.get("status_url") or ""))
+    if expected_status_url and target_status_url and target_status_url == expected_status_url:
+        return True
+
+    target_status_id = str(metadata.get("status_id") or "").strip()
+    target_media_id = str(metadata.get("media_id") or "").strip()
+    return bool(expected_status_id and expected_status_id in {target_status_id, target_media_id})
+
+
+def _resolve_immediate_collect_target_for_source(
+    *,
+    core: Any,
+    workspace_ctx: Any,
+    source_url: str,
+    candidate_targets: list[Path],
+) -> Optional[Path]:
+    expected_status_id = _extract_x_status_id_from_url(source_url)
+    finder = getattr(core, "_find_processed_target_by_source", None)
+    if callable(finder):
+        try:
+            matched_target, _matched_item = finder(
+                workspace_ctx,
+                source_url=source_url,
+                status_id=expected_status_id,
+            )
+        except TypeError:
+            matched_target, _matched_item = finder(workspace_ctx, source_url=source_url)
+        if matched_target is not None:
+            resolved = Path(matched_target).resolve()
+            if resolved.exists() and resolved.is_file():
+                return resolved
+
+    for candidate in sorted(candidate_targets, key=lambda path: path.stat().st_mtime, reverse=True):
+        if _immediate_target_matches_source(
+            core=core,
+            workspace_ctx=workspace_ctx,
+            target=candidate,
+            source_url=source_url,
+        ):
+            return candidate
+    return None
+
+
 def _adopt_downloaded_target(
     *,
     workspace: Path,
@@ -8098,35 +8195,42 @@ def _run_immediate_collect_item_job(
                 else _list_processed_media(workspace, media_kind=media_kind)
             )
             new_targets = [path for name, path in after_videos.items() if name not in before_videos]
-            if new_targets:
-                target = sorted(new_targets, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+            matched_processed_target = _resolve_immediate_collect_target_for_source(
+                core=core,
+                workspace_ctx=workspace_ctx,
+                source_url=source_url,
+                candidate_targets=new_targets,
+            )
+            if matched_processed_target is not None:
+                target = matched_processed_target
                 break
-            if immediate_test_mode:
-                after_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
-                new_downloads = [path for name, path in after_downloads.items() if name not in before_downloads]
-                if new_downloads:
-                    adopted = _adopt_downloaded_target_for_test_mode(
+
+            after_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
+            new_downloads = [path for name, path in after_downloads.items() if name not in before_downloads]
+            mismatched_material_detected = bool(new_targets) and _collect_result_indicates_success(collect_result)
+            if new_downloads and _collect_result_indicates_success(collect_result):
+                matched_download_target = _resolve_immediate_collect_target_for_source(
+                    core=core,
+                    workspace_ctx=workspace_ctx,
+                    source_url=source_url,
+                    candidate_targets=new_downloads,
+                )
+                if matched_download_target is not None:
+                    adopter = _adopt_downloaded_target_for_test_mode if immediate_test_mode else _adopt_downloaded_target
+                    adopted = adopter(
                         workspace=workspace,
                         media_kind=media_kind,
-                        downloaded_target=sorted(new_downloads, key=lambda path: path.stat().st_mtime, reverse=True)[0],
+                        downloaded_target=matched_download_target,
                     )
                     if adopted is not None:
                         target = adopted
                         break
-            else:
-                after_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
-                new_downloads = [path for name, path in after_downloads.items() if name not in before_downloads]
-                if new_downloads and _collect_result_indicates_success(collect_result):
-                    adopted = _adopt_downloaded_target(
-                        workspace=workspace,
-                        media_kind=media_kind,
-                        downloaded_target=sorted(new_downloads, key=lambda path: path.stat().st_mtime, reverse=True)[0],
-                    )
-                    if adopted is not None:
-                        target = adopted
-                        break
+                else:
+                    mismatched_material_detected = True
 
             reason = _extract_attempt_reason(collect_result) or "未生成可发布素材。"
+            if mismatched_material_detected:
+                reason = "本轮采集产出了与当前候选不匹配的素材，已跳过以避免串号。"
             print(
                 f"[ImmediateCollect] collect attempt failed item_id={item_id} "
                 f"network_mode={attempt_network_mode} reason={reason}"
@@ -8301,6 +8405,23 @@ def _publish_immediate_candidate_platform(
             updates={"status": "failed", "error": f"素材文件不存在：{processed_name}"},
         )
         return 2
+    workspace_ctx = core.init_workspace(str(workspace))
+    if not _immediate_target_matches_source(
+        core=core,
+        workspace_ctx=workspace_ctx,
+        target=target,
+        source_url=str(item.get("source_url") or "").strip(),
+    ):
+        _merge_platform_result(
+            workspace=workspace,
+            item_id=item_id,
+            platform=platform,
+            updates={
+                "status": "failed",
+                "error": f"素材与当前候选不匹配：{processed_name}；已阻止发布以避免串号",
+            },
+        )
+        return 2
 
     def _publish_once_under_lock() -> int:
         args = _build_immediate_publish_args(
@@ -8373,7 +8494,7 @@ def _publish_immediate_candidate_platform(
             if duplicate_marker in error_text.lower()
             else ("login_required" if _failure_requires_login(failure, error_text) else "failed")
         )
-        if result_status == "failed":
+        if result_status == "failed" and _should_probe_platform_login_after_publish_failure(platform, error_text):
             result_status, error_text = _probe_platform_login_after_publish_failure(
                 workspace=workspace,
                 item_id=item_id,
@@ -8429,7 +8550,7 @@ def _publish_immediate_candidate_platform(
             if duplicate_marker in error_text.lower()
             else ("login_required" if _failure_requires_login(failure, error_text) else "failed")
         )
-        if result_status == "failed":
+        if result_status == "failed" and _should_probe_platform_login_after_publish_failure(platform, error_text):
             result_status, error_text = _probe_platform_login_after_publish_failure(
                 workspace=workspace,
                 item_id=item_id,
