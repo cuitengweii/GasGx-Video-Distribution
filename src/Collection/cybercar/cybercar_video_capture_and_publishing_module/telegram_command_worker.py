@@ -4799,6 +4799,7 @@ def _refresh_platform_login_qr_message(
     message_id: int,
     timeout_seconds: int,
     log_file: Path,
+    telegram_bot_identifier: str = "",
     wait_token: str = "",
 ) -> Dict[str, Any]:
     try:

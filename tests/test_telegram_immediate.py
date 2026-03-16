@@ -174,6 +174,22 @@ def _image_item(item_id: str = "item-image", **overrides: object) -> dict[str, o
     return payload
 
 
+def test_refresh_platform_login_qr_message_accepts_telegram_bot_identifier(tmp_path: Path) -> None:
+    result = worker_impl._refresh_platform_login_qr_message(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        message_id=0,
+        timeout_seconds=30,
+        log_file=tmp_path / "telegram_worker.log",
+        telegram_bot_identifier="cybercar-main-bot",
+    )
+
+    assert result["ok"] is False
+    assert result["needs_login"] is True
+    assert result["error"] == "invalid qr message id"
+
+
 def _install_transport_mocks(monkeypatch) -> SimpleNamespace:
     record = SimpleNamespace(
         answers=[],
