@@ -95,12 +95,15 @@ DEFAULT_POLL_NETWORK_FAILURE_RESTART_THRESHOLD = 6
 DEFAULT_TELEGRAM_POST_RETRY_COUNT = 3
 DEFAULT_HOME_FORCE_NEW_DEBOUNCE_SECONDS = 6
 DEFAULT_HOME_SHORTCUT_DEBOUNCE_SECONDS = 3600
-DEFAULT_HOME_SHORTCUT_KEYBOARD_VERSION = 4
-DEFAULT_HOME_SURFACE_VERSION = 2
+DEFAULT_HOME_SHORTCUT_KEYBOARD_VERSION = 5
+DEFAULT_HOME_SURFACE_VERSION = 3
 DEFAULT_ACTION_QUEUE_STALE_SECONDS = 1800
 DEFAULT_ACTION_QUEUE_TERMINAL_RETENTION_SECONDS = 86400
 DEFAULT_ACTION_QUEUE_MAX_TASKS = 50
 DEFAULT_HOME_VISIBLE_TASK_LIMIT = 5
+DEFAULT_PROCESS_STATUS_TASK_LIMIT = 4
+DEFAULT_PROCESS_STATUS_PREFILTER_LIMIT = 3
+DEFAULT_PROCESS_STATUS_LOG_TAIL_LINES = 8
 DEFAULT_IMMEDIATE_REVIEW_WAIT_SECONDS = 18
 DEFAULT_IMMEDIATE_CANDIDATE_LIMIT = 10
 DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS = 12
@@ -5014,11 +5017,11 @@ def _resolve_platform_login_runtime_context(core: Any, platform_name: str) -> Di
                 str(getattr(core, "DEFAULT_CHROME_USER_DATA_DIR", "")),
             )
         ).strip()
-    open_url = str(
-        (getattr(core, "PLATFORM_LOGIN_ENTRY_URLS", {}) or {}).get(platform)
-        or (getattr(core, "PLATFORM_CREATE_POST_URLS", {}) or {}).get(platform)
-        or ""
-    )
+    create_url = str((getattr(core, "PLATFORM_CREATE_POST_URLS", {}) or {}).get(platform) or "").strip()
+    login_entry_url = str((getattr(core, "PLATFORM_LOGIN_ENTRY_URLS", {}) or {}).get(platform) or "").strip()
+    # For publish-capable platforms, probe the business page first so a stale
+    # login helper URL does not force the active tab back to login.html.
+    open_url = create_url or login_entry_url
     return {
         "platform": platform,
         "debug_port": debug_port,
@@ -5476,13 +5479,38 @@ def _probe_platform_login_after_publish_failure(
     platform_token = str(platform or "").strip().lower()
     if platform_token != "wechat":
         return "failed", str(error_text or "").strip()
+    try:
+        from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as core
+    except Exception:
+        import main as core  # type: ignore
+
+    runtime_ctx = _resolve_platform_login_runtime_context(core, platform_token)
+    try:
+        login_status = core.check_platform_login_status(
+            platform_name=runtime_ctx["platform"],
+            open_url=runtime_ctx["open_url"],
+            debug_port=runtime_ctx["debug_port"],
+            chrome_user_data_dir=runtime_ctx["chrome_user_data_dir"],
+            auto_open_chrome=True,
+            refresh_page=True,
+        )
+    except Exception as exc:
+        _append_log(log_file, f"[Worker] immediate publish login recheck status probe failed platform={platform_token} item={item_id} error={exc}")
+        return "failed", str(error_text or "").strip()
+    if not isinstance(login_status, dict) or not bool(login_status.get("needs_login")):
+        _append_log(
+            log_file,
+            f"[Worker] immediate publish login recheck kept original failure platform={platform_token} item={item_id} "
+            f"needs_login={bool((login_status or {}).get('needs_login'))}",
+        )
+        return "failed", str(error_text or "").strip()
     result = _request_platform_login_qr(
         platform_name=platform_token,
         bot_token=telegram_bot_token,
         chat_id=telegram_chat_id,
         timeout_seconds=max(10, int(timeout_seconds or 20)),
         log_file=log_file,
-        refresh_page=True,
+        refresh_page=False,
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
         return "failed", str(error_text or "").strip()

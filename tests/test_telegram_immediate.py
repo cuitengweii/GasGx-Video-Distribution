@@ -1591,6 +1591,105 @@ def test_run_immediate_publish_item_job_requests_wechat_qr_when_login_required(t
     assert {entry["platform"] for entry in spawned_platforms} == {"douyin", "xiaohongshu", "kuaishou", "bilibili"}
 
 
+def test_resolve_platform_login_runtime_context_prefers_wechat_publish_url() -> None:
+    fake_core = SimpleNamespace(
+        DEFAULT_WECHAT_DEBUG_PORT=9334,
+        DEFAULT_WECHAT_CHROME_USER_DATA_DIR=r"D:\profiles\wechat",
+        DEFAULT_CHROME_USER_DATA_DIR=r"D:\profiles\default",
+        PLATFORM_CREATE_POST_URLS={"wechat": "https://channels.weixin.qq.com/platform/post/create"},
+        PLATFORM_LOGIN_ENTRY_URLS={"wechat": "https://channels.weixin.qq.com/login.html"},
+    )
+
+    runtime_ctx = worker_impl._resolve_platform_login_runtime_context(fake_core, "wechat")
+
+    assert runtime_ctx["open_url"] == "https://channels.weixin.qq.com/platform/post/create"
+
+
+def test_probe_platform_login_after_publish_failure_keeps_original_error_when_session_ready(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda core, platform_name: {
+            "platform": "wechat",
+            "debug_port": 9334,
+            "chrome_user_data_dir": r"D:\profiles\wechat",
+            "open_url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: {"ok": True, "needs_login": False, "url": kwargs["open_url"]},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("qr request should not run when session is ready")),
+    )
+
+    status, message = worker_impl._probe_platform_login_after_publish_failure(
+        workspace=workspace,
+        item_id="item-video",
+        platform="wechat",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+        error_text="publish blocked by login page",
+    )
+
+    assert status == "failed"
+    assert message == "publish blocked by login page"
+
+
+def test_probe_platform_login_after_publish_failure_requests_qr_only_after_confirmed_login(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    qr_requests: list[dict[str, object]] = []
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda core, platform_name: {
+            "platform": "wechat",
+            "debug_port": 9334,
+            "chrome_user_data_dir": r"D:\profiles\wechat",
+            "open_url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: {"ok": True, "needs_login": True, "reason": "login_url", "url": kwargs["open_url"]},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs)) or {"ok": True, "needs_login": True, "sent": True},
+    )
+
+    status, message = worker_impl._probe_platform_login_after_publish_failure(
+        workspace=workspace,
+        item_id="item-video",
+        platform="wechat",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+        error_text="publish blocked by login page",
+    )
+
+    assert status == "login_required"
+    assert "视频号登录二维码已发送到 Telegram" in message
+    assert len(qr_requests) == 1
+    assert qr_requests[0]["refresh_page"] is False
+
+
 def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     video_path = workspace / "2_Processed" / "clip.mp4"
@@ -1600,6 +1699,7 @@ def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_p
     fake_runner = FakeRunner(fake_core)
     feedbacks: list[dict[str, object]] = []
     qr_requests: list[dict[str, object]] = []
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
 
     fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
         SimpleNamespace(success=False, error="publish blocked by login page")
@@ -1608,6 +1708,12 @@ def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_p
     monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
     monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
     monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: {"ok": True, "needs_login": True, "reason": "login_url", "url": kwargs["open_url"]},
+        raising=False,
+    )
     monkeypatch.setattr(
         worker_impl,
         "_request_platform_login_qr",
@@ -1651,6 +1757,7 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_requ
     fake_runner = FakeRunner(fake_core)
     feedbacks: list[dict[str, object]] = []
     qr_requests: list[dict[str, object]] = []
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
 
     fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
         SimpleNamespace(success=False, error="publish blocked by login page")
@@ -1659,6 +1766,12 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_requ
     monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
     monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
     monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: {"ok": True, "needs_login": True, "reason": "login_url", "url": kwargs["open_url"]},
+        raising=False,
+    )
     monkeypatch.setattr(
         worker_impl,
         "_request_platform_login_qr",
@@ -1707,6 +1820,7 @@ def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_
     feedbacks: list[dict[str, object]] = []
     qr_requests: list[dict[str, object]] = []
     original_error = "未能确认合集选择成功: 赛博皮卡精选; 当前字段值=-; 读取来源=empty"
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
 
     fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
         SimpleNamespace(success=False, error=original_error)
@@ -1715,6 +1829,12 @@ def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_
     monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
     monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
     monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: {"ok": True, "needs_login": True, "reason": "login_url", "url": kwargs["open_url"]},
+        raising=False,
+    )
     monkeypatch.setattr(
         worker_impl,
         "_request_platform_login_qr",
