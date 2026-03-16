@@ -10,3 +10,5 @@ def test_paths_point_inside_repo() -> None:
     paths = get_paths()
     assert str(paths.runtime_root).endswith("runtime")
     assert str(paths.default_profile_dir).endswith("profiles\\default") or str(paths.default_profile_dir).endswith("profiles/default")
+    assert str(paths.x_profile_dir).endswith("profiles\\x_collect") or str(paths.x_profile_dir).endswith("profiles/x_collect")
+    assert str(paths.x_cookie_file_path).endswith("config\\x_cookies.local.json") or str(paths.x_cookie_file_path).endswith("config/x_cookies.local.json")

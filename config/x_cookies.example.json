@@ -1,0 +1,24 @@
+{
+  "enabled": true,
+  "active_account": "primary",
+  "replace_profile_cookies": false,
+  "domain": ".x.com",
+  "path": "/",
+  "secure": true,
+  "accounts": {
+    "primary": {
+      "cookies": {
+        "auth_token": "",
+        "ct0": "",
+        "twid": ""
+      }
+    },
+    "backup": {
+      "cookies": {
+        "auth_token": "",
+        "ct0": "",
+        "twid": ""
+      }
+    }
+  }
+}

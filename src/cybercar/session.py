@@ -8,26 +8,37 @@ from . import engine
 from .settings import apply_runtime_environment, load_app_config
 
 
-def _chrome_settings() -> tuple[int, int]:
+def _chrome_settings() -> tuple[int, int, int]:
     app_config = load_app_config()
     chrome_cfg = app_config.get("chrome") if isinstance(app_config.get("chrome"), dict) else {}
-    return int(chrome_cfg.get("default_debug_port") or 9333), int(chrome_cfg.get("wechat_debug_port") or 9334)
+    return (
+        int(chrome_cfg.get("default_debug_port") or 9333),
+        int(chrome_cfg.get("wechat_debug_port") or 9334),
+        int(chrome_cfg.get("x_debug_port") or 9335),
+    )
 
 
 def _profile_dir(platform: str) -> Path:
     paths = apply_runtime_environment()
-    return paths.wechat_profile_dir if str(platform or "").strip().lower() == "wechat" else paths.default_profile_dir
+    token = str(platform or "").strip().lower()
+    if token == "wechat":
+        return paths.wechat_profile_dir
+    if token in {"x", "collect"}:
+        return paths.x_profile_dir
+    return paths.default_profile_dir
 
 
 def _open_url(platform: str) -> str:
     token = str(platform or "").strip().lower()
+    if token in {"x", "collect"}:
+        return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.X_LOGIN_URL)
     return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.CREATE_POST_URL)
 
 
 def login_status(platform: str) -> dict[str, Any]:
-    default_port, wechat_port = _chrome_settings()
+    default_port, wechat_port, x_port = _chrome_settings()
     token = str(platform or "").strip().lower()
-    debug_port = wechat_port if token == "wechat" else default_port
+    debug_port = wechat_port if token == "wechat" else (x_port if token in {"x", "collect"} else default_port)
     return engine.probe_platform_session_via_debug_port(
         platform_name=token,
         open_url=_open_url(token),
@@ -37,9 +48,9 @@ def login_status(platform: str) -> dict[str, Any]:
 
 
 def open_login(platform: str) -> dict[str, Any]:
-    default_port, wechat_port = _chrome_settings()
+    default_port, wechat_port, x_port = _chrome_settings()
     token = str(platform or "").strip().lower()
-    debug_port = wechat_port if token == "wechat" else default_port
+    debug_port = wechat_port if token == "wechat" else (x_port if token in {"x", "collect"} else default_port)
     open_url = _open_url(token)
     engine._ensure_chrome_debug_port(
         debug_port=debug_port,
@@ -61,7 +72,7 @@ def capture_login_qr(platform: str = "wechat") -> dict[str, Any]:
     if token != "wechat":
         raise RuntimeError("login qr is currently supported for wechat only")
     paths = apply_runtime_environment()
-    _, wechat_port = _chrome_settings()
+    _, wechat_port, _ = _chrome_settings()
     page = engine._connect_chrome(
         debug_port=wechat_port,
         auto_open_chrome=True,

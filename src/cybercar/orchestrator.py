@@ -122,10 +122,16 @@ def run_mode(
         str(paths.default_profile_dir),
         "--wechat-chrome-user-data-dir",
         str(paths.wechat_profile_dir),
+        "--x-chrome-user-data-dir",
+        str(paths.x_profile_dir),
+        "--x-cookie-file",
+        str(paths.x_cookie_file_path),
         "--debug-port",
         str(chrome_cfg.get("default_debug_port") or 9333),
         "--wechat-debug-port",
         str(chrome_cfg.get("wechat_debug_port") or 9334),
+        "--x-debug-port",
+        str(chrome_cfg.get("x_debug_port") or 9335),
     ]
     effective_keyword = str(keyword or "").strip() or profile.keyword
     if effective_keyword:

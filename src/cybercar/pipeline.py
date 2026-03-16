@@ -2394,6 +2394,11 @@ def _run_collect_once(
     configured_collection_name = str(runtime_config.get("collection_name", "") or "").strip()
     resolved_collection_name = (args.collection_name or "").strip() or configured_collection_name or core.DEFAULT_COLLECTION_NAME
     chrome_user_data_dir = (args.chrome_user_data_dir or "").strip() or core.DEFAULT_CHROME_USER_DATA_DIR
+    x_chrome_user_data_dir = (
+        str(getattr(args, "x_chrome_user_data_dir", "") or "").strip() or getattr(core, "DEFAULT_X_CHROME_USER_DATA_DIR", chrome_user_data_dir)
+    )
+    x_cookie_file = str(getattr(args, "x_cookie_file", "") or "").strip() or getattr(core, "DEFAULT_X_COOKIE_FILE", "")
+    x_debug_port = max(1, int(getattr(args, "x_debug_port", getattr(core, "DEFAULT_X_DEBUG_PORT", args.debug_port)) or args.debug_port))
 
     core._log(
         "[Collector] Config "
@@ -2405,6 +2410,9 @@ def _run_collect_once(
         f"require_text_keyword_match={require_text_keyword_match}, "
         f"collect_media_kind={collect_media_kind}, "
         f"xiaohongshu_allow_image={xiaohongshu_allow_image}, "
+        f"x_debug_port={x_debug_port}, "
+        f"x_profile_dir={x_chrome_user_data_dir}, "
+        f"x_cookie_file={'set' if x_cookie_file else 'none'}, "
         f"x_download_socket_timeout={x_download_policy.socket_timeout_seconds}, "
         f"x_download_retries={x_download_policy.download_retries}, "
         f"x_download_fail_fast={x_download_policy.fail_fast}, "
@@ -2445,10 +2453,11 @@ def _run_collect_once(
             x_discovery_url_limit=max(1, int(image_discovery_url_limit)),
             x_discovery_scroll_rounds=max(2, int(image_discovery_scroll_rounds)),
             x_discovery_scroll_wait=max(0.3, float(args.x_discovery_scroll_wait)),
-            debug_port=args.debug_port,
+            debug_port=x_debug_port,
             auto_open_chrome=not args.no_auto_open_chrome,
             chrome_path=chrome_path,
-            chrome_user_data_dir=chrome_user_data_dir,
+            chrome_user_data_dir=x_chrome_user_data_dir,
+            x_cookie_file=x_cookie_file,
             require_x_live_discovery=bool(getattr(args, "require_x_live_discovery", False)),
             require_text_keyword_match=require_text_keyword_match,
             x_download_socket_timeout=x_download_policy.socket_timeout_seconds,
@@ -2479,10 +2488,11 @@ def _run_collect_once(
             x_discovery_url_limit=max(1, int(args.x_discovery_url_limit)),
             x_discovery_scroll_rounds=max(2, int(args.x_discovery_scroll_rounds)),
             x_discovery_scroll_wait=max(0.3, float(args.x_discovery_scroll_wait)),
-            debug_port=args.debug_port,
+            debug_port=x_debug_port,
             auto_open_chrome=not args.no_auto_open_chrome,
             chrome_path=chrome_path,
-            chrome_user_data_dir=chrome_user_data_dir,
+            chrome_user_data_dir=x_chrome_user_data_dir,
+            x_cookie_file=x_cookie_file,
             require_x_live_discovery=bool(getattr(args, "require_x_live_discovery", False)),
             require_text_keyword_match=require_text_keyword_match,
             x_download_socket_timeout=x_download_policy.socket_timeout_seconds,
@@ -2526,10 +2536,11 @@ def _run_collect_once(
                     x_discovery_url_limit=max(1, int(image_discovery_url_limit)),
                     x_discovery_scroll_rounds=max(2, int(image_discovery_scroll_rounds)),
                     x_discovery_scroll_wait=max(0.3, float(args.x_discovery_scroll_wait)),
-                    debug_port=args.debug_port,
+                    debug_port=x_debug_port,
                     auto_open_chrome=not args.no_auto_open_chrome,
                     chrome_path=chrome_path,
-                    chrome_user_data_dir=chrome_user_data_dir,
+                    chrome_user_data_dir=x_chrome_user_data_dir,
+                    x_cookie_file=x_cookie_file,
                     require_x_live_discovery=bool(getattr(args, "require_x_live_discovery", False)),
                     require_text_keyword_match=require_text_keyword_match,
                     x_download_socket_timeout=x_download_policy.socket_timeout_seconds,
@@ -3569,8 +3580,13 @@ def _run_one_cycle(args: argparse.Namespace, email_settings: EmailSettings) -> i
                 platform="collect",
                 stage="collect",
                 error_text=str(exc),
-                debug_port=int(args.debug_port),
-                chrome_user_data_dir=str(args.chrome_user_data_dir or ""),
+                debug_port=max(
+                    1,
+                    int(getattr(args, "x_debug_port", getattr(core, "DEFAULT_X_DEBUG_PORT", args.debug_port)) or args.debug_port),
+                ),
+                chrome_user_data_dir=str(
+                    getattr(args, "x_chrome_user_data_dir", "") or getattr(core, "DEFAULT_X_CHROME_USER_DATA_DIR", "")
+                ),
             )
             raise
         if not bool(getattr(args, "no_telegram_collect_notify", False)):
@@ -3696,6 +3712,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug-port", type=int, default=core.DEFAULT_PORT)
     parser.add_argument("--chrome-path", default="")
     parser.add_argument("--chrome-user-data-dir", default=core.DEFAULT_CHROME_USER_DATA_DIR)
+    parser.add_argument(
+        "--x-debug-port",
+        type=int,
+        default=_env_int("CYBERCAR_X_CHROME_DEBUG_PORT", getattr(core, "DEFAULT_X_DEBUG_PORT", core.DEFAULT_PORT + 2)),
+        help="X collect debug port; keep it independent from publish Chrome sessions.",
+    )
+    parser.add_argument(
+        "--x-chrome-user-data-dir",
+        default=os.getenv("CYBERCAR_X_CHROME_USER_DATA_DIR", getattr(core, "DEFAULT_X_CHROME_USER_DATA_DIR", core.DEFAULT_CHROME_USER_DATA_DIR)),
+        help="X collect Chrome user data dir; isolate X account cookies from publish platforms.",
+    )
+    parser.add_argument(
+        "--x-cookie-file",
+        default=_env_first("CYBERCAR_X_COOKIE_FILE", default=getattr(core, "DEFAULT_X_COOKIE_FILE", "")),
+        help="Optional JSON file with manual X cookies; values override the X collect profile cookies.",
+    )
     parser.add_argument(
         "--wechat-debug-port",
         type=int,

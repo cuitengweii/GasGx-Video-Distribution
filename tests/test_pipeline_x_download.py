@@ -138,6 +138,36 @@ def test_run_collect_once_uses_runtime_x_download_defaults(tmp_path: Path, monke
     assert captured[0]["x_download_batch_retry_sleep"] == 1.0
 
 
+def test_run_collect_once_uses_dedicated_x_session_settings(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {"x_download": {}}
+    captured = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--tweet-url",
+            "https://x.test/post/session",
+            "--x-debug-port",
+            "9555",
+            "--x-chrome-user-data-dir",
+            str(tmp_path / "profiles" / "x_alt"),
+            "--x-cookie-file",
+            str(tmp_path / "config" / "x_cookies.alt.json"),
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    assert captured
+    assert all(item["debug_port"] == 9555 for item in captured)
+    assert all(item["chrome_user_data_dir"] == str(tmp_path / "profiles" / "x_alt") for item in captured)
+    assert all(item["x_cookie_file"] == str(tmp_path / "config" / "x_cookies.alt.json") for item in captured)
+
+
 def test_download_from_x_uses_direct_status_fallback_for_partial_failures(tmp_path: Path, monkeypatch) -> None:
     workspace = _workspace(tmp_path)
     logs: list[str] = []
@@ -147,7 +177,11 @@ def test_download_from_x_uses_direct_status_fallback_for_partial_failures(tmp_pa
     monkeypatch.setattr(engine, "_log", lambda message: logs.append(str(message)))
     monkeypatch.setattr(engine, "_ensure_binary", lambda name: None)
     monkeypatch.setattr(engine, "_resolve_network_proxy", lambda proxy, use_system_proxy=False: (proxy, use_system_proxy))
-    monkeypatch.setattr(engine, "_export_x_cookies_for_ytdlp", lambda chrome_user_data_dir: (None, "skipped-empty"))
+    monkeypatch.setattr(
+        engine,
+        "_export_x_cookies_for_ytdlp",
+        lambda chrome_user_data_dir, x_cookie_file="": (None, "skipped-empty"),
+    )
     monkeypatch.setattr(engine, "_build_subprocess_network_env", lambda proxy=None, use_system_proxy=False: {})
     monkeypatch.setattr(engine, "_filter_already_processed_x_urls", lambda workspace, urls: (list(urls), []))
 

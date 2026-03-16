@@ -3,11 +3,16 @@
     "runtime_root": "runtime",
     "profiles_root": "profiles",
     "default_profile_dir": "default",
-    "wechat_profile_dir": "wechat"
+    "wechat_profile_dir": "wechat",
+    "x_profile_dir": "x_collect"
   },
   "chrome": {
     "default_debug_port": 9333,
-    "wechat_debug_port": 9334
+    "wechat_debug_port": 9334,
+    "x_debug_port": 9335
+  },
+  "x": {
+    "cookie_file": "config/x_cookies.local.json"
   },
   "publish": {
     "default_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili"

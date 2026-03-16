@@ -183,6 +183,7 @@ KUAISHOU_CREATE_POST_URL = "https://cp.kuaishou.com/article/publish/video"
 KUAISHOU_CREATE_IMAGE_POST_URL = "https://cp.kuaishou.com/article/publish/video?tabType=2"
 BILIBILI_CREATE_POST_URL = "https://member.bilibili.com/platform/upload/video/frame"
 X_LOGIN_URL = "https://x.com/i/flow/login"
+X_COLLECT_LIVE_URL = "https://x.com/search?q=Cybertruck%20filter%3Avideos&src=typed_query&f=live"
 PLATFORM_CREATE_POST_URLS = {
     "wechat": CREATE_POST_URL,
     "douyin": DOUYIN_CREATE_POST_URL,
@@ -191,6 +192,8 @@ PLATFORM_CREATE_POST_URLS = {
     "bilibili": BILIBILI_CREATE_POST_URL,
 }
 PLATFORM_LOGIN_ENTRY_URLS = {
+    "collect": X_LOGIN_URL,
+    "x": X_LOGIN_URL,
     "wechat": "https://channels.weixin.qq.com/login.html",
     "douyin": DOUYIN_CREATE_POST_URL,
     "xiaohongshu": "https://creator.xiaohongshu.com/login",
@@ -198,6 +201,8 @@ PLATFORM_LOGIN_ENTRY_URLS = {
     "bilibili": "https://passport.bilibili.com/login",
 }
 PLATFORM_LOGIN_DISPLAY_NAMES = {
+    "collect": "X采集",
+    "x": "X",
     "wechat": "视频号",
     "douyin": "抖音",
     "xiaohongshu": "小红书",
@@ -205,6 +210,28 @@ PLATFORM_LOGIN_DISPLAY_NAMES = {
     "bilibili": "B站",
 }
 PLATFORM_LOGIN_PAGE_HINTS = {
+    "collect": {
+        "url_tokens": ("x.com/i/flow/login", "twitter.com/i/flow/login"),
+        "text_markers": (
+            "Sign in to X",
+            "Log in to X",
+            "登录 X",
+            "登录到 X",
+            "手机、邮件地址或用户名",
+            "Phone, email, or username",
+        ),
+    },
+    "x": {
+        "url_tokens": ("x.com/i/flow/login", "twitter.com/i/flow/login"),
+        "text_markers": (
+            "Sign in to X",
+            "Log in to X",
+            "登录 X",
+            "登录到 X",
+            "手机、邮件地址或用户名",
+            "Phone, email, or username",
+        ),
+    },
     "wechat": {
         "url_tokens": ("channels.weixin.qq.com/login", "passport", "scan"),
         "text_markers": (
@@ -334,6 +361,21 @@ def _default_chrome_user_data_dir() -> str:
 DEFAULT_CHROME_USER_DATA_DIR = _default_chrome_user_data_dir()
 
 
+def _default_x_chrome_user_data_dir() -> str:
+    from_env = str(os.getenv("CYBERCAR_X_CHROME_USER_DATA_DIR", "") or "").strip()
+    if from_env:
+        return str(Path(from_env).expanduser())
+    if callable(get_paths):
+        try:
+            return str(get_paths().x_profile_dir)
+        except Exception:
+            pass
+    return DEFAULT_CHROME_USER_DATA_DIR + "_XCollect"
+
+
+DEFAULT_X_CHROME_USER_DATA_DIR = _default_x_chrome_user_data_dir()
+
+
 def _default_wechat_chrome_user_data_dir() -> str:
     from_env = str(os.getenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", "") or "").strip()
     if from_env:
@@ -347,6 +389,24 @@ def _default_wechat_chrome_user_data_dir() -> str:
 
 
 DEFAULT_WECHAT_CHROME_USER_DATA_DIR = _default_wechat_chrome_user_data_dir()
+
+
+def _default_x_debug_port() -> int:
+    raw = str(os.getenv("CYBERCAR_X_CHROME_DEBUG_PORT", "") or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except Exception:
+            value = 0
+        if 1 <= value <= 65535:
+            return value
+    fallback = DEFAULT_PORT + 2
+    if 1 <= fallback <= 65535:
+        return fallback
+    return 9335
+
+
+DEFAULT_X_DEBUG_PORT = _default_x_debug_port()
 
 
 def _default_wechat_debug_port() -> int:
@@ -365,6 +425,39 @@ def _default_wechat_debug_port() -> int:
 
 
 DEFAULT_WECHAT_DEBUG_PORT = _default_wechat_debug_port()
+
+
+def _default_x_cookie_file() -> str:
+    from_env = str(os.getenv("CYBERCAR_X_COOKIE_FILE", "") or "").strip()
+    if from_env:
+        return str(Path(from_env).expanduser())
+    if callable(get_paths):
+        try:
+            return str(get_paths().x_cookie_file_path)
+        except Exception:
+            pass
+    return str(Path(__file__).resolve().parents[2] / "config" / "x_cookies.local.json")
+
+
+DEFAULT_X_COOKIE_FILE = _default_x_cookie_file()
+
+
+def _default_debug_port_for_platform(platform_name: str) -> int:
+    platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        return DEFAULT_WECHAT_DEBUG_PORT
+    if platform in {"x", "collect"}:
+        return DEFAULT_X_DEBUG_PORT
+    return DEFAULT_PORT
+
+
+def _default_profile_dir_for_platform(platform_name: str) -> str:
+    platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        return DEFAULT_WECHAT_CHROME_USER_DATA_DIR
+    if platform in {"x", "collect"}:
+        return DEFAULT_X_CHROME_USER_DATA_DIR
+    return DEFAULT_CHROME_USER_DATA_DIR
 
 
 def _default_config_path() -> str:
@@ -1389,8 +1482,8 @@ def _prepare_platform_login_qr_notice(
     wait_token: str = "",
 ) -> dict[str, Any]:
     platform = str(platform_name or "").strip().lower() or "wechat"
-    default_profile_dir = DEFAULT_WECHAT_CHROME_USER_DATA_DIR if platform == "wechat" else DEFAULT_CHROME_USER_DATA_DIR
-    default_debug_port = DEFAULT_WECHAT_DEBUG_PORT if platform == "wechat" else DEFAULT_PORT
+    default_profile_dir = _default_profile_dir_for_platform(platform)
+    default_debug_port = _default_debug_port_for_platform(platform)
     profile_dir = str(Path(chrome_user_data_dir or default_profile_dir).expanduser())
     runtime_debug_port = int(debug_port or default_debug_port)
     open_target_url = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip() or CREATE_POST_URL
@@ -3242,8 +3335,8 @@ def check_platform_login_status(
     refresh_page: bool = False,
 ) -> dict[str, Any]:
     platform = str(platform_name or "").strip().lower() or "wechat"
-    default_profile_dir = DEFAULT_WECHAT_CHROME_USER_DATA_DIR if platform == "wechat" else DEFAULT_CHROME_USER_DATA_DIR
-    default_debug_port = DEFAULT_WECHAT_DEBUG_PORT if platform == "wechat" else DEFAULT_PORT
+    default_profile_dir = _default_profile_dir_for_platform(platform)
+    default_debug_port = _default_debug_port_for_platform(platform)
     profile_dir = str(Path(chrome_user_data_dir or default_profile_dir).expanduser())
     runtime_debug_port = int(debug_port or default_debug_port)
     open_target_url = str(open_url or PLATFORM_CREATE_POST_URLS.get(platform) or "").strip() or CREATE_POST_URL
@@ -7478,55 +7571,22 @@ def _build_x_cookie_context(
     *,
     use_system_proxy: bool = False,
 ) -> Optional[tuple[requests.Session, str]]:
+    return _build_x_cookie_context_with_overrides(
+        chrome_user_data_dir,
+        proxy=proxy,
+        use_system_proxy=use_system_proxy,
+        x_cookie_file="",
+    )
+
+
+def _resolve_x_cookie_file_path(x_cookie_file: str = "") -> Path:
+    raw = str(x_cookie_file or DEFAULT_X_COOKIE_FILE).strip()
+    return Path(raw).expanduser()
+
+
+def _load_x_profile_cookie_jar(chrome_user_data_dir: str) -> tuple[Optional[requests.cookies.RequestsCookieJar], str]:
     if browser_cookie3 is None:
-        _log("[Downloader] X API seed discovery skipped: browser_cookie3 is not available.")
-        return None
-
-    profile_dir = Path(chrome_user_data_dir).expanduser()
-    cookie_file = profile_dir / "Default" / "Network" / "Cookies"
-    key_file = profile_dir / "Local State"
-    if not cookie_file.exists() or not key_file.exists():
-        _log(
-            "[Downloader] X API seed discovery skipped: X Chrome profile cookie files not found "
-            f"(cookie={cookie_file}, key={key_file})."
-        )
-        return None
-
-    try:
-        cookie_jar = browser_cookie3.chrome(
-            cookie_file=str(cookie_file),
-            key_file=str(key_file),
-            domain_name="x.com",
-        )
-    except Exception as exc:
-        _log(f"[Downloader] X API seed discovery skipped: failed to decrypt X cookies ({exc}).")
-        return None
-
-    ct0 = ""
-    auth_token = ""
-    for cookie in cookie_jar:
-        if cookie.name == "ct0" and cookie.value:
-            ct0 = cookie.value
-        elif cookie.name == "auth_token" and cookie.value:
-            auth_token = cookie.value
-    if not ct0 or not auth_token:
-        _log(
-            "[Downloader] X API seed discovery skipped: missing auth_token/ct0 cookie in Chrome profile. "
-            "Please login X once in that profile."
-        )
-        return None
-
-    session = requests.Session()
-    _configure_requests_session_proxy(session, proxy=proxy, use_system_proxy=use_system_proxy)
-    session.cookies.update(cookie_jar)
-    return session, ct0
-
-
-def _export_x_cookies_for_ytdlp(
-    chrome_user_data_dir: str,
-) -> tuple[Optional[Path], str]:
-    if browser_cookie3 is None:
-        _log("[Downloader] yt-dlp cookie export skipped: browser_cookie3 is not available.")
+        _log("[Downloader] X cookie profile load skipped: browser_cookie3 is not available.")
         return None, "skipped-no-lib"
 
     profile_dir = Path(chrome_user_data_dir).expanduser()
@@ -7534,7 +7594,7 @@ def _export_x_cookies_for_ytdlp(
     key_file = profile_dir / "Local State"
     if not cookie_file.exists() or not key_file.exists():
         _log(
-            "[Downloader] yt-dlp cookie export skipped: Chrome cookie files not found "
+            "[Downloader] X cookie profile load skipped: X Chrome profile cookie files not found "
             f"(cookie={cookie_file}, key={key_file})."
         )
         return None, "skipped-no-files"
@@ -7546,8 +7606,206 @@ def _export_x_cookies_for_ytdlp(
             domain_name="x.com",
         )
     except Exception as exc:
-        _log(f"[Downloader] yt-dlp cookie export skipped: failed to decrypt X cookies ({exc}).")
+        _log(f"[Downloader] X cookie profile load skipped: failed to decrypt X cookies ({exc}).")
         return None, "skipped-decrypt-failed"
+
+    merged = requests.cookies.RequestsCookieJar()
+    count = 0
+    for cookie in cookie_jar:
+        merged.set_cookie(cookie)
+        count += 1
+    if count <= 0:
+        return None, "skipped-empty"
+    return merged, "loaded-profile"
+
+
+def _select_x_cookie_override_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    active_account = str(payload.get("active_account") or "").strip()
+    accounts = payload.get("accounts") if isinstance(payload.get("accounts"), dict) else {}
+    if not active_account or not accounts:
+        return payload, ""
+    account_payload = accounts.get(active_account)
+    if not isinstance(account_payload, dict):
+        _log(
+            "[Downloader] X cookie override ignored: "
+            f"active_account={active_account!r} not found in accounts."
+        )
+        return payload, ""
+    selected = dict(payload)
+    selected.update(account_payload)
+    return selected, active_account
+
+
+def _load_x_cookie_overrides(
+    x_cookie_file: str = "",
+) -> tuple[Optional[requests.cookies.RequestsCookieJar], bool, str]:
+    cookie_file_path = _resolve_x_cookie_file_path(x_cookie_file)
+    if not cookie_file_path.exists():
+        return None, False, "skipped-missing-file"
+    try:
+        payload = json.loads(cookie_file_path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        _log(f"[Downloader] X cookie override ignored: invalid json in {cookie_file_path} ({exc}).")
+        return None, False, "skipped-invalid-json"
+    if not isinstance(payload, dict):
+        _log(f"[Downloader] X cookie override ignored: payload is not an object ({cookie_file_path}).")
+        return None, False, "skipped-invalid-payload"
+
+    selected, active_account = _select_x_cookie_override_payload(payload)
+    if not _to_bool(selected.get("enabled"), default=True):
+        return None, False, "skipped-disabled"
+
+    replace_profile_cookies = _to_bool(selected.get("replace_profile_cookies"), default=False)
+    default_domain = str(selected.get("domain") or ".x.com").strip() or ".x.com"
+    default_path = str(selected.get("path") or "/").strip() or "/"
+    default_secure = _to_bool(selected.get("secure"), default=True)
+    try:
+        default_expires = int(selected.get("expires") or 0)
+    except Exception:
+        default_expires = 0
+
+    raw_cookies = selected.get("cookies")
+    jar = requests.cookies.RequestsCookieJar()
+    count = 0
+    if isinstance(raw_cookies, dict):
+        for raw_name, raw_value in raw_cookies.items():
+            name = str(raw_name or "").strip()
+            value = str(raw_value or "")
+            if not name or not value.strip():
+                continue
+            jar.set_cookie(
+                requests.cookies.create_cookie(
+                    name=name,
+                    value=value,
+                    domain=default_domain,
+                    path=default_path,
+                    secure=default_secure,
+                    expires=(default_expires if default_expires > 0 else None),
+                )
+            )
+            count += 1
+    elif isinstance(raw_cookies, list):
+        for item in raw_cookies:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            value = str(item.get("value") or "")
+            if not name or not value.strip():
+                continue
+            domain = str(item.get("domain") or default_domain).strip() or default_domain
+            path = str(item.get("path") or default_path).strip() or default_path
+            secure = _to_bool(item.get("secure"), default=default_secure)
+            try:
+                expires = int(item.get("expires") or default_expires or 0)
+            except Exception:
+                expires = default_expires
+            jar.set_cookie(
+                requests.cookies.create_cookie(
+                    name=name,
+                    value=value,
+                    domain=domain,
+                    path=path,
+                    secure=secure,
+                    expires=(expires if expires > 0 else None),
+                )
+            )
+            count += 1
+    if count <= 0:
+        return None, replace_profile_cookies, "skipped-empty"
+
+    account_suffix = f", account={active_account}" if active_account else ""
+    _log(
+        "[Downloader] Loaded X cookie overrides: "
+        f"file={cookie_file_path}, count={count}, replace_profile_cookies={replace_profile_cookies}{account_suffix}"
+    )
+    return jar, replace_profile_cookies, "loaded"
+
+
+def _merge_x_cookie_jars(
+    *cookie_jars: Optional[requests.cookies.RequestsCookieJar],
+) -> requests.cookies.RequestsCookieJar:
+    merged = requests.cookies.RequestsCookieJar()
+    for cookie_jar in cookie_jars:
+        if cookie_jar is None:
+            continue
+        for cookie in cookie_jar:
+            merged.set_cookie(cookie)
+    return merged
+
+
+def _extract_x_auth_tokens(cookie_jar: requests.cookies.RequestsCookieJar) -> tuple[str, str]:
+    ct0 = ""
+    auth_token = ""
+    for cookie in cookie_jar:
+        if cookie.name == "ct0" and cookie.value:
+            ct0 = cookie.value
+        elif cookie.name == "auth_token" and cookie.value:
+            auth_token = cookie.value
+    return auth_token, ct0
+
+
+def _resolve_effective_x_cookie_jar(
+    chrome_user_data_dir: str,
+    *,
+    x_cookie_file: str = "",
+) -> tuple[Optional[requests.cookies.RequestsCookieJar], str]:
+    manual_cookie_jar, replace_profile_cookies, manual_status = _load_x_cookie_overrides(x_cookie_file)
+    if manual_cookie_jar is not None and replace_profile_cookies:
+        return manual_cookie_jar, f"manual={manual_status}"
+
+    profile_cookie_jar, profile_status = _load_x_profile_cookie_jar(chrome_user_data_dir)
+    effective_jar = _merge_x_cookie_jars(profile_cookie_jar, manual_cookie_jar)
+    if len(list(effective_jar)) <= 0:
+        return None, f"profile={profile_status},manual={manual_status}"
+    return effective_jar, f"profile={profile_status},manual={manual_status}"
+
+
+def _build_x_cookie_context_with_overrides(
+    chrome_user_data_dir: str,
+    proxy: Optional[str] = None,
+    *,
+    use_system_proxy: bool = False,
+    x_cookie_file: str = "",
+) -> Optional[tuple[requests.Session, str]]:
+    cookie_jar, cookie_source_status = _resolve_effective_x_cookie_jar(
+        chrome_user_data_dir,
+        x_cookie_file=x_cookie_file,
+    )
+    if cookie_jar is None:
+        _log(
+            "[Downloader] X API seed discovery skipped: no usable X cookies available "
+            f"({cookie_source_status})."
+        )
+        return None
+
+    auth_token, ct0 = _extract_x_auth_tokens(cookie_jar)
+    if not ct0 or not auth_token:
+        _log(
+            "[Downloader] X API seed discovery skipped: missing auth_token/ct0 in the configured X cookie source. "
+            "Please login X in the X collect profile or update the manual X cookie file."
+        )
+        return None
+
+    session = requests.Session()
+    _configure_requests_session_proxy(session, proxy=proxy, use_system_proxy=use_system_proxy)
+    session.cookies.update(cookie_jar)
+    return session, ct0
+
+
+def _export_x_cookies_for_ytdlp(
+    chrome_user_data_dir: str,
+    x_cookie_file: str = "",
+) -> tuple[Optional[Path], str]:
+    cookie_jar, cookie_source_status = _resolve_effective_x_cookie_jar(
+        chrome_user_data_dir,
+        x_cookie_file=x_cookie_file,
+    )
+    if cookie_jar is None:
+        _log(
+            "[Downloader] yt-dlp cookie export skipped: no usable X cookies available "
+            f"({cookie_source_status})."
+        )
+        return None, "skipped-empty"
 
     cookies = [
         cookie
@@ -7736,15 +7994,17 @@ def discover_x_urls_via_seed_accounts(
     include_images: bool = False,
     proxy: Optional[str] = None,
     use_system_proxy: bool = False,
+    x_cookie_file: str = "",
 ) -> list[str]:
     accounts = _resolve_x_discovery_seed_accounts()
     if not accounts:
         return []
 
-    cookie_ctx = _build_x_cookie_context(
+    cookie_ctx = _build_x_cookie_context_with_overrides(
         chrome_user_data_dir,
         proxy=proxy,
         use_system_proxy=use_system_proxy,
+        x_cookie_file=x_cookie_file,
     )
     if not cookie_ctx:
         return []
@@ -8793,7 +9053,8 @@ def download_from_x(
     debug_port: int = DEFAULT_PORT,
     auto_open_chrome: bool = True,
     chrome_path: Optional[str] = None,
-    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    chrome_user_data_dir: str = DEFAULT_X_CHROME_USER_DATA_DIR,
+    x_cookie_file: str = DEFAULT_X_COOKIE_FILE,
     require_x_live_discovery: bool = False,
     require_text_keyword_match: bool = False,
     x_download_socket_timeout: int = X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS,
@@ -8855,7 +9116,13 @@ def download_from_x(
     selected_urls: list[str] = []
     image_status_candidates: list[str] = []
     discovery_source = "provided_tweet_urls" if tweet_urls else ""
-    cookie_export_path, cookie_export_status = _export_x_cookies_for_ytdlp(chrome_user_data_dir)
+    if str(x_cookie_file or "").strip():
+        cookie_export_path, cookie_export_status = _export_x_cookies_for_ytdlp(
+            chrome_user_data_dir,
+            x_cookie_file=str(x_cookie_file or "").strip(),
+        )
+    else:
+        cookie_export_path, cookie_export_status = _export_x_cookies_for_ytdlp(chrome_user_data_dir)
     discovery_started_at = time.monotonic()
 
     cleaned_urls = _dedupe_urls(tweet_urls or [])
@@ -8938,6 +9205,7 @@ def download_from_x(
                     include_images=include_images,
                     proxy=effective_proxy,
                     use_system_proxy=effective_use_system_proxy,
+                    x_cookie_file=x_cookie_file,
                 )
                 if discovered_urls:
                     discovery_source = "seed_accounts_fallback"
@@ -18577,6 +18845,17 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_CHROME_USER_DATA_DIR,
         help=f"Chrome 调试用户目录，默认 {DEFAULT_CHROME_USER_DATA_DIR}",
     )
+    parser.add_argument("--x-debug-port", type=int, default=DEFAULT_X_DEBUG_PORT)
+    parser.add_argument(
+        "--x-chrome-user-data-dir",
+        default=DEFAULT_X_CHROME_USER_DATA_DIR,
+        help=f"X 采集专用 Chrome 调试用户目录，默认 {DEFAULT_X_CHROME_USER_DATA_DIR}",
+    )
+    parser.add_argument(
+        "--x-cookie-file",
+        default=DEFAULT_X_COOKIE_FILE,
+        help=f"X 手动 Cookie JSON 文件，默认 {DEFAULT_X_COOKIE_FILE}",
+    )
     parser.add_argument("--no-auto-open-chrome", action="store_true", help="不自动启动 Chrome")
     parser.add_argument(
         "--upload-platforms",
@@ -18801,6 +19080,11 @@ def main() -> int:
         DEFAULT_REQUIRE_ANY_KEYWORDS,
     )
     chrome_user_data_dir = (args.chrome_user_data_dir or "").strip() or DEFAULT_CHROME_USER_DATA_DIR
+    x_chrome_user_data_dir = (
+        str(getattr(args, "x_chrome_user_data_dir", "") or "").strip() or DEFAULT_X_CHROME_USER_DATA_DIR
+    )
+    x_cookie_file = str(getattr(args, "x_cookie_file", "") or "").strip() or DEFAULT_X_COOKIE_FILE
+    x_debug_port = max(1, int(getattr(args, "x_debug_port", DEFAULT_X_DEBUG_PORT) or DEFAULT_X_DEBUG_PORT))
     configured_collection_name = str(runtime_config.get("collection_name", "") or "").strip()
     resolved_collection_name = (args.collection_name or "").strip() or configured_collection_name or DEFAULT_COLLECTION_NAME
     if args.auto_delete_source_files:
@@ -18858,10 +19142,11 @@ def main() -> int:
                 x_discovery_url_limit=max(1, int(args.x_discovery_url_limit)),
                 x_discovery_scroll_rounds=max(2, int(args.x_discovery_scroll_rounds)),
                 x_discovery_scroll_wait=max(0.3, float(args.x_discovery_scroll_wait)),
-                debug_port=args.debug_port,
+                debug_port=x_debug_port,
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=chrome_path,
-                chrome_user_data_dir=chrome_user_data_dir,
+                chrome_user_data_dir=x_chrome_user_data_dir,
+                x_cookie_file=x_cookie_file,
             )
         if not args.skip_process:
             processed_outputs = process_video_fingerprint(
