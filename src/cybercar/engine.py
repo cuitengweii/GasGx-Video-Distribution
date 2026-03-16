@@ -135,12 +135,14 @@ X_DOWNLOAD_RETRY_SLEEP_SECONDS = 2.0
 X_DOWNLOAD_BATCH_SIZE = 5
 X_DOWNLOAD_RETRY_BATCH_SIZE = 1
 X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS = 2.0
+X_DOWNLOAD_FAIL_FAST = False
 X_DOWNLOAD_CONFIG_SOCKET_TIMEOUT_SECONDS = 25
 X_DOWNLOAD_CONFIG_EXTRACTOR_RETRIES = 2
 X_DOWNLOAD_CONFIG_RETRIES = 2
 X_DOWNLOAD_CONFIG_FRAGMENT_RETRIES = 2
 X_DOWNLOAD_CONFIG_RETRY_SLEEP_SECONDS = 1.0
 X_DOWNLOAD_CONFIG_BATCH_RETRY_SLEEP_SECONDS = 1.0
+X_DOWNLOAD_CONFIG_FAIL_FAST = False
 MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS = 5.0
 MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS = 120.0
 WINDOWS_CHROME_WINDOW_MODE_DEFAULT = "minimized"
@@ -470,9 +472,10 @@ class XDownloadPolicy:
     fragment_retries: int
     retry_sleep_seconds: float
     batch_retry_sleep_seconds: float
+    fail_fast: bool = False
 
     def to_cli_args(self) -> list[str]:
-        return [
+        args = [
             "--x-download-socket-timeout",
             str(max(5, int(self.socket_timeout_seconds))),
             "--x-download-extractor-retries",
@@ -486,6 +489,9 @@ class XDownloadPolicy:
             "--x-download-batch-retry-sleep",
             f"{max(0.0, float(self.batch_retry_sleep_seconds)):g}",
         ]
+        if self.fail_fast:
+            args.append("--x-download-fail-fast")
+        return args
 
 
 @dataclass(frozen=True)
@@ -573,6 +579,7 @@ def _run_ytdlp_download_with_retries(
     batch_size: int = X_DOWNLOAD_BATCH_SIZE,
     retry_batch_size: int = X_DOWNLOAD_RETRY_BATCH_SIZE,
     retry_sleep_seconds: float = X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
+    allow_retries: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], XDownloadRetryStats]:
     if not selected_urls:
         return _run_command_result(base_cmd, step_name, env=env), XDownloadRetryStats()
@@ -599,6 +606,16 @@ def _run_ytdlp_download_with_retries(
 
     if not failed_urls:
         return _merge_completed_process_results(aggregated), XDownloadRetryStats()
+
+    if not allow_retries:
+        _log("[Downloader] X fail-fast enabled; skip retry batches and transport fallback.")
+        deduped_failed_urls = tuple(dict.fromkeys(failed_urls))
+        stats = XDownloadRetryStats(
+            initial_batch_failures=initial_batch_failures,
+            initial_failed_urls=deduped_failed_urls,
+            final_failed_urls=deduped_failed_urls,
+        )
+        return _merge_completed_process_results(aggregated), stats
 
     _log(
         "[Downloader] yt-dlp batch download degraded; "
@@ -3322,6 +3339,7 @@ def _default_runtime_config() -> dict[str, Any]:
             "fragment_retries": X_DOWNLOAD_CONFIG_FRAGMENT_RETRIES,
             "retry_sleep_seconds": X_DOWNLOAD_CONFIG_RETRY_SLEEP_SECONDS,
             "batch_retry_sleep_seconds": X_DOWNLOAD_CONFIG_BATCH_RETRY_SLEEP_SECONDS,
+            "fail_fast": X_DOWNLOAD_CONFIG_FAIL_FAST,
         },
         "spark_ai": _default_spark_ai_config(),
         "comment_reply": {
@@ -3426,6 +3444,10 @@ def _merge_x_download_config(raw: Any) -> dict[str, Any]:
             X_DOWNLOAD_CONFIG_BATCH_RETRY_SLEEP_SECONDS,
             minimum=0.0,
         ),
+        "fail_fast": _to_bool(
+            payload.get("fail_fast"),
+            default=X_DOWNLOAD_CONFIG_FAIL_FAST,
+        ),
     }
 
 
@@ -3480,6 +3502,10 @@ def resolve_x_download_policy(
             ),
             X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
             minimum=0.0,
+        ),
+        fail_fast=_to_bool(
+            _value("x_download_fail_fast", "fail_fast", X_DOWNLOAD_FAIL_FAST),
+            default=X_DOWNLOAD_FAIL_FAST,
         ),
     )
 
@@ -7039,7 +7065,7 @@ def discover_x_media_candidates(
     allow_search_inferred_match: bool = False,
     require_text_keyword_match: bool = False,
 ) -> list[dict[str, str]]:
-    search_filter = "filter:media" if include_images else "filter:videos"
+    search_filter = "filter:images" if include_images else "filter:videos"
     search_query = quote_plus(f"{keyword} {search_filter}")
     search_url = f"https://x.com/search?q={search_query}&src=typed_query&f=live"
     page = _connect_chrome(
@@ -8635,6 +8661,7 @@ def download_from_x(
     x_download_fragment_retries: int = X_DOWNLOAD_FRAGMENT_RETRIES,
     x_download_retry_sleep: float = X_DOWNLOAD_RETRY_SLEEP_SECONDS,
     x_download_batch_retry_sleep: float = X_DOWNLOAD_BATCH_RETRY_SLEEP_SECONDS,
+    x_download_fail_fast: bool = X_DOWNLOAD_FAIL_FAST,
 ) -> list[Path]:
     _log("[Downloader] Starting X download task")
     started_at = time.monotonic()
@@ -8649,12 +8676,19 @@ def download_from_x(
     _ensure_binary("yt-dlp")
     before = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
     media_filter_args = [] if include_images else ["--match-filter", "duration > 10 & duration < 60"]
+    effective_fail_fast = bool(x_download_fail_fast)
     effective_socket_timeout = max(5, int(x_download_socket_timeout or X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS))
     effective_extractor_retries = max(0, int(x_download_extractor_retries or 0))
     effective_download_retries = max(0, int(x_download_retries or 0))
     effective_fragment_retries = max(0, int(x_download_fragment_retries or 0))
     effective_retry_sleep = max(0.0, float(x_download_retry_sleep or 0.0))
     effective_batch_retry_sleep = max(0.0, float(x_download_batch_retry_sleep or 0.0))
+    if effective_fail_fast:
+        effective_extractor_retries = 0
+        effective_download_retries = 0
+        effective_fragment_retries = 0
+        effective_retry_sleep = 0.0
+        effective_batch_retry_sleep = 0.0
     _log(
         "[Downloader] X retry policy: "
         f"socket_timeout={effective_socket_timeout}s, "
@@ -8662,7 +8696,8 @@ def download_from_x(
         f"download_retries={effective_download_retries}, "
         f"fragment_retries={effective_fragment_retries}, "
         f"retry_sleep={effective_retry_sleep:g}s, "
-        f"batch_retry_sleep={effective_batch_retry_sleep:g}s"
+        f"batch_retry_sleep={effective_batch_retry_sleep:g}s, "
+        f"fail_fast={effective_fail_fast}"
     )
     network_retry_args = [
         "--socket-timeout",
@@ -8782,7 +8817,10 @@ def download_from_x(
             # Image discovery already uses filter:media and falls back to direct image download,
             # so it does not need the same oversized candidate window as video collection.
             candidate_multiplier = 3 if include_images else 8
-            candidate_url_count = min(len(discovered_urls), max(target_limit * candidate_multiplier, 12))
+            if effective_fail_fast:
+                candidate_url_count = min(len(discovered_urls), target_limit)
+            else:
+                candidate_url_count = min(len(discovered_urls), max(target_limit * candidate_multiplier, 12))
             selected_urls = discovered_urls[:candidate_url_count]
             image_status_candidates = _dedupe_x_status_urls(discovered_urls)
             _log(
@@ -8849,6 +8887,7 @@ def download_from_x(
             step_name="Downloader",
             env=command_env,
             retry_sleep_seconds=effective_batch_retry_sleep,
+            allow_retries=not effective_fail_fast,
         )
     finally:
         if isinstance(cookie_export_path, Path):
@@ -8864,53 +8903,56 @@ def download_from_x(
     direct_status_fallback_downloaded = 0
     fallback_elapsed = 0.0
 
-    if include_images and image_status_candidates:
-        target_images = max(0, int(image_min_target))
-        if target_images > 0:
-            current_new_images = [p for p in new_files if _is_image_file(p)]
-            need_images = max(0, target_images - len(current_new_images))
-            if need_images > 0:
+    if not effective_fail_fast:
+        if include_images and image_status_candidates:
+            target_images = max(0, int(image_min_target))
+            if target_images > 0:
+                current_new_images = [p for p in new_files if _is_image_file(p)]
+                need_images = max(0, target_images - len(current_new_images))
+                if need_images > 0:
+                    _log(
+                        "[Downloader] X image fallback enabled: "
+                        f"target={target_images}, current={len(current_new_images)}, need={need_images}"
+                    )
+                    extra_images = _download_x_images_from_status_urls(
+                        workspace=workspace,
+                        status_urls=image_status_candidates,
+                        limit=need_images,
+                        keyword=keyword,
+                        proxy=effective_proxy,
+                        use_system_proxy=effective_use_system_proxy,
+                    )
+                    if extra_images:
+                        after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+                        new_files = sorted(Path(p) for p in (after - before))
+        elif not include_images:
+            target_videos = max(1, int(limit))
+            current_new_videos = [p for p in new_files if _is_video_file(p)]
+            fallback_status_urls = _dedupe_x_status_urls(list(retry_stats.final_failed_urls))
+            need_videos = max(0, target_videos - len(current_new_videos))
+            if fallback_status_urls and need_videos > 0:
+                direct_status_fallback_attempts = len(fallback_status_urls)
                 _log(
-                    "[Downloader] X image fallback enabled: "
-                    f"target={target_images}, current={len(current_new_images)}, need={need_images}"
+                    "[Downloader] X direct status fallback enabled: "
+                    f"target={target_videos}, current={len(current_new_videos)}, need={need_videos}, "
+                    f"failed_status_urls={direct_status_fallback_attempts}"
                 )
-                extra_images = _download_x_images_from_status_urls(
+                fallback_started_at = time.monotonic()
+                extra_videos = _download_x_videos_from_status_urls(
                     workspace=workspace,
-                    status_urls=image_status_candidates,
-                    limit=need_images,
+                    status_urls=fallback_status_urls,
+                    limit=need_videos,
                     keyword=keyword,
                     proxy=effective_proxy,
                     use_system_proxy=effective_use_system_proxy,
                 )
-                if extra_images:
+                fallback_elapsed = time.monotonic() - fallback_started_at
+                direct_status_fallback_downloaded = len(extra_videos)
+                if extra_videos:
                     after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
                     new_files = sorted(Path(p) for p in (after - before))
-    elif not include_images:
-        target_videos = max(1, int(limit))
-        current_new_videos = [p for p in new_files if _is_video_file(p)]
-        fallback_status_urls = _dedupe_x_status_urls(list(retry_stats.final_failed_urls))
-        need_videos = max(0, target_videos - len(current_new_videos))
-        if fallback_status_urls and need_videos > 0:
-            direct_status_fallback_attempts = len(fallback_status_urls)
-            _log(
-                "[Downloader] X direct status fallback enabled: "
-                f"target={target_videos}, current={len(current_new_videos)}, need={need_videos}, "
-                f"failed_status_urls={direct_status_fallback_attempts}"
-            )
-            fallback_started_at = time.monotonic()
-            extra_videos = _download_x_videos_from_status_urls(
-                workspace=workspace,
-                status_urls=fallback_status_urls,
-                limit=need_videos,
-                keyword=keyword,
-                proxy=effective_proxy,
-                use_system_proxy=effective_use_system_proxy,
-            )
-            fallback_elapsed = time.monotonic() - fallback_started_at
-            direct_status_fallback_downloaded = len(extra_videos)
-            if extra_videos:
-                after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
-                new_files = sorted(Path(p) for p in (after - before))
+    else:
+        _log("[Downloader] X fail-fast enabled: skip image/direct fallback.")
 
     if result.returncode != 0:
         stderr_text = (result.stderr or "").lower()
@@ -8924,6 +8966,12 @@ def download_from_x(
                 f"[Downloader] Warning: yt-dlp exited with {result.returncode}, "
                 f"but downloaded {len(new_files)} new file(s). Continue."
             )
+        elif effective_fail_fast:
+            _log(
+                f"[Downloader] Warning: yt-dlp exited with {result.returncode} and no new files. "
+                "Fail-fast enabled; skip retries and continue."
+            )
+            return []
         elif any(marker in stderr_text for marker in nonfatal_markers):
             _log(
                 f"[Downloader] Warning: yt-dlp exited with {result.returncode} and no new files. "
@@ -8951,6 +8999,7 @@ def download_from_x(
         f"transport_fallback_attempts={retry_stats.transport_fallback_attempts}, "
         f"direct_status_fallback_attempts={direct_status_fallback_attempts}, "
         f"direct_status_fallback_downloaded={direct_status_fallback_downloaded}, "
+        f"fail_fast={effective_fail_fast}, "
         f"discovery_elapsed={discovery_elapsed:.1f}s, "
         f"download_elapsed={download_elapsed:.1f}s, "
         f"fallback_elapsed={fallback_elapsed:.1f}s, "

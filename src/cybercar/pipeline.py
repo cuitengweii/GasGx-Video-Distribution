@@ -948,8 +948,8 @@ def _send_telegram_prefilter_for_candidate(
             email_settings,
             card,
             disable_web_page_preview=(not source_url),
-            max_attempts=1 if fast_send else 3,
-            api_retries=0 if fast_send else 2,
+            max_attempts=2 if fast_send else 3,
+            api_retries=1 if fast_send else 2,
         )
     except Exception as exc:
         preview = _single_line_preview(tweet_text, limit=180) or "-"
@@ -2405,6 +2405,7 @@ def _run_collect_once(
         f"xiaohongshu_allow_image={xiaohongshu_allow_image}, "
         f"x_download_socket_timeout={x_download_policy.socket_timeout_seconds}, "
         f"x_download_retries={x_download_policy.download_retries}, "
+        f"x_download_fail_fast={x_download_policy.fail_fast}, "
         f"network_mode={network_mode}"
     )
 
@@ -2454,6 +2455,7 @@ def _run_collect_once(
             x_download_fragment_retries=x_download_policy.fragment_retries,
             x_download_retry_sleep=x_download_policy.retry_sleep_seconds,
             x_download_batch_retry_sleep=x_download_policy.batch_retry_sleep_seconds,
+            x_download_fail_fast=x_download_policy.fail_fast,
         )
     else:
         # First collect video sources to satisfy the planned per-slot video quota.
@@ -2482,6 +2484,7 @@ def _run_collect_once(
             x_download_fragment_retries=x_download_policy.fragment_retries,
             x_download_retry_sleep=x_download_policy.retry_sleep_seconds,
             x_download_batch_retry_sleep=x_download_policy.batch_retry_sleep_seconds,
+            x_download_fail_fast=x_download_policy.fail_fast,
         )
 
         # Then top up media pool for Xiaohongshu image posts in this slot.
@@ -2517,12 +2520,13 @@ def _run_collect_once(
                     chrome_user_data_dir=chrome_user_data_dir,
                     require_x_live_discovery=bool(getattr(args, "require_x_live_discovery", False)),
                     require_text_keyword_match=require_text_keyword_match,
-                x_download_socket_timeout=x_download_policy.socket_timeout_seconds,
-                x_download_extractor_retries=x_download_policy.extractor_retries,
-                x_download_retries=x_download_policy.download_retries,
-                x_download_fragment_retries=x_download_policy.fragment_retries,
-                x_download_retry_sleep=x_download_policy.retry_sleep_seconds,
-                x_download_batch_retry_sleep=x_download_policy.batch_retry_sleep_seconds,
+                    x_download_socket_timeout=x_download_policy.socket_timeout_seconds,
+                    x_download_extractor_retries=x_download_policy.extractor_retries,
+                    x_download_retries=x_download_policy.download_retries,
+                    x_download_fragment_retries=x_download_policy.fragment_retries,
+                    x_download_retry_sleep=x_download_policy.retry_sleep_seconds,
+                    x_download_batch_retry_sleep=x_download_policy.batch_retry_sleep_seconds,
+                    x_download_fail_fast=x_download_policy.fail_fast,
                 )
             except Exception as exc:
                 core._log(
@@ -3661,6 +3665,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--x-download-batch-retry-sleep",
         type=float,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--x-download-fail-fast",
+        action="store_true",
         default=None,
         help=argparse.SUPPRESS,
     )

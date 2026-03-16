@@ -15,3 +15,5 @@ Last updated: 2026-03-16
 - The standalone repo no longer treats Task Scheduler as a supported operator path; scheduled collect/publish and old Telegram startup tasks are removed instead of migrated.
 - `python -m cybercar telegram worker` and `scripts/telegram_worker.ps1` are the only supported long-running operator entrypoints.
 - Collect/publish remains available as explicit commands, but every video stays on the manual Telegram review path rather than unattended scheduling.
+- Immediate image review must search X with `filter:images`; `filter:media` is not acceptable for the image branch because it admits videos and causes false failures on video-only guards.
+- Global X download config may use `fail_fast=true`, but Telegram immediate review jobs must override that behavior and keep retry/fallback enabled so manually approved candidates are not discarded on the first transient X timeout.

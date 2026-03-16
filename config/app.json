@@ -50,7 +50,8 @@
     "download_retries": 2,
     "fragment_retries": 2,
     "retry_sleep_seconds": 1.0,
-    "batch_retry_sleep_seconds": 1.0
+    "batch_retry_sleep_seconds": 1.0,
+    "fail_fast": true
   },
   "spark_ai": {
     "enabled": true,

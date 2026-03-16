@@ -4582,7 +4582,6 @@ def _request_platform_login_qr(
     chat_id: str,
     timeout_seconds: int,
     log_file: Path,
-    telegram_bot_identifier: str = "",
     refresh_page: bool = False,
 ) -> Dict[str, Any]:
     try:
@@ -4603,7 +4602,6 @@ def _request_platform_login_qr(
             allow_duplicate=bool(refresh_page),
             telegram_bot_token=bot_token,
             telegram_chat_id=chat_id,
-            telegram_bot_identifier=telegram_bot_identifier,
             telegram_timeout_seconds=timeout_seconds,
         )
         _append_log(
@@ -4625,7 +4623,6 @@ def _refresh_platform_login_qr_message(
     message_id: int,
     timeout_seconds: int,
     log_file: Path,
-    telegram_bot_identifier: str = "",
     wait_token: str = "",
 ) -> Dict[str, Any]:
     try:
@@ -4655,7 +4652,6 @@ def _refresh_platform_login_qr_message(
         notify_settings = core._resolve_runtime_telegram_notify_settings(
             telegram_bot_token=bot_token,
             telegram_chat_id=chat_id,
-            telegram_bot_identifier=telegram_bot_identifier,
             telegram_timeout_seconds=timeout_seconds,
         )
         api_base = str(getattr(notify_settings, "telegram_api_base", "") or "").strip()
@@ -5179,7 +5175,6 @@ def _probe_platform_login_after_publish_failure(
     workspace: Path,
     item_id: str,
     platform: str,
-    telegram_bot_identifier: str = "",
     telegram_bot_token: str,
     telegram_chat_id: str,
     timeout_seconds: int,
@@ -5195,7 +5190,6 @@ def _probe_platform_login_after_publish_failure(
         chat_id=telegram_chat_id,
         timeout_seconds=max(10, int(timeout_seconds or 20)),
         log_file=log_file,
-        telegram_bot_identifier=telegram_bot_identifier,
         refresh_page=True,
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
@@ -5731,7 +5725,6 @@ def _run_collect_once(
     workspace: Path,
     timeout_seconds: int,
     profile: str = DEFAULT_PROFILE,
-    telegram_bot_identifier: str = "",
     telegram_chat_id: str = "",
     media_kind: str = "video",
     count: Optional[int] = None,
@@ -5751,7 +5744,6 @@ def _run_collect_once(
         timeout_seconds=timeout_seconds,
         mode="collect",
         profile=profile,
-        telegram_bot_identifier=telegram_bot_identifier,
         telegram_chat_id=telegram_chat_id,
         count=count,
         extra_args=extra_args,
@@ -5766,7 +5758,6 @@ def _run_unified_once(
     mode: str,
     profile: str = DEFAULT_PROFILE,
     platforms: Optional[list[str]] = None,
-    telegram_bot_identifier: str = "",
     telegram_chat_id: str = "",
     count: Optional[int] = None,
     schedule_minutes: Optional[int] = None,
@@ -5826,11 +5817,13 @@ def _build_immediate_fast_x_download_args(repo_root: Optional[Path] = None) -> l
     resolve_policy = getattr(core, "resolve_x_download_policy", None)
     if callable(load_runtime_config) and callable(resolve_policy):
         runtime_config = load_runtime_config(str(_default_runtime_config_path(resolved_repo_root)))
-        return resolve_policy(runtime_config=runtime_config).to_cli_args()
+        args = resolve_policy(runtime_config=runtime_config).to_cli_args()
+        return [arg for arg in args if str(arg) != "--x-download-fail-fast"]
     from cybercar import engine as cybercar_engine
 
     runtime_config = cybercar_engine._load_runtime_config(str(_default_runtime_config_path(resolved_repo_root)))
-    return cybercar_engine.resolve_x_download_policy(runtime_config=runtime_config).to_cli_args()
+    args = cybercar_engine.resolve_x_download_policy(runtime_config=runtime_config).to_cli_args()
+    return [arg for arg in args if str(arg) != "--x-download-fail-fast"]
 
 
 def _build_child_worker_env(repo_root: Optional[Path] = None) -> dict[str, str]:
@@ -6331,7 +6324,6 @@ def _run_distribution_once(
     timeout_seconds: int,
     platforms: list[str],
     profile: str = DEFAULT_PROFILE,
-    telegram_bot_identifier: str = "",
     telegram_chat_id: str = "",
     count: Optional[int] = None,
     schedule_minutes: Optional[int] = None,
@@ -6369,7 +6361,6 @@ def _run_distribution_once(
             mode=mode,
             profile=profile,
             platforms=target_platforms,
-            telegram_bot_identifier=telegram_bot_identifier,
             telegram_chat_id=telegram_chat_id,
             count=count,
             schedule_minutes=schedule_minutes,
@@ -7019,7 +7010,6 @@ def _run_collect_publish_latest_once(
             mode="pipeline",
             profile=profile,
             platforms=target_platforms,
-            telegram_bot_identifier=telegram_bot_identifier,
             telegram_chat_id=telegram_chat_id,
             count=1,
             extra_args=[
@@ -7414,7 +7404,6 @@ def _preflight_immediate_platform_login(
             chat_id=str(telegram_chat_id or "").strip(),
             timeout_seconds=max(10, int(timeout_seconds or 20)),
             log_file=Path(log_file) if log_file is not None else Path.cwd() / "runtime" / "logs" / "telegram_command_worker.log",
-            telegram_bot_identifier=str(telegram_bot_identifier or "").strip(),
             refresh_page=True,
         )
         if bool(qr_result.get("sent")):
@@ -7814,7 +7803,6 @@ def _run_immediate_collect_item_job(
                 mode="collect",
                 profile=profile,
                 platforms=target_platforms,
-                telegram_bot_identifier=telegram_bot_identifier,
                 telegram_chat_id=telegram_chat_id,
                 count=1,
                 extra_args=collect_extra_args,
@@ -8051,7 +8039,6 @@ def _publish_immediate_candidate_platform(
                 workspace=workspace,
                 item_id=item_id,
                 platform=platform,
-                telegram_bot_identifier=telegram_bot_identifier,
                 telegram_bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
                 timeout_seconds=timeout_seconds,
@@ -8108,7 +8095,6 @@ def _publish_immediate_candidate_platform(
                 workspace=workspace,
                 item_id=item_id,
                 platform=platform,
-                telegram_bot_identifier=telegram_bot_identifier,
                 telegram_bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
                 timeout_seconds=timeout_seconds,
@@ -8506,7 +8492,6 @@ def _run_home_action_job(
                 workspace=workspace,
                 timeout_seconds=timeout_seconds,
                 profile=resolved_profile,
-                telegram_bot_identifier=telegram_bot_identifier,
                 telegram_chat_id=telegram_chat_id,
                 media_kind=media_kind,
                 count=count if count > 0 else None,
@@ -8543,7 +8528,6 @@ def _run_home_action_job(
                     timeout_seconds=timeout_seconds,
                     platforms=platforms,
                     profile=resolved_profile,
-                    telegram_bot_identifier=telegram_bot_identifier,
                     telegram_chat_id=telegram_chat_id,
                     publish_only=True,
                     media_kind=media_kind,
@@ -8564,7 +8548,6 @@ def _run_home_action_job(
                 timeout_seconds=timeout_seconds,
                 platforms=platforms,
                 profile=resolved_profile,
-                    telegram_bot_identifier=telegram_bot_identifier,
                 telegram_chat_id=telegram_chat_id,
                 schedule_minutes=minutes,
                 publish_only=True,
@@ -8584,7 +8567,6 @@ def _run_home_action_job(
                 chat_id=telegram_chat_id,
                 timeout_seconds=timeout_seconds,
                 log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-                telegram_bot_identifier=telegram_bot_identifier,
                 refresh_page=True,
             )
             if bool(result.get("sent")):
@@ -8880,6 +8862,7 @@ def _run_collect_publish_latest_job(
     reused_candidates = 0
     skipped_duplicates = 0
     fresh_candidates = 0
+    last_send_error = ""
     total_candidates = len(candidates)
     workspace_ctx = runner.core.init_workspace(str(workspace))
     for idx, candidate in enumerate(candidates, start=1):
@@ -8937,6 +8920,7 @@ def _run_collect_publish_latest_job(
             sent_candidates += 1
             fresh_candidates += 1
         except Exception as exc:
+            last_send_error = _preview_text(str(exc), limit=160)
             _update_prefilter_item(
                 workspace,
                 item_id,
@@ -9005,9 +8989,12 @@ def _run_collect_publish_latest_job(
             {
                 "title": "失败线索",
                 "emoji": "⚠️",
-                "items": [
-                    "未能生成新的 Telegram 预审卡片，请检查机器人配置或发送日志。",
-                ],
+                "items": (
+                    [
+                        "未能生成新的 Telegram 预审卡片，请检查机器人配置或发送日志。",
+                    ]
+                    + ([f"最后错误：{last_send_error}"] if last_send_error else [])
+                ),
             }
         ],
         status="failed",
@@ -9375,7 +9362,6 @@ def _handle_command(
                 chat_id=notify_chat_id,
                 timeout_seconds=timeout_seconds,
                 log_file=audit_file.parent / "telegram_command_worker.log",
-                telegram_bot_identifier=runtime_bot_identifier,
                 refresh_page=True,
             )
             if bool(result.get("sent")):
@@ -9707,7 +9693,6 @@ def handle_callback_update(
                 chat_id=chat_id,
                 timeout_seconds=timeout_seconds,
                 log_file=log_file,
-                telegram_bot_identifier=telegram_bot_identifier,
                 wait_token=wait_token,
             )
             callback_text = "已确认登录，任务继续执行。"
