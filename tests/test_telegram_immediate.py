@@ -159,7 +159,7 @@ def _image_item(item_id: str = "item-image", **overrides: object) -> dict[str, o
     payload: dict[str, object] = {
         "id": item_id,
         "status": "link_pending",
-        "workflow": "immediate_collect_review",
+        "workflow": "immediate_manual_publish",
         "media_kind": "image",
         "source_url": "https://x.test/post/image",
         "tweet_text": "image candidate",
@@ -172,6 +172,20 @@ def _image_item(item_id: str = "item-image", **overrides: object) -> dict[str, o
     }
     payload.update(overrides)
     return payload
+
+
+def _reply_markup_texts(reply_markup: dict[str, object]) -> list[str]:
+    rows = reply_markup.get("inline_keyboard", [])
+    if not isinstance(rows, list):
+        return []
+    texts: list[str] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        for button in row:
+            if isinstance(button, dict):
+                texts.append(str(button.get("text") or ""))
+    return texts
 
 
 def test_refresh_platform_login_qr_message_accepts_telegram_bot_identifier(tmp_path: Path) -> None:
@@ -725,7 +739,7 @@ def test_update_prefilter_item_persists_row_changes(tmp_path: Path) -> None:
     assert persisted["message_id"] == 1201
 
 
-def test_run_collect_publish_latest_job_image_records_review_only_items(tmp_path: Path, monkeypatch) -> None:
+def test_run_collect_publish_latest_job_image_records_publish_items(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
     runner = FakeRunner(core)
@@ -770,10 +784,24 @@ def test_run_collect_publish_latest_job_image_records_review_only_items(tmp_path
     assert len(items) == 2
     for item in items.values():
         assert isinstance(item, dict)
-        assert item["workflow"] == "immediate_collect_review"
+        assert item["workflow"] == "immediate_manual_publish"
         assert item["status"] == "link_pending"
         assert item["target_platforms"] == "douyin,xiaohongshu,kuaishou"
-    assert runner.sent_candidates[0]["mode"] == "immediate_collect_review"
+    assert runner.sent_candidates[0]["mode"] == "immediate_manual_publish"
+
+
+def test_build_telegram_prefilter_reply_markup_hides_original_for_image_publish() -> None:
+    reply_markup = pipeline._build_telegram_prefilter_reply_markup(
+        "https://x.test/post/image-1",
+        "item-image",
+        mode="immediate_manual_publish",
+        target_platforms="douyin,xiaohongshu,kuaishou",
+    )
+
+    texts = _reply_markup_texts(reply_markup)
+    assert "⚡ 普通发布" in texts
+    assert "⏭ 跳过本条" in texts
+    assert "📝 原创发布" not in texts
 
 
 def test_run_collect_publish_latest_job_returns_failure_without_candidates(tmp_path: Path, monkeypatch) -> None:
@@ -1231,6 +1259,38 @@ def test_handle_prefilter_publish_normal_queues_publish_job(tmp_path: Path, monk
     assert len(record.updated_cards) == 1
 
 
+def test_handle_prefilter_publish_normal_queues_image_publish_job(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+    approvals: list[dict[str, object]] = []
+    spawned: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_immediate_publish_item_job",
+        lambda **kwargs: spawned.append(dict(kwargs)) or {"ok": True, "pid": 415, "log_path": str(workspace / "runtime" / "logs" / "publish-image.log")},
+    )
+
+    item = _image_item()
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    result = commands.handle_callback_update(
+        update=_make_callback_update("ctpf|publish_normal|item-image"),
+        **_worker_kwargs(workspace),
+    )
+
+    assert result["handled"] is True
+    assert len(spawned) == 1
+    assert len(approvals) == 0
+    updated = _prefilter_items(workspace)["item-image"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_requested"
+    assert updated["action"] == "publish_normal"
+    assert updated["wechat_declare_original"] is False
+    assert len(record.updated_cards) == 1
+
+
 def test_handle_prefilter_publish_original_sets_wechat_original(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     _install_transport_mocks(monkeypatch)
@@ -1298,7 +1358,7 @@ def test_handle_prefilter_image_up_queues_collect_job(tmp_path: Path, monkeypatc
         lambda **kwargs: spawned.append(dict(kwargs)) or {"ok": True, "pid": 512, "log_path": str(workspace / "runtime" / "logs" / "collect-image.log")},
     )
 
-    item = _image_item()
+    item = _image_item(workflow="immediate_collect_review")
     _save_prefilter_items(workspace, {str(item["id"]): item})
 
     commands.handle_callback_update(
@@ -1843,7 +1903,7 @@ def test_run_immediate_collect_item_job_test_mode_keeps_real_collect_and_adopts_
     monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedback_cards.append(dict(kwargs)))
     monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
 
-    item = _image_item()
+    item = _image_item(workflow="immediate_collect_review")
     _save_prefilter_items(workspace, {str(item["id"]): item})
 
     exit_code = actions.run_immediate_collect_item_job(

@@ -667,20 +667,23 @@ def _build_telegram_prefilter_reply_markup(
     *,
     skip_only: bool = False,
     mode: str = "",
+    target_platforms: str = "",
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     link = str(source_url or "").strip()
     mode_token = str(mode or "").strip().lower()
+    target_tokens = {
+        str(token or "").strip().lower()
+        for token in str(target_platforms or "").split(",")
+        if str(token or "").strip()
+    }
     if link:
         actions.append({"text": "🔗 查看原帖", "url": link, "row": 0})
     if mode_token == "immediate_manual_publish":
-        actions.extend(
-            [
-                {"text": "⚡ 普通发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}", "row": 1},
-                {"text": "📝 原创发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}", "row": 1},
-                {"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}", "row": 2},
-            ]
-        )
+        actions.append({"text": "⚡ 普通发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}", "row": 1})
+        if not target_tokens or "wechat" in target_tokens:
+            actions.append({"text": "📝 原创发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}", "row": 1})
+        actions.append({"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}", "row": 2})
     elif skip_only:
         actions.append({"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|down|{item_id}", "row": 1})
     else:
@@ -840,6 +843,7 @@ def _send_telegram_prefilter_for_video(
         item_id,
         skip_only=bool(getattr(args, "telegram_prefilter_skip_only", False)),
         mode=str(getattr(args, "telegram_prefilter_mode", "") or "").strip(),
+        target_platforms=str(getattr(args, "upload_platforms", "") or ""),
     )
     card["reply_markup"] = reply_markup
 
@@ -942,6 +946,7 @@ def _send_telegram_prefilter_for_candidate(
         item_id,
         skip_only=False,
         mode=mode,
+        target_platforms=target_platforms,
     )
     try:
         return _send_telegram_card_message(
@@ -2763,6 +2768,7 @@ def _publish_once(
                 ctx.workspace,
                 caption=caption,
                 target_video=target,
+                collection_name=ctx.collection_name,
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,

@@ -15219,6 +15219,105 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
                 return
             _log(f"[Uploader:{platform_name}] Caption candidate rejected after verification: {selector}")
 
+    if platform_name == "kuaishou":
+        js_set = """
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function norm(s) {
+          return String(s || '')
+            .replace(/[\\u200B-\\u200D\\uFEFF]/g, '')
+            .replace(/\\s+/g, ' ')
+            .trim();
+        }
+        function setValue(el, value) {
+          const tag = String(el.tagName || '').toLowerCase();
+          if (el.isContentEditable) {
+            el.innerHTML = '';
+            el.textContent = value;
+          } else if (tag === 'textarea') {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+            if (setter && setter.set) {
+              setter.set.call(el, value);
+            } else {
+              el.value = value;
+            }
+          } else {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+            if (setter && setter.set) {
+              setter.set.call(el, value);
+            } else {
+              el.value = value;
+            }
+          }
+        }
+        const target = String(arguments[0] || '').trim();
+        if (!target) return {state: 'skip'};
+        const nodes = Array.from(document.querySelectorAll(
+          "textarea, [contenteditable='true'], div[role='textbox'], input[type='text']"
+        ))
+          .filter(isVisible)
+          .map(el => {
+            const attrs = [
+              el.getAttribute('placeholder') || '',
+              el.getAttribute('data-placeholder') || '',
+              el.getAttribute('aria-label') || '',
+              String(el.className || ''),
+              String(el.getAttribute('role') || ''),
+            ].join(' ');
+            const wrap = el.closest('form, section, .publish, .content, .editor, div') || el.parentElement || el;
+            const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 420);
+            let score = 0;
+            if (/作品描述|描述|文案/.test(attrs)) score += 18;
+            if (/作品描述|描述|文案/.test(wrapText)) score += 14;
+            if (/textarea/i.test(String(el.tagName || ''))) score += 4;
+            if (String(el.getAttribute('contenteditable') || '').toLowerCase() === 'true') score += 3;
+            if (/500|700/.test(wrapText)) score += 2;
+            if (/search|keyword|location|topic|tag|商品|链接|位置|地点|作者服务/.test((attrs + ' ' + wrapText).toLowerCase())) score -= 16;
+            return {el, score};
+          })
+          .filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score);
+        if (!nodes.length) return {state: 'not_found'};
+        const chosen = nodes[0].el;
+        try { chosen.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+        try { chosen.focus(); } catch (e) {}
+        try { chosen.click(); } catch (e) {}
+        try {
+          setValue(chosen, target);
+          chosen.dispatchEvent(new Event('input', {bubbles: true}));
+          chosen.dispatchEvent(new Event('change', {bubbles: true}));
+          chosen.dispatchEvent(new Event('blur', {bubbles: true}));
+        } catch (e) {
+          return {state: 'set_failed', error: String(e || '')};
+        }
+        const current = chosen.isContentEditable
+          ? norm(chosen.innerText || chosen.textContent || '')
+          : norm(chosen.value || chosen.textContent || '');
+        return {state: 'set', value: current};
+        """
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                result = owner.run_js(js_set, caption)
+            except Exception:
+                result = None
+            if not isinstance(result, dict):
+                continue
+            if str(result.get("state") or "").strip().lower() != "set":
+                continue
+            current = str(result.get("value") or "").strip()
+            if not _caption_marker_exists(current, verify_marker):
+                current = _read_kuaishou_caption_snapshot(owner)
+            if _caption_marker_exists(current, verify_marker):
+                _log("[Uploader:kuaishou] Caption filled and verified by JS fallback.")
+                return
+
     if strict_verify:
         snapshot = ""
         for owner in (primary_ctx, fallback_ctx):
@@ -15240,6 +15339,96 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
         return
 
     raise RuntimeError(f"Failed to locate caption input on {platform_name}.")
+
+
+def _pick_kuaishou_publish_wrap_text(texts: Sequence[str]) -> str:
+    allow_wrap_tokens = (
+        "发布时间",
+        "立即发布",
+        "定时发布",
+        "发布设置",
+        "发布 取消",
+        "取消 发布",
+        "确认发布",
+        "查看权限",
+        "添加地点",
+        "所有人可见",
+        "好友可见",
+        "仅自己可见",
+    )
+    strong_wrap_tokens = (
+        "发布 取消",
+        "取消 发布",
+        "确认发布",
+    )
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in texts:
+        text = re.sub(r"\s+", " ", str(raw or "")).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text[:320])
+
+    for text in normalized:
+        if any(token in text for token in strong_wrap_tokens):
+            return text
+    for text in normalized:
+        if any(token in text for token in allow_wrap_tokens):
+            return text
+    return ""
+
+
+def _scroll_kuaishou_publish_controls_into_view(primary_ctx: Any, fallback_ctx: Any) -> None:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    const keywords = ['发布时间', '查看权限', '添加地点', '立即发布', '定时发布', '发布', '取消'];
+    const nodes = Array.from(document.querySelectorAll('button, [role="button"], div, span, label, input'))
+      .filter(isVisible)
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || el.value || '');
+        const wrap = el.closest('form, section, .publish, .content, .editor, div') || el.parentElement || el;
+        const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 320);
+        let score = 0;
+        if (keywords.some(keyword => text.includes(keyword))) score += 6;
+        if (/发布时间|查看权限|添加地点/.test(wrapText)) score += 12;
+        if (/发布 取消|取消 发布/.test(wrapText)) score += 10;
+        if (text === '发布' || text === '取消') score += 4;
+        return {el, score};
+      })
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+    if (nodes.length) {
+      try {
+        nodes[0].el.scrollIntoView({block:'center', inline:'nearest'});
+      } catch (e) {}
+      return nodes[0].score;
+    }
+    try {
+      window.scrollTo({top: document.body.scrollHeight, behavior: 'instant'});
+    } catch (e) {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+    return 0;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            owner.run_js(js)
+        except Exception:
+            continue
+    time.sleep(0.4)
 
 
 def _trim_bilibili_title_candidate(text: str, limit: int = 80) -> str:
@@ -15286,6 +15475,27 @@ def _build_bilibili_title_from_caption(caption: str, limit: int = 80) -> str:
     return ""
 
 
+def _utf16_code_unit_length(text: str) -> int:
+    return len(str(text or "").encode("utf-16-le")) // 2
+
+
+def _trim_text_by_utf16_units(text: str, limit: int) -> str:
+    value = str(text or "")
+    max_units = max(0, int(limit))
+    if not value or max_units <= 0:
+        return ""
+
+    kept: list[str] = []
+    used_units = 0
+    for char in value:
+        char_units = len(char.encode("utf-16-le")) // 2
+        if used_units + char_units > max_units:
+            break
+        kept.append(char)
+        used_units += char_units
+    return "".join(kept)
+
+
 def _build_xiaohongshu_title_from_caption(caption: str, limit: int = 20) -> str:
     raw = str(caption or "").strip()
     if not raw:
@@ -15307,7 +15517,7 @@ def _build_xiaohongshu_title_from_caption(caption: str, limit: int = 20) -> str:
     for candidate in candidates:
         title = str(candidate or "").strip().strip("#")
         if title:
-            return title[: max(8, int(limit))]
+            return _trim_text_by_utf16_units(title, max(8, int(limit))).rstrip(" \t\r\n-_|,，。！？!?.#")
     return ""
 
 
@@ -15432,6 +15642,9 @@ def _prepare_image_post_text_payload(
     caption: str,
 ) -> str:
     if str(platform_name or "").strip().lower() not in {"douyin", "xiaohongshu", "kuaishou"}:
+        return str(caption or "").strip()
+
+    if str(platform_name or "").strip().lower() == "douyin":
         return str(caption or "").strip()
 
     title_limit = 20 if platform_name == "xiaohongshu" else 30
@@ -15933,6 +16146,293 @@ def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_
     return
 
 
+def _normalize_douyin_collection_value(text: str) -> str:
+    value = re.sub(r"\s+", "", str(text or ""))
+    if not value:
+        return ""
+    value = re.sub(r"^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：\-]*", "", value)
+    value = re.sub(r"(共\d+[个条]作品|共\d+[个条]内容)$", "", value)
+    return value.strip(":-：|/ ")
+
+
+def _is_douyin_collection_match(current: str, target: str) -> bool:
+    norm_current = _normalize_douyin_collection_value(current)
+    norm_target = _normalize_douyin_collection_value(target)
+    if not norm_current or not norm_target:
+        return False
+    return (
+        norm_current == norm_target
+        or norm_current in norm_target
+        or norm_target in norm_current
+    )
+
+
+def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function clean(txt) {
+      return norm(txt)
+        .replace(/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：\\-]*/g, '')
+        .replace(/共\\d+[个条]作品/g, '')
+        .replace(/共\\d+[个条]内容/g, '')
+        .trim();
+    }
+    const label = Array.from(document.querySelectorAll('label, span, div'))
+      .find(el => isVisible(el) && /^(添加合集|添加到合集|加入合集)$/.test(norm(el.textContent)));
+    if (!label) return {hasField: false, current: '', episode: '', source: 'missing_label'};
+
+    const row = label.closest('[class*="form"], [class*="item"], [class*="row"], section, li, div') || label.parentElement || label;
+    const clone = row.cloneNode(true);
+    Array.from(clone.querySelectorAll(
+      '.semi-select-dropdown, .semi-select-option, .semi-portal, .semi-popover, .semi-tooltip, ' +
+      '[role="listbox"], [role="option"], ul, li'
+    )).forEach(el => el.remove());
+
+    const values = [];
+    const selects = Array.from(row.querySelectorAll(
+      '[role="combobox"], [class*="semi-select"], [class*="select"], [class*="dropdown"], input, [contenteditable="true"]'
+    )).filter(isVisible);
+    let episode = '';
+    for (const el of selects) {
+      const raw = ('value' in el && typeof el.value === 'string' && el.value)
+        ? el.value
+        : (el.innerText || el.textContent || '');
+      const txt = clean(raw);
+      if (!txt) continue;
+      if (/^第\\d+集$/.test(txt)) {
+        if (!episode) episode = txt;
+        continue;
+      }
+      if (txt === '合集') continue;
+      if (/^(请选择合集|选择合集|不选择合集|不选合集)$/.test(txt)) continue;
+      values.push(txt);
+    }
+
+    let current = values[0] || '';
+    if (!current) {
+      const text = clean(clone.innerText || clone.textContent || '');
+      const parts = text.split(/\\s+/).map(clean).filter(Boolean);
+      current = parts.find(part => {
+        if (!part) return false;
+        if (part === '合集') return false;
+        if (/^第\\d+集$/.test(part)) return false;
+        return !/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)$/.test(part);
+      }) || '';
+    }
+
+    return {
+      hasField: true,
+      current,
+      episode,
+      source: current ? 'row_value' : 'empty',
+    };
+    """
+    merged: dict[str, Any] = {"hasField": False, "current": "", "episode": "", "source": ""}
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        if bool(payload.get("hasField")):
+            merged["hasField"] = True
+        if payload.get("current") and not merged["current"]:
+            merged["current"] = str(payload.get("current") or "")
+        if payload.get("episode") and not merged["episode"]:
+            merged["episode"] = str(payload.get("episode") or "")
+        if payload.get("source") and not merged["source"]:
+            merged["source"] = str(payload.get("source") or "")
+    return merged
+
+
+def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_name: str) -> None:
+    target = str(collection_name or "").strip()
+    if not target:
+        _log("[Uploader:douyin] Collection name empty, skip selection.")
+        return
+
+    before = _get_douyin_collection_state(primary_ctx, fallback_ctx)
+    if not bool(before.get("hasField")):
+        raise RuntimeError("douyin image post missing collection field; cannot select target collection.")
+
+    current = str(before.get("current", "") or "")
+    if _is_douyin_collection_match(current, target):
+        _log(f"[Uploader:douyin] Collection already selected: {target}")
+        return
+
+    js_select = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function clean(txt) {
+      return norm(txt)
+        .replace(/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：\\-]*/g, '')
+        .replace(/共\\d+[个条]作品/g, '')
+        .replace(/共\\d+[个条]内容/g, '')
+        .trim();
+    }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+        node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+      } catch (e) {}
+      try {
+        node.click();
+        return true;
+      } catch (e) {
+        try {
+          node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+          return true;
+        } catch (inner) {
+          return false;
+        }
+      }
+    }
+
+    const target = clean(arguments[0] || '');
+    if (!target) return {state: 'skip'};
+
+    const label = Array.from(document.querySelectorAll('label, span, div'))
+      .find(el => isVisible(el) && /^(添加合集|添加到合集|加入合集)$/.test(norm(el.textContent)));
+    if (!label) return {state: 'missing_field'};
+    const row = label.closest('[class*="form"], [class*="item"], [class*="row"], section, li, div') || label.parentElement || label;
+
+    const triggers = Array.from(row.querySelectorAll(
+      '[role="combobox"], [class*="semi-select"], [class*="select"], [class*="dropdown"], input, [contenteditable="true"]'
+    )).filter(isVisible);
+    const collectionTrigger = triggers.find(el => {
+      const txt = clean(('value' in el && typeof el.value === 'string' && el.value) ? el.value : (el.innerText || el.textContent || ''));
+      if (!txt) return true;
+      if (txt === '合集') return false;
+      if (/^第\\d+集$/.test(txt)) return false;
+      return true;
+    }) || triggers.find(el => {
+      const raw = norm(('value' in el && typeof el.value === 'string' && el.value) ? el.value : (el.innerText || el.textContent || ''));
+      return /合集/.test(raw) || /请选择合集|选择合集|不选择合集|不选合集/.test(raw);
+    });
+
+    if (!collectionTrigger) return {state: 'missing_trigger'};
+    if (!clickNode(collectionTrigger)) return {state: 'trigger_click_failed'};
+
+    const roots = [];
+    Array.from(document.querySelectorAll(
+      '.semi-select-dropdown, .semi-portal, .semi-popover, .semi-tooltip, [role="listbox"], [role="dialog"]'
+    )).filter(isVisible).forEach(el => roots.push(el));
+    roots.push(document);
+
+    function optionScore(txt) {
+      if (!txt) return 0;
+      if (txt === target) return 4;
+      if (txt.startsWith(target) || target.startsWith(txt)) return 3;
+      if (txt.includes(target) || target.includes(txt)) return 2;
+      return 0;
+    }
+
+    let bestNode = null;
+    let bestText = '';
+    let bestScore = 0;
+    const optionTexts = [];
+    for (const root of roots) {
+      const nodes = Array.from(root.querySelectorAll(
+        '.semi-select-option, [role="option"], li, button, div, span, a'
+      )).filter(isVisible);
+      for (const node of nodes) {
+        const txt = clean(node.innerText || node.textContent || '');
+        if (!txt || txt.length > 80) continue;
+        if (txt === '合集') continue;
+        if (/^第\\d+集$/.test(txt)) continue;
+        if (/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)$/.test(txt)) continue;
+        if (!optionTexts.includes(txt)) optionTexts.push(txt);
+        const score = optionScore(txt);
+        if (score > bestScore) {
+          bestScore = score;
+          bestNode = node;
+          bestText = txt;
+        }
+      }
+      if (bestScore >= 4) break;
+    }
+
+    if (!bestNode || bestScore <= 0) {
+      return {state: 'option_not_found', visible_options: optionTexts.slice(0, 8)};
+    }
+
+    const clickTarget = bestNode.closest('.semi-select-option, [role="option"], li, button, a, div, span') || bestNode;
+    if (!clickNode(clickTarget)) {
+      return {state: 'option_click_failed', option: bestText, visible_options: optionTexts.slice(0, 8)};
+    }
+
+    return {state: 'clicked', option: bestText, visible_options: optionTexts.slice(0, 8)};
+    """
+
+    for attempt in range(1, 7):
+        action_states: list[str] = []
+        visible_options: list[str] = []
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                action = owner.run_js(js_select, target)
+            except Exception:
+                action = {}
+            if isinstance(action, dict):
+                action_states.append(str(action.get("state", "") or ""))
+                for raw in list(action.get("visible_options") or []):
+                    option = str(raw or "").strip()
+                    if option and option not in visible_options:
+                        visible_options.append(option)
+            else:
+                action_states.append("none")
+
+        time.sleep(0.6)
+        after = _get_douyin_collection_state(primary_ctx, fallback_ctx)
+        current = str(after.get("current", "") or "")
+        if _is_douyin_collection_match(current, target):
+            _log(
+                f"[Uploader:douyin] Collection selected: {target}"
+                + (f" (episode={after.get('episode')})" if after.get("episode") else "")
+            )
+            return
+
+        _log(
+            f"[Uploader:douyin] Collection select retry {attempt}/6: "
+            f"states={','.join(action_states) or '-'}, "
+            f"current={current or '-'}, "
+            f"visible={';'.join(visible_options[:4]) or '-'}"
+        )
+        if any(state in {"missing_field", "missing_trigger"} for state in action_states):
+            break
+
+    final_state = _get_douyin_collection_state(primary_ctx, fallback_ctx)
+    final_current = str(final_state.get("current", "") or "")
+    final_episode = str(final_state.get("episode", "") or "")
+    raise RuntimeError(
+        f"douyin collection selection not confirmed: target={target}, "
+        f"current={final_current or '-'}, episode={final_episode or '-'}"
+    )
+
+
 def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tuple[str, ...], platform_name: str) -> bool:
     def _js_click(owner: Any, keyword: str) -> bool:
         js = """
@@ -16178,6 +16678,8 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
 
 def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
+        "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
+        "xpath://span[normalize-space(.)='发布']/ancestor::button[../button[normalize-space(.)='取消']][1]",
         "xpath://button[normalize-space(.)='发布']",
         "xpath://button[contains(@class,'primary') and normalize-space(.)='发布']",
         "xpath://button[contains(@class,'btn') and normalize-space(.)='发布']",
@@ -16194,20 +16696,6 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
         "数据中心",
         "成长中心",
         "创作服务",
-    )
-    allow_wrap_tokens = (
-        "发布时间",
-        "立即发布",
-        "定时发布",
-        "发布设置",
-        "发布 取消",
-        "取消 发布",
-        "确认发布",
-    )
-    strong_wrap_tokens = (
-        "发布 取消",
-        "取消 发布",
-        "确认发布",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -16247,19 +16735,14 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
             except Exception:
                 wrapper_text = ""
                 wrapper_texts = ()
-            strong_matched = any(
-                any(token in text for token in strong_wrap_tokens)
-                for text in ((wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,))
-            )
-            if not strong_matched and any(
+            wrap_candidates = (wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,)
+            chosen_wrap = _pick_kuaishou_publish_wrap_text(wrap_candidates)
+            if not chosen_wrap and any(
                 any(token in text for token in skip_wrap_tokens)
-                for text in ((wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,))
+                for text in wrap_candidates
             ):
                 continue
-            if not any(
-                any(token in text for token in allow_wrap_tokens)
-                for text in ((wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,))
-            ):
+            if not chosen_wrap:
                 continue
             try:
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
@@ -16278,11 +16761,11 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
     js = r"""
     function isVisible(el) {
       if (!el) return false;
-      const st = window.getComputedStyle(el);
-      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
-      const r = el.getBoundingClientRect();
-      return r.width > 8 && r.height > 8;
-    }
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 8 && r.height > 8;
+      }
     function norm(s) {
       return String(s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
     }
@@ -16293,10 +16776,16 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
       const st = window.getComputedStyle(el);
       if (st.pointerEvents === 'none') return true;
       return false;
-    }
-    const allowWrapTokens = ['发布时间', '立即发布', '定时发布', '发布设置', '发布 取消', '取消 发布', '确认发布'];
+      }
+    const allowWrapTokens = ['发布时间', '立即发布', '定时发布', '发布设置', '发布 取消', '取消 发布', '确认发布', '查看权限', '添加地点', '所有人可见', '好友可见', '仅自己可见'];
     const strongWrapTokens = ['发布 取消', '取消 发布', '确认发布'];
     const skipWrapTokens = ['上传视频', '上传图文', '上传全景视频', '首页', '内容管理', '互动管理', '数据中心', '成长中心', '创作服务'];
+    function pickWrap(wrapTexts) {
+      const texts = Array.from(wrapTexts || []).filter(Boolean);
+      const strong = texts.find(text => strongWrapTokens.some(token => text.includes(token))) || '';
+      if (strong) return strong;
+      return texts.find(text => allowWrapTokens.some(token => text.includes(token))) || '';
+    }
     const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
       .filter(el => isVisible(el))
       .map(el => {
@@ -16313,10 +16802,9 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
           wrapTexts.push(norm(String((cur && cur.innerText) || '').slice(0, 320)));
           cur = cur.parentElement;
         }
-        const strongWrap = wrapTexts.find(wrapText => strongWrapTokens.some(token => wrapText.includes(token))) || '';
-        const wrapText = strongWrap || wrapTexts.find(Boolean) || '';
-        if (!wrapTexts.some(candidate => allowWrapTokens.some(token => candidate.includes(token)))) return null;
-        if (!strongWrap && wrapTexts.some(candidate => skipWrapTokens.some(token => candidate.includes(token)))) return null;
+        const wrapText = pickWrap(wrapTexts);
+        if (!wrapText && wrapTexts.some(candidate => skipWrapTokens.some(token => candidate.includes(token)))) return null;
+        if (!wrapText) return null;
         let score = 0;
         if (text === '发布') score += 14;
         if (text === '确认发布') score += 12;
@@ -18315,9 +18803,13 @@ def _fill_draft_once_generic(
     _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
     if platform_name == "xiaohongshu" and not _is_image_file(target):
         _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)
+    if platform_name == "douyin" and _is_image_file(target):
+        _select_douyin_collection(ctx, page, collection_name)
     if platform_name == "bilibili":
         _fill_bilibili_title_from_caption(ctx, page, final_caption)
         _log("[Uploader:bilibili] Skip collection selection by design.")
+    if platform_name == "kuaishou":
+        _scroll_kuaishou_publish_controls_into_view(ctx, page)
     if save_draft:
         if not _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
             if platform_name in {"douyin", "kuaishou", "bilibili"} and _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name):
@@ -18343,6 +18835,7 @@ def _fill_draft_once_generic(
             douyin_mode = "immediate"
             _log("[Uploader:douyin] Publish mode(fixed): immediate")
         elif platform_name == "kuaishou":
+            _scroll_kuaishou_publish_controls_into_view(ctx, page)
             _click_first_matching_button(
                 ctx,
                 page,
@@ -18522,6 +19015,7 @@ def fill_draft_douyin(
     workspace: Workspace,
     caption: Optional[str] = None,
     target_video: Optional[Path] = None,
+    collection_name: str = DEFAULT_COLLECTION_NAME,
     debug_port: int = DEFAULT_PORT,
     save_draft: bool = True,
     publish_now: bool = False,
@@ -18580,6 +19074,7 @@ def fill_draft_douyin(
                     save_draft=save_draft,
                     publish_now=publish_now,
                     upload_timeout=upload_timeout,
+                    collection_name=collection_name,
                     draft_button_texts=("保存草稿", "草稿箱", "草稿"),
                     publish_button_texts=("发布", "立即发布", "确认发布"),
                     debug_port=debug_port,
@@ -19281,6 +19776,7 @@ def main() -> int:
                             workspace,
                             caption=(args.caption or "").strip() or None,
                             target_video=target,
+                            collection_name=resolved_collection_name,
                             debug_port=args.debug_port,
                             save_draft=not args.no_save_draft,
                             upload_timeout=max(30, int(args.upload_timeout)),

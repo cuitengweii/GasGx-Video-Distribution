@@ -2002,7 +2002,7 @@ def _build_collect_publish_latest_menu_card(*, default_profile: str) -> Dict[str
                 "emoji": "\u26a1",
                 "items": [
                     "\u89c6\u9891\u5373\u91c7\u5373\u53d1\uff1a\u53ea\u626b X \u89c6\u9891\u5e16\uff0c\u540e\u7eed\u8fdb\u5165\u89c6\u9891\u53d1\u5e03\u6d41\u7a0b\u3002",
-                    "\u56fe\u7247\u5373\u91c7\u5373\u53d1\uff1a\u53ea\u626b X \u56fe\u7247\u5e16\uff0c\u76ee\u524d\u4ec5\u8fdb\u5c0f\u7ea2\u4e66\u56fe\u6587\u53d1\u5e03\u6d41\u7a0b\u3002",
+                    "\u56fe\u7247\u5373\u91c7\u5373\u53d1\uff1a\u53ea\u626b X \u56fe\u7247\u5e16\uff0c\u786e\u8ba4\u540e\u6309\u5b9e\u9645\u6d41\u7a0b\u8fdb\u5165\u6296\u97f3 / \u5c0f\u7ea2\u4e66 / \u5feb\u624b\u53d1\u5e03\u3002",
                     "\u4e24\u6761\u6d41\u7a0b\u7684\u5019\u9009\u961f\u5217\u3001\u5904\u7406\u548c\u53d1\u5e03\u8bb0\u5f55\u76f8\u4e92\u72ec\u7acb\u3002",
                 ],
             }
@@ -4542,11 +4542,7 @@ def _upsert_immediate_candidate_item(
         existing_status = str(row.get("status") or "").strip().lower()
         existing_message_id = int(row.get("message_id") or 0)
         row["id"] = item_id
-        row["workflow"] = (
-            IMMEDIATE_COLLECT_REVIEW_WORKFLOW
-            if _normalize_immediate_collect_media_kind(media_kind) == "image"
-            else "immediate_manual_publish"
-        )
+        row["workflow"] = "immediate_manual_publish"
         row["media_kind"] = _normalize_immediate_collect_media_kind(media_kind or row.get("media_kind") or "video")
         row["created_at"] = str(row.get("created_at") or _now_text())
         row["updated_at"] = _now_text()
