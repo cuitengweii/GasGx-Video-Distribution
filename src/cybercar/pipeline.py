@@ -948,8 +948,8 @@ def _send_telegram_prefilter_for_candidate(
             email_settings,
             card,
             disable_web_page_preview=(not source_url),
-            max_attempts=1 if fast_send else 3,
-            api_retries=0 if fast_send else 2,
+            max_attempts=2 if fast_send else 3,
+            api_retries=1 if fast_send else 2,
             timeout_seconds_override=8 if fast_send else None,
         )
     except Exception as exc:
@@ -972,7 +972,7 @@ def _send_telegram_prefilter_for_candidate(
             fallback_card,
             disable_web_page_preview=False,
             max_attempts=1,
-            api_retries=0,
+            api_retries=1 if fast_send else 0,
             timeout_seconds_override=8 if fast_send else None,
         )
         core._log(f"[Prefilter] Candidate card send failed, fallback text sent: {item_id} ({exc})")

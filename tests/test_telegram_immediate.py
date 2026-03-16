@@ -876,11 +876,11 @@ def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatc
 
     assert result["result"]["message_id"] == 777
     assert len(attempts) == 2
-    assert attempts[0]["kwargs"]["max_attempts"] == 1
-    assert attempts[0]["kwargs"]["api_retries"] == 0
+    assert attempts[0]["kwargs"]["max_attempts"] == 2
+    assert attempts[0]["kwargs"]["api_retries"] == 1
     assert attempts[0]["kwargs"]["timeout_seconds_override"] == 8
     assert attempts[1]["kwargs"]["max_attempts"] == 1
-    assert attempts[1]["kwargs"]["api_retries"] == 0
+    assert attempts[1]["kwargs"]["api_retries"] == 1
     assert attempts[1]["kwargs"]["timeout_seconds_override"] == 8
     primary_card = attempts[0]["card"]
     fallback_card = attempts[1]["card"]
@@ -923,8 +923,8 @@ def test_send_telegram_prefilter_for_candidate_fast_send_shortens_primary_send(m
 
     assert result["result"]["message_id"] == 778
     assert len(attempts) == 1
-    assert attempts[0]["kwargs"]["max_attempts"] == 1
-    assert attempts[0]["kwargs"]["api_retries"] == 0
+    assert attempts[0]["kwargs"]["max_attempts"] == 2
+    assert attempts[0]["kwargs"]["api_retries"] == 1
     assert attempts[0]["kwargs"]["timeout_seconds_override"] == 8
 
 
@@ -1455,6 +1455,69 @@ def test_run_immediate_collect_item_job_test_mode_keeps_real_collect_and_adopts_
     assert len(feedback_cards) == 1
     assert "\u56fe\u7247\u91c7\u96c6\u5df2\u5b8c\u6210" in str(feedback_cards[0]["title"])
     assert "\u6d4b\u8bd5\u6a21\u5f0f" in str(feedback_cards[0]["subtitle"])
+
+
+def test_run_immediate_collect_item_job_adopts_downloaded_video_after_successful_collect(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    collect_calls: list[dict[str, object]] = []
+    approvals: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_queue_immediate_platform_jobs",
+        lambda **kwargs: {
+            "spawned": 1,
+            "failed": 0,
+            "skipped_duplicate": 0,
+            "item": worker_impl._update_prefilter_item(
+                workspace,
+                str(kwargs["item_id"]),
+                updates={
+                    "status": "publish_running",
+                    "platform_results": {"wechat": {"status": "queued"}},
+                    "action": "publish",
+                },
+            ),
+        },
+    )
+
+    def run_unified_once(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        downloaded = workspace / "1_Downloads" / "fresh-video.mp4"
+        downloaded.parent.mkdir(parents=True, exist_ok=True)
+        downloaded.write_text("video", encoding="utf-8")
+        return {"ok": True, "code": 0, "stdout": "collect success"}
+
+    monkeypatch.setattr(worker_impl, "_run_unified_once", run_unified_once)
+
+    item = _video_item(video_name="", processed_name="", status="publish_requested", source_url="https://x.test/post/fresh-video")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 0
+    assert len(collect_calls) == 1
+    assert len(approvals) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_running"
+    assert updated["processed_name"] == "fresh-video.mp4"
+    assert (workspace / "2_Processed" / "fresh-video.mp4").exists()
 
 
 def test_run_immediate_collect_item_job_retries_transient_x_metadata_failure(tmp_path: Path, monkeypatch) -> None:

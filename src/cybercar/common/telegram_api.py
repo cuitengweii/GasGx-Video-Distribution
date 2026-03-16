@@ -25,6 +25,18 @@ def _telegram_session() -> requests.Session:
     return _SESSION
 
 
+def _reset_telegram_session() -> None:
+    global _SESSION
+    session = _SESSION
+    _SESSION = None
+    if session is None:
+        return
+    try:
+        session.close()
+    except Exception:
+        pass
+
+
 def _to_int(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -84,8 +96,8 @@ def call_telegram_api(
         retry_count = max(0, _to_int(max_retries, 0))
 
     total_attempts = 1 + retry_count
-    session = _telegram_session()
     for attempt in range(total_attempts):
+        session = _telegram_session()
         try:
             if use_post:
                 resp = session.post(endpoint, data=payload, timeout=timeout)
@@ -96,6 +108,7 @@ def call_telegram_api(
             should_retry = (attempt + 1) < total_attempts and _is_retryable_request_error(exc)
             if not should_retry:
                 raise
+            _reset_telegram_session()
             time.sleep(_retry_sleep_seconds(attempt, retry_backoff_seconds))
 
     try:

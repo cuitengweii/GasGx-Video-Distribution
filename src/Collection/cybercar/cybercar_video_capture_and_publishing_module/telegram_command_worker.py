@@ -7204,7 +7204,21 @@ def _list_downloaded_media(workspace: Path, media_kind: str = "video") -> Dict[s
     return items
 
 
-def _adopt_downloaded_target_for_test_mode(
+def _collect_result_indicates_success(result: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if bool(result.get("ok")):
+        return True
+    status = str(result.get("status") or "").strip().lower()
+    if status in {"ok", "success", "done"}:
+        return True
+    try:
+        return int(result.get("code")) == 0
+    except Exception:
+        return False
+
+
+def _adopt_downloaded_target(
     *,
     workspace: Path,
     media_kind: str,
@@ -7224,6 +7238,19 @@ def _adopt_downloaded_target_for_test_mode(
         return target
     except Exception:
         return None
+
+
+def _adopt_downloaded_target_for_test_mode(
+    *,
+    workspace: Path,
+    media_kind: str,
+    downloaded_target: Path,
+) -> Optional[Path]:
+    return _adopt_downloaded_target(
+        workspace=workspace,
+        media_kind=media_kind,
+        downloaded_target=downloaded_target,
+    )
 
 
 def _build_immediate_cycle_context(
@@ -7918,6 +7945,18 @@ def _run_immediate_collect_item_job(
                 new_downloads = [path for name, path in after_downloads.items() if name not in before_downloads]
                 if new_downloads:
                     adopted = _adopt_downloaded_target_for_test_mode(
+                        workspace=workspace,
+                        media_kind=media_kind,
+                        downloaded_target=sorted(new_downloads, key=lambda path: path.stat().st_mtime, reverse=True)[0],
+                    )
+                    if adopted is not None:
+                        target = adopted
+                        break
+            else:
+                after_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
+                new_downloads = [path for name, path in after_downloads.items() if name not in before_downloads]
+                if new_downloads and _collect_result_indicates_success(collect_result):
+                    adopted = _adopt_downloaded_target(
                         workspace=workspace,
                         media_kind=media_kind,
                         downloaded_target=sorted(new_downloads, key=lambda path: path.stat().st_mtime, reverse=True)[0],
