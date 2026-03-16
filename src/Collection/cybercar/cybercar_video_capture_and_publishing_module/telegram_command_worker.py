@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
@@ -117,6 +117,7 @@ DEFAULT_TELEGRAM_PREFILTER_FEEDBACK_HISTORY_FILE = Path("runtime") / "telegram_p
 DEFAULT_PENDING_BACKGROUND_FEEDBACK_FILE = Path("runtime") / "telegram_pending_background_feedback.json"
 DEFAULT_PIPELINE_PRIORITY_REQUEST_DIR = Path("runtime") / "pipeline_priority_requests"
 DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 30
+DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 14 * 86400
 DEFAULT_PLATFORM_LOCK_TIMEOUT_SECONDS = 1800
 TELEGRAM_PREFILTER_CALLBACK_PREFIX = "ctpf"
 TELEGRAM_MENU_CALLBACK_PREFIX = "ctm"
@@ -352,31 +353,37 @@ def _save_offset(path: Path, value: int) -> None:
     path.write_text(str(int(value)), encoding="utf-8")
 
 
-def _is_telegram_poll_network_error(exc: Exception) -> bool:
-    text = str(exc or "").strip().lower()
+_TELEGRAM_TRANSPORT_ERROR_MARKERS = (
+    "httpsconnectionpool",
+    "connection aborted",
+    "connection reset",
+    "connectionreseterror",
+    "connecttimeout",
+    "connect time out",
+    "read timeout",
+    "readtimeout",
+    "timed out",
+    "max retries exceeded",
+    "temporary failure",
+    "name or service not known",
+    "nodename nor servname",
+    "failed to establish a new connection",
+    "remote end closed connection",
+    "proxyerror",
+    "sslerror",
+    "connection refused",
+)
+
+
+def _is_telegram_transport_error_text(value: str) -> bool:
+    text = str(value or "").strip().lower()
     if not text:
         return False
-    markers = (
-        "httpsconnectionpool",
-        "connection aborted",
-        "connection reset",
-        "connectionreseterror",
-        "connecttimeout",
-        "connect time out",
-        "read timeout",
-        "readtimeout",
-        "timed out",
-        "max retries exceeded",
-        "temporary failure",
-        "name or service not known",
-        "nodename nor servname",
-        "failed to establish a new connection",
-        "remote end closed connection",
-        "proxyerror",
-        "sslerror",
-        "connection refused",
-    )
-    return any(marker in text for marker in markers)
+    return any(marker in text for marker in _TELEGRAM_TRANSPORT_ERROR_MARKERS)
+
+
+def _is_telegram_poll_network_error(exc: Exception) -> bool:
+    return _is_telegram_transport_error_text(str(exc or ""))
 
 
 def _should_restart_after_poll_error(exc: Exception, consecutive_failures: int, threshold: int) -> bool:
@@ -4081,6 +4088,7 @@ def _flush_pending_prefilter_retries(
 ) -> None:
     if not str(bot_token or "").strip() or not str(chat_id or "").strip():
         return
+    _cleanup_prefilter_queue(workspace, log_file=log_file)
     candidates = _pending_prefilter_retry_candidates(workspace)
     if not candidates:
         return
@@ -4209,6 +4217,84 @@ def _save_prefilter_queue(path: Path, queue: Dict[str, Any]) -> None:
     payload["version"] = int(payload.get("version", 1) or 1)
     payload["updated_at"] = _now_text()
     _atomic_write_json(path, payload)
+
+
+def _prefilter_item_timestamp(row: Dict[str, Any]) -> Optional[datetime]:
+    if not isinstance(row, dict):
+        return None
+    for key in ("updated_at", "created_at", "prefilter_last_retry_at"):
+        parsed = _parse_time_text(str(row.get(key) or ""))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _is_prefilter_item_polluted(row: Dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return True
+    workflow = str(row.get("workflow") or "").strip().lower()
+    if workflow not in {"immediate_manual_publish", IMMEDIATE_COLLECT_REVIEW_WORKFLOW}:
+        return False
+    media_kind = str(row.get("media_kind") or "").strip().lower()
+    if media_kind and media_kind not in {"video", "image"}:
+        return True
+    source_url = str(row.get("source_url") or "").strip()
+    video_name = str(row.get("video_name") or "").strip()
+    processed_name = str(row.get("processed_name") or "").strip()
+    if source_url or video_name or processed_name:
+        return False
+    if _normalize_platform_results(row.get("platform_results")):
+        return False
+    try:
+        message_id = int(row.get("message_id") or 0)
+    except Exception:
+        message_id = 0
+    if message_id > 0:
+        return False
+    return True
+
+
+def _prune_prefilter_queue(queue: Dict[str, Any]) -> Dict[str, int]:
+    items = queue.get("items", {})
+    if not isinstance(items, dict) or not items:
+        return {"removed_terminal": 0, "removed_polluted": 0}
+    cutoff = datetime.now() - timedelta(seconds=max(3600, int(DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS)))
+    removed_terminal = 0
+    removed_polluted = 0
+    for item_id, row in list(items.items()):
+        if not isinstance(row, dict):
+            del items[item_id]
+            removed_polluted += 1
+            continue
+        if _is_prefilter_item_polluted(row):
+            del items[item_id]
+            removed_polluted += 1
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status not in {"up_confirmed", "down_confirmed", "send_failed"}:
+            continue
+        ts = _prefilter_item_timestamp(row)
+        if ts is not None and ts < cutoff:
+            del items[item_id]
+            removed_terminal += 1
+    return {"removed_terminal": removed_terminal, "removed_polluted": removed_polluted}
+
+
+def _cleanup_prefilter_queue(workspace: Path, *, log_file: Optional[Path] = None) -> Dict[str, int]:
+    summary = _with_prefilter_queue_lock(workspace, _prune_prefilter_queue)
+    if not isinstance(summary, dict):
+        return {"removed_terminal": 0, "removed_polluted": 0}
+    removed_terminal = int(summary.get("removed_terminal") or 0)
+    removed_polluted = int(summary.get("removed_polluted") or 0)
+    if (removed_terminal > 0 or removed_polluted > 0) and isinstance(log_file, Path):
+        _append_log(
+            log_file,
+            (
+                "[Worker] prefilter queue cleanup: "
+                f"removed_terminal={removed_terminal}, removed_polluted={removed_polluted}"
+            ),
+        )
+    return {"removed_terminal": removed_terminal, "removed_polluted": removed_polluted}
 
 
 def _with_prefilter_queue_lock(
@@ -4806,7 +4892,12 @@ def _request_platform_login_qr(
         return result if isinstance(result, dict) else {"ok": False, "error": "invalid platform_login_qr response"}
     except Exception as exc:
         _append_log(log_file, f"[Worker] platform_login_qr failed: {exc}")
-        return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "needs_login": True,
+            "transport_error": _is_telegram_transport_error_text(str(exc)),
+            "error": str(exc),
+        }
 
 
 def _refresh_platform_login_qr_message(
@@ -5389,6 +5480,13 @@ def _probe_platform_login_after_publish_failure(
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
         return "failed", str(error_text or "").strip()
+    if bool(result.get("transport_error")):
+        notice = "视频号需要重新登录；Telegram 网络抖动导致二维码暂未送达，可稍后重试"
+        _append_log(
+            log_file,
+            f"[Worker] immediate publish login recheck transport degraded platform={platform_token} item={item_id}",
+        )
+        return "login_required", notice
     if not (bool(result.get("sent")) or bool(result.get("skipped"))):
         _append_log(
             log_file,
@@ -7814,6 +7912,8 @@ def _preflight_immediate_platform_login(
             error_text = f"{error_text}；登录二维码已发送到 Telegram"
         elif bool(qr_result.get("skipped")):
             error_text = f"{error_text}；登录二维码已在近期发送"
+        elif bool(qr_result.get("transport_error")):
+            error_text = f"{error_text}；Telegram 网络抖动导致二维码暂未送达，可稍后重试"
         elif str(qr_result.get("error") or "").strip():
             error_text = f"{error_text}；二维码发送失败：{str(qr_result.get('error') or '').strip()}"
     return {"ready": False, "error": error_text, "result": result, "qr_result": qr_result}
@@ -9303,6 +9403,10 @@ def _run_collect_publish_latest_job(
     immediate_test_mode: bool = False,
 ) -> int:
     runner, core = _load_runtime_modules()
+    _cleanup_prefilter_queue(
+        workspace,
+        log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+    )
     args = _build_immediate_publish_args(
         runner=runner,
         workspace=workspace,
@@ -11081,6 +11185,7 @@ def main() -> int:
                 pruned_tasks = _prune_home_action_tasks(workspace)
                 if pruned_tasks > 0:
                     _append_log(log_file, f"[Worker] home action tasks pruned: {pruned_tasks}")
+                _cleanup_prefilter_queue(workspace, log_file=log_file)
                 _flush_pending_background_feedback(
                     workspace=workspace,
                     bot_token=bot_token,
@@ -11207,15 +11312,23 @@ def main() -> int:
                 )
                 return 0
             except Exception as exc:
-                _append_log(log_file, f"[Worker] loop error: {exc}")
+                poll_transport_error = _is_telegram_poll_network_error(exc)
+                if poll_transport_error:
+                    _append_log(log_file, f"[Worker] Telegram poll transport warning: {exc}")
+                else:
+                    _append_log(log_file, f"[Worker] loop error: {exc}")
                 consecutive_poll_failures += 1
                 _update_worker_state(
                     state_file,
                     pid=os.getpid(),
-                    status="error",
-                    startup_stage="",
+                    status="polling" if poll_transport_error else "error",
+                    startup_stage="poll_transport_retry" if poll_transport_error else "",
                     worker_heartbeat_at=_now_text(),
-                    last_error=str(exc),
+                    last_error=(
+                        "telegram poll transport jitter; send path remains retryable"
+                        if poll_transport_error
+                        else str(exc)
+                    ),
                     consecutive_poll_failures=consecutive_poll_failures,
                 )
                 if args.once:

@@ -11,30 +11,35 @@ DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_GET_RETRY_COUNT = 2
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
 
-_SESSION: requests.Session | None = None
+_SESSIONS: dict[str, requests.Session] = {}
 
 
-def _telegram_session() -> requests.Session:
-    global _SESSION
-    if _SESSION is None:
+def _session_key(*, use_post: bool) -> str:
+    return "post" if use_post else "get"
+
+
+def _telegram_session(*, use_post: bool) -> requests.Session:
+    key = _session_key(use_post=use_post)
+    session = _SESSIONS.get(key)
+    if session is None:
         session = requests.Session()
         adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
-        _SESSION = session
-    return _SESSION
+        _SESSIONS[key] = session
+    return session
 
 
-def _reset_telegram_session() -> None:
-    global _SESSION
-    session = _SESSION
-    _SESSION = None
-    if session is None:
-        return
-    try:
-        session.close()
-    except Exception:
-        pass
+def _reset_telegram_session(*, use_post: bool | None = None) -> None:
+    keys = [_session_key(use_post=bool(use_post))] if use_post is not None else list(_SESSIONS)
+    for key in keys:
+        session = _SESSIONS.pop(key, None)
+        if session is None:
+            continue
+        try:
+            session.close()
+        except Exception:
+            pass
 
 
 def _to_int(value: Any, default: int) -> int:
@@ -97,7 +102,7 @@ def call_telegram_api(
 
     total_attempts = 1 + retry_count
     for attempt in range(total_attempts):
-        session = _telegram_session()
+        session = _telegram_session(use_post=use_post)
         try:
             if use_post:
                 resp = session.post(endpoint, data=payload, timeout=timeout)
@@ -108,7 +113,7 @@ def call_telegram_api(
             should_retry = (attempt + 1) < total_attempts and _is_retryable_request_error(exc)
             if not should_retry:
                 raise
-            _reset_telegram_session()
+            _reset_telegram_session(use_post=use_post)
             time.sleep(_retry_sleep_seconds(attempt, retry_backoff_seconds))
 
     try:
