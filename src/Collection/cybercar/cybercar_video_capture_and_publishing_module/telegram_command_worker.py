@@ -143,6 +143,12 @@ IMMEDIATE_CANDIDATE_REUSE_STATUSES = {
     "publish_confirm_pending",
     "publish_running",
 }
+IMMEDIATE_CANDIDATE_REISSUE_STATUSES = {
+    "link_pending",
+    "publish_requested",
+    "publish_confirm_pending",
+    "publish_partial",
+}
 IMMEDIATE_PUBLISH_APPROVED_STATUSES = {
     "publish_requested",
     "download_running",
@@ -7585,6 +7591,57 @@ def _send_immediate_candidate_prefilter_card(
         target_platforms=str(item.get("target_platforms") or "").strip(),
         fast_send=bool(fast_send),
     )
+
+
+def _should_reissue_immediate_candidate_card(item: Dict[str, Any]) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    if status not in IMMEDIATE_CANDIDATE_REISSUE_STATUSES:
+        return False
+    if int(item.get("message_id") or 0) <= 0:
+        return False
+    return bool(str(item.get("source_url") or "").strip())
+
+
+def _reissue_immediate_candidate_prefilter_card(
+    *,
+    runner: Any,
+    email_settings: Any,
+    workspace: Path,
+    item_id: str,
+    item: Dict[str, Any],
+    telegram_chat_id: str,
+    workspace_ctx: Any = None,
+) -> Dict[str, Any]:
+    response = _send_immediate_candidate_prefilter_card(
+        runner=runner,
+        email_settings=email_settings,
+        workspace=workspace,
+        item=item,
+        workspace_ctx=workspace_ctx,
+        fast_send=False,
+    )
+    result_payload = response.get("result") if isinstance(response, dict) else {}
+    if not isinstance(result_payload, dict):
+        result_payload = {}
+    chat_payload = result_payload.get("chat") if isinstance(result_payload.get("chat"), dict) else {}
+    message_id = int(result_payload.get("message_id") or 0)
+    if message_id <= 0:
+        raise RuntimeError("telegram candidate prefilter message_id missing")
+    current_status = str(item.get("status") or "").strip().lower() or "link_pending"
+    return _update_prefilter_item(
+        workspace,
+        item_id,
+        updates={
+            "status": current_status,
+            "message_id": message_id,
+            "chat_id": str(chat_payload.get("id") or telegram_chat_id or ""),
+            "action": "resent_existing_card",
+            "last_error": "",
+            "prefilter_retry_pending": False,
+            "prefilter_last_retry_epoch": 0.0,
+            "prefilter_last_retry_at": "",
+        },
+    )
 def _queue_immediate_platform_jobs(
     *,
     workspace: Path,
@@ -8674,6 +8731,7 @@ def _update_prefilter_item(
             row.update({k: v for k, v in updates.items()})
         row = _apply_coordination_snapshot(row, workspace)
         row["updated_at"] = _now_text()
+        items[item_id] = row
         return dict(row)
 
     return _with_prefilter_queue_lock(workspace, _mutate)
@@ -9320,12 +9378,14 @@ def _run_collect_publish_latest_job(
 
     sent_candidates = 0
     reused_candidates = 0
+    reissued_candidates = 0
     skipped_duplicates = 0
     fresh_candidates = 0
     attempted_new_candidates = 0
     last_send_error = ""
     total_candidates = len(candidates)
     workspace_ctx = runner.core.init_workspace(str(workspace))
+    reusable_items_to_reissue: list[tuple[str, Dict[str, Any]]] = []
     for idx, candidate in enumerate(candidates, start=1):
         if fresh_candidates >= requested_limit or attempted_new_candidates >= requested_limit:
             break
@@ -9349,6 +9409,8 @@ def _run_collect_publish_latest_job(
                 skipped_duplicates += 1
                 continue
             reused_candidates += 1
+            if _should_reissue_immediate_candidate_card(item):
+                reusable_items_to_reissue.append((item_id, dict(item)))
             continue
         if not item_id or not isinstance(item, dict):
             skipped_duplicates += 1
@@ -9439,15 +9501,44 @@ def _run_collect_publish_latest_job(
             )
             skipped_duplicates += 1
 
+    if (not immediate_test_mode) and fresh_candidates <= 0 and reusable_items_to_reissue:
+        for reusable_item_id, reusable_item in reusable_items_to_reissue[:requested_limit]:
+            try:
+                _reissue_immediate_candidate_prefilter_card(
+                    runner=runner,
+                    email_settings=email_settings,
+                    workspace=workspace,
+                    item_id=reusable_item_id,
+                    item=reusable_item,
+                    telegram_chat_id=telegram_chat_id,
+                    workspace_ctx=workspace_ctx,
+                )
+                reissued_candidates += 1
+            except Exception as exc:
+                last_send_error = _preview_text(str(exc), limit=160)
+                _update_prefilter_item(
+                    workspace,
+                    reusable_item_id,
+                    updates={
+                        "action": "resent_existing_failed",
+                        "last_error": str(exc),
+                    },
+                )
+        if reissued_candidates > 0:
+            sent_candidates += reissued_candidates
+            reused_candidates = max(0, reused_candidates - reissued_candidates)
+
     if sent_candidates > 0 or reused_candidates > 0:
         next_step_items: list[str] = []
         if fresh_candidates > 0:
             next_step_items.append(
                 f"我已发送本轮候选预审卡片；只有你明确点击“普通发布”或“原创发布”的候选，才会进入下载和{_format_platform_text(target_platforms)}发布。"
             )
+        if reissued_candidates > 0:
+            next_step_items.append("本轮命中的历史在审候选已重发当前状态卡；直接从新卡继续处理即可。")
         if reused_candidates > 0 and not immediate_test_mode:
             next_step_items.append("其中有部分候选已存在历史预审记录，本轮未重复创建新的旧卡片。")
-        if fresh_candidates == 0 and reused_candidates > 0 and not immediate_test_mode:
+        if fresh_candidates == 0 and reissued_candidates == 0 and reused_candidates > 0 and not immediate_test_mode:
             next_step_items.append("这次命中的都是已在处理或已处理过的候选；请查看最近的候选卡片继续操作。")
         if immediate_test_mode:
             next_step_items.append("测试模式已放宽候选匹配并强制重发新预审卡，后续仍会进入真实采集和发布链路。")
@@ -9464,7 +9555,7 @@ def _run_collect_publish_latest_job(
                     requested_limit=requested_limit,
                     platforms=target_platforms,
                     discovered_count=total_candidates,
-                    sent_count=fresh_candidates,
+                    sent_count=fresh_candidates + reissued_candidates,
                     reused_count=reused_candidates,
                     skipped_count=skipped_duplicates,
                 ),

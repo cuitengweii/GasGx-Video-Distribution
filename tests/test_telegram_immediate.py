@@ -566,11 +566,12 @@ def test_run_collect_publish_latest_job_test_mode_forces_new_prefilter_card(tmp_
     assert item["platform_results"] == {}
 
 
-def test_run_collect_publish_latest_job_default_mode_reuses_existing_prefilter_card(tmp_path: Path, monkeypatch) -> None:
+def test_run_collect_publish_latest_job_default_mode_reissues_existing_active_prefilter_card(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
     runner = FakeRunner(core)
     discovered_kwargs: list[dict[str, object]] = []
+    feedbacks: list[dict[str, object]] = []
     candidate = {
         "url": "https://x.test/post/video-reused-normal",
         "published_at": "2026-03-15 10:03:00",
@@ -597,7 +598,7 @@ def test_run_collect_publish_latest_job_default_mode_reuses_existing_prefilter_c
     )
 
     monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
-    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
 
     def discover_latest_live_candidates(**kwargs: object) -> dict[str, object]:
         discovered_kwargs.append(dict(kwargs))
@@ -618,13 +619,110 @@ def test_run_collect_publish_latest_job_default_mode_reuses_existing_prefilter_c
 
     assert exit_code == 0
     assert discovered_kwargs[0]["allow_search_inferred_match"] is False
-    assert len(runner.sent_candidates) == 0
+    assert len(runner.sent_candidates) == 1
     item = _prefilter_items(workspace)[existing_id]
     assert isinstance(item, dict)
     assert item["status"] == "publish_partial"
+    assert item["action"] == "resent_existing_card"
+    assert item["message_id"] != 913
+    assert item["message_id"] > 0
+    assert item["platform_results"] == {"wechat": {"status": "success"}}
+    assert feedbacks[-1]["sections"][0]["items"][3]["value"] == "1 条"
+    assert "重发当前状态卡" in feedbacks[-1]["sections"][1]["items"][0]
+
+
+def test_run_collect_publish_latest_job_keeps_reusing_existing_card_when_new_prefilter_sent(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    candidate_fresh = {
+        "url": "https://x.test/post/video-fresh",
+        "published_at": "2026-03-15 10:04:00",
+        "display_time": "6m",
+        "tweet_text": "video fresh",
+    }
+    candidate_reused = {
+        "url": "https://x.test/post/video-reused-existing",
+        "published_at": "2026-03-15 10:03:00",
+        "display_time": "7m",
+        "tweet_text": "video reused existing",
+    }
+    reused_id = worker_impl._build_immediate_candidate_item_id(candidate_reused["url"], candidate_reused["published_at"], "video")
+
+    _save_prefilter_items(
+        workspace,
+        {
+            reused_id: _video_item(
+                reused_id,
+                source_url=candidate_reused["url"],
+                published_at=candidate_reused["published_at"],
+                display_time=candidate_reused["display_time"],
+                tweet_text=candidate_reused["tweet_text"],
+                status="publish_partial",
+                action="publish",
+                message_id=913,
+                platform_results={"wechat": {"status": "success"}},
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [candidate_fresh, candidate_reused]},
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=2,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert len(runner.sent_candidates) == 1
+    item = _prefilter_items(workspace)[reused_id]
+    assert isinstance(item, dict)
     assert item["action"] == "publish"
     assert item["message_id"] == 913
-    assert item["platform_results"] == {"wechat": {"status": "success"}}
+
+
+def test_update_prefilter_item_persists_row_changes(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    item_id = "item-persisted"
+    _save_prefilter_items(
+        workspace,
+        {
+            item_id: _video_item(
+                item_id,
+                status="publish_partial",
+                action="publish",
+                message_id=913,
+            ),
+        },
+    )
+
+    updated = worker_impl._update_prefilter_item(
+        workspace,
+        item_id,
+        updates={
+            "action": "resent_existing_card",
+            "message_id": 1201,
+        },
+    )
+
+    assert updated["action"] == "resent_existing_card"
+    assert updated["message_id"] == 1201
+    persisted = _prefilter_items(workspace)[item_id]
+    assert isinstance(persisted, dict)
+    assert persisted["action"] == "resent_existing_card"
+    assert persisted["message_id"] == 1201
 
 
 def test_run_collect_publish_latest_job_image_records_review_only_items(tmp_path: Path, monkeypatch) -> None:
