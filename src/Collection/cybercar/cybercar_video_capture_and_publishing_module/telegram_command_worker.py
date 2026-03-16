@@ -9001,11 +9001,12 @@ def _run_collect_publish_latest_job(
     reused_candidates = 0
     skipped_duplicates = 0
     fresh_candidates = 0
+    attempted_new_candidates = 0
     last_send_error = ""
     total_candidates = len(candidates)
     workspace_ctx = runner.core.init_workspace(str(workspace))
     for idx, candidate in enumerate(candidates, start=1):
-        if fresh_candidates >= requested_limit:
+        if fresh_candidates >= requested_limit or attempted_new_candidates >= requested_limit:
             break
         upserted = _upsert_immediate_candidate_item(
             workspace=workspace,
@@ -9031,6 +9032,7 @@ def _run_collect_publish_latest_job(
         if not item_id or not isinstance(item, dict):
             skipped_duplicates += 1
             continue
+        attempted_new_candidates += 1
         try:
             response = _send_immediate_candidate_prefilter_card(
                 runner=runner,
@@ -9123,6 +9125,8 @@ def _run_collect_publish_latest_job(
                 requested_limit=requested_limit,
                 platforms=target_platforms,
                 discovered_count=total_candidates,
+                sent_count=sent_candidates,
+                reused_count=reused_candidates,
                 skipped_count=skipped_duplicates,
             ),
             {
@@ -9130,7 +9134,8 @@ def _run_collect_publish_latest_job(
                 "emoji": "⚠️",
                 "items": (
                     [
-                        "未能生成新的 Telegram 预审卡片，请检查机器人配置或发送日志。",
+                        f"已尝试发送前 {max(1, attempted_new_candidates)} 条新候选，但 Telegram 预审卡未成功送达。",
+                        "当前更像 Telegram 网络抖动，而不是 X 候选扫描失败。",
                     ]
                     + ([f"最后错误：{last_send_error}"] if last_send_error else [])
                 ),

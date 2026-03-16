@@ -748,6 +748,74 @@ def test_run_collect_publish_latest_job_fails_when_message_id_missing(tmp_path: 
     assert feedbacks[-1]["status"] == "failed"
 
 
+def test_run_collect_publish_latest_job_stops_after_requested_failed_new_candidates(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    attempts: list[dict[str, object]] = []
+
+    def send_prefilter_failure(**kwargs: object) -> dict[str, object]:
+        attempts.append(dict(kwargs))
+        raise RuntimeError(f"telegram send failed {len(attempts)}")
+
+    runner._send_telegram_prefilter_for_candidate = send_prefilter_failure  # type: ignore[assignment]
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": DEFAULT_PROFILE,
+            "candidates": [
+                {
+                    "url": "https://x.test/post/video-1",
+                    "published_at": "2026-03-15 10:00:00",
+                    "display_time": "10m",
+                    "tweet_text": "video one",
+                },
+                {
+                    "url": "https://x.test/post/video-2",
+                    "published_at": "2026-03-15 09:58:00",
+                    "display_time": "12m",
+                    "tweet_text": "video two",
+                },
+                {
+                    "url": "https://x.test/post/video-3",
+                    "published_at": "2026-03-15 09:55:00",
+                    "display_time": "15m",
+                    "tweet_text": "video three",
+                },
+            ],
+        },
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=2,
+        media_kind="video",
+    )
+
+    assert exit_code == 3
+    assert len(attempts) == 2
+    items = _prefilter_items(workspace)
+    assert len(items) == 2
+    assert all(isinstance(item, dict) and item["status"] == "send_failed" for item in items.values())
+    failed_feedback = feedbacks[-1]
+    assert failed_feedback["status"] == "failed"
+    sections = failed_feedback["sections"]
+    assert isinstance(sections, list)
+    failure_items = sections[-1]["items"]
+    assert "已尝试发送前 2 条新候选，但 Telegram 预审卡未成功送达。" in failure_items
+    assert "当前更像 Telegram 网络抖动，而不是 X 候选扫描失败。" in failure_items
+    assert any("telegram send failed 2" in str(item) for item in failure_items)
+
+
 def test_build_immediate_fast_x_download_args(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         worker_impl.core,
@@ -808,6 +876,12 @@ def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatc
 
     assert result["result"]["message_id"] == 777
     assert len(attempts) == 2
+    assert attempts[0]["kwargs"]["max_attempts"] == 1
+    assert attempts[0]["kwargs"]["api_retries"] == 0
+    assert attempts[0]["kwargs"]["timeout_seconds_override"] == 8
+    assert attempts[1]["kwargs"]["max_attempts"] == 1
+    assert attempts[1]["kwargs"]["api_retries"] == 0
+    assert attempts[1]["kwargs"]["timeout_seconds_override"] == 8
     primary_card = attempts[0]["card"]
     fallback_card = attempts[1]["card"]
     assert isinstance(primary_card, dict)
@@ -815,6 +889,43 @@ def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatc
     assert fallback_card["reply_markup"] == primary_card["reply_markup"]
     assert fallback_card["parse_mode"] == ""
     assert "链接：https://x.test/post/video-1" in str(fallback_card["text"])
+
+
+def test_send_telegram_prefilter_for_candidate_fast_send_shortens_primary_send(monkeypatch, tmp_path: Path) -> None:
+    attempts: list[dict[str, object]] = []
+
+    def send_card(settings: object, card: dict[str, object], **kwargs: object) -> dict[str, object]:
+        attempts.append({"card": dict(card), "kwargs": dict(kwargs)})
+        return {"result": {"message_id": 778, "chat": {"id": CHAT_ID}}}
+
+    monkeypatch.setattr(pipeline, "_send_telegram_card_message", send_card)
+    result = pipeline._send_telegram_prefilter_for_candidate(
+        workspace=SimpleNamespace(root=tmp_path),
+        email_settings=SimpleNamespace(
+            enabled=True,
+            telegram_bot_token=BOT_TOKEN,
+            telegram_chat_id=CHAT_ID,
+            telegram_timeout_seconds=20,
+            telegram_api_base="",
+        ),
+        source_url="https://x.test/post/video-fast",
+        item_id="item-video-fast",
+        idx=1,
+        total=1,
+        platform_hint="video",
+        mode="immediate_manual_publish",
+        tweet_text="video fast",
+        published_at="2026-03-15 10:00:00",
+        display_time="1m",
+        target_platforms="wechat,douyin",
+        fast_send=True,
+    )
+
+    assert result["result"]["message_id"] == 778
+    assert len(attempts) == 1
+    assert attempts[0]["kwargs"]["max_attempts"] == 1
+    assert attempts[0]["kwargs"]["api_retries"] == 0
+    assert attempts[0]["kwargs"]["timeout_seconds_override"] == 8
 
 
 def test_handle_prefilter_publish_normal_queues_publish_job(tmp_path: Path, monkeypatch) -> None:
