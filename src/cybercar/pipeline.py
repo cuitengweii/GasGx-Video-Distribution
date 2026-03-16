@@ -2459,7 +2459,12 @@ def _run_collect_once(
         )
     else:
         # First collect video sources to satisfy the planned per-slot video quota.
-        video_collect_limit = max(collect_limit, non_wechat_video_plan)
+        if x_download_policy.fail_fast:
+            # In latest-first fail-fast mode, keep X discovery/download fan-out
+            # aligned to the explicit request instead of slot-planning defaults.
+            video_collect_limit = collect_limit
+        else:
+            video_collect_limit = max(collect_limit, non_wechat_video_plan)
         core.download_from_x(
             workspace,
             keyword=args.keyword,
@@ -2489,7 +2494,12 @@ def _run_collect_once(
 
         # Then top up media pool for Xiaohongshu image posts in this slot.
         if xiaohongshu_allow_image and xhs_extra_images_per_run > 0:
-            image_collect_limit = max(collect_limit, xhs_extra_images_per_run * 4)
+            if x_download_policy.fail_fast:
+                image_collect_limit = collect_limit
+                image_min_target = min(collect_limit, max(1, xhs_extra_images_per_run))
+            else:
+                image_collect_limit = max(collect_limit, xhs_extra_images_per_run * 4)
+                image_min_target = xhs_extra_images_per_run
             image_discovery_url_limit = max(int(args.x_discovery_url_limit), max(90, xhs_extra_images_per_run * 30))
             image_discovery_scroll_rounds = max(int(args.x_discovery_scroll_rounds), 16)
             core._log(
@@ -2509,7 +2519,7 @@ def _run_collect_once(
                     proxy=proxy,
                     use_system_proxy=use_system_proxy,
                     include_images=True,
-                    image_min_target=xhs_extra_images_per_run,
+                    image_min_target=image_min_target,
                     auto_discover_x=auto_discover_x,
                     x_discovery_url_limit=max(1, int(image_discovery_url_limit)),
                     x_discovery_scroll_rounds=max(2, int(image_discovery_scroll_rounds)),

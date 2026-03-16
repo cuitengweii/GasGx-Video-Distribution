@@ -3416,18 +3416,36 @@ def _action_queue_path(workspace: Path) -> Path:
 
 def _load_action_queue(path: Path) -> Dict[str, Any]:
     payload = _load_state(path)
+    repaired = False
+    if path.exists():
+        try:
+            repaired = path.stat().st_size > 0 and not bool(payload)
+        except Exception:
+            repaired = False
     tasks = payload.get("tasks")
     if not isinstance(tasks, dict):
         tasks = {}
+        repaired = True
     normalized_tasks: Dict[str, Any] = {}
     for task_key, task in tasks.items():
         if not isinstance(task, dict):
+            repaired = True
             continue
-        normalized_tasks[str(task_key or "").strip()] = _normalize_home_action_task_record(task)
-    return {
+        normalized_key = str(task_key or "").strip()
+        if not normalized_key:
+            repaired = True
+            continue
+        normalized_task = _normalize_home_action_task_record(task)
+        if normalized_task != task or normalized_key != str(task_key):
+            repaired = True
+        normalized_tasks[normalized_key] = normalized_task
+    queue = {
         "version": int(payload.get("version") or 1),
         "tasks": normalized_tasks,
     }
+    if repaired:
+        _atomic_write_json(path, queue)
+    return queue
 
 
 def _save_action_queue(path: Path, queue: Dict[str, Any]) -> None:
@@ -3734,10 +3752,13 @@ def _recover_orphaned_home_action_tasks(
                 {
                     "task_key": str(task_key or "").strip(),
                     "action": action,
+                    "value": str(task.get("value") or "").strip(),
                     "chat_id": str(task.get("chat_id") or "").strip(),
                     "profile": str(task.get("profile") or "").strip(),
                     "loading_message_id": int(task.get("loading_message_id") or 0),
                     "detail": str(task.get("detail") or "").strip(),
+                    "log_path": str(task.get("log_path") or "").strip(),
+                    "updated_at": str(task.get("updated_at") or "").strip(),
                 }
             )
         if changed:
@@ -5763,9 +5784,15 @@ def _run_unified_once(
     schedule_minutes: Optional[int] = None,
     extra_args: Optional[list[str]] = None,
     pipeline_priority: str = "normal",
+    proxy_override: Optional[str] = None,
+    use_system_proxy_override: Optional[bool] = None,
 ) -> Dict[str, Any]:
     script = repo_root / DEFAULT_UNIFIED_RUNNER_REL
-    resolved_proxy, resolved_use_system_proxy = _resolve_worker_network_mode()
+    if proxy_override is not None or use_system_proxy_override is not None:
+        resolved_proxy = str(proxy_override or "").strip()
+        resolved_use_system_proxy = bool(use_system_proxy_override) and not resolved_proxy
+    else:
+        resolved_proxy, resolved_use_system_proxy = _resolve_worker_network_mode()
     python_exe = str(sys.executable or "").strip() or "python"
     cmd: list[str] = [
         "powershell",
@@ -5824,6 +5851,41 @@ def _build_immediate_fast_x_download_args(repo_root: Optional[Path] = None) -> l
     runtime_config = cybercar_engine._load_runtime_config(str(_default_runtime_config_path(resolved_repo_root)))
     args = cybercar_engine.resolve_x_download_policy(runtime_config=runtime_config).to_cli_args()
     return [arg for arg in args if str(arg) != "--x-download-fail-fast"]
+
+
+def _override_cli_arg(args: list[str], option: str, value: str) -> list[str]:
+    normalized_option = str(option or "").strip()
+    if not normalized_option:
+        return [str(item) for item in args]
+    rendered = [str(item) for item in args]
+    filtered: list[str] = []
+    skip_next = False
+    removed = False
+    for idx, item in enumerate(rendered):
+        if skip_next:
+            skip_next = False
+            continue
+        if item == normalized_option:
+            removed = True
+            if idx + 1 < len(rendered):
+                skip_next = True
+            continue
+        filtered.append(item)
+    filtered += [normalized_option, str(value)]
+    return filtered
+
+
+def _worker_system_proxy_available() -> bool:
+    use_system_proxy = str(_env_first("CYBERCAR_USE_SYSTEM_PROXY", default="")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if use_system_proxy:
+        return True
+    _proxy_server, system_enabled = _detect_windows_manual_proxy()
+    return bool(system_enabled)
 
 
 def _build_child_worker_env(repo_root: Optional[Path] = None) -> dict[str, str]:
@@ -7782,6 +7844,17 @@ def _run_immediate_collect_item_job(
                 "--xiaohongshu-extra-images-per-run",
                 "6",
             ]
+        base_proxy, base_use_system_proxy = _resolve_worker_network_mode()
+        base_network_mode = "explicit_proxy" if base_proxy else ("system_proxy" if base_use_system_proxy else "direct_tun")
+        system_proxy_available = _worker_system_proxy_available()
+        forced_use_system_proxy = False
+        elevated_socket_timeout: Optional[int] = None
+        elevated_timeout_retry_used = False
+        proxy_retry_used = False
+        print(
+            f"[ImmediateCollect] item_id={item_id} source_url={source_url} "
+            f"media_kind={media_kind} network_mode={base_network_mode} system_proxy_available={system_proxy_available}"
+        )
         lock_wait_deadline = _lock_wait_deadline(
             max_wait_seconds=float(DEFAULT_IMMEDIATE_COLLECT_LOCK_MAX_WAIT_SECONDS),
             timeout_seconds=timeout_seconds,
@@ -7790,6 +7863,27 @@ def _run_immediate_collect_item_job(
         transient_retry_attempts = 0
         target: Optional[Path] = None
         while target is None:
+            attempt_proxy = base_proxy
+            attempt_use_system_proxy = base_use_system_proxy
+            if forced_use_system_proxy:
+                attempt_proxy = ""
+                attempt_use_system_proxy = True
+            attempt_extra_args = list(collect_extra_args)
+            if elevated_socket_timeout is not None:
+                attempt_extra_args = _override_cli_arg(
+                    attempt_extra_args,
+                    "--x-download-socket-timeout",
+                    str(max(5, int(elevated_socket_timeout))),
+                )
+            attempt_network_mode = (
+                "explicit_proxy"
+                if attempt_proxy
+                else ("system_proxy" if attempt_use_system_proxy else "direct_tun")
+            )
+            print(
+                f"[ImmediateCollect] collect attempt item_id={item_id} network_mode={attempt_network_mode} "
+                f"socket_timeout={elevated_socket_timeout or 'default'}"
+            )
             before_downloads = _list_downloaded_media(workspace, media_kind=media_kind)
             before_videos = (
                 _list_processed_videos(workspace)
@@ -7805,8 +7899,10 @@ def _run_immediate_collect_item_job(
                 platforms=target_platforms,
                 telegram_chat_id=telegram_chat_id,
                 count=1,
-                extra_args=collect_extra_args,
+                extra_args=attempt_extra_args,
                 pipeline_priority="high",
+                proxy_override=attempt_proxy or None,
+                use_system_proxy_override=attempt_use_system_proxy,
             )
             after_videos = (
                 _list_processed_videos(workspace)
@@ -7831,6 +7927,10 @@ def _run_immediate_collect_item_job(
                         break
 
             reason = _extract_attempt_reason(collect_result) or "未生成可发布素材。"
+            print(
+                f"[ImmediateCollect] collect attempt failed item_id={item_id} "
+                f"network_mode={attempt_network_mode} reason={reason}"
+            )
             remaining_wait_seconds = lock_wait_deadline - time.monotonic()
             if _is_immediate_collect_lock_retry_reason(reason, collect_result) and remaining_wait_seconds > 0:
                 _update_prefilter_item(
@@ -7844,6 +7944,45 @@ def _run_immediate_collect_item_job(
                     },
                 )
                 time.sleep(min(float(DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS), max(1.0, remaining_wait_seconds)))
+                continue
+            if (
+                _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and not proxy_retry_used
+                and not attempt_use_system_proxy
+                and system_proxy_available
+            ):
+                proxy_retry_used = True
+                forced_use_system_proxy = True
+                elevated_socket_timeout = max(40, int(elevated_socket_timeout or 0))
+                _update_prefilter_item(
+                    workspace,
+                    item_id,
+                    updates={
+                        "status": "download_running",
+                        "action": "collect_retry_system_proxy",
+                        "last_error": f"{reason}（已切换系统代理重试）",
+                        "updated_at": _now_text(),
+                    },
+                )
+                time.sleep(float(DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_SECONDS))
+                continue
+            if (
+                _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and not elevated_timeout_retry_used
+            ):
+                elevated_timeout_retry_used = True
+                elevated_socket_timeout = max(40, int(elevated_socket_timeout or 0))
+                _update_prefilter_item(
+                    workspace,
+                    item_id,
+                    updates={
+                        "status": "download_running",
+                        "action": "collect_retry_timeout",
+                        "last_error": f"{reason}（已放宽 X 超时后重试）",
+                        "updated_at": _now_text(),
+                    },
+                )
+                time.sleep(float(DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_SECONDS))
                 continue
             if (
                 _is_immediate_collect_transient_retry_reason(reason, collect_result)
