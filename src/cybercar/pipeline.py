@@ -3702,11 +3702,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=argparse.SUPPRESS,
     )
-    parser.add_argument("--proxy", default="", help="HTTP proxy, e.g. http://127.0.0.1:PORT")
+    parser.add_argument(
+        "--proxy",
+        default=core._default_network_proxy(),
+        help="HTTP proxy, e.g. http://127.0.0.1:PORT",
+    )
     parser.add_argument(
         "--use-system-proxy",
         action="store_true",
-        default=bool(core._env_bool_first(["CYBERCAR_USE_SYSTEM_PROXY"], default=False)),
+        default=bool(core._default_use_system_proxy()),
         help="Use system/env proxy when --proxy is empty. Default false (TUN/direct mode).",
     )
     parser.add_argument("--debug-port", type=int, default=core.DEFAULT_PORT)

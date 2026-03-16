@@ -11,6 +11,10 @@
     "wechat_debug_port": 9334,
     "x_debug_port": 9335
   },
+  "network": {
+    "proxy": "http://127.0.0.1:33210",
+    "use_system_proxy": false
+  },
   "x": {
     "cookie_file": "config/x_cookies.local.json"
   },

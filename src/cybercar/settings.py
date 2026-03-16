@@ -54,6 +54,19 @@ def _resolve_path(root: Path, raw: Any, default: Path) -> Path:
     return path
 
 
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    token = str(value or "").strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 @lru_cache(maxsize=1)
 def load_app_config() -> dict[str, Any]:
     return _load_json(_repo_root() / "config" / "app.json")
@@ -95,14 +108,24 @@ def get_paths() -> AppPaths:
 def apply_runtime_environment() -> AppPaths:
     paths = get_paths()
     paths.ensure()
+    config = load_app_config()
     os.environ.setdefault("CYBERCAR_CHROME_USER_DATA_DIR", str(paths.default_profile_dir))
     os.environ.setdefault("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", str(paths.wechat_profile_dir))
     os.environ.setdefault("CYBERCAR_X_CHROME_USER_DATA_DIR", str(paths.x_profile_dir))
     os.environ.setdefault("CYBERCAR_X_COOKIE_FILE", str(paths.x_cookie_file_path))
-    chrome_cfg = load_app_config().get("chrome") if isinstance(load_app_config().get("chrome"), dict) else {}
+    chrome_cfg = config.get("chrome") if isinstance(config.get("chrome"), dict) else {}
+    network_cfg = config.get("network") if isinstance(config.get("network"), dict) else {}
     default_port = str(chrome_cfg.get("default_debug_port") or "").strip()
     wechat_port = str(chrome_cfg.get("wechat_debug_port") or "").strip()
     x_port = str(chrome_cfg.get("x_debug_port") or "").strip()
+    default_proxy = str(network_cfg.get("proxy") or "").strip()
+    if default_proxy:
+        os.environ.setdefault("CYBERCAR_PROXY", default_proxy)
+    if "use_system_proxy" in network_cfg:
+        os.environ.setdefault(
+            "CYBERCAR_USE_SYSTEM_PROXY",
+            "1" if _to_bool(network_cfg.get("use_system_proxy"), default=False) else "0",
+        )
     if default_port:
         os.environ.setdefault("CYBERCAR_CHROME_DEBUG_PORT", default_port)
     if wechat_port:

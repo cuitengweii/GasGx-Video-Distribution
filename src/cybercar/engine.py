@@ -55,9 +55,10 @@ import requests
 _PYTHON_ROOT = Path(__file__).resolve().parents[3]
 
 try:
-    from .settings import get_paths
+    from .settings import get_paths, load_app_config
 except Exception:  # pragma: no cover
     get_paths = None  # type: ignore
+    load_app_config = None  # type: ignore
 
 try:
     from DrissionPage import ChromiumOptions, ChromiumPage
@@ -895,6 +896,35 @@ def _env_bool_first(names: list[str], default: bool = False) -> bool:
             continue
         return _parse_bool_token(raw, default=default)
     return bool(default)
+
+
+def _app_network_config() -> dict[str, Any]:
+    if not callable(load_app_config):
+        return {}
+    try:
+        cfg = load_app_config().get("network")
+    except Exception:
+        return {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _default_network_proxy() -> str:
+    configured = _env_first("CYBERCAR_PROXY")
+    if configured:
+        return configured
+    return str(_app_network_config().get("proxy") or "").strip()
+
+
+def _default_use_system_proxy() -> bool:
+    configured = _env_first("CYBERCAR_USE_SYSTEM_PROXY")
+    if configured:
+        return _parse_bool_token(configured, default=False)
+    raw = _app_network_config().get("use_system_proxy")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    return _parse_bool_token(str(raw or ""), default=False)
 
 
 def _merge_no_proxy_items(raw_no_proxy: str, extras: Iterable[str]) -> str:
@@ -19024,7 +19054,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--comment-max-replies", type=int, default=0, help="单次自动回复评论数量上限。")
     parser.add_argument("--comment-test-latest", action="store_true", help="仅测试回复最新一条评论。")
     parser.add_argument("--comment-debug", action="store_true", help="输出评论回复调试日志。")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not str(getattr(args, "proxy", "") or "").strip():
+        args.proxy = _default_network_proxy()
+    if not bool(getattr(args, "use_system_proxy", False)):
+        args.use_system_proxy = _default_use_system_proxy()
+    return args
 
 
 def main() -> int:

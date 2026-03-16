@@ -168,6 +168,17 @@ def test_run_collect_once_uses_dedicated_x_session_settings(tmp_path: Path, monk
     assert all(item["x_cookie_file"] == str(tmp_path / "config" / "x_cookies.alt.json") for item in captured)
 
 
+def test_build_parser_uses_configured_proxy_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(pipeline.core, "_default_network_proxy", lambda: "http://127.0.0.1:33210")
+    monkeypatch.setattr(pipeline.core, "_default_use_system_proxy", lambda: False)
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args([])
+
+    assert args.proxy == "http://127.0.0.1:33210"
+    assert args.use_system_proxy is False
+
+
 def test_download_from_x_uses_direct_status_fallback_for_partial_failures(tmp_path: Path, monkeypatch) -> None:
     workspace = _workspace(tmp_path)
     logs: list[str] = []
