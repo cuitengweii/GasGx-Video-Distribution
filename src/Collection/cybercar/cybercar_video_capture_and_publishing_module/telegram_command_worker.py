@@ -308,6 +308,16 @@ def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_worker_time_text(value: str) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
 def _append_log(log_file: Path, message: str) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     line = f"[{_now_text()}] {message}"
@@ -4223,7 +4233,7 @@ def _prefilter_item_timestamp(row: Dict[str, Any]) -> Optional[datetime]:
     if not isinstance(row, dict):
         return None
     for key in ("updated_at", "created_at", "prefilter_last_retry_at"):
-        parsed = _parse_time_text(str(row.get(key) or ""))
+        parsed = _parse_worker_time_text(str(row.get(key) or ""))
         if parsed is not None:
             return parsed
     return None
