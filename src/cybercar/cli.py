@@ -9,7 +9,7 @@ from .engagement import run_wechat_engagement
 from .migrate import migrate_legacy_assets
 from .publish import immediate, publish
 from .session import capture_login_qr, login_status, open_login
-from .telegram.bootstrap import refresh_home_surface, set_clickable_commands
+from .telegram.bootstrap import recover_bot_surface, refresh_home_surface, set_clickable_commands
 from .telegram.worker import main as telegram_worker_main
 
 
@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_sub.add_parser("worker", add_help=False)
     telegram_sub.add_parser("set-commands")
     telegram_sub.add_parser("home-refresh")
+    recover = telegram_sub.add_parser("recover")
+    recover.add_argument("--retries", type=int, default=3)
 
     subparsers.add_parser("migrate-legacy")
     return parser
@@ -106,6 +108,9 @@ def main() -> int:
             return telegram_worker_main(passthrough)
         if args.telegram_command == "set-commands":
             _print_json(set_clickable_commands())
+            return 0
+        if args.telegram_command == "recover":
+            _print_json(recover_bot_surface(retries=int(args.retries)))
             return 0
         _print_json(refresh_home_surface())
         return 0

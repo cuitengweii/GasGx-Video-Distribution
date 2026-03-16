@@ -14,10 +14,13 @@ Standalone CyberCar workspace extracted from the legacy monorepo.
 ```powershell
 python -m cybercar telegram set-commands
 python -m cybercar telegram home-refresh
+python -m cybercar telegram recover
 python -m cybercar telegram worker
 ```
 
 Use the Telegram worker as the only operator entry. Keep collect/publish manual and trigger them from the bot review flow or explicit CLI runs.
+
+If the bot surface goes stale after a Telegram/network hiccup, run `python -m cybercar telegram recover`.
 
 ## Supporting commands
 

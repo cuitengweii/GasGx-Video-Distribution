@@ -220,6 +220,7 @@ def _install_transport_mocks(monkeypatch) -> SimpleNamespace:
     monkeypatch.setattr(worker_impl, "_answer_callback_query", lambda **kwargs: record.answers.append(dict(kwargs)))
     monkeypatch.setattr(worker_impl, "answer_interaction_toast", lambda **kwargs: record.toasts.append(dict(kwargs)))
     monkeypatch.setattr(worker_impl, "send_interaction_result", lambda **kwargs: record.cards.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_send_interaction_result_async", lambda **kwargs: record.cards.append(dict(kwargs)))
 
     def send_loading_placeholder(**kwargs: object) -> int:
         record.placeholders.append(dict(kwargs))
@@ -231,6 +232,121 @@ def _install_transport_mocks(monkeypatch) -> SimpleNamespace:
     monkeypatch.setattr(worker_impl, "_send_reply", lambda **kwargs: record.replies.append(dict(kwargs)))
     monkeypatch.setattr(worker_impl, "_try_delete_telegram_message", lambda **kwargs: False)
     return record
+
+
+def test_home_card_and_immediate_menu_include_process_status_button(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+
+    home_card = worker_impl._build_home_card(
+        default_profile=DEFAULT_PROFILE,
+        workspace=workspace,
+        chat_id=CHAT_ID,
+    )
+    immediate_card = worker_impl._build_collect_publish_latest_menu_card(default_profile=DEFAULT_PROFILE)
+
+    assert "📍 进程查看" in _reply_markup_texts(home_card["reply_markup"])
+    assert "📍 进程查看" in _reply_markup_texts(immediate_card["reply_markup"])
+
+
+def test_home_feedback_response_includes_process_status_button() -> None:
+    card = worker_impl._home_feedback_response(
+        status="running",
+        title="即采即发进行中",
+        subtitle="当前配置：cybertruck",
+        detail="后台任务已启动。",
+        menu_label="即采即发 / 视频 / 3条",
+        task_identifier="collect_publish_latest|video|3|20260317_050000",
+    )
+
+    texts = _reply_markup_texts(card["reply_markup"])
+    assert "📍 进程查看" in texts
+    assert "🏠 返回首页" in texts
+
+
+def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    worker_state_path = workspace / worker_impl.DEFAULT_STATE_FILE
+    worker_state_path.parent.mkdir(parents=True, exist_ok=True)
+    worker_state_path.write_text(
+        json.dumps(
+            {
+                "status": "polling",
+                "worker_heartbeat_at": "2026-03-17 05:02:33",
+                "last_processed_update_id": 67138940,
+                "consecutive_poll_failures": 0,
+                "last_error": "",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    log_path = workspace / "runtime" / "logs" / "home_action_collect_publish_latest_test.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[2026-03-17 05:02:30] collect started",
+                "[2026-03-17 05:02:40] candidate queued",
+                "[2026-03-17 05:02:50] publish running",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    claim = worker_impl._claim_home_action_task(
+        workspace=workspace,
+        chat_id=CHAT_ID,
+        action="collect_publish_latest",
+        value="video:3",
+        profile=DEFAULT_PROFILE,
+        username="tester",
+    )
+    worker_impl._update_home_action_task(
+        workspace,
+        str(claim["task_key"]),
+        status="running",
+        detail="视频即采即发后台任务已启动。",
+        log_path=str(log_path),
+        pid=321,
+    )
+    _save_prefilter_items(
+        workspace,
+        {
+            "item-video": _video_item(
+                status="publish_running",
+                processed_name="clip.mp4",
+            )
+        },
+    )
+
+    card = worker_impl._build_process_status_card(
+        default_profile=DEFAULT_PROFILE,
+        workspace=workspace,
+    )
+    text = str(card["text"])
+
+    assert "即采即发进程查看" in text
+    assert "Bot 心跳" in text
+    assert "当前活跃任务" in text
+    assert "即采即发队列" in text
+    assert "home_action_collect_publish_latest_test.log" in text
+    assert "clip.mp4" in text
+    assert "🔄 刷新进度" in _reply_markup_texts(card["reply_markup"])
+
+
+def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "process_status"),
+    )
+    result = commands.handle_callback_update(update=update, **_worker_kwargs(workspace))
+
+    assert result["handled"] is True
+    assert len(record.cards) == 1
+    card = record.cards[0]["card"]
+    assert "即采即发进程查看" in str(card["text"])
+    assert "🔄 刷新进度" in _reply_markup_texts(card["reply_markup"])
 
 
 def test_handle_home_collect_publish_video_queues_task(tmp_path: Path, monkeypatch) -> None:
@@ -2435,3 +2551,54 @@ def test_atomic_write_json_cleans_tmp_file_when_replace_fails(tmp_path: Path, mo
 
     assert tmp_paths, "temporary file path should be captured"
     assert not tmp_paths[0].exists()
+
+
+def test_build_process_log_section_folds_repeated_init_lines(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    log_path = workspace / "runtime" / "logs" / "home-progress.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[2026-03-17 05:30:26] [Init] Workspace ready: D:/code/CyberCar/runtime",
+                "[2026-03-17 05:30:27] [Init] Workspace ready: D:/code/CyberCar/runtime",
+                "[2026-03-17 05:30:28] [Notify] backend result sent",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    claim = worker_impl._claim_home_action_task(
+        workspace=workspace,
+        chat_id=CHAT_ID,
+        action="collect_publish_latest",
+        value="image:5",
+        profile=DEFAULT_PROFILE,
+        username="tester",
+    )
+    worker_impl._update_home_action_task(
+        workspace,
+        str(claim["task_key"]),
+        status="running",
+        detail="图片即采即发后台任务正在运行。",
+        log_path=str(log_path),
+        pid=321,
+    )
+
+    section = worker_impl._build_process_log_section(workspace)
+    values = [str(item.get("value")) if isinstance(item, dict) else str(item) for item in section["items"]]
+
+    assert any("已折叠 1 条重复初始化日志" in value for value in values)
+    assert any("backend result sent" in value for value in values)
+
+
+def test_build_process_log_section_sanitizes_garbled_lines(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    log_path = workspace / "runtime" / "logs" / "home_action_collect_publish_latest_test.log"
+    log_path.write_text(
+        "[2026-03-17 05:30:29] [Notify] ̨ѷͣ??? ɼ / ͼƬ / 5ͼƬɼѡ\n",
+        encoding="utf-8",
+    )
+
+    section = worker_impl._build_process_log_section(workspace)
+    items = [str(item.get("value")) if isinstance(item, dict) else str(item) for item in section["items"]]
+
+    assert any("日志文本存在编码异常" in item for item in items)

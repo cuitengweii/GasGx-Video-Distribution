@@ -104,6 +104,7 @@ DEFAULT_HOME_VISIBLE_TASK_LIMIT = 5
 DEFAULT_PROCESS_STATUS_TASK_LIMIT = 4
 DEFAULT_PROCESS_STATUS_PREFILTER_LIMIT = 3
 DEFAULT_PROCESS_STATUS_LOG_TAIL_LINES = 8
+DEFAULT_PROCESS_STATUS_LOG_SCAN_LINES = 40
 DEFAULT_IMMEDIATE_REVIEW_WAIT_SECONDS = 18
 DEFAULT_IMMEDIATE_CANDIDATE_LIMIT = 10
 DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS = 12
@@ -719,6 +720,34 @@ def _with_home_button(reply_markup: Optional[Dict[str, Any]] = None) -> Dict[str
     return _build_inline_keyboard(rows)
 
 
+def _with_process_status_button(reply_markup: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    rows: list[list[Dict[str, str]]] = []
+    inline_keyboard = reply_markup.get("inline_keyboard") if isinstance(reply_markup, dict) else None
+    if isinstance(inline_keyboard, list):
+        for row in inline_keyboard:
+            if isinstance(row, list) and row:
+                rows.append([dict(button) for button in row if isinstance(button, dict) and button])
+    home_callback = build_home_callback_data("cybercar", "home")
+    process_callback = build_home_callback_data("cybercar", "process_status")
+    has_home = False
+    has_process = False
+    for row in rows:
+        for button in row:
+            callback_data = str(button.get("callback_data") or "").strip()
+            if callback_data == home_callback:
+                has_home = True
+            elif callback_data == process_callback:
+                has_process = True
+    append_row: list[Dict[str, str]] = []
+    if not has_process:
+        append_row.append({"text": "📍 进程查看", "callback_data": process_callback})
+    if not has_home:
+        append_row.append({"text": "🏠 返回首页", "callback_data": home_callback})
+    if append_row:
+        rows.append(append_row)
+    return _build_inline_keyboard(rows)
+
+
 def _ensure_card_has_home_button(card: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(card) if isinstance(card, dict) else {}
     normalized["reply_markup"] = _with_home_button(
@@ -836,10 +865,14 @@ def _wechat_comment_reply_state_path(workspace: Path) -> Path:
     return (workspace / DEFAULT_WECHAT_COMMENT_REPLY_STATE_FILE).resolve()
 
 
+def _worker_state_path(workspace: Path) -> Path:
+    return (workspace / DEFAULT_STATE_FILE).resolve()
+
+
 def _build_home_reply_keyboard() -> Dict[str, Any]:
     return {
         "keyboard": [
-            [{"text": "🔐 平台登录"}],
+            [{"text": "🔐 平台登录"}, {"text": "📍 进程查看"}],
             [{"text": "✨ 即采即发"}, {"text": "💬 点赞评论"}],
         ],
         "resize_keyboard": True,
@@ -913,7 +946,7 @@ def _ensure_home_shortcut_keyboard(
         message_id = _send_text_message(
             bot_token=bot_token,
             chat_id=clean_chat_id,
-            text="已启用底部快捷键：可直接使用即采即发、平台登录、点赞评论。",
+            text="已启用底部快捷键：可直接使用即采即发、进程查看、平台登录、点赞评论。",
             timeout_seconds=max(8, int(timeout_seconds)),
             reply_markup=_build_home_reply_keyboard(),
         )
@@ -1011,6 +1044,121 @@ def _preview_text(text: Any, limit: int = 60) -> str:
     return clean[: max(8, int(limit) - 3)] + "..."
 
 
+def _read_process_log_lines(path: Path) -> list[str]:
+    raw = path.read_bytes()
+    candidates: list[str] = []
+    for encoding in ("utf-8", "utf-8-sig", "gb18030", "cp936", "latin-1"):
+        try:
+            candidates.append(raw.decode(encoding))
+        except Exception:
+            continue
+    if not candidates:
+        candidates.append(raw.decode("utf-8", errors="replace"))
+    return max(candidates, key=_score_log_decode_candidate).splitlines()
+
+
+def _score_log_decode_candidate(text: str) -> int:
+    score = 0
+    for char in str(text or ""):
+        code = ord(char)
+        if char in "\r\n\t":
+            continue
+        if "0" <= char <= "9" or "A" <= char <= "Z" or "a" <= char <= "z":
+            score += 2
+            continue
+        if 0x4E00 <= code <= 0x9FFF:
+            score += 4
+            continue
+        if char in " []():/._-+|,<>@#%=&":
+            score += 1
+            continue
+        if code < 32:
+            score -= 4
+            continue
+        if 0x370 <= code <= 0x52F or 0x0300 <= code <= 0x036F:
+            score -= 4
+            continue
+        score -= 1
+    lowered = str(text or "").lower()
+    for marker in ("鎵", "鍙", "馃", "鈥", "锛", "寮", "缁", "璇", "ͼ", "ѷ"):
+        if marker in text:
+            score -= 12
+    if "\ufffd" in text:
+        score -= 20
+    if "[init]" in lowered or "[worker]" in lowered or "[notify]" in lowered:
+        score += 6
+    return score
+
+
+def _repair_process_log_text(text: str) -> str:
+    clean = str(text or "").strip()
+    if not clean:
+        return ""
+    candidates = [clean]
+    for source_encoding, target_encoding in (("gb18030", "utf-8"), ("latin-1", "utf-8"), ("cp1252", "utf-8")):
+        try:
+            repaired = clean.encode(source_encoding, errors="ignore").decode(target_encoding, errors="ignore").strip()
+        except Exception:
+            continue
+        if repaired:
+            candidates.append(repaired)
+    return max(candidates, key=_score_log_decode_candidate)
+
+
+def _split_process_log_prefix(line: str) -> tuple[str, str]:
+    match = re.match(r"^(\[[^\]]+\]\s+\[[^\]]+\]\s*)(.*)$", str(line or "").strip())
+    if match:
+        return str(match.group(1) or ""), str(match.group(2) or "").strip()
+    return "", str(line or "").strip()
+
+
+def _looks_like_garbled_log_body(text: str) -> bool:
+    body = str(text or "").strip()
+    if not body:
+        return False
+    suspicious = sum(1 for char in body if 0x370 <= ord(char) <= 0x52F or 0x0300 <= ord(char) <= 0x036F)
+    if suspicious >= 2:
+        return True
+    markers = ("鎵", "鍙", "馃", "鈥", "锛", "ͼ", "ѷ", "ɼ")
+    if sum(body.count(marker) for marker in markers) >= 2:
+        return True
+    if body.count("?") >= 4:
+        readable_ascii = sum(1 for char in body if char.isascii() and (char.isalnum() or char in " /:._-[]()"))
+        if readable_ascii <= max(6, len(body) // 3):
+            return True
+    return False
+
+
+def _normalize_process_log_line(line: str) -> str:
+    prefix, body = _split_process_log_prefix(line)
+    repaired_body = _repair_process_log_text(body)
+    if _looks_like_garbled_log_body(repaired_body):
+        return (prefix + "日志文本存在编码异常，请查看原始日志文件。").strip()
+    return (prefix + repaired_body).strip()
+
+
+def _compact_process_log_lines(lines: Sequence[str], *, limit: int) -> tuple[list[str], int]:
+    window = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    if not window:
+        return [], 0
+    selected = window[-max(int(limit), DEFAULT_PROCESS_STATUS_LOG_SCAN_LINES) :]
+    compacted: list[str] = []
+    folded = 0
+    previous_key = ""
+    for raw in selected:
+        normalized = _normalize_process_log_line(raw)
+        _, body = _split_process_log_prefix(normalized)
+        key = re.sub(r"\s+", " ", body).strip().lower()
+        if not key:
+            continue
+        if key == previous_key and "workspace ready" in key:
+            folded += 1
+            continue
+        compacted.append(normalized)
+        previous_key = key
+    return compacted[-max(1, int(limit)) :], folded
+
+
 def _normalize_shortcut_text(text: str) -> str:
     clean = re.sub(r"\s+", " ", str(text or "").replace("\ufe0f", "").strip())
     if not clean:
@@ -1018,6 +1166,8 @@ def _normalize_shortcut_text(text: str) -> str:
     shortcut_map = {
         "✨ 即采即发": "即采即发",
         "即采即发": "即采即发",
+        "📍 进程查看": "进程查看",
+        "进程查看": "进程查看",
         "🔐 平台登录": "平台登录",
         "平台登录": "平台登录",
         "💬 点赞评论": "点赞评论",
@@ -1169,6 +1319,7 @@ def _menu_label_for_action(action: str) -> str:
         "login_qr": "平台登录",
         "collect_publish_latest": "即采即发",
         "comment_reply_run": "点赞评论",
+        "process_status": "进程查看",
     }
     return mapping.get(str(action or "").strip().lower(), "")
 
@@ -1250,6 +1401,7 @@ def _menu_label_from_title(title: str) -> str:
         if match:
             return str(match.group(1) or "").strip()
     keyword_mapping = [
+        ("进程查看", "进程查看"),
         ("点赞评论", "点赞评论"),
         ("平台登录", "平台登录"),
         ("二维码", "平台登录"),
@@ -1811,6 +1963,327 @@ def _build_home_task_queue_section(
     }
 
 
+def _prefilter_progress_status_label(status: str) -> str:
+    mapping = {
+        "link_pending": "待人工确认",
+        "up_confirmed": "待采集",
+        "down_confirmed": "待发布",
+        "download_running": "下载中",
+        "publish_requested": "待平台发布",
+        "publish_running": "发布中",
+        "publish_partial": "部分完成",
+        "publish_done": "全部完成",
+        "publish_failed": "发布失败",
+        "send_failed": "卡片发送失败",
+    }
+    token = str(status or "").strip().lower()
+    return mapping.get(token, token or "未知状态")
+
+
+def _build_process_worker_section(workspace: Path) -> dict[str, Any]:
+    state = _load_state(_worker_state_path(workspace))
+    if not state:
+        return {
+            "title": "Bot 心跳",
+            "emoji": "🤖",
+            "items": ["尚未生成 worker 心跳文件；如果 Bot 刚启动，可以稍后再刷新一次。"],
+        }
+
+    status_token = str(state.get("status") or "").strip().lower()
+    status_text = {
+        "polling": "轮询中",
+        "starting": "启动中",
+        "idle": "空闲",
+        "stopped": "已停止",
+        "failed": "异常",
+    }.get(status_token, status_token or "未知")
+    heartbeat_at = str(state.get("worker_heartbeat_at") or state.get("updated_at") or "").strip()
+    last_error = _preview_text(state.get("last_error") or "", limit=96)
+    items: list[Any] = [
+        {"label": "Worker 状态", "value": status_text},
+        {"label": "最近心跳", "value": heartbeat_at or "-"},
+    ]
+    startup_stage = str(state.get("startup_stage") or "").strip()
+    if startup_stage:
+        items.append({"label": "启动阶段", "value": startup_stage})
+    try:
+        update_id = int(state.get("last_processed_update_id") or state.get("offset") or 0)
+    except Exception:
+        update_id = 0
+    if update_id > 0:
+        items.append({"label": "最近 UpdateId", "value": str(update_id)})
+    try:
+        failures = int(state.get("consecutive_poll_failures") or 0)
+    except Exception:
+        failures = 0
+    if failures > 0:
+        items.append({"label": "连续轮询失败", "value": str(failures)})
+    items.append({"label": "最近错误", "value": last_error or "无"})
+    return {
+        "title": "Bot 心跳",
+        "emoji": "🤖",
+        "items": items,
+    }
+
+
+def _build_process_task_section(
+    workspace: Path,
+    *,
+    limit: int = DEFAULT_PROCESS_STATUS_TASK_LIMIT,
+) -> dict[str, Any]:
+    active_tasks = _list_active_home_action_tasks(workspace=workspace, guarded_only=False)
+    if active_tasks:
+        items: list[Any] = []
+        for task in active_tasks[: max(1, int(limit))]:
+            status_emoji, status_text = _home_task_status_summary(str(task.get("status") or ""))
+            title = _home_action_title(str(task.get("action") or ""))
+            updated_at = str(task.get("updated_at") or task.get("created_at") or "").strip() or "-"
+            lines = [f"{status_text}｜{updated_at}"]
+            detail = _preview_home_task_detail(task)
+            if detail:
+                lines.append(detail)
+            log_name = _log_display_name(str(task.get("log_path") or "").strip())
+            if log_name:
+                lines.append(f"日志：{log_name}")
+            items.append({"label": f"{status_emoji} {title}", "value": "\n".join(lines)})
+        remaining = len(active_tasks) - max(1, int(limit))
+        if remaining > 0:
+            items.append(f"还有 {remaining} 条活跃任务未展开。")
+        return {
+            "title": "当前活跃任务",
+            "emoji": "⚡",
+            "items": items,
+        }
+
+    recent_tasks = _list_home_action_tasks_for_display(workspace=workspace, limit=max(1, int(limit)))
+    if not recent_tasks:
+        return {
+            "title": "当前活跃任务",
+            "emoji": "⚡",
+            "items": ["当前没有活跃任务。"],
+        }
+
+    items = []
+    for task in recent_tasks[: max(1, int(limit))]:
+        status_emoji, status_text = _home_task_status_summary(str(task.get("status") or ""))
+        title = _home_action_title(str(task.get("action") or ""))
+        updated_at = str(task.get("updated_at") or task.get("created_at") or "").strip() or "-"
+        detail = _preview_home_task_detail(task)
+        value = f"{status_text}｜{updated_at}"
+        if detail:
+            value = f"{value}\n{detail}"
+        items.append({"label": f"{status_emoji} {title}", "value": value})
+    return {
+        "title": "最近任务摘要",
+        "emoji": "🧾",
+        "items": items,
+    }
+
+
+def _build_process_prefilter_section(
+    workspace: Path,
+    *,
+    limit: int = DEFAULT_PROCESS_STATUS_PREFILTER_LIMIT,
+) -> dict[str, Any]:
+    queue = _load_prefilter_queue(_prefilter_queue_path(workspace))
+    raw_items = queue.get("items", {})
+    if not isinstance(raw_items, dict) or not raw_items:
+        return {
+            "title": "即采即发队列",
+            "emoji": "🪄",
+            "items": ["当前没有即采即发候选队列。"],
+        }
+
+    items_list = [dict(row) for row in raw_items.values() if isinstance(row, dict)]
+    status_counts: dict[str, int] = {}
+    for row in items_list:
+        status = str(row.get("status") or "").strip().lower() or "unknown"
+        status_counts[status] = int(status_counts.get(status, 0)) + 1
+
+    ordered_statuses = [
+        "link_pending",
+        "up_confirmed",
+        "down_confirmed",
+        "download_running",
+        "publish_requested",
+        "publish_running",
+        "publish_partial",
+        "publish_done",
+        "publish_failed",
+        "send_failed",
+    ]
+    items: list[Any] = [
+        {"label": "候选总数", "value": str(len(items_list))},
+    ]
+    queue_updated_at = str(queue.get("updated_at") or "").strip()
+    if queue_updated_at:
+        items.append({"label": "队列更新时间", "value": queue_updated_at})
+    for status in ordered_statuses:
+        count = int(status_counts.get(status) or 0)
+        if count <= 0:
+            continue
+        items.append({"label": _prefilter_progress_status_label(status), "value": str(count)})
+
+    active_like_statuses = {
+        "link_pending",
+        "up_confirmed",
+        "down_confirmed",
+        "download_running",
+        "publish_requested",
+        "publish_running",
+        "publish_partial",
+        "send_failed",
+    }
+    highlighted = [
+        row
+        for row in sorted(
+            items_list,
+            key=lambda row: _prefilter_item_timestamp(row) or datetime.min,
+            reverse=True,
+        )
+        if str(row.get("status") or "").strip().lower() in active_like_statuses
+    ]
+    if not highlighted:
+        highlighted = sorted(
+            items_list,
+            key=lambda row: _prefilter_item_timestamp(row) or datetime.min,
+            reverse=True,
+        )
+
+    for row in highlighted[: max(1, int(limit))]:
+        media_kind = _normalize_immediate_collect_media_kind(str(row.get("media_kind") or "video"))
+        media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
+        status_label = _prefilter_progress_status_label(str(row.get("status") or ""))
+        updated_at = str(row.get("updated_at") or row.get("created_at") or "").strip() or "-"
+        preview = _preview_text(
+            row.get("processed_name")
+            or row.get("video_name")
+            or row.get("tweet_text")
+            or row.get("source_url")
+            or row.get("id")
+            or "",
+            limit=72,
+        )
+        items.append({"label": f"{media_label}｜{status_label}", "value": f"{updated_at}\n{preview}"})
+
+    return {
+        "title": "即采即发队列",
+        "emoji": "🪄",
+        "items": items,
+    }
+
+
+def _resolve_process_log_path(workspace: Path, log_path: str) -> Optional[Path]:
+    token = str(log_path or "").strip()
+    if not token:
+        return None
+    candidate = Path(token)
+    if candidate.is_absolute():
+        return candidate if candidate.exists() else None
+    resolved = (workspace / DEFAULT_LOG_SUBDIR / candidate.name).resolve()
+    return resolved if resolved.exists() else None
+
+
+def _pick_process_log_target(workspace: Path) -> tuple[Optional[Path], str]:
+    active_tasks = _list_active_home_action_tasks(workspace=workspace, guarded_only=False)
+    for task in active_tasks:
+        resolved = _resolve_process_log_path(workspace, str(task.get("log_path") or ""))
+        if resolved is not None:
+            return resolved, _home_action_title(str(task.get("action") or ""))
+
+    recent_tasks = _list_home_action_tasks_for_display(workspace=workspace, limit=3)
+    for task in recent_tasks:
+        resolved = _resolve_process_log_path(workspace, str(task.get("log_path") or ""))
+        if resolved is not None:
+            return resolved, _home_action_title(str(task.get("action") or ""))
+
+    log_dir = (workspace / DEFAULT_LOG_SUBDIR).resolve()
+    if not log_dir.exists():
+        return None, ""
+    patterns = [
+        "home_action_*.log",
+        "collect_publish_latest_job_*.log",
+        "immediate_collect_item_job_*.log",
+        "immediate_publish_item_job_*.log",
+        "immediate_publish_*.log",
+        "comment_reply_job_*.log",
+    ]
+    candidates: list[Path] = []
+    for pattern in patterns:
+        candidates.extend(log_dir.glob(pattern))
+    if not candidates:
+        return None, ""
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0], ""
+
+
+def _build_process_log_section(
+    workspace: Path,
+    *,
+    lines: int = DEFAULT_PROCESS_STATUS_LOG_TAIL_LINES,
+) -> dict[str, Any]:
+    target, owner = _pick_process_log_target(workspace)
+    if target is None:
+        return {
+            "title": "最新日志尾部",
+            "emoji": "🧾",
+            "items": ["当前没有可读取的进度日志。"],
+        }
+
+    try:
+        raw_lines = _read_process_log_lines(target)
+    except Exception as exc:
+        return {
+            "title": "最新日志尾部",
+            "emoji": "🧾",
+            "items": [f"读取日志失败：{exc}"],
+        }
+
+    tail_lines, folded = _compact_process_log_lines(raw_lines, limit=lines)
+    items: list[Any] = [{"label": "日志文件", "value": target.name}]
+    if owner:
+        items.append({"label": "关联任务", "value": owner})
+    if folded > 0:
+        items.append({"label": "日志折叠", "value": f"已折叠 {folded} 条重复初始化日志"})
+    if tail_lines:
+        for line in tail_lines[-max(1, int(lines)) :]:
+            items.append(_preview_text(line, limit=120))
+    else:
+        items.append("(empty log)")
+    return {
+        "title": "最新日志尾部",
+        "emoji": "🧾",
+        "items": items,
+    }
+
+
+def _build_process_status_card(*, default_profile: str, workspace: Path) -> Dict[str, Any]:
+    profile = _normalize_profile_name(default_profile)
+    return _build_submenu_card(
+        title="即采即发进程查看",
+        subtitle=f"当前配置：{profile}｜随时查看整个流程是否在推进",
+        sections=[
+            _build_process_worker_section(workspace),
+            _build_runtime_status_section(workspace),
+            _build_process_task_section(workspace),
+            _build_process_prefilter_section(workspace),
+            _build_process_log_section(workspace),
+        ],
+        actions=[
+            {
+                "text": "🔄 刷新进度",
+                "callback_data": build_home_callback_data("cybercar", "process_status"),
+                "row": 0,
+            },
+            {
+                "text": "🏠 返回首页",
+                "callback_data": build_home_callback_data("cybercar", "home"),
+                "row": 0,
+            },
+        ],
+    )
+
+
 def _build_submenu_card(
     *,
     title: str,
@@ -1991,6 +2464,13 @@ def _build_collect_publish_latest_menu_card(*, default_profile: str) -> Dict[str
         )
     actions.append(
         {
+            "text": "📍 进程查看",
+            "callback_data": build_home_callback_data("cybercar", "process_status"),
+            "row": len(COLLECT_PUBLISH_CANDIDATE_OPTIONS),
+        }
+    )
+    actions.append(
+        {
             "text": "🏠 返回首页",
             "callback_data": build_home_callback_data("cybercar", "home"),
             "row": len(COLLECT_PUBLISH_CANDIDATE_OPTIONS),
@@ -2047,6 +2527,7 @@ def _build_comment_reply_menu_card(*, default_profile: str) -> Dict[str, Any]:
 def _build_home_actions() -> list[dict[str, Any]]:
     return [
         {"text": "🔐 平台登录", "callback_data": build_home_callback_data("cybercar", "login_menu"), "row": 0},
+        {"text": "📍 进程查看", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": 0},
         {"text": "✨ 即采即发", "callback_data": build_home_callback_data("cybercar", "collect_publish_latest_menu"), "row": 1},
         {"text": "💬 点赞评论", "callback_data": build_home_callback_data("cybercar", "comment_reply_menu"), "row": 1},
     ]
@@ -2157,7 +2638,7 @@ def _home_feedback_response(
         sections=sections,
         bot_name=BOT_NAME,
     )
-    card["reply_markup"] = _with_home_button()
+    card["reply_markup"] = _with_process_status_button()
     return card
 
 
@@ -2497,6 +2978,7 @@ def _home_action_title(action: str) -> str:
     mapping = {
         "login_menu": "平台登录",
         "login_qr": "平台登录",
+        "process_status": "进程查看",
         "view_result": "查看结果",
         "collect_log": "采集日志",
         "worker_status": "系统状态",
@@ -2630,6 +3112,27 @@ def _handle_home_callback(
                 status_note="已返回首页",
                 workspace=workspace,
                 chat_id=chat_id,
+            ),
+            timeout_seconds=timeout_seconds,
+            message_id=message_id,
+            inline_message_id=inline_message_id,
+        )
+        return {"handled": True, "update_id": update_id}
+
+    if action == "process_status":
+        answer_interaction_toast(
+            bot_token=bot_token,
+            query_id=query_id,
+            action=action,
+            status="success",
+            timeout_seconds=timeout_seconds,
+        )
+        _send_interaction_result_async(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            card=_build_process_status_card(
+                default_profile=resolved_default_profile,
+                workspace=workspace,
             ),
             timeout_seconds=timeout_seconds,
             message_id=message_id,
@@ -5869,6 +6372,7 @@ def _normalize_command_key(text: str) -> str:
     shortcut_map = {
         "首页": "首页",
         "✨ 即采即发": "即采即发",
+        "📍 进程查看": "进程查看",
         "🔐 平台登录": "平台登录",
         "💬 点赞评论": "点赞评论",
     }
@@ -10132,6 +10636,11 @@ def _handle_command(
         )
     if cmd_key in {"即采即发"}:
         return _build_collect_publish_latest_menu_card(default_profile=resolved_default_profile)
+    if cmd_key in {"进程查看", "查看进度", "进度查看", "流程进度"}:
+        return _build_process_status_card(
+            default_profile=resolved_default_profile,
+            workspace=workspace,
+        )
     if cmd_key in {"平台登录"}:
         return _build_login_menu_card(default_profile=resolved_default_profile)
     if cmd_key in {"点赞评论"}:

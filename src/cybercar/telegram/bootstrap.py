@@ -114,3 +114,46 @@ def refresh_home_surface() -> dict[str, object]:
         default_profile=str(target.get("default_profile") or "cybertruck"),
     )
     return {"ok": True, "log_file": str(log_file)}
+
+
+def recover_bot_surface(*, retries: int = 3, retry_delay_seconds: float = 2.0) -> dict[str, object]:
+    target = _resolve_target()
+    bot_token = str(target.get("bot_token") or "")
+    chat_id = str(target.get("chat_id") or "")
+    if not bot_token or not chat_id:
+        raise RuntimeError("telegram bot token/chat_id is not configured")
+    paths = get_paths()
+    log_file = paths.log_dir / f"telegram_worker_{time.strftime('%Y%m%d')}.log"
+    telegram_cfg = target["telegram_config"]
+    timeout_seconds = max(30, int(telegram_cfg.get("poll_timeout_seconds") or 10) + 20)  # type: ignore[index]
+    attempts = max(1, int(retries))
+    last_error: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            _set_clickable_commands(
+                bot_token=bot_token,
+                timeout_seconds=timeout_seconds,
+                log_file=log_file,
+            )
+            _refresh_home_surface(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                workspace=paths.runtime_root,
+                timeout_seconds=timeout_seconds,
+                log_file=log_file,
+                default_profile=str(target.get("default_profile") or "cybertruck"),
+            )
+            return {
+                "ok": True,
+                "attempts": attempt,
+                "log_file": str(log_file),
+                "chat_id": chat_id,
+            }
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            time.sleep(max(0.5, float(retry_delay_seconds)))
+
+    raise RuntimeError(f"telegram recover failed after {attempts} attempts: {last_error}") from last_error

@@ -14492,8 +14492,46 @@ def _stage_bilibili_upload_via_page_set(page: ChromiumPage, primary_ctx: Any, fa
 
 def _read_generic_file_inputs_snapshot(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
     js = """
+    function collectAllRoots(root) {
+      const roots = [root];
+      const queue = [root];
+      const seen = new Set([root]);
+      while (queue.length) {
+        const current = queue.shift();
+        let nodes = [];
+        try {
+          nodes = Array.from(current.querySelectorAll('*'));
+        } catch (e) {
+          nodes = [];
+        }
+        for (const el of nodes) {
+          const shadow = el && el.shadowRoot;
+          if (shadow && !seen.has(shadow)) {
+            seen.add(shadow);
+            roots.push(shadow);
+            queue.push(shadow);
+          }
+        }
+      }
+      return roots;
+    }
     function collect(root) {
-      const inputs = Array.from(root.querySelectorAll("input[type='file']"));
+      const roots = collectAllRoots(root);
+      const seenInputs = new Set();
+      const inputs = [];
+      for (const current of roots) {
+        let found = [];
+        try {
+          found = Array.from(current.querySelectorAll("input[type='file']"));
+        } catch (e) {
+          found = [];
+        }
+        for (const el of found) {
+          if (seenInputs.has(el)) continue;
+          seenInputs.add(el);
+          inputs.push(el);
+        }
+      }
       let maxCount = 0;
       const sample = [];
       for (const el of inputs) {
@@ -14513,20 +14551,29 @@ def _read_generic_file_inputs_snapshot(primary_ctx: Any, fallback_ctx: Any) -> d
         total: inputs.length,
         max_count: maxCount,
         sample,
+        root_count: roots.length,
       };
     }
     return collect(document);
     """
-    for owner in (primary_ctx, fallback_ctx):
+    merged: dict[str, Any] = {"total": 0, "max_count": 0, "sample": [], "root_count": 0}
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
         if not owner:
             continue
         try:
             payload = owner.run_js(js)
         except Exception:
             payload = {}
-        if isinstance(payload, dict) and payload:
-            return payload
-    return {}
+        if not isinstance(payload, dict) or not payload:
+            continue
+        merged["total"] = int(merged.get("total", 0) or 0) + int(payload.get("total", 0) or 0)
+        merged["root_count"] = int(merged.get("root_count", 0) or 0) + int(payload.get("root_count", 0) or 0)
+        payload_max = int(payload.get("max_count", 0) or 0)
+        if payload_max >= int(merged.get("max_count", 0) or 0):
+            merged["max_count"] = payload_max
+            if isinstance(payload.get("sample"), list):
+                merged["sample"] = list(payload.get("sample") or [])[:6]
+    return merged
 
 
 def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
@@ -15381,7 +15428,7 @@ def _pick_kuaishou_publish_wrap_text(texts: Sequence[str]) -> str:
 
 
 def _scroll_kuaishou_publish_controls_into_view(primary_ctx: Any, fallback_ctx: Any) -> None:
-    js = """
+    js = r"""
     function isVisible(el) {
       if (!el) return false;
       const st = window.getComputedStyle(el);
@@ -16168,7 +16215,7 @@ def _is_douyin_collection_match(current: str, target: str) -> bool:
 
 
 def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
-    js = """
+    js = r"""
     function isVisible(el) {
       if (!el) return false;
       const st = window.getComputedStyle(el);
@@ -16627,7 +16674,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
             _log(f"[Uploader:xiaohongshu] Clicked publish button by dedicated selector: {selector}")
             return True
 
-    js = """
+    js = r"""
     function isVisible(el) {
       if (!el) return false;
       const st = window.getComputedStyle(el);
@@ -16680,6 +16727,8 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
     selectors = (
         "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
         "xpath://span[normalize-space(.)='发布']/ancestor::button[../button[normalize-space(.)='取消']][1]",
+        "xpath://button[normalize-space(.)='发布作品' and ../button[normalize-space(.)='取消']]",
+        "xpath://span[normalize-space(.)='发布作品']/ancestor::button[../button[normalize-space(.)='取消']][1]",
         "xpath://button[normalize-space(.)='发布']",
         "xpath://button[contains(@class,'primary') and normalize-space(.)='发布']",
         "xpath://button[contains(@class,'btn') and normalize-space(.)='发布']",
@@ -16717,26 +16766,52 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
                       nodes.push(cur);
                       cur = cur.parentElement;
                     }
+                    const parent = this.parentElement || null;
+                    if (parent) {
+                      for (const sibling of Array.from(parent.children || [])) {
+                        if (sibling && !nodes.includes(sibling)) nodes.push(sibling);
+                      }
+                    }
                     const texts = nodes
                       .map(node => norm((node && node.innerText) || '').slice(0, 320))
                       .filter(Boolean);
                     const strongTokens = ['发布 取消', '取消 发布', '确认发布'];
                     const strong = texts.find(text => strongTokens.some(token => text.includes(token))) || '';
                     const chosen = strong || texts[0] || '';
-                    return {wrap: chosen.slice(0, 240), texts};
+                    const rect = this.getBoundingClientRect();
+                    return {
+                      wrap: chosen.slice(0, 240),
+                      texts,
+                      rectTop: Number(rect && rect.top || 0),
+                      viewportHeight: Number(window.innerHeight || document.documentElement.clientHeight || 0),
+                      buttonText: norm((this && this.innerText) || '')
+                    };
                     """
                 )
                 if isinstance(wrap_state, dict):
                     wrapper_text = str(wrap_state.get("wrap") or "").strip()
                     wrapper_texts = tuple(wrap_state.get("texts") or ())
+                    rect_top = float(wrap_state.get("rectTop", 0) or 0)
+                    viewport_height = float(wrap_state.get("viewportHeight", 0) or 0)
+                    button_text = str(wrap_state.get("buttonText") or "").strip()
                 else:
                     wrapper_text = str(wrap_state or "").strip()
                     wrapper_texts = ()
+                    rect_top = 0.0
+                    viewport_height = 0.0
+                    button_text = ""
             except Exception:
                 wrapper_text = ""
                 wrapper_texts = ()
+                rect_top = 0.0
+                viewport_height = 0.0
+                button_text = ""
             wrap_candidates = (wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,)
             chosen_wrap = _pick_kuaishou_publish_wrap_text(wrap_candidates)
+            sibling_cancel = any("取消" in text for text in wrap_candidates)
+            near_bottom = bool(viewport_height > 0 and rect_top >= (viewport_height * 0.55))
+            if not chosen_wrap and button_text == "发布作品" and (sibling_cancel or near_bottom):
+                chosen_wrap = "bottom_publish_area"
             if not chosen_wrap and any(
                 any(token in text for token in skip_wrap_tokens)
                 for text in wrap_candidates
@@ -16802,18 +16877,31 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
           wrapTexts.push(norm(String((cur && cur.innerText) || '').slice(0, 320)));
           cur = cur.parentElement;
         }
+        const parent = el.parentElement || null;
+        if (parent) {
+          for (const sibling of Array.from(parent.children || [])) {
+            if (sibling === el) continue;
+            const text = norm(String((sibling && sibling.innerText) || '').slice(0, 240));
+            if (text) wrapTexts.push(text);
+          }
+        }
         const wrapText = pickWrap(wrapTexts);
+        const rect = el.getBoundingClientRect();
+        const siblingCancel = wrapTexts.some(candidate => candidate.includes('取消'));
+        const nearBottom = Number(rect && rect.top || 0) >= (Number(window.innerHeight || document.documentElement.clientHeight || 0) * 0.55);
         if (!wrapText && wrapTexts.some(candidate => skipWrapTokens.some(token => candidate.includes(token)))) return null;
-        if (!wrapText) return null;
+        if (!wrapText && !(text === '发布作品' && (siblingCancel || nearBottom))) return null;
         let score = 0;
         if (text === '发布') score += 14;
         if (text === '确认发布') score += 12;
         if (text === '发布作品') score += 8;
         if (/button/i.test(el.tagName || '')) score += 10;
         if (/primary|btn|publish/.test(attrs.toLowerCase())) score += 6;
-        if (wrapText.includes('发布 取消') || wrapText.includes('取消 发布')) score += 8;
-        if (wrapText.includes('发布时间') || wrapText.includes('立即发布') || wrapText.includes('定时发布')) score += 4;
-        return {el, text, score, wrapText: wrapText.slice(0, 160)};
+        if (wrapText && (wrapText.includes('发布 取消') || wrapText.includes('取消 发布'))) score += 8;
+        if (wrapText && (wrapText.includes('发布时间') || wrapText.includes('立即发布') || wrapText.includes('定时发布'))) score += 4;
+        if (siblingCancel) score += 10;
+        if (nearBottom) score += 8;
+        return {el, text, score, wrapText: (wrapText || (siblingCancel ? 'sibling_cancel' : '')).slice(0, 160)};
       })
       .filter(Boolean)
       .sort((a, b) => b.score - a.score);

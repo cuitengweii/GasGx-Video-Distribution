@@ -333,6 +333,7 @@ def build_callback_toast(action: str, status: str, context: Any = None) -> str:
     success_map = {
         "home": "已返回首页",
         "refresh_home": "首页已刷新",
+        "process_status": "进度已刷新",
         "collect_now": "已开始采集",
         "publish_now": "已开始发布",
         "content_collect_now": "已开始内容采集",

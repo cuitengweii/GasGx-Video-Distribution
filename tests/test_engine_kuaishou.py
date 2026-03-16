@@ -64,3 +64,41 @@ def test_click_kuaishou_primary_publish_button_uses_publish_panel_context() -> N
     assert engine._click_kuaishou_primary_publish_button(owner, None) is True
     assert button.clicked is True
 
+
+def test_click_kuaishou_primary_publish_button_accepts_bottom_publish_work_button() -> None:
+    class FakeButton:
+        def __init__(self) -> None:
+            self.clicked = False
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "const nodes = []" in script:
+                return {
+                    "wrap": "发布作品",
+                    "texts": [
+                        "发布作品",
+                        "取消",
+                    ],
+                    "rectTop": 820,
+                    "viewportHeight": 1000,
+                    "buttonText": "发布作品",
+                }
+            return True
+
+        def click(self, by_js: bool = False) -> None:
+            self.clicked = True
+
+    class FakeOwner:
+        def __init__(self, button: FakeButton) -> None:
+            self.button = button
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del timeout
+            if "发布作品" in selector:
+                return self.button
+            return None
+
+    button = FakeButton()
+    owner = FakeOwner(button)
+
+    assert engine._click_kuaishou_primary_publish_button(owner, None) is True
+    assert button.clicked is True
