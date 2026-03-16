@@ -16,6 +16,8 @@ Last updated: 2026-03-16
 - Restored the Telegram command worker inside the standalone repo and added low-risk facade packages for `support`, `services`, `telegram`, and `pipeline_core`.
 - Removed scheduled-task registration from the standalone repo and aligned the supported operator model around one manual Telegram worker entry.
 - Tightened the immediate image-review flow so it searches X with `filter:images`, reports the last Telegram prefilter send error in failure cards, and lets immediate collect jobs keep retry/fallback behavior even when global X download config enables fail-fast mode.
+- Unified X download policy resolution across `collect` and Telegram immediate paths, added downloader stage observability, and introduced global `fail_fast` support for low-volume latest-first collection.
+- Adjusted fail-fast after real-host validation so low-volume collect only hits the newest `limit` candidates and does not abort the whole run when X GraphQL metadata requests all fail.
 
 ## Current Status
 
@@ -31,7 +33,10 @@ Last updated: 2026-03-16
 - Immediate image candidate discovery now uses X `filter:images` instead of `filter:media`, so image review no longer pulls short videos into the image-only branch.
 - `config/app.json` currently enables X download `fail_fast=true` globally, but the Telegram immediate collect path strips that flag from child collect jobs so manual reviewed candidates can still retry and run image/direct fallback.
 - Telegram prefilter fast-send now retries lightly and failure feedback cards include the last send error snippet to make network problems visible without opening logs.
+- `collect` now logs a shared X retry policy block and X stage summary that include `fail_fast`, batch failure counts, transport fallback counts, direct fallback counts, and cookie export status.
+- In `fail_fast=true` mode, downloader retries and image/direct fallback are skipped, selected X URLs are capped to the freshest `limit`, and a full metadata failure returns an empty result instead of raising `RuntimeError`.
 - The worker was restarted on 2026-03-16 and a real image review run was exercised; main remaining production issue is intermittent X/Telegram network instability, not legacy path coupling.
+- Real-host validation on 2026-03-16 still showed repeated X `Downloading GraphQL JSON` failures with `ConnectionResetError(10054)` even under direct-tun and low daily volume, so the dominant production risk remains X-side/network instability rather than downloader wiring.
 
 ## Open Work
 
@@ -42,6 +47,7 @@ Last updated: 2026-03-16
 - Common helper code still contains backward-compatible multi-bot parsing paths, but the active runtime configuration is now single-bot only.
 - `runtime/runtime/telegram_command_worker_action_queue.json` had been corrupted by invalid JSON content during this thread and was reset manually; the queue format and corruption handling still need hardening in code.
 - Real image candidate downloads can still fail on X metadata timeouts; if failures remain frequent after the immediate-path fail-fast override, network policy or timeout defaults need another pass.
+- Direct `collect` still needs one more real-host confirmation that a round with `fail_fast=true` and zero successful downloads exits cleanly all the way back to the shell prompt after the latest patch.
 
 ## Next Step
 
@@ -50,3 +56,9 @@ Last updated: 2026-03-16
 - Verify `python -m cybercar login status --platform wechat`, `douyin`, `xiaohongshu`, `kuaishou`, and `bilibili`.
 - Verify one complete manual publish from the Telegram review flow without any scheduled task involvement.
 - Continue deleting dead multi-bot helper code and add code-side recovery for corrupted action-queue state once the single-bot worker path is stable through a few real sessions.
+
+## Next Step Update
+
+- Re-run `python -m cybercar collect --profile cybertruck --limit 2` and verify the patched fail-fast path reaches the shell prompt with `Using discovered X URLs: 2` and no terminal `RuntimeError`.
+- Validate one Telegram immediate reviewed collect still keeps retry/fallback behavior after `_build_immediate_fast_x_download_args()` strips `--x-download-fail-fast`.
+- If X metadata resets still dominate, decide whether to shorten `socket_timeout_seconds` again for latest-first collection or force a different network path or cookie source for X only.

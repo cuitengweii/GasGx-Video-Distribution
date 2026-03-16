@@ -40,3 +40,8 @@ Last updated: 2026-03-16
 - Root cause: `runtime/runtime/telegram_command_worker_action_queue.json` became invalid JSON, so the queue could no longer be safely recovered and stale queued work blocked new actions.
 - Earlier detection: validate queue-state JSON whenever the worker reports a persistent lock with no matching live child process.
 - Prevention: add corruption-tolerant queue loading and automatic reset/backup for invalid queue files instead of requiring manual cleanup.
+
+- Symptom: after enabling global X downloader `fail_fast`, a direct `collect` run still hit X GraphQL metadata resets and then aborted the whole command with `RuntimeError`, which defeated the intended "just skip failed fresh items" behavior.
+- Root cause: the fail-fast change disabled retry layers, but the downloader still raised on a zero-output round and still over-selected discovered candidates far beyond the operator's requested `limit`.
+- Earlier detection: real-host validation should check not only whether retry/fallback is skipped, but also whether a full no-download round exits cleanly and whether selected candidate count shrinks with the latest-first mode.
+- Prevention: in fail-fast mode, cap selected X URLs to the freshest requested `limit` and treat a zero-download result as a non-fatal empty round.

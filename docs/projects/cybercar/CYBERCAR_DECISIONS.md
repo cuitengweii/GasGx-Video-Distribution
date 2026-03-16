@@ -17,3 +17,4 @@ Last updated: 2026-03-16
 - Collect/publish remains available as explicit commands, but every video stays on the manual Telegram review path rather than unattended scheduling.
 - Immediate image review must search X with `filter:images`; `filter:media` is not acceptable for the image branch because it admits videos and causes false failures on video-only guards.
 - Global X download config may use `fail_fast=true`, but Telegram immediate review jobs must override that behavior and keep retry/fallback enabled so manually approved candidates are not discarded on the first transient X timeout.
+- For low-volume latest-first manual collect, `fail_fast=true` is the preferred global default: skip downloader retry batches and all fallback work, target only the freshest `limit` discovered X URLs, and treat a no-download round as a non-fatal empty result instead of aborting the whole command.
