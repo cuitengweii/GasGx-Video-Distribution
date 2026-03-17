@@ -10,6 +10,9 @@ Last updated: 2026-03-17
 
 ## Latest Milestone
 
+- Confirmed that the reported Kuaishou immediate-publish crash path caused by `CycleContext.__init__() missing 1 required positional argument: 'collection_names'` is already repaired in the current standalone repo: `CycleContext` now keeps a backward-compatible default and the Telegram immediate worker passes resolved `collection_names` into the publish context.
+- Expanded Douyin collection selection so `_select_douyin_collection()` now runs for Douyin publishes regardless of media type, preventing video publishes from silently skipping collection assignment after caption fill.
+- Locked the Telegram publish-result success-card layout around the operator summary block: the normalization tests now require `执行摘要` to appear directly after the stacked platform header instead of preserving a redundant `平台发布成功 / 已返回平台结果` subtitle line.
 - Established the standalone repository skeleton under `D:\code\CyberCar`.
 - Localized runtime, config, profiles, docs, scripts, and migration tooling so the repo can run without importing code from the old monorepo.
 - Preserved the proven legacy pipeline logic by vendoring the old CyberCar engine and pipeline into the new repo with local compatibility wrappers and a new CLI.
@@ -32,6 +35,9 @@ Last updated: 2026-03-17
 
 ## Current Status
 
+- The current repo code already contains the immediate-worker `collection_names` propagation fix for `runner.CycleContext(...)`, so the previously reported Kuaishou platform-processing failure is not represented by a new unstaged diff in this archive.
+- `src/cybercar/engine.py` currently broadens Douyin collection selection from the image-only branch to all Douyin publishes, aligning video and image flows on the same post-caption collection assignment step.
+- `tests/test_telegram_card_normalization.py` now asserts the compact success-card layout more strictly: stacked platform headers must flow straight into the `执行摘要` section instead of keeping a duplicated platform-result subtitle line.
 - Fixed the WeChat immediate-publish login false positive: the worker now probes the actual create page before the login helper URL and only requests a QR code after `check_platform_login_status()` confirms the session is truly `login_required`.
 - Added regression coverage around the WeChat runtime context and post-publish login recheck so a generic publish failure no longer forces the active business tab back to `login.html`.
 
@@ -64,6 +70,9 @@ Last updated: 2026-03-17
 
 ## Open Work
 
+- Real-host validation is still required for the reported Kuaishou image publish failure path: re-run `即采即发 > 图片 > 全部平台` and verify that the current repo no longer surfaces the old `CycleContext.__init__()` crash before platform handling starts.
+- Douyin collection selection now runs on both image and video publishes in code, but one live creator-center pass is still needed to confirm the shared path does not regress the current video form.
+- Telegram success-card compaction still needs one live bot confirmation to ensure removing the redundant platform-result subtitle does not hide the only operator-facing clue on edge-case success cards.
 - A direct WeChat session probe on 2026-03-17 05:03 (Asia/Shanghai) reported `status=ready` on `https://channels.weixin.qq.com/platform/post/create`; the mixed "publish tab + login tab" operator screenshot was traced to the worker's own QR recovery path reopening `login.html`, not to a confirmed upstream logout.
 - The current archive scan shows one unrelated unstaged tweak in `tests/test_telegram.py`; the WeChat misclassification fix itself is already present in repo code and covered by tests.
 - Real-host validation is still required for five-platform login status, one fully successful manual bot-driven image collect-review-download path, one successful manual video collect-publish review run, and one WeChat engagement run.
@@ -83,6 +92,10 @@ Last updated: 2026-03-17
 - The fixed Douyin video branch still needs one real-host rerun from the Telegram `即采即发 > 视频 > 全部平台` path to confirm the uploader now waits through the transient upload shell and reaches caption fill reliably.
 
 ## Next Step
+
+- Re-run Telegram `即采即发 > 图片 > 全部平台` for the same Kuaishou image scenario and confirm the worker no longer fails at `CycleContext` construction before platform handling begins.
+- Re-run one Douyin video publish path and verify the assigned collection is still selected after caption fill now that `_select_douyin_collection()` is no longer gated by `_is_image_file(target)`.
+- Trigger one known-success Telegram publish-result card and confirm the operator still sees enough context when the header is followed directly by `执行摘要` and no extra `平台发布成功` subtitle line.
 
 - Re-run Telegram `即采即发 > 图片 > 3条` after the worker restart and confirm at least one reviewed image candidate downloads into `runtime/1_Downloads_Images` or `runtime/2_Processed_Images`.
 - If image collect still fails, capture the newest `immediate_collect_item_job_*.log` and decide whether to raise X timeout/retry policy or force proxy/system-proxy mode for X downloads.

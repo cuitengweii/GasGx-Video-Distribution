@@ -21,6 +21,9 @@ Last updated: 2026-03-17
 
 ## 2026-03-17
 
+- `CycleContext` construction for Telegram immediate publish must remain backward-compatible: the dataclass keeps a default empty `collection_names` map, and immediate worker code must pass resolved per-platform collection names explicitly instead of relying on positional constructor history.
+- Douyin collection selection is a publish-step invariant, not an image-only branch. After caption fill, CyberCar should run `_select_douyin_collection()` for Douyin publishes regardless of whether the target is an image or a video.
+- Telegram publish-result success cards should not spend a dedicated subtitle line on `平台发布成功` or `已返回平台结果` when the stacked platform header is already present and the `执行摘要` block follows immediately after it.
 - Windows Task Scheduler is allowed again only as a bootstrap layer for Telegram bot availability, not as an unattended collect/publish runner.
 - CyberCar now supports a resident Telegram watchdog plus a periodic `--once` self-heal probe so "worker dead but bot silent" incidents are recovered automatically.
 - Watchdog recovery must reuse `recover_bot_surface()` so process restart, `/start` command refresh, and home-surface rebuild stay on one code path.

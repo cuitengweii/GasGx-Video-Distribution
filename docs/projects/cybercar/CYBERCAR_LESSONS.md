@@ -48,6 +48,16 @@ Last updated: 2026-03-17
 
 ## 2026-03-17
 
+- Symptom: `即采即发 / 图片 / 全部平台` could fail before any platform-specific publish logic with `CycleContext.__init__() missing 1 required positional argument: 'collection_names'`.
+- Root cause: one Telegram immediate worker constructor path had fallen behind the newer `CycleContext` shape and no longer passed the resolved per-platform `collection_names` payload.
+- Earlier detection: compare every `runner.CycleContext(...)` call site whenever the dataclass signature changes, rather than assuming the main pipeline constructors cover the legacy worker path.
+- Prevention: keep a backward-compatible default on `CycleContext.collection_names` and add regression coverage around immediate-worker context construction so signature drift cannot break publish flows silently.
+
+- Symptom: Douyin video publishes could complete caption fill without ever assigning the configured collection even though image publishes still ran collection selection.
+- Root cause: `_select_douyin_collection()` was gated behind `platform_name == "douyin" and _is_image_file(target)`, so the video branch skipped the collection step entirely.
+- Earlier detection: compare post-caption logs across Douyin image and video publishes and look for missing collection-selection traces rather than only checking final publish success.
+- Prevention: treat collection selection as a shared Douyin publish invariant and cover it with focused tests around `_fill_draft_once_generic()`.
+
 - Symptom: a real Douyin video publish failed with `Failed to verify caption input on douyin (candidates=0, preview=-)` even though the same account and publish entry were still healthy a few minutes later.
 - Root cause: `_wait_upload_ready_generic()` treated the Douyin video page as upload-complete as soon as the page stopped showing generic busy markers, but the real creator form had not rendered a visible caption editor yet.
 - Earlier detection: compare the upload-complete log line with the first caption-fill attempt in the same `immediate_publish_douyin_*.log`; if "upload appears completed" is immediately followed by `candidates=0`, the ready heuristic is ahead of the live DOM.
