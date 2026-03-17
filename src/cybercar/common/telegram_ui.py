@@ -80,8 +80,8 @@ _SECTION_TITLE_ALIASES = {
 }
 _SECTION_EMOJI_BY_TITLE = {
     "人工关注": "🎯",
-    "失败原因": "❌",
-    "处理建议": "🛠️",
+    "失败原因": "⚠️",
+    "处理建议": "🔧",
     "结果说明": "📝",
     "执行摘要": "📌",
     "执行结果": "📝",
@@ -538,12 +538,30 @@ def _rank_machine_item_for_success(item: Any, index: int) -> tuple[int, int]:
         (0, ("日志", "log", ".log", "trace")),
         (1, ("标识", "task_id", "job_id", "message_id", "trace_id", "flag", "status", "state")),
         (2, ("任务", "task", "job", "platform", "pipeline")),
+        (30, ("当前任务", "当前链路", "menu", "breadcrumb", "source_url", "原帖链接", "link")),
         (20, ()),
     )
     for priority, keywords in keyword_groups:
         if any(keyword in haystack for keyword in keywords):
             return (priority, index)
     return (20, index)
+
+
+def _trim_success_section_items(title: str, items: Sequence[Any]) -> list[Any]:
+    normalized_title = str(title or "").strip()
+    normalized_items = list(items or [])
+    if normalized_title != "候选信息":
+        return normalized_items
+    trimmed: list[Any] = []
+    for item in normalized_items:
+        if not isinstance(item, Mapping):
+            trimmed.append(item)
+            continue
+        label = str(item.get("label") or "").strip()
+        if label == "原帖链接":
+            continue
+        trimmed.append(dict(item))
+    return trimmed or normalized_items[:1]
 
 
 def _suppress_low_priority_success_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -556,6 +574,7 @@ def _suppress_low_priority_success_sections(status: str, sections: Sequence[Mapp
     for section in normalized:
         title = str(section.get("title") or "").strip()
         items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        items = _trim_success_section_items(title, items)
         if has_focus and title == "执行结果":
             continue
         if title == "机器信息" and len(items) > 2:
@@ -564,7 +583,7 @@ def _suppress_low_priority_success_sections(status: str, sections: Sequence[Mapp
             ]
             compacted.append({**section, "items": ranked_items[:2]})
             continue
-        compacted.append(section)
+        compacted.append({**section, "items": items})
     return compacted
 
 
@@ -608,6 +627,7 @@ def build_telegram_card(
     sections = payload.get("sections", [])
     if not isinstance(sections, Iterable):
         sections = []
+    sections = _normalize_card_sections(status, list(sections))
     sections = _prioritize_card_sections(
         status,
         _suppress_low_priority_success_sections(

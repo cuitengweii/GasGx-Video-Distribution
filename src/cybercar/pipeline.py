@@ -142,6 +142,7 @@ class CycleContext:
     exclude_keywords: list[str]
     require_any_keywords: list[str]
     collection_name: str
+    collection_names: dict[str, str]
     chrome_path: Optional[str]
     chrome_user_data_dir: str
     proxy: Optional[str]
@@ -2398,6 +2399,22 @@ def _run_collect_once(
 
     configured_collection_name = str(runtime_config.get("collection_name", "") or "").strip()
     resolved_collection_name = (args.collection_name or "").strip() or configured_collection_name or core.DEFAULT_COLLECTION_NAME
+    resolved_collection_names = {
+        platform: core.resolve_platform_collection_name(
+            runtime_config,
+            platform,
+            cli_collection_name=(args.collection_name or "").strip(),
+        )
+        for platform in core.SUPPORTED_UPLOAD_PLATFORMS
+    }
+    resolved_collection_names = {
+        platform: core.resolve_platform_collection_name(
+            runtime_config,
+            platform,
+            cli_collection_name=(args.collection_name or "").strip(),
+        )
+        for platform in core.SUPPORTED_UPLOAD_PLATFORMS
+    }
     chrome_user_data_dir = (args.chrome_user_data_dir or "").strip() or core.DEFAULT_CHROME_USER_DATA_DIR
     x_chrome_user_data_dir = (
         str(getattr(args, "x_chrome_user_data_dir", "") or "").strip() or getattr(core, "DEFAULT_X_CHROME_USER_DATA_DIR", chrome_user_data_dir)
@@ -2408,6 +2425,7 @@ def _run_collect_once(
     core._log(
         "[Collector] Config "
         f"collection_name={resolved_collection_name}, "
+        f"collection_names={resolved_collection_names}, "
         f"auto_delete_source_files={auto_delete_source_files}, "
         f"spark_ai_ready={core._spark_config_ready(spark_ai_config)}, "
         f"exclude_keywords={len(exclude_keywords)}, "
@@ -2590,6 +2608,7 @@ def _run_collect_once(
         exclude_keywords=exclude_keywords,
         require_any_keywords=require_any_keywords,
         collection_name=resolved_collection_name,
+        collection_names=resolved_collection_names,
         chrome_path=chrome_path,
         chrome_user_data_dir=chrome_user_data_dir,
         proxy=proxy,
@@ -2665,6 +2684,7 @@ def _build_publish_only_context(args: argparse.Namespace) -> CycleContext:
         exclude_keywords=exclude_keywords,
         require_any_keywords=require_any_keywords,
         collection_name=resolved_collection_name,
+        collection_names=resolved_collection_names,
         chrome_path=chrome_path,
         chrome_user_data_dir=chrome_user_data_dir,
         proxy=proxy,
@@ -2742,13 +2762,14 @@ def _publish_once(
         return True
 
     publish_mode = _resolve_platform_publish_mode(args, platform)
+    platform_collection_name = str((ctx.collection_names or {}).get(platform, "") or ctx.collection_name or "").strip()
     try:
         if platform == "wechat":
             used_target = core.fill_draft_wechat(
                 ctx.workspace,
                 caption=caption,
                 target_video=target,
-                collection_name=ctx.collection_name,
+                collection_name=platform_collection_name,
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
@@ -2768,7 +2789,7 @@ def _publish_once(
                 ctx.workspace,
                 caption=caption,
                 target_video=target,
-                collection_name=ctx.collection_name,
+                collection_name=platform_collection_name,
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
@@ -2895,7 +2916,7 @@ def _publish_once(
             stage=stage,
             video=used_target,
             workspace_root=ctx.workspace.root,
-            collection_name=ctx.collection_name,
+            collection_name=platform_collection_name,
             publish_id=publish_id,
             target_fp=success_fp,
             video_meta=success_meta,
@@ -2948,7 +2969,7 @@ def _publish_once(
             stage=stage,
             video=target,
             workspace_root=ctx.workspace.root,
-            collection_name=ctx.collection_name,
+            collection_name=platform_collection_name,
             publish_id=publish_id,
             target_fp=failed_fp,
             video_meta=failed_meta,

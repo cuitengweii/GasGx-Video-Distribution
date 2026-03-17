@@ -36,6 +36,29 @@ def test_is_douyin_collection_match_accepts_prefix_suffix_alias() -> None:
     assert engine._is_douyin_collection_match("赛博皮卡现车：aawbcc", "赛博皮卡天津港现车")
 
 
+def test_resolve_platform_collection_name_prefers_platform_specific_value() -> None:
+    runtime_config = {
+        "collection_name": "Global Collection",
+        "collection_names": {
+            "douyin": "Douyin Collection",
+            "wechat": "Wechat Collection",
+        },
+    }
+
+    assert engine.resolve_platform_collection_name(runtime_config, "douyin") == "Douyin Collection"
+    assert engine.resolve_platform_collection_name(runtime_config, "wechat") == "Wechat Collection"
+    assert engine.resolve_platform_collection_name(runtime_config, "bilibili") == "Global Collection"
+
+
+def test_resolve_platform_collection_name_supports_legacy_platform_key() -> None:
+    runtime_config = {
+        "collection_name": "Global Collection",
+        "douyin_collection_name": "Legacy Douyin Collection",
+    }
+
+    assert engine.resolve_platform_collection_name(runtime_config, "douyin") == "Legacy Douyin Collection"
+
+
 def test_prepare_image_post_text_payload_keeps_douyin_caption(monkeypatch: pytest.MonkeyPatch) -> None:
     title_calls: list[dict[str, Any]] = []
 

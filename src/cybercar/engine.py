@@ -3593,6 +3593,9 @@ def _resolve_processed_target_path(workspace: Workspace, processed_name: str, in
 def _default_runtime_config() -> dict[str, Any]:
     return {
         "collection_name": DEFAULT_COLLECTION_NAME,
+        "collection_names": {
+            "douyin": DEFAULT_COLLECTION_NAME,
+        },
         "auto_delete_source_files": DEFAULT_AUTO_DELETE_SOURCE_FILES,
         "exclude_keywords": DEFAULT_EXCLUDE_KEYWORDS.copy(),
         "require_any_keywords": DEFAULT_REQUIRE_ANY_KEYWORDS.copy(),
@@ -3859,6 +3862,43 @@ def _merge_comment_reply_config(raw: Any) -> dict[str, Any]:
     return cfg
 
 
+def _merge_platform_collection_names(raw: Any, fallback: str = "") -> dict[str, str]:
+    result: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            platform = str(key or "").strip().lower()
+            name = str(value or "").strip()
+            if platform in SUPPORTED_UPLOAD_PLATFORMS and name:
+                result[platform] = name
+    fallback_name = str(fallback or "").strip()
+    if fallback_name and "douyin" not in result:
+        result["douyin"] = fallback_name
+    return result
+
+
+def resolve_platform_collection_name(
+    runtime_config: Optional[dict[str, Any]],
+    platform_name: str,
+    *,
+    cli_collection_name: str = "",
+) -> str:
+    platform = str(platform_name or "").strip().lower()
+    cli_value = str(cli_collection_name or "").strip()
+    if cli_value:
+        return cli_value
+    payload = runtime_config if isinstance(runtime_config, dict) else {}
+    collection_names = payload.get("collection_names") if isinstance(payload.get("collection_names"), dict) else {}
+    platform_specific = str(collection_names.get(platform, "") or "").strip()
+    if platform_specific:
+        return platform_specific
+    legacy_key = f"{platform}_collection_name"
+    legacy_value = str(payload.get(legacy_key, "") or "").strip()
+    if legacy_value:
+        return legacy_value
+    configured_collection_name = str(payload.get("collection_name", "") or "").strip()
+    return configured_collection_name or DEFAULT_COLLECTION_NAME
+
+
 def _load_runtime_config(config_path: str) -> dict[str, Any]:
     defaults = _default_runtime_config()
     path = Path(config_path).expanduser()
@@ -3883,6 +3923,15 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
     collection_name = str(payload.get("collection_name", "") or "").strip()
     if collection_name:
         merged["collection_name"] = collection_name
+    merged["collection_names"] = _merge_platform_collection_names(
+        payload.get("collection_names"),
+        fallback=str(merged.get("collection_name", "") or ""),
+    )
+    for platform in SUPPORTED_UPLOAD_PLATFORMS:
+        legacy_key = f"{platform}_collection_name"
+        legacy_value = str(payload.get(legacy_key, "") or "").strip()
+        if legacy_value:
+            merged["collection_names"][platform] = legacy_value
     merged["auto_delete_source_files"] = _to_bool(
         payload.get("auto_delete_source_files"),
         default=DEFAULT_AUTO_DELETE_SOURCE_FILES,
@@ -21651,6 +21700,14 @@ def main() -> int:
     x_debug_port = max(1, int(getattr(args, "x_debug_port", DEFAULT_X_DEBUG_PORT) or DEFAULT_X_DEBUG_PORT))
     configured_collection_name = str(runtime_config.get("collection_name", "") or "").strip()
     resolved_collection_name = (args.collection_name or "").strip() or configured_collection_name or DEFAULT_COLLECTION_NAME
+    resolved_collection_names = {
+        platform: resolve_platform_collection_name(
+            runtime_config,
+            platform,
+            cli_collection_name=(args.collection_name or "").strip(),
+        )
+        for platform in SUPPORTED_UPLOAD_PLATFORMS
+    }
     if args.auto_delete_source_files:
         auto_delete_source_files = True
     elif args.keep_source_files:
@@ -21673,6 +21730,7 @@ def main() -> int:
     _log(
         "[Config] "
         f"collection_name={resolved_collection_name}, "
+        f"collection_names={resolved_collection_names}, "
         f"network_mode={network_mode}, "
         f"auto_delete_source_files={auto_delete_source_files}, "
         f"spark_ai_ready={_spark_config_ready(spark_ai_config)}, "
@@ -21766,6 +21824,9 @@ def main() -> int:
                     _log(f"[Uploader:{platform}] No eligible source files in shared pool, skip this platform.")
                     continue
                 _log(f"[Uploader:{platform}] Use shared source pool: {len(targets)} candidates.")
+                platform_collection_name = str(
+                    resolved_collection_names.get(platform, "") or resolved_collection_name or ""
+                ).strip()
 
                 success_count = 0
                 for idx, target in enumerate(targets):
@@ -21791,7 +21852,7 @@ def main() -> int:
                             workspace,
                             caption=(args.caption or "").strip() or None,
                             target_video=target,
-                            collection_name=resolved_collection_name,
+                            collection_name=platform_collection_name,
                             debug_port=args.debug_port,
                             save_draft=not args.no_save_draft,
                             declare_original=bool(getattr(args, "wechat_declare_original", False)),
@@ -21810,7 +21871,7 @@ def main() -> int:
                             workspace,
                             caption=(args.caption or "").strip() or None,
                             target_video=target,
-                            collection_name=resolved_collection_name,
+                            collection_name=platform_collection_name,
                             debug_port=args.debug_port,
                             save_draft=not args.no_save_draft,
                             upload_timeout=max(30, int(args.upload_timeout)),
@@ -21864,7 +21925,7 @@ def main() -> int:
                             workspace,
                             caption=(args.caption or "").strip() or None,
                             target_video=target,
-                            collection_name=resolved_collection_name,
+                            collection_name=platform_collection_name,
                             debug_port=args.debug_port,
                             save_draft=not args.no_save_draft,
                             auto_publish_random_schedule=bool(args.bilibili_auto_publish_random_schedule),
