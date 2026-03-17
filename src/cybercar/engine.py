@@ -3614,8 +3614,10 @@ def _default_runtime_config() -> dict[str, Any]:
             "max_posts_per_run": 50,
             "max_replies_per_run": 20,
             "reply_max_chars": 20,
-            "min_reply_interval_seconds": 90,
-            "max_reply_interval_seconds": 240,
+            "min_reply_interval_seconds": 1,
+            "max_reply_interval_seconds": 5,
+            "min_like_to_reply_interval_seconds": 1,
+            "max_like_to_reply_interval_seconds": 5,
             "auto_like": True,
             "prompt_template": DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE,
             "fallback_replies": DEFAULT_COMMENT_REPLY_FALLBACKS.copy(),
@@ -3840,6 +3842,23 @@ def _merge_comment_reply_config(raw: Any) -> dict[str, Any]:
         cfg["max_reply_interval_seconds"] = max(
             cfg["min_reply_interval_seconds"],
             int(defaults["max_reply_interval_seconds"]),
+        )
+    try:
+        cfg["min_like_to_reply_interval_seconds"] = max(
+            0,
+            int(raw.get("min_like_to_reply_interval_seconds", defaults["min_like_to_reply_interval_seconds"])),
+        )
+    except Exception:
+        cfg["min_like_to_reply_interval_seconds"] = int(defaults["min_like_to_reply_interval_seconds"])
+    try:
+        cfg["max_like_to_reply_interval_seconds"] = max(
+            cfg["min_like_to_reply_interval_seconds"],
+            int(raw.get("max_like_to_reply_interval_seconds", defaults["max_like_to_reply_interval_seconds"])),
+        )
+    except Exception:
+        cfg["max_like_to_reply_interval_seconds"] = max(
+            cfg["min_like_to_reply_interval_seconds"],
+            int(defaults["max_like_to_reply_interval_seconds"]),
         )
     cfg["auto_like"] = _to_bool(raw.get("auto_like"), default=bool(defaults["auto_like"]))
     cfg["launch_background"] = _to_bool(raw.get("launch_background"), default=bool(defaults["launch_background"]))
@@ -4119,6 +4138,26 @@ def _apply_comment_reply_wait(
             f">= target={float(plan.get('target_interval_seconds') or 0.0):.1f}s",
         )
     return last_reply_at
+
+
+def _apply_comment_reply_like_to_reply_wait(
+    comment_cfg: dict[str, Any],
+    *,
+    debug: bool,
+) -> float:
+    min_interval = max(0.0, float(comment_cfg.get("min_like_to_reply_interval_seconds") or 0))
+    max_interval = max(min_interval, float(comment_cfg.get("max_like_to_reply_interval_seconds") or min_interval))
+    if max_interval <= 0:
+        return 0.0
+    wait_seconds = min_interval if max_interval <= min_interval else random.uniform(min_interval, max_interval)
+    _comment_reply_log(
+        debug,
+        "Humanized like->reply wait: "
+        f"wait={wait_seconds:.1f}s "
+        f"range={min_interval:.1f}-{max_interval:.1f}s",
+    )
+    time.sleep(wait_seconds)
+    return float(wait_seconds)
 
 
 WECHAT_COMMENT_DOC_HELPER_JS = """
@@ -4602,12 +4641,36 @@ def _maybe_notify_wechat_comment_login_required(
     if not looks_like_login:
         return {"ok": True, "sent": False, "skipped": True, "reason": "not_login_gate", "url": page_url}
     try:
+        normalized_reason = str(login_state.get("reason") or login_reason or "comment_manager_not_ready")
+        qr_result = send_platform_login_qr_notification(
+            platform_name="wechat",
+            open_url=open_url,
+            page=page,
+            chrome_user_data_dir=chrome_user_data_dir,
+            auto_open_chrome=False,
+            refresh_page=False,
+            allow_duplicate=False,
+            wait_token="",
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        if bool(qr_result.get("sent")):
+            payload = dict(qr_result)
+            payload["url"] = page_url
+            payload["notification_mode"] = "qr"
+            return payload
+
         result = _send_platform_login_text_notification(
             platform_name="wechat",
             open_url=open_url,
             chrome_user_data_dir=chrome_user_data_dir,
-            login_reason=str(login_state.get("reason") or login_reason or "comment_manager_not_ready"),
-            qr_error="comment reply hit login gate while opening comment manager",
+            login_reason=normalized_reason,
+            qr_error=str(qr_result.get("error") or "comment reply hit login gate while opening comment manager"),
             wait_token="",
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
@@ -4620,6 +4683,8 @@ def _maybe_notify_wechat_comment_login_required(
     except Exception as exc:
         return {"ok": False, "sent": False, "error": str(exc), "url": page_url}
     payload = dict(result) if isinstance(result, dict) else {"ok": bool(result)}
+    payload["qr_result"] = qr_result
+    payload["notification_mode"] = "text" if bool(payload.get("sent")) else "none"
     payload["url"] = page_url
     return payload
 
@@ -6052,7 +6117,7 @@ def run_wechat_comment_reply(
                                     playwright_needs_native_retry = True
                                     break
                                 _playwright_like_comment_if_needed(pw_frame, int(comment.get("index") or 0))
-                                pw_page.wait_for_timeout(300)
+                                _apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
                             pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
                             if pw_frame is None:
                                 playwright_needs_native_retry = True
@@ -6242,7 +6307,7 @@ def run_wechat_comment_reply(
                     )
                     if bool(comment_cfg.get("auto_like")):
                         like_comment_if_needed(page, int(comment.get("index") or 0))
-                        time.sleep(0.3)
+                        _apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
                     if not submit_reply(page, int(comment.get("index") or 0), reply_text):
                         _comment_reply_log(debug_enabled, "Submit reply failed")
                         continue
@@ -15699,6 +15764,8 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
           return /(\u5141\u8bb8|\u4e0d\u5141\u8bb8|\u516c\u5f00|\u597d\u53cb\u53ef\u89c1|\u4ec5\u81ea\u5df1\u53ef\u89c1|\u7acb\u5373\u53d1\u5e03|\u5b9a\u65f6\u53d1\u5e03|\u53d1\u5e03\u8bbe\u7f6e|\u4fdd\u5b58\u6743\u9650|\u8c01\u53ef\u4ee5\u770b|\u6dfb\u52a0\u6807\u7b7e|\u5173\u8054\u70ed\u70b9|\u4f4d\u7f6e|\u9009\u62e9\u97f3\u4e50)/.test(value);
         }
         const selectors = [
+          "button[class*='container-drag-btn']",
+          "button",
           "div[class*='drop-']",
           "div[class*='content-right']",
           "div[class*='content-upload']",
@@ -15738,7 +15805,9 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
               const hasUploadText = looksUploadText(fullText);
               const hasForbiddenText = looksForbiddenText(fullText);
               const isCoverUpload = /(\u5c01\u9762|\u7f16\u8f91\u5c01\u9762|\u4f5c\u4e3a\u5c01\u9762)/.test(fullText);
+              const isUploadButton = node.tagName === 'BUTTON' || cls.includes('container-drag-btn');
               const isHugeContainer = !!rect && rect.width >= 1200 && rect.height >= 700;
+              if (isUploadButton) score += 260;
               if (cls.includes('content-right')) score += 240;
               if (/upload|drag/i.test(cls)) score += 60;
               if (hasUploadText) score += 300;
@@ -15781,6 +15850,8 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
                 _log(f"[Uploader:douyin] Upload trigger clicked by JS scorer: {result}")
                 return
         douyin_selectors = (
+            "css:button[class*='container-drag-btn']",
+            "xpath://button[contains(normalize-space(.), '涓婁紶鍥炬枃')]",
             "css:div[class*='drop-']",
             "css:div[class*='content-right']",
             "css:div[class*='content-upload']",
@@ -15817,7 +15888,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
                 try:
                     ele.run_js(
                         """
-                        const target = this.closest("div[class*='content-upload'], div[class*='drop-'], label, [role='button']") || this;
+                        const target = this.matches("button, [role='button']") ? this : (this.querySelector("button[class*='container-drag-btn']") || this.closest("button, [role='button'], div[class*='content-right'], div[class*='content-upload'], div[class*='drop-'], label") || this);
                         try { target.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
                         try { target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
                         try { target.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window})); } catch (e) {}

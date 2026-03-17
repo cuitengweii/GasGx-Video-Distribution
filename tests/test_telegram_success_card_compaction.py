@@ -33,3 +33,37 @@ def test_build_telegram_card_prefers_log_and_ids_in_success_machine_info() -> No
     assert "• <b>log</b>：publish.log" in text
     assert "• <b>job_id</b>：publish-42" in text
     assert "• <b>duration</b>：12.3s" not in text
+
+
+def test_build_publish_result_card_keeps_comment_reply_sections_on_success() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "点赞评论已完成",
+            "subtitle": "已返回本次命中的短视频和评论内容，便于直接复查。",
+            "sections": [
+                {
+                    "title": "结果",
+                    "items": [
+                        {"label": "命中视频", "value": "1"},
+                        {"label": "实际回复", "value": "1"},
+                    ],
+                },
+                {
+                    "title": "回复 1",
+                    "items": [
+                        {"label": "短视频", "value": "test title"},
+                        {"label": "原评论", "value": "comment body"},
+                        {"label": "自动回复", "value": "reply body"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "<b>结果</b>" in text
+    assert "<b>回复 1</b>" in text
+    assert "comment body" in text
+    assert "reply body" in text

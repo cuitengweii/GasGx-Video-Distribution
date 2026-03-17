@@ -204,7 +204,8 @@ def test_build_telegram_card_compacts_platform_success_title() -> None:
         },
     )
 
-    assert str(card["text"]).startswith("<b>✅ CyberCar｜小红书已确认</b>")
+    text = str(card["text"])
+    assert text.startswith("<b>✅ CyberCar</b>\n<b>📝 小红书已确认</b>")
 
 
 def test_build_telegram_card_compacts_collect_start_title() -> None:
@@ -315,5 +316,95 @@ def test_build_telegram_card_splits_prefixed_title_into_title_and_subtitle() -> 
     )
 
     text = str(card["text"])
-    assert text.startswith("<b>✅ CyberCar｜快手已确认</b>")
+    assert text.startswith("<b>✅ CyberCar</b>\n<b>⚡ 快手已确认</b>")
     assert "<i>即采即发 / 图片 / 全部平台｜平台发布成功</i>" in text
+
+
+def test_build_telegram_card_prioritizes_platform_result_sections_by_operator_flow() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {"title": "执行摘要", "items": [{"label": "成功平台", "value": "2"}]},
+                {"title": "候选信息", "items": [{"label": "标题", "value": "candidate"}]},
+                {"title": "平台状态", "items": [{"label": "小红书", "value": "平台已确认发布成功"}]},
+                {"title": "机器信息", "items": [{"label": "当前任务", "value": "collect_publish_latest"}]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.index("<b>🧩 平台状态</b>") < text.index("<b>📌 执行摘要</b>")
+    assert text.index("<b>📌 执行摘要</b>") < text.index("<b>🤖 机器信息</b>")
+    assert text.index("<b>🤖 机器信息</b>") < text.index("<b>🧾 候选信息</b>")
+
+
+def test_build_telegram_card_orders_summary_counts_for_platform_results() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {
+                    "title": "执行摘要",
+                    "items": [
+                        {"label": "目标平台", "value": "3"},
+                        {"label": "失败平台", "value": "1"},
+                        {"label": "成功平台", "value": "2"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.index("• <b>成功平台</b>：2") < text.index("• <b>失败平台</b>：1")
+    assert text.index("• <b>失败平台</b>：1") < text.index("• <b>目标平台</b>：3")
+
+
+def test_build_telegram_card_places_platform_title_on_dedicated_header_line() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "【即采即发/图片/全部平台】小红书已确认",
+            "subtitle": "平台发布成功",
+            "sections": [{"title": "执行摘要", "items": [{"label": "结果", "value": "成功"}]}],
+        },
+    )
+
+    text = str(card["text"])
+    lines = text.splitlines()
+    assert lines[0] == "<b>✅ CyberCar</b>"
+    assert lines[1] == "<b>📝 小红书已确认</b>"
+    assert lines[2] == "<i>即采即发 / 图片 / 全部平台｜平台发布成功</i>"
+
+
+def test_build_telegram_card_normalizes_platform_status_items_with_platform_emojis() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {
+                    "title": "平台状态",
+                    "items": [
+                        {"label": "📝小红书", "value": "平台已确认发布成功"},
+                        {"label": "🎵抖音", "value": "平台处理失败；原因：Could not find file input on douyin page；建议：查看该平台日志后重试"},
+                        {"label": "⚡快手", "value": "需要登录"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "• <b>⚡ 快手</b>：🔐 需要登录" in text
+    assert "• <b>🎵 抖音</b>：📣 发布失败｜Could not find file input on douyin page" in text
+    assert "• <b>📝 小红书</b>：✅ 已确认" in text
+    assert text.index("• <b>⚡ 快手</b>") < text.index("• <b>🎵 抖音</b>")
+    assert text.index("• <b>🎵 抖音</b>") < text.index("• <b>📝 小红书</b>")

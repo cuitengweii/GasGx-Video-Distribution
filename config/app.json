@@ -77,8 +77,10 @@
     "max_posts_per_run": 50,
     "max_replies_per_run": 20,
     "reply_max_chars": 20,
-    "min_reply_interval_seconds": 90,
-    "max_reply_interval_seconds": 240,
+    "min_reply_interval_seconds": 1,
+    "max_reply_interval_seconds": 5,
+    "min_like_to_reply_interval_seconds": 1,
+    "max_like_to_reply_interval_seconds": 5,
     "auto_like": true,
     "prompt_template": "请你作为特斯拉 Cybertruck 社区运营，根据粉丝评论生成一条中文回复。\n视频标题：{post_title}\n发布时间：{post_published_text}\n粉丝评论：{comment_content}\n要求：友好、积极、有共鸣，20字以内；不要换行；不要引导私信；不要外链；只返回 JSON。",
     "fallback_replies": [

@@ -99,6 +99,34 @@ _SECTION_EMOJI_BY_TITLE = {
     "菜单链路": "🧭",
 }
 
+_PLATFORM_META: dict[str, dict[str, str]] = {
+    "wechat": {"emoji": "📱", "name": "视频号"},
+    "douyin": {"emoji": "🎵", "name": "抖音"},
+    "xiaohongshu": {"emoji": "📝", "name": "小红书"},
+    "kuaishou": {"emoji": "⚡", "name": "快手"},
+    "bilibili": {"emoji": "📺", "name": "B站"},
+}
+_PLATFORM_ALIASES: tuple[tuple[str, str], ...] = (
+    ("视频号", "wechat"),
+    ("微信视频号", "wechat"),
+    ("wechat", "wechat"),
+    ("shipinhao", "wechat"),
+    ("weixin", "wechat"),
+    ("抖音", "douyin"),
+    ("douyin", "douyin"),
+    ("dy", "douyin"),
+    ("小红书", "xiaohongshu"),
+    ("xiaohongshu", "xiaohongshu"),
+    ("xhs", "xiaohongshu"),
+    ("快手", "kuaishou"),
+    ("kuaishou", "kuaishou"),
+    ("ks", "kuaishou"),
+    ("B站", "bilibili"),
+    ("哔哩哔哩", "bilibili"),
+    ("bilibili", "bilibili"),
+    ("bili", "bilibili"),
+)
+
 
 def _escape_text(value: Any) -> str:
     return html.escape(str(value or "").strip())
@@ -262,6 +290,97 @@ def _canonical_section_title(title: str) -> str:
     return _SECTION_TITLE_ALIASES.get(token, token)
 
 
+def _detect_platform_token(text: str) -> str:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return ""
+    for keyword, token in _PLATFORM_ALIASES:
+        if keyword.lower() in lowered:
+            return token
+    return ""
+
+
+def _platform_meta(text: str) -> dict[str, str]:
+    token = _detect_platform_token(text)
+    if token:
+        return _PLATFORM_META.get(token, {"emoji": "📣", "name": str(text or "").strip() or "平台"})
+    label = str(text or "").strip() or "平台"
+    return {"emoji": "📣", "name": label}
+
+
+def _extract_platform_reason(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    for pattern in (r"原因[:：]\s*([^；;]+)", r"reason[:=]\s*([^;；]+)"):
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip()
+    return ""
+
+
+def _compact_platform_status_value(text: str) -> str:
+    raw = str(text or "").strip()
+    lowered = raw.lower()
+    if not raw:
+        return "⚠️ 待确认"
+    if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
+        return "🔐 需要登录"
+    if any(token in lowered for token in ("失败", "异常", "未启动", "failed", "error")):
+        reason = _extract_platform_reason(raw)
+        return f"📣 发布失败｜{reason}" if reason else "📣 发布失败"
+    if any(token in lowered for token in ("发布中", "处理中", "running", "processing")):
+        return "⏳ 发布中"
+    if any(token in lowered for token in ("排队", "queued", "queue")):
+        return "🕓 已排队"
+    if any(token in lowered for token in ("跳过", "duplicate", "历史发布记录", "已发布")):
+        return "⏭️ 已跳过"
+    if any(token in lowered for token in ("成功", "确认发布成功", "模拟发布成功", "success")):
+        return "✅ 已确认"
+    if any(token in lowered for token in ("待确认", "待核实", "pending")):
+        return "⚠️ 待确认"
+    return raw
+
+
+def _platform_status_priority(item: Any) -> tuple[int, str]:
+    text = ""
+    if isinstance(item, Mapping):
+        text = f"{item.get('label') or ''} {item.get('value') or item.get('text') or ''}"
+    else:
+        text = str(item or "")
+    lowered = str(text).strip().lower()
+    platform_text = str(item.get("label") or "").strip() if isinstance(item, Mapping) else str(item or "").strip()
+    if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
+        return (0, platform_text)
+    if any(token in lowered for token in ("失败", "异常", "未启动", "failed", "error")):
+        return (1, platform_text)
+    if any(token in lowered for token in ("发布中", "处理中", "running", "processing")):
+        return (2, platform_text)
+    if any(token in lowered for token in ("排队", "queued", "queue")):
+        return (3, platform_text)
+    if any(token in lowered for token in ("跳过", "duplicate", "历史发布记录", "已发布")):
+        return (4, platform_text)
+    if any(token in lowered for token in ("成功", "确认发布成功", "模拟发布成功", "success")):
+        return (5, platform_text)
+    return (6, platform_text)
+
+
+def _normalize_platform_status_items(items: Sequence[Any]) -> list[Any]:
+    normalized: list[Any] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            normalized.append(item)
+            continue
+        label = str(item.get("label") or "").strip()
+        value = str(item.get("value") or item.get("text") or "").strip()
+        meta = _platform_meta(label or value)
+        updated = dict(item)
+        updated["label"] = f"{meta['emoji']} {meta['name']}"
+        updated["value"] = _compact_platform_status_value(value or label)
+        normalized.append(updated)
+    return sorted(normalized, key=_platform_status_priority)
+
+
 def _is_positive_platform_status_item(item: Any) -> bool:
     text = ""
     if isinstance(item, Mapping):
@@ -285,6 +404,9 @@ def _normalize_card_sections(status: str, sections: Sequence[Mapping[str, Any]])
         raw_title = str(section.get("title") or "").strip()
         title = _canonical_section_title(raw_title)
         items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        items = _normalize_summary_section_items(title, items)
+        if title == "平台状态":
+            items = _normalize_platform_status_items(items)
         if title == "平台状态" and status_token in {"success", "done"} and items and all(
             _is_positive_platform_status_item(item) for item in items
         ):
@@ -526,6 +648,19 @@ def _split_header_title(title: str) -> tuple[str, str]:
     return clean_title, ""
 
 
+def _build_platform_header_line(title: str) -> str:
+    title_text = _strip_html_like_markup(title)
+    token = _detect_platform_token(title_text)
+    if not token:
+        return ""
+    meta = _PLATFORM_META.get(token, {})
+    platform_name = str(meta.get("name") or "").strip()
+    platform_emoji = str(meta.get("emoji") or "📣").strip()
+    if platform_name and title_text.startswith(platform_name):
+        return f"{platform_emoji} {title_text}"
+    return f"{platform_emoji} {title_text}"
+
+
 def _dedupe_bot_title_prefix(title: str, bot_name: str) -> str:
     clean_title = _strip_html_like_markup(title)
     clean_bot_name = str(bot_name or "").strip()
@@ -581,9 +716,19 @@ def _prioritize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]
     if not normalized:
         return []
     status_token = str(status or "").strip().lower()
+    titles = {str(section.get("title") or "").strip() for section in normalized}
+    has_platform_result_layout = "平台状态" in titles and "执行摘要" in titles
 
     def _section_rank(section: Mapping[str, Any], index: int) -> tuple[int, int]:
         title = str(section.get("title") or "").strip()
+        if has_platform_result_layout and title == "平台状态":
+            return (0, index)
+        if has_platform_result_layout and title == "执行摘要":
+            return (1, index)
+        if has_platform_result_layout and title == "机器信息":
+            return (2, index)
+        if has_platform_result_layout and title == "候选信息":
+            return (3, index)
         if title in _MACHINE_LAST_SECTION_TITLES:
             return (_MACHINE_LAST_SECTION_TITLES[title], index)
         if status_token in {"failed", "blocked", "alert", "login_required"}:
@@ -664,6 +809,28 @@ def _trim_success_section_items(title: str, items: Sequence[Any]) -> list[Any]:
     return trimmed or normalized_items[:1]
 
 
+def _rank_summary_item(item: Any, index: int) -> tuple[int, int]:
+    if not isinstance(item, Mapping):
+        return (50, index)
+    label = str(item.get("label") or "").strip()
+    priority_map = {
+        "成功平台": 0,
+        "失败平台": 1,
+        "目标平台": 2,
+        "执行结果": 3,
+        "结果": 3,
+        "平台摘要": 4,
+    }
+    return (priority_map.get(label, 20), index)
+
+
+def _normalize_summary_section_items(title: str, items: Sequence[Any]) -> list[Any]:
+    if str(title or "").strip() != "执行摘要":
+        return list(items or [])
+    normalized_items = list(items or [])
+    return [item for _, item in sorted(enumerate(normalized_items), key=lambda pair: _rank_summary_item(pair[1], pair[0]))]
+
+
 def _prune_sections_for_kind(kind: str, status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     token = str(kind or "").strip().lower()
     status_token = str(status or "").strip().lower()
@@ -683,7 +850,20 @@ def _prune_sections_for_kind(kind: str, status: str, sections: Sequence[Mapping[
         return compacted
     if status_token in {"success", "done"}:
         allowed_titles = {"人工关注", "执行摘要", "候选信息", "机器信息", "任务日志"}
-        return [section for section in normalized if str(section.get("title") or "").strip() in allowed_titles]
+        return [
+            section
+            for section in normalized
+            if (
+                str(section.get("title") or "").strip() in allowed_titles
+                or (
+                    token == "publish_result"
+                    and (
+                        str(section.get("title") or "").strip() == "\u7ed3\u679c"
+                        or str(section.get("title") or "").strip().startswith("\u56de\u590d ")
+                    )
+                )
+            )
+        ]
     if status_token in {"failed", "blocked", "alert", "login_required"}:
         allowed_titles = {
             "人工关注",
@@ -781,8 +961,12 @@ def build_telegram_card(
     emoji, title = _decorate_positive_header(status, title, sections, emoji)
     title = _dedupe_bot_title_prefix(title, bot_name)
     title_main, title_context = _split_header_title(title)
+    platform_header = _build_platform_header_line(title_main or title)
     subtitle = _decorate_card_subtitle(status, subtitle, sections)
-    header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title_main or title)}</b>"]
+    if platform_header:
+        header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}</b>", f"<b>{_render_inline_text(platform_header)}</b>"]
+    else:
+        header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title_main or title)}</b>"]
     header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
     if header_subtitle_parts:
         header.append(f"<i>{_render_inline_text('｜'.join(header_subtitle_parts))}</i>")

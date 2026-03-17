@@ -85,7 +85,7 @@ def test_collect_upload_contexts_recurses_nested_frames() -> None:
     assert contexts == [root, child, leaf]
 
 
-def test_activate_upload_trigger_generic_prefers_douyin_drop_selector(monkeypatch) -> None:
+def test_activate_upload_trigger_generic_prefers_douyin_button_selector(monkeypatch) -> None:
     class FakeElement:
         def __init__(self) -> None:
             self.run_js_calls = 0
@@ -103,7 +103,7 @@ def test_activate_upload_trigger_generic_prefers_douyin_drop_selector(monkeypatc
 
         def ele(self, selector: str, timeout: float = 0) -> Any:
             self.selectors.append(selector)
-            if selector == "css:div[class*='drop-']":
+            if selector == "css:button[class*='container-drag-btn']":
                 return self.element
             return None
 
@@ -115,7 +115,7 @@ def test_activate_upload_trigger_generic_prefers_douyin_drop_selector(monkeypatc
 
     engine._activate_upload_trigger_generic(owner, None, platform_name="douyin")
 
-    assert owner.selectors[0] == "css:div[class*='drop-']"
+    assert owner.selectors[0] == "css:button[class*='container-drag-btn']"
     assert element.run_js_calls == 1
 
 
@@ -176,6 +176,7 @@ def test_activate_upload_trigger_generic_douyin_js_targets_upload_shell(monkeypa
     assert owner.run_js_calls
     script = next(call for call in owner.run_js_calls if "clicked:douyin-js|" in call)
     assert "content-right" in script
+    assert "container-drag-btn" in script
     assert "允许" in script
     assert "发布设置" in script
 
