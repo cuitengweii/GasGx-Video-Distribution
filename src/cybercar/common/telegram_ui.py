@@ -476,6 +476,25 @@ def _decorate_card_subtitle(status: str, subtitle: str, sections: Sequence[Mappi
     return _compact_subtitle_text(subtitle)
 
 
+def _compact_card_title(kind: str, title: str) -> str:
+    token = str(kind or "").strip().lower()
+    text = str(title or "").strip()
+    if not text:
+        return ""
+    if token == "collect_start":
+        text = text.replace("即采即发候选", "候选")
+        text = text.replace("即采即发预审", "预审")
+    if token == "publish_result":
+        text = text.replace("发布状态更新", "结果")
+        text = text.replace("发布已确认", "已确认")
+    replacements = {
+        "即采即发已全部完成": "全部完成",
+        "即采即发部分平台已完成": "部分完成",
+        "即采即发发布失败": "发布失败",
+    }
+    return replacements.get(text, text)
+
+
 def _decorate_positive_header(status: str, title: str, sections: Sequence[Mapping[str, Any]], fallback: str) -> tuple[str, str]:
     status_token = str(status or "").strip().lower()
     if status_token not in {"success", "done", "queued", "running"}:
@@ -681,7 +700,7 @@ def build_telegram_card(
     meta = _KIND_META.get(token, _KIND_META["alert"])
     status = str(payload.get("status", "") or "").strip().lower()
     emoji = str(payload.get("emoji", "") or "").strip() or _STATUS_EMOJI.get(status) or meta["emoji"]
-    title = str(payload.get("title", "") or "").strip() or meta["title"]
+    title = _compact_card_title(token, str(payload.get("title", "") or "").strip() or meta["title"])
     subtitle = str(payload.get("subtitle", "") or "").strip()
     bot_name = str(payload.get("bot_name", "") or "").strip() or "CyberCar"
     sections = payload.get("sections", [])

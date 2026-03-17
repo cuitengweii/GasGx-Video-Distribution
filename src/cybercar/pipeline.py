@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -142,7 +142,6 @@ class CycleContext:
     exclude_keywords: list[str]
     require_any_keywords: list[str]
     collection_name: str
-    collection_names: dict[str, str]
     chrome_path: Optional[str]
     chrome_user_data_dir: str
     proxy: Optional[str]
@@ -153,6 +152,7 @@ class CycleContext:
     requested_limit: int
     extra_url_count: int
     auto_discover_x: bool
+    collection_names: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

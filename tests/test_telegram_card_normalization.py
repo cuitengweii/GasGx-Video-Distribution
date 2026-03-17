@@ -192,3 +192,42 @@ def test_build_telegram_card_compacts_platform_result_subtitle() -> None:
     )
 
     assert "<i>已返回平台结果</i>" in str(card["text"])
+
+
+def test_build_telegram_card_compacts_platform_success_title() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "小红书发布已确认",
+            "sections": [{"title": "执行摘要", "items": [{"label": "结果", "value": "成功"}]}],
+        },
+    )
+
+    assert str(card["text"]).startswith("<b>✅ CyberCar｜小红书已确认</b>")
+
+
+def test_build_telegram_card_compacts_collect_start_title() -> None:
+    card = telegram_ui.build_telegram_card(
+        "collect_start",
+        {
+            "status": "queued",
+            "title": "图片即采即发候选已整理",
+            "sections": [{"title": "任务概览", "items": [{"label": "候选目标", "value": "3条"}]}],
+        },
+    )
+
+    assert str(card["text"]).startswith("<b>🕓 CyberCar｜图片候选已整理</b>")
+
+
+def test_build_telegram_card_compacts_immediate_summary_title() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "即采即发已全部完成",
+            "sections": [{"title": "执行摘要", "items": [{"label": "结果", "value": "全部完成"}]}],
+        },
+    )
+
+    assert str(card["text"]).startswith("<b>✅ CyberCar｜全部完成</b>")

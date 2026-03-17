@@ -8308,6 +8308,14 @@ def _build_immediate_cycle_context(
         or str(runtime_config.get("collection_name", "") or "").strip()
         or core.DEFAULT_COLLECTION_NAME
     )
+    collection_names = {
+        platform: core.resolve_platform_collection_name(
+            runtime_config,
+            platform,
+            cli_collection_name=str(getattr(args, "collection_name", "") or "").strip(),
+        )
+        for platform in core.SUPPORTED_UPLOAD_PLATFORMS
+    }
     resolved_proxy, resolved_use_system_proxy = _resolve_worker_network_mode()
     workspace_ctx = core.init_workspace(str(workspace))
     return runner.CycleContext(
@@ -8317,6 +8325,7 @@ def _build_immediate_cycle_context(
         exclude_keywords=exclude_keywords,
         require_any_keywords=require_any_keywords,
         collection_name=collection_name,
+        collection_names=collection_names,
         chrome_path=str(getattr(args, "chrome_path", "") or "").strip() or None,
         chrome_user_data_dir=str(getattr(args, "chrome_user_data_dir", "") or "").strip() or core.DEFAULT_CHROME_USER_DATA_DIR,
         proxy=resolved_proxy,

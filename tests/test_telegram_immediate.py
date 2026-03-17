@@ -204,6 +204,69 @@ def test_refresh_platform_login_qr_message_accepts_telegram_bot_identifier(tmp_p
     assert result["error"] == "invalid qr message id"
 
 
+def test_build_immediate_cycle_context_passes_platform_collection_names(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    target = workspace / "2_Processed_Images" / "sample.jpg"
+    target.write_bytes(b"img")
+    runtime_config = {
+        "collection_name": "Global Collection",
+        "collection_names": {
+            "kuaishou": "Kuaishou Collection",
+            "xiaohongshu": "XHS Collection",
+        },
+    }
+
+    class StubCore:
+        DEFAULT_COLLECTION_NAME = "Default Collection"
+        DEFAULT_CHROME_USER_DATA_DIR = "D:/profiles/chrome"
+        DEFAULT_EXCLUDE_KEYWORDS = []
+        DEFAULT_REQUIRE_ANY_KEYWORDS = []
+        SUPPORTED_UPLOAD_PLATFORMS = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili")
+
+        @staticmethod
+        def _load_runtime_config(path: str) -> dict[str, object]:
+            return runtime_config
+
+        @staticmethod
+        def _normalize_keyword_list(raw: object, default: object) -> list[str]:
+            return list(default) if isinstance(default, (list, tuple)) else []
+
+        @staticmethod
+        def resolve_platform_collection_name(config: dict[str, object], platform: str, *, cli_collection_name: str = "") -> str:
+            if cli_collection_name:
+                return cli_collection_name
+            mapping = config.get("collection_names") if isinstance(config.get("collection_names"), dict) else {}
+            value = str(mapping.get(platform, "") or "").strip()
+            if value:
+                return value
+            return str(config.get("collection_name", "") or StubCore.DEFAULT_COLLECTION_NAME)
+
+        @staticmethod
+        def init_workspace(path: str) -> SimpleNamespace:
+            return SimpleNamespace(root=Path(path))
+
+    args = SimpleNamespace(
+        collection_name="",
+        chrome_path="",
+        chrome_user_data_dir="",
+    )
+
+    ctx = worker_impl._build_immediate_cycle_context(
+        core=StubCore,
+        runner=SimpleNamespace(CycleContext=SimpleNamespace),
+        repo_root=tmp_path,
+        workspace=workspace,
+        args=args,
+        target=target,
+        candidate_url="https://x.test/post/1",
+        profile="cybertruck",
+    )
+
+    assert ctx.collection_name == "Global Collection"
+    assert ctx.collection_names["kuaishou"] == "Kuaishou Collection"
+    assert ctx.collection_names["douyin"] == "Global Collection"
+
+
 def _install_transport_mocks(monkeypatch) -> SimpleNamespace:
     record = SimpleNamespace(
         answers=[],
