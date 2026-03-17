@@ -18,6 +18,24 @@ def test_cli_login_subcommand_parses_platform() -> None:
     assert args.platform == "wechat"
 
 
+def test_cli_engage_douyin_subcommand_parses_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["engage", "douyin", "--max-posts", "5", "--latest-only"])
+    assert args.command == "engage"
+    assert args.engage_command == "douyin"
+    assert args.max_posts == 5
+    assert args.latest_only is True
+
+
+def test_cli_engage_kuaishou_subcommand_parses_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["engage", "kuaishou", "--max-replies", "2", "--like-only"])
+    assert args.command == "engage"
+    assert args.engage_command == "kuaishou"
+    assert args.max_replies == 2
+    assert args.like_only is True
+
+
 def test_cli_telegram_recover_subcommand_parses_retries() -> None:
     parser = build_parser()
     args = parser.parse_args(["telegram", "recover", "--retries", "5"])

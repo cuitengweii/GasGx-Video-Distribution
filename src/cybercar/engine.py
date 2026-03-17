@@ -3916,9 +3916,11 @@ def resolve_platform_collection_name(
     legacy_value = str(payload.get(legacy_key, "") or "").strip()
     if legacy_value:
         return legacy_value
-    configured_collection_name = str(payload.get("collection_name", "") or "").strip()
     default_platform_collection = str(DEFAULT_PLATFORM_COLLECTION_NAMES.get(platform, "") or "").strip()
-    return platform_specific or legacy_value or configured_collection_name or default_platform_collection or DEFAULT_COLLECTION_NAME
+    if default_platform_collection:
+        return default_platform_collection
+    configured_collection_name = str(payload.get("collection_name", "") or "").strip()
+    return configured_collection_name or DEFAULT_COLLECTION_NAME
 
 
 def _load_runtime_config(config_path: str) -> dict[str, Any]:
@@ -15526,6 +15528,18 @@ def _stage_generic_upload_via_page_set(
         )
         if max_count <= 0 and trigger_round == 0:
             _log_upload_surface_snapshot(primary_ctx, fallback_ctx, platform_name, reason="page-set-stage-empty")
+        if platform_name == "douyin" and _is_image_file(target):
+            douyin_state = _read_douyin_image_upload_state(primary_ctx, fallback_ctx)
+            if bool(douyin_state.get("ready")) or (
+                bool(douyin_state.get("image_added")) and bool(douyin_state.get("editor_hints"))
+            ):
+                _log(
+                    "[Uploader:douyin] page.set staged upload confirmed by image editor readiness. "
+                    f"image_added={bool(douyin_state.get('image_added'))}, "
+                    f"editor_hints={bool(douyin_state.get('editor_hints'))}, "
+                    f"publish_btn={bool(douyin_state.get('publish_btn'))}"
+                )
+                return True
         if max_count > 0:
             return True
     return False

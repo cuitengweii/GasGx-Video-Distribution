@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from cybercar import engagement
+from cybercar.services.engagement.common import PLATFORM_CAPABILITIES
+
+
+def test_platform_capabilities_enable_douyin_and_kuaishou_engagement() -> None:
+    assert PLATFORM_CAPABILITIES["douyin"]["engagement_supported"] is True
+    assert PLATFORM_CAPABILITIES["douyin"]["implemented"] is True
+    assert PLATFORM_CAPABILITIES["kuaishou"]["engagement_supported"] is True
+    assert PLATFORM_CAPABILITIES["kuaishou"]["implemented"] is True
+
+
+def test_run_douyin_engagement_delegates_to_platform_runtime(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+        default_profile_dir = tmp_path / "default"
+
+    monkeypatch.setattr(engagement, "apply_runtime_environment", lambda: FakePaths())
+    monkeypatch.setattr(
+        engagement,
+        "load_app_config",
+        lambda: {
+            "chrome": {"default_debug_port": 9555},
+            "notify": {"env_prefix": "TEST_NOTIFY_"},
+            "comment_reply": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(engagement.engine, "init_workspace", lambda root: f"workspace:{root}")
+
+    def fake_run_platform_comment_reply(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "platform": kwargs["platform_name"]}
+
+    monkeypatch.setattr(engagement, "run_platform_comment_reply", fake_run_platform_comment_reply)
+
+    result = engagement.run_douyin_engagement(max_posts=3, max_replies=2, like_only=True, latest_only=True, debug=True)
+
+    assert result == {"ok": True, "platform": "douyin"}
+    assert captured["platform_name"] == "douyin"
+    assert captured["workspace"] == f"workspace:{FakePaths.runtime_root}"
+    assert captured["debug_port"] == 9555
+    assert captured["chrome_user_data_dir"] == str(FakePaths.default_profile_dir)
+    assert captured["max_posts_override"] == 3
+    assert captured["max_replies_override"] == 2
+    assert captured["latest_only"] is True
+    assert captured["debug"] is True
+    assert captured["notify_env_prefix"] == "TEST_NOTIFY_"
+
+
+def test_run_kuaishou_engagement_delegates_to_platform_runtime(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+        default_profile_dir = tmp_path / "default"
+
+    monkeypatch.setattr(engagement, "apply_runtime_environment", lambda: FakePaths())
+    monkeypatch.setattr(
+        engagement,
+        "load_app_config",
+        lambda: {
+            "chrome": {"default_debug_port": 9444},
+            "notify": {"env_prefix": "KS_NOTIFY_"},
+            "comment_reply": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(engagement.engine, "init_workspace", lambda root: f"workspace:{root}")
+
+    def fake_run_platform_comment_reply(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "platform": kwargs["platform_name"]}
+
+    monkeypatch.setattr(engagement, "run_platform_comment_reply", fake_run_platform_comment_reply)
+
+    result = engagement.run_kuaishou_engagement(max_posts=4, max_replies=1, like_only=False, latest_only=False, debug=False)
+
+    assert result == {"ok": True, "platform": "kuaishou"}
+    assert captured["platform_name"] == "kuaishou"
+    assert captured["debug_port"] == 9444
+    assert captured["chrome_user_data_dir"] == str(FakePaths.default_profile_dir)
+    assert captured["max_posts_override"] == 4
+    assert captured["max_replies_override"] == 1
+    assert captured["notify_env_prefix"] == "KS_NOTIFY_"

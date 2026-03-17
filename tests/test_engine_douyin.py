@@ -8,6 +8,15 @@ import pytest
 from cybercar import engine
 
 
+def test_resolve_platform_collection_name_prefers_douyin_default_over_global_collection() -> None:
+    runtime_config = {
+        "collection_name": "赛博皮卡天津港现车",
+    }
+
+    assert engine.resolve_platform_collection_name(runtime_config, "douyin") == "赛博皮卡现车：aawbcc"
+    assert engine.resolve_platform_collection_name(runtime_config, "bilibili") == "赛博皮卡天津港现车"
+
+
 def _workspace(tmp_path: Path) -> engine.Workspace:
     root = tmp_path / "workspace"
     root.mkdir()

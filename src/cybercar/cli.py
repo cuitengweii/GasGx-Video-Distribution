@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from .collect import collect
-from .engagement import run_wechat_engagement
+from .engagement import run_douyin_engagement, run_kuaishou_engagement, run_wechat_engagement
 from .migrate import migrate_legacy_assets
 from .publish import immediate, publish
 from .session import capture_login_qr, login_status, open_login
@@ -35,12 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     engage = subparsers.add_parser("engage")
     engage_sub = engage.add_subparsers(dest="engage_command", required=True)
-    engage_wechat = engage_sub.add_parser("wechat")
-    engage_wechat.add_argument("--max-posts", type=int, default=0)
-    engage_wechat.add_argument("--max-replies", type=int, default=0)
-    engage_wechat.add_argument("--like-only", action="store_true")
-    engage_wechat.add_argument("--latest-only", action="store_true")
-    engage_wechat.add_argument("--debug", action="store_true")
+    for name in ["wechat", "douyin", "kuaishou"]:
+        engage_platform = engage_sub.add_parser(name)
+        engage_platform.add_argument("--max-posts", type=int, default=0)
+        engage_platform.add_argument("--max-replies", type=int, default=0)
+        engage_platform.add_argument("--like-only", action="store_true")
+        engage_platform.add_argument("--latest-only", action="store_true")
+        engage_platform.add_argument("--debug", action="store_true")
 
     telegram = subparsers.add_parser("telegram")
     telegram_sub = telegram.add_subparsers(dest="telegram_command", required=True)
@@ -127,8 +128,13 @@ def main() -> int:
             return 0
         _print_json(capture_login_qr(str(args.platform)))
         return 0
-    if command == "engage" and args.engage_command == "wechat":
-        result = run_wechat_engagement(
+    if command == "engage" and args.engage_command in {"wechat", "douyin", "kuaishou"}:
+        runner = {
+            "wechat": run_wechat_engagement,
+            "douyin": run_douyin_engagement,
+            "kuaishou": run_kuaishou_engagement,
+        }[str(args.engage_command)]
+        result = runner(
             max_posts=int(args.max_posts),
             max_replies=int(args.max_replies),
             like_only=bool(args.like_only),

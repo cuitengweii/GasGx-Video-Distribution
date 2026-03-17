@@ -244,3 +244,50 @@ def test_wait_upload_ready_generic_accepts_douyin_image_editor_ready(monkeypatch
     result = engine._wait_upload_ready_generic(None, owner, "douyin", timeout_seconds=3, upload_target=target)
 
     assert result is owner
+
+
+def test_stage_generic_upload_via_page_set_accepts_douyin_editor_ready_without_file_inputs(
+    monkeypatch, tmp_path
+) -> None:
+    class FakeSet:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def upload_files(self, path: str) -> None:
+            self.calls.append(path)
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.set = FakeSet()
+
+    target = tmp_path / "sample.jpg"
+    target.write_bytes(b"x")
+    page = FakePage()
+
+    monkeypatch.setattr(engine, "_activate_upload_trigger_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_read_generic_file_inputs_snapshot",
+        lambda *_args, **_kwargs: {"total": 0, "max_count": 0, "sample": [], "root_count": 0},
+    )
+    monkeypatch.setattr(engine, "_log_upload_surface_snapshot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_read_douyin_image_upload_state",
+        lambda *_args, **_kwargs: {
+            "ready": False,
+            "busy": False,
+            "upload_entry": False,
+            "image_added": True,
+            "editor_hints": True,
+            "publish_btn": False,
+            "sample_texts": ["编辑图片", "已添加1张图片", "继续添加"],
+        },
+    )
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._stage_generic_upload_via_page_set(page, None, None, target, "douyin")
+
+    assert result is True
+    assert page.set.calls == [str(target)]

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from .common import unsupported
+from ...engagement import run_douyin_engagement
 
-
-def run(**_: object) -> dict[str, object]:
-    return unsupported("douyin")
+run = run_douyin_engagement
