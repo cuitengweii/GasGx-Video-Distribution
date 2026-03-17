@@ -375,3 +375,56 @@ def test_stage_generic_upload_via_page_set_accepts_douyin_editor_ready_without_f
 
     assert result is True
     assert page.set.calls == [str(target)]
+
+
+def test_fill_draft_once_generic_selects_douyin_collection_for_video(monkeypatch, tmp_path) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"x")
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_ensure_douyin_publish_mode", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_click_douyin_primary_publish_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_finalize_douyin_publish", lambda *_args, **_kwargs: "immediate")
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_humanized_publish_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_prepare_image_post_text_payload", lambda *_args, **_kwargs: "ignored")
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_select_douyin_collection", lambda _ctx, _page, name: calls.append(("douyin", name)))
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.url = "https://creator.douyin.com/creator-micro/content/upload"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
+
+    page = FakeOwner()
+    result = engine._fill_draft_once_generic(
+        page=page,
+        target=target,
+        final_caption="video caption",
+        open_url="https://creator.douyin.com/creator-micro/content/upload",
+        platform_name="douyin",
+        save_draft=True,
+        publish_now=False,
+        upload_timeout=30,
+        draft_button_texts=("保存草稿",),
+        publish_button_texts=("发布",),
+        collection_name="赛博皮卡现车：aawbcc",
+    )
+
+    assert result is page
+    assert calls == [("douyin", "赛博皮卡现车：aawbcc")]

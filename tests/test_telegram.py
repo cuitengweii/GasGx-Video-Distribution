@@ -224,8 +224,8 @@ def test_build_telegram_card_uses_clean_section_layout() -> None:
     )
 
     text = str(card["text"])
-    assert "<b>✅ CyberCar｜发布完成</b>" in text
-    assert "<i>3个平台已完成</i>" in text
+    assert "<b>✅ 发布完成</b>" in text
+    assert "<i>· 3个平台已完成</i>" in text
     assert "• <b>结果</b>：全部完成" in text
     assert "\n\n<b>🧾 任务日志</b>" in text
 
@@ -270,7 +270,7 @@ def test_build_telegram_card_marks_notify_and_network_failures_with_distinct_ico
     )
 
     text = str(card["text"])
-    assert text.startswith("<b>🌐 CyberCar｜发送失败</b>")
+    assert text.startswith("<b>🌐 发送失败</b>")
     assert "• <b>🌐 原因</b>：网络超时" in text
     assert "• <b>📨 说明</b>：chat_id missing fo..." in text
 
@@ -287,7 +287,7 @@ def test_build_telegram_card_uses_login_icon_in_failure_header() -> None:
         },
     )
 
-    assert str(card["text"]).startswith("<b>🔐 CyberCar｜发布失败</b>")
+    assert str(card["text"]).startswith("<b>🔐 发布失败</b>")
 
 
 def test_build_telegram_card_compacts_success_focus_to_three_primary_items() -> None:
@@ -338,7 +338,7 @@ def test_build_telegram_card_marks_partial_success_in_header() -> None:
         },
     )
 
-    assert str(card["text"]).startswith("<b>🟡 CyberCar｜发布完成（部分）</b>")
+    assert str(card["text"]).startswith("<b>🟡 发布完成（部分）</b>")
 
 
 def test_build_telegram_card_marks_skipped_success_in_header() -> None:
@@ -359,7 +359,7 @@ def test_build_telegram_card_marks_skipped_success_in_header() -> None:
         },
     )
 
-    assert str(card["text"]).startswith("<b>⏭️ CyberCar｜发布完成（跳过）</b>")
+    assert str(card["text"]).startswith("<b>⏭️ 发布完成（跳过）</b>")
 
 
 def test_build_telegram_card_compacts_config_subtitle() -> None:
@@ -373,7 +373,7 @@ def test_build_telegram_card_compacts_config_subtitle() -> None:
         },
     )
 
-    assert "<i>配置：cybertruck-profile-lon...</i>" in str(card["text"])
+    assert "<i>· 配置：cybertruck-profile-lon...</i>" in str(card["text"])
 
 
 def test_build_telegram_card_prefers_platform_summary_for_subtitle() -> None:
@@ -397,7 +397,7 @@ def test_build_telegram_card_prefers_platform_summary_for_subtitle() -> None:
     )
 
     text = str(card["text"])
-    assert "<i>1个平台成功 / 1个平台失败</i>" in text
+    assert "<i>· 1个平台成功 / 1个平台失败</i>" in text
 
 
 def test_build_telegram_card_suppresses_long_success_tail_when_focus_exists() -> None:

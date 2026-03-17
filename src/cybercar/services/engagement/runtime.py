@@ -185,6 +185,154 @@ def _scroll_container(page: Any, selector_candidates: list[str]) -> None:
         pass
 
 
+def _force_click_by_text(page: Any, texts: tuple[str, ...]) -> bool:
+    keywords = [str(text or "").strip() for text in texts if str(text or "").strip()]
+    if not keywords:
+        return False
+    js = """
+    return ((keywords) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function actionable(node) {
+        return node && (node.closest('button,[role="button"],a,[tabindex]') || node);
+      }
+      function fire(target, type) {
+        const rect = target.getBoundingClientRect();
+        const x = rect.left + Math.min(rect.width / 2, Math.max(4, rect.width - 4));
+        const y = rect.top + Math.min(rect.height / 2, Math.max(4, rect.height - 4));
+        const base = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0 };
+        try {
+          if (type.startsWith('pointer')) {
+            target.dispatchEvent(new PointerEvent(type, Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, base)));
+          } else {
+            target.dispatchEvent(new MouseEvent(type, base));
+          }
+          return true;
+        } catch (e) {
+          return false;
+        }
+      }
+      function robustClick(node) {
+        const target = actionable(node);
+        if (!target || !visible(target)) return false;
+        try { target.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { target.focus(); } catch (e) {}
+        try { target.click(); return true; } catch (e) {}
+        fire(target, 'pointerover');
+        fire(target, 'mouseover');
+        fire(target, 'pointerdown');
+        fire(target, 'mousedown');
+        fire(target, 'pointerup');
+        fire(target, 'mouseup');
+        fire(target, 'click');
+        return true;
+      }
+      const words = Array.isArray(keywords) ? keywords.map(norm).filter(Boolean) : [];
+      if (!words.length) return { ok: false, reason: 'no_keywords' };
+      const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+        .filter(visible)
+        .map((node) => {
+          const text = norm(node.innerText || node.textContent || '');
+          const rect = node.getBoundingClientRect();
+          return { node, text, area: Math.round(rect.width * rect.height), width: rect.width, height: rect.height };
+        })
+        .filter((entry) => entry.text && words.some((word) => entry.text.includes(word)));
+      if (!nodes.length) return { ok: false, reason: 'node_not_found' };
+      nodes.sort((left, right) => {
+        const leftExact = words.some((word) => left.text === word) ? 1 : 0;
+        const rightExact = words.some((word) => right.text === word) ? 1 : 0;
+        if (leftExact !== rightExact) return rightExact - leftExact;
+        const leftCompact = left.text.length <= 12 ? 1 : 0;
+        const rightCompact = right.text.length <= 12 ? 1 : 0;
+        if (leftCompact !== rightCompact) return rightCompact - leftCompact;
+        if (left.area !== right.area) return left.area - right.area;
+        return left.text.length - right.text.length;
+      });
+      const chosen = nodes[0];
+      return {
+        ok: robustClick(chosen.node),
+        reason: 'clicked',
+        text: chosen.text,
+      };
+    })(arguments[0]);
+    """
+    return bool(_run_js_dict(page, js, keywords).get("ok"))
+
+
+def _cdp_click_by_text(page: Any, texts: tuple[str, ...]) -> bool:
+    keywords = [str(text or "").strip() for text in texts if str(text or "").strip()]
+    if not keywords or not hasattr(page, "run_cdp"):
+        return False
+    js = """
+    return ((keywords) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function actionable(node) {
+        return node && (node.closest('button,[role="button"],a,[tabindex]') || node);
+      }
+      const words = Array.isArray(keywords) ? keywords.map(norm).filter(Boolean) : [];
+      const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+        .filter(visible)
+        .map((node) => {
+          const target = actionable(node);
+          const text = norm(node.innerText || node.textContent || '');
+          const targetText = norm(target ? (target.innerText || target.textContent || '') : '');
+          const rect = (target || node).getBoundingClientRect();
+          return {
+            text,
+            targetText,
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            area: Math.round(rect.width * rect.height),
+          };
+        })
+        .filter((entry) => entry.targetText && words.some((word) => entry.text === word || entry.targetText === word || entry.text.includes(word) || entry.targetText.includes(word)));
+      if (!candidates.length) return null;
+      candidates.sort((left, right) => {
+        const leftExact = words.some((word) => left.text === word || left.targetText === word) ? 1 : 0;
+        const rightExact = words.some((word) => right.text === word || right.targetText === word) ? 1 : 0;
+        if (leftExact !== rightExact) return rightExact - leftExact;
+        if (left.area !== right.area) return left.area - right.area;
+        return left.targetText.length - right.targetText.length;
+      });
+      const best = candidates[0];
+      return {
+        x: Math.max(1, Math.round(best.left + best.width / 2)),
+        y: Math.max(1, Math.round(best.top + best.height / 2)),
+        text: best.targetText || best.text,
+      };
+    })(arguments[0]);
+    """
+    point = _run_js_dict(page, js, keywords)
+    if "x" not in point or "y" not in point:
+        return False
+    try:
+        x = float(point["x"])
+        y = float(point["y"])
+        page.run_cdp("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y, button="left", buttons=1, clickCount=0)
+        page.run_cdp("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y, button="left", buttons=1, clickCount=1)
+        page.run_cdp("Input.dispatchMouseEvent", type="mouseReleased", x=x, y=y, button="left", buttons=0, clickCount=1)
+        return True
+    except Exception:
+        return False
+
+
 def _diagnose_douyin_page(page: Any) -> dict[str, Any]:
     js = """
     return (() => {
@@ -266,17 +414,44 @@ def _ensure_douyin_picker_open(page: Any) -> bool:
       }
       const list = document.querySelector('ul.douyin-creator-interactive-list-items');
       if (visible(list)) return { ok: true, already_open: true };
-      const nodes = Array.from(document.querySelectorAll('button, div, span')).filter(visible);
-      const trigger = nodes.find((node) => /选择作品/.test(norm(node.innerText || node.textContent || '')));
+      const nodes = Array.from(document.querySelectorAll('button, div, span'))
+        .filter(visible)
+        .map((node) => {
+          const text = norm(node.innerText || node.textContent || '');
+          const rect = node.getBoundingClientRect();
+          return { node, text, area: Math.round(rect.width * rect.height) };
+        })
+        .filter((entry) => entry.text.includes('选择作品'));
+      nodes.sort((left, right) => {
+        const leftExact = left.text === '选择作品' ? 1 : 0;
+        const rightExact = right.text === '选择作品' ? 1 : 0;
+        if (leftExact !== rightExact) return rightExact - leftExact;
+        return left.area - right.area;
+      });
+      const trigger = nodes.length ? nodes[0].node : null;
       if (!trigger) return { ok: false, reason: 'trigger_not_found' };
       return { ok: click(trigger), reason: 'trigger_clicked' };
     })();
     """
     result = _run_js_dict(page, js)
-    if not bool(result.get("ok")):
+    if (not bool(result.get("ok"))) and not _force_click_by_text(page, ("选择作品",)):
+        result = _run_js_dict(page, js)
+    if (not bool(result.get("ok"))) and not _cdp_click_by_text(page, ("选择作品",)):
+        result = _run_js_dict(page, js)
+    if (not bool(result.get("ok"))) and not engine._click_first_matching_button(page, page, ("选择作品",), platform_name="douyin"):
         return False
     return _wait_until(
-        lambda: bool(_run_js_dict(page, "return { ok: !!document.querySelector('ul.douyin-creator-interactive-list-items') };").get("ok")),
+        lambda: bool(
+            _run_js_dict(
+                page,
+                """
+                return {
+                  ok: !!document.querySelector('ul.douyin-creator-interactive-list-items')
+                    || /作品列表/.test(String((document.body && document.body.innerText) || ''))
+                };
+                """,
+            ).get("ok")
+        ),
         timeout_seconds=6.0,
         poll_seconds=0.25,
     )
@@ -832,16 +1007,44 @@ def _ensure_kuaishou_picker_open(page: Any) -> bool:
       }
       const item = document.querySelector('.video-item');
       if (visible(item)) return { ok: true, already_open: true };
-      const trigger = Array.from(document.querySelectorAll('button, div, span')).find((node) => visible(node) && /选择视频/.test(norm(node.innerText || node.textContent || '')));
+      const nodes = Array.from(document.querySelectorAll('button, div, span'))
+        .filter(visible)
+        .map((node) => {
+          const text = norm(node.innerText || node.textContent || '');
+          const rect = node.getBoundingClientRect();
+          return { node, text, area: Math.round(rect.width * rect.height) };
+        })
+        .filter((entry) => entry.text.includes('选择视频'));
+      nodes.sort((left, right) => {
+        const leftExact = left.text === '选择视频' ? 1 : 0;
+        const rightExact = right.text === '选择视频' ? 1 : 0;
+        if (leftExact !== rightExact) return rightExact - leftExact;
+        return left.area - right.area;
+      });
+      const trigger = nodes.length ? nodes[0].node : null;
       if (!trigger) return { ok: false, reason: 'trigger_not_found' };
       return { ok: click(trigger) };
     })();
     """
     result = _run_js_dict(page, js)
-    if not bool(result.get("ok")):
+    if (not bool(result.get("ok"))) and not _force_click_by_text(page, ("选择视频",)):
+        result = _run_js_dict(page, js)
+    if (not bool(result.get("ok"))) and not _cdp_click_by_text(page, ("选择视频",)):
+        result = _run_js_dict(page, js)
+    if (not bool(result.get("ok"))) and not engine._click_first_matching_button(page, page, ("选择视频",), platform_name="kuaishou"):
         return False
     return _wait_until(
-        lambda: bool(_run_js_dict(page, "return { ok: !!document.querySelector('.video-item') };").get("ok")),
+        lambda: bool(
+            _run_js_dict(
+                page,
+                """
+                return {
+                  ok: !!document.querySelector('.video-item')
+                    || /作品列表/.test(String((document.body && document.body.innerText) || ''))
+                };
+                """,
+            ).get("ok")
+        ),
         timeout_seconds=6.0,
         poll_seconds=0.25,
     )

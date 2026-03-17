@@ -234,9 +234,9 @@ def _bot_home_title(bot_kind: str) -> str:
 
 
 def _format_value(item: Mapping[str, Any]) -> str:
-    raw_value = str(item.get("value", "") or "").strip()
+    raw_value = _strip_html_like_markup(item.get("value", ""))
     link = str(item.get("url", "") or "").strip()
-    text = str(item.get("text", "") or "").strip() or raw_value
+    text = _strip_html_like_markup(item.get("text", "")) or raw_value
     style = str(item.get("style", "") or "").strip().lower()
     rendered_text = _render_inline_text(text)
     rendered_value = _render_inline_text(raw_value)
@@ -257,14 +257,14 @@ def _render_section_items(items: Sequence[Any]) -> list[str]:
     lines: list[str] = []
     for item in items:
         if isinstance(item, Mapping):
-            label = str(item.get("label", "") or "").strip()
+            label = _strip_html_like_markup(item.get("label", ""))
             formatted = _format_value(item)
             if label:
                 lines.append(f"• <b>{html.escape(label)}</b>：{formatted}")
             elif formatted:
                 lines.append(f"• {formatted}")
             continue
-        text = _render_inline_text(item)
+        text = _render_inline_text(_strip_html_like_markup(item))
         if text:
             lines.append(f"• {text}")
     return lines
@@ -273,7 +273,7 @@ def _render_section_items(items: Sequence[Any]) -> list[str]:
 def _render_sections(sections: Sequence[Mapping[str, Any]]) -> list[str]:
     lines: list[str] = []
     for section in sections:
-        title = str(section.get("title", "") or "").strip()
+        title = _strip_html_like_markup(section.get("title", ""))
         if not title:
             continue
         icon = _render_emoji(section.get("emoji", ""))
@@ -286,7 +286,7 @@ def _render_sections(sections: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _canonical_section_title(title: str) -> str:
-    token = str(title or "").strip()
+    token = _strip_html_like_markup(title)
     return _SECTION_TITLE_ALIASES.get(token, token)
 
 
@@ -640,7 +640,8 @@ def _split_header_title(title: str) -> tuple[str, str]:
     clean_title = _strip_html_like_markup(title)
     if not clean_title:
         return "", ""
-    match = re.match(r"^【([^】]+)】\s*(.+)$", clean_title)
+    compact_title = re.sub(r"^[^A-Za-z0-9\u4e00-\u9fff【]+", "", clean_title).strip()
+    match = re.match(r"^【([^】]+)】\s*(.+)$", compact_title)
     if match:
         context = str(match.group(1) or "").strip().replace("/", " / ")
         main = str(match.group(2) or "").strip()
@@ -649,7 +650,7 @@ def _split_header_title(title: str) -> tuple[str, str]:
 
 
 def _build_platform_header_line(title: str) -> str:
-    title_text = _strip_html_like_markup(title)
+    title_text = re.sub(r"^[^A-Za-z0-9\u4e00-\u9fff]+", "", _strip_html_like_markup(title)).strip()
     token = _detect_platform_token(title_text)
     if not token:
         return ""
@@ -677,6 +678,13 @@ def _decorate_platform_subtitle_line(status: str, subtitle: str) -> str:
     if any(token in text for token in ("排队",)) or status_token == "queued":
         return f"🕓 {text}"
     return text
+
+
+def _decorate_context_line(text: str) -> str:
+    clean = str(text or "").strip()
+    if not clean:
+        return ""
+    return f"· {clean}"
 
 
 def _dedupe_bot_title_prefix(title: str, bot_name: str) -> str:
@@ -958,7 +966,7 @@ def build_telegram_card(
     status = str(payload.get("status", "") or "").strip().lower()
     emoji = str(payload.get("emoji", "") or "").strip() or _STATUS_EMOJI.get(status) or meta["emoji"]
     title = _compact_card_title(token, str(payload.get("title", "") or "").strip() or meta["title"])
-    subtitle = str(payload.get("subtitle", "") or "").strip()
+    subtitle = _strip_html_like_markup(payload.get("subtitle", ""))
     bot_name = str(payload.get("bot_name", "") or "").strip() or "CyberCar"
     sections = payload.get("sections", [])
     if not isinstance(sections, Iterable):
@@ -982,17 +990,16 @@ def build_telegram_card(
     platform_header = _build_platform_header_line(title_main or title)
     subtitle = _decorate_card_subtitle(status, subtitle, sections)
     if platform_header:
-        header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}</b>"]
+        header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(platform_header)}</b>"]
         if title_context:
-            header.append(f"<i>{_render_inline_text(title_context)}</i>")
-        header.append(f"<b>{_render_inline_text(platform_header)}</b>")
+            header.append(f"<i>{_render_inline_text(_decorate_context_line(title_context))}</i>")
         if subtitle:
             header.append(f"<i>{_render_inline_text(_decorate_platform_subtitle_line(status, subtitle))}</i>")
     else:
-        header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title_main or title)}</b>"]
+        header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(title_main or title)}</b>"]
         header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
         if header_subtitle_parts:
-            header.append(f"<i>{_render_inline_text('｜'.join(header_subtitle_parts))}</i>")
+            header.append(f"<i>{_render_inline_text(_decorate_context_line('｜'.join(header_subtitle_parts)))}</i>")
     text_lines = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:
@@ -1021,14 +1028,14 @@ def build_telegram_home(
     title = str(payload.get("title", "") or "").strip() or _bot_home_title(token)
     title = _dedupe_bot_title_prefix(title, bot_name)
     title_main, title_context = _split_header_title(title)
-    subtitle = str(payload.get("subtitle", "") or "").strip()
+    subtitle = _strip_html_like_markup(payload.get("subtitle", ""))
     sections = payload.get("sections", [])
     if not isinstance(sections, Iterable):
         sections = []
-    header = [f"<b>{_render_emoji('🏠')} {html.escape(bot_name)}｜{_render_inline_text(title_main or title)}</b>"]
+    header = [f"<b>{_render_emoji('🏠')} {_render_inline_text(title_main or title)}</b>"]
     header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
     if header_subtitle_parts:
-        header.append(f"<i>{_render_inline_text('｜'.join(header_subtitle_parts))}</i>")
+        header.append(f"<i>{_render_inline_text(_decorate_context_line('｜'.join(header_subtitle_parts)))}</i>")
     body = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:
