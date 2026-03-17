@@ -29,7 +29,7 @@ def test_pick_kuaishou_publish_wrap_text_rejects_shell_only_context() -> None:
     assert wrap == ""
 
 
-def test_click_kuaishou_primary_publish_button_uses_publish_panel_context() -> None:
+def test_click_kuaishou_primary_publish_button_uses_publish_panel_context(monkeypatch) -> None:
     class FakeButton:
         def __init__(self) -> None:
             self.clicked = False
@@ -61,12 +61,13 @@ def test_click_kuaishou_primary_publish_button_uses_publish_panel_context() -> N
 
     button = FakeButton()
     owner = FakeOwner(button)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     assert engine._click_kuaishou_primary_publish_button(owner, None) is True
     assert button.clicked is True
 
 
-def test_click_kuaishou_primary_publish_button_accepts_bottom_publish_work_button() -> None:
+def test_click_kuaishou_primary_publish_button_accepts_bottom_publish_work_button(monkeypatch) -> None:
     class FakeButton:
         def __init__(self) -> None:
             self.clicked = False
@@ -100,6 +101,7 @@ def test_click_kuaishou_primary_publish_button_accepts_bottom_publish_work_butto
 
     button = FakeButton()
     owner = FakeOwner(button)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     assert engine._click_kuaishou_primary_publish_button(owner, None) is True
     assert button.clicked is True
@@ -121,7 +123,7 @@ def test_click_kuaishou_publish_confirm_dialog_only_ignores_compose_page() -> No
     assert engine._click_kuaishou_publish_confirm_dialog_only(owner, None) is False
 
 
-def test_click_kuaishou_publish_confirm_dialog_only_clicks_dialog_button() -> None:
+def test_click_kuaishou_publish_confirm_dialog_only_clicks_dialog_button(monkeypatch) -> None:
     class FakeButton:
         def __init__(self) -> None:
             self.clicked = False
@@ -153,6 +155,7 @@ def test_click_kuaishou_publish_confirm_dialog_only_clicks_dialog_button() -> No
 
     button = FakeButton()
     owner = FakeOwner(button)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     assert engine._click_kuaishou_publish_confirm_dialog_only(owner, None) is True
     assert button.clicked is True

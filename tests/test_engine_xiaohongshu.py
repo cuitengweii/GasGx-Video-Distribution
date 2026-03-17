@@ -35,7 +35,7 @@ def test_pick_xiaohongshu_publish_wrap_text_prefers_publish_panel_context() -> N
     assert wrap == "\u6682\u5b58\u79bb\u5f00 \u53d1\u5e03"
 
 
-def test_click_xiaohongshu_primary_publish_button_skips_sidebar_publish_note() -> None:
+def test_click_xiaohongshu_primary_publish_button_skips_sidebar_publish_note(monkeypatch) -> None:
     class FakeButton:
         def __init__(
             self,
@@ -102,6 +102,7 @@ def test_click_xiaohongshu_primary_publish_button_skips_sidebar_publish_note() -
         button_text="\u53d1\u5e03",
     )
     owner = FakeOwner(sidebar_button, footer_button)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     assert engine._click_xiaohongshu_primary_publish_button(owner, None) is True
     assert sidebar_button.clicked is False

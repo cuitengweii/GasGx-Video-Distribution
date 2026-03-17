@@ -12308,7 +12308,6 @@ def _click_save_draft_button(ctx: Any) -> bool:
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
-            _humanized_publish_reaction_pause("douyin primary publish click")
             try:
                 btn.click()
             except Exception:
@@ -15895,6 +15894,51 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
         }
         return "clicked:douyin-js|" + best.cls + "|" + best.text + "|" + String(best.score);
         """
+        douyin_native_selectors = (
+            "css:button[class*='container-drag-btn']",
+            "xpath://button[contains(normalize-space(.), '娑撳﹣绱堕崶鐐瀮')]",
+            "css:div[class*='phone-screen'] div[class*='container-']",
+            "css:div[class*='phone-container'] div[class*='container-']",
+            "css:div[class*='content-right'] button",
+            "css:div[class*='drop-']",
+            "css:div[class*='content-right']",
+        )
+        for owner in contexts:
+            if not owner:
+                continue
+            for selector in douyin_native_selectors:
+                try:
+                    ele = owner.ele(selector, timeout=0.8)
+                except Exception:
+                    ele = None
+                if not ele or (not _is_visible_element(ele)):
+                    continue
+                try:
+                    ele.run_js("try { this.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}")
+                except Exception:
+                    pass
+                try:
+                    ele.click()
+                except Exception:
+                    try:
+                        ele.click(by_js=True)
+                    except Exception:
+                        try:
+                            ele.run_js(
+                                """
+                                const target = this.matches("button, [role='button']") ? this : (this.querySelector("button[class*='container-drag-btn'], div[class*='phone-screen'] div[class*='container-'], div[class*='phone-container'] div[class*='container-']") || this.closest("button, [role='button'], div[class*='phone-screen'], div[class*='phone-container'], div[class*='content-right'], div[class*='content-upload'], div[class*='drop-'], label") || this);
+                                try { target.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+                                try { target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
+                                try { target.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
+                                try { target.click(); } catch (e) {
+                                  try { target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window})); } catch (inner) {}
+                                }
+                                """
+                            )
+                        except Exception:
+                            continue
+                _log(f"[Uploader:douyin] Upload trigger clicked by native selector: {selector}")
+                return
         for owner in contexts:
             if not owner:
                 continue
@@ -16645,7 +16689,7 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
             tried_candidates += 1
             if not _input_caption_with_keyboard(ele, caption):
                 continue
-            time.sleep(0.35)
+            _humanized_publish_reaction_pause(f"{platform_name} caption verification")
             current = _read_element_text(ele)
             if not _caption_marker_exists(current, verify_marker):
                 if platform_name == "kuaishou":
@@ -16866,7 +16910,7 @@ def _scroll_kuaishou_publish_controls_into_view(primary_ctx: Any, fallback_ctx: 
             owner.run_js(js)
         except Exception:
             continue
-    time.sleep(0.4)
+    _humanized_publish_retry_pause("kuaishou publish controls scroll settle")
 
 
 def _trim_bilibili_title_candidate(text: str, limit: int = 80) -> str:
@@ -17563,7 +17607,7 @@ def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_
                 owner.run_js(js_collapse)
             except Exception:
                 pass
-        time.sleep(0.5)
+        _humanized_publish_retry_pause("bilibili collection picker settle")
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
@@ -18352,7 +18396,7 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
-            _humanized_publish_reaction_pause("xiaohongshu primary publish click")
+            _humanized_publish_reaction_pause("douyin primary publish click")
             try:
                 btn.click()
             except Exception:
@@ -18567,7 +18611,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
-            _humanized_publish_reaction_pause("kuaishou primary publish click")
+            _humanized_publish_reaction_pause("xiaohongshu primary publish click")
             try:
                 btn.click()
             except Exception:
@@ -18783,6 +18827,7 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
+            _humanized_publish_reaction_pause("kuaishou primary publish click")
             try:
                 btn.click()
             except Exception:
@@ -18949,6 +18994,7 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
             if txt == "立即投稿" and tag_name not in {"button", "a"} and role_name != "button":
                 if not any(token in cls_name for token in ("button", "btn", "submit", "publish")):
                     continue
+            _humanized_publish_reaction_pause("bilibili primary publish click")
             try:
                 btn.run_js(
                     """
@@ -19038,6 +19084,7 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_reaction_pause("bilibili primary publish click")
         try:
             ok = bool(owner.run_js(js))
         except Exception:
@@ -19091,6 +19138,7 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
                 wrap_text = ""
             if wrap_text and "取消" not in wrap_text and "确认发布" not in wrap_text:
                 continue
+            _humanized_publish_reaction_pause("kuaishou publish confirm click")
             try:
                 btn.run_js(
                     """
@@ -19151,6 +19199,7 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_reaction_pause("kuaishou publish confirm click")
         try:
             result = owner.run_js(js)
         except Exception:
@@ -19190,6 +19239,7 @@ def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: 
                 btn = None
             if not btn or not _is_visible_element(btn):
                 continue
+            _humanized_publish_reaction_pause("kuaishou publish confirm click")
             try:
                 btn.run_js(
                     """
@@ -19247,7 +19297,7 @@ def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: 
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
-        _humanized_publish_reaction_pause("kuaishou primary publish click")
+        _humanized_publish_reaction_pause("kuaishou publish confirm click")
         try:
             result = owner.run_js(js)
         except Exception:
@@ -19323,6 +19373,7 @@ def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) ->
                 btn = None
             if not btn or not _is_visible_element(btn):
                 continue
+            _humanized_publish_reaction_pause("douyin publish confirm click")
             try:
                 btn.click()
             except Exception:
@@ -19362,6 +19413,7 @@ def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) ->
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_reaction_pause("douyin publish confirm click")
         try:
             ok = bool(owner.run_js(js))
         except Exception:
@@ -19393,6 +19445,7 @@ def _click_xiaohongshu_publish_confirm_button(primary_ctx: Any, fallback_ctx: An
                 btn = None
             if not btn or not _is_visible_element(btn):
                 continue
+            _humanized_publish_reaction_pause("xiaohongshu publish confirm click")
             try:
                 btn.click()
             except Exception:
@@ -19436,6 +19489,7 @@ def _click_xiaohongshu_publish_confirm_button(primary_ctx: Any, fallback_ctx: An
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_reaction_pause("xiaohongshu publish confirm click")
         try:
             ok = bool(owner.run_js(js))
         except Exception:
@@ -20068,7 +20122,7 @@ def _wait_publish_feedback(
                 if _dismiss_unfinished_dialog(primary_ctx, fallback_ctx, platform_name=platform_name):
                     republish_attempts += 1
                     _log(f"[Uploader:douyin] Unfinished-video dialog dismissed, republish attempt {republish_attempts}/2.")
-                    time.sleep(0.8)
+                    _humanized_publish_settle_pause("douyin republish after unfinished dialog")
                     _click_douyin_primary_publish_button(primary_ctx, fallback_ctx)
                     _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
                     continue
@@ -20273,7 +20327,7 @@ def _configure_douyin_random_publish_mode(primary_ctx: Any, fallback_ctx: Any) -
         _log("[Uploader:douyin] Publish mode(random): scheduled requested but toggle not found, fallback immediate.")
         return "immediate"
 
-    time.sleep(0.4)
+    _humanized_publish_retry_pause("douyin scheduled mode settle")
     scheduled_value = _set_douyin_schedule_default_time(primary_ctx, fallback_ctx, min_lead_minutes=61)
     if scheduled_value:
         _log(f"[Uploader:douyin] Publish mode(random): scheduled (default time={scheduled_value})")
@@ -20304,7 +20358,7 @@ def _finalize_douyin_publish(
             raise
         _log(f"[Uploader:douyin] Scheduled publish not confirmed, fallback to immediate: {exc}")
         _click_first_matching_button(primary_ctx, fallback_ctx, ("立即发布",), platform_name="douyin")
-        time.sleep(0.4)
+        _humanized_publish_retry_pause("douyin immediate fallback settle")
         if not _click_douyin_primary_publish_button(primary_ctx, fallback_ctx):
             raise RuntimeError("douyin immediate fallback failed: publish button not clickable.") from exc
         _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
@@ -20354,7 +20408,7 @@ def _dismiss_unfinished_dialog(primary_ctx: Any, fallback_ctx: Any, platform_nam
             except Exception:
                 ele.click(by_js=True)
             _log(f"[Uploader:{platform_name}] Dismissed unfinished-video dialog.")
-            time.sleep(0.8)
+            _humanized_publish_settle_pause(f"{platform_name} unfinished dialog dismiss")
             return True
     return False
 
@@ -20503,7 +20557,7 @@ def _set_bilibili_random_publish_time(
             owner.run_js(js_toggle)
         except Exception:
             continue
-    time.sleep(0.6)
+    _humanized_publish_retry_pause("bilibili schedule toggle settle")
 
     js_set = """
     const textVal = String(arguments[0] || '');
@@ -20561,7 +20615,7 @@ def _set_bilibili_random_publish_time(
                 value = str(result.get("value", "") or "").strip() or schedule_text
                 _log(f"[Uploader:bilibili] Random schedule set: {value} (+{delay_minutes}m)")
                 return value
-        time.sleep(0.5)
+        _humanized_publish_retry_pause("bilibili schedule time retry")
 
     debug_js = """
     function isVisible(el) {
@@ -20976,7 +21030,7 @@ def _fill_draft_once_generic(
             if max_count <= 0:
                 for rebind_idx in range(2):
                     _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
-                    time.sleep(0.6)
+                    _humanized_publish_retry_pause("kuaishou upload rebind settle")
                     _ensure_kuaishou_publish_mode(ctx, page, prefer_video=False, max_rounds=2)
                     retry_input = _find_kuaishou_upload_file_input(ctx, page, prefer_video=False)
                     if not retry_input:
@@ -21016,7 +21070,7 @@ def _fill_draft_once_generic(
             _log(f"[Uploader:{platform_name}] No file bound on page after initial input, retry immediate rebind.")
             for rebind_idx in range(2):
                 _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
-                time.sleep(0.5)
+                _humanized_publish_retry_pause(f"{platform_name} upload rebind settle")
                 retry_input = _find_bilibili_upload_file_input(ctx, page) or _find_upload_file_input_generic(ctx, page)
                 if not retry_input:
                     continue

@@ -89,9 +89,17 @@ def test_activate_upload_trigger_generic_prefers_douyin_button_selector(monkeypa
     class FakeElement:
         def __init__(self) -> None:
             self.run_js_calls = 0
+            self.click_calls = 0
+            self.click_by_js_calls = 0
 
         def run_js(self, _script: str) -> None:
             self.run_js_calls += 1
+
+        def click(self, by_js: bool = False) -> None:
+            if by_js:
+                self.click_by_js_calls += 1
+            else:
+                self.click_calls += 1
 
     class FakeOwner:
         def __init__(self, element: FakeElement) -> None:
@@ -112,14 +120,16 @@ def test_activate_upload_trigger_generic_prefers_douyin_button_selector(monkeypa
 
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_is_visible_element", lambda _ele: True)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     engine._activate_upload_trigger_generic(owner, None, platform_name="douyin")
 
     assert owner.selectors[0] == "css:button[class*='container-drag-btn']"
-    assert element.run_js_calls == 1
+    assert element.click_calls == 1
+    assert element.click_by_js_calls == 0
 
 
-def test_activate_upload_trigger_generic_uses_douyin_js_scorer_first(monkeypatch) -> None:
+def test_activate_upload_trigger_generic_uses_douyin_js_scorer_after_selector_miss(monkeypatch) -> None:
     class FakeOwner:
         def __init__(self) -> None:
             self.run_js_calls: list[str] = []
@@ -141,11 +151,12 @@ def test_activate_upload_trigger_generic_uses_douyin_js_scorer_first(monkeypatch
     owner = FakeOwner()
 
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     engine._activate_upload_trigger_generic(owner, None, platform_name="douyin")
 
     assert len(owner.run_js_calls) == 1
-    assert owner.selector_calls == 0
+    assert owner.selector_calls > 0
 
 
 def test_activate_upload_trigger_generic_douyin_js_targets_upload_shell(monkeypatch) -> None:
