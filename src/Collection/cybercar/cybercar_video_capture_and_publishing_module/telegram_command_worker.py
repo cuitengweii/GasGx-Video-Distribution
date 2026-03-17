@@ -15,7 +15,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
 
 try:
     import winreg  # type: ignore
@@ -1541,6 +1541,128 @@ def _build_task_identifier_section(task_identifier: str) -> Optional[Dict[str, A
     }
 
 
+_OPERATOR_PRIORITY_LABELS = {
+    "执行结果",
+    "目标平台",
+    "平台摘要",
+    "采集媒体",
+    "候选数量",
+    "时间窗口",
+    "结果",
+    "平台",
+}
+_MACHINE_SECTION_TITLES = {"任务标识", "菜单链路", "任务日志"}
+_MACHINE_DETAIL_LABELS = {"耗时", "状态文件", "工作区", "运行上下文"}
+
+
+def _optimize_feedback_sections_for_operator(
+    sections: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    operator_items: list[Any] = []
+    machine_items: list[Any] = []
+    remaining_sections: list[dict[str, Any]] = []
+
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        title = str(section.get("title") or "").strip()
+        emoji = str(section.get("emoji") or "").strip()
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        if title in _MACHINE_SECTION_TITLES:
+            machine_items.extend(items)
+            continue
+        if title == "执行摘要":
+            for item in items:
+                if not isinstance(item, Mapping):
+                    machine_items.append(item)
+                    continue
+                label = str(item.get("label") or "").strip()
+                if label in _OPERATOR_PRIORITY_LABELS:
+                    operator_items.append(dict(item))
+                else:
+                    machine_items.append(dict(item))
+            continue
+        if title == "执行结果" and not operator_items:
+            operator_items.extend(items[:1])
+            if len(items) > 1:
+                remaining_sections.append({"title": title, "emoji": emoji or "📝", "items": items[1:]})
+            continue
+        remaining_sections.append({"title": title, "emoji": emoji, "items": items})
+
+    optimized: list[dict[str, Any]] = []
+    if operator_items:
+        optimized.append({"title": "人工关注", "emoji": "🎯", "items": operator_items})
+    optimized.extend(remaining_sections)
+    if machine_items:
+        normalized_machine_items: list[Any] = []
+        for item in machine_items:
+            if isinstance(item, Mapping):
+                label = str(item.get("label") or "").strip()
+                if label in _MACHINE_DETAIL_LABELS:
+                    normalized_machine_items.append(dict(item))
+                else:
+                    normalized_machine_items.append(dict(item))
+            else:
+                normalized_machine_items.append(item)
+        optimized.append({"title": "机器信息", "emoji": "🤖", "items": normalized_machine_items})
+    return optimized
+
+
+def _platform_status_marker(platform: str, merged_text: str, *, effective_status: str) -> str:
+    token = str(platform or "").strip().lower()
+    lowered = str(merged_text or "").strip().lower()
+    related_lines = [line for line in lowered.splitlines() if token and token in line]
+    if not token:
+        return "⚠️"
+    if any(
+        marker in line
+        for line in related_lines
+        for marker in ("publish success", "发布成功", "已成功发布", "成功放到草稿箱")
+    ):
+        return "✅"
+    if any(marker in line for line in related_lines for marker in ("login", "未登录", "登录", "扫码", "qr")):
+        return "🔐"
+    if (
+        any(
+            marker in line
+            for line in related_lines
+            for marker in ("publish failed", "发布失败", "执行失败")
+        )
+        or f"[scheduler:{token}] publish failed:" in lowered
+        or f"{token} publish failed" in lowered
+    ):
+        return "📣"
+    if any(marker in line for line in related_lines for marker in ("skipped", "跳过", "duplicate target blocked")):
+        return "⏭️"
+    if str(effective_status or "").strip().lower() == "done":
+        return "✅"
+    if str(effective_status or "").strip().lower() in {"failed", "blocked"}:
+        return "📣"
+    return "⚠️"
+
+
+def _build_platform_status_summary(platforms: Sequence[str], merged_text: str, *, effective_status: str) -> str:
+    normalized = _normalize_platform_tokens(platforms)
+    if not normalized:
+        return ""
+    parts: list[str] = []
+    for platform in normalized:
+        marker = _platform_status_marker(platform, merged_text, effective_status=effective_status)
+        platform_name = PUBLISH_PLATFORM_DISPLAY.get(platform, platform or "平台")
+        if marker == "✅":
+            suffix = "成功"
+        elif marker == "🔐":
+            suffix = "登录"
+        elif marker == "⏭️":
+            suffix = "跳过"
+        elif marker == "📣":
+            suffix = "失败"
+        else:
+            suffix = "待确认"
+        parts.append(f"{marker} {platform_name}{suffix}")
+    return " / ".join(parts)
+
+
 def _format_task_log_header(
     *,
     task_identifier: str = "",
@@ -2784,8 +2906,11 @@ def _build_distribution_result_card(
             ],
         }
     ]
+    platform_summary = _build_platform_status_summary(platforms, merged, effective_status=effective_status)
+    if platform_summary:
+        sections[-1]["items"].insert(1, {"label": "平台摘要", "value": platform_summary})
     if action_token == "schedule_run" and minutes is not None and minutes > 0:
-        sections[0]["items"].append({"label": "时间窗口", "value": f"{int(minutes)} 分钟"})
+        sections[-1]["items"].append({"label": "时间窗口", "value": f"{int(minutes)} 分钟"})
     if video_names:
         sections.append(
             {
@@ -2810,6 +2935,7 @@ def _build_distribution_result_card(
                 "items": [summary],
             }
         )
+    sections = _optimize_feedback_sections_for_operator(sections)
     card = build_action_feedback(
         status="success" if effective_status == "done" else "failed",
         title=title,
@@ -2901,6 +3027,7 @@ def _build_collect_result_card(
                 "items": [summary],
             }
         )
+    sections = _optimize_feedback_sections_for_operator(sections)
     card = build_action_feedback(
         status="success" if result_status == "done" else "failed",
         title=title,
@@ -9458,6 +9585,7 @@ def _send_background_feedback(
         normalized_sections = [task_identifier_section, *normalized_sections]
     if menu_section is not None:
         normalized_sections = [menu_section, *normalized_sections]
+    normalized_sections = _optimize_feedback_sections_for_operator(normalized_sections)
     card = build_action_feedback(
         status=status,
         title=display_title,
@@ -11718,7 +11846,6 @@ def main() -> int:
                     last_poll_started_at=_now_text(),
                     offset=offset,
                     last_processed_update_id=last_processed,
-                    last_error="",
                 )
                 _recover_orphaned_home_action_tasks(
                     workspace=workspace,
@@ -11759,6 +11886,17 @@ def main() -> int:
                 if not isinstance(updates, list):
                     updates = []
                 consecutive_poll_failures = 0
+                _update_worker_state(
+                    state_file,
+                    pid=os.getpid(),
+                    status="polling",
+                    startup_stage="",
+                    worker_heartbeat_at=_now_text(),
+                    offset=offset,
+                    last_processed_update_id=last_processed,
+                    consecutive_poll_failures=0,
+                    last_error="",
+                )
 
                 for update in updates:
                     if not isinstance(update, dict):

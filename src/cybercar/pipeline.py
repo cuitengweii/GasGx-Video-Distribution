@@ -1105,7 +1105,7 @@ def _send_telegram_text(
     bot_token = str(settings.telegram_bot_token or "").strip()
     chat_id = str(settings.telegram_chat_id or "").strip()
     if not bot_token or not chat_id:
-        core._log("[Notify] Telegram ????????? bot_token ? chat_id?")
+        core._log("[Notify] Telegram send skipped: missing bot_token or chat_id.")
         return False
     params: dict[str, Any] = {
         "chat_id": chat_id,
@@ -1128,7 +1128,7 @@ def _send_telegram_text(
         )
         return True
     except Exception as exc:
-        core._log(f"[Notify] Telegram ?????????{exc}")
+        core._log(f"[Notify] Telegram send failed: {exc}")
         return False
 
 

@@ -26,6 +26,26 @@ def test_cli_telegram_recover_subcommand_parses_retries() -> None:
     assert args.retries == 5
 
 
+def test_cli_telegram_supervise_subcommand_parses_once_and_thresholds() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "telegram",
+            "supervise",
+            "--once",
+            "--stale-heartbeat-seconds",
+            "180",
+            "--startup-grace-seconds",
+            "120",
+        ]
+    )
+    assert args.command == "telegram"
+    assert args.telegram_command == "supervise"
+    assert args.once is True
+    assert args.stale_heartbeat_seconds == 180
+    assert args.startup_grace_seconds == 120
+
+
 def test_recover_bot_surface_retries_until_refresh_succeeds(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     restart_calls: list[dict[str, object]] = []

@@ -3,6 +3,7 @@ from pathlib import Path
 import requests
 
 from cybercar.common import telegram_api
+from cybercar.common import telegram_ui
 from cybercar.common.telegram_bot_registry import load_registry
 
 from cybercar.cli import build_parser
@@ -205,3 +206,98 @@ def test_call_telegram_api_keeps_get_and_post_sessions_isolated(monkeypatch) -> 
     assert get_session.closed is False
     assert post_session.closed is False
     assert post_session.calls
+
+
+def test_build_telegram_card_uses_clean_section_layout() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "发布完成",
+            "subtitle": "3个平台已完成",
+            "bot_name": "CyberCar",
+            "sections": [
+                {"title": "执行摘要", "emoji": "📋", "items": [{"label": "结果", "value": "全部完成"}]},
+                {"title": "任务日志", "emoji": "🧾", "items": ["日志文件：publish.log"]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "<b>✅ CyberCar｜发布完成</b>" in text
+    assert "<i>3个平台已完成</i>" in text
+    assert "• <b>结果</b>：全部完成" in text
+    assert "\n\n<b>🧾 任务日志</b>" in text
+
+
+def test_build_callback_toast_returns_clean_chinese_copy() -> None:
+    assert telegram_ui.build_callback_toast("process_status", "success") == "进度已刷新"
+    assert telegram_ui.build_callback_toast("refresh_qr", "failed") == "二维码刷新失败"
+
+
+def test_build_telegram_card_prioritizes_failure_reason_before_machine_sections() -> None:
+    card = telegram_ui.build_telegram_card(
+        "alert",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {"title": "运行上下文", "emoji": "🧭", "items": [{"label": "工作区", "value": "D:/code/CyberCar"}]},
+                {"title": "失败原因", "emoji": "⚠️", "items": [{"label": "原因", "value": "平台未登录"}]},
+                {"title": "处理建议", "emoji": "🔧", "items": ["请先登录后重试。"]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.index("<b>⚠️ 失败原因</b>") < text.index("<b>🧭 运行上下文</b>")
+    assert text.index("<b>🔧 处理建议</b>") < text.index("<b>🧭 运行上下文</b>")
+    assert "• <b>🔐 原因</b>：平台未登录" in text
+    assert "• 🛠️ 请先登录后重试。" in text
+
+
+def test_build_telegram_card_marks_notify_and_network_failures_with_distinct_icons() -> None:
+    card = telegram_ui.build_telegram_card(
+        "alert",
+        {
+            "status": "failed",
+            "title": "发送失败",
+            "sections": [
+                {"title": "失败原因", "emoji": "⚠️", "items": [{"label": "原因", "value": "Telegram timeout while sending card"}]},
+                {"title": "结果说明", "emoji": "⚠️", "items": [{"label": "说明", "value": "chat_id missing for notify bot"}]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "• <b>🌐 原因</b>：Telegram timeout while sending card" in text
+    assert "• <b>📨 说明</b>：chat_id missing for notify bot" in text
+
+
+def test_build_telegram_card_compacts_success_focus_to_three_primary_items() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "发布完成",
+            "sections": [
+                {
+                    "title": "人工关注",
+                    "emoji": "🎯",
+                    "items": [
+                        {"label": "执行结果", "value": "成功"},
+                        {"label": "目标平台", "value": "抖音 / 小红书"},
+                        {"label": "候选数量", "value": "5"},
+                        {"label": "时间窗口", "value": "30 分钟"},
+                    ],
+                },
+                {"title": "执行结果", "emoji": "📝", "items": ["已完成全部平台发布。"]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.count("• <b>") == 4
+    assert text.index("• <b>执行结果</b>：成功") < text.index("<b>🤖 机器信息</b>")
+    assert text.index("<b>🤖 机器信息</b>") < text.index("<b>📝 执行结果</b>")
+    assert "• <b>时间窗口</b>：30 分钟" in text

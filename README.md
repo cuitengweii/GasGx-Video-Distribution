@@ -16,11 +16,13 @@ python -m cybercar telegram set-commands
 python -m cybercar telegram home-refresh
 python -m cybercar telegram recover
 python -m cybercar telegram worker
+python -m cybercar telegram supervise
 ```
 
 Use the Telegram worker as the only operator entry. Keep collect/publish manual and trigger them from the bot review flow or explicit CLI runs.
 
 If the bot surface goes stale after a Telegram/network hiccup, run `python -m cybercar telegram recover`.
+For unattended resilience on Windows, install the watchdog tasks with `scripts/install_telegram_supervisor_task.ps1`.
 
 ## Supporting commands
 

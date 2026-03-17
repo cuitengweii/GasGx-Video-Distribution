@@ -24,8 +24,8 @@ def _workspace(tmp_path: Path) -> engine.Workspace:
 
 
 def test_is_douyin_collection_match_strips_counter_suffix() -> None:
-    assert engine._is_douyin_collection_match("赛博皮卡现车：aawbcc 共66个作品", "赛博皮卡现车：aawbcc")
-    assert engine._is_douyin_collection_match("添加合集 赛博皮卡现车：aawbcc", "赛博皮卡现车：aawbcc")
+    assert engine._is_douyin_collection_match("Cybertruck Clips 共 6 作品", "Cybertruck Clips")
+    assert engine._is_douyin_collection_match("添加合集 Cybertruck Clips", "Cybertruck Clips")
 
 
 def test_prepare_image_post_text_payload_keeps_douyin_caption(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,7 +37,7 @@ def test_prepare_image_post_text_payload_keeps_douyin_caption(monkeypatch: pytes
         lambda *args, **kwargs: title_calls.append(dict(kwargs)) or "",
     )
 
-    caption = "赛博皮卡现车\n到店实拍"
+    caption = "Cybertruck\nStore visit"
     result = engine._prepare_image_post_text_payload(
         object(),
         object(),
@@ -52,7 +52,7 @@ def test_prepare_image_post_text_payload_keeps_douyin_caption(monkeypatch: pytes
 def test_select_douyin_collection_supports_dropdown_picker(monkeypatch: pytest.MonkeyPatch) -> None:
     states = [
         {"hasField": True, "current": "", "episode": "", "source": "empty"},
-        {"hasField": True, "current": "赛博皮卡现车：aawbcc", "episode": "第67集", "source": "selected"},
+        {"hasField": True, "current": "Cybertruck Clips", "episode": "Episode 7", "source": "selected"},
     ]
 
     def fake_get_state(_primary: Any, _fallback: Any) -> dict[str, Any]:
@@ -68,18 +68,19 @@ def test_select_douyin_collection_supports_dropdown_picker(monkeypatch: pytest.M
             self.calls.append((script, args))
             assert ".semi-select-option" in script
             assert "visible_options" in script
-            assert args == ("赛博皮卡现车：aawbcc",)
+            assert "__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__" in script
+            assert args == ("Cybertruck Clips",)
             return {
                 "state": "clicked",
-                "option": "赛博皮卡现车：aawbcc",
-                "visible_options": ["赛博皮卡现车：aawbcc"],
+                "option": "Cybertruck Clips",
+                "visible_options": ["Cybertruck Clips"],
             }
 
     monkeypatch.setattr(engine, "_get_douyin_collection_state", fake_get_state)
     monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
 
     ctx = FakeCtx()
-    engine._select_douyin_collection(ctx, None, "赛博皮卡现车：aawbcc")
+    engine._select_douyin_collection(ctx, None, "Cybertruck Clips")
 
     assert len(ctx.calls) == 1
 
@@ -107,14 +108,27 @@ def test_fill_draft_douyin_passes_collection_name_to_generic(tmp_path: Path, mon
 
     used_target = engine.fill_draft_douyin(
         workspace,
-        caption="赛博皮卡现车",
+        caption="Cybertruck",
         target_video=target,
-        collection_name="赛博皮卡现车：aawbcc",
+        collection_name="Cybertruck Clips",
         auto_open_chrome=False,
         check_duplicate_before_upload=False,
         record_after_success=False,
     )
 
     assert used_target == target
-    assert captured["collection_name"] == "赛博皮卡现车：aawbcc"
+    assert captured["collection_name"] == "Cybertruck Clips"
 
+
+def test_looks_like_douyin_image_upload_ready_accepts_editor_state() -> None:
+    text = "作品描述 编辑图片 已添加1张图片 继续添加 发布设置 发布时间 立即发布 预览图文"
+    actions = ["编辑图片 已添加1张图片 继续添加", "发布时间", "立即发布", "发布"]
+
+    assert engine._looks_like_douyin_image_upload_ready(text, actions) is True
+
+
+def test_looks_like_douyin_image_upload_ready_rejects_upload_shell_only() -> None:
+    text = "点击上传 或直接将图片文件拖入此区域 推荐上传 9:16 的竖版图片"
+    actions = ["点击上传", "发布"]
+
+    assert engine._looks_like_douyin_image_upload_ready(text, actions) is False

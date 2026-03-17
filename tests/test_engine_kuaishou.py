@@ -157,3 +157,102 @@ def test_wait_upload_ready_generic_waits_for_kuaishou_image_editor_form(
 
     assert result is owner
     assert owner.state_calls >= 2
+
+
+def test_stage_kuaishou_image_upload_via_page_set_clicks_upload_button_first(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeSetter:
+        def upload_files(self, target_path: str) -> None:
+            events.append(f"upload:{Path(target_path).name}")
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.set = FakeSetter()
+
+    snapshots = [
+        {"max_count": 0, "total": 2},
+        {"max_count": 1, "total": 2},
+    ]
+
+    monkeypatch.setattr(engine, "_ensure_kuaishou_publish_mode", lambda *args, **kwargs: events.append("ensure"))
+    monkeypatch.setattr(
+        engine,
+        "_click_first_matching_button",
+        lambda *args, **kwargs: events.append("click:upload") or True,
+    )
+    monkeypatch.setattr(engine, "_activate_upload_trigger_generic", lambda *args, **kwargs: events.append("activate"))
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log_upload_surface_snapshot", lambda *args, **kwargs: events.append("snapshot"))
+    monkeypatch.setattr(engine, "_read_generic_file_inputs_snapshot", lambda *args, **kwargs: snapshots.pop(0))
+
+    result = engine._stage_kuaishou_image_upload_via_page_set(
+        FakePage(),
+        object(),
+        object(),
+        Path("sample.jpg"),
+    )
+
+    assert result is True
+    assert events[:3] == ["ensure", "click:upload", "upload:sample.jpg"]
+
+
+def test_pick_kuaishou_file_input_candidate_prefers_add_image_input() -> None:
+    dom_index, candidate, score = engine._pick_kuaishou_file_input_candidate(
+        [
+            {
+                "idx": 0,
+                "accept": "video/*,.mp4,.mov",
+                "wrap": "还有上次未发布的视频，是否继续编辑？继续编辑 放弃 拖拽视频到此或点击上传 上传视频",
+                "multiple": False,
+                "visible": False,
+            },
+            {
+                "idx": 1,
+                "accept": "image/png, image/jpg, image/jpeg, image/webp",
+                "wrap": "发布图文 作品描述 发布设置 发布 取消",
+                "multiple": True,
+                "visible": False,
+            },
+            {
+                "idx": 2,
+                "accept": "image/png, image/jpg, image/jpeg, image/webp",
+                "wrap": "编辑图片 1/31 添加图片",
+                "multiple": False,
+                "visible": False,
+            },
+        ],
+        prefer_video=False,
+    )
+
+    assert dom_index == 2
+    assert candidate["wrap"] == "编辑图片 1/31 添加图片"
+    assert score > 0
+
+
+def test_pick_kuaishou_file_input_candidate_rejects_video_shell_for_image_publish() -> None:
+    dom_index, candidate, score = engine._pick_kuaishou_file_input_candidate(
+        [
+            {
+                "idx": 0,
+                "accept": "video/*,.mp4,.mov",
+                "wrap": "还有上次未发布的视频，是否继续编辑？继续编辑 放弃 拖拽视频到此或点击上传 上传视频",
+                "multiple": False,
+                "visible": False,
+            },
+            {
+                "idx": 1,
+                "accept": "image/png, image/jpg, image/jpeg, image/webp",
+                "wrap": "发布图文 作品描述 发布设置 发布 取消",
+                "multiple": True,
+                "visible": False,
+            },
+        ],
+        prefer_video=False,
+    )
+
+    assert dom_index == 1
+    assert candidate["accept"].startswith("image/")
+    assert score > 0

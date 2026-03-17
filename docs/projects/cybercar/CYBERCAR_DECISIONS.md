@@ -18,3 +18,9 @@ Last updated: 2026-03-16
 - Immediate image review must search X with `filter:images`; `filter:media` is not acceptable for the image branch because it admits videos and causes false failures on video-only guards.
 - Global X download config may use `fail_fast=true`, but Telegram immediate review jobs must override that behavior and keep retry/fallback enabled so manually approved candidates are not discarded on the first transient X timeout.
 - For low-volume latest-first manual collect, `fail_fast=true` is the preferred global default: skip downloader retry batches and all fallback work, target only the freshest `limit` discovered X URLs, and treat a no-download round as a non-fatal empty result instead of aborting the whole command.
+
+## 2026-03-17
+
+- Windows Task Scheduler is allowed again only as a bootstrap layer for Telegram bot availability, not as an unattended collect/publish runner.
+- CyberCar now supports a resident Telegram watchdog plus a periodic `--once` self-heal probe so "worker dead but bot silent" incidents are recovered automatically.
+- Watchdog recovery must reuse `recover_bot_surface()` so process restart, `/start` command refresh, and home-surface rebuild stay on one code path.

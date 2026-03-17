@@ -2602,3 +2602,80 @@ def test_build_process_log_section_sanitizes_garbled_lines(tmp_path: Path) -> No
     items = [str(item.get("value")) if isinstance(item, dict) else str(item) for item in section["items"]]
 
     assert any("\u65e5\u5fd7\u6587\u672c\u5b58\u5728\u7f16\u7801\u5f02\u5e38" in item for item in items)
+
+
+def test_update_worker_state_preserves_last_error_until_poll_success(tmp_path: Path) -> None:
+    state_path = tmp_path / "worker_state.json"
+
+    worker_impl._update_worker_state(
+        state_path,
+        status="polling",
+        worker_heartbeat_at="2026-03-17 09:00:00",
+        consecutive_poll_failures=6,
+        last_error="telegram poll transport jitter; send path remains retryable",
+    )
+    worker_impl._update_worker_state(
+        state_path,
+        status="polling",
+        worker_heartbeat_at="2026-03-17 09:00:10",
+        last_poll_started_at="2026-03-17 09:00:10",
+    )
+    payload = worker_impl._load_state(state_path)
+    assert payload["consecutive_poll_failures"] == 6
+    assert payload["last_error"] == "telegram poll transport jitter; send path remains retryable"
+
+    worker_impl._update_worker_state(
+        state_path,
+        status="polling",
+        worker_heartbeat_at="2026-03-17 09:00:20",
+        consecutive_poll_failures=0,
+        last_error="",
+    )
+    payload = worker_impl._load_state(state_path)
+    assert payload["consecutive_poll_failures"] == 0
+    assert payload["last_error"] == ""
+
+
+def test_optimize_feedback_sections_for_operator_moves_logs_to_machine_info() -> None:
+    sections = worker_impl._optimize_feedback_sections_for_operator(
+        [
+            {"title": "任务标识", "emoji": "🏷️", "items": [{"label": "当前任务", "value": "collect|image|3"}]},
+            {"title": "菜单链路", "emoji": "🧭", "items": [{"label": "当前链路", "value": "即采即发 > 图片"}]},
+            {
+                "title": "执行摘要",
+                "emoji": "📌",
+                "items": [
+                    {"label": "目标平台", "value": "抖音 / 小红书"},
+                    {"label": "执行结果", "value": "成功"},
+                    {"label": "耗时", "value": "12.4s"},
+                ],
+            },
+            {"title": "任务日志", "emoji": "🧾", "items": [{"label": "日志名", "value": "job.log"}]},
+        ]
+    )
+
+    assert sections[0]["title"] == "人工关注"
+    assert any(str(item.get("label")) == "执行结果" for item in sections[0]["items"])
+    assert sections[-1]["title"] == "机器信息"
+    machine_values = [str(item.get("value")) for item in sections[-1]["items"] if isinstance(item, dict)]
+    assert "collect|image|3" in machine_values
+    assert "job.log" in machine_values
+
+
+def test_build_platform_status_summary_marks_platforms_individually() -> None:
+    summary = worker_impl._build_platform_status_summary(
+        ["wechat", "douyin", "xiaohongshu"],
+        "\n".join(
+            [
+                "[scheduler:wechat] publish failed: login required",
+                "[scheduler:douyin] publish failed: upload rejected",
+                "[scheduler:xiaohongshu] publish success",
+            ]
+        ),
+        effective_status="failed",
+    )
+
+    assert "🔐 视频号登录" in summary
+    assert "📣 抖音失败" in summary
+    assert "📣 小红书失败" not in summary
+    assert "⚠️ 小红书待确认" in summary or "✅ 小红书成功" in summary

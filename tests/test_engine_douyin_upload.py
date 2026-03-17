@@ -83,3 +83,119 @@ def test_collect_upload_contexts_recurses_nested_frames() -> None:
     contexts = engine._collect_upload_contexts(root, None)
 
     assert contexts == [root, child, leaf]
+
+
+def test_activate_upload_trigger_generic_prefers_douyin_drop_selector(monkeypatch) -> None:
+    class FakeElement:
+        def __init__(self) -> None:
+            self.run_js_calls = 0
+
+        def run_js(self, _script: str) -> None:
+            self.run_js_calls += 1
+
+    class FakeOwner:
+        def __init__(self, element: FakeElement) -> None:
+            self.element = element
+            self.selectors: list[str] = []
+
+        def get_frames(self, timeout: float = 0) -> list[Any]:
+            return []
+
+        def ele(self, selector: str, timeout: float = 0) -> Any:
+            self.selectors.append(selector)
+            if selector == "css:div[class*='drop-']":
+                return self.element
+            return None
+
+    element = FakeElement()
+    owner = FakeOwner(element)
+
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_is_visible_element", lambda _ele: True)
+
+    engine._activate_upload_trigger_generic(owner, None, platform_name="douyin")
+
+    assert owner.selectors[0] == "css:div[class*='drop-']"
+    assert element.run_js_calls == 1
+
+
+def test_activate_upload_trigger_generic_uses_douyin_js_scorer_first(monkeypatch) -> None:
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.run_js_calls: list[str] = []
+            self.selector_calls = 0
+
+        def get_frames(self, timeout: float = 0) -> list[Any]:
+            return []
+
+        def run_js(self, script: str) -> str:
+            self.run_js_calls.append(script)
+            if "clicked:douyin-js|" in script:
+                return "clicked:douyin-js|drop-qMdG9E||340"
+            return ""
+
+        def ele(self, selector: str, timeout: float = 0) -> Any:
+            self.selector_calls += 1
+            return None
+
+    owner = FakeOwner()
+
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._activate_upload_trigger_generic(owner, None, platform_name="douyin")
+
+    assert len(owner.run_js_calls) == 1
+    assert owner.selector_calls == 0
+
+
+def test_read_douyin_image_upload_state_detects_ready_editor() -> None:
+    class FakeOwner:
+        def run_js(self, _script: str) -> dict[str, Any]:
+            return {
+                "ready": True,
+                "busy": False,
+                "upload_entry": False,
+                "image_added": True,
+                "editor_hints": True,
+                "publish_btn": True,
+                "sample_texts": ["编辑图片", "已添加1张图片", "发布"],
+            }
+
+    state = engine._read_douyin_image_upload_state(FakeOwner(), None)
+
+    assert state["ready"] is True
+    assert state["image_added"] is True
+    assert state["publish_btn"] is True
+
+
+def test_wait_upload_ready_generic_accepts_douyin_image_editor_ready(monkeypatch, tmp_path) -> None:
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run_js(self, _script: str) -> str:
+            self.calls += 1
+            return "编辑图片 已添加1张图片 继续添加 发布设置 发布"
+
+    owner = FakeOwner()
+    target = tmp_path / "sample.jpg"
+    target.write_bytes(b"x")
+
+    monkeypatch.setattr(
+        engine,
+        "_read_douyin_image_upload_state",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "busy": False,
+            "upload_entry": False,
+            "image_added": True,
+            "editor_hints": True,
+            "publish_btn": True,
+            "sample_texts": ["编辑图片", "已添加1张图片", "发布"],
+        },
+    )
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._wait_upload_ready_generic(None, owner, "douyin", timeout_seconds=3, upload_target=target)
+
+    assert result is owner

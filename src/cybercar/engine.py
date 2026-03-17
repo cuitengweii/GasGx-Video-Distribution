@@ -13917,6 +13917,27 @@ def _wait_upload_ready_generic(
                 continue
             bilibili_entry_since = 0.0
             bilibili_busy_since = 0.0
+        elif platform_name == "douyin" and upload_target is not None and _is_image_file(upload_target):
+            state = _read_douyin_image_upload_state(ctx, page)
+            ready_hit = bool(state.get("ready"))
+            if ready_hit:
+                _log(
+                    "[Uploader:douyin] Upload appears completed by image editor readiness: "
+                    f"image_added={bool(state.get('image_added'))}, "
+                    f"editor_hints={bool(state.get('editor_hints'))}, "
+                    f"publish={bool(state.get('publish_btn'))}"
+                )
+                return ctx
+            busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
+            upload_entry_hit = bool(state.get("upload_entry"))
+            if upload_entry_hit:
+                _log("[Uploader:douyin] Waiting for image editor form readiness...")
+                time.sleep(2.0)
+                continue
+            if busy_hit:
+                _log("[Uploader:douyin] Waiting for upload completion...")
+                time.sleep(2.0)
+                continue
         elif platform_name == "kuaishou" and upload_target is not None and _is_image_file(upload_target):
             js_state = r"""
             function isVisible(el) {
@@ -14031,6 +14052,54 @@ def _wait_upload_ready_generic(
     raise TimeoutError(f"{platform_name} upload timeout ({timeout_seconds}s).")
 
 
+def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function visibleTexts() {
+      return Array.from(document.querySelectorAll('button, [role="button"], div, span, a, label, input, textarea'))
+        .filter(isVisible)
+        .map(node => norm(node.innerText || node.textContent || node.value || ''))
+        .filter(Boolean)
+        .slice(0, 120);
+    }
+    const bodyText = norm((document.body && document.body.innerText) || '');
+    const texts = visibleTexts();
+    const imageAdded = /(已添加\d+张图片|已添加图片|编辑图片|继续添加)/.test(bodyText);
+    const uploadEntry = /(点击上传|上传图文|上传图片|拖入此区域|图片文件)/.test(bodyText) && !imageAdded;
+    const busy = /\b\d{1,3}%\b/.test(bodyText) || /(上传中|正在上传|处理中|排队中|校验中)/.test(bodyText);
+    const editorHints = /(作品描述|发布设置|保存权限|发布时间|谁可以看|添加合集)/.test(bodyText);
+    const publishBtn = texts.some(text => /^(发布|发布作品|立即发布|确认发布)$/.test(text));
+    return {
+      ready: !!(imageAdded && editorHints && publishBtn && !busy),
+      busy: !!busy,
+      upload_entry: !!uploadEntry,
+      image_added: !!imageAdded,
+      editor_hints: !!editorHints,
+      publish_btn: !!publishBtn,
+      sample_texts: texts.filter(text => /发布|描述|合集|继续添加|编辑图片|已添加/.test(text)).slice(0, 16),
+    };
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload:
+            return payload
+    return {}
+
+
 def _find_upload_file_input_generic(
     primary_ctx: Any,
     fallback_ctx: Any,
@@ -14071,6 +14140,149 @@ def _find_upload_file_input_generic(
             except Exception:
                 continue
     return fallback_candidate
+
+
+def _score_kuaishou_file_input_candidate(candidate: dict[str, Any], prefer_video: bool) -> int:
+    accept = str(candidate.get("accept") or "").lower()
+    wrap = str(candidate.get("wrap") or "")
+    meta = " ".join(
+        [
+            wrap,
+            str(candidate.get("name") or ""),
+            str(candidate.get("id") or ""),
+            str(candidate.get("cls") or ""),
+        ]
+    )
+    normalized = _normalize_metadata_text(meta, limit=480)
+    score = 0
+    if prefer_video:
+        if "video" in accept or any(ext in accept for ext in (".mp4", ".mov", ".webm", ".avi", ".mkv")):
+            score += 180
+        if any(token in wrap for token in ("上传视频", "发布视频", "拖拽视频", "选择视频")):
+            score += 120
+        if "继续编辑" in wrap:
+            score += 24
+        if "image" in accept or any(ext in accept for ext in (".png", ".jpg", ".jpeg", ".webp")):
+            score -= 220
+        if any(token in wrap for token in ("发布图文", "添加图片", "编辑图片", "作品描述", "发布设置")):
+            score -= 160
+    else:
+        if "image" in accept or any(ext in accept for ext in (".png", ".jpg", ".jpeg", ".webp")):
+            score += 120
+        if "multiple" in normalized or bool(candidate.get("multiple")):
+            score += 8
+        if "添加图片" in wrap:
+            score += 160
+        if "编辑图片" in wrap:
+            score += 120
+        if "发布图文" in wrap:
+            score += 80
+        if any(token in wrap for token in ("作品描述", "发布设置", "封面设置")):
+            score += 40
+        if "video" in accept or any(ext in accept for ext in (".mp4", ".mov", ".webm", ".avi", ".mkv")):
+            score -= 260
+        if any(token in wrap for token in ("上传视频", "继续编辑", "放弃", "拖拽视频")):
+            score -= 220
+    if bool(candidate.get("visible")):
+        score += 6
+    return score
+
+
+def _pick_kuaishou_file_input_candidate(
+    candidates: Sequence[dict[str, Any]],
+    prefer_video: bool,
+) -> tuple[int, dict[str, Any], int]:
+    best_index = -1
+    best_candidate: dict[str, Any] = {}
+    best_score = -10**9
+    for idx, candidate in enumerate(candidates or ()):
+        if not isinstance(candidate, dict):
+            continue
+        score = _score_kuaishou_file_input_candidate(candidate, prefer_video=prefer_video)
+        if score > best_score:
+            best_index = idx
+            best_candidate = candidate
+            best_score = score
+    return best_index, best_candidate, best_score
+
+
+def _find_kuaishou_upload_file_input(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    prefer_video: bool,
+) -> Any:
+    js = r"""
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }
+    function wrapText(el) {
+      let node = el;
+      const samples = [];
+      for (let depth = 0; depth < 6 && node; depth += 1, node = node.parentElement) {
+        const text = norm(node.innerText || node.textContent || '');
+        if (text) samples.push(text.slice(0, 240));
+      }
+      if (!samples.length) return '';
+      const precise = samples.find(text => /(添加图片|编辑图片|上传图片|上传图文|作品描述|发布设置|上传视频|继续编辑)/.test(text));
+      return precise || samples[0];
+    }
+    return {
+      candidates: Array.from(document.querySelectorAll("input[type='file']")).map((el, idx) => ({
+        idx,
+        visible: isVisible(el),
+        accept: String(el.getAttribute('accept') || ''),
+        name: String(el.getAttribute('name') || ''),
+        id: String(el.id || ''),
+        cls: String(el.className || ''),
+        multiple: el.hasAttribute('multiple'),
+        wrap: wrapText(el),
+      })),
+    };
+    """
+    best_owner: Any = None
+    best_dom_index = -1
+    best_candidate: dict[str, Any] = {}
+    best_score = -10**9
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        candidates = payload.get("candidates") if isinstance(payload, dict) else []
+        if not isinstance(candidates, list) or not candidates:
+            continue
+        dom_index, candidate, score = _pick_kuaishou_file_input_candidate(candidates, prefer_video=prefer_video)
+        if dom_index < 0 or not isinstance(candidate, dict):
+            continue
+        if score > best_score:
+            best_owner = owner
+            best_dom_index = int(candidate.get("idx", dom_index) or dom_index)
+            best_candidate = candidate
+            best_score = score
+    if best_owner and best_dom_index >= 0 and best_score > -120:
+        try:
+            selected = best_owner.ele(f"xpath:(//input[@type='file'])[{best_dom_index + 1}]", timeout=1)
+        except Exception:
+            selected = None
+        if selected:
+            _log(
+                "[Uploader:kuaishou] Preferred file input selected: "
+                f"score={best_score}, "
+                f"accept={_single_line_preview(str(best_candidate.get('accept') or ''), limit=80) or '-'}, "
+                f"multiple={bool(best_candidate.get('multiple'))}, "
+                f"wrap={_single_line_preview(str(best_candidate.get('wrap') or ''), limit=180) or '-'}"
+            )
+            return selected
+    return _find_upload_file_input_generic(primary_ctx, fallback_ctx, prefer_video=prefer_video)
 
 
 def _ensure_xiaohongshu_upload_mode(
@@ -15164,6 +15376,44 @@ def _stage_generic_upload_via_page_set(
     return False
 
 
+def _stage_kuaishou_image_upload_via_page_set(
+    page: ChromiumPage,
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    target: Path,
+) -> bool:
+    setter = getattr(page, "set", None)
+    upload_fn = getattr(setter, "upload_files", None) if setter else None
+    if not callable(upload_fn):
+        return False
+
+    target_path = str(target)
+    for stage_round in range(3):
+        _ensure_kuaishou_publish_mode(primary_ctx, fallback_ctx, prefer_video=False, max_rounds=2)
+        clicked = _click_first_matching_button(primary_ctx, fallback_ctx, ("上传图片",), platform_name="kuaishou")
+        if not clicked:
+            _activate_upload_trigger_generic(primary_ctx, fallback_ctx, platform_name="kuaishou")
+        time.sleep(0.4)
+        try:
+            upload_fn(target_path)
+        except Exception as exc:
+            _log(f"[Uploader:kuaishou] page.set.upload_files image stage failed: {exc}")
+            return False
+        time.sleep(0.8)
+        snapshot = _read_generic_file_inputs_snapshot(primary_ctx, fallback_ctx)
+        max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
+        total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
+        _log(
+            f"[Uploader:kuaishou] page.set image stage {stage_round + 1}/3: "
+            f"max_count={max_count}, total_inputs={total}"
+        )
+        if max_count <= 0 and stage_round == 0:
+            _log_upload_surface_snapshot(primary_ctx, fallback_ctx, "kuaishou", reason="page-set-image-stage-empty")
+        if max_count > 0:
+            return True
+    return False
+
+
 def _read_click_effect_snapshot_rich(owner: Any) -> dict[str, Any]:
     js = r"""
     function collectAllRoots(root) {
@@ -15348,6 +15598,172 @@ def _log_click_effect_delta(before: dict[str, Any], after: dict[str, Any], platf
 
 def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> None:
     contexts = _collect_upload_contexts(primary_ctx, fallback_ctx)
+    if platform_name == "douyin":
+        douyin_click_js = """
+        function collectAllRoots(root) {
+          const roots = [root];
+          const queue = [root];
+          const seen = new Set([root]);
+          while (queue.length) {
+            const current = queue.shift();
+            let nodes = [];
+            try {
+              nodes = Array.from(current.querySelectorAll('*'));
+            } catch (e) {
+              nodes = [];
+            }
+            for (const node of nodes) {
+              const shadow = node && node.shadowRoot;
+              if (shadow && !seen.has(shadow)) {
+                seen.add(shadow);
+                roots.push(shadow);
+                queue.push(shadow);
+              }
+            }
+          }
+          return roots;
+        }
+        function isVisible(el) {
+          if (!el) return false;
+          try {
+            const style = window.getComputedStyle(el);
+            if (!style || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+              return false;
+            }
+          } catch (e) {}
+          let rect = null;
+          try {
+            rect = el.getBoundingClientRect();
+          } catch (e) {
+            return false;
+          }
+          return !!rect && rect.width > 0 && rect.height > 0;
+        }
+        function normText(value) {
+          return String(value || '').replace(/\\s+/g, ' ').trim();
+        }
+        const roots = collectAllRoots(document);
+        const selectors = [
+          "div[class*='drop-']",
+          "div[class*='content-upload']",
+          "div[class*='upload'][class*='content']",
+          "label",
+          "[role='button']",
+        ];
+        const pageText = normText(document.body && (document.body.innerText || document.body.textContent || ''));
+        const candidates = [];
+        const seen = new Set();
+        for (const root of roots) {
+          for (const selector of selectors) {
+            let nodes = [];
+            try {
+              nodes = Array.from(root.querySelectorAll(selector));
+            } catch (e) {
+              nodes = [];
+            }
+            for (const node of nodes) {
+              if (!node || seen.has(node) || !isVisible(node)) continue;
+              seen.add(node);
+              const cls = normText(node.className || '');
+              const text = normText(node.innerText || node.textContent || '');
+              const aria = normText(node.getAttribute && node.getAttribute('aria-label'));
+              const fullText = normText([text, aria].filter(Boolean).join(' '));
+              let score = 0;
+              if (cls.includes('drop-')) score += 220;
+              if (cls.includes('content-upload')) score -= 40;
+              if (/点击上传|上传图文|上传图片|选择图片|添加图片|拖入此区域|图片文件|继续添加/.test(fullText)) score += 80;
+              if (/已添加\\d+张图片|已添加图片|编辑图片|继续添加/.test(pageText) && cls.includes('drop-')) score += 120;
+              if (/封面|编辑封面|作为封面/.test(fullText)) score -= 260;
+              let rect = null;
+              try {
+                rect = node.getBoundingClientRect();
+              } catch (e) {}
+              const area = rect ? rect.width * rect.height : 0;
+              candidates.push({ node, cls, text: fullText, score, area });
+            }
+          }
+        }
+        candidates.sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return b.area - a.area;
+        });
+        const best = candidates.find((item) => item.score > -200);
+        if (!best) return "not_found";
+        const target = best.node;
+        try { target.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+        try { target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
+        try { target.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
+        try { target.click(); } catch (e) {
+          try { target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window})); } catch (inner) {}
+        }
+        return "clicked:douyin-js|" + best.cls + "|" + best.text + "|" + String(best.score);
+        """
+        for owner in contexts:
+            if not owner:
+                continue
+            runner = getattr(owner, "run_js", None)
+            if not callable(runner):
+                continue
+            try:
+                result = runner(douyin_click_js)
+            except Exception:
+                result = ""
+            if isinstance(result, str) and result.startswith("clicked:douyin-js|"):
+                _log(f"[Uploader:douyin] Upload trigger clicked by JS scorer: {result}")
+                return
+        douyin_selectors = (
+            "css:div[class*='drop-']",
+            "css:div[class*='content-upload']",
+            "css:div[class*='upload'][class*='content']",
+            "xpath://div[contains(@class,'drop-')]",
+            "xpath://div[contains(@class,'content-upload')]",
+            "xpath://div[contains(normalize-space(.), '点击上传')]",
+            "xpath://div[contains(normalize-space(.), '直接将图片文件拖入此区域')]",
+        )
+        for owner in contexts:
+            if not owner:
+                continue
+            for selector in douyin_selectors:
+                try:
+                    ele = owner.ele(selector, timeout=0.8)
+                except Exception:
+                    ele = None
+                if not ele or (not _is_visible_element(ele)):
+                    continue
+                if "content-upload" in selector:
+                    try:
+                        marker = ele.run_js(
+                            """
+                            const text = String(this.innerText || this.textContent || '').replace(/\\s+/g, ' ').trim();
+                            return /封面|编辑封面|作为封面/.test(text) ? 'cover-upload' : '';
+                            """
+                        )
+                    except Exception:
+                        marker = ""
+                    if marker == "cover-upload":
+                        continue
+                try:
+                    ele.run_js(
+                        """
+                        const target = this.closest("div[class*='content-upload'], div[class*='drop-'], label, [role='button']") || this;
+                        try { target.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+                        try { target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
+                        try { target.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
+                        try { target.click(); } catch (e) {
+                          try { target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window})); } catch (inner) {}
+                        }
+                        """
+                    )
+                except Exception:
+                    try:
+                        ele.click()
+                    except Exception:
+                        try:
+                            ele.click(by_js=True)
+                        except Exception:
+                            continue
+                _log(f"[Uploader:douyin] Upload trigger clicked by selector: {selector}")
+                return
     if platform_name == "bilibili":
         bilibili_selectors = (
             "css:div.upload-wrp div.upload-area",
@@ -17004,11 +17420,69 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
         .replace(/共\\d+[个条]内容/g, '')
         .trim();
     }
+    window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__ = function(root) {
+      return Array.from(root.querySelectorAll(
+        '[role="combobox"], [class*="semi-select"], [class*="select"], [class*="dropdown"], input, [contenteditable="true"]'
+      )).filter(isVisible);
+    };
+    window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__ = function(label) {
+      const ancestors = [];
+      let node = label;
+      while (node && node !== document.body) {
+        ancestors.push(node);
+        node = node.parentElement;
+      }
+      let best = null;
+      let bestScore = -1;
+      for (const candidate of ancestors) {
+        if (!candidate || !isVisible(candidate)) continue;
+        const controls = window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__(candidate);
+        const txt = norm(candidate.innerText || candidate.textContent || '');
+        let score = controls.length * 20;
+        if (/娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦/.test(txt)) score += 10;
+        if (/鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?/.test(txt)) score += 10;
+        if (/绗琝\d+闆?/.test(txt)) score += 6;
+        if (score > bestScore) {
+          best = candidate;
+          bestScore = score;
+        }
+      }
+      return best || label.parentElement || label;
+    };
+    window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__ = function(root) {
+      return Array.from(root.querySelectorAll(
+        '[role="combobox"], [class*="semi-select"], [class*="select"], [class*="dropdown"], input, [contenteditable="true"]'
+      )).filter(isVisible);
+    };
+    window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__ = function(label) {
+      const ancestors = [];
+      let node = label;
+      while (node && node !== document.body) {
+        ancestors.push(node);
+        node = node.parentElement;
+      }
+      let best = null;
+      let bestScore = -1;
+      for (const candidate of ancestors) {
+        if (!candidate || !isVisible(candidate)) continue;
+        const controls = window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__(candidate);
+        const txt = norm(candidate.innerText || candidate.textContent || '');
+        let score = controls.length * 20;
+        if (/娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦/.test(txt)) score += 10;
+        if (/鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?/.test(txt)) score += 10;
+        if (/绗琝\d+闆?/.test(txt)) score += 6;
+        if (score > bestScore) {
+          best = candidate;
+          bestScore = score;
+        }
+      }
+      return best || label.parentElement || label;
+    };
     const label = Array.from(document.querySelectorAll('label, span, div'))
       .find(el => isVisible(el) && /^(添加合集|添加到合集|加入合集)$/.test(norm(el.textContent)));
     if (!label) return {hasField: false, current: '', episode: '', source: 'missing_label'};
 
-    const row = label.closest('[class*="form"], [class*="item"], [class*="row"], section, li, div') || label.parentElement || label;
+    const row = (window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__ && window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__(label)) || label.parentElement || label;
     const clone = row.cloneNode(true);
     Array.from(clone.querySelectorAll(
       '.semi-select-dropdown, .semi-select-option, .semi-portal, .semi-popover, .semi-tooltip, ' +
@@ -17016,7 +17490,7 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
     )).forEach(el => el.remove());
 
     const values = [];
-    const selects = Array.from(row.querySelectorAll(
+    const selects = (window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__ && window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__(row)) || Array.from(row.querySelectorAll(
       '[role="combobox"], [class*="semi-select"], [class*="select"], [class*="dropdown"], input, [contenteditable="true"]'
     )).filter(isVisible);
     let episode = '';
@@ -17134,9 +17608,9 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
     const label = Array.from(document.querySelectorAll('label, span, div'))
       .find(el => isVisible(el) && /^(添加合集|添加到合集|加入合集)$/.test(norm(el.textContent)));
     if (!label) return {state: 'missing_field'};
-    const row = label.closest('[class*="form"], [class*="item"], [class*="row"], section, li, div') || label.parentElement || label;
+    const row = (window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__ && window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__(label)) || label.parentElement || label;
 
-    const triggers = Array.from(row.querySelectorAll(
+    const triggers = (window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__ && window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__(row)) || Array.from(row.querySelectorAll(
       '[role="combobox"], [class*="semi-select"], [class*="select"], [class*="dropdown"], input, [contenteditable="true"]'
     )).filter(isVisible);
     const collectionTrigger = triggers.find(el => {
@@ -18460,6 +18934,21 @@ def _is_xiaohongshu_publish_confirmed_by_heuristic(primary_ctx: Any, fallback_ct
     return _is_xiaohongshu_publish_confirmed_from_state(state)
 
 
+def _looks_like_douyin_image_upload_ready(snapshot_text: str, actions: Sequence[str]) -> bool:
+    text = str(snapshot_text or "")
+    normalized_actions = " ".join(str(item or "").strip() for item in actions or () if str(item or "").strip())
+    merged = f"{text} {normalized_actions}".strip()
+    if not merged:
+        return False
+    if not any(token in merged for token in ("作品描述", "发布设置", "发布时间", "立即发布")):
+        return False
+    if re.search(r"已添加\s*\d+\s*张图片", merged):
+        return True
+    if any(token in merged for token in ("编辑图片", "继续添加", "预览图文")):
+        return True
+    return False
+
+
 def _recover_xiaohongshu_publish_after_missing_file_input(
     primary_ctx: Any,
     fallback_ctx: Any,
@@ -19507,7 +19996,11 @@ def _fill_draft_once_generic(
         lambda: (
             _find_bilibili_upload_file_input(ctx, page)
             if platform_name == "bilibili"
-            else _find_upload_file_input_generic(ctx, page, prefer_video=prefer_video_input)
+            else (
+                _find_kuaishou_upload_file_input(ctx, page, prefer_video=bool(prefer_video_input))
+                if platform_name == "kuaishou"
+                else _find_upload_file_input_generic(ctx, page, prefer_video=prefer_video_input)
+            )
         ),
     )
     if not file_input:
@@ -19530,13 +20023,18 @@ def _fill_draft_once_generic(
                 lambda: (
                     _find_bilibili_upload_file_input(ctx, page)
                     if platform_name == "bilibili"
-                    else _find_upload_file_input_generic(ctx, page, prefer_video=prefer_video_input)
+                    else (
+                        _find_kuaishou_upload_file_input(ctx, page, prefer_video=bool(prefer_video_input))
+                        if platform_name == "kuaishou"
+                        else _find_upload_file_input_generic(ctx, page, prefer_video=prefer_video_input)
+                    )
                 ),
                 retries=2,
             )
             if file_input:
                 break
     staged_with_page_set = False
+    upload_already_ready = False
     if not file_input:
         if before_upload_hook:
             before_upload_hook(ctx, page)
@@ -19572,9 +20070,21 @@ def _fill_draft_once_generic(
                 return ctx
         if platform_name != "bilibili":
             _log(f"[Uploader:{platform_name}] No DOM file input found, try page.set.upload_files fallback.")
-            staged_with_page_set = _stage_generic_upload_via_page_set(page, ctx, page, target, platform_name)
+            if platform_name == "kuaishou" and _is_image_file(target):
+                staged_with_page_set = _stage_kuaishou_image_upload_via_page_set(page, ctx, page, target)
+            else:
+                staged_with_page_set = _stage_generic_upload_via_page_set(page, ctx, page, target, platform_name)
             if staged_with_page_set:
                 _log(f"[Uploader:{platform_name}] Upload file staged via page.set.upload_files fallback.")
+        if (not staged_with_page_set) and platform_name == "douyin" and _is_image_file(target):
+            douyin_state = _read_douyin_image_upload_state(ctx, page)
+            if bool(douyin_state.get("ready")) or _looks_like_douyin_image_upload_ready(snapshot_text, actions):
+                _log(
+                    "[Uploader:douyin] Missing file input but image editor already looks ready; continue. "
+                    f"sample={_single_line_preview(str(douyin_state.get('sample_texts') or actions), limit=180) or '-'}"
+                )
+                upload_already_ready = True
+                staged_with_page_set = True
         if platform_name != "bilibili":
             if not staged_with_page_set:
                 _log_upload_surface_snapshot(ctx, page, platform_name, reason="missing-file-input-final")
@@ -19591,10 +20101,12 @@ def _fill_draft_once_generic(
     else:
         if platform_name == "bilibili":
             bilibili_staged = _stage_bilibili_upload_via_page_set(page, ctx, page, target)
-        elif not file_input and not staged_with_page_set:
+        elif not file_input and not staged_with_page_set and not upload_already_ready:
             staged_with_page_set = _stage_generic_upload_via_page_set(page, ctx, page, target, platform_name)
         if not bilibili_staged:
-            if staged_with_page_set:
+            if upload_already_ready:
+                _log(f"[Uploader:{platform_name}] Upload already looks ready on page; skip file staging.")
+            elif staged_with_page_set:
                 _log(f"[Uploader:{platform_name}] Continue with page.set.upload_files staged result.")
             else:
                 if not file_input:
@@ -19604,10 +20116,70 @@ def _fill_draft_once_generic(
         snapshot = _read_generic_file_inputs_snapshot(ctx, page)
         max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
         total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
+        sample = snapshot.get("sample") if isinstance(snapshot.get("sample"), list) else []
         _log(
             f"[Uploader:{platform_name}] Generic staged bind state: "
-            f"max_count={max_count}, total_inputs={total}"
+            f"max_count={max_count}, total_inputs={total}, sample={_single_line_preview(str(sample), limit=180) or '-'}"
         )
+    elif platform_name != "bilibili":
+        bind_state = _read_file_input_binding_state(file_input) if file_input else {}
+        if bind_state:
+            _log(
+                f"[Uploader:{platform_name}] File input bind state: "
+                f"count={bind_state.get('count', 0)}, "
+                f"visible={bind_state.get('visible')}, "
+                f"name={bind_state.get('name') or '-'}, "
+                f"id={bind_state.get('id') or '-'}, "
+                f"accept={_single_line_preview(str(bind_state.get('accept') or ''), limit=60) or '-'}, "
+                f"files={_single_line_preview(','.join([str(x) for x in (bind_state.get('names') or [])]), limit=80) or '-'}"
+            )
+        snapshot = _read_generic_file_inputs_snapshot(ctx, page)
+        max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
+        total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
+        sample = snapshot.get("sample") if isinstance(snapshot.get("sample"), list) else []
+        _log(
+            f"[Uploader:{platform_name}] Generic file-input snapshot after upload: "
+            f"max_count={max_count}, total_inputs={total}, sample={_single_line_preview(str(sample), limit=180) or '-'}"
+        )
+        if platform_name == "kuaishou" and _is_image_file(target) and max_count <= 0:
+            _log("[Uploader:kuaishou] No file bound after initial upload, retrying image input binding.")
+            staged_retry = _stage_kuaishou_image_upload_via_page_set(page, ctx, page, target)
+            if staged_retry:
+                staged_with_page_set = True
+                retry_snapshot = _read_generic_file_inputs_snapshot(ctx, page)
+                max_count = int(retry_snapshot.get("max_count", 0) or 0) if isinstance(retry_snapshot, dict) else 0
+                total = int(retry_snapshot.get("total", 0) or 0) if isinstance(retry_snapshot, dict) else 0
+                sample = retry_snapshot.get("sample") if isinstance(retry_snapshot.get("sample"), list) else []
+                _log(
+                    "[Uploader:kuaishou] page.set retry snapshot: "
+                    f"max_count={max_count}, total_inputs={total}, sample={_single_line_preview(str(sample), limit=180) or '-'}"
+                )
+            if max_count <= 0:
+                for rebind_idx in range(2):
+                    _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
+                    time.sleep(0.6)
+                    _ensure_kuaishou_publish_mode(ctx, page, prefer_video=False, max_rounds=2)
+                    retry_input = _find_kuaishou_upload_file_input(ctx, page, prefer_video=False)
+                    if not retry_input:
+                        continue
+                    try:
+                        retry_input.input(str(target))
+                    except Exception:
+                        continue
+                    retry_state = _read_file_input_binding_state(retry_input)
+                    retry_count = int(retry_state.get("count", 0) or 0) if isinstance(retry_state, dict) else 0
+                    _log(
+                        f"[Uploader:kuaishou] Rebind attempt {rebind_idx + 1}/2: "
+                        f"count={retry_count}, "
+                        f"accept={_single_line_preview(str(retry_state.get('accept') or ''), limit=60) or '-'}, "
+                        f"files={_single_line_preview(','.join([str(x) for x in (retry_state.get('names') or [])]), limit=80) or '-'}"
+                    )
+                    if retry_count > 0:
+                        file_input = retry_input
+                        max_count = retry_count
+                        break
+            if max_count <= 0:
+                _log_upload_surface_snapshot(ctx, page, platform_name, reason="kuaishou-image-bind-still-empty")
     if platform_name == "bilibili":
         bind_state = _read_file_input_binding_state(file_input) if file_input else {}
         if bind_state:
@@ -19647,7 +20219,7 @@ def _fill_draft_once_generic(
         ctx,
         platform_name=platform_name,
         timeout_seconds=upload_timeout,
-        upload_target=(target if platform_name == "bilibili" else None),
+        upload_target=target,
     )
     if platform_name in {"douyin", "kuaishou", "bilibili"}:
         _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name)

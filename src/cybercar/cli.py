@@ -10,6 +10,7 @@ from .migrate import migrate_legacy_assets
 from .publish import immediate, publish
 from .session import capture_login_qr, login_status, open_login
 from .telegram.bootstrap import recover_bot_surface, refresh_home_surface, set_clickable_commands
+from .telegram.supervisor import ensure_worker_running, resolve_supervisor_settings, run_supervisor
 from .telegram.worker import main as telegram_worker_main
 
 
@@ -46,6 +47,39 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_sub.add_parser("worker", add_help=False)
     telegram_sub.add_parser("set-commands")
     telegram_sub.add_parser("home-refresh")
+    supervise_defaults = resolve_supervisor_settings()
+    supervise = telegram_sub.add_parser("supervise")
+    supervise.add_argument("--once", action="store_true")
+    supervise.add_argument(
+        "--check-interval-seconds",
+        type=int,
+        default=int(supervise_defaults["check_interval_seconds"]),
+    )
+    supervise.add_argument(
+        "--stale-heartbeat-seconds",
+        type=int,
+        default=int(supervise_defaults["stale_heartbeat_seconds"]),
+    )
+    supervise.add_argument(
+        "--startup-grace-seconds",
+        type=int,
+        default=int(supervise_defaults["startup_grace_seconds"]),
+    )
+    supervise.add_argument(
+        "--recover-retries",
+        type=int,
+        default=int(supervise_defaults["recover_retries"]),
+    )
+    supervise.add_argument(
+        "--max-recoveries-per-window",
+        type=int,
+        default=int(supervise_defaults["max_recoveries_per_window"]),
+    )
+    supervise.add_argument(
+        "--recovery-window-seconds",
+        type=int,
+        default=int(supervise_defaults["recovery_window_seconds"]),
+    )
     recover = telegram_sub.add_parser("recover")
     recover.add_argument("--retries", type=int, default=3)
 
@@ -109,6 +143,25 @@ def main() -> int:
         if args.telegram_command == "set-commands":
             _print_json(set_clickable_commands())
             return 0
+        if args.telegram_command == "supervise":
+            if bool(args.once):
+                result = ensure_worker_running(
+                    stale_heartbeat_seconds=int(args.stale_heartbeat_seconds),
+                    startup_grace_seconds=int(args.startup_grace_seconds),
+                    recover_retries=int(args.recover_retries),
+                    max_recoveries_per_window=int(args.max_recoveries_per_window),
+                    recovery_window_seconds=int(args.recovery_window_seconds),
+                )
+                _print_json(result)
+                return 0 if bool(result.get("ok")) else 1
+            return run_supervisor(
+                check_interval_seconds=int(args.check_interval_seconds),
+                stale_heartbeat_seconds=int(args.stale_heartbeat_seconds),
+                startup_grace_seconds=int(args.startup_grace_seconds),
+                recover_retries=int(args.recover_retries),
+                max_recoveries_per_window=int(args.max_recoveries_per_window),
+                recovery_window_seconds=int(args.recovery_window_seconds),
+            )
         if args.telegram_command == "recover":
             _print_json(recover_bot_surface(retries=int(args.retries)))
             return 0

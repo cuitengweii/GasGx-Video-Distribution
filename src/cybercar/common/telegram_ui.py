@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import html
 import json
-import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -18,42 +17,40 @@ _CUSTOM_EMOJI_TAG_RE = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", flags=re
 _CUSTOM_EMOJI_ENABLED = False
 
 _BOT_META: dict[str, dict[str, str]] = {
-    "cybercar": {"name": "CyberCar", "home_title": "总控台"},
+    "cybercar": {"name": "CyberCar", "home_title": "控制台"},
     "gasgx": {"name": "GasGx", "home_title": "控制台"},
     "manager": {"name": "Bot Manager", "home_title": "管理台"},
 }
 
 _KIND_META: dict[str, dict[str, str]] = {
-    "collect_start": {"title": "采集开始", "emoji": "📷"},
-    "collect_result": {"title": "采集结果", "emoji": "📊"},
-    "collect_summary": {"title": "采集完成", "emoji": "🧾"},
+    "collect_start": {"title": "采集开始", "emoji": "📲"},
+    "collect_result": {"title": "采集结果", "emoji": "📋"},
+    "collect_summary": {"title": "采集完成", "emoji": "✅"},
     "login_qr": {"title": "登录提醒", "emoji": "🔐"},
     "publish_result": {"title": "发布结果", "emoji": "🚀"},
-    "alert": {"title": "异常提醒", "emoji": "❗"},
+    "alert": {"title": "异常提醒", "emoji": "❌"},
 }
 
 _STATUS_EMOJI: dict[str, str] = {
-    "running": "⚙️",
-    "queued": "🕒",
-    "success": "🚀",
-    "draft": "🟦",
-    "failed": "❗",
-    "blocked": "❗",
+    "running": "⏳",
+    "queued": "🕓",
+    "success": "✅",
+    "draft": "📝",
+    "failed": "❌",
+    "blocked": "❌",
     "login_required": "🔐",
-    "alert": "❗",
+    "alert": "❌",
 }
 
 _CUSTOM_EMOJI_BY_TOKEN: dict[str, str] = {
-    "⚙": "5312016608254762256",
-    "⚙️": "5312016608254762256",
-    "❗": "5379748062124056162",
-    "❌": "5312138559556164615",
+    "⏳": "5312016608254762256",
+    "❌": "5379748062124056162",
     "🏠": "5312486108309757006",
-    "📷": "5309965701241379366",
-    "🕒": "5309984423003823246",
-    "🟦": "5373251851074415873",
-    "📊": "5368653135101310687",
-    "🧾": "5357315181649076022",
+    "📲": "5309965701241379366",
+    "🕓": "5309984423003823246",
+    "📝": "5373251851074415873",
+    "📋": "5368653135101310687",
+    "✅": "5357315181649076022",
     "🔐": "5409357944619802453",
     "🚀": "5310228579009699834",
 }
@@ -61,6 +58,22 @@ _CUSTOM_EMOJI_BY_TOKEN: dict[str, str] = {
 _CUSTOM_EMOJI_TOKENS: tuple[str, ...] = tuple(
     sorted({str(token or "") for token in _CUSTOM_EMOJI_BY_TOKEN.keys() if str(token or "")}, key=len, reverse=True)
 )
+_HUMAN_FIRST_SECTION_TITLES = {
+    "人工关注": 0,
+    "失败原因": 1,
+    "处理建议": 2,
+    "结果说明": 3,
+    "执行摘要": 4,
+    "执行结果": 5,
+}
+_MACHINE_LAST_SECTION_TITLES = {
+    "机器信息": 100,
+    "运行上下文": 101,
+    "任务日志": 102,
+    "任务标识": 103,
+    "菜单链路": 104,
+}
+_FAILURE_DETAIL_SECTION_TITLES = {"失败原因", "结果说明", "处理建议"}
 
 
 def _escape_text(value: Any) -> str:
@@ -69,6 +82,13 @@ def _escape_text(value: Any) -> str:
 
 def _normalize_emoji_token(value: str) -> str:
     return str(value or "").replace(_VARIATION_SELECTOR, "").strip()
+
+
+def _strip_custom_emoji_markup(text: str) -> str:
+    raw = str(text or "")
+    if "<tg-emoji" not in raw.lower():
+        return raw
+    return _CUSTOM_EMOJI_TAG_RE.sub(lambda match: html.unescape(str(match.group(1) or "")), raw)
 
 
 def _render_emoji(value: Any) -> str:
@@ -81,13 +101,6 @@ def _render_emoji(value: Any) -> str:
     if not emoji_id or not _CUSTOM_EMOJI_ENABLED:
         return token
     return f'<tg-emoji emoji-id="{emoji_id}">{html.escape(token)}</tg-emoji>'
-
-
-def _strip_custom_emoji_markup(text: str) -> str:
-    raw = str(text or "")
-    if "<tg-emoji" not in raw.lower():
-        return raw
-    return _CUSTOM_EMOJI_TAG_RE.sub(lambda match: html.unescape(str(match.group(1) or "")), raw)
 
 
 def _render_inline_text(value: Any) -> str:
@@ -168,7 +181,6 @@ def _format_value(item: Mapping[str, Any]) -> str:
     rendered_text = _render_inline_text(text)
     rendered_value = _render_inline_text(raw_value)
     escaped_value = _escape_text(raw_value)
-
     if link:
         label = rendered_text or rendered_value or escaped_value or "点击查看"
         return f'<a href="{html.escape(link, quote=True)}">{label}</a>'
@@ -213,11 +225,124 @@ def _render_sections(sections: Sequence[Mapping[str, Any]]) -> list[str]:
     return lines
 
 
+def _failure_marker_for_text(text: str, *, fallback: str = "⚠️") -> str:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return fallback
+    if any(token in lowered for token in ("timeout", "network", "transport", "连接", "代理", "connection", "proxy")):
+        return "🌐"
+    if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
+        return "🔐"
+    if any(token in lowered for token in ("telegram", "bot_token", "chat_id", "notify", "消息发送", "卡片发送")):
+        return "📨"
+    if any(token in lowered for token in ("素材", "候选", "下载", "文件", "链接", "source", "candidate", "download", "upload")):
+        return "📦"
+    if any(
+        token in lowered
+        for token in (
+            "平台",
+            "发布",
+            "抖音",
+            "小红书",
+            "快手",
+            "微信",
+            "视频号",
+            "bilibili",
+            "wechat",
+            "douyin",
+            "xiaohongshu",
+            "kuaishou",
+        )
+    ):
+        return "📣"
+    if any(token in lowered for token in ("跳过", "skip", "duplicate", "已发布")):
+        return "⏭️"
+    return fallback
+
+
+def _decorate_failure_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    status_token = str(status or "").strip().lower()
+    normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
+    if status_token not in {"failed", "blocked", "alert", "login_required"}:
+        return normalized
+    decorated: list[dict[str, Any]] = []
+    for section in normalized:
+        title = str(section.get("title") or "").strip()
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        if title not in _FAILURE_DETAIL_SECTION_TITLES:
+            decorated.append(section)
+            continue
+        new_items: list[Any] = []
+        default_marker = "🛠️" if title == "处理建议" else "⚠️"
+        for item in items:
+            if isinstance(item, Mapping):
+                label = str(item.get("label") or "").strip()
+                value = str(item.get("value") or item.get("text") or "").strip()
+                marker = default_marker if title == "处理建议" else _failure_marker_for_text(f"{label} {value}", fallback=default_marker)
+                updated = dict(item)
+                updated["label"] = f"{marker} {label or '详情'}".strip()
+                new_items.append(updated)
+            else:
+                marker = default_marker if title == "处理建议" else _failure_marker_for_text(str(item or ""), fallback=default_marker)
+                new_items.append(f"{marker} {str(item or '').strip()}".strip())
+        decorated.append({**section, "items": new_items})
+    return decorated
+
+
+def _prioritize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = [dict(section) for section in sections if isinstance(section, Mapping)]
+    if not normalized:
+        return []
+    status_token = str(status or "").strip().lower()
+
+    def _section_rank(section: Mapping[str, Any], index: int) -> tuple[int, int]:
+        title = str(section.get("title") or "").strip()
+        if title in _MACHINE_LAST_SECTION_TITLES:
+            return (_MACHINE_LAST_SECTION_TITLES[title], index)
+        if status_token in {"failed", "blocked", "alert", "login_required"}:
+            return (_HUMAN_FIRST_SECTION_TITLES.get(title, 50), index)
+        if status_token in {"success", "done"}:
+            if title in {"人工关注", "执行摘要"}:
+                return (_HUMAN_FIRST_SECTION_TITLES.get(title, 10), index)
+            if title == "执行结果":
+                return (120, index)
+        return (40, index)
+
+    return [section for _, section in sorted(enumerate(normalized), key=lambda pair: _section_rank(pair[1], pair[0]))]
+
+
+def _compact_sections_for_status(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
+    status_token = str(status or "").strip().lower()
+    if status_token not in {"success", "done"}:
+        return normalized
+    compacted: list[dict[str, Any]] = []
+    deferred_machine_items: list[Any] = []
+    for section in normalized:
+        title = str(section.get("title") or "").strip()
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        if title == "人工关注" and len(items) > 3:
+            compacted.append({**section, "items": items[:3]})
+            deferred_machine_items.extend(items[3:])
+            continue
+        compacted.append(section)
+    if deferred_machine_items:
+        merged = False
+        for section in compacted:
+            if str(section.get("title") or "").strip() == "机器信息":
+                current_items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+                section["items"] = [*current_items, *deferred_machine_items]
+                merged = True
+                break
+        if not merged:
+            compacted.append({"title": "机器信息", "emoji": "🤖", "items": deferred_machine_items})
+    return compacted
+
+
 def build_reply_markup(actions: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     keyboard: list[list[dict[str, str]]] = []
     if not actions:
         return {"inline_keyboard": keyboard}
-
     grouped: dict[int, list[dict[str, str]]] = {}
     for action in actions:
         text = str(action.get("text", "") or "").strip()
@@ -234,7 +359,6 @@ def build_reply_markup(actions: Sequence[Mapping[str, Any]] | None = None) -> di
             continue
         row = int(action.get("row", 0) or 0)
         grouped.setdefault(max(0, row), []).append(button)
-
     for row in sorted(grouped):
         keyboard.append(grouped[row])
     return {"inline_keyboard": keyboard}
@@ -255,16 +379,24 @@ def build_telegram_card(
     sections = payload.get("sections", [])
     if not isinstance(sections, Iterable):
         sections = []
-
+    sections = _prioritize_card_sections(
+        status,
+        _compact_sections_for_status(
+            status,
+            _decorate_failure_sections(status, _prioritize_card_sections(status, list(sections))),
+        ),
+    )
     header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title)}</b>"]
     if subtitle:
         header.append(f"<i>{_render_inline_text(subtitle)}</i>")
-
-    text_lines = header + _render_sections(list(sections))
+    text_lines = list(header)
+    rendered_sections = _render_sections(list(sections))
+    if rendered_sections:
+        text_lines.append("")
+        text_lines.extend(rendered_sections)
     render_mode = str(payload.get("mode", "") or "").strip().lower()
     if render_mode not in {"photo", "text"}:
         render_mode = "photo" if payload.get("cover_image") or payload.get("qr_image") else "text"
-
     return {
         "kind": token,
         "mode": render_mode,
@@ -287,12 +419,14 @@ def build_telegram_home(
     sections = payload.get("sections", [])
     if not isinstance(sections, Iterable):
         sections = []
-
     header = [f"<b>{_render_emoji('🏠')} {html.escape(bot_name)}｜{_render_inline_text(title)}</b>"]
     if subtitle:
         header.append(f"<i>{_render_inline_text(subtitle)}</i>")
-
-    body = header + _render_sections(list(sections))
+    body = list(header)
+    rendered_sections = _render_sections(list(sections))
+    if rendered_sections:
+        body.append("")
+        body.extend(rendered_sections)
     return {
         "kind": "home",
         "mode": "text",
@@ -478,10 +612,7 @@ def _delete_message(
     call_telegram_api(
         bot_token=bot_token,
         method="deleteMessage",
-        params={
-            "chat_id": str(chat_id or "").strip(),
-            "message_id": int(message_id),
-        },
+        params={"chat_id": str(chat_id or "").strip(), "message_id": int(message_id)},
         timeout_seconds=timeout_seconds,
         use_post=True,
     )
@@ -505,7 +636,6 @@ def send_or_update_home_message(
     known_message_ids = _known_home_message_ids(state) if stored_chat_id == str(chat_id or "").strip() else []
     params = _message_params(chat_id, card)
     reply_markup = card.get("reply_markup") if isinstance(card, Mapping) else None
-
     if (not force_new) and stored_chat_id == str(chat_id or "").strip() and stored_message_id > 0:
         edit_params = dict(params)
         edit_params.pop("chat_id", None)
@@ -557,7 +687,6 @@ def send_or_update_home_message(
         except Exception as exc:
             if "message is not modified" not in str(exc).lower():
                 state = {}
-
     payload = _call_telegram_api_with_emoji_fallback(
         bot_token=bot_token,
         method="sendMessage",
@@ -623,7 +752,6 @@ def send_interaction_result(
         except Exception as exc:
             if "message is not modified" in str(exc).lower():
                 return {"ok": True, "action": "unchanged", "message_id": int(message_id)}
-
     payload = _call_telegram_api_with_emoji_fallback(
         bot_token=bot_token,
         method="sendMessage",
