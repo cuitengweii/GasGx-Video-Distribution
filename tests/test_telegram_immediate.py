@@ -711,6 +711,59 @@ def test_run_collect_publish_latest_job_video_records_prefilter_items(tmp_path: 
     assert feedbacks[-1]["status"] == "done"
 
 
+def test_run_collect_publish_latest_job_prefilter_keeps_candidate_and_marks_wechat_login_warning(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": DEFAULT_PROFILE,
+            "candidates": [
+                {
+                    "url": "https://x.test/post/video-1",
+                    "published_at": "2026-03-15 10:00:00",
+                    "display_time": "10m",
+                    "tweet_text": "video one",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_preflight_immediate_platform_login",
+        lambda **kwargs: {"ready": False, "error": "视频号未登录；登录二维码已发送到 Telegram"},
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    items = _prefilter_items(workspace)
+    assert len(items) == 1
+    item = next(iter(items.values()))
+    assert isinstance(item, dict)
+    assert item["status"] == "link_pending"
+    assert "视频号预检" in str(item["prefilter_warning"])
+    platform_results = item["platform_results"]
+    assert isinstance(platform_results, dict)
+    assert platform_results["wechat"]["status"] == "login_required"
+    assert len(runner.sent_candidates) == 1
+    assert "视频号预检" in str(runner.sent_candidates[0]["prefilter_warning"])
+
+
 def test_run_collect_publish_latest_job_test_mode_forces_new_prefilter_card(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
@@ -1784,6 +1837,56 @@ def test_run_immediate_publish_item_job_requests_wechat_qr_when_login_required(t
     assert {entry["platform"] for entry in spawned_platforms} == {"douyin", "xiaohongshu", "kuaishou", "bilibili"}
 
 
+def test_preflight_immediate_platform_login_uses_probe_notification_without_duplicate_qr_request(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    qr_requests: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda core, platform_name: {
+            "platform": "wechat",
+            "debug_port": 9334,
+            "chrome_user_data_dir": r"D:\profiles\wechat",
+            "open_url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+
+    fake_core = FakeCore()
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(
+        fake_core,
+        "probe_platform_session_via_debug_port",
+        lambda **kwargs: {
+            "status": "login_required",
+            "reason": "login_url",
+            "current_url": "https://channels.weixin.qq.com/login.html",
+            "notified": True,
+            "notification_mode": "qr",
+            "qr_result": {"sent": True, "needs_login": True},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs)) or {"ok": True, "needs_login": True, "sent": True},
+    )
+
+    result = worker_impl._preflight_immediate_platform_login(
+        platform="wechat",
+        telegram_bot_identifier="",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_command_worker.log",
+    )
+
+    assert result["ready"] is False
+    assert "Telegram" in str(result["error"])
+    assert qr_requests == []
+
+
 def test_resolve_platform_login_runtime_context_prefers_wechat_publish_url() -> None:
     fake_core = SimpleNamespace(
         DEFAULT_WECHAT_DEBUG_PORT=9334,
@@ -2044,6 +2147,80 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_requ
     assert updated["platform_results"]["wechat"]["status"] == "login_required"
     assert "Telegram" in str(updated["platform_results"]["wechat"]["error"])
     assert len(feedbacks) == 2
+
+
+def test_publish_platform_job_wechat_transport_qr_failure_still_sends_feedback_when_queue_write_times_out(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedbacks: list[dict[str, object]] = []
+    qr_requests: list[dict[str, object]] = []
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
+        SimpleNamespace(success=False, error="publish blocked by login page")
+    )
+
+    monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
+    monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: {"ok": True, "needs_login": True, "reason": "login_url", "url": kwargs["open_url"]},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs))
+        or {
+            "ok": False,
+            "needs_login": True,
+            "transport_error": True,
+            "sent": False,
+            "error": "ConnectionResetError(10054)",
+        },
+    )
+
+    original_merge = worker_impl._merge_platform_result
+
+    def flaky_merge(*, workspace: Path, item_id: str, platform: str, updates: dict[str, object]) -> dict[str, object]:
+        status = str(updates.get("status") or "").strip().lower()
+        if status == "running":
+            return original_merge(workspace=workspace, item_id=item_id, platform=platform, updates=updates)
+        raise TimeoutError("Timed out waiting for lock: queue")
+
+    monkeypatch.setattr(worker_impl, "_merge_platform_result", flaky_merge)
+
+    item = _video_item(target_platforms="wechat")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = worker_impl._publish_immediate_candidate_platform(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+        platform="wechat",
+    )
+
+    assert exit_code == 2
+    assert len(qr_requests) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["platform_results"]["wechat"]["status"] == "running"
+    assert len(feedbacks) == 1
+    assert "视频号需要重新登录" in str(feedbacks[0]["title"])
+    sections = list(feedbacks[0]["sections"])
+    assert any("Telegram" in str(section) for section in sections)
 
 
 def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_fails(tmp_path: Path, monkeypatch) -> None:

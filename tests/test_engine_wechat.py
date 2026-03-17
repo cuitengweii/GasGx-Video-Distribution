@@ -161,6 +161,36 @@ def test_comment_login_notification_skips_when_page_is_not_login_gate(monkeypatc
     assert result["reason"] == "not_login_gate"
 
 
+def test_prepare_platform_login_qr_notice_keeps_current_login_gate_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = object()
+    stabilize_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {"needs_login": True, "url": "https://channels.weixin.qq.com/login.html"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_stabilize_platform_session_page",
+        lambda current_page, **kwargs: stabilize_calls.append(dict(kwargs)) or current_page,
+    )
+    monkeypatch.setattr(engine, "_extract_login_qr_source", lambda *_args, **_kwargs: "data:image/png;base64,QUJD")
+    monkeypatch.setattr(engine, "_capture_login_qr_screenshot", lambda *_args, **_kwargs: b"png-bytes")
+
+    result = engine._prepare_platform_login_qr_notice(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        page=page,
+        chrome_user_data_dir="D:/profiles/wechat",
+        auto_open_chrome=False,
+    )
+
+    assert result["ok"] is True
+    assert result["needs_login"] is True
+    assert stabilize_calls == []
+
+
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
     cfg = engine._merge_comment_reply_config({})
 

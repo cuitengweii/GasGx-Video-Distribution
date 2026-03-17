@@ -1570,12 +1570,19 @@ def _prepare_platform_login_qr_notice(
             chrome_user_data_dir=profile_dir,
             startup_url=open_target_url,
         )
-    active_page = _stabilize_platform_session_page(
-        active_page,
-        platform_name=platform,
-        open_url=open_target_url,
-        close_stale_login_tabs=True,
-    )
+    preserve_current_login_gate = False
+    if active_page is not None:
+        try:
+            preserve_current_login_gate = bool(inspect_platform_login_gate(active_page, platform).get("needs_login"))
+        except Exception:
+            preserve_current_login_gate = False
+    if not preserve_current_login_gate:
+        active_page = _stabilize_platform_session_page(
+            active_page,
+            platform_name=platform,
+            open_url=open_target_url,
+            close_stale_login_tabs=True,
+        )
     if refresh_page:
         try:
             active_page.get(open_target_url)
@@ -5278,7 +5285,7 @@ def _connect_playwright_wechat_comment_page(debug_port: int, target_url: str):
         if page is None:
             page = context.new_page()
         page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_timeout(2500)
+        _humanized_wechat_comment_settle_pause(page, "wechat comment page initial settle")
         return playwright, browser, page
     except Exception:
         try:
@@ -16867,7 +16874,7 @@ def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platfo
         if str(state or "").startswith("clicked:"):
             _log(f"[Uploader:{platform_name}] Upload trigger clicked: {str(state or '')[8:]}")
             if platform_name == "douyin":
-                time.sleep(0.5)
+                _humanized_publish_reaction_pause("douyin upload trigger click effect settle")
                 after_snapshot = _read_click_effect_snapshot(owner)
                 _log_click_effect_delta(before_snapshot, after_snapshot, platform_name)
             clicked = True
@@ -18528,6 +18535,11 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
                     option = str(raw or "").strip()
                     if option and option not in visible_options:
                         visible_options.append(option)
+                if str(action.get("state", "") or "") == "clicked" and _is_douyin_collection_match(
+                    str(action.get("option", "") or ""),
+                    target,
+                ):
+                    break
             else:
                 action_states.append("none")
 
@@ -21296,7 +21308,11 @@ def _fill_draft_once_generic(
         retry_rounds = 3 if platform_name == "bilibili" else 1
         for retry_idx in range(retry_rounds):
             _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
-            time.sleep(1.0 + (retry_idx * 0.4))
+            _humanized_publish_pause(
+                f"{platform_name} upload rebind settle {retry_idx + 1}/{retry_rounds}",
+                minimum_seconds=0.8,
+                maximum_seconds=1.8 + (retry_idx * 0.25),
+            )
             ctx = page if prefer_top_level_ctx else _resolve_post_editor_context(page, timeout_seconds=8)
             if before_upload_hook:
                 before_upload_hook(ctx, page)

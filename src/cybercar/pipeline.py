@@ -705,6 +705,7 @@ def _build_telegram_prefilter_candidate_card(
     published_at: str = "",
     display_time: str = "",
     target_platforms: str = "",
+    prefilter_warning: str = "",
 ) -> dict[str, Any]:
     if idx > 0 and total > 0:
         subtitle = f"\u7b2c {idx}/{total} \u6761 \u00b7 \u7b49\u5f85\u4f60\u5ba1\u6838"
@@ -719,25 +720,35 @@ def _build_telegram_prefilter_candidate_card(
         manual_caption=_single_line_preview(tweet_text, limit=180),
         video_meta={},
     )
+    sections = [
+        {
+            "title": "\u53d1\u5e03\u4fe1\u606f",
+            "emoji": "\U0001f3af",
+            "items": [
+                {"label": "\u5e73\u53f0", "value": target_names},
+                {"label": "\u6807\u9898", "value": video_title},
+            ],
+        },
+        {
+            "title": "\u89c6\u9891\u94fe\u63a5",
+            "emoji": "\U0001f517",
+            "items": ([source_url] if source_url else ["\u672a\u8bb0\u5f55\u89c6\u9891\u94fe\u63a5"]),
+        },
+    ]
+    warning_text = str(prefilter_warning or "").strip()
+    if warning_text:
+        sections.append(
+            {
+                "title": "\u5e73\u53f0\u9884\u68c0",
+                "emoji": "\U0001f510",
+                "items": [warning_text],
+            }
+        )
     card = build_telegram_card(
         "collect_result",
         {
             "subtitle": subtitle,
-            "sections": [
-                {
-                    "title": "\u53d1\u5e03\u4fe1\u606f",
-                    "emoji": "\U0001f3af",
-                    "items": [
-                        {"label": "\u5e73\u53f0", "value": target_names},
-                        {"label": "\u6807\u9898", "value": video_title},
-                    ],
-                },
-                {
-                    "title": "\u89c6\u9891\u94fe\u63a5",
-                    "emoji": "\U0001f517",
-                    "items": ([source_url] if source_url else ["\u672a\u8bb0\u5f55\u89c6\u9891\u94fe\u63a5"]),
-                },
-            ],
+            "sections": sections,
         },
     )
     card["mode"] = "text"
@@ -1011,6 +1022,7 @@ def _send_telegram_prefilter_for_candidate(
     published_at: str = "",
     display_time: str = "",
     target_platforms: str = "",
+    prefilter_warning: str = "",
     fast_send: bool = False,
 ) -> dict[str, Any]:
     card = _build_telegram_prefilter_candidate_card(
@@ -1024,6 +1036,7 @@ def _send_telegram_prefilter_for_candidate(
         published_at=published_at,
         display_time=display_time,
         target_platforms=target_platforms,
+        prefilter_warning=prefilter_warning,
     )
     card["reply_markup"] = _build_telegram_prefilter_reply_markup(
         source_url,

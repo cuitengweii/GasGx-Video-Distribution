@@ -5158,6 +5158,56 @@ def _merge_platform_result(
     return _with_prefilter_queue_lock(workspace, _mutate)
 
 
+def _merge_platform_result_resilient(
+    *,
+    workspace: Path,
+    item_id: str,
+    platform: str,
+    updates: Dict[str, Any],
+    log_file: Optional[Path] = None,
+) -> Dict[str, Any]:
+    try:
+        row = _merge_platform_result(
+            workspace=workspace,
+            item_id=item_id,
+            platform=platform,
+            updates=updates,
+        )
+        return {
+            "item": dict(row) if isinstance(row, dict) else {},
+            "queue_write_failed": False,
+            "queue_write_error": "",
+        }
+    except Exception as exc:
+        if isinstance(log_file, Path):
+            _append_log(
+                log_file,
+                f"[Worker] platform result queue write failed platform={platform} item={item_id} error={exc}",
+            )
+        row = _get_prefilter_item(workspace, item_id)
+        if not isinstance(row, dict):
+            row = {}
+        row = dict(row)
+        if not row:
+            row["id"] = item_id
+        results = _normalize_platform_results(row.get("platform_results"))
+        base = results.get(platform, {})
+        if not isinstance(base, dict):
+            base = {}
+        merged = dict(base)
+        merged.update({k: v for k, v in updates.items()})
+        merged["updated_at"] = _now_text()
+        results[platform] = merged
+        row["platform_results"] = results
+        row.update(_summarize_platform_results(row))
+        row["updated_at"] = _now_text()
+        return {
+            "item": row,
+            "queue_write_failed": True,
+            "queue_write_error": str(exc),
+        }
+
+
 def _describe_platform_failure(platform: str, error_text: str) -> Dict[str, str]:
     raw = str(error_text or "").strip()
     if not raw:
@@ -6136,8 +6186,19 @@ def _send_immediate_platform_feedback(
     workspace: Path,
     item_id: str,
     platform: str,
+    item_override: Optional[Dict[str, Any]] = None,
+    result_override: Optional[Dict[str, Any]] = None,
+    send_summary: bool = True,
 ) -> None:
-    claimed = _claim_immediate_platform_feedback(workspace=workspace, item_id=item_id, platform=platform)
+    if isinstance(item_override, dict) and isinstance(result_override, dict):
+        claimed = {
+            "send_platform": True,
+            "send_summary": False,
+            "item": dict(item_override),
+            "platform_result": dict(result_override),
+        }
+    else:
+        claimed = _claim_immediate_platform_feedback(workspace=workspace, item_id=item_id, platform=platform)
     item = claimed.get("item") if isinstance(claimed.get("item"), dict) else {}
     result = claimed.get("platform_result") if isinstance(claimed.get("platform_result"), dict) else {}
     if bool(claimed.get("send_platform")) and item and result:
@@ -6158,7 +6219,7 @@ def _send_immediate_platform_feedback(
                 item_id=item_id,
             ),
         )
-    if bool(claimed.get("send_summary")) and item:
+    if send_summary and bool(claimed.get("send_summary")) and item:
         payload = _build_immediate_publish_summary_feedback_payload(item)
         _send_background_feedback(
             runner=runner,
@@ -8460,7 +8521,64 @@ def _send_immediate_candidate_prefilter_card(
         published_at=str(item.get("published_at") or "").strip(),
         display_time=str(item.get("display_time") or "").strip(),
         target_platforms=str(item.get("target_platforms") or "").strip(),
+        prefilter_warning=str(item.get("prefilter_warning") or "").strip(),
         fast_send=bool(fast_send),
+    )
+
+
+def _preflight_immediate_candidate_for_prefilter(
+    *,
+    workspace: Path,
+    item_id: str,
+    item: Dict[str, Any],
+    telegram_bot_identifier: str,
+    telegram_bot_token: str,
+    telegram_chat_id: str,
+    timeout_seconds: int,
+    log_file: Path,
+) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    platforms = _resolve_item_target_platforms(item)
+    if "wechat" not in platforms:
+        if str(item.get("prefilter_warning") or "").strip():
+            return _update_prefilter_item(workspace, item_id, updates={"prefilter_warning": ""})
+        return item
+
+    platform_results = _normalize_platform_results(item.get("platform_results"))
+    warning_text = ""
+    login_probe = _preflight_immediate_platform_login(
+        platform="wechat",
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        timeout_seconds=timeout_seconds,
+        log_file=log_file,
+    )
+    if not bool(login_probe.get("ready", True)):
+        error_text = str(login_probe.get("error") or "视频号未登录").strip() or "视频号未登录"
+        failure = _describe_platform_failure("wechat", error_text)
+        platform_results["wechat"] = {
+            "status": "login_required",
+            "updated_at": _now_text(),
+            "error": error_text,
+            "failure_reason": str(failure.get("reason") or "").strip(),
+            "failure_category": str(failure.get("category") or "").strip(),
+            "failure_suggestion": str(failure.get("suggestion") or "").strip(),
+        }
+        warning_text = f"视频号预检：{error_text}"
+    else:
+        existing = platform_results.get("wechat")
+        if isinstance(existing, dict) and str(existing.get("status") or "").strip().lower() == "login_required":
+            platform_results.pop("wechat", None)
+
+    return _update_prefilter_item(
+        workspace,
+        item_id,
+        updates={
+            "platform_results": platform_results,
+            "prefilter_warning": warning_text,
+        },
     )
 
 
@@ -8672,6 +8790,14 @@ def _preflight_immediate_platform_login(
         or "视频号未登录"
     )
     qr_result: Dict[str, Any] = {}
+    if bool(result.get("notified")):
+        qr_result = dict(result.get("qr_result") or {}) if isinstance(result.get("qr_result"), dict) else {}
+        notification_mode = str(result.get("notification_mode") or "").strip().lower()
+        if notification_mode == "qr":
+            error_text = f"{error_text}；登录二维码已发送到 Telegram"
+        elif notification_mode == "text":
+            error_text = f"{error_text}；已向 Telegram 发送登录提醒"
+        return {"ready": False, "error": error_text, "result": result, "qr_result": qr_result}
     if str(telegram_bot_token or "").strip() and str(telegram_chat_id or "").strip():
         qr_result = _request_platform_login_qr(
             platform_name=normalized_platform,
@@ -9367,11 +9493,12 @@ def _publish_immediate_candidate_platform(
             args.xiaohongshu_allow_image = True
         args.wechat_declare_original = bool(_normalize_optional_bool(item.get("wechat_declare_original"))) if platform == "wechat" else False
         email_settings = runner._build_email_settings(args)
-        _merge_platform_result(
+        _merge_platform_result_resilient(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
             updates={"status": "running", "started_at": _now_text()},
+            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
         )
         ctx = _build_immediate_cycle_context(
             core=core,
@@ -9395,7 +9522,7 @@ def _publish_immediate_candidate_platform(
         )
         event = events[-1] if events else None
         if event is not None and bool(getattr(event, "success", False)):
-            _merge_platform_result(
+            merge_result = _merge_platform_result_resilient(
                 workspace=workspace,
                 item_id=item_id,
                 platform=platform,
@@ -9407,6 +9534,7 @@ def _publish_immediate_candidate_platform(
                     "failure_category": "",
                     "failure_suggestion": "",
                 },
+                log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
             )
             _send_immediate_platform_feedback(
                 runner=runner,
@@ -9414,6 +9542,11 @@ def _publish_immediate_candidate_platform(
                 workspace=workspace,
                 item_id=item_id,
                 platform=platform,
+                item_override=merge_result.get("item") if bool(merge_result.get("queue_write_failed")) else None,
+                result_override=_normalize_platform_results((merge_result.get("item") or {}).get("platform_results")).get(platform, {})
+                if bool(merge_result.get("queue_write_failed"))
+                else None,
+                send_summary=not bool(merge_result.get("queue_write_failed")),
             )
             return 0
         error_text = str(getattr(event, "error", "") or "") if event is not None else "发布失败"
@@ -9436,7 +9569,7 @@ def _publish_immediate_candidate_platform(
                 error_text=error_text,
             )
             failure = _describe_platform_failure(platform, error_text)
-        _merge_platform_result(
+        merge_result = _merge_platform_result_resilient(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
@@ -9447,6 +9580,7 @@ def _publish_immediate_candidate_platform(
                 "failure_category": str(failure.get("category") or "").strip(),
                 "failure_suggestion": str(failure.get("suggestion") or "").strip(),
             },
+            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
         )
         _send_immediate_platform_feedback(
             runner=runner,
@@ -9454,6 +9588,11 @@ def _publish_immediate_candidate_platform(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
+            item_override=merge_result.get("item") if bool(merge_result.get("queue_write_failed")) else None,
+            result_override=_normalize_platform_results((merge_result.get("item") or {}).get("platform_results")).get(platform, {})
+            if bool(merge_result.get("queue_write_failed"))
+            else None,
+            send_summary=not bool(merge_result.get("queue_write_failed")),
         )
         return 0 if duplicate_marker in error_text.lower() else 2
 
@@ -9492,7 +9631,7 @@ def _publish_immediate_candidate_platform(
                 error_text=error_text,
             )
             failure = _describe_platform_failure(platform, error_text)
-        _merge_platform_result(
+        merge_result = _merge_platform_result_resilient(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
@@ -9503,6 +9642,7 @@ def _publish_immediate_candidate_platform(
                 "failure_category": str(failure.get("category") or "").strip(),
                 "failure_suggestion": str(failure.get("suggestion") or "").strip(),
             },
+            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
         )
         _send_immediate_platform_feedback(
             runner=runner,
@@ -9510,6 +9650,11 @@ def _publish_immediate_candidate_platform(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
+            item_override=merge_result.get("item") if bool(merge_result.get("queue_write_failed")) else None,
+            result_override=_normalize_platform_results((merge_result.get("item") or {}).get("platform_results")).get(platform, {})
+            if bool(merge_result.get("queue_write_failed"))
+            else None,
+            send_summary=not bool(merge_result.get("queue_write_failed")),
         )
         return 0 if duplicate_marker in error_text.lower() else 2
 
@@ -10321,6 +10466,16 @@ def _run_collect_publish_latest_job(
         if not item_id or not isinstance(item, dict):
             skipped_duplicates += 1
             continue
+        item = _preflight_immediate_candidate_for_prefilter(
+            workspace=workspace,
+            item_id=item_id,
+            item=item,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            timeout_seconds=timeout_seconds,
+            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+        )
         attempted_new_candidates += 1
         try:
             response = _send_immediate_candidate_prefilter_card(
@@ -10410,6 +10565,16 @@ def _run_collect_publish_latest_job(
     if (not immediate_test_mode) and fresh_candidates <= 0 and reusable_items_to_reissue:
         for reusable_item_id, reusable_item in reusable_items_to_reissue[:requested_limit]:
             try:
+                reusable_item = _preflight_immediate_candidate_for_prefilter(
+                    workspace=workspace,
+                    item_id=reusable_item_id,
+                    item=reusable_item,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    timeout_seconds=timeout_seconds,
+                    log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+                )
                 _reissue_immediate_candidate_prefilter_card(
                     runner=runner,
                     email_settings=email_settings,
