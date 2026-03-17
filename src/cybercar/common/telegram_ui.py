@@ -680,6 +680,19 @@ def _decorate_platform_subtitle_line(status: str, subtitle: str) -> str:
     return text
 
 
+def _should_hide_platform_subtitle_line(status: str, platform_header: str, subtitle: str) -> bool:
+    header_text = str(platform_header or "").strip()
+    subtitle_text = str(subtitle or "").strip()
+    if not header_text or not subtitle_text:
+        return False
+    status_token = str(status or "").strip().lower()
+    if _detect_platform_token(header_text) and status_token in {"success", "done"}:
+        normalized = subtitle_text.replace("✅ ", "").strip()
+        if normalized in {"平台发布成功", "平台已确认发布成功", "已返回平台结果"}:
+            return True
+    return False
+
+
 def _decorate_context_line(text: str) -> str:
     clean = str(text or "").strip()
     if not clean:
@@ -993,7 +1006,7 @@ def build_telegram_card(
         header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(platform_header)}</b>"]
         if title_context:
             header.append(f"<i>{_render_inline_text(_decorate_context_line(title_context))}</i>")
-        if subtitle:
+        if subtitle and not _should_hide_platform_subtitle_line(status, platform_header, subtitle):
             header.append(f"<i>{_render_inline_text(_decorate_platform_subtitle_line(status, subtitle))}</i>")
     else:
         header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(title_main or title)}</b>"]
