@@ -661,6 +661,24 @@ def _build_platform_header_line(title: str) -> str:
     return f"{platform_emoji} {title_text}"
 
 
+def _decorate_platform_subtitle_line(status: str, subtitle: str) -> str:
+    text = str(subtitle or "").strip()
+    if not text:
+        return ""
+    status_token = str(status or "").strip().lower()
+    if any(token in text for token in ("成功", "已确认")) or status_token in {"success", "done"}:
+        return f"✅ {text}"
+    if any(token in text for token in ("失败", "异常")) or status_token in {"failed", "blocked", "alert"}:
+        return f"📣 {text}"
+    if any(token in text for token in ("登录", "扫码")) or status_token == "login_required":
+        return f"🔐 {text}"
+    if any(token in text for token in ("处理中", "发布中")) or status_token == "running":
+        return f"⏳ {text}"
+    if any(token in text for token in ("排队",)) or status_token == "queued":
+        return f"🕓 {text}"
+    return text
+
+
 def _dedupe_bot_title_prefix(title: str, bot_name: str) -> str:
     clean_title = _strip_html_like_markup(title)
     clean_bot_name = str(bot_name or "").strip()
@@ -964,12 +982,17 @@ def build_telegram_card(
     platform_header = _build_platform_header_line(title_main or title)
     subtitle = _decorate_card_subtitle(status, subtitle, sections)
     if platform_header:
-        header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}</b>", f"<b>{_render_inline_text(platform_header)}</b>"]
+        header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}</b>"]
+        if title_context:
+            header.append(f"<i>{_render_inline_text(title_context)}</i>")
+        header.append(f"<b>{_render_inline_text(platform_header)}</b>")
+        if subtitle:
+            header.append(f"<i>{_render_inline_text(_decorate_platform_subtitle_line(status, subtitle))}</i>")
     else:
         header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title_main or title)}</b>"]
-    header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
-    if header_subtitle_parts:
-        header.append(f"<i>{_render_inline_text('｜'.join(header_subtitle_parts))}</i>")
+        header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
+        if header_subtitle_parts:
+            header.append(f"<i>{_render_inline_text('｜'.join(header_subtitle_parts))}</i>")
     text_lines = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:

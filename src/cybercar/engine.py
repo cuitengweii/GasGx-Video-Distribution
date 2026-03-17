@@ -299,6 +299,7 @@ DRAFT_SAVE_RETRY_COUNT = 3
 CHROME_LAUNCH_TIMEOUT_SECONDS = 60
 X_DISCOVERY_URL_LIMIT = 24
 X_DISCOVERY_SCROLL_ROUNDS = 8
+X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS = 1.0
 WECHAT_LOGIN_QR_REFRESH_CALLBACK_PREFIX = "ctqr"
 WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS = 120
 WECHAT_LOGIN_QR_NOTICE_CACHE: dict[str, tuple[str, float]] = {}
@@ -307,7 +308,7 @@ PLATFORM_LOGIN_CONFIRM_POLL_SECONDS = 2.0
 PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS = 600
 WECHAT_RECENT_READY_ROUTE_ERROR_RECHECKS = 4
 WECHAT_RECENT_READY_ROUTE_ERROR_RECHECK_SLEEP_SECONDS = 2.0
-X_DISCOVERY_SCROLL_WAIT_SECONDS = 1.2
+X_DISCOVERY_SCROLL_WAIT_SECONDS = 3.0
 DEFAULT_X_DISCOVERY_SEED_ACCOUNTS = ("cybertruck", "tesla", "elonmusk")
 DRAFTS_PER_RUN_DEFAULT = 0
 UPLOAD_INTERVAL_MIN_SECONDS = 45
@@ -7432,6 +7433,11 @@ def _discover_media_candidates_in_x_page(
     )
 
 
+def _next_x_discovery_scroll_wait_seconds(scroll_wait_seconds: float) -> float:
+    upper_bound = min(3.0, max(X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS, float(scroll_wait_seconds)))
+    return random.uniform(X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS, upper_bound)
+
+
 def discover_x_media_candidates(
     keyword: str,
     url_limit: int,
@@ -7542,7 +7548,7 @@ def discover_x_media_candidates(
                 work_page.run_js("window.scrollBy(0, Math.max(window.innerHeight, 1100));")
             except Exception:
                 pass
-            time.sleep(wait_seconds)
+            time.sleep(_next_x_discovery_scroll_wait_seconds(wait_seconds))
 
         return _take_latest_x_candidates(collected, limit)
     finally:
@@ -11620,6 +11626,18 @@ def _humanized_publish_pause(
     return delay
 
 
+def _humanized_publish_reaction_pause(reason: str) -> float:
+    return _humanized_publish_pause(reason, minimum_seconds=0.18, maximum_seconds=0.55)
+
+
+def _humanized_publish_settle_pause(reason: str) -> float:
+    return _humanized_publish_pause(reason, minimum_seconds=0.45, maximum_seconds=1.1)
+
+
+def _humanized_publish_retry_pause(reason: str) -> float:
+    return _humanized_publish_pause(reason, minimum_seconds=0.25, maximum_seconds=0.8)
+
+
 def _is_bad_caption_field(ele: Any) -> bool:
     try:
         attrs = ele.run_js(
@@ -12290,6 +12308,7 @@ def _click_save_draft_button(ctx: Any) -> bool:
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
+            _humanized_publish_reaction_pause("douyin primary publish click")
             try:
                 btn.click()
             except Exception:
@@ -14514,10 +14533,10 @@ def _ensure_xiaohongshu_upload_mode(
                 return True
             if state == "clicked":
                 _log(f"[Uploader:xiaohongshu] Switched upload mode to: {target_text}")
-                time.sleep(0.8)
+                _humanized_publish_settle_pause("xiaohongshu mode switch settle")
                 break
         else:
-            time.sleep(0.6)
+            _humanized_publish_retry_pause("xiaohongshu mode switch retry")
             continue
     _log(f"[Uploader:xiaohongshu] Unable to confirm upload mode: {target_text}")
     return False
@@ -14637,10 +14656,10 @@ def _ensure_douyin_publish_mode(
                 return True
             if state == "clicked":
                 _log(f"[Uploader:douyin] Switched publish mode to: {target_text}")
-                time.sleep(0.8)
+                _humanized_publish_settle_pause("douyin mode switch settle")
                 break
         else:
-            time.sleep(0.6)
+            _humanized_publish_retry_pause("douyin mode switch retry")
             continue
     _log(f"[Uploader:douyin] Unable to confirm publish mode: {target_text}")
     return False
@@ -14762,10 +14781,10 @@ def _ensure_kuaishou_publish_mode(
                 return True
             if state == "clicked":
                 _log(f"[Uploader:kuaishou] Switched publish mode to: {target_text}")
-                time.sleep(0.8)
+                _humanized_publish_settle_pause("kuaishou mode switch settle")
                 break
         else:
-            time.sleep(0.6)
+            _humanized_publish_retry_pause("kuaishou mode switch retry")
             continue
     _log(f"[Uploader:kuaishou] Unable to confirm publish mode: {target_text}")
     return False
@@ -14933,7 +14952,7 @@ def _stage_bilibili_upload_via_page_set(page: ChromiumPage, primary_ctx: Any, fa
 
     for trigger_round in range(2):
         _activate_upload_trigger_generic(primary_ctx, fallback_ctx, platform_name="bilibili")
-        time.sleep(0.45)
+        _humanized_publish_retry_pause("bilibili upload trigger settle")
         snapshot = _read_bilibili_file_inputs_snapshot(primary_ctx, fallback_ctx)
         max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
         total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
@@ -15498,7 +15517,7 @@ def _stage_generic_upload_via_page_set(
 
     for trigger_round in range(2):
         _activate_upload_trigger_generic(primary_ctx, fallback_ctx, platform_name=platform_name)
-        time.sleep(0.6)
+        _humanized_publish_retry_pause(f"{platform_name} upload trigger settle")
         snapshot = _read_generic_file_inputs_snapshot(primary_ctx, fallback_ctx)
         max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
         total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
@@ -15530,13 +15549,13 @@ def _stage_kuaishou_image_upload_via_page_set(
         clicked = _click_first_matching_button(primary_ctx, fallback_ctx, ("上传图片",), platform_name="kuaishou")
         if not clicked:
             _activate_upload_trigger_generic(primary_ctx, fallback_ctx, platform_name="kuaishou")
-        time.sleep(0.4)
+        _humanized_publish_reaction_pause("kuaishou image upload chooser open")
         try:
             upload_fn(target_path)
         except Exception as exc:
             _log(f"[Uploader:kuaishou] page.set.upload_files image stage failed: {exc}")
             return False
-        time.sleep(0.8)
+        _humanized_publish_settle_pause("kuaishou image upload settle")
         snapshot = _read_generic_file_inputs_snapshot(primary_ctx, fallback_ctx)
         max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
         total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
@@ -15779,6 +15798,18 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
         function normText(value) {
           return String(value || '').replace(/\\s+/g, ' ').trim();
         }
+        function parentClassTrail(node, limit) {
+          const parts = [];
+          let current = node ? node.parentElement : null;
+          let remain = limit || 4;
+          while (current && remain > 0) {
+            const cls = normText(current.className || '');
+            if (cls) parts.push(cls);
+            current = current.parentElement;
+            remain -= 1;
+          }
+          return parts.join(' ');
+        }
         const roots = collectAllRoots(document);
         function looksUploadText(value) {
           return /(\u70b9\u51fb\u4e0a\u4f20|\u4e0a\u4f20\u56fe\u6587|\u4e0a\u4f20\u56fe\u7247|\u9009\u62e9\u56fe\u7247|\u6dfb\u52a0\u56fe\u7247|\u76f4\u63a5\u5c06\u56fe\u7247\u6587\u4ef6\u62d6\u5165\u6b64\u533a\u57df|\u62d6\u5165\u6b64\u533a\u57df|\u56fe\u7247\u6587\u4ef6|\u7ee7\u7eed\u6dfb\u52a0)/.test(value);
@@ -15789,6 +15820,8 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
         const selectors = [
           "button[class*='container-drag-btn']",
           "button",
+          "div[class*='phone-screen'] div[class*='container-']",
+          "div[class*='phone-container'] div[class*='container-']",
           "div[class*='drop-']",
           "div[class*='content-right']",
           "div[class*='content-upload']",
@@ -15815,6 +15848,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
               const text = normText(node.innerText || node.textContent || '');
               const aria = normText(node.getAttribute && node.getAttribute('aria-label'));
               const fullText = normText([text, aria].filter(Boolean).join(' '));
+              const parentTrail = parentClassTrail(node, 5);
               let score = 0;
               if (cls.includes('drop-')) score += 220;
               if (cls.includes('content-upload')) score -= 40;
@@ -15829,14 +15863,16 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
               const hasForbiddenText = looksForbiddenText(fullText);
               const isCoverUpload = /(\u5c01\u9762|\u7f16\u8f91\u5c01\u9762|\u4f5c\u4e3a\u5c01\u9762)/.test(fullText);
               const isUploadButton = node.tagName === 'BUTTON' || cls.includes('container-drag-btn');
+              const isPreviewUpload = cls.includes('container-') && /phone-screen|phone-container|content-right/.test(parentTrail);
               const isHugeContainer = !!rect && rect.width >= 1200 && rect.height >= 700;
               if (isUploadButton) score += 260;
+              if (isPreviewUpload) score += 280;
               if (cls.includes('content-right')) score += 240;
               if (/upload|drag/i.test(cls)) score += 60;
               if (hasUploadText) score += 300;
               if (isCoverUpload) score -= 340;
               if (hasForbiddenText) score -= 520;
-              if (!hasUploadText && !cls.includes('drop-') && !cls.includes('content-right') && !/upload|drag/i.test(cls)) score -= 140;
+              if (!hasUploadText && !cls.includes('drop-') && !cls.includes('content-right') && !isPreviewUpload && !/upload|drag/i.test(cls)) score -= 140;
               if (isHugeContainer) score -= 120;
               if (rect && rect.width >= 180 && rect.height >= 120 && rect.width <= 1400 && rect.height <= 900) score += 35;
               const area = rect ? rect.width * rect.height : 0;
@@ -15875,6 +15911,8 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
         douyin_selectors = (
             "css:button[class*='container-drag-btn']",
             "xpath://button[contains(normalize-space(.), '涓婁紶鍥炬枃')]",
+            "css:div[class*='phone-screen'] div[class*='container-']",
+            "css:div[class*='phone-container'] div[class*='container-']",
             "css:div[class*='drop-']",
             "css:div[class*='content-right']",
             "css:div[class*='content-upload']",
@@ -15911,7 +15949,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
                 try:
                     ele.run_js(
                         """
-                        const target = this.matches("button, [role='button']") ? this : (this.querySelector("button[class*='container-drag-btn']") || this.closest("button, [role='button'], div[class*='content-right'], div[class*='content-upload'], div[class*='drop-'], label") || this);
+                        const target = this.matches("button, [role='button']") ? this : (this.querySelector("button[class*='container-drag-btn'], div[class*='phone-screen'] div[class*='container-'], div[class*='phone-container'] div[class*='container-']") || this.closest("button, [role='button'], div[class*='phone-screen'], div[class*='phone-container'], div[class*='content-right'], div[class*='content-upload'], div[class*='drop-'], label") || this);
                         try { target.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
                         try { target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
                         try { target.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window})); } catch (e) {}
@@ -16184,7 +16222,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
             continue
         _log(f"[Uploader:{platform_name}] Upload trigger clicked: {str(state or '')[8:]}")
         if platform_name == "douyin":
-            time.sleep(0.5)
+            _humanized_publish_retry_pause("douyin upload trigger effect check")
             after_snapshot = _read_click_effect_snapshot(owner)
             _log_click_effect_delta(before_snapshot, after_snapshot, platform_name)
         return
@@ -17014,7 +17052,7 @@ def _fill_optional_platform_title_field(
                     ok = False
                 if not ok:
                     continue
-                time.sleep(0.25)
+                _humanized_publish_reaction_pause(f"{platform_name} title verification")
                 current = re.sub(r"\s+", "", _read_element_text(ele)).lower()
                 if expect and expect in current:
                     _log(
@@ -17022,7 +17060,7 @@ def _fill_optional_platform_title_field(
                         f"{_single_line_preview(final_title, limit=40)}"
                     )
                     return final_title
-        time.sleep(0.4)
+        _humanized_publish_retry_pause(f"{platform_name} title field retry")
 
     message = (
         f"{platform_name} title fill verification failed "
@@ -17123,12 +17161,12 @@ def _fill_xiaohongshu_title_from_caption(
                     _input_caption_with_keyboard(ele, title)
                 except Exception:
                     continue
-                time.sleep(0.25)
+                _humanized_publish_reaction_pause("xiaohongshu title verification")
                 current = re.sub(r"\s+", "", _read_element_text(ele)).lower()
                 if expect and expect in current:
                     _log(f"[Uploader:xiaohongshu] Title filled from caption: {_single_line_preview(title, limit=40)}")
                     return title
-        time.sleep(0.4)
+        _humanized_publish_retry_pause("xiaohongshu title field retry")
     _log(f"[Uploader:xiaohongshu] Title field not confirmed after {tried} candidate(s); continue with body only.")
     return ""
 
@@ -17322,7 +17360,7 @@ def _fill_bilibili_title_from_caption(
                     continue
                 if not _input_caption_with_keyboard(ele, title):
                     continue
-                time.sleep(0.25)
+                _humanized_publish_reaction_pause("bilibili title verification")
                 current = _read_element_text(ele)
                 if _is_title_match(current):
                     _log(f"[Uploader:bilibili] Title filled from caption: {_single_line_preview(title, limit=80)}")
@@ -17361,7 +17399,7 @@ def _fill_bilibili_title_from_caption(
             if refreshed_ctx:
                 primary_ctx = refreshed_ctx
 
-        time.sleep(1.2)
+        _humanized_publish_retry_pause("bilibili title field retry")
 
     raise RuntimeError(
         "Failed to fill Bilibili title from caption "
@@ -18033,7 +18071,7 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
             else:
                 action_states.append("none")
 
-        time.sleep(0.6)
+        _humanized_publish_retry_pause("douyin collection picker settle")
         after = _get_douyin_collection_state(primary_ctx, fallback_ctx)
         current = str(after.get("current", "") or "")
         if _is_douyin_collection_match(current, target):
@@ -18314,6 +18352,7 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
+            _humanized_publish_reaction_pause("xiaohongshu primary publish click")
             try:
                 btn.click()
             except Exception:
@@ -18377,6 +18416,7 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_reaction_pause("douyin primary publish click")
         try:
             ok = bool(owner.run_js(js))
         except Exception:
@@ -18527,6 +18567,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
+            _humanized_publish_reaction_pause("kuaishou primary publish click")
             try:
                 btn.click()
             except Exception:
@@ -18631,6 +18672,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_reaction_pause("xiaohongshu primary publish click")
         try:
             ok = bool(owner.run_js(js))
         except Exception:
@@ -19205,6 +19247,7 @@ def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: 
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_reaction_pause("kuaishou primary publish click")
         try:
             result = owner.run_js(js)
         except Exception:
@@ -21559,7 +21602,10 @@ def parse_args() -> argparse.Namespace:
         "--x-discovery-scroll-wait",
         type=float,
         default=X_DISCOVERY_SCROLL_WAIT_SECONDS,
-        help=f"X 自动发现每轮滚动等待秒数，默认 {X_DISCOVERY_SCROLL_WAIT_SECONDS}",
+        help=(
+            "X 自动发现每轮滚动随机等待上限秒数，"
+            f"下限固定 {X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS:g}，默认 {X_DISCOVERY_SCROLL_WAIT_SECONDS:g}"
+        ),
     )
     parser.add_argument("--caption", default="", help="手动文案；不传则自动从采集视频元数据生成")
     parser.add_argument("--proxy", default="", help="代理地址，例如 http://127.0.0.1:PORT")

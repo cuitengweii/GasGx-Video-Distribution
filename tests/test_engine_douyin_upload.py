@@ -177,6 +177,7 @@ def test_activate_upload_trigger_generic_douyin_js_targets_upload_shell(monkeypa
     script = next(call for call in owner.run_js_calls if "clicked:douyin-js|" in call)
     assert "content-right" in script
     assert "container-drag-btn" in script
+    assert "phone-screen" in script
     assert "允许" in script
     assert "发布设置" in script
 

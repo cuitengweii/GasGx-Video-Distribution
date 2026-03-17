@@ -191,7 +191,7 @@ def test_build_telegram_card_compacts_platform_result_subtitle() -> None:
         },
     )
 
-    assert "<i>已返回平台结果</i>" in str(card["text"])
+    assert "<i>✅ 已返回平台结果</i>" in str(card["text"])
 
 
 def test_build_telegram_card_compacts_platform_success_title() -> None:
@@ -316,8 +316,11 @@ def test_build_telegram_card_splits_prefixed_title_into_title_and_subtitle() -> 
     )
 
     text = str(card["text"])
-    assert text.startswith("<b>✅ CyberCar</b>\n<b>⚡ 快手已确认</b>")
-    assert "<i>即采即发 / 图片 / 全部平台｜平台发布成功</i>" in text
+    lines = text.splitlines()
+    assert lines[0] == "<b>✅ CyberCar</b>"
+    assert lines[1] == "<i>即采即发 / 图片 / 全部平台</i>"
+    assert lines[2] == "<b>⚡ 快手已确认</b>"
+    assert lines[3] == "<i>✅ 平台发布成功</i>"
 
 
 def test_build_telegram_card_prioritizes_platform_result_sections_by_operator_flow() -> None:
@@ -379,8 +382,9 @@ def test_build_telegram_card_places_platform_title_on_dedicated_header_line() ->
     text = str(card["text"])
     lines = text.splitlines()
     assert lines[0] == "<b>✅ CyberCar</b>"
-    assert lines[1] == "<b>📝 小红书已确认</b>"
-    assert lines[2] == "<i>即采即发 / 图片 / 全部平台｜平台发布成功</i>"
+    assert lines[1] == "<i>即采即发 / 图片 / 全部平台</i>"
+    assert lines[2] == "<b>📝 小红书已确认</b>"
+    assert lines[3] == "<i>✅ 平台发布成功</i>"
 
 
 def test_build_telegram_card_normalizes_platform_status_items_with_platform_emojis() -> None:

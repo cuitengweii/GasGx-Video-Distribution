@@ -2812,3 +2812,16 @@ def test_build_failure_feedback_actions_prefers_home_for_duplicate_skip_failures
 
     texts = [str(action.get("text") or "") for action in actions]
     assert texts == ["🏠 首页"]
+
+
+def test_build_failure_feedback_actions_does_not_treat_summary_login_hint_as_login_failure() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {"title": "执行摘要", "items": [{"label": "结果", "value": "本轮存在部分平台成功，部分平台失败或需要登录。"}]},
+            {"title": "平台状态", "items": [{"label": "📝 小红书", "value": "✅ 已确认"}, {"label": "🎵 抖音", "value": "📣 发布失败"}]},
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    assert texts == ["📍 进度"]

@@ -3711,7 +3711,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--x-discovery-url-limit", type=int, default=core.X_DISCOVERY_URL_LIMIT)
     parser.add_argument("--x-discovery-scroll-rounds", type=int, default=core.X_DISCOVERY_SCROLL_ROUNDS)
-    parser.add_argument("--x-discovery-scroll-wait", type=float, default=core.X_DISCOVERY_SCROLL_WAIT_SECONDS)
+    parser.add_argument(
+        "--x-discovery-scroll-wait",
+        type=float,
+        default=core.X_DISCOVERY_SCROLL_WAIT_SECONDS,
+        help=(
+            "Upper bound for randomized X discovery scroll wait in seconds; "
+            f"lower bound stays fixed at {core.X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS:g}s."
+        ),
+    )
     parser.add_argument("--x-download-socket-timeout", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--x-download-extractor-retries", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--x-download-retries", type=int, default=None, help=argparse.SUPPRESS)

@@ -752,21 +752,32 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
     status_token = str(status or "").strip().lower()
     if status_token not in {"failed", "blocked", "alert", "login_required"}:
         return []
+    login_signal_parts: list[str] = []
     merged_text_parts: list[str] = []
     for section in sections:
         if not isinstance(section, Mapping):
             continue
-        merged_text_parts.append(str(section.get("title") or "").strip())
+        section_title = str(section.get("title") or "").strip()
+        merged_text_parts.append(section_title)
         items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
         for item in items:
             if isinstance(item, Mapping):
-                merged_text_parts.append(str(item.get("label") or "").strip())
-                merged_text_parts.append(str(item.get("value") or item.get("text") or "").strip())
+                label = str(item.get("label") or "").strip()
+                value = str(item.get("value") or item.get("text") or "").strip()
+                merged_text_parts.append(label)
+                merged_text_parts.append(value)
+                if section_title in {"失败原因", "平台状态", "处理建议"}:
+                    login_signal_parts.append(label)
+                    login_signal_parts.append(value)
             else:
-                merged_text_parts.append(str(item or "").strip())
+                text = str(item or "").strip()
+                merged_text_parts.append(text)
+                if section_title in {"失败原因", "平台状态", "处理建议"}:
+                    login_signal_parts.append(text)
     merged_text = " ".join(part for part in merged_text_parts if part).lower()
+    login_text = " ".join(part for part in login_signal_parts if part).lower()
     needs_login = status_token == "login_required" or any(
-        token in merged_text for token in ("登录", "未登录", "扫码", "qr", "login", "sign in")
+        token in login_text for token in ("登录", "未登录", "扫码", "qr", "login", "sign in")
     )
     is_retryable_transport = any(
         token in merged_text

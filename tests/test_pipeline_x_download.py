@@ -246,3 +246,33 @@ def test_transport_failure_classifier_ignores_non_transport_messages() -> None:
     )
 
     assert engine._looks_like_x_metadata_transport_failure(result) is False
+
+
+def test_next_x_discovery_scroll_wait_seconds_uses_randomized_one_to_three_second_window(monkeypatch) -> None:
+    captured: dict[str, tuple[float, float]] = {}
+
+    def fake_uniform(start: float, end: float) -> float:
+        captured["range"] = (start, end)
+        return 2.4
+
+    monkeypatch.setattr(engine.random, "uniform", fake_uniform)
+
+    wait_seconds = engine._next_x_discovery_scroll_wait_seconds(engine.X_DISCOVERY_SCROLL_WAIT_SECONDS)
+
+    assert wait_seconds == 2.4
+    assert captured["range"] == (1.0, 3.0)
+
+
+def test_next_x_discovery_scroll_wait_seconds_clamps_to_minimum_window(monkeypatch) -> None:
+    captured: dict[str, tuple[float, float]] = {}
+
+    def fake_uniform(start: float, end: float) -> float:
+        captured["range"] = (start, end)
+        return start
+
+    monkeypatch.setattr(engine.random, "uniform", fake_uniform)
+
+    wait_seconds = engine._next_x_discovery_scroll_wait_seconds(0.2)
+
+    assert wait_seconds == 1.0
+    assert captured["range"] == (1.0, 1.0)
