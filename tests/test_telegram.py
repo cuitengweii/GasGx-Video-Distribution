@@ -252,8 +252,8 @@ def test_build_telegram_card_prioritizes_failure_reason_before_machine_sections(
     text = str(card["text"])
     assert text.index("<b>⚠️ 失败原因</b>") < text.index("<b>🧭 运行上下文</b>")
     assert text.index("<b>🔧 处理建议</b>") < text.index("<b>🧭 运行上下文</b>")
-    assert "• <b>🔐 原因</b>：平台未登录" in text
-    assert "• 🛠️ 请先登录后重试。" in text
+    assert "• <b>🔐 原因</b>：登录失效" in text
+    assert "• 🛠️ 去登录" in text
 
 
 def test_build_telegram_card_marks_notify_and_network_failures_with_distinct_icons() -> None:
@@ -271,8 +271,8 @@ def test_build_telegram_card_marks_notify_and_network_failures_with_distinct_ico
 
     text = str(card["text"])
     assert text.startswith("<b>🌐 CyberCar｜发送失败</b>")
-    assert "• <b>🌐 原因</b>：Telegram timeout while sending card" in text
-    assert "• <b>📨 说明</b>：chat_id missing for notify bot" in text
+    assert "• <b>🌐 原因</b>：网络超时" in text
+    assert "• <b>📨 说明</b>：chat_id missing fo..." in text
 
 
 def test_build_telegram_card_uses_login_icon_in_failure_header() -> None:

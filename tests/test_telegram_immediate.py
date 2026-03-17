@@ -2782,9 +2782,33 @@ def test_build_failure_feedback_actions_uses_progress_for_generic_failures() -> 
     actions = worker_impl._build_failure_feedback_actions(
         status="failed",
         sections=[
-            {"title": "失败原因", "items": [{"label": "原因", "value": "上传失败"}]},
+            {"title": "失败原因", "items": [{"label": "原因", "value": "平台处理失败"}]},
         ],
     )
 
     texts = [str(action.get("text") or "") for action in actions]
     assert texts == ["📍 进度"]
+
+
+def test_build_failure_feedback_actions_prefers_refresh_for_retryable_failures() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {"title": "失败原因", "items": [{"label": "原因", "value": "上传失败，network timeout"}]},
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    assert texts == ["🔄 刷新", "📍 进度"]
+
+
+def test_build_failure_feedback_actions_prefers_home_for_duplicate_skip_failures() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {"title": "结果说明", "items": ["平台已有历史发布记录，本轮已自动跳过。"]},
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    assert texts == ["🏠 首页"]

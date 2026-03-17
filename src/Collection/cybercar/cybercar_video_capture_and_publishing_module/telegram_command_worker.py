@@ -768,10 +768,25 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
     needs_login = status_token == "login_required" or any(
         token in merged_text for token in ("登录", "未登录", "扫码", "qr", "login", "sign in")
     )
+    is_retryable_transport = any(
+        token in merged_text
+        for token in ("timeout", "network", "连接", "超时", "上传失败", "upload", "transport", "proxy", "代理")
+    )
+    is_skip_like = any(
+        token in merged_text
+        for token in ("跳过", "重复", "duplicate", "已自动跳过", "历史发布记录", "无需重复")
+    )
     actions: list[dict[str, Any]] = []
     row = 0
     if needs_login:
         actions.append({"text": "🔐 登录", "callback_data": build_home_callback_data("cybercar", "login_menu"), "row": row})
+        actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
+        return actions
+    if is_skip_like:
+        actions.append({"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": row})
+        return actions
+    if is_retryable_transport:
+        actions.append({"text": "🔄 刷新", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
         actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
         return actions
     actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
@@ -2631,7 +2646,7 @@ def _build_collect_publish_latest_menu_card(*, default_profile: str) -> Dict[str
     )
     return _build_submenu_card(
         title="\u5373\u91c7\u5373\u53d1",
-        subtitle=f"\u5f53\u524d\u914d\u7f6e\uff1a{profile}\uff5c\u56fe\u7247\u548c\u89c6\u9891\u5df2\u62c6\u4e3a\u4e24\u6761\u72ec\u7acb\u6d41\u7a0b",
+        subtitle=f"\u5f53\u524d\u914d\u7f6e\uff1a{profile}\uff5c\u89c6\u9891/\u56fe\u7247\u53cc\u6d41\u7a0b",
         sections=[
             {
                 "title": "\u6267\u884c\u8bf4\u660e",

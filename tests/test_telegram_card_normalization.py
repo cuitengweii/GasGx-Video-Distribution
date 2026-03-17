@@ -231,3 +231,89 @@ def test_build_telegram_card_compacts_immediate_summary_title() -> None:
     )
 
     assert str(card["text"]).startswith("<b>✅ CyberCar｜全部完成</b>")
+
+
+def test_build_telegram_card_templates_login_failure_text() -> None:
+    card = telegram_ui.build_telegram_card(
+        "alert",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {"title": "失败原因", "items": [{"label": "原因", "value": "平台未登录"}]},
+                {"title": "处理建议", "items": ["请先登录后重试。"]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "• <b>🔐 原因</b>：登录失效" in text
+    assert "• 🛠️ 去登录" in text
+
+
+def test_build_telegram_card_templates_network_failure_text() -> None:
+    card = telegram_ui.build_telegram_card(
+        "alert",
+        {
+            "status": "failed",
+            "title": "发送失败",
+            "sections": [
+                {"title": "失败原因", "items": [{"label": "原因", "value": "Telegram timeout while sending card"}]},
+                {"title": "处理建议", "items": ["请稍后刷新重试。"]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "• <b>🌐 原因</b>：网络超时" in text
+    assert "• 🛠️ 刷新后看进度" in text
+
+
+def test_build_telegram_card_templates_duplicate_skip_text() -> None:
+    card = telegram_ui.build_telegram_card(
+        "alert",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {"title": "结果说明", "items": [{"label": "说明", "value": "平台已有历史发布记录，本轮已自动跳过。"}]},
+                {"title": "处理建议", "items": ["无需重复提交。"]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "• <b>⏭️ 说明</b>：重复发布｜已跳过" in text
+    assert "• 🛠️ 无需处理" in text
+
+
+def test_build_telegram_home_strips_html_from_title() -> None:
+    card = telegram_ui.build_telegram_home(
+        "cybercar",
+        {
+            "title": "<b>🏠 CyberCar｜即采即发</b>",
+            "subtitle": "当前配置：cybertruck",
+            "sections": [],
+        },
+    )
+
+    text = str(card["text"])
+    assert "<b><b>" not in text
+    assert "&lt;b&gt;" not in text
+    assert "<b>🏠 CyberCar｜🏠 CyberCar｜即采即发</b>" not in text
+
+
+def test_build_telegram_card_splits_prefixed_title_into_title_and_subtitle() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "【即采即发/图片/全部平台】快手已确认",
+            "subtitle": "平台发布成功",
+            "sections": [{"title": "执行摘要", "items": [{"label": "结果", "value": "成功"}]}],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.startswith("<b>✅ CyberCar｜快手已确认</b>")
+    assert "<i>即采即发 / 图片 / 全部平台｜平台发布成功</i>" in text

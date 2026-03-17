@@ -15692,10 +15692,18 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
           return String(value || '').replace(/\\s+/g, ' ').trim();
         }
         const roots = collectAllRoots(document);
+        function looksUploadText(value) {
+          return /(\u70b9\u51fb\u4e0a\u4f20|\u4e0a\u4f20\u56fe\u6587|\u4e0a\u4f20\u56fe\u7247|\u9009\u62e9\u56fe\u7247|\u6dfb\u52a0\u56fe\u7247|\u76f4\u63a5\u5c06\u56fe\u7247\u6587\u4ef6\u62d6\u5165\u6b64\u533a\u57df|\u62d6\u5165\u6b64\u533a\u57df|\u56fe\u7247\u6587\u4ef6|\u7ee7\u7eed\u6dfb\u52a0)/.test(value);
+        }
+        function looksForbiddenText(value) {
+          return /(\u5141\u8bb8|\u4e0d\u5141\u8bb8|\u516c\u5f00|\u597d\u53cb\u53ef\u89c1|\u4ec5\u81ea\u5df1\u53ef\u89c1|\u7acb\u5373\u53d1\u5e03|\u5b9a\u65f6\u53d1\u5e03|\u53d1\u5e03\u8bbe\u7f6e|\u4fdd\u5b58\u6743\u9650|\u8c01\u53ef\u4ee5\u770b|\u6dfb\u52a0\u6807\u7b7e|\u5173\u8054\u70ed\u70b9|\u4f4d\u7f6e|\u9009\u62e9\u97f3\u4e50)/.test(value);
+        }
         const selectors = [
           "div[class*='drop-']",
+          "div[class*='content-right']",
           "div[class*='content-upload']",
           "div[class*='upload'][class*='content']",
+          "div[class*='drag']",
           "label",
           "[role='button']",
         ];
@@ -15727,6 +15735,18 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
               try {
                 rect = node.getBoundingClientRect();
               } catch (e) {}
+              const hasUploadText = looksUploadText(fullText);
+              const hasForbiddenText = looksForbiddenText(fullText);
+              const isCoverUpload = /(\u5c01\u9762|\u7f16\u8f91\u5c01\u9762|\u4f5c\u4e3a\u5c01\u9762)/.test(fullText);
+              const isHugeContainer = !!rect && rect.width >= 1200 && rect.height >= 700;
+              if (cls.includes('content-right')) score += 240;
+              if (/upload|drag/i.test(cls)) score += 60;
+              if (hasUploadText) score += 300;
+              if (isCoverUpload) score -= 340;
+              if (hasForbiddenText) score -= 520;
+              if (!hasUploadText && !cls.includes('drop-') && !cls.includes('content-right') && !/upload|drag/i.test(cls)) score -= 140;
+              if (isHugeContainer) score -= 120;
+              if (rect && rect.width >= 180 && rect.height >= 120 && rect.width <= 1400 && rect.height <= 900) score += 35;
               const area = rect ? rect.width * rect.height : 0;
               candidates.push({ node, cls, text: fullText, score, area });
             }
@@ -15736,7 +15756,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
           if (b.score !== a.score) return b.score - a.score;
           return b.area - a.area;
         });
-        const best = candidates.find((item) => item.score > -200);
+        const best = candidates.find((item) => item.score >= 120);
         if (!best) return "not_found";
         const target = best.node;
         try { target.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
@@ -15762,9 +15782,12 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
                 return
         douyin_selectors = (
             "css:div[class*='drop-']",
+            "css:div[class*='content-right']",
             "css:div[class*='content-upload']",
             "css:div[class*='upload'][class*='content']",
+            "css:div[class*='drag']",
             "xpath://div[contains(@class,'drop-')]",
+            "xpath://div[contains(@class,'content-right')]",
             "xpath://div[contains(@class,'content-upload')]",
             "xpath://div[contains(normalize-space(.), '点击上传')]",
             "xpath://div[contains(normalize-space(.), '直接将图片文件拖入此区域')]",

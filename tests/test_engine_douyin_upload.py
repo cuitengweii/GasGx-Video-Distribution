@@ -148,6 +148,38 @@ def test_activate_upload_trigger_generic_uses_douyin_js_scorer_first(monkeypatch
     assert owner.selector_calls == 0
 
 
+def test_activate_upload_trigger_generic_douyin_js_targets_upload_shell(monkeypatch) -> None:
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.run_js_calls: list[str] = []
+
+        def get_frames(self, timeout: float = 0) -> list[Any]:
+            return []
+
+        def run_js(self, script: str) -> str:
+            self.run_js_calls.append(script)
+            return "not_found"
+
+        def ele(self, selector: str, timeout: float = 0) -> Any:
+            return None
+
+    owner = FakeOwner()
+
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_is_visible_element", lambda _ele: False)
+
+    try:
+        engine._activate_upload_trigger_generic(owner, None, platform_name="douyin")
+    except RuntimeError:
+        pass
+
+    assert owner.run_js_calls
+    script = next(call for call in owner.run_js_calls if "clicked:douyin-js|" in call)
+    assert "content-right" in script
+    assert "允许" in script
+    assert "发布设置" in script
+
+
 def test_read_douyin_image_upload_state_detects_ready_editor() -> None:
     class FakeOwner:
         def run_js(self, _script: str) -> dict[str, Any]:

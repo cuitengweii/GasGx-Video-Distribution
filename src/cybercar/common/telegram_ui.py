@@ -15,6 +15,7 @@ _HOME_STATE_HISTORY_LIMIT = 8
 _VARIATION_SELECTOR = "\ufe0f"
 _CUSTOM_EMOJI_TAG_RE = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", flags=re.IGNORECASE | re.DOTALL)
 _CUSTOM_EMOJI_ENABLED = False
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 _BOT_META: dict[str, dict[str, str]] = {
     "cybercar": {"name": "CyberCar", "home_title": "控制台"},
@@ -112,6 +113,14 @@ def _strip_custom_emoji_markup(text: str) -> str:
     if "<tg-emoji" not in raw.lower():
         return raw
     return _CUSTOM_EMOJI_TAG_RE.sub(lambda match: html.unescape(str(match.group(1) or "")), raw)
+
+
+def _strip_html_like_markup(text: str) -> str:
+    raw = html.unescape(str(text or "").strip())
+    if not raw:
+        return ""
+    raw = _strip_custom_emoji_markup(raw)
+    return _HTML_TAG_RE.sub("", raw).strip()
 
 
 def _render_emoji(value: Any) -> str:
@@ -293,6 +302,8 @@ def _failure_marker_for_text(text: str, *, fallback: str = "⚠️") -> str:
         return "🌐"
     if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
         return "🔐"
+    if any(token in lowered for token in ("跳过", "skip", "duplicate", "已发布")):
+        return "⏭️"
     if any(token in lowered for token in ("telegram", "bot_token", "chat_id", "notify", "消息发送", "卡片发送")):
         return "📨"
     if any(token in lowered for token in ("素材", "候选", "下载", "文件", "链接", "source", "candidate", "download", "upload")):
@@ -315,8 +326,6 @@ def _failure_marker_for_text(text: str, *, fallback: str = "⚠️") -> str:
         )
     ):
         return "📣"
-    if any(token in lowered for token in ("跳过", "skip", "duplicate", "已发布")):
-        return "⏭️"
     return fallback
 
 
@@ -341,12 +350,41 @@ def _decorate_failure_sections(status: str, sections: Sequence[Mapping[str, Any]
                 marker = default_marker if title == "处理建议" else _failure_marker_for_text(f"{label} {value}", fallback=default_marker)
                 updated = dict(item)
                 updated["label"] = f"{marker} {label or '详情'}".strip()
+                if value:
+                    updated["value"] = _short_failure_text(title, label, value)
                 new_items.append(updated)
             else:
                 marker = default_marker if title == "处理建议" else _failure_marker_for_text(str(item or ""), fallback=default_marker)
-                new_items.append(f"{marker} {str(item or '').strip()}".strip())
+                short_text = _short_failure_text(title, "", str(item or "").strip())
+                new_items.append(f"{marker} {short_text}".strip())
         decorated.append({**section, "items": new_items})
     return decorated
+
+
+def _short_failure_text(title: str, label: str, value: str) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    title_text = str(title or "").strip()
+    label_text = str(label or "").strip()
+    if not text:
+        return text
+    if title_text == "处理建议":
+        if any(token in lowered for token in ("登录", "未登录", "需要登录", "login", "sign in", "扫码", "qr")):
+            return "去登录"
+        if any(token in lowered for token in ("刷新", "retry", "重试", "timeout", "network", "upload", "上传")):
+            return "刷新后看进度"
+        if any(token in lowered for token in ("无需", "跳过", "duplicate", "历史发布记录")):
+            return "无需处理"
+        return "查看进度"
+    if any(token in lowered for token in ("未登录", "需要登录", "login", "sign in", "扫码", "qr")):
+        return "登录失效"
+    if any(token in lowered for token in ("timeout", "network", "连接", "超时", "upload", "上传")):
+        return "上传失败" if any(token in lowered for token in ("upload", "上传")) else "网络超时"
+    if any(token in lowered for token in ("duplicate", "历史发布记录", "已自动跳过", "跳过", "无需重复")):
+        return "重复发布｜已跳过"
+    if title_text == "结果说明" and label_text in {"说明", "详情"} and len(text) > 18:
+        return text[:18].rstrip() + "..."
+    return text
 
 
 def _pick_failure_header_emoji(status: str, sections: Sequence[Mapping[str, Any]], fallback: str) -> str:
@@ -474,6 +512,27 @@ def _decorate_card_subtitle(status: str, subtitle: str, sections: Sequence[Mappi
     if platform_subtitle:
         return platform_subtitle
     return _compact_subtitle_text(subtitle)
+
+
+def _split_header_title(title: str) -> tuple[str, str]:
+    clean_title = _strip_html_like_markup(title)
+    if not clean_title:
+        return "", ""
+    match = re.match(r"^【([^】]+)】\s*(.+)$", clean_title)
+    if match:
+        context = str(match.group(1) or "").strip().replace("/", " / ")
+        main = str(match.group(2) or "").strip()
+        return main, context
+    return clean_title, ""
+
+
+def _dedupe_bot_title_prefix(title: str, bot_name: str) -> str:
+    clean_title = _strip_html_like_markup(title)
+    clean_bot_name = str(bot_name or "").strip()
+    if not clean_title or not clean_bot_name:
+        return clean_title
+    pattern = rf"^[^A-Za-z0-9\u4e00-\u9fff]*\s*{re.escape(clean_bot_name)}\s*[｜|]\s*"
+    return re.sub(pattern, "", clean_title, count=1).strip() or clean_title
 
 
 def _compact_card_title(kind: str, title: str) -> str:
@@ -720,10 +779,13 @@ def build_telegram_card(
     )
     emoji = _pick_failure_header_emoji(status, sections, emoji)
     emoji, title = _decorate_positive_header(status, title, sections, emoji)
+    title = _dedupe_bot_title_prefix(title, bot_name)
+    title_main, title_context = _split_header_title(title)
     subtitle = _decorate_card_subtitle(status, subtitle, sections)
-    header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title)}</b>"]
-    if subtitle:
-        header.append(f"<i>{_render_inline_text(subtitle)}</i>")
+    header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title_main or title)}</b>"]
+    header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
+    if header_subtitle_parts:
+        header.append(f"<i>{_render_inline_text('｜'.join(header_subtitle_parts))}</i>")
     text_lines = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:
@@ -750,13 +812,16 @@ def build_telegram_home(
     token = str(bot_kind or "").strip().lower() or "cybercar"
     bot_name = _bot_name(token)
     title = str(payload.get("title", "") or "").strip() or _bot_home_title(token)
+    title = _dedupe_bot_title_prefix(title, bot_name)
+    title_main, title_context = _split_header_title(title)
     subtitle = str(payload.get("subtitle", "") or "").strip()
     sections = payload.get("sections", [])
     if not isinstance(sections, Iterable):
         sections = []
-    header = [f"<b>{_render_emoji('🏠')} {html.escape(bot_name)}｜{_render_inline_text(title)}</b>"]
-    if subtitle:
-        header.append(f"<i>{_render_inline_text(subtitle)}</i>")
+    header = [f"<b>{_render_emoji('🏠')} {html.escape(bot_name)}｜{_render_inline_text(title_main or title)}</b>"]
+    header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
+    if header_subtitle_parts:
+        header.append(f"<i>{_render_inline_text('｜'.join(header_subtitle_parts))}</i>")
     body = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:
