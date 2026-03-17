@@ -2679,3 +2679,25 @@ def test_build_platform_status_summary_marks_platforms_individually() -> None:
     assert "📣 抖音失败" in summary
     assert "📣 小红书失败" not in summary
     assert "⚠️ 小红书待确认" in summary or "✅ 小红书成功" in summary
+def test_immediate_publish_feedback_omits_duplicate_platform_in_candidate_section() -> None:
+    item = _image_item(
+        target_platforms="douyin,xiaohongshu,kuaishou",
+        platform_results={
+            "xiaohongshu": {
+                "status": "success",
+                "publish_id": "xh-1",
+            }
+        },
+    )
+
+    payload = worker_impl._build_immediate_platform_feedback_payload(
+        item=item,
+        platform="xiaohongshu",
+        result={"status": "success", "publish_id": "xh-1"},
+    )
+
+    sections = list(payload.get("sections") or [])
+    candidate_section = next(section for section in sections if section.get("title") == "候选信息")
+    labels = [str(entry.get("label") or "") for entry in candidate_section.get("items", []) if isinstance(entry, dict)]
+
+    assert "平台" not in labels

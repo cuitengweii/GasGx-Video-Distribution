@@ -27,6 +27,8 @@ Last updated: 2026-03-17
 - Repaired the Douyin image immediate-publish path through the upload stage: the uploader now targets the real image drop zone instead of the cover uploader and treats the image editor state as upload-ready even when the page exposes no DOM file input.
 - Advanced the Douyin image publish flow past upload and caption fill into collection selection; the remaining blocker is confirming the updated "添加合集" row structure on the current creator page.
 
+- Douyin collection selection is now factored into dedicated JS state/select probes that read the live `semi-select` selection text and option-title nodes directly, while Kuaishou publish confirmation now uses a dialog-only confirm helper so delayed modal confirmation does not re-click the compose-page publish button.
+
 ## Current Status
 
 - Fixed the WeChat immediate-publish login false positive: the worker now probes the actual create page before the login helper URL and only requests a QR code after `check_platform_login_status()` confirms the session is truly `login_required`.

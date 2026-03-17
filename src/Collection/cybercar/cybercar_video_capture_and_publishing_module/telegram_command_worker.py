@@ -5994,7 +5994,7 @@ def _build_immediate_platform_feedback_payload(
         "subtitle": subtitle,
         "status": feedback_status,
         "sections": [
-            _build_immediate_candidate_info_section(item),
+            _build_immediate_candidate_info_section(item, include_platform=False),
             {
                 "title": "执行状态",
                 "emoji": "📌",
@@ -6036,7 +6036,7 @@ def _build_immediate_publish_summary_feedback_payload(item: Dict[str, Any]) -> D
         "subtitle": subtitle,
         "status": feedback_status,
         "sections": [
-            _build_immediate_candidate_info_section(item),
+            _build_immediate_candidate_info_section(item, include_platform=False),
             {
                 "title": "执行汇总",
                 "emoji": "📦",
@@ -7797,16 +7797,22 @@ def _build_immediate_candidate_info_section(
     item: Dict[str, Any],
     *,
     title: str = "候选信息",
+    include_platform: bool = True,
 ) -> dict[str, Any]:
     source_url = str(item.get("source_url") or "").strip()
+    items: list[dict[str, str]] = []
+    if include_platform:
+        items.append({"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)})
+    items.extend(
+        [
+            {"label": "标题", "value": _resolve_immediate_item_title(item)},
+            {"label": "原帖链接", "value": source_url or "未记录原帖链接"},
+        ]
+    )
     return {
         "title": title,
         "emoji": "🎯",
-        "items": [
-            {"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)},
-            {"label": "标题", "value": _resolve_immediate_item_title(item)},
-            {"label": "原帖链接", "value": source_url or "未记录原帖链接"},
-        ],
+        "items": items,
     }
 
 

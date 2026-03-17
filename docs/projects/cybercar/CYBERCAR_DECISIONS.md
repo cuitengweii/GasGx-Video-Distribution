@@ -30,6 +30,8 @@ Last updated: 2026-03-17
 - Douyin image upload trigger selection must prefer the real image drop zone over the cover uploader. The uploader now uses a JS-scored candidate search that heavily favors `drop-*` targets and penalizes cover-related `content-upload-*` nodes.
 - Douyin collection handling should locate the "添加合集" row by searching upward for the ancestor that owns multiple visible dropdown/combobox controls, rather than relying on a shallow `closest(...div)` match around the text label.
 - Telegram success notifications should prioritize operator-facing sections over exhaustive detail: when `人工关注` is present on a success/done card, redundant `执行结果` blocks are suppressed and `机器信息` is capped so the first screen stays readable in Telegram.
+- When success cards must compress `机器信息`, the renderer should prefer log and task/ID style clues over low-signal fields such as duration so machine-oriented debugging context survives the cut.
+- Kuaishou publish confirmation must target modal dialog buttons only; the compose-page `发布` button is not a valid delayed-confirm target once a confirm dialog is present.
 - For WeChat immediate publish and relogin checks, the worker must treat the publish create page as the primary session probe target. `login.html` is a helper or fallback URL only and may not drive the first probe path.
 - A generic WeChat publish failure is no longer sufficient evidence for `login_required`. The worker must run `check_platform_login_status()` first and only request a QR code after the session probe confirms a true login loss.
 - When success cards must compress `机器信息`, the renderer should prefer log and task/ID style clues over low-signal fields such as duration so machine-oriented debugging context survives the cut.
