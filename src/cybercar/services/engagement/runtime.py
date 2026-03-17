@@ -252,11 +252,16 @@ def _ensure_douyin_picker_open(page: Any) -> bool:
         const rect = node.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
       }
+      function actionable(node) {
+        if (!node) return null;
+        return node.closest('button,[role="button"]') || node;
+      }
       function click(node) {
-        if (!node) return false;
-        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
-        try { node.click(); return true; } catch (e) {}
-        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        const target = actionable(node);
+        if (!target) return false;
+        try { target.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { target.click(); return true; } catch (e) {}
+        try { target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
         return false;
       }
       const list = document.querySelector('ul.douyin-creator-interactive-list-items');
@@ -275,6 +280,43 @@ def _ensure_douyin_picker_open(page: Any) -> bool:
         timeout_seconds=6.0,
         poll_seconds=0.25,
     )
+
+
+def _extract_current_douyin_post(page: Any) -> Optional[dict[str, Any]]:
+    js = """
+    return (() => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      const cards = Array.from(document.querySelectorAll('div'))
+        .map((node) => ({
+          node,
+          text: norm(node.innerText || node.textContent || ''),
+        }))
+        .filter((entry) => entry.text && /发布于\\d{4}年\\d{1,2}月\\d{1,2}日/.test(entry.text));
+      const card = cards[0];
+      if (!card) return null;
+      const lines = card.text.split(/\\s+/).filter(Boolean);
+      const published = lines.find((text) => /发布于\\d{4}年\\d{1,2}月\\d{1,2}日/.test(text)) || '';
+      const title = lines.find((text) => text && text !== published && !/^选择作品$/.test(text) && text.length >= 4) || '';
+      return { title, published_text: published };
+    })();
+    """
+    payload = _run_js_dict(page, js)
+    if not payload or not any(payload.get(key) for key in ("title", "published_text")):
+        return None
+    comments = _extract_douyin_comments(page)
+    if not comments:
+        return None
+    title = str(payload.get("title") or "").strip()
+    published_text = str(payload.get("published_text") or "").strip()
+    return {
+        "post_key": _build_post_key(title, published_text),
+        "title": title,
+        "published_text": published_text,
+        "comment_count": len(comments),
+        "has_comments": True,
+    }
 
 
 def _extract_douyin_picker_posts(page: Any) -> list[dict[str, Any]]:
@@ -349,6 +391,10 @@ def _scroll_douyin_picker(page: Any) -> None:
 
 def _collect_douyin_commented_posts(page: Any, limit: int, debug: bool = False) -> list[dict[str, Any]]:
     if not _ensure_douyin_picker_open(page):
+        current_post = _extract_current_douyin_post(page)
+        if current_post:
+            engine._comment_reply_log(debug, "[douyin] Picker not opened; fallback to current selected post")
+            return [current_post]
         return []
     target = max(1, int(limit))
     collected: list[dict[str, Any]] = []
@@ -376,6 +422,11 @@ def _collect_douyin_commented_posts(page: Any, limit: int, debug: bool = False) 
             break
         _scroll_douyin_picker(page)
         time.sleep(0.8)
+    if not collected:
+        current_post = _extract_current_douyin_post(page)
+        if current_post:
+            engine._comment_reply_log(debug, "[douyin] Picker returned no commented posts; fallback to current selected post")
+            return [current_post]
     return collected[:target]
 
 
@@ -767,11 +818,16 @@ def _ensure_kuaishou_picker_open(page: Any) -> bool:
         const rect = node.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
       }
+      function actionable(node) {
+        if (!node) return null;
+        return node.closest('button,[role="button"]') || node;
+      }
       function click(node) {
-        if (!node) return false;
-        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
-        try { node.click(); return true; } catch (e) {}
-        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        const target = actionable(node);
+        if (!target) return false;
+        try { target.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { target.click(); return true; } catch (e) {}
+        try { target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
         return false;
       }
       const item = document.querySelector('.video-item');
@@ -789,6 +845,43 @@ def _ensure_kuaishou_picker_open(page: Any) -> bool:
         timeout_seconds=6.0,
         poll_seconds=0.25,
     )
+
+
+def _extract_current_kuaishou_post(page: Any) -> Optional[dict[str, Any]]:
+    js = """
+    return (() => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      const blocks = Array.from(document.querySelectorAll('div'))
+        .map((node) => ({
+          node,
+          text: norm(node.innerText || node.textContent || ''),
+        }))
+        .filter((entry) => entry.text && /\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}/.test(entry.text));
+      const block = blocks[0];
+      if (!block) return null;
+      const texts = block.text.split(/\\s+/).filter(Boolean);
+      const published = texts.find((text) => /\\d{4}-\\d{2}-\\d{2}/.test(text)) || '';
+      const title = texts.find((text) => text && text !== published && !/^选择视频$/.test(text) && text.length >= 4) || '';
+      return { title, published_text: published };
+    })();
+    """
+    payload = _run_js_dict(page, js)
+    if not payload or not any(payload.get(key) for key in ("title", "published_text")):
+        return None
+    comments = _extract_kuaishou_comments(page)
+    if not comments:
+        return None
+    title = str(payload.get("title") or "").strip()
+    published_text = str(payload.get("published_text") or "").strip()
+    return {
+        "post_key": _build_post_key(title, published_text),
+        "title": title,
+        "published_text": published_text,
+        "comment_count": len(comments),
+        "has_comments": True,
+    }
 
 
 def _extract_kuaishou_picker_posts(page: Any) -> list[dict[str, Any]]:
@@ -848,6 +941,10 @@ def _scroll_kuaishou_picker(page: Any) -> None:
 
 def _collect_kuaishou_commented_posts(page: Any, limit: int, debug: bool = False) -> list[dict[str, Any]]:
     if not _ensure_kuaishou_picker_open(page):
+        current_post = _extract_current_kuaishou_post(page)
+        if current_post:
+            engine._comment_reply_log(debug, "[kuaishou] Picker not opened; fallback to current selected post")
+            return [current_post]
         return []
     target = max(1, int(limit))
     collected: list[dict[str, Any]] = []
@@ -875,6 +972,11 @@ def _collect_kuaishou_commented_posts(page: Any, limit: int, debug: bool = False
             break
         _scroll_kuaishou_picker(page)
         time.sleep(0.8)
+    if not collected:
+        current_post = _extract_current_kuaishou_post(page)
+        if current_post:
+            engine._comment_reply_log(debug, "[kuaishou] Picker returned no commented posts; fallback to current selected post")
+            return [current_post]
     return collected[:target]
 
 
