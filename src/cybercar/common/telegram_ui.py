@@ -779,6 +779,7 @@ def build_action_feedback(
     subtitle: str = "",
     sections: Sequence[Mapping[str, Any]] | None = None,
     *,
+    actions: Sequence[Mapping[str, Any]] | None = None,
     bot_name: str = "CyberCar",
 ) -> dict[str, Any]:
     token = str(status or "").strip().lower() or "success"
@@ -792,6 +793,7 @@ def build_action_feedback(
             "bot_name": bot_name,
             "mode": "text",
         },
+        actions=actions,
     )
 
 

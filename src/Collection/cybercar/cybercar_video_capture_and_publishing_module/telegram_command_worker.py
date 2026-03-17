@@ -716,7 +716,7 @@ def _with_home_button(reply_markup: Optional[Dict[str, Any]] = None) -> Dict[str
         for button in row:
             if str(button.get("callback_data") or "").strip() == home_callback:
                 return _build_inline_keyboard(rows)
-    rows.append([{"text": "🏠 返回首页", "callback_data": home_callback}])
+    rows.append([{"text": "🏠 首页", "callback_data": home_callback}])
     return _build_inline_keyboard(rows)
 
 
@@ -740,12 +740,42 @@ def _with_process_status_button(reply_markup: Optional[Dict[str, Any]] = None) -
                 has_process = True
     append_row: list[Dict[str, str]] = []
     if not has_process:
-        append_row.append({"text": "📍 进程查看", "callback_data": process_callback})
+        append_row.append({"text": "📍 进度", "callback_data": process_callback})
     if not has_home:
-        append_row.append({"text": "🏠 返回首页", "callback_data": home_callback})
+        append_row.append({"text": "🏠 首页", "callback_data": home_callback})
     if append_row:
         rows.append(append_row)
     return _build_inline_keyboard(rows)
+
+
+def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    status_token = str(status or "").strip().lower()
+    if status_token not in {"failed", "blocked", "alert", "login_required"}:
+        return []
+    merged_text_parts: list[str] = []
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        merged_text_parts.append(str(section.get("title") or "").strip())
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        for item in items:
+            if isinstance(item, Mapping):
+                merged_text_parts.append(str(item.get("label") or "").strip())
+                merged_text_parts.append(str(item.get("value") or item.get("text") or "").strip())
+            else:
+                merged_text_parts.append(str(item or "").strip())
+    merged_text = " ".join(part for part in merged_text_parts if part).lower()
+    needs_login = status_token == "login_required" or any(
+        token in merged_text for token in ("登录", "未登录", "扫码", "qr", "login", "sign in")
+    )
+    actions: list[dict[str, Any]] = []
+    row = 0
+    if needs_login:
+        actions.append({"text": "🔐 登录", "callback_data": build_home_callback_data("cybercar", "login_menu"), "row": row})
+        actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
+        return actions
+    actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
+    return actions
 
 
 def _ensure_card_has_home_button(card: Dict[str, Any]) -> Dict[str, Any]:
@@ -814,7 +844,7 @@ def _build_prefilter_action_card(
     rows: list[list[Dict[str, str]]] = []
     link = str(source_url or "").strip()
     if link:
-        rows.append([{"text": "🔗 查看原帖", "url": link}])
+        rows.append([{"text": "🔗 原帖", "url": link}])
     for row in action_rows or []:
         if row:
             rows.append(row)
@@ -2394,12 +2424,12 @@ def _build_process_status_card(*, default_profile: str, workspace: Path) -> Dict
         ],
         actions=[
             {
-                "text": "🔄 刷新进度",
+                "text": "🔄 刷新",
                 "callback_data": build_home_callback_data("cybercar", "process_status"),
                 "row": 0,
             },
             {
-                "text": "🏠 返回首页",
+                "text": "🏠 首页",
                 "callback_data": build_home_callback_data("cybercar", "home"),
                 "row": 0,
             },
@@ -2548,7 +2578,7 @@ def _build_login_menu_card(*, default_profile: str) -> Dict[str, Any]:
                 "row": row,
             }
         )
-    actions.append({"text": "🏠 返回首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": 3})
+    actions.append({"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": 3})
     return _build_submenu_card(
         title="平台登录",
         subtitle=f"当前配置：{profile}｜选择平台返回登录二维码",
@@ -2587,14 +2617,14 @@ def _build_collect_publish_latest_menu_card(*, default_profile: str) -> Dict[str
         )
     actions.append(
         {
-            "text": "📍 进程查看",
+            "text": "📍 进度",
             "callback_data": build_home_callback_data("cybercar", "process_status"),
             "row": len(COLLECT_PUBLISH_CANDIDATE_OPTIONS),
         }
     )
     actions.append(
         {
-            "text": "🏠 返回首页",
+            "text": "🏠 首页",
             "callback_data": build_home_callback_data("cybercar", "home"),
             "row": len(COLLECT_PUBLISH_CANDIDATE_OPTIONS),
         }
@@ -2628,7 +2658,7 @@ def _build_comment_reply_menu_card(*, default_profile: str) -> Dict[str, Any]:
                 "row": idx // 2,
             }
         )
-    actions.append({"text": "🏠 返回首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": 2})
+    actions.append({"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": 2})
     return _build_submenu_card(
         title="点赞评论",
         subtitle=f"当前配置：{profile}｜只统计有评论的视频",
@@ -2649,8 +2679,8 @@ def _build_comment_reply_menu_card(*, default_profile: str) -> Dict[str, Any]:
 
 def _build_home_actions() -> list[dict[str, Any]]:
     return [
-        {"text": "🔐 平台登录", "callback_data": build_home_callback_data("cybercar", "login_menu"), "row": 0},
-        {"text": "📍 进程查看", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": 0},
+        {"text": "🔐 登录", "callback_data": build_home_callback_data("cybercar", "login_menu"), "row": 0},
+        {"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": 0},
         {"text": "✨ 即采即发", "callback_data": build_home_callback_data("cybercar", "collect_publish_latest_menu"), "row": 1},
         {"text": "💬 点赞评论", "callback_data": build_home_callback_data("cybercar", "comment_reply_menu"), "row": 1},
     ]
@@ -5319,16 +5349,16 @@ def _build_immediate_publish_confirm_reply_markup(item_id: str, source_url: str)
     rows: list[list[Dict[str, str]]] = []
     link = str(source_url or "").strip()
     if link:
-        rows.append([{"text": "🔗 查看原帖", "url": link}])
+        rows.append([{"text": "🔗 原帖", "url": link}])
     rows.append(
         [
-            {"text": "⚡ 普通发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}"},
-            {"text": "📝 原创发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}"},
+            {"text": "⚡ 发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}"},
+            {"text": "📝 原创", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}"},
         ]
     )
     rows.append(
         [
-            {"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}"},
+            {"text": "⏭ 跳过", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}"},
         ]
     )
     return _build_inline_keyboard(rows)
@@ -5436,11 +5466,11 @@ def _build_immediate_publish_confirm_card(item: Dict[str, Any], item_id: str) ->
         source_url=source_url,
         action_rows=[
             [
-                {"text": "⚡ 普通发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}"},
-                {"text": "📝 原创发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}"},
+                {"text": "⚡ 发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}"},
+                {"text": "📝 原创", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}"},
             ],
             [
-                {"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}"},
+                {"text": "⏭ 跳过", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}"},
             ],
         ],
         menu_label=_menu_breadcrumb_for_item(item),
@@ -9601,11 +9631,13 @@ def _send_background_feedback(
     if menu_section is not None:
         normalized_sections = [menu_section, *normalized_sections]
     normalized_sections = _optimize_feedback_sections_for_operator(normalized_sections)
+    feedback_actions = _build_failure_feedback_actions(status=status, sections=normalized_sections)
     card = build_action_feedback(
         status=status,
         title=display_title,
         subtitle=subtitle,
         sections=normalized_sections,
+        actions=feedback_actions,
         bot_name="CyberCar",
     )
     card["reply_markup"] = _with_home_button(card.get("reply_markup") if isinstance(card, dict) else None)
@@ -9751,7 +9783,7 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
         bot_name="CyberCar",
     )
     card["reply_markup"] = _build_inline_keyboard(
-        [[{"text": "🏠 返回首页", "callback_data": build_home_callback_data("cybercar", "home")}]]
+        [[{"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home")}]]
     )
     return card
 

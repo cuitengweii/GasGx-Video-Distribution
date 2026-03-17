@@ -679,19 +679,19 @@ def _build_telegram_prefilter_reply_markup(
         if str(token or "").strip()
     }
     if link:
-        actions.append({"text": "🔗 查看原帖", "url": link, "row": 0})
+        actions.append({"text": "🔗 原帖", "url": link, "row": 0})
     if mode_token == "immediate_manual_publish":
-        actions.append({"text": "⚡ 普通发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}", "row": 1})
+        actions.append({"text": "⚡ 发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}", "row": 1})
         if not target_tokens or "wechat" in target_tokens:
-            actions.append({"text": "📝 原创发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}", "row": 1})
-        actions.append({"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}", "row": 2})
+            actions.append({"text": "📝 原创", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_original|{item_id}", "row": 1})
+        actions.append({"text": "⏭ 跳过", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|skip|{item_id}", "row": 2})
     elif skip_only:
-        actions.append({"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|down|{item_id}", "row": 1})
+        actions.append({"text": "⏭ 跳过", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|down|{item_id}", "row": 1})
     else:
         actions.extend(
             [
                 {"text": "✅ 保留本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|up|{item_id}", "row": 1},
-                {"text": "⏭ 跳过本条", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|down|{item_id}", "row": 1},
+                {"text": "⏭ 跳过", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|down|{item_id}", "row": 1},
             ]
         )
     return build_telegram_card("collect_result", {"sections": []}, actions)["reply_markup"]
@@ -1873,7 +1873,7 @@ def _build_publish_notification_card(
                 },
             ],
         },
-        actions=([{"text": "🔗 查看原帖", "url": source_url, "row": 0}] if source_url else None),
+        actions=([{"text": "🔗 原帖", "url": source_url, "row": 0}] if source_url else None),
     )
     card["mode"] = "text"
     card["image"] = None

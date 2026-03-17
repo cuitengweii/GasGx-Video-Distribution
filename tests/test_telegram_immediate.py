@@ -307,8 +307,8 @@ def test_home_card_and_immediate_menu_include_process_status_button(tmp_path: Pa
     )
     immediate_card = worker_impl._build_collect_publish_latest_menu_card(default_profile=DEFAULT_PROFILE)
 
-    assert "📍 进程查看" in _reply_markup_texts(home_card["reply_markup"])
-    assert "📍 进程查看" in _reply_markup_texts(immediate_card["reply_markup"])
+    assert "📍 进度" in _reply_markup_texts(home_card["reply_markup"])
+    assert "📍 进度" in _reply_markup_texts(immediate_card["reply_markup"])
 
 
 def test_home_feedback_response_includes_process_status_button() -> None:
@@ -322,8 +322,8 @@ def test_home_feedback_response_includes_process_status_button() -> None:
     )
 
     texts = _reply_markup_texts(card["reply_markup"])
-    assert "📍 进程查看" in texts
-    assert "🏠 返回首页" in texts
+    assert "📍 进度" in texts
+    assert "🏠 首页" in texts
 
 
 def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_path: Path) -> None:
@@ -393,7 +393,7 @@ def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_pa
     assert "即采即发队列" in text
     assert "home_action_collect_publish_latest_test.log" in text
     assert "clip.mp4" in text
-    assert "🔄 刷新进度" in _reply_markup_texts(card["reply_markup"])
+    assert "🔄 刷新" in _reply_markup_texts(card["reply_markup"])
 
 
 def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Path, monkeypatch) -> None:
@@ -409,7 +409,7 @@ def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Pat
     assert len(record.cards) == 1
     card = record.cards[0]["card"]
     assert "即采即发进程查看" in str(card["text"])
-    assert "🔄 刷新进度" in _reply_markup_texts(card["reply_markup"])
+    assert "🔄 刷新" in _reply_markup_texts(card["reply_markup"])
 
 
 def test_handle_home_collect_publish_video_queues_task(tmp_path: Path, monkeypatch) -> None:
@@ -978,9 +978,9 @@ def test_build_telegram_prefilter_reply_markup_hides_original_for_image_publish(
     )
 
     texts = _reply_markup_texts(reply_markup)
-    assert "⚡ 普通发布" in texts
-    assert "⏭ 跳过本条" in texts
-    assert "📝 原创发布" not in texts
+    assert "⚡ 发布" in texts
+    assert "⏭ 跳过" in texts
+    assert "📝 原创" not in texts
 
 
 def test_run_collect_publish_latest_job_returns_failure_without_candidates(tmp_path: Path, monkeypatch) -> None:
@@ -2764,3 +2764,27 @@ def test_immediate_publish_feedback_omits_duplicate_platform_in_candidate_sectio
     labels = [str(entry.get("label") or "") for entry in candidate_section.get("items", []) if isinstance(entry, dict)]
 
     assert "平台" not in labels
+
+
+def test_build_failure_feedback_actions_prefers_login_and_progress_for_login_failures() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {"title": "失败原因", "items": [{"label": "原因", "value": "平台未登录"}]},
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    assert texts == ["🔐 登录", "📍 进度"]
+
+
+def test_build_failure_feedback_actions_uses_progress_for_generic_failures() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {"title": "失败原因", "items": [{"label": "原因", "value": "上传失败"}]},
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    assert texts == ["📍 进度"]
