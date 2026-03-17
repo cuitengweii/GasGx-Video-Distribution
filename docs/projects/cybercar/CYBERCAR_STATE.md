@@ -19,6 +19,11 @@ Last updated: 2026-03-17
 - Unified X download policy resolution across `collect` and Telegram immediate paths, added downloader stage observability, and introduced global `fail_fast` support for low-volume latest-first collection.
 - Adjusted fail-fast after real-host validation so low-volume collect only hits the newest `limit` candidates and does not abort the whole run when X GraphQL metadata requests all fail.
 - Added a Telegram watchdog supervisor plus Windows task-registration scripts so the bot can auto-recover when the worker dies or its heartbeat stalls.
+- Immediate image publish triage now has platform-specific recovery on Douyin and Kuaishou: Douyin no longer treats hidden file inputs as a hard failure when the editor already shows uploaded media, and Kuaishou now scores image upload inputs separately from the lingering "continue editing old video" shell.
+- Kuaishou image publish diagnostics were expanded around upload shell detection, file-input bind state, staged `page.set.upload_files` retries, and upload-surface snapshots so real-host failures can be traced without guessing from the final timeout alone.
+- Telegram failure cards now prefer the failing platform emoji from the failure-detail section so mixed-platform alerts surface the failing platform directly in the header.
+- Repaired the Douyin image immediate-publish path through the upload stage: the uploader now targets the real image drop zone instead of the cover uploader and treats the image editor state as upload-ready even when the page exposes no DOM file input.
+- Advanced the Douyin image publish flow past upload and caption fill into collection selection; the remaining blocker is confirming the updated "添加合集" row structure on the current creator page.
 
 ## Current Status
 
@@ -39,6 +44,11 @@ Last updated: 2026-03-17
 - The worker was restarted on 2026-03-16 and a real image review run was exercised; main remaining production issue is intermittent X/Telegram network instability, not legacy path coupling.
 - Real-host validation on 2026-03-16 still showed repeated X `Downloading GraphQL JSON` failures with `ConnectionResetError(10054)` even under direct-tun and low daily volume, so the dominant production risk remains X-side/network instability rather than downloader wiring.
 - Telegram runtime now also exposes `python -m cybercar telegram supervise`, `scripts/telegram_supervisor.ps1`, and `scripts/install_telegram_supervisor_task.ps1` for self-healing worker supervision.
+- Douyin image publish now has a code-side escape hatch for pages that already show `编辑图片 / 已添加1张图片 / 预览图文` but no longer expose a usable DOM file input.
+- Kuaishou image publish is still not production-stable. The latest live failure in `runtime/runtime/logs/immediate_publish_kuaishou_20260317_091800.log` shows the page staying on the upload shell for the full 420-second window with `File input bind state: count=0`, `max_count=0`, and repeated `拖拽图片到此或点击上传 / 上传图片` shell text.
+- The latest Kuaishou shell snapshot confirms two hidden file inputs remain visible to automation: one stale video input from "continue editing old video" and one image input for the shell upload area. Neither currently binds the selected image on the live host.
+- Douyin image publish no longer fails on `Could not find file input on douyin page.` for the inspected page state; current production failure has moved to collection confirmation on the image-post form.
+- Latest Douyin logs now show successful transition into image editor state (`编辑图片 / 已添加1张图片 / 继续添加`) and successful caption fill before collection selection begins.
 
 ## Open Work
 
@@ -51,6 +61,10 @@ Last updated: 2026-03-17
 - Real image candidate downloads can still fail on X metadata timeouts; if failures remain frequent after the immediate-path fail-fast override, network policy or timeout defaults need another pass.
 - Direct `collect` still needs one more real-host confirmation that a round with `fail_fast=true` and zero successful downloads exits cleanly all the way back to the shell prompt after the latest patch.
 - The watchdog path still needs one Windows validation pass that the scheduled tasks register correctly and recover a deliberately killed worker.
+- Kuaishou image publish still needs a real-host fix for the upload shell itself; current code now isolates the failure precisely, but the live page still refuses to bind the file to the shell input and never transitions into the image editor form.
+- Once Kuaishou is fixed, the immediate image path needs one more full live pass across Douyin, Xiaohongshu, and Kuaishou to confirm the new platform-specific upload readiness rules do not regress mixed-platform runs.
+- Douyin image collection selection still needs one real-host confirmation against the current creator-center DOM. The latest failure is `douyin collection selection not confirmed: target=赛博皮卡天津港现车, current=-, episode=-`.
+- Kuaishou image immediate publish is still timing out at `420s`; this thread did not address that branch after Xiaohongshu started succeeding again.
 
 ## Next Step
 
@@ -59,9 +73,14 @@ Last updated: 2026-03-17
 - Verify `python -m cybercar login status --platform wechat`, `douyin`, `xiaohongshu`, `kuaishou`, and `bilibili`.
 - Verify one complete manual publish from the Telegram review flow while the watchdog remains active in the background.
 - Continue deleting dead multi-bot helper code and add code-side recovery for corrupted action-queue state once the single-bot worker path is stable through a few real sessions.
+- Re-run `即采即发 > 图片 > 全部平台` after the latest Kuaishou upload-shell patch and inspect whether the new `page.set image stage` log lines ever move `max_count` above `0`.
+- If Kuaishou still stays on the shell page, capture the next `immediate_publish_kuaishou_*.log` and patch the upload-shell click/bind sequence directly around the visible `上传图片` button and `_upload-container_ysbff_*` region instead of the hidden input alone.
 
 ## Next Step Update
 
 - Re-run `python -m cybercar collect --profile cybertruck --limit 2` and verify the patched fail-fast path reaches the shell prompt with `Using discovered X URLs: 2` and no terminal `RuntimeError`.
 - Validate one Telegram immediate reviewed collect still keeps retry/fallback behavior after `_build_immediate_fast_x_download_args()` strips `--x-download-fail-fast`.
 - If X metadata resets still dominate, decide whether to shorten `socket_timeout_seconds` again for latest-first collection or force a different network path or cookie source for X only.
+- Re-run one Telegram `即采即发 > 图片 > 全部平台` task and inspect the newest `immediate_publish_douyin_*.log` to confirm whether the patched collection-row locator can now see and click the actual Douyin collection dropdown.
+- If Douyin still fails, capture the next log's `Collection select retry ... visible=...` line and compare it with the live creator page so the collection trigger heuristic can be tightened one step further.
+- After Douyin is green, open a separate thread for `kuaishou upload timeout (420s)` using the newest `immediate_publish_kuaishou_*.log`.

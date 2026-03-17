@@ -1,6 +1,6 @@
 # CyberCar Decisions
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
 
 ## 2026-03-15
 
@@ -24,3 +24,8 @@ Last updated: 2026-03-16
 - Windows Task Scheduler is allowed again only as a bootstrap layer for Telegram bot availability, not as an unattended collect/publish runner.
 - CyberCar now supports a resident Telegram watchdog plus a periodic `--once` self-heal probe so "worker dead but bot silent" incidents are recovered automatically.
 - Watchdog recovery must reuse `recover_bot_surface()` so process restart, `/start` command refresh, and home-surface rebuild stay on one code path.
+- On image platforms, DOM file-input presence is no longer the only source of truth. If the page already exposes stable editor-state evidence such as `编辑图片 / 已添加N张图片 / 预览图文 / 发布时间`, the flow should continue instead of failing purely because the upload input has been hidden or detached.
+- Kuaishou image upload must use platform-specific shell handling. Generic file-input discovery is insufficient because the page can expose both a stale video input from unfinished-edit state and a shell image input that never binds; code should prioritize the image shell explicitly, log bind counts, and treat the shell/editor transition as the real readiness boundary.
+- Douyin image publish readiness is no longer defined solely by DOM `input[type=file]` presence. If the page has already entered the image editor state (`编辑图片`, `已添加N张图片`, `继续添加`) and the publish form is visible, CyberCar should treat upload as complete and continue.
+- Douyin image upload trigger selection must prefer the real image drop zone over the cover uploader. The uploader now uses a JS-scored candidate search that heavily favors `drop-*` targets and penalizes cover-related `content-upload-*` nodes.
+- Douyin collection handling should locate the "添加合集" row by searching upward for the ancestor that owns multiple visible dropdown/combobox controls, rather than relying on a shallow `closest(...div)` match around the text label.

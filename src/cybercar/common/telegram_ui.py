@@ -289,6 +289,133 @@ def _decorate_failure_sections(status: str, sections: Sequence[Mapping[str, Any]
     return decorated
 
 
+def _pick_failure_header_emoji(status: str, sections: Sequence[Mapping[str, Any]], fallback: str) -> str:
+    status_token = str(status or "").strip().lower()
+    if status_token not in {"failed", "blocked", "alert", "login_required"}:
+        return str(fallback or "").strip()
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        title = str(section.get("title") or "").strip()
+        if title not in _FAILURE_DETAIL_SECTION_TITLES:
+            continue
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        for item in items:
+            if isinstance(item, Mapping):
+                label = str(item.get("label") or "").strip()
+                marker = label.split(" ", 1)[0].strip()
+                if marker:
+                    return marker
+            else:
+                marker = str(item or "").strip().split(" ", 1)[0].strip()
+                if marker:
+                    return marker
+    return str(fallback or "").strip()
+
+
+def _extract_primary_result_signal(sections: Sequence[Mapping[str, Any]]) -> str:
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        title = str(section.get("title") or "").strip()
+        if title not in {"人工关注", "执行摘要"}:
+            continue
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            label = str(item.get("label") or "").strip()
+            if label not in {"执行结果", "结果", "平台摘要"}:
+                continue
+            value = str(item.get("value") or item.get("text") or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _extract_platform_summary_signal(sections: Sequence[Mapping[str, Any]]) -> str:
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            label = str(item.get("label") or "").strip()
+            if label != "平台摘要":
+                continue
+            value = str(item.get("value") or item.get("text") or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _summarize_platform_subtitle(signal: str) -> str:
+    text = str(signal or "").strip()
+    if not text:
+        return ""
+    counts = {
+        "success": text.count("✅"),
+        "failed": text.count("📣"),
+        "login": text.count("🔐"),
+        "skipped": text.count("⏭️"),
+        "unknown": text.count("⚠️"),
+    }
+    parts: list[str] = []
+    if counts["success"] > 0:
+        parts.append(f"{counts['success']}个平台成功")
+    if counts["failed"] > 0:
+        parts.append(f"{counts['failed']}个平台失败")
+    if counts["login"] > 0:
+        parts.append(f"{counts['login']}个平台需登录")
+    if counts["skipped"] > 0:
+        parts.append(f"{counts['skipped']}个平台跳过")
+    if counts["unknown"] > 0:
+        parts.append(f"{counts['unknown']}个平台待确认")
+    return " / ".join(parts[:2])
+
+
+def _compact_subtitle_text(subtitle: str) -> str:
+    text = re.sub(r"\s+", " ", str(subtitle or "").strip())
+    if not text:
+        return ""
+    text = text.replace("当前配置：", "配置：")
+    text = text.replace("当前配置:", "配置：")
+    if len(text) <= 28:
+        return text
+    return text[:25].rstrip() + "..."
+
+
+def _decorate_card_subtitle(status: str, subtitle: str, sections: Sequence[Mapping[str, Any]]) -> str:
+    platform_signal = _extract_platform_summary_signal(sections)
+    platform_subtitle = _summarize_platform_subtitle(platform_signal)
+    if platform_subtitle:
+        return platform_subtitle
+    return _compact_subtitle_text(subtitle)
+
+
+def _decorate_positive_header(status: str, title: str, sections: Sequence[Mapping[str, Any]], fallback: str) -> tuple[str, str]:
+    status_token = str(status or "").strip().lower()
+    if status_token not in {"success", "done", "queued", "running"}:
+        return str(fallback or "").strip(), str(title or "").strip()
+    signal = _extract_primary_result_signal(sections)
+    title_text = str(title or "").strip()
+    signal_lower = signal.lower()
+    if any(token in signal for token in ("部分", "待确认", "需处理")) or ("✅" in signal and any(token in signal for token in ("📣", "🔐", "⚠️", "⏭️"))):
+        if "部分" not in title_text and "跳过" not in title_text:
+            title_text = f"{title_text}（部分）"
+        return "🟡", title_text
+    if any(token in signal for token in ("跳过", "⏭️")):
+        if "跳过" not in title_text:
+            title_text = f"{title_text}（跳过）"
+        return "⏭️", title_text
+    if status_token == "queued":
+        return "🕓", title_text
+    if status_token == "running":
+        return "⏳", title_text
+    return str(fallback or "").strip(), title_text
+
+
 def _prioritize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = [dict(section) for section in sections if isinstance(section, Mapping)]
     if not normalized:
@@ -386,6 +513,9 @@ def build_telegram_card(
             _decorate_failure_sections(status, _prioritize_card_sections(status, list(sections))),
         ),
     )
+    emoji = _pick_failure_header_emoji(status, sections, emoji)
+    emoji, title = _decorate_positive_header(status, title, sections, emoji)
+    subtitle = _decorate_card_subtitle(status, subtitle, sections)
     header = [f"<b>{_render_emoji(emoji)} {html.escape(bot_name)}｜{_render_inline_text(title)}</b>"]
     if subtitle:
         header.append(f"<i>{_render_inline_text(subtitle)}</i>")

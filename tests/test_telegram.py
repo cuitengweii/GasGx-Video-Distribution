@@ -270,8 +270,24 @@ def test_build_telegram_card_marks_notify_and_network_failures_with_distinct_ico
     )
 
     text = str(card["text"])
+    assert text.startswith("<b>🌐 CyberCar｜发送失败</b>")
     assert "• <b>🌐 原因</b>：Telegram timeout while sending card" in text
     assert "• <b>📨 说明</b>：chat_id missing for notify bot" in text
+
+
+def test_build_telegram_card_uses_login_icon_in_failure_header() -> None:
+    card = telegram_ui.build_telegram_card(
+        "alert",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {"title": "失败原因", "emoji": "⚠️", "items": [{"label": "原因", "value": "平台未登录"}]},
+            ],
+        },
+    )
+
+    assert str(card["text"]).startswith("<b>🔐 CyberCar｜发布失败</b>")
 
 
 def test_build_telegram_card_compacts_success_focus_to_three_primary_items() -> None:
@@ -301,3 +317,84 @@ def test_build_telegram_card_compacts_success_focus_to_three_primary_items() -> 
     assert text.index("• <b>执行结果</b>：成功") < text.index("<b>🤖 机器信息</b>")
     assert text.index("<b>🤖 机器信息</b>") < text.index("<b>📝 执行结果</b>")
     assert "• <b>时间窗口</b>：30 分钟" in text
+
+
+def test_build_telegram_card_marks_partial_success_in_header() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "发布完成",
+            "sections": [
+                {
+                    "title": "人工关注",
+                    "emoji": "🎯",
+                    "items": [
+                        {"label": "执行结果", "value": "部分完成"},
+                        {"label": "平台摘要", "value": "✅ 小红书成功 / 📣 抖音失败"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert str(card["text"]).startswith("<b>🟡 CyberCar｜发布完成（部分）</b>")
+
+
+def test_build_telegram_card_marks_skipped_success_in_header() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "发布完成",
+            "sections": [
+                {
+                    "title": "人工关注",
+                    "emoji": "🎯",
+                    "items": [
+                        {"label": "执行结果", "value": "跳过"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert str(card["text"]).startswith("<b>⏭️ CyberCar｜发布完成（跳过）</b>")
+
+
+def test_build_telegram_card_compacts_config_subtitle() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "发布完成",
+            "subtitle": "当前配置：cybertruck-profile-long-name",
+            "sections": [{"title": "人工关注", "emoji": "🎯", "items": [{"label": "执行结果", "value": "成功"}]}],
+        },
+    )
+
+    assert "<i>配置：cybertruck-profile-long..." in str(card["text"])
+
+
+def test_build_telegram_card_prefers_platform_summary_for_subtitle() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "发布完成",
+            "subtitle": "当前配置：cybertruck",
+            "sections": [
+                {
+                    "title": "人工关注",
+                    "emoji": "🎯",
+                    "items": [
+                        {"label": "执行结果", "value": "部分完成"},
+                        {"label": "平台摘要", "value": "✅ 小红书成功 / 📣 抖音失败 / 🔐 视频号登录"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "<i>1个平台成功 / 1个平台失败</i>" in text

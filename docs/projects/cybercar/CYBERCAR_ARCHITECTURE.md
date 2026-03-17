@@ -30,6 +30,12 @@ Last updated: 2026-03-16
 - New entrypoints are exposed only through the `cybercar` package and thin PowerShell wrappers.
 - Telegram shared/common modules are now vendored locally under `src/cybercar/common/` and mirrored through `src/Collection/shared/common/` compatibility wrappers.
 
+## Platform-Specific Publish Heuristics
+
+- `src/cybercar/engine.py` now carries a Douyin-specific image upload path that scores visible upload candidates in the live page DOM and prefers the actual image drop zone over cover-upload widgets.
+- The generic upload staging path now allows platform-specific "editor already ready" inference. For Douyin image posts, the transition into the image editor form is treated as the upload-complete boundary even if the creator page never surfaces a usable DOM file input.
+- Douyin collection selection now depends on locating the full collection row container and then enumerating its visible dropdown controls, because the current creator page no longer guarantees that the text label and the real trigger share a shallow wrapper node.
+
 ## Command Flow
 
 - `python -m cybercar immediate|collect|publish` -> `cybercar.cli` -> `cybercar.orchestrator` -> `cybercar.pipeline`
