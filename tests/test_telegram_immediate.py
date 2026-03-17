@@ -326,6 +326,20 @@ def test_home_feedback_response_includes_process_status_button() -> None:
     assert "🏠 首页" in texts
 
 
+def test_home_reply_keyboard_uses_same_short_labels_as_inline_actions() -> None:
+    keyboard = worker_impl._build_home_reply_keyboard()
+    rows = keyboard["keyboard"]
+    texts = [str(button.get("text") or "") for row in rows for button in row]
+
+    assert texts == ["🔐 登录", "📍 进度", "⚡ 即采即发", "💬 点赞评论"]
+
+
+def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
+    assert worker_impl._normalize_shortcut_text("🔐 登录") == "平台登录"
+    assert worker_impl._normalize_shortcut_text("📍 进度") == "进程查看"
+    assert worker_impl._normalize_shortcut_text("⚡ 即采即发") == "即采即发"
+
+
 def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     worker_state_path = workspace / worker_impl.DEFAULT_STATE_FILE

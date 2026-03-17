@@ -928,8 +928,8 @@ def _worker_state_path(workspace: Path) -> Path:
 def _build_home_reply_keyboard() -> Dict[str, Any]:
     return {
         "keyboard": [
-            [{"text": "🔐 平台登录"}, {"text": "📍 进程查看"}],
-            [{"text": "✨ 即采即发"}, {"text": "💬 点赞评论"}],
+            [{"text": "🔐 登录"}, {"text": "📍 进度"}],
+            [{"text": "⚡ 即采即发"}, {"text": "💬 点赞评论"}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
@@ -1002,7 +1002,7 @@ def _ensure_home_shortcut_keyboard(
         message_id = _send_text_message(
             bot_token=bot_token,
             chat_id=clean_chat_id,
-            text="已启用底部快捷键：可直接使用即采即发、进程查看、平台登录、点赞评论。",
+            text="已启用底部快捷键：可直接使用即采即发、进度、登录、点赞评论。",
             timeout_seconds=max(8, int(timeout_seconds)),
             reply_markup=_build_home_reply_keyboard(),
         )
@@ -1221,10 +1221,13 @@ def _normalize_shortcut_text(text: str) -> str:
     if not clean:
         return ""
     shortcut_map = {
+        "⚡ 即采即发": "即采即发",
         "✨ 即采即发": "即采即发",
         "即采即发": "即采即发",
+        "📍 进度": "进程查看",
         "📍 进程查看": "进程查看",
         "进程查看": "进程查看",
+        "🔐 登录": "平台登录",
         "🔐 平台登录": "平台登录",
         "平台登录": "平台登录",
         "💬 点赞评论": "点赞评论",
@@ -10509,13 +10512,13 @@ def _help_text() -> str:
         f"{BOT_NAME} 入口说明\n"
         "手机端命令菜单已切到固定底部快捷入口。\n"
         "日常操作优先使用底部快捷键；下面这些 slash 命令仅作为兜底。\n\n"
-        "常用入口：/start、即采即发、平台登录、点赞评论。\n\n"
+        "常用入口：/start、即采即发、登录、点赞评论。\n\n"
         f"{chr(10).join(command_lines)}\n\n"
         "示例：\n"
         "- /start\n"
         "- /menu\n"
         "- 即采即发\n"
-        "- 平台登录"
+        "- 登录"
     )
 
 
