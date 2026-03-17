@@ -188,6 +188,24 @@ def test_apply_comment_reply_like_to_reply_wait_uses_random_interval(monkeypatch
     assert waits == [3.25]
 
 
+def test_humanized_wechat_comment_pause_prefers_page_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    timeout_calls: list[int] = []
+    sleep_calls: list[float] = []
+
+    class FakePage:
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            timeout_calls.append(int(milliseconds))
+
+    monkeypatch.setattr(engine.random, "uniform", lambda a, b: 0.42)
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: sleep_calls.append(float(seconds)))
+
+    waited = engine._humanized_wechat_comment_reaction_pause(FakePage(), "wechat comment submit click")
+
+    assert waited == 0.42
+    assert timeout_calls == [420]
+    assert sleep_calls == []
+
+
 def test_append_comment_reply_markdown_writes_json_code_block(tmp_path) -> None:
     target = tmp_path / "runtime" / "wechat_comment_reply_records.md"
 

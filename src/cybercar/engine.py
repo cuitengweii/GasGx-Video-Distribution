@@ -175,6 +175,7 @@ DEFAULT_COLLECTION_NAME = "赛博皮卡天津港现车"
 DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
     "douyin": "赛博皮卡现车：aawbcc",
 }
+DEFAULT_KUAISHOU_RANDOM_SCHEDULE_MAX_MINUTES = 45
 CREATE_POST_URL = "https://channels.weixin.qq.com/platform/post/create"
 WECHAT_MICRO_CREATE_POST_URL = "https://channels.weixin.qq.com/micro/content/post/create"
 DOUYIN_CREATE_POST_URL = "https://creator.douyin.com/creator-micro/content/upload"
@@ -315,6 +316,43 @@ UPLOAD_INTERVAL_MIN_SECONDS = 45
 UPLOAD_INTERVAL_MAX_SECONDS = 120
 BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES = 121
 BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT = 240
+DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
+    "wechat": {
+        "collection_name": DEFAULT_COLLECTION_NAME,
+        "save_draft": True,
+        "publish_now": False,
+        "declare_original": False,
+        "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
+    },
+    "douyin": {
+        "collection_name": DEFAULT_PLATFORM_COLLECTION_NAMES.get("douyin", DEFAULT_COLLECTION_NAME),
+        "save_draft": False,
+        "publish_now": True,
+        "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
+    },
+    "xiaohongshu": {
+        "collection_name": DEFAULT_COLLECTION_NAME,
+        "save_draft": False,
+        "publish_now": True,
+        "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
+    },
+    "kuaishou": {
+        "collection_name": DEFAULT_COLLECTION_NAME,
+        "save_draft": False,
+        "publish_now": True,
+        "auto_publish_random_schedule": False,
+        "random_schedule_max_minutes": DEFAULT_KUAISHOU_RANDOM_SCHEDULE_MAX_MINUTES,
+        "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
+    },
+    "bilibili": {
+        "collection_name": DEFAULT_COLLECTION_NAME,
+        "save_draft": False,
+        "publish_now": True,
+        "auto_publish_random_schedule": False,
+        "random_schedule_max_minutes": BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
+        "upload_timeout": max(600, UPLOAD_TIMEOUT_SECONDS),
+    },
+}
 KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 150
 WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 90
 DEFAULT_AUTO_DELETE_SOURCE_FILES = False
@@ -1546,7 +1584,7 @@ def _prepare_platform_login_qr_notice(
                 active_page.refresh()
             except Exception:
                 pass
-        time.sleep(1.0)
+        _humanized_publish_settle_pause(f"{platform} login page refresh settle")
     if not _is_platform_login_gate(active_page, platform):
         _mark_platform_session_ready(platform, profile_dir, url=str(getattr(active_page, "url", "") or open_target_url or ""))
         return {"ok": False, "needs_login": False, "error": f"{platform} already logged in"}
@@ -1554,7 +1592,7 @@ def _prepare_platform_login_qr_notice(
     qr_source = _extract_login_qr_source(active_page, platform_name=platform)
     if (not qr_source) and platform == "wechat":
         _log("[Uploader:wechat] Login QR not ready on initial scan; wait and retry once before fallback.")
-        time.sleep(2.0)
+        _humanized_publish_settle_pause("wechat login qr retry settle")
         qr_source = _extract_login_qr_source(active_page, timeout_seconds=12.0, platform_name=platform)
     if not qr_source:
         login_entry_url = str(PLATFORM_LOGIN_ENTRY_URLS.get(platform) or "").strip()
@@ -1565,7 +1603,7 @@ def _prepare_platform_login_qr_notice(
             )
             try:
                 active_page.get(login_entry_url)
-                time.sleep(1.5)
+                _humanized_publish_settle_pause(f"{platform} dedicated login entry settle")
             except Exception as exc:
                 _log(f"[Uploader:{platform}] Open dedicated login entry failed: {exc}")
             else:
@@ -2621,7 +2659,7 @@ def _prepare_platform_login_qr_surface(page: ChromiumPage, platform_name: str = 
     for ctx in contexts:
         payload = _prepare_login_qr_context(ctx, platform)
         if bool(payload.get("clicked")):
-            time.sleep(0.8)
+            _humanized_publish_settle_pause(f"{platform} login qr surface settle")
             return
 
 
@@ -3905,15 +3943,60 @@ def _merge_publish_platform_config(raw: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     if not isinstance(raw, dict):
         return result
-    platforms = raw.get("platforms") if isinstance(raw.get("platforms"), dict) else {}
+    platforms = raw.get("platforms") if "platforms" in raw and isinstance(raw.get("platforms"), dict) else raw
+    if not isinstance(platforms, dict):
+        return result
     for key, value in platforms.items():
         platform = str(key or "").strip().lower()
         if platform not in SUPPORTED_UPLOAD_PLATFORMS or not isinstance(value, dict):
             continue
+        merged = dict(DEFAULT_PLATFORM_PUBLISH_SETTINGS.get(platform, {}))
         collection_name = str(value.get("collection_name", "") or "").strip()
         if collection_name:
-            result[platform] = {"collection_name": collection_name}
+            merged["collection_name"] = collection_name
+        if "save_draft" in value:
+            merged["save_draft"] = _to_bool(value.get("save_draft"), default=bool(merged.get("save_draft", False)))
+        if "publish_now" in value:
+            merged["publish_now"] = _to_bool(value.get("publish_now"), default=bool(merged.get("publish_now", False)))
+        if "declare_original" in value:
+            merged["declare_original"] = _to_bool(
+                value.get("declare_original"),
+                default=bool(merged.get("declare_original", False)),
+            )
+        if "auto_publish_random_schedule" in value:
+            merged["auto_publish_random_schedule"] = _to_bool(
+                value.get("auto_publish_random_schedule"),
+                default=bool(merged.get("auto_publish_random_schedule", False)),
+            )
+        if "random_schedule_max_minutes" in value:
+            merged["random_schedule_max_minutes"] = _coerce_int(
+                value.get("random_schedule_max_minutes"),
+                int(merged.get("random_schedule_max_minutes", 0) or 0),
+                minimum=1,
+            )
+        if "upload_timeout" in value:
+            merged["upload_timeout"] = _coerce_int(
+                value.get("upload_timeout"),
+                int(merged.get("upload_timeout", UPLOAD_TIMEOUT_SECONDS) or UPLOAD_TIMEOUT_SECONDS),
+                minimum=30,
+            )
+        result[platform] = merged
     return result
+
+
+def resolve_platform_publish_config(runtime_config: Optional[dict[str, Any]], platform_name: str) -> dict[str, Any]:
+    platform = str(platform_name or "").strip().lower()
+    defaults = dict(DEFAULT_PLATFORM_PUBLISH_SETTINGS.get(platform, {}))
+    defaults["collection_name"] = defaults.get("collection_name") or str(
+        DEFAULT_PLATFORM_COLLECTION_NAMES.get(platform, "") or DEFAULT_COLLECTION_NAME
+    ).strip()
+    payload = runtime_config if isinstance(runtime_config, dict) else {}
+    publish_cfg = payload.get("publish") if isinstance(payload.get("publish"), dict) else {}
+    platform_cfgs = publish_cfg.get("platforms") if isinstance(publish_cfg.get("platforms"), dict) else {}
+    if isinstance(platform_cfgs.get(platform), dict):
+        defaults.update(_merge_publish_platform_config({platform: platform_cfgs.get(platform) or {}}).get(platform, {}))
+    defaults["collection_name"] = resolve_platform_collection_name(payload, platform)
+    return defaults
 
 
 def resolve_platform_collection_name(
@@ -4009,6 +4092,38 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
     merged["spark_ai"] = _merge_spark_ai_config(payload.get("spark_ai"))
     merged["comment_reply"] = _merge_comment_reply_config(payload.get("comment_reply"))
     return merged
+
+
+def _resolve_platform_upload_timeout_from_runtime(
+    runtime_config: Optional[dict[str, Any]],
+    platform_name: str,
+    *,
+    cli_timeout: int,
+    cli_default: int,
+    minimum: int,
+) -> int:
+    configured = resolve_platform_publish_config(runtime_config, platform_name)
+    configured_timeout = max(minimum, int(configured.get("upload_timeout", cli_default) or cli_default))
+    normalized_cli = max(1, int(cli_timeout or cli_default))
+    if normalized_cli != cli_default:
+        return max(minimum, normalized_cli)
+    return configured_timeout
+
+
+def _resolve_platform_random_schedule_minutes_from_runtime(
+    runtime_config: Optional[dict[str, Any]],
+    platform_name: str,
+    *,
+    cli_value: int,
+    cli_default: int,
+    minimum: int,
+) -> int:
+    configured = resolve_platform_publish_config(runtime_config, platform_name)
+    configured_minutes = max(minimum, int(configured.get("random_schedule_max_minutes", cli_default) or cli_default))
+    normalized_cli = max(1, int(cli_value or cli_default))
+    if normalized_cli != cli_default:
+        return max(minimum, normalized_cli)
+    return configured_minutes
 
 
 def _comment_reply_state_path(workspace: Workspace) -> Path:
@@ -4785,7 +4900,9 @@ def _build_wechat_comment_login_failure_result(
     workspace: Workspace,
     *,
     reason: str,
+    login_notify_result: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    payload = dict(login_notify_result) if isinstance(login_notify_result, dict) else {}
     return {
         "ok": False,
         "reason": str(reason or "").strip() or "comment_login_required",
@@ -4794,6 +4911,14 @@ def _build_wechat_comment_login_failure_result(
         "posts_scanned": 0,
         "posts_selected": 0,
         "replies_sent": 0,
+        "login_required": bool(payload.get("needs_login")),
+        "login_notify_sent": bool(payload.get("sent")),
+        "login_notification_mode": str(payload.get("notification_mode") or "").strip(),
+        "login_notification_error": str(payload.get("error") or "").strip(),
+        "login_qr_error": str((payload.get("qr_result") or {}).get("error") or "").strip()
+        if isinstance(payload.get("qr_result"), dict)
+        else "",
+        "login_url": str(payload.get("url") or "").strip(),
     }
 
 
@@ -5969,7 +6094,10 @@ def _playwright_wait_reply_confirm(frame: Any, comment_index: int, reply_text: s
                 return True
         except Exception:
             pass
-        _humanized_wechat_comment_retry_pause(getattr(frame, "page", None), "wechat reply confirm retry")
+        try:
+            frame.page.wait_for_timeout(400)
+        except Exception:
+            time.sleep(0.4)
     return False
 
 
@@ -6120,12 +6248,12 @@ def run_wechat_comment_reply(
                         break
                     posts_scanned += 1
                     pw_page.goto(WECHAT_COMMENT_MANAGER_URL, wait_until="domcontentloaded", timeout=15000)
-                    pw_page.wait_for_timeout(1200)
+                    _humanized_wechat_comment_settle_pause(pw_page, "wechat comment manager page settle")
                     if not _playwright_open_comment_manager(pw_page, post, frame_hint=pw_frame):
                         playwright_needs_native_retry = True
                         _comment_reply_log(debug_enabled, "Skip post: Playwright comment manager not opened")
                         continue
-                    pw_page.wait_for_timeout(1500)
+                    _humanized_wechat_comment_settle_pause(pw_page, "wechat comment manager detail settle")
                     _playwright_wait_comment_items_ready(pw_page, timeout_seconds=6.0)
                     pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
                     if pw_frame is None:
@@ -6221,7 +6349,7 @@ def run_wechat_comment_reply(
                                 else:
                                     _comment_reply_log(debug_enabled, "Playwright submit reply failed")
                                 continue
-                            pw_page.wait_for_timeout(500)
+                            _humanized_wechat_comment_reaction_pause(pw_page, "wechat comment post-submit state refresh")
                             pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
                             if pw_frame is None:
                                 playwright_needs_native_retry = True
@@ -6253,7 +6381,7 @@ def run_wechat_comment_reply(
                             _save_comment_reply_state(workspace, state)
                             last_reply_at = _parse_comment_reply_timestamp(record.get("replied_at")) or datetime.now()
                             sent_in_round = True
-                            pw_page.wait_for_timeout(1000)
+                            _humanized_wechat_comment_settle_pause(pw_page, "wechat comment reply post-submit settle")
                             if latest_only or len(reply_records) >= max_replies:
                                 break
                         if latest_only or len(reply_records) >= max_replies:
@@ -6265,7 +6393,7 @@ def run_wechat_comment_reply(
                         if stagnant_rounds >= 2:
                             break
                         _playwright_scroll_wechat_list(pw_frame, [".comment-list", ".comment-main-content", ".scroll-list", ".scroll-list__wrp", "[class*='scroll-list']"])
-                        pw_page.wait_for_timeout(1000)
+                        _humanized_wechat_comment_retry_pause(pw_page, "wechat comment list scroll")
         finally:
             try:
                 browser.close()
@@ -6308,7 +6436,8 @@ def run_wechat_comment_reply(
             )
             return _build_wechat_comment_login_failure_result(
                 workspace,
-                reason="comment_manager_not_ready" if bool(login_notify_result.get("needs_login")) else "comment_manager_not_ready",
+                reason="comment_manager_not_ready",
+                login_notify_result=login_notify_result,
             )
 
         posts = _collect_recent_commented_posts(page, max_posts, debug=debug_enabled)
@@ -6322,7 +6451,7 @@ def run_wechat_comment_reply(
                 f"Open post '{_single_line_preview(str(post.get('title') or ''), 72)}' comments={post.get('comment_count')}",
             )
             page.get(WECHAT_COMMENT_MANAGER_URL)
-            time.sleep(1.0)
+            _humanized_publish_settle_pause("wechat comment manager page settle")
             if not open_comment_manager(page, post):
                 _comment_reply_log(debug_enabled, "Skip post: comment manager not opened")
                 login_notify_result = _maybe_notify_wechat_comment_login_required(
@@ -6343,9 +6472,13 @@ def run_wechat_comment_reply(
                     "[CommentReply] Open manager login notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
                 )
                 if bool(login_notify_result.get("needs_login")):
-                    return _build_wechat_comment_login_failure_result(workspace, reason="comment_manager_open_failed")
+                    return _build_wechat_comment_login_failure_result(
+                        workspace,
+                        reason="comment_manager_open_failed",
+                        login_notify_result=login_notify_result,
+                    )
                 continue
-            time.sleep(1.0)
+            _humanized_publish_settle_pause("wechat comment manager detail settle")
 
             seen_comment_fingerprints: set[str] = set()
             stagnant_rounds = 0
@@ -6419,7 +6552,11 @@ def run_wechat_comment_reply(
                             "[CommentReply] Submit reply login notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
                         )
                         if bool(login_notify_result.get("needs_login")):
-                            return _build_wechat_comment_login_failure_result(workspace, reason="comment_reply_submit_failed")
+                            return _build_wechat_comment_login_failure_result(
+                                workspace,
+                                reason="comment_reply_submit_failed",
+                                login_notify_result=login_notify_result,
+                            )
                         continue
                     if not wait_reply_confirm(page, int(comment.get("index") or 0), reply_text):
                         _comment_reply_log(debug_enabled, "Reply confirm timeout")
@@ -6441,7 +6578,11 @@ def run_wechat_comment_reply(
                             "[CommentReply] Reply confirm login notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
                         )
                         if bool(login_notify_result.get("needs_login")):
-                            return _build_wechat_comment_login_failure_result(workspace, reason="comment_reply_confirm_timeout")
+                            return _build_wechat_comment_login_failure_result(
+                                workspace,
+                                reason="comment_reply_confirm_timeout",
+                                login_notify_result=login_notify_result,
+                            )
                         continue
 
                     record = _remember_comment_reply(
@@ -6462,7 +6603,7 @@ def run_wechat_comment_reply(
                         f"Replied: {_single_line_preview(str(comment.get('content') or ''), 60)} -> {reply_text}",
                     )
                     sent_in_round = True
-                    time.sleep(1.0)
+                    _humanized_publish_settle_pause("wechat comment reply post-submit settle")
                     if latest_only or len(reply_records) >= max_replies:
                         break
 
@@ -6475,7 +6616,7 @@ def run_wechat_comment_reply(
                 if stagnant_rounds >= 2:
                     break
                 _scroll_wechat_comment_list(page)
-                time.sleep(1.0)
+                _humanized_publish_retry_pause("wechat comment list scroll")
 
     state["items"] = _prune_comment_reply_state_items(items)
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -22323,9 +22464,30 @@ def main() -> int:
                     _log(f"[Uploader:{platform}] No eligible source files in shared pool, skip this platform.")
                     continue
                 _log(f"[Uploader:{platform}] Use shared source pool: {len(targets)} candidates.")
+                platform_publish_cfg = resolve_platform_publish_config(runtime_config, platform)
                 platform_collection_name = str(
                     resolved_collection_names.get(platform, "") or resolved_collection_name or ""
                 ).strip()
+                platform_upload_timeout = _resolve_platform_upload_timeout_from_runtime(
+                    runtime_config,
+                    platform,
+                    cli_timeout=int(args.upload_timeout),
+                    cli_default=UPLOAD_TIMEOUT_SECONDS,
+                    minimum=(600 if platform == "bilibili" else 30),
+                )
+                wechat_declare_original = bool(
+                    getattr(args, "wechat_declare_original", False) or platform_publish_cfg.get("declare_original", False)
+                )
+                kuaishou_auto_publish_random_schedule = bool(
+                    getattr(args, "kuaishou_auto_publish_random_schedule", False)
+                    or platform_publish_cfg.get("auto_publish_random_schedule", False)
+                )
+                bilibili_auto_publish_random_schedule = bool(
+                    getattr(args, "bilibili_auto_publish_random_schedule", False)
+                    or platform_publish_cfg.get("auto_publish_random_schedule", False)
+                )
+                platform_save_draft = bool(platform_publish_cfg.get("save_draft", False) and not args.no_save_draft)
+                platform_publish_now = bool(platform_publish_cfg.get("publish_now", True))
 
                 success_count = 0
                 for idx, target in enumerate(targets):
@@ -22353,9 +22515,10 @@ def main() -> int:
                             target_video=target,
                             collection_name=platform_collection_name,
                             debug_port=args.debug_port,
-                            save_draft=not args.no_save_draft,
-                            declare_original=bool(getattr(args, "wechat_declare_original", False)),
-                            upload_timeout=max(30, int(args.upload_timeout)),
+                            save_draft=platform_save_draft,
+                            publish_now=platform_publish_now,
+                            declare_original=wechat_declare_original,
+                            upload_timeout=platform_upload_timeout,
                             auto_open_chrome=not args.no_auto_open_chrome,
                             chrome_path=chrome_path,
                             chrome_user_data_dir=chrome_user_data_dir,
@@ -22372,8 +22535,9 @@ def main() -> int:
                             target_video=target,
                             collection_name=platform_collection_name,
                             debug_port=args.debug_port,
-                            save_draft=not args.no_save_draft,
-                            upload_timeout=max(30, int(args.upload_timeout)),
+                            save_draft=platform_save_draft,
+                            publish_now=platform_publish_now,
+                            upload_timeout=platform_upload_timeout,
                             auto_open_chrome=not args.no_auto_open_chrome,
                             chrome_path=chrome_path,
                             chrome_user_data_dir=chrome_user_data_dir,
@@ -22389,8 +22553,9 @@ def main() -> int:
                             caption=(args.caption or "").strip() or None,
                             target_video=target,
                             debug_port=args.debug_port,
-                            save_draft=not args.no_save_draft,
-                            upload_timeout=max(30, int(args.upload_timeout)),
+                            save_draft=platform_save_draft,
+                            publish_now=platform_publish_now,
+                            upload_timeout=platform_upload_timeout,
                             auto_open_chrome=not args.no_auto_open_chrome,
                             chrome_path=chrome_path,
                             chrome_user_data_dir=chrome_user_data_dir,
@@ -22406,10 +22571,17 @@ def main() -> int:
                             caption=(args.caption or "").strip() or None,
                             target_video=target,
                             debug_port=args.debug_port,
-                            save_draft=not args.no_save_draft,
-                            auto_publish_random_schedule=bool(args.kuaishou_auto_publish_random_schedule),
-                            random_schedule_max_minutes=max(1, int(args.kuaishou_random_schedule_max_minutes)),
-                            upload_timeout=max(30, int(args.upload_timeout)),
+                            save_draft=platform_save_draft,
+                            publish_now=platform_publish_now,
+                            auto_publish_random_schedule=kuaishou_auto_publish_random_schedule,
+                            random_schedule_max_minutes=_resolve_platform_random_schedule_minutes_from_runtime(
+                                runtime_config,
+                                "kuaishou",
+                                cli_value=int(args.kuaishou_random_schedule_max_minutes),
+                                cli_default=DEFAULT_KUAISHOU_RANDOM_SCHEDULE_MAX_MINUTES,
+                                minimum=1,
+                            ),
+                            upload_timeout=platform_upload_timeout,
                             auto_open_chrome=not args.no_auto_open_chrome,
                             chrome_path=chrome_path,
                             chrome_user_data_dir=chrome_user_data_dir,
@@ -22426,13 +22598,17 @@ def main() -> int:
                             target_video=target,
                             collection_name=platform_collection_name,
                             debug_port=args.debug_port,
-                            save_draft=not args.no_save_draft,
-                            auto_publish_random_schedule=bool(args.bilibili_auto_publish_random_schedule),
-                            random_schedule_max_minutes=max(
-                                BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
-                                int(args.bilibili_random_schedule_max_minutes),
+                            save_draft=platform_save_draft,
+                            publish_now=platform_publish_now,
+                            auto_publish_random_schedule=bilibili_auto_publish_random_schedule,
+                            random_schedule_max_minutes=_resolve_platform_random_schedule_minutes_from_runtime(
+                                runtime_config,
+                                "bilibili",
+                                cli_value=int(args.bilibili_random_schedule_max_minutes),
+                                cli_default=BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
+                                minimum=BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
                             ),
-                            upload_timeout=max(600, int(args.upload_timeout)),
+                            upload_timeout=platform_upload_timeout,
                             auto_open_chrome=not args.no_auto_open_chrome,
                             chrome_path=chrome_path,
                             chrome_user_data_dir=chrome_user_data_dir,

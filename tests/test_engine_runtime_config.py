@@ -36,3 +36,27 @@ def test_load_runtime_config_promotes_legacy_platform_collection_into_publish_pl
     assert payload["collection_name"] == "Global Collection"
     assert payload["collection_names"]["douyin"] == "Legacy Douyin Collection"
     assert payload["publish"]["platforms"]["douyin"]["collection_name"] == "Legacy Douyin Collection"
+
+
+def test_resolve_platform_publish_config_reads_structured_platform_settings() -> None:
+    runtime_config = {
+        "publish": {
+            "platforms": {
+                "wechat": {
+                    "collection_name": "Wechat Collection",
+                    "save_draft": True,
+                    "publish_now": False,
+                    "declare_original": True,
+                    "upload_timeout": 480,
+                }
+            }
+        }
+    }
+
+    payload = engine.resolve_platform_publish_config(runtime_config, "wechat")
+
+    assert payload["collection_name"] == "Wechat Collection"
+    assert payload["save_draft"] is True
+    assert payload["publish_now"] is False
+    assert payload["declare_original"] is True
+    assert payload["upload_timeout"] == 480

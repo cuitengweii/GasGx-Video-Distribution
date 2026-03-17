@@ -491,29 +491,112 @@ def _resolve_prefilter_platform_hint(upload_platforms: str) -> str:
 
 def _resolve_platform_publish_mode(args: argparse.Namespace, platform: str) -> PlatformPublishMode:
     platform_name = str(platform or "").strip().lower()
+    return _resolve_platform_publish_mode_with_config(args, platform_name, runtime_config=None)
+
+
+def _resolve_platform_publish_mode_with_config(
+    args: argparse.Namespace,
+    platform: str,
+    runtime_config: dict[str, Any] | None,
+) -> PlatformPublishMode:
+    platform_name = str(platform or "").strip().lower()
+    config = (
+        core.resolve_platform_publish_config(runtime_config, platform_name)
+        if hasattr(core, "resolve_platform_publish_config")
+        else {}
+    )
     if platform_name == "wechat":
         publish_now = bool(getattr(args, "wechat_publish_now", False))
         if bool(getattr(args, "publish_only", False)) and not bool(getattr(args, "wechat_save_draft_only", False)):
             publish_now = True
-        save_draft = bool(not publish_now and not getattr(args, "no_save_draft", False))
+        elif not publish_now:
+            publish_now = bool(config.get("publish_now", False))
+        save_draft = bool(
+            not publish_now
+            and (
+                bool(config.get("save_draft", True))
+                if not getattr(args, "no_save_draft", False)
+                else False
+            )
+        )
         return PlatformPublishMode(save_draft=save_draft, publish_now=publish_now)
     if platform_name == "bilibili":
         return PlatformPublishMode(
-            save_draft=False,
-            publish_now=True,
+            save_draft=bool(config.get("save_draft", False) and not getattr(args, "no_save_draft", False)),
+            publish_now=bool(config.get("publish_now", True)),
             bilibili_auto_publish_random_schedule=bool(
                 getattr(args, "bilibili_auto_publish_random_schedule", False)
+                or config.get("auto_publish_random_schedule", False)
             ),
         )
     if platform_name == "kuaishou":
         return PlatformPublishMode(
-            save_draft=False,
-            publish_now=True,
+            save_draft=bool(config.get("save_draft", False) and not getattr(args, "no_save_draft", False)),
+            publish_now=bool(config.get("publish_now", True)),
             kuaishou_auto_publish_random_schedule=bool(
                 getattr(args, "kuaishou_auto_publish_random_schedule", False)
+                or config.get("auto_publish_random_schedule", False)
             ),
         )
-    return PlatformPublishMode(save_draft=False, publish_now=True)
+    return PlatformPublishMode(
+        save_draft=bool(config.get("save_draft", False) and not getattr(args, "no_save_draft", False)),
+        publish_now=bool(config.get("publish_now", True)),
+    )
+
+
+def _resolve_platform_upload_timeout(
+    args: argparse.Namespace,
+    runtime_config: dict[str, Any] | None,
+    platform: str,
+    *,
+    minimum: int,
+) -> int:
+    default_timeout = int(getattr(core, "UPLOAD_TIMEOUT_SECONDS", 420))
+    cli_timeout = max(1, int(getattr(args, "upload_timeout", default_timeout) or default_timeout))
+    config = (
+        core.resolve_platform_publish_config(runtime_config, platform)
+        if hasattr(core, "resolve_platform_publish_config")
+        else {}
+    )
+    configured_timeout = max(minimum, int(config.get("upload_timeout", default_timeout) or default_timeout))
+    if cli_timeout != default_timeout:
+        return max(minimum, cli_timeout)
+    return configured_timeout
+
+
+def _resolve_platform_random_schedule_max_minutes(
+    args: argparse.Namespace,
+    runtime_config: dict[str, Any] | None,
+    platform: str,
+    *,
+    cli_attr: str,
+    parser_default: int,
+    minimum: int,
+) -> int:
+    cli_value = max(1, int(getattr(args, cli_attr, parser_default) or parser_default))
+    config = (
+        core.resolve_platform_publish_config(runtime_config, platform)
+        if hasattr(core, "resolve_platform_publish_config")
+        else {}
+    )
+    configured = max(minimum, int(config.get("random_schedule_max_minutes", parser_default) or parser_default))
+    if cli_value != parser_default:
+        return max(minimum, cli_value)
+    return configured
+
+
+def _resolve_wechat_declare_original(
+    args: argparse.Namespace,
+    runtime_config: dict[str, Any] | None,
+) -> bool:
+    if bool(getattr(args, "wechat_declare_original", False)):
+        return True
+    config = (
+        core.resolve_platform_publish_config(runtime_config, "wechat")
+        if hasattr(core, "resolve_platform_publish_config")
+        else {}
+    )
+    return bool(config.get("declare_original", False))
 
 
 def _build_telegram_prefilter_message(
@@ -2660,6 +2743,14 @@ def _build_publish_only_context(args: argparse.Namespace) -> CycleContext:
     )
     configured_collection_name = str(runtime_config.get("collection_name", "") or "").strip()
     resolved_collection_name = (args.collection_name or "").strip() or configured_collection_name or core.DEFAULT_COLLECTION_NAME
+    resolved_collection_names = {
+        platform: core.resolve_platform_collection_name(
+            runtime_config,
+            platform,
+            cli_collection_name=(args.collection_name or "").strip(),
+        )
+        for platform in core.SUPPORTED_UPLOAD_PLATFORMS
+    }
     chrome_user_data_dir = (args.chrome_user_data_dir or "").strip() or core.DEFAULT_CHROME_USER_DATA_DIR
     processed_outputs = _list_existing_processed_outputs(workspace, media_kind=collect_media_kind)
     collected_at = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -2761,7 +2852,8 @@ def _publish_once(
         )
         return True
 
-    publish_mode = _resolve_platform_publish_mode(args, platform)
+    runtime_config = core._load_runtime_config(args.config or core.DEFAULT_CONFIG_PATH)
+    publish_mode = _resolve_platform_publish_mode_with_config(args, platform, runtime_config=runtime_config)
     platform_collection_name = str((ctx.collection_names or {}).get(platform, "") or ctx.collection_name or "").strip()
     try:
         if platform == "wechat":
@@ -2773,8 +2865,8 @@ def _publish_once(
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
-                declare_original=bool(getattr(args, "wechat_declare_original", False)),
-                upload_timeout=max(30, int(args.upload_timeout)),
+                declare_original=_resolve_wechat_declare_original(args, runtime_config),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "wechat", minimum=30),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -2793,7 +2885,7 @@ def _publish_once(
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
-                upload_timeout=max(30, int(args.upload_timeout)),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "douyin", minimum=30),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -2811,7 +2903,7 @@ def _publish_once(
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
-                upload_timeout=max(30, int(args.upload_timeout)),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "xiaohongshu", minimum=30),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -2830,8 +2922,15 @@ def _publish_once(
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
                 auto_publish_random_schedule=publish_mode.kuaishou_auto_publish_random_schedule,
-                random_schedule_max_minutes=max(1, int(args.kuaishou_random_schedule_max_minutes)),
-                upload_timeout=max(30, int(args.upload_timeout)),
+                random_schedule_max_minutes=_resolve_platform_random_schedule_max_minutes(
+                    args,
+                    runtime_config,
+                    "kuaishou",
+                    cli_attr="kuaishou_random_schedule_max_minutes",
+                    parser_default=45,
+                    minimum=1,
+                ),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "kuaishou", minimum=30),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -2850,11 +2949,15 @@ def _publish_once(
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
                 auto_publish_random_schedule=publish_mode.bilibili_auto_publish_random_schedule,
-                random_schedule_max_minutes=max(
-                    BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
-                    int(getattr(args, "bilibili_random_schedule_max_minutes", DEFAULT_BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES)),
+                random_schedule_max_minutes=_resolve_platform_random_schedule_max_minutes(
+                    args,
+                    runtime_config,
+                    "bilibili",
+                    cli_attr="bilibili_random_schedule_max_minutes",
+                    parser_default=DEFAULT_BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES,
+                    minimum=BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
                 ),
-                upload_timeout=max(600, int(args.upload_timeout)),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "bilibili", minimum=600),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,

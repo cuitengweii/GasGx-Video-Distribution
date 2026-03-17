@@ -9786,7 +9786,12 @@ def _publish_immediate_candidate(
 def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
     payload = result if isinstance(result, dict) else {}
     reply_count = int(payload.get("replies_sent") or 0)
-    status = "success" if reply_count > 0 else "failed"
+    login_required = bool(payload.get("login_required"))
+    status = "success" if bool(payload.get("ok")) and reply_count > 0 else "failed"
+    title = "点赞评论已完成" if status == "success" else "点赞评论未完成"
+    subtitle = "已返回本次命中的短视频和评论内容，便于直接复查。"
+    if login_required:
+        subtitle = "视频号当前未登录，本轮未执行点赞评论。"
     sections: list[dict[str, Any]] = [
         {
             "title": "任务概览",
@@ -9800,6 +9805,27 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
         }
     ]
     reason = str(payload.get("reason") or "").strip()
+    if login_required:
+        notify_items: list[str] = []
+        login_url = str(payload.get("login_url") or "").strip()
+        notify_mode = str(payload.get("login_notification_mode") or "").strip()
+        notify_error = str(payload.get("login_notification_error") or "").strip()
+        qr_error = str(payload.get("login_qr_error") or "").strip()
+        if login_url:
+            notify_items.append(f"当前页面：{login_url}")
+        if bool(payload.get("login_notify_sent")):
+            mode_label = "二维码" if notify_mode == "qr" else "文字提醒"
+            notify_items.append(f"已向 Telegram 发送{mode_label}。")
+        else:
+            error_text = notify_error or qr_error
+            notify_items.append("已识别为视频号未登录。")
+            if error_text:
+                notify_items.append(f"但 Telegram 通知发送失败：{error_text}")
+        sections.append({
+            "title": "登录状态",
+            "emoji": "🔐",
+            "items": notify_items or ["已识别为视频号未登录。"],
+        })
     if reason:
         sections.append({
             "title": "原因",
@@ -9839,8 +9865,8 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
 
     card = build_action_feedback(
         status=status,
-        title="点赞评论已完成",
-        subtitle="已返回本次命中的短视频和评论内容，便于直接复查。",
+        title=title,
+        subtitle=subtitle,
         sections=sections,
         bot_name="CyberCar",
     )

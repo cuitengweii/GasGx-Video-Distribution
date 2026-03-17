@@ -22,19 +22,39 @@
     "default_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
     "platforms": {
       "wechat": {
-        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
+        "save_draft": true,
+        "publish_now": false,
+        "declare_original": false,
+        "upload_timeout": 420
       },
       "douyin": {
-        "collection_name": "\u8d5b\u535a\u76ae\u5361\u73b0\u8f66\uff1aaawbcc"
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u73b0\u8f66\uff1aaawbcc",
+        "save_draft": false,
+        "publish_now": true,
+        "upload_timeout": 420
       },
       "xiaohongshu": {
-        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
+        "save_draft": false,
+        "publish_now": true,
+        "upload_timeout": 420
       },
       "kuaishou": {
-        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
+        "save_draft": false,
+        "publish_now": true,
+        "auto_publish_random_schedule": false,
+        "random_schedule_max_minutes": 45,
+        "upload_timeout": 420
       },
       "bilibili": {
-        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
+        "save_draft": false,
+        "publish_now": true,
+        "auto_publish_random_schedule": false,
+        "random_schedule_max_minutes": 240,
+        "upload_timeout": 600
       }
     }
   },
