@@ -26,6 +26,7 @@ Last updated: 2026-03-17
 - Success-side machine info now keeps the most actionable rows first on compact cards, preferring log and task/ID clues over low-signal fields like duration.
 - Repaired the Douyin image immediate-publish path through the upload stage: the uploader now targets the real image drop zone instead of the cover uploader and treats the image editor state as upload-ready even when the page exposes no DOM file input.
 - Advanced the Douyin image publish flow past upload and caption fill into collection selection; the remaining blocker is confirming the updated "添加合集" row structure on the current creator page.
+- Hardened the Douyin video immediate-publish path against a live upload-to-editor race: the uploader now waits for the real video editor form before running caption verification, instead of treating a missing busy marker as upload completion.
 
 - Douyin collection selection is now factored into dedicated JS state/select probes that read the live `semi-select` selection text and option-title nodes directly, while Kuaishou publish confirmation now uses a dialog-only confirm helper so delayed modal confirmation does not re-click the compose-page publish button.
 
@@ -58,6 +59,8 @@ Last updated: 2026-03-17
 - The latest Kuaishou shell snapshot confirms two hidden file inputs remain visible to automation: one stale video input from "continue editing old video" and one image input for the shell upload area. Neither currently binds the selected image on the live host.
 - Douyin image publish no longer fails on `Could not find file input on douyin page.` for the inspected page state; current production failure has moved to collection confirmation on the image-post form.
 - Latest Douyin logs now show successful transition into image editor state (`编辑图片 / 已添加1张图片 / 继续添加`) and successful caption fill before collection selection begins.
+- The failed Douyin video run in `runtime/runtime/logs/immediate_publish_douyin_20260317_192308.log` is now explained by premature upload-ready detection: the page was marked complete before any visible caption field existed, producing `Failed to verify caption input on douyin (candidates=0, preview=-)`.
+- `src/cybercar/engine.py` now uses a dedicated Douyin video editor-state probe before caption fill, and `tests/test_engine_douyin_upload.py` covers both the ready-state detector and the "keep waiting until editor is ready" branch.
 
 ## Open Work
 
@@ -77,6 +80,7 @@ Last updated: 2026-03-17
 - Douyin image collection selection still needs one real-host confirmation against the current creator-center DOM. The latest failure is `douyin collection selection not confirmed: target=赛博皮卡天津港现车, current=-, episode=-`.
 - Kuaishou image immediate publish is still timing out at `420s`; this thread did not address that branch after Xiaohongshu started succeeding again.
 - Telegram success-card compaction still needs one live-bot confirmation to ensure the shortened machine-info tail and new log/ID prioritization do not hide the only useful operator clue for edge-case successes.
+- The fixed Douyin video branch still needs one real-host rerun from the Telegram `即采即发 > 视频 > 全部平台` path to confirm the uploader now waits through the transient upload shell and reaches caption fill reliably.
 
 ## Next Step
 
@@ -102,3 +106,5 @@ Last updated: 2026-03-17
 - Re-run one Telegram `即采即发 > 图片 > 全部平台` task and inspect the newest `immediate_publish_douyin_*.log` to confirm whether the patched collection-row locator can now see and click the actual Douyin collection dropdown.
 - If Douyin still fails, capture the next log's `Collection select retry ... visible=...` line and compare it with the live creator page so the collection trigger heuristic can be tightened one step further.
 - After Douyin is green, open a separate thread for `kuaishou upload timeout (420s)` using the newest `immediate_publish_kuaishou_*.log`.
+- Re-run the failed Douyin video candidate from `collect_publish_latest|ctim-b1e08111a76a71f4` and confirm the next `immediate_publish_douyin_*.log` contains `Waiting for video editor form readiness...` before the first successful caption verification.
+- If the rerun still fails, capture the next Douyin log around upload completion and compare the page text snapshot with `_read_douyin_video_upload_state()` so the ready heuristic can be tightened around the current creator-center DOM.

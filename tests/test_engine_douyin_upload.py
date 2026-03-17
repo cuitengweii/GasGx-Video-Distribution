@@ -213,6 +213,28 @@ def test_read_douyin_image_upload_state_detects_ready_editor() -> None:
     assert state["publish_btn"] is True
 
 
+def test_read_douyin_video_upload_state_detects_ready_editor() -> None:
+    class FakeOwner:
+        def run_js(self, _script: str) -> dict[str, Any]:
+            return {
+                "ready": True,
+                "busy": False,
+                "upload_entry": False,
+                "caption_input": True,
+                "title_input": False,
+                "editor_hints": True,
+                "publish_btn": True,
+                "schedule_toggle": True,
+                "sample_texts": ["作品描述", "立即发布", "发布"],
+            }
+
+    state = engine._read_douyin_video_upload_state(FakeOwner(), None)
+
+    assert state["ready"] is True
+    assert state["caption_input"] is True
+    assert state["publish_btn"] is True
+
+
 def test_wait_upload_ready_generic_accepts_douyin_image_editor_ready(monkeypatch, tmp_path) -> None:
     class FakeOwner:
         def __init__(self) -> None:
@@ -244,6 +266,68 @@ def test_wait_upload_ready_generic_accepts_douyin_image_editor_ready(monkeypatch
     result = engine._wait_upload_ready_generic(None, owner, "douyin", timeout_seconds=3, upload_target=target)
 
     assert result is owner
+
+
+def test_wait_upload_ready_generic_waits_for_douyin_video_editor_ready(monkeypatch, tmp_path) -> None:
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run_js(self, _script: str) -> str:
+            self.calls += 1
+            return "上传视频 发布设置"
+
+    class FakeClock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def time(self) -> float:
+            self.now += 1.0
+            return self.now
+
+    owner = FakeOwner()
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"x")
+    clock = FakeClock()
+    sleep_calls: list[float] = []
+    states = [
+        {
+            "ready": False,
+            "busy": False,
+            "upload_entry": True,
+            "caption_input": False,
+            "title_input": False,
+            "editor_hints": False,
+            "publish_btn": False,
+            "schedule_toggle": False,
+            "sample_texts": ["上传视频"],
+        },
+        {
+            "ready": True,
+            "busy": False,
+            "upload_entry": False,
+            "caption_input": True,
+            "title_input": False,
+            "editor_hints": True,
+            "publish_btn": True,
+            "schedule_toggle": True,
+            "sample_texts": ["作品描述", "立即发布", "发布"],
+        },
+    ]
+
+    def fake_read_state(*_args, **_kwargs):
+        return states.pop(0)
+
+    monkeypatch.setattr(engine, "_read_douyin_video_upload_state", fake_read_state)
+    monkeypatch.setattr(engine.time, "time", clock.time)
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._wait_upload_ready_generic(None, owner, "douyin", timeout_seconds=10, upload_target=target)
+
+    assert result is owner
+    assert sleep_calls == [2.0]
+    assert owner.calls >= 2
 
 
 def test_stage_generic_upload_via_page_set_accepts_douyin_editor_ready_without_file_inputs(

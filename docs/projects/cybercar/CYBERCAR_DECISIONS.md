@@ -35,3 +35,4 @@ Last updated: 2026-03-17
 - For WeChat immediate publish and relogin checks, the worker must treat the publish create page as the primary session probe target. `login.html` is a helper or fallback URL only and may not drive the first probe path.
 - A generic WeChat publish failure is no longer sufficient evidence for `login_required`. The worker must run `check_platform_login_status()` first and only request a QR code after the session probe confirms a true login loss.
 - When success cards must compress `机器信息`, the renderer should prefer log and task/ID style clues over low-signal fields such as duration so machine-oriented debugging context survives the cut.
+- Douyin video upload readiness may not fall back to a generic "not busy anymore" completion rule. The publish flow must wait for explicit video-editor evidence such as caption/title inputs, publish controls, or other stable editor hints before caption verification begins.

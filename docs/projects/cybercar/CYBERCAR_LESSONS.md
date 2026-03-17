@@ -1,6 +1,6 @@
 # CyberCar Lessons
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
 
 ## 2026-03-15
 
@@ -45,3 +45,10 @@ Last updated: 2026-03-16
 - Root cause: the fail-fast change disabled retry layers, but the downloader still raised on a zero-output round and still over-selected discovered candidates far beyond the operator's requested `limit`.
 - Earlier detection: real-host validation should check not only whether retry/fallback is skipped, but also whether a full no-download round exits cleanly and whether selected candidate count shrinks with the latest-first mode.
 - Prevention: in fail-fast mode, cap selected X URLs to the freshest requested `limit` and treat a zero-download result as a non-fatal empty round.
+
+## 2026-03-17
+
+- Symptom: a real Douyin video publish failed with `Failed to verify caption input on douyin (candidates=0, preview=-)` even though the same account and publish entry were still healthy a few minutes later.
+- Root cause: `_wait_upload_ready_generic()` treated the Douyin video page as upload-complete as soon as the page stopped showing generic busy markers, but the real creator form had not rendered a visible caption editor yet.
+- Earlier detection: compare the upload-complete log line with the first caption-fill attempt in the same `immediate_publish_douyin_*.log`; if "upload appears completed" is immediately followed by `candidates=0`, the ready heuristic is ahead of the live DOM.
+- Prevention: keep a platform-specific Douyin video editor-state probe and require real editor evidence before entering caption verification; add regression coverage for the "upload shell first, editor ready later" sequence.

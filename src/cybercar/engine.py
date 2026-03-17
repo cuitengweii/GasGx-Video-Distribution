@@ -14074,25 +14074,57 @@ def _wait_upload_ready_generic(
                 continue
             bilibili_entry_since = 0.0
             bilibili_busy_since = 0.0
-        elif platform_name == "douyin" and upload_target is not None and _is_image_file(upload_target):
-            state = _read_douyin_image_upload_state(ctx, page)
-            ready_hit = bool(state.get("ready"))
-            if ready_hit:
-                _log(
-                    "[Uploader:douyin] Upload appears completed by image editor readiness: "
-                    f"image_added={bool(state.get('image_added'))}, "
-                    f"editor_hints={bool(state.get('editor_hints'))}, "
-                    f"publish={bool(state.get('publish_btn'))}"
-                )
-                return ctx
-            busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
-            upload_entry_hit = bool(state.get("upload_entry"))
-            if upload_entry_hit:
-                _log("[Uploader:douyin] Waiting for image editor form readiness...")
-                time.sleep(2.0)
-                continue
-            if busy_hit:
-                _log("[Uploader:douyin] Waiting for upload completion...")
+        elif platform_name == "douyin":
+            if upload_target is not None and _is_image_file(upload_target):
+                state = _read_douyin_image_upload_state(ctx, page)
+                ready_hit = bool(state.get("ready"))
+                if ready_hit:
+                    _log(
+                        "[Uploader:douyin] Upload appears completed by image editor readiness: "
+                        f"image_added={bool(state.get('image_added'))}, "
+                        f"editor_hints={bool(state.get('editor_hints'))}, "
+                        f"publish={bool(state.get('publish_btn'))}"
+                    )
+                    return ctx
+                busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
+                upload_entry_hit = bool(state.get("upload_entry"))
+                if upload_entry_hit:
+                    _log("[Uploader:douyin] Waiting for image editor form readiness...")
+                    time.sleep(2.0)
+                    continue
+                if busy_hit:
+                    _log("[Uploader:douyin] Waiting for upload completion...")
+                    time.sleep(2.0)
+                    continue
+            else:
+                state = _read_douyin_video_upload_state(ctx, page)
+                ready_hit = bool(state.get("ready"))
+                if ready_hit:
+                    _log(
+                        "[Uploader:douyin] Upload appears completed by video editor readiness: "
+                        f"caption={bool(state.get('caption_input'))}, "
+                        f"title={bool(state.get('title_input'))}, "
+                        f"publish={bool(state.get('publish_btn'))}, "
+                        f"editor_hints={bool(state.get('editor_hints'))}"
+                    )
+                    return ctx
+                busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
+                upload_entry_hit = bool(state.get("upload_entry"))
+                sample_texts = state.get("sample_texts") if isinstance(state.get("sample_texts"), list) else []
+                preview = ",".join(str(item or "").strip() for item in sample_texts if str(item or "").strip())
+                if upload_entry_hit:
+                    _log(
+                        "[Uploader:douyin] Waiting for video editor form readiness..."
+                        + (f" texts={preview}" if preview else "")
+                    )
+                    time.sleep(2.0)
+                    continue
+                if busy_hit:
+                    _log("[Uploader:douyin] Waiting for upload completion...")
+                    time.sleep(2.0)
+                    continue
+                if sample_texts:
+                    _log(f"[Uploader:douyin] Video editor not ready yet, continue waiting: {sample_texts}")
                 time.sleep(2.0)
                 continue
         elif platform_name == "kuaishou" and upload_target is not None and _is_image_file(upload_target):
@@ -14243,6 +14275,81 @@ def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
       editor_hints: !!editorHints,
       publish_btn: !!publishBtn,
       sample_texts: texts.filter(text => /发布|描述|合集|继续添加|编辑图片|已添加/.test(text)).slice(0, 16),
+    };
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload:
+            return payload
+    return {}
+
+
+def _read_douyin_video_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function hasVisibleSelector(selectors) {
+      for (const selector of selectors) {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        if (nodes.some(isVisible)) return true;
+      }
+      return false;
+    }
+    function visibleTexts() {
+      return Array.from(document.querySelectorAll('button, [role="button"], div, span, a, label, input, textarea'))
+        .filter(isVisible)
+        .map(node => norm(node.innerText || node.textContent || node.value || ''))
+        .filter(Boolean)
+        .slice(0, 120);
+    }
+    const bodyText = norm((document.body && document.body.innerText) || '');
+    const texts = visibleTexts();
+    const captionInput = hasVisibleSelector([
+      "textarea[placeholder*='作品描述']",
+      "textarea[placeholder*='描述']",
+      "textarea[placeholder*='文案']",
+      "div[role='textbox']",
+      "div[contenteditable='true']",
+      "div[contenteditable='plaintext-only']",
+      "[contenteditable='true']",
+      "[contenteditable='plaintext-only']",
+    ]);
+    const titleInput = hasVisibleSelector([
+      "input[placeholder*='标题']",
+      "textarea[placeholder*='标题']",
+      "input[aria-label*='标题']",
+    ]);
+    const uploadEntry = /(\u4e0a\u4f20\u89c6\u9891|\u70b9\u51fb\u4e0a\u4f20|\u62d6\u62fd\u89c6\u9891|\u5c06\u89c6\u9891\u62d6\u5165|\u9009\u62e9\u89c6\u9891)/.test(bodyText)
+      && !captionInput;
+    const busy = /\b\d{1,3}%\b/.test(bodyText)
+      || /(\u4e0a\u4f20\u4e2d|\u5904\u7406\u4e2d|\u6b63\u5728\u4e0a\u4f20|\u6b63\u5728\u5904\u7406|\u8f6c\u7801\u4e2d|\u6821\u9a8c\u4e2d|\u6392\u961f\u4e2d)/.test(bodyText);
+    const editorHints = /(\u4f5c\u54c1\u63cf\u8ff0|\u6dfb\u52a0\u8bdd\u9898|@\u597d\u53cb|\u53d1\u5e03\u8bbe\u7f6e|\u53d1\u5e03\u65f6\u95f4|\u7acb\u5373\u53d1\u5e03|\u5b9a\u65f6\u53d1\u5e03|\u5c01\u9762\u8bbe\u7f6e|\u9884\u89c6\u89c6\u9891)/.test(bodyText);
+    const publishBtn = texts.some(text => /^(\u53d1\u5e03|\u53d1\u5e03\u4f5c\u54c1|\u7acb\u5373\u53d1\u5e03|\u786e\u8ba4\u53d1\u5e03)$/.test(text));
+    const scheduleToggle = texts.some(text => /(\u7acb\u5373\u53d1\u5e03|\u5b9a\u65f6\u53d1\u5e03|\u53d1\u5e03\u8bbe\u7f6e)/.test(text));
+    const ready = !!((captionInput || titleInput || editorHints) && (publishBtn || scheduleToggle) && !busy);
+    return {
+      ready,
+      busy,
+      upload_entry: !!uploadEntry,
+      caption_input: captionInput,
+      title_input: titleInput,
+      editor_hints: editorHints,
+      publish_btn: publishBtn,
+      schedule_toggle: scheduleToggle,
+      sample_texts: texts.filter(text => /(\u53d1\u5e03|\u63cf\u8ff0|\u6807\u9898|\u5c01\u9762|\u8bdd\u9898|@\u597d\u53cb|\u65f6\u95f4)/.test(text)).slice(0, 16),
     };
     """
     for owner in (primary_ctx, fallback_ctx):
