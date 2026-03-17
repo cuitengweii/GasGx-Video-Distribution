@@ -315,7 +315,7 @@ def test_build_telegram_card_compacts_success_focus_to_three_primary_items() -> 
     text = str(card["text"])
     assert text.count("• <b>") == 4
     assert text.index("• <b>执行结果</b>：成功") < text.index("<b>🤖 机器信息</b>")
-    assert text.index("<b>🤖 机器信息</b>") < text.index("<b>📝 执行结果</b>")
+    assert "<b>📝 执行结果</b>" not in text
     assert "• <b>时间窗口</b>：30 分钟" in text
 
 
@@ -373,7 +373,7 @@ def test_build_telegram_card_compacts_config_subtitle() -> None:
         },
     )
 
-    assert "<i>配置：cybertruck-profile-long..." in str(card["text"])
+    assert "<i>配置：cybertruck-profile-lon...</i>" in str(card["text"])
 
 
 def test_build_telegram_card_prefers_platform_summary_for_subtitle() -> None:
@@ -398,3 +398,40 @@ def test_build_telegram_card_prefers_platform_summary_for_subtitle() -> None:
 
     text = str(card["text"])
     assert "<i>1个平台成功 / 1个平台失败</i>" in text
+
+
+def test_build_telegram_card_suppresses_long_success_tail_when_focus_exists() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "发布完成",
+            "sections": [
+                {
+                    "title": "人工关注",
+                    "emoji": "🎯",
+                    "items": [
+                        {"label": "执行结果", "value": "成功"},
+                        {"label": "目标平台", "value": "抖音"},
+                        {"label": "候选数量", "value": "3"},
+                    ],
+                },
+                {"title": "执行结果", "emoji": "📝", "items": ["这里是一大段成功说明，列表里不需要重复出现。"]},
+                {
+                    "title": "机器信息",
+                    "emoji": "🤖",
+                    "items": [
+                        {"label": "任务", "value": "publish|douyin"},
+                        {"label": "日志", "value": "job.log"},
+                        {"label": "耗时", "value": "12.3s"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "<b>📝 执行结果</b>" not in text
+    assert "• <b>任务</b>：publish|douyin" in text
+    assert "• <b>日志</b>：job.log" in text
+    assert "• <b>耗时</b>：12.3s" not in text

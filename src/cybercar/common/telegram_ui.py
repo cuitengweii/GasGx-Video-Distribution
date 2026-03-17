@@ -466,6 +466,48 @@ def _compact_sections_for_status(status: str, sections: Sequence[Mapping[str, An
     return compacted
 
 
+def _rank_machine_item_for_success(item: Any, index: int) -> tuple[int, int]:
+    if isinstance(item, Mapping):
+        label = str(item.get("label") or "").strip().lower()
+        value = str(item.get("value") or "").strip().lower()
+    else:
+        label = ""
+        value = str(item or "").strip().lower()
+    haystack = f"{label} {value}"
+    keyword_groups = (
+        (0, ("日志", "log", ".log", "trace")),
+        (1, ("标识", "task_id", "job_id", "message_id", "trace_id", "flag", "status", "state")),
+        (2, ("任务", "task", "job", "platform", "pipeline")),
+        (20, ()),
+    )
+    for priority, keywords in keyword_groups:
+        if any(keyword in haystack for keyword in keywords):
+            return (priority, index)
+    return (20, index)
+
+
+def _suppress_low_priority_success_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
+    status_token = str(status or "").strip().lower()
+    if status_token not in {"success", "done"}:
+        return normalized
+    has_focus = any(str(section.get("title") or "").strip() == "人工关注" for section in normalized)
+    compacted: list[dict[str, Any]] = []
+    for section in normalized:
+        title = str(section.get("title") or "").strip()
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        if has_focus and title == "执行结果":
+            continue
+        if title == "机器信息" and len(items) > 2:
+            ranked_items = [
+                item for _, item in sorted(enumerate(items), key=lambda pair: _rank_machine_item_for_success(pair[1], pair[0]))
+            ]
+            compacted.append({**section, "items": ranked_items[:2]})
+            continue
+        compacted.append(section)
+    return compacted
+
+
 def build_reply_markup(actions: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     keyboard: list[list[dict[str, str]]] = []
     if not actions:
@@ -508,9 +550,12 @@ def build_telegram_card(
         sections = []
     sections = _prioritize_card_sections(
         status,
-        _compact_sections_for_status(
+        _suppress_low_priority_success_sections(
             status,
-            _decorate_failure_sections(status, _prioritize_card_sections(status, list(sections))),
+            _compact_sections_for_status(
+                status,
+                _decorate_failure_sections(status, _prioritize_card_sections(status, list(sections))),
+            ),
         ),
     )
     emoji = _pick_failure_header_emoji(status, sections, emoji)

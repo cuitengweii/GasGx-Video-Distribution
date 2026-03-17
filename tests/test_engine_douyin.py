@@ -67,8 +67,9 @@ def test_select_douyin_collection_supports_dropdown_picker(monkeypatch: pytest.M
         def run_js(self, script: str, *args: Any) -> Any:
             self.calls.append((script, args))
             assert ".semi-select-option" in script
+            assert ".semi-select-selection-text" in script
+            assert '[class*="option-title"]' in script
             assert "visible_options" in script
-            assert "__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__" in script
             assert args == ("Cybertruck Clips",)
             return {
                 "state": "clicked",

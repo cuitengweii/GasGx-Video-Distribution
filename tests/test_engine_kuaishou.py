@@ -105,6 +105,59 @@ def test_click_kuaishou_primary_publish_button_accepts_bottom_publish_work_butto
     assert button.clicked is True
 
 
+def test_click_kuaishou_publish_confirm_dialog_only_ignores_compose_page() -> None:
+    class FakeOwner:
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del selector, timeout
+            return None
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "const modalRoots" in script:
+                return False
+            return {}
+
+    owner = FakeOwner()
+
+    assert engine._click_kuaishou_publish_confirm_dialog_only(owner, None) is False
+
+
+def test_click_kuaishou_publish_confirm_dialog_only_clicks_dialog_button() -> None:
+    class FakeButton:
+        def __init__(self) -> None:
+            self.clicked = False
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "target.click();" in script:
+                self.clicked = True
+                return True
+            return True
+
+        def click(self, by_js: bool = False) -> None:
+            del by_js
+            self.clicked = True
+
+    class FakeOwner:
+        def __init__(self, button: FakeButton) -> None:
+            self.button = button
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del timeout
+            if "@role='dialog'" in selector or "contains(@class,'dialog')" in selector:
+                return self.button
+            return None
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "const modalRoots" in script:
+                return False
+            return {}
+
+    button = FakeButton()
+    owner = FakeOwner(button)
+
+    assert engine._click_kuaishou_publish_confirm_dialog_only(owner, None) is True
+    assert button.clicked is True
+
+
 def test_wait_upload_ready_generic_waits_for_kuaishou_image_editor_form(
     monkeypatch,
 ) -> None:

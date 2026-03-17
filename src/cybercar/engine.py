@@ -17380,7 +17380,230 @@ def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_
     return
 
 
+def _douyin_collection_state_js() -> str:
+    return r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function clean(txt) {
+      return norm(txt)
+        .replace(/^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6|\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)[:：-]*/g, '')
+        .replace(/\u5171\s*\d+\s*[\u4e2a\u6761](?:\u4f5c\u54c1|\u5185\u5bb9)/g, '')
+        .trim();
+    }
+    const labelRe = /^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6)$/;
+    const placeholderRe = /^(?:\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)$/;
+    const episodeRe = /^\u7b2c\s*\d+\s*\u96c6$/;
+    function collectSelectRoots(root) {
+      return Array.from(root.querySelectorAll('.semi-select, [role="combobox"], [class*="semi-select-single"]'))
+        .filter(isVisible);
+    }
+    function selectValue(root) {
+      const node =
+        root.querySelector('.semi-select-selection-text') ||
+        root.querySelector('.semi-select-selection .semi-select-content-wrapper') ||
+        root.querySelector('.semi-select-selection') ||
+        root;
+      return clean(node ? (node.innerText || node.textContent || '') : '');
+    }
+    function findLabel() {
+      return Array.from(document.querySelectorAll('label, span, div'))
+        .find(el => isVisible(el) && labelRe.test(norm(el.textContent || '')));
+    }
+    function findRow(label) {
+      let node = label;
+      while (node && node !== document.body) {
+        const count = collectSelectRoots(node).length;
+        if (count >= 2) return node;
+        node = node.parentElement;
+      }
+      return label.parentElement || label;
+    }
+
+    const label = findLabel();
+    if (!label) return {hasField: false, current: '', episode: '', source: 'missing_label'};
+    const row = findRow(label);
+    const selects = collectSelectRoots(row);
+    let current = '';
+    let episode = '';
+    for (const select of selects) {
+      const txt = selectValue(select);
+      if (!txt || txt === '\u5408\u96c6' || labelRe.test(txt) || placeholderRe.test(txt)) continue;
+      if (episodeRe.test(txt)) {
+        if (!episode) episode = txt;
+        continue;
+      }
+      if (!current) current = txt;
+    }
+    return {
+      hasField: true,
+      current,
+      episode,
+      source: current ? 'selection_text' : 'empty',
+      select_count: selects.length,
+    };
+    """
+
+
+def _douyin_collection_select_js() -> str:
+    return r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function clean(txt) {
+      return norm(txt)
+        .replace(/^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6|\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)[:：-]*/g, '')
+        .replace(/\u5171\s*\d+\s*[\u4e2a\u6761](?:\u4f5c\u54c1|\u5185\u5bb9)/g, '')
+        .trim();
+    }
+    const labelRe = /^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6)$/;
+    const placeholderRe = /^(?:\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)$/;
+    const episodeRe = /^\u7b2c\s*\d+\s*\u96c6$/;
+    function collectSelectRoots(root) {
+      return Array.from(root.querySelectorAll('.semi-select, [role="combobox"], [class*="semi-select-single"]'))
+        .filter(isVisible);
+    }
+    function selectValue(root) {
+      const node =
+        root.querySelector('.semi-select-selection-text') ||
+        root.querySelector('.semi-select-selection .semi-select-content-wrapper') ||
+        root.querySelector('.semi-select-selection') ||
+        root;
+      return clean(node ? (node.innerText || node.textContent || '') : '');
+    }
+    function findLabel() {
+      return Array.from(document.querySelectorAll('label, span, div'))
+        .find(el => isVisible(el) && labelRe.test(norm(el.textContent || '')));
+    }
+    function findRow(label) {
+      let node = label;
+      while (node && node !== document.body) {
+        const count = collectSelectRoots(node).length;
+        if (count >= 2) return node;
+        node = node.parentElement;
+      }
+      return label.parentElement || label;
+    }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+        node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+      } catch (e) {}
+      try {
+        node.click();
+        return true;
+      } catch (e) {
+        try {
+          node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+          return true;
+        } catch (inner) {
+          return false;
+        }
+      }
+    }
+    function optionText(node) {
+      const title =
+        node.querySelector('[class*="option-title"]') ||
+        node.querySelector('.semi-select-option-text') ||
+        node.querySelector('span') ||
+        node;
+      return clean(title ? (title.innerText || title.textContent || '') : '');
+    }
+    function optionScore(txt, target) {
+      if (!txt) return 0;
+      if (txt === target) return 4;
+      if (txt.startsWith(target) || target.startsWith(txt)) return 3;
+      if (txt.includes(target) || target.includes(txt)) return 2;
+      return 0;
+    }
+
+    const target = clean(arguments[0] || '');
+    if (!target) return {state: 'skip'};
+
+    const label = findLabel();
+    if (!label) return {state: 'missing_field'};
+    const row = findRow(label);
+    const selects = collectSelectRoots(row);
+    const collectionTrigger = selects.find(root => {
+      const txt = selectValue(root);
+      if (!txt) return true;
+      if (txt === '\u5408\u96c6' || labelRe.test(txt) || episodeRe.test(txt)) return false;
+      return true;
+    }) || selects.find(root => {
+      const txt = selectValue(root);
+      return !episodeRe.test(txt);
+    });
+
+    if (!collectionTrigger) {
+      return {state: 'missing_trigger', trigger_count: selects.length};
+    }
+
+    const clickTarget =
+      collectionTrigger.querySelector('.semi-select-arrow') ||
+      collectionTrigger.querySelector('.semi-select-selection') ||
+      collectionTrigger;
+    if (!clickNode(clickTarget)) return {state: 'trigger_click_failed'};
+
+    const roots = Array.from(document.querySelectorAll(
+      '.semi-select-dropdown, .semi-portal, .semi-popover, .semi-tooltip, [role="listbox"], [role="dialog"]'
+    )).filter(isVisible);
+    roots.push(document);
+
+    let bestNode = null;
+    let bestText = '';
+    let bestScore = 0;
+    const optionTexts = [];
+    for (const root of roots) {
+      const nodes = Array.from(root.querySelectorAll('.semi-select-option, [role="option"], li, button, div, span, a'))
+        .filter(isVisible);
+      for (const node of nodes) {
+        const txt = optionText(node);
+        if (!txt || txt.length > 80) continue;
+        if (txt === '\u5408\u96c6' || labelRe.test(txt) || placeholderRe.test(txt) || episodeRe.test(txt)) continue;
+        if (!optionTexts.includes(txt)) optionTexts.push(txt);
+        const score = optionScore(txt, target);
+        if (score > bestScore) {
+          bestScore = score;
+          bestNode = node.closest('.semi-select-option, [role="option"], li, button, a, div, span') || node;
+          bestText = txt;
+        }
+      }
+      if (bestScore >= 4) break;
+    }
+
+    if (!bestNode || bestScore <= 0) {
+      return {state: 'option_not_found', visible_options: optionTexts.slice(0, 8), trigger_count: selects.length};
+    }
+    if (!clickNode(bestNode)) {
+      return {state: 'option_click_failed', option: bestText, visible_options: optionTexts.slice(0, 8)};
+    }
+    return {state: 'clicked', option: bestText, visible_options: optionTexts.slice(0, 8)};
+    """
+
+
 def _normalize_douyin_collection_value(text: str) -> str:
+    value = re.sub(r"\s+", "", str(text or ""))
+    if not value:
+        return ""
+    value = re.sub(r"^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：-]*", "", value)
+    value = re.sub(r"(共\d+[个条]作品|共\d+[个条]内容)$", "", value)
+    return value.strip(":-：/ ")
     value = re.sub(r"\s+", "", str(text or ""))
     if not value:
         return ""
@@ -17402,6 +17625,26 @@ def _is_douyin_collection_match(current: str, target: str) -> bool:
 
 
 def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = _douyin_collection_state_js()
+    merged: dict[str, Any] = {"hasField": False, "current": "", "episode": "", "source": ""}
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        if bool(payload.get("hasField")):
+            merged["hasField"] = True
+        if payload.get("current") and not merged["current"]:
+            merged["current"] = str(payload.get("current") or "")
+        if payload.get("episode") and not merged["episode"]:
+            merged["episode"] = str(payload.get("episode") or "")
+        if payload.get("source") and not merged["source"]:
+            merged["source"] = str(payload.get("source") or "")
+    return merged
     js = r"""
     function isVisible(el) {
       if (!el) return false;
@@ -17563,6 +17806,53 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
     if _is_douyin_collection_match(current, target):
         _log(f"[Uploader:douyin] Collection already selected: {target}")
         return
+
+    js_select = _douyin_collection_select_js()
+    for attempt in range(1, 7):
+        action_states: list[str] = []
+        visible_options: list[str] = []
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                action = owner.run_js(js_select, target)
+            except Exception:
+                action = {}
+            if isinstance(action, dict):
+                action_states.append(str(action.get("state", "") or ""))
+                for raw in list(action.get("visible_options") or []):
+                    option = str(raw or "").strip()
+                    if option and option not in visible_options:
+                        visible_options.append(option)
+            else:
+                action_states.append("none")
+
+        time.sleep(0.6)
+        after = _get_douyin_collection_state(primary_ctx, fallback_ctx)
+        current = str(after.get("current", "") or "")
+        if _is_douyin_collection_match(current, target):
+            _log(
+                f"[Uploader:douyin] Collection selected: {target}"
+                + (f" (episode={after.get('episode')})" if after.get("episode") else "")
+            )
+            return
+
+        _log(
+            f"[Uploader:douyin] Collection select retry {attempt}/6: "
+            f"states={','.join(action_states) or '-'}, "
+            f"current={current or '-'}, "
+            f"visible={';'.join(visible_options[:4]) or '-'}"
+        )
+        if any(state in {"missing_field", "missing_trigger"} for state in action_states):
+            break
+
+    final_state = _get_douyin_collection_state(primary_ctx, fallback_ctx)
+    final_current = str(final_state.get("current", "") or "")
+    final_episode = str(final_state.get("episode", "") or "")
+    raise RuntimeError(
+        f"douyin collection selection not confirmed: target={target}, "
+        f"current={final_current or '-'}, episode={final_episode or '-'}"
+    )
 
     js_select = """
     function isVisible(el) {
@@ -18449,6 +18739,102 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
     return False
 
 
+def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "xpath://div[@role='dialog']//button[normalize-space(.)='纭鍙戝竷']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='纭瀹氭椂鍙戝竷']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='缁х画鍙戝竷']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='纭畾鍙戝竷']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='浠嶈鍙戝竷']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='鍘诲彂甯?]",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='鍙戝竷']",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='纭鍙戝竷']",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='缁х画鍙戝竷']",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='鍙戝竷']",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='纭鍙戝竷']",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='缁х画鍙戝竷']",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='鍙戝竷']",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.35)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                btn.run_js(
+                    """
+                    const target = this.closest('button, [role="button"], a') || this;
+                    target.scrollIntoView({block:'center', inline:'nearest'});
+                    target.click();
+                    """
+                )
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:kuaishou] Clicked publish confirm button by dialog selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    const modalRoots = Array.from(document.querySelectorAll(
+      '[role="dialog"], .dialog, .modal, .popup, [class*="dialog"], [class*="modal"], [class*="popup"]'
+    )).filter(el => isVisible(el));
+    const candidates = [];
+    for (const root of modalRoots) {
+      const wrapText = norm((root && root.innerText) || '');
+      for (const node of Array.from(root.querySelectorAll('button, [role="button"], a, div, span'))) {
+        if (!isVisible(node)) continue;
+        const text = norm(node.innerText || node.textContent || '');
+        if (!text) continue;
+        if (!/^(鍙戝竷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷|纭畾鍙戝竷|浠嶈鍙戝竷|鍘诲彂甯?$/.test(text)) continue;
+        let score = 0;
+        if (text === '纭鍙戝竷') score += 20;
+        if (text === '纭瀹氭椂鍙戝竷') score += 18;
+        if (text === '缁х画鍙戝竷' || text === '纭畾鍙戝竷') score += 16;
+        if (text === '浠嶈鍙戝竷' || text === '鍘诲彂甯?') score += 14;
+        if (text === '鍙戝竷') score += 10;
+        if (/鍙栨秷/.test(wrapText)) score += 6;
+        if (/纭|缁х画|瀹氭椂/.test(wrapText)) score += 8;
+        candidates.push({node, text, score});
+      }
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    candidates[0].node.click();
+    return candidates[0].text || '鍙戝竷';
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = False
+        if isinstance(result, str) and result.strip():
+            _log(f"[Uploader:kuaishou] Clicked publish confirm button by dialog JS: {result.strip()}")
+            return True
+        if bool(result):
+            _log("[Uploader:kuaishou] Clicked publish confirm button by dialog JS fallback.")
+            return True
+    return False
+
+
 def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any) -> bool:
     url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
     lowered = (text or "").lower()
@@ -19262,7 +19648,7 @@ def _wait_publish_feedback(
                     continue
         elif platform_name == "kuaishou":
             # Best effort: some accounts show delayed confirm dialogs after first publish click.
-            _click_kuaishou_publish_confirm_button(primary_ctx, fallback_ctx)
+            _click_kuaishou_publish_confirm_dialog_only(primary_ctx, fallback_ctx)
         elif platform_name == "bilibili":
             _click_first_matching_button(
                 primary_ctx,
@@ -20285,7 +20671,7 @@ def _fill_draft_once_generic(
                 douyin_mode = _finalize_douyin_publish(ctx, page, douyin_mode, expected_tokens=publish_verify_tokens)
                 return
             if platform_name == "kuaishou":
-                _click_kuaishou_publish_confirm_button(ctx, page)
+                _click_kuaishou_publish_confirm_dialog_only(ctx, page)
             if platform_name == "xiaohongshu":
                 _click_xiaohongshu_publish_confirm_button(ctx, page)
             if platform_name == "bilibili":

@@ -1,6 +1,6 @@
 # CyberCar Architecture
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
 
 ## Top-Level Structure
 
@@ -29,6 +29,18 @@ Last updated: 2026-03-16
 - The standalone repo keeps local `Collection.*` compatibility wrappers under `src/Collection/...` so vendored legacy modules can run without depending on the old repository.
 - New entrypoints are exposed only through the `cybercar` package and thin PowerShell wrappers.
 - Telegram shared/common modules are now vendored locally under `src/cybercar/common/` and mirrored through `src/Collection/shared/common/` compatibility wrappers.
+
+## Telegram Card Rendering
+
+- `src/cybercar/common/telegram_ui.py` owns the final Telegram card assembly order: section prioritization, failure decoration, success compaction, low-priority success suppression, then subtitle/header decoration.
+- For `success` and `done` cards, `人工关注` is treated as the operator-facing focus block. When present, the renderer can drop a redundant `执行结果` section and trim `机器信息` to the first two rows before rendering.
+- Success-side machine-info compaction is content-aware inside `src/cybercar/common/telegram_ui.py`: rows mentioning logs, IDs, flags, status, or task identity outrank generic tails like duration.
+- Subtitle generation still prefers platform-summary aggregation when present; otherwise it falls back to compacting the provided subtitle string.
+
+## WeChat Login Recovery Flow
+
+- The vendored Telegram worker resolves WeChat runtime context from `PLATFORM_CREATE_POST_URLS` before `PLATFORM_LOGIN_ENTRY_URLS`, so the first session probe stays on the actual publish surface instead of mutating a healthy tab into `login.html`.
+- Post-publish login recovery is now a two-stage path inside the worker: `check_platform_login_status()` verifies whether the session is truly `needs_login`, then `_request_platform_login_qr()` is allowed to send the QR code without forcing another page refresh.
 
 ## Platform-Specific Publish Heuristics
 

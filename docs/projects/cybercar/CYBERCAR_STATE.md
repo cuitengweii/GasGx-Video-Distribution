@@ -22,10 +22,15 @@ Last updated: 2026-03-17
 - Immediate image publish triage now has platform-specific recovery on Douyin and Kuaishou: Douyin no longer treats hidden file inputs as a hard failure when the editor already shows uploaded media, and Kuaishou now scores image upload inputs separately from the lingering "continue editing old video" shell.
 - Kuaishou image publish diagnostics were expanded around upload shell detection, file-input bind state, staged `page.set.upload_files` retries, and upload-surface snapshots so real-host failures can be traced without guessing from the final timeout alone.
 - Telegram failure cards now prefer the failing platform emoji from the failure-detail section so mixed-platform alerts surface the failing platform directly in the header.
+- Telegram success cards now suppress redundant low-priority sections when a human-focused summary exists, and trim machine-info tails so successful bot feedback stays short enough to scan inside Telegram.
+- Success-side machine info now keeps the most actionable rows first on compact cards, preferring log and task/ID clues over low-signal fields like duration.
 - Repaired the Douyin image immediate-publish path through the upload stage: the uploader now targets the real image drop zone instead of the cover uploader and treats the image editor state as upload-ready even when the page exposes no DOM file input.
 - Advanced the Douyin image publish flow past upload and caption fill into collection selection; the remaining blocker is confirming the updated "添加合集" row structure on the current creator page.
 
 ## Current Status
+
+- Fixed the WeChat immediate-publish login false positive: the worker now probes the actual create page before the login helper URL and only requests a QR code after `check_platform_login_status()` confirms the session is truly `login_required`.
+- Added regression coverage around the WeChat runtime context and post-publish login recheck so a generic publish failure no longer forces the active business tab back to `login.html`.
 
 - `src/cybercar/engine.py`, `src/cybercar/pipeline.py`, and `src/cybercar/login_triage.py` are now local copies in the standalone repo.
 - Public entrypoints now route through `python -m cybercar ...` and PowerShell wrappers under `scripts/`.
@@ -44,6 +49,8 @@ Last updated: 2026-03-17
 - The worker was restarted on 2026-03-16 and a real image review run was exercised; main remaining production issue is intermittent X/Telegram network instability, not legacy path coupling.
 - Real-host validation on 2026-03-16 still showed repeated X `Downloading GraphQL JSON` failures with `ConnectionResetError(10054)` even under direct-tun and low daily volume, so the dominant production risk remains X-side/network instability rather than downloader wiring.
 - Telegram runtime now also exposes `python -m cybercar telegram supervise`, `scripts/telegram_supervisor.ps1`, and `scripts/install_telegram_supervisor_task.ps1` for self-healing worker supervision.
+- `src/cybercar/common/telegram_ui.py` now hides the redundant success-side `执行结果` section whenever `人工关注` is present and caps `机器信息` output to the two highest-signal items on success cards.
+- Regression coverage for the Telegram card compaction rules now lives in `tests/test_telegram.py` and `tests/test_telegram_success_card_compaction.py`.
 - Douyin image publish now has a code-side escape hatch for pages that already show `编辑图片 / 已添加1张图片 / 预览图文` but no longer expose a usable DOM file input.
 - Kuaishou image publish is still not production-stable. The latest live failure in `runtime/runtime/logs/immediate_publish_kuaishou_20260317_091800.log` shows the page staying on the upload shell for the full 420-second window with `File input bind state: count=0`, `max_count=0`, and repeated `拖拽图片到此或点击上传 / 上传图片` shell text.
 - The latest Kuaishou shell snapshot confirms two hidden file inputs remain visible to automation: one stale video input from "continue editing old video" and one image input for the shell upload area. Neither currently binds the selected image on the live host.
@@ -52,6 +59,8 @@ Last updated: 2026-03-17
 
 ## Open Work
 
+- A direct WeChat session probe on 2026-03-17 05:03 (Asia/Shanghai) reported `status=ready` on `https://channels.weixin.qq.com/platform/post/create`; the mixed "publish tab + login tab" operator screenshot was traced to the worker's own QR recovery path reopening `login.html`, not to a confirmed upstream logout.
+- The current archive scan shows one unrelated unstaged tweak in `tests/test_telegram.py`; the WeChat misclassification fix itself is already present in repo code and covered by tests.
 - Real-host validation is still required for five-platform login status, one fully successful manual bot-driven image collect-review-download path, one successful manual video collect-publish review run, and one WeChat engagement run.
 - The vendored pipeline and worker still carry legacy internal complexity; future threads should continue moving logic out of `engine.py`, `pipeline.py`, and the legacy worker into the new domain packages.
 - If legacy config or platform selectors drift, the new standalone repo must be updated locally rather than patched back through the old monorepo.
@@ -65,6 +74,7 @@ Last updated: 2026-03-17
 - Once Kuaishou is fixed, the immediate image path needs one more full live pass across Douyin, Xiaohongshu, and Kuaishou to confirm the new platform-specific upload readiness rules do not regress mixed-platform runs.
 - Douyin image collection selection still needs one real-host confirmation against the current creator-center DOM. The latest failure is `douyin collection selection not confirmed: target=赛博皮卡天津港现车, current=-, episode=-`.
 - Kuaishou image immediate publish is still timing out at `420s`; this thread did not address that branch after Xiaohongshu started succeeding again.
+- Telegram success-card compaction still needs one live-bot confirmation to ensure the shortened machine-info tail and new log/ID prioritization do not hide the only useful operator clue for edge-case successes.
 
 ## Next Step
 
@@ -76,6 +86,12 @@ Last updated: 2026-03-17
 - Re-run `即采即发 > 图片 > 全部平台` after the latest Kuaishou upload-shell patch and inspect whether the new `page.set image stage` log lines ever move `max_count` above `0`.
 - If Kuaishou still stays on the shell page, capture the next `immediate_publish_kuaishou_*.log` and patch the upload-shell click/bind sequence directly around the visible `上传图片` button and `_upload-container_ysbff_*` region instead of the hidden input alone.
 
+- Trigger one known-success Telegram card locally and verify that the new success-card suppression still preserves enough operator context with only two prioritized `机器信息` rows and no duplicated `执行结果` block.
+
+- Real-host validation is still required for the corrected WeChat branch in two opposite states: one normal "already logged in" immediate publish run and one true logout run that must still send the QR code on first detection.
+- If Telegram `sendPhoto` transport errors remain intermittent during WeChat relogin, the transport layer still needs a separate retry and observability pass; this thread only removed the false-positive trigger path.
+
+- Trigger one known-success Telegram card locally and verify that the new success-card suppression still preserves enough operator context with only two prioritized `机器信息` rows and no duplicated `执行结果` block.
 ## Next Step Update
 
 - Re-run `python -m cybercar collect --profile cybertruck --limit 2` and verify the patched fail-fast path reaches the shell prompt with `Using discovered X URLs: 2` and no terminal `RuntimeError`.
