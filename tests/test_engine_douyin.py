@@ -59,6 +59,10 @@ def test_resolve_platform_collection_name_supports_legacy_platform_key() -> None
     assert engine.resolve_platform_collection_name(runtime_config, "douyin") == "Legacy Douyin Collection"
 
 
+def test_resolve_platform_collection_name_uses_douyin_default_collection() -> None:
+    assert engine.resolve_platform_collection_name({}, "douyin") == "赛博皮卡现车：aawbcc"
+
+
 def test_prepare_image_post_text_payload_keeps_douyin_caption(monkeypatch: pytest.MonkeyPatch) -> None:
     title_calls: list[dict[str, Any]] = []
 

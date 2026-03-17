@@ -172,6 +172,9 @@ KUAISHOU_HASHTAG_LIMIT = 4
 KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#特斯拉Cybertruck"]
 DEFAULT_CAPTION = f"Cybertruck 赛博皮卡最新画面！\n\n{DEFAULT_HASHTAGS}"
 DEFAULT_COLLECTION_NAME = "赛博皮卡天津港现车"
+DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
+    "douyin": "赛博皮卡现车：aawbcc",
+}
 CREATE_POST_URL = "https://channels.weixin.qq.com/platform/post/create"
 WECHAT_MICRO_CREATE_POST_URL = "https://channels.weixin.qq.com/micro/content/post/create"
 DOUYIN_CREATE_POST_URL = "https://creator.douyin.com/creator-micro/content/upload"
@@ -3593,9 +3596,7 @@ def _resolve_processed_target_path(workspace: Workspace, processed_name: str, in
 def _default_runtime_config() -> dict[str, Any]:
     return {
         "collection_name": DEFAULT_COLLECTION_NAME,
-        "collection_names": {
-            "douyin": DEFAULT_COLLECTION_NAME,
-        },
+        "collection_names": DEFAULT_PLATFORM_COLLECTION_NAMES.copy(),
         "auto_delete_source_files": DEFAULT_AUTO_DELETE_SOURCE_FILES,
         "exclude_keywords": DEFAULT_EXCLUDE_KEYWORDS.copy(),
         "require_any_keywords": DEFAULT_REQUIRE_ANY_KEYWORDS.copy(),
@@ -3915,7 +3916,8 @@ def resolve_platform_collection_name(
     if legacy_value:
         return legacy_value
     configured_collection_name = str(payload.get("collection_name", "") or "").strip()
-    return configured_collection_name or DEFAULT_COLLECTION_NAME
+    default_platform_collection = str(DEFAULT_PLATFORM_COLLECTION_NAMES.get(platform, "") or "").strip()
+    return platform_specific or legacy_value or configured_collection_name or default_platform_collection or DEFAULT_COLLECTION_NAME
 
 
 def _load_runtime_config(config_path: str) -> dict[str, Any]:
@@ -11604,6 +11606,20 @@ def _read_element_text(ele: Any) -> str:
     return _normalize_text(str(val or ""), limit=500)
 
 
+def _humanized_publish_pause(
+    reason: str,
+    *,
+    minimum_seconds: float = 1.0,
+    maximum_seconds: float = 3.0,
+) -> float:
+    lower = max(0.0, float(minimum_seconds))
+    upper = max(lower, float(maximum_seconds))
+    delay = random.uniform(lower, upper)
+    _log(f"[Uploader] Humanized pause before {reason}: {delay:.2f}s")
+    time.sleep(delay)
+    return delay
+
+
 def _is_bad_caption_field(ele: Any) -> bool:
     try:
         attrs = ele.run_js(
@@ -11649,6 +11665,7 @@ def _find_visible_caption_editor(ctx: Any) -> Optional[Any]:
 
 
 def _input_caption_with_keyboard(ele: Any, caption: str) -> bool:
+    _humanized_publish_pause("caption field focus")
     try:
         ele.click(by_js=True)
     except Exception:
@@ -11673,6 +11690,7 @@ def _input_caption_with_keyboard(ele: Any, caption: str) -> bool:
     except Exception:
         pass
 
+    _humanized_publish_pause("caption entry")
     for by_js in (False, True):
         try:
             ele.input(caption, by_js=by_js)
@@ -11692,6 +11710,7 @@ def _input_text_field_with_keyboard(ele: Any, value: str) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
+    _humanized_publish_pause("text field focus")
     try:
         ele.click(by_js=True)
     except Exception:
@@ -11712,6 +11731,7 @@ def _input_text_field_with_keyboard(ele: Any, value: str) -> bool:
     except Exception:
         pass
 
+    _humanized_publish_pause("text entry")
     for by_js in (False, True):
         try:
             ele.input(text, by_js=by_js)
@@ -13175,6 +13195,7 @@ def _clear_location_if_selected(ctx: Any) -> None:
     """
 
     for _ in range(4):
+        _humanized_publish_pause("location option review")
         try:
             action = ctx.run_js(js_click_none)
         except Exception:
@@ -13484,11 +13505,13 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
 
     confirm_texts = ("\u786e\u5b9a", "\u5b8c\u6210", "\u786e\u8ba4")
     for attempt in range(1, 7):
+        _humanized_publish_pause("wechat collection picker interaction")
         try:
             action = ctx.run_js(js_select, target)
         except Exception:
             action = None
         if isinstance(action, dict) and str(action.get("state", "")).startswith("clicked"):
+            _humanized_publish_pause("wechat collection confirm")
             # Some picker variants require an explicit confirm button click.
             _click_first_matching_button(ctx, ctx, confirm_texts, platform_name="wechat")
         try:
@@ -17996,6 +18019,7 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
+            _humanized_publish_pause("douyin collection picker interaction")
             try:
                 action = owner.run_js(js_select, target)
             except Exception:
@@ -18252,12 +18276,14 @@ def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tup
                 except Exception:
                     btn = None
                 if btn and _is_visible_element(btn):
+                    _humanized_publish_pause(f"{platform_name} button click")
                     try:
                         btn.click()
                     except Exception:
                         btn.click(by_js=True)
                     _log(f"[Uploader:{platform_name}] Clicked button by selector: {selector}")
                     return True
+            _humanized_publish_pause(f"{platform_name} button click")
             if _js_click(owner, text):
                 _log(f"[Uploader:{platform_name}] Clicked button by JS keyword: {text}")
                 return True
@@ -20182,6 +20208,7 @@ def _set_douyin_schedule_default_time(
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_pause("douyin schedule time entry")
         try:
             result = owner.run_js(js_set, schedule_text, schedule_iso)
         except Exception:
@@ -20353,6 +20380,7 @@ def _set_kuaishou_random_publish_time(primary_ctx: Any, fallback_ctx: Any, max_m
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_pause("kuaishou schedule time entry")
         try:
             result = owner.run_js(js_set, schedule_text, schedule_iso)
         except Exception:
@@ -20427,6 +20455,7 @@ def _set_bilibili_random_publish_time(
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        _humanized_publish_pause("bilibili schedule toggle review")
         try:
             owner.run_js(js_toggle)
         except Exception:
@@ -20480,6 +20509,7 @@ def _set_bilibili_random_publish_time(
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
+            _humanized_publish_pause("bilibili schedule time entry")
             try:
                 result = owner.run_js(js_set, schedule_text, schedule_iso)
             except Exception:
