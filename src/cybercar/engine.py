@@ -21228,7 +21228,7 @@ def _fill_draft_once_generic(
     _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
     if platform_name == "xiaohongshu" and not _is_image_file(target):
         _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)
-    if platform_name == "douyin" and _is_image_file(target):
+    if platform_name == "douyin":
         _select_douyin_collection(ctx, page, collection_name)
     if platform_name == "bilibili":
         _fill_bilibili_title_from_caption(ctx, page, final_caption)
