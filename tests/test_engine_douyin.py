@@ -28,6 +28,14 @@ def test_is_douyin_collection_match_strips_counter_suffix() -> None:
     assert engine._is_douyin_collection_match("添加合集 Cybertruck Clips", "Cybertruck Clips")
 
 
+def test_normalize_douyin_collection_value_strips_suffix_alias() -> None:
+    assert engine._normalize_douyin_collection_value("赛博皮卡现车：aawbcc") == "赛博皮卡现车"
+
+
+def test_is_douyin_collection_match_accepts_prefix_suffix_alias() -> None:
+    assert engine._is_douyin_collection_match("赛博皮卡现车：aawbcc", "赛博皮卡天津港现车")
+
+
 def test_prepare_image_post_text_payload_keeps_douyin_caption(monkeypatch: pytest.MonkeyPatch) -> None:
     title_calls: list[dict[str, Any]] = []
 

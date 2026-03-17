@@ -74,6 +74,29 @@ _MACHINE_LAST_SECTION_TITLES = {
     "菜单链路": 104,
 }
 _FAILURE_DETAIL_SECTION_TITLES = {"失败原因", "结果说明", "处理建议"}
+_SECTION_TITLE_ALIASES = {
+    "执行状态": "执行摘要",
+    "执行汇总": "执行摘要",
+}
+_SECTION_EMOJI_BY_TITLE = {
+    "人工关注": "🎯",
+    "失败原因": "❌",
+    "处理建议": "🛠️",
+    "结果说明": "📝",
+    "执行摘要": "📌",
+    "执行结果": "📝",
+    "候选信息": "🧾",
+    "任务概览": "📦",
+    "平台状态": "🧩",
+    "发布选项": "🛠️",
+    "下一步": "🛠️",
+    "原帖摘要": "📝",
+    "机器信息": "🤖",
+    "运行上下文": "🧭",
+    "任务日志": "🧾",
+    "任务标识": "🏷️",
+    "菜单链路": "🧭",
+}
 
 
 def _escape_text(value: Any) -> str:
@@ -223,6 +246,43 @@ def _render_sections(sections: Sequence[Mapping[str, Any]]) -> list[str]:
         lines.append(header)
         lines.extend(_render_section_items(section.get("items", [])))
     return lines
+
+
+def _canonical_section_title(title: str) -> str:
+    token = str(title or "").strip()
+    return _SECTION_TITLE_ALIASES.get(token, token)
+
+
+def _is_positive_platform_status_item(item: Any) -> bool:
+    text = ""
+    if isinstance(item, Mapping):
+        text = f"{item.get('label') or ''} {item.get('value') or item.get('text') or ''}"
+    else:
+        text = str(item or "")
+    lowered = str(text).strip().lower()
+    if not lowered:
+        return False
+    positive_tokens = ("成功", "确认发布成功", "模拟发布成功", "自动跳过", "历史发布记录", "已自动跳过")
+    negative_tokens = ("失败", "登录", "待核实", "待确认", "建议", "原因", "分类", "平台未启动")
+    return any(token in lowered for token in positive_tokens) and not any(token in lowered for token in negative_tokens)
+
+
+def _normalize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    status_token = str(status or "").strip().lower()
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        raw_title = str(section.get("title") or "").strip()
+        title = _canonical_section_title(raw_title)
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        if title == "平台状态" and status_token in {"success", "done"} and items and all(
+            _is_positive_platform_status_item(item) for item in items
+        ):
+            continue
+        emoji = _SECTION_EMOJI_BY_TITLE.get(title) or str(section.get("emoji") or "").strip()
+        normalized.append({**section, "title": title, "emoji": emoji, "items": items})
+    return normalized
 
 
 def _failure_marker_for_text(text: str, *, fallback: str = "⚠️") -> str:

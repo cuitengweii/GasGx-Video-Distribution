@@ -17624,6 +17624,45 @@ def _is_douyin_collection_match(current: str, target: str) -> bool:
     )
 
 
+def _normalize_douyin_collection_value(text: str) -> str:
+    value = re.sub(r"\s+", "", str(text or ""))
+    if not value:
+        return ""
+    value = re.sub(r"^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：-]*", "", value)
+    value = re.sub(r"(共\d+[个条]作品|共\d+[个条]内容)$", "", value)
+    value = re.split(r"[:：]", value, maxsplit=1)[0]
+    return value.strip(":-：/ ")
+
+
+def _shared_edge_length(left: str, right: str, *, suffix: bool = False) -> int:
+    if not left or not right:
+        return 0
+    a = left[::-1] if suffix else left
+    b = right[::-1] if suffix else right
+    count = 0
+    for ch_a, ch_b in zip(a, b):
+        if ch_a != ch_b:
+            break
+        count += 1
+    return count
+
+
+def _is_douyin_collection_match(current: str, target: str) -> bool:
+    norm_current = _normalize_douyin_collection_value(current)
+    norm_target = _normalize_douyin_collection_value(target)
+    if not norm_current or not norm_target:
+        return False
+    if (
+        norm_current == norm_target
+        or norm_current in norm_target
+        or norm_target in norm_current
+    ):
+        return True
+    prefix = _shared_edge_length(norm_current, norm_target, suffix=False)
+    suffix = _shared_edge_length(norm_current, norm_target, suffix=True)
+    return prefix >= 4 and suffix >= 2
+
+
 def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
     js = _douyin_collection_state_js()
     merged: dict[str, Any] = {"hasField": False, "current": "", "episode": "", "source": ""}
@@ -18179,11 +18218,68 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
     return False
 
 
+def _pick_xiaohongshu_publish_wrap_text(candidates: Sequence[str]) -> str:
+    strong_wrap_tokens = (
+        "\u6682\u5b58\u79bb\u5f00 \u53d1\u5e03",
+        "\u53d1\u5e03 \u6682\u5b58\u79bb\u5f00",
+        "\u66f4\u591a\u8bbe\u7f6e",
+        "\u5b9a\u65f6\u53d1\u5e03",
+    )
+    allow_wrap_tokens = (
+        "\u6682\u5b58\u79bb\u5f00",
+        "\u66f4\u591a\u8bbe\u7f6e",
+        "\u5b9a\u65f6\u53d1\u5e03",
+        "\u516c\u5f00\u53ef\u89c1",
+        "\u4ec5\u81ea\u5df1\u53ef\u89c1",
+        "\u5141\u8bb8\u5408\u62cd",
+        "\u5141\u8bb8\u6b63\u6587\u590d\u5236",
+        "\u8c01\u53ef\u4ee5\u770b",
+    )
+    skip_wrap_tokens = (
+        "\u9996\u9875",
+        "\u7b14\u8bb0\u7ba1\u7406",
+        "\u6570\u636e\u770b\u677f",
+        "\u6d3b\u52a8\u4e2d\u5fc3",
+        "\u521b\u4f5c\u5b66\u9662",
+        "\u521b\u4f5c\u767e\u79d1",
+        "\u53d1\u5e03\u7b14\u8bb0",
+    )
+    texts: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    for token in strong_wrap_tokens:
+        for text in texts:
+            if token in text:
+                return text
+    for token in allow_wrap_tokens:
+        for text in texts:
+            if token in text and not any(skip in text for skip in skip_wrap_tokens):
+                return text
+    return ""
+
+
 def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
+        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[normalize-space(.)='发布']",
+        "xpath://button[normalize-space(.)='发布' and ancestor::div[contains(@class,'publish-page-publish-btn')]]",
+        "xpath://button[normalize-space(.)='发布' and contains(@class,'custom-button') and contains(@class,'bg-red')]",
+        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[last()]",
         "css:button.custom-button.bg-red",
         "xpath://button[contains(@class,'custom-button') and contains(@class,'bg-red')]",
-        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[last()]",
+    )
+    skip_wrap_tokens = (
+        "\u9996\u9875",
+        "\u7b14\u8bb0\u7ba1\u7406",
+        "\u6570\u636e\u770b\u677f",
+        "\u6d3b\u52a8\u4e2d\u5fc3",
+        "\u521b\u4f5c\u5b66\u9662",
+        "\u521b\u4f5c\u767e\u79d1",
+        "\u53d1\u5e03\u7b14\u8bb0",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -18196,6 +18292,69 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
             if not btn or not _is_visible_element(btn):
                 continue
             try:
+                wrap_state = btn.run_js(
+                    r"""
+                    const norm = (s) => String(s || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+                    const nodes = [];
+                    let cur = this;
+                    for (let i = 0; cur && i < 6; i += 1) {
+                      nodes.push(cur);
+                      cur = cur.parentElement;
+                    }
+                    const parent = this.parentElement || null;
+                    if (parent) {
+                      for (const sibling of Array.from(parent.children || [])) {
+                        if (sibling && !nodes.includes(sibling)) nodes.push(sibling);
+                      }
+                    }
+                    const texts = nodes
+                      .map(node => norm((node && node.innerText) || '').slice(0, 320))
+                      .filter(Boolean);
+                    const strongTokens = ['暂存离开 发布', '发布 暂存离开', '更多设置', '定时发布'];
+                    const strong = texts.find(text => strongTokens.some(token => text.includes(token))) || '';
+                    const chosen = strong || texts[0] || '';
+                    const rect = this.getBoundingClientRect();
+                    return {
+                      wrap: chosen.slice(0, 240),
+                      texts,
+                      rectTop: Number(rect && rect.top || 0),
+                      viewportHeight: Number(window.innerHeight || document.documentElement.clientHeight || 0),
+                      buttonText: norm((this && this.innerText) || '')
+                    };
+                    """
+                )
+                if isinstance(wrap_state, dict):
+                    wrapper_text = str(wrap_state.get("wrap") or "").strip()
+                    wrapper_texts = tuple(wrap_state.get("texts") or ())
+                    rect_top = float(wrap_state.get("rectTop", 0) or 0)
+                    viewport_height = float(wrap_state.get("viewportHeight", 0) or 0)
+                    button_text = str(wrap_state.get("buttonText") or "").strip()
+                else:
+                    wrapper_text = str(wrap_state or "").strip()
+                    wrapper_texts = ()
+                    rect_top = 0.0
+                    viewport_height = 0.0
+                    button_text = ""
+            except Exception:
+                wrapper_text = ""
+                wrapper_texts = ()
+                rect_top = 0.0
+                viewport_height = 0.0
+                button_text = ""
+            wrap_candidates = (wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,)
+            chosen_wrap = _pick_xiaohongshu_publish_wrap_text(wrap_candidates)
+            sibling_draft = any("\u6682\u5b58\u79bb\u5f00" in text for text in wrap_candidates)
+            near_bottom = bool(viewport_height > 0 and rect_top >= (viewport_height * 0.55))
+            if not chosen_wrap and button_text == "\u53d1\u5e03" and (sibling_draft or near_bottom):
+                chosen_wrap = "bottom_publish_area"
+            if not chosen_wrap and any(
+                any(token in text for token in skip_wrap_tokens)
+                for text in wrap_candidates
+            ):
+                continue
+            if not chosen_wrap:
+                continue
+            try:
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
@@ -18206,7 +18365,10 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                     btn.click(by_js=True)
                 except Exception:
                     continue
-            _log(f"[Uploader:xiaohongshu] Clicked publish button by dedicated selector: {selector}")
+            _log(
+                f"[Uploader:xiaohongshu] Clicked publish button by dedicated selector: {selector}; "
+                f"wrap={chosen_wrap or '-'}"
+            )
             return True
 
     js = r"""
@@ -18225,23 +18387,75 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
       if (st.pointerEvents === 'none') return true;
       return false;
     }
-    const candidates = Array.from(document.querySelectorAll('button'))
+    function pickWrap(wrapTexts) {
+      const strongTokens = ['暂存离开 发布', '发布 暂存离开', '更多设置', '定时发布'];
+      const allowTokens = ['暂存离开', '更多设置', '定时发布', '公开可见', '仅自己可见', '允许合拍', '允许正文复制', '谁可以看'];
+      const skipTokens = ['首页', '笔记管理', '数据看板', '活动中心', '创作学院', '创作百科', '发布笔记'];
+      const texts = Array.from(wrapTexts || []).filter(Boolean);
+      for (const token of strongTokens) {
+        const strong = texts.find(text => text.includes(token)) || '';
+        if (strong) return strong;
+      }
+      for (const token of allowTokens) {
+        const normal = texts.find(text => text.includes(token) && !skipTokens.some(skip => text.includes(skip))) || '';
+        if (normal) return normal;
+      }
+      return '';
+    }
+    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
       .filter(el => isVisible(el))
       .filter(el => !disabled(el))
       .map(el => {
-        const text = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+        const text = String(el.innerText || el.textContent || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+        if (!/^(发布|发布笔记|继续发布|确认发布)$/.test(text)) return null;
         const cls = String(el.className || '');
         const parentCls = String((el.parentElement && el.parentElement.className) || '');
+        const attrs = [
+          cls,
+          String(el.getAttribute('aria-label') || ''),
+          String(el.getAttribute('data-testid') || ''),
+        ].join(' ');
+        const wrapTexts = [];
+        let cur = el;
+        for (let i = 0; cur && i < 6; i += 1) {
+          wrapTexts.push(String((cur && cur.innerText) || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim().slice(0, 320));
+          cur = cur.parentElement;
+        }
+        const parent = el.parentElement || null;
+        if (parent) {
+          for (const sibling of Array.from(parent.children || [])) {
+            if (sibling === el) continue;
+            const siblingText = String((sibling && sibling.innerText) || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim().slice(0, 240);
+            if (siblingText) wrapTexts.push(siblingText);
+          }
+        }
+        const wrapText = pickWrap(wrapTexts);
+        const rect = el.getBoundingClientRect();
+        const siblingDraft = wrapTexts.some(candidate => candidate.includes('暂存离开'));
+        const nearBottom = Number(rect && rect.top || 0) >= (Number(window.innerHeight || document.documentElement.clientHeight || 0) * 0.55);
+        const skipShell = wrapTexts.some(candidate => ['首页', '笔记管理', '数据看板', '活动中心', '创作学院', '创作百科', '发布笔记'].some(token => candidate.includes(token)));
+        if (!wrapText && skipShell) return null;
+        if (!wrapText && !(text === '发布' && (siblingDraft || nearBottom))) return null;
         let score = 0;
+        if (text === '发布') score += 18;
+        if (text === '确认发布') score += 14;
+        if (text === '继续发布') score += 10;
+        if (text === '发布笔记') score -= 18;
         if (cls.includes('bg-red')) score += 16;
         if (cls.includes('custom-button')) score += 8;
-        if (parentCls.includes('publish-page-publish-btn')) score += 6;
-        if (text.length > 0 && text.length <= 6) score += 3;
+        if (parentCls.includes('publish-page-publish-btn')) score += 12;
+        if (/button/i.test(el.tagName || '')) score += 8;
+        if (/publish|button|custom-button/.test(attrs.toLowerCase())) score += 6;
+        if (wrapText && wrapText.includes('暂存离开')) score += 10;
+        if (wrapText && (wrapText.includes('更多设置') || wrapText.includes('定时发布'))) score += 5;
+        if (nearBottom) score += 8;
+        if (siblingDraft) score += 10;
         return {el, score};
       })
+      .filter(Boolean)
       .sort((a, b) => b.score - a.score);
     if (!candidates.length) return false;
-    if (candidates[0].score < 8) return false;
+    if (candidates[0].score < 18) return false;
     candidates[0].el.click();
     return true;
     """
@@ -19649,6 +19863,9 @@ def _wait_publish_feedback(
         elif platform_name == "kuaishou":
             # Best effort: some accounts show delayed confirm dialogs after first publish click.
             _click_kuaishou_publish_confirm_dialog_only(primary_ctx, fallback_ctx)
+        elif platform_name == "xiaohongshu":
+            # Best effort: some accounts show a delayed confirm dialog or secondary publish gate.
+            _click_xiaohongshu_publish_confirm_button(primary_ctx, fallback_ctx)
         elif platform_name == "bilibili":
             _click_first_matching_button(
                 primary_ctx,

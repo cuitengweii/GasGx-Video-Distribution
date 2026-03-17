@@ -10307,10 +10307,6 @@ def _run_collect_publish_latest_job(
 
     if sent_candidates > 0 or reused_candidates > 0:
         next_step_items: list[str] = []
-        if fresh_candidates > 0:
-            next_step_items.append(
-                f"我已发送本轮候选预审卡片；只有你明确点击“普通发布”或“原创发布”的候选，才会进入下载和{_format_platform_text(target_platforms)}发布。"
-            )
         if reissued_candidates > 0:
             next_step_items.append("本轮命中的历史在审候选已重发当前状态卡；直接从新卡继续处理即可。")
         if reused_candidates > 0 and not immediate_test_mode:
@@ -10319,8 +10315,6 @@ def _run_collect_publish_latest_job(
             next_step_items.append("这次命中的都是已在处理或已处理过的候选；请查看最近的候选卡片继续操作。")
         if immediate_test_mode:
             next_step_items.append("测试模式已放宽候选匹配并强制重发新预审卡，后续仍会进入真实采集和发布链路。")
-        if not next_step_items:
-            next_step_items.append("候选已整理完成，请查看后续卡片。")
         _send_background_feedback(
             runner=runner,
             email_settings=email_settings,
@@ -10336,11 +10330,17 @@ def _run_collect_publish_latest_job(
                     reused_count=reused_candidates,
                     skipped_count=skipped_duplicates,
                 ),
-                {
-                    "title": "下一步",
-                    "emoji": "🧭",
-                    "items": next_step_items,
-                },
+                *(
+                    [
+                        {
+                            "title": "下一步",
+                            "emoji": "🧭",
+                            "items": next_step_items,
+                        }
+                    ]
+                    if next_step_items
+                    else []
+                ),
             ],
             status="done",
             platforms=target_platforms,
