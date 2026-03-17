@@ -101,6 +101,7 @@ def test_comment_login_notification_prefers_qr(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert result["sent"] is True
+    assert result["needs_login"] is True
     assert result["notification_mode"] == "qr"
     assert result["url"] == "https://channels.weixin.qq.com/login.html"
     assert len(qr_calls) == 1
@@ -131,10 +132,33 @@ def test_comment_login_notification_falls_back_to_text(monkeypatch: pytest.Monke
     )
 
     assert result["sent"] is True
+    assert result["needs_login"] is True
     assert result["notification_mode"] == "text"
     assert result["qr_result"]["error"] == "wechat login qr not found"
     assert len(text_calls) == 1
     assert text_calls[0]["qr_error"] == "wechat login qr not found"
+
+
+def test_comment_login_notification_skips_when_page_is_not_login_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {"needs_login": False, "url": "https://channels.weixin.qq.com/platform/interaction/comment"},
+    )
+
+    result = engine._maybe_notify_wechat_comment_login_required(
+        page=object(),
+        chrome_user_data_dir="D:/profiles/wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/comment",
+        login_reason="comment_manager_open_failed",
+        telegram_bot_token="token",
+        telegram_chat_id="chat",
+    )
+
+    assert result["ok"] is True
+    assert result["needs_login"] is False
+    assert result["skipped"] is True
+    assert result["reason"] == "not_login_gate"
 
 
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
@@ -162,3 +186,24 @@ def test_apply_comment_reply_like_to_reply_wait_uses_random_interval(monkeypatch
 
     assert waited == 3.25
     assert waits == [3.25]
+
+
+def test_append_comment_reply_markdown_writes_json_code_block(tmp_path) -> None:
+    target = tmp_path / "runtime" / "wechat_comment_reply_records.md"
+
+    engine._append_comment_reply_markdown(
+        target,
+        "wechat",
+        {
+            "fingerprint": "abc123",
+            "comment_preview": "奇丑无比",
+            "reply_text": "喜欢的就喜欢",
+            "replied_at": "2026-03-18 10:11:12",
+        },
+    )
+
+    body = target.read_text(encoding="utf-8")
+    assert "## 2026-03-18 10:11:12 | wechat" in body
+    assert "```json" in body
+    assert '"fingerprint": "abc123"' in body
+    assert '"reply_text": "喜欢的就喜欢"' in body

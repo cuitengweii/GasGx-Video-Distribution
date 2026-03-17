@@ -450,8 +450,42 @@ def test_build_telegram_card_normalizes_platform_status_items_with_platform_emoj
     )
 
     text = str(card["text"])
-    assert "• <b>⚡ 快手</b>：🔐 需要登录" in text
-    assert "• <b>🎵 抖音</b>：📣 发布失败｜Could not find file input on douyin page" in text
+    assert "• <b>⚡ 快手 ❌</b>：🔐 需要登录" in text
+    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜Could not find file input on douyin page" in text
     assert "• <b>📝 小红书</b>：✅ 已确认" in text
-    assert text.index("• <b>⚡ 快手</b>") < text.index("• <b>🎵 抖音</b>")
-    assert text.index("• <b>🎵 抖音</b>") < text.index("• <b>📝 小红书</b>")
+    assert text.index("• <b>⚡ 快手 ❌</b>") < text.index("• <b>🎵 抖音 ❌</b>")
+    assert text.index("• <b>🎵 抖音 ❌</b>") < text.index("• <b>📝 小红书</b>")
+
+
+def test_build_telegram_card_uses_neutral_overview_header_for_immediate_platform_summary() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "即采即发部分平台已完成",
+            "subtitle": "部分平台待处理",
+            "sections": [
+                {
+                    "title": "平台状态",
+                    "items": [
+                        {"label": "视频号", "value": "需要登录"},
+                        {"label": "抖音", "value": "平台处理失败；原因：collection not confirmed"},
+                        {"label": "小红书", "value": "平台已确认发布成功"},
+                    ],
+                },
+                {
+                    "title": "执行摘要",
+                    "items": [
+                        {"label": "成功平台", "value": "1"},
+                        {"label": "失败平台", "value": "2"},
+                        {"label": "目标平台", "value": "3"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.startswith("<b>📌 平台概览</b>")
+    assert "• <b>📱 视频号 ❌</b>：🔐 需要登录" in text
+    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜collection not confirmed" in text

@@ -1,6 +1,6 @@
 # CyberCar Architecture
 
-Last updated: 2026-03-17
+Last updated: 2026-03-18
 
 ## Top-Level Structure
 
@@ -36,6 +36,9 @@ Last updated: 2026-03-17
 - For `success` and `done` cards, `人工关注` is treated as the operator-facing focus block. When present, the renderer can drop a redundant `执行结果` section and trim `机器信息` to the first two rows before rendering.
 - Success-side machine-info compaction is content-aware inside `src/cybercar/common/telegram_ui.py`: rows mentioning logs, IDs, flags, status, or task identity outrank generic tails like duration.
 - Subtitle generation still prefers platform-summary aggregation when present; otherwise it falls back to compacting the provided subtitle string.
+- The header renderer in `src/cybercar/common/telegram_ui.py` now uses a platform-first contract for publish-result cards: `状态+平台主标题` on the first line, a weak `· 菜单路径` helper line when context exists, then any remaining subtitle line only if it is not redundant with the platform title.
+- The Telegram UI layer now strips HTML-like markup from subtitle text, section titles, item labels, item values, and plain string items before rendering, so malformed upstream fragments cannot force a whole card into raw literal-tag output.
+- `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py` owns a separate but now aligned operator-entry surface: persistent reply-keyboard shortcuts and shortcut parsing both use the same short labels as inline card buttons.
 
 ## WeChat Login Recovery Flow
 
@@ -47,6 +50,8 @@ Last updated: 2026-03-17
 - `src/cybercar/engine.py` now carries a Douyin-specific image upload path that scores visible upload candidates in the live page DOM and prefers the actual image drop zone over cover-upload widgets.
 - The generic upload staging path now allows platform-specific "editor already ready" inference. For Douyin image posts, the transition into the image editor form is treated as the upload-complete boundary even if the creator page never surfaces a usable DOM file input.
 - Douyin collection selection now depends on locating the full collection row container and then enumerating its visible dropdown controls, because the current creator page no longer guarantees that the text label and the real trigger share a shallow wrapper node.
+- The Douyin upload-entry path now tries native selector clicks before JS scorer fallback, prioritizing the right-side phone-preview upload shell (`phone-screen` / `container-*`) and the dedicated upload button over the broader outer `content-right` wrapper.
+- Collection resolution is now platform-aware inside `src/cybercar/engine.py`: CLI override stays highest, then `collection_names[platform]`, then legacy `<platform>_collection_name`, then `DEFAULT_PLATFORM_COLLECTION_NAMES[platform]`, and only then the shared global `collection_name`.
 
 ## Command Flow
 

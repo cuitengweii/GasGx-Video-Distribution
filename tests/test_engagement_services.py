@@ -86,3 +86,29 @@ def test_run_kuaishou_engagement_delegates_to_platform_runtime(monkeypatch, tmp_
     assert captured["max_posts_override"] == 4
     assert captured["max_replies_override"] == 1
     assert captured["notify_env_prefix"] == "KS_NOTIFY_"
+
+
+def test_diagnose_platform_engagement_delegates_to_runtime(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+        default_profile_dir = tmp_path / "default"
+
+    monkeypatch.setattr(engagement, "apply_runtime_environment", lambda: FakePaths())
+    monkeypatch.setattr(engagement, "load_app_config", lambda: {"chrome": {"default_debug_port": 9666}})
+    monkeypatch.setattr(engagement.engine, "init_workspace", lambda root: f"workspace:{root}")
+
+    def fake_diagnose_platform_comment_page(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "platform": kwargs["platform_name"]}
+
+    monkeypatch.setattr(engagement, "diagnose_platform_comment_page", fake_diagnose_platform_comment_page)
+
+    result = engagement.diagnose_platform_engagement("kuaishou")
+
+    assert result == {"ok": True, "platform": "kuaishou"}
+    assert captured["platform_name"] == "kuaishou"
+    assert captured["workspace"] == f"workspace:{FakePaths.runtime_root}"
+    assert captured["debug_port"] == 9666
+    assert captured["chrome_user_data_dir"] == str(FakePaths.default_profile_dir)

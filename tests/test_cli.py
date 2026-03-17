@@ -36,6 +36,14 @@ def test_cli_engage_kuaishou_subcommand_parses_options() -> None:
     assert args.like_only is True
 
 
+def test_cli_engage_diagnose_subcommand_parses_platform() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["engage", "diagnose", "--platform", "douyin"])
+    assert args.command == "engage"
+    assert args.engage_command == "diagnose"
+    assert args.platform == "douyin"
+
+
 def test_cli_telegram_recover_subcommand_parses_retries() -> None:
     parser = build_parser()
     args = parser.parse_args(["telegram", "recover", "--retries", "5"])

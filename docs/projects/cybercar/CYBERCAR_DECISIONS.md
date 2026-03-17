@@ -1,6 +1,6 @@
 # CyberCar Decisions
 
-Last updated: 2026-03-17
+Last updated: 2026-03-18
 
 ## 2026-03-15
 
@@ -39,3 +39,11 @@ Last updated: 2026-03-17
 - A generic WeChat publish failure is no longer sufficient evidence for `login_required`. The worker must run `check_platform_login_status()` first and only request a QR code after the session probe confirms a true login loss.
 - When success cards must compress `机器信息`, the renderer should prefer log and task/ID style clues over low-signal fields such as duration so machine-oriented debugging context survives the cut.
 - Douyin video upload readiness may not fall back to a generic "not busy anymore" completion rule. The publish flow must wait for explicit video-editor evidence such as caption/title inputs, publish controls, or other stable editor hints before caption verification begins.
+
+## 2026-03-18
+
+- Douyin image upload should be considered complete once the creator page has transitioned into the image editor form, even if `page.set.upload_files` leaves `input[type=file]` counts at zero. Editor-state evidence beats DOM file-input counts on the current creator page.
+- Platform-specific collection defaults must override the shared `collection_name` fallback. For Douyin image publish, the canonical collection target is `赛博皮卡现车：aawbcc`, and the global fallback may not silently replace it with another platform's collection name.
+- Telegram operator-facing cards now optimize for platform-first scanning instead of bot branding. `CyberCar` is removed from card headers, platform-result titles render the platform line first, and menu-path context is demoted to a weak helper line.
+- Telegram shortcut vocabulary must remain identical across inline buttons, persistent reply keyboards, and help copy. The supported operator-facing labels are `登录 / 进度 / 即采即发 / 点赞评论`; longer variants remain accepted only as backward-compatible aliases.
+- Failure-card login actions may not be inferred from generic summary prose. `🔐 登录` is reserved for explicit login-loss evidence from failure/platform-status/suggestion signals or `status=login_required`.

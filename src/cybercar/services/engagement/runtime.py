@@ -19,6 +19,10 @@ COMMENT_REPLY_STATE_FILES = {
     "douyin": "douyin_comment_reply_state.json",
     "kuaishou": "kuaishou_comment_reply_state.json",
 }
+COMMENT_REPLY_MARKDOWN_FILES = {
+    "douyin": "douyin_comment_reply_records.md",
+    "kuaishou": "kuaishou_comment_reply_records.md",
+}
 
 COMMENT_REPLY_RETENTION_DAYS = 30
 
@@ -43,6 +47,12 @@ def _normalize_platform(platform_name: str) -> str:
 def _state_path(workspace: engine.Workspace, platform_name: str) -> Path:
     platform = _normalize_platform(platform_name)
     filename = COMMENT_REPLY_STATE_FILES.get(platform) or f"{platform}_comment_reply_state.json"
+    return workspace.root / filename
+
+
+def _markdown_path(workspace: engine.Workspace, platform_name: str) -> Path:
+    platform = _normalize_platform(platform_name)
+    filename = COMMENT_REPLY_MARKDOWN_FILES.get(platform) or f"{platform}_comment_reply_records.md"
     return workspace.root / filename
 
 
@@ -1464,6 +1474,103 @@ PLATFORM_DIAGNOSTICS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "kuaishou": _diagnose_kuaishou_page,
 }
 
+PLATFORM_PICKER_OPENERS: dict[str, Callable[[Any], bool]] = {
+    "douyin": _ensure_douyin_picker_open,
+    "kuaishou": _ensure_kuaishou_picker_open,
+}
+
+
+def _diagnostics_dir(workspace: engine.Workspace) -> Path:
+    return workspace.root / "diagnostics"
+
+
+def _snapshot_page_html(page: Any) -> str:
+    payload = _run_js_dict(
+        page,
+        """
+        return {
+          ok: true,
+          html: String((document.documentElement && document.documentElement.outerHTML) || '')
+        };
+        """,
+    )
+    return str(payload.get("html") or "")
+
+
+def _snapshot_page_text(page: Any) -> str:
+    payload = _run_js_dict(
+        page,
+        """
+        return {
+          ok: true,
+          text: String(((document.body || document.documentElement) && (document.body || document.documentElement).innerText) || '')
+        };
+        """,
+    )
+    return str(payload.get("text") or "")
+
+
+def diagnose_platform_comment_page(
+    *,
+    platform_name: str,
+    workspace: engine.Workspace,
+    debug_port: int,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = "",
+    auto_open_chrome: bool = True,
+) -> dict[str, Any]:
+    platform = _normalize_platform(platform_name)
+    adapter = PLATFORM_ADAPTERS.get(platform)
+    diagnose = PLATFORM_DIAGNOSTICS.get(platform)
+    if adapter is None or diagnose is None:
+        return {
+            "ok": False,
+            "platform": platform,
+            "reason": f"unsupported engagement platform: {platform}",
+        }
+
+    page = engine._connect_chrome(
+        debug_port=int(debug_port),
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=adapter.open_url,
+    )
+    page.get(adapter.open_url)
+    time.sleep(1.0)
+
+    before = diagnose(page)
+    picker_opener = PLATFORM_PICKER_OPENERS.get(platform)
+    picker_opened = bool(picker_opener(page)) if picker_opener is not None else False
+    time.sleep(0.8)
+    after = diagnose(page)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = _diagnostics_dir(workspace)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{platform}_comment_page_{timestamp}"
+    json_path = out_dir / f"{prefix}.json"
+    html_path = out_dir / f"{prefix}.html"
+    text_path = out_dir / f"{prefix}.txt"
+
+    html_body = _snapshot_page_html(page)
+    text_body = _snapshot_page_text(page)
+    payload = {
+        "ok": True,
+        "platform": platform,
+        "open_url": adapter.open_url,
+        "picker_opened": picker_opened,
+        "before": before,
+        "after": after,
+        "json_path": str(json_path),
+        "html_path": str(html_path),
+        "text_path": str(text_path),
+    }
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    html_path.write_text(html_body, encoding="utf-8")
+    text_path.write_text(text_body, encoding="utf-8")
+    return payload
+
 
 def run_platform_comment_reply(
     *,
@@ -1620,6 +1727,7 @@ def run_platform_comment_reply(
                     reply_text=reply_text,
                 )
                 reply_records.append(record)
+                engine._append_comment_reply_markdown(_markdown_path(workspace, platform), platform, record)
                 state["items"] = items
                 state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 _save_state(workspace, platform, state)
@@ -1647,6 +1755,7 @@ def run_platform_comment_reply(
         "platform": platform,
         "reason": "",
         "state_path": str(_state_path(workspace, platform)),
+        "markdown_path": str(_markdown_path(workspace, platform)),
         "records": reply_records,
         "posts_scanned": posts_scanned,
         "posts_selected": len(posts),

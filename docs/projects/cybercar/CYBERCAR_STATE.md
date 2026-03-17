@@ -1,6 +1,6 @@
 # CyberCar State
 
-Last updated: 2026-03-17
+Last updated: 2026-03-18
 
 ## Scope
 
@@ -10,6 +10,12 @@ Last updated: 2026-03-17
 
 ## Latest Milestone
 
+- Finished a full Telegram operator-card cleanup pass focused on scan speed: platform result cards now put the platform title first, drop the redundant `CyberCar` prefix, weaken menu-path context lines, and hide duplicate success subtitle lines on single-platform success cards.
+- Unified Telegram surface wording across inline actions, persistent reply-keyboard shortcuts, and help copy: operators now see the same short labels (`🔐 登录`, `📍 进度`, `⚡ 即采即发`, `💬 点赞评论`) instead of mixed old/new phrases like `平台登录` and `进程查看`.
+- Hardened Telegram card rendering against malformed HTML fragments from upstream payloads: title/subtitle/section/item text is now stripped of stray `<b>/<i>` markup before rendering so a single broken tag no longer downgrades an entire card into raw literal markup output.
+- Tightened failure-card action inference so `🔐 登录` only appears on explicit login-failure signals (`login_required`, failure/platform-status/suggestion sections) instead of generic summary phrases like “部分平台失败或需要登录”.
+- Closed the long-running Douyin image-upload misdiagnosis loop: live logs now show the uploader clicking the real phone-preview upload trigger, entering `编辑图片 / 已添加1张图片 / 继续添加`, and treating that editor state as upload-ready even when the creator page still exposes `file_inputs=0`.
+- Corrected platform collection resolution so Douyin no longer inherits the global fallback collection name. The intended Douyin image collection is now the exact live value `赛博皮卡现车：aawbcc`, and platform-specific defaults resolve ahead of the shared `collection_name`.
 - Confirmed that the reported Kuaishou immediate-publish crash path caused by `CycleContext.__init__() missing 1 required positional argument: 'collection_names'` is already repaired in the current standalone repo: `CycleContext` now keeps a backward-compatible default and the Telegram immediate worker passes resolved `collection_names` into the publish context.
 - Expanded Douyin collection selection so `_select_douyin_collection()` now runs for Douyin publishes regardless of media type, preventing video publishes from silently skipping collection assignment after caption fill.
 - Locked the Telegram publish-result success-card layout around the operator summary block: the normalization tests now require `执行摘要` to appear directly after the stacked platform header instead of preserving a redundant `平台发布成功 / 已返回平台结果` subtitle line.
@@ -35,6 +41,14 @@ Last updated: 2026-03-17
 
 ## Current Status
 
+- `src/cybercar/common/telegram_ui.py` now owns the current Telegram header layout contract: platform-result cards render as `平台主标题 -> 弱化路径行 -> 正文`, and single-platform success cards no longer keep an extra `平台发布成功` line when the title already says `某平台已确认`.
+- The Telegram UI layer now sanitizes subtitle text, section titles, item labels, item values, and plain string items with `_strip_html_like_markup(...)`, which prevents malformed upstream markup from surfacing as literal `<b>` / `<i>` text in menu cards.
+- `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py` now keeps the home reply keyboard and shortcut parser aligned on the short operator vocabulary: `登录 / 进度 / 即采即发 / 点赞评论`.
+- Telegram regression coverage for this card-normalization round now spans `tests/test_telegram.py`, `tests/test_telegram_immediate.py`, `tests/test_telegram_card_normalization.py`, and `tests/test_telegram_success_card_compaction.py`, with the latest local run at `113 passed`.
+- The latest Douyin live run in `runtime/runtime/logs/immediate_publish_douyin_20260317_175430.log` confirms the image upload stage is no longer the active blocker: the page enters the editor form, caption fill succeeds, and the failure has moved entirely to collection target resolution/selection.
+- The same log proves the page already exposes the correct visible collection option `赛博皮卡现车：aawbcc`; the reported `target=赛博皮卡天津港现车` came from config-resolution precedence, not from a missing option in the creator UI.
+- `src/cybercar/engine.py` now resolves platform collection names in this order: CLI override, `collection_names[platform]`, legacy `<platform>_collection_name`, platform default, then shared global `collection_name`.
+- The Douyin upload trigger path now prefers native selector clicks on the right-side phone preview upload shell before falling back to JS-scored generic upload heuristics.
 - The current repo code already contains the immediate-worker `collection_names` propagation fix for `runner.CycleContext(...)`, so the previously reported Kuaishou platform-processing failure is not represented by a new unstaged diff in this archive.
 - `src/cybercar/engine.py` currently broadens Douyin collection selection from the image-only branch to all Douyin publishes, aligning video and image flows on the same post-caption collection assignment step.
 - `tests/test_telegram_card_normalization.py` now asserts the compact success-card layout more strictly: stacked platform headers must flow straight into the `执行摘要` section instead of keeping a duplicated platform-result subtitle line.
@@ -70,6 +84,8 @@ Last updated: 2026-03-17
 
 ## Open Work
 
+- The Telegram card system still needs one live-bot validation pass against real messages after the latest “platform-first title / hidden single-platform success subtitle / weak path line” changes, to confirm Telegram clients do not cache or visually merge older card layouts.
+- Menu-card and result-card shortening is now largely stable, but one more real-message review is still needed to decide whether single-platform success cards should also drop the redundant `平台已确认发布成功。` sentence from the `执行摘要` body.
 - Real-host validation is still required for the reported Kuaishou image publish failure path: re-run `即采即发 > 图片 > 全部平台` and verify that the current repo no longer surfaces the old `CycleContext.__init__()` crash before platform handling starts.
 - Douyin collection selection now runs on both image and video publishes in code, but one live creator-center pass is still needed to confirm the shared path does not regress the current video form.
 - Telegram success-card compaction still needs one live bot confirmation to ensure removing the redundant platform-result subtitle does not hide the only operator-facing clue on edge-case success cards.
@@ -93,6 +109,8 @@ Last updated: 2026-03-17
 
 ## Next Step
 
+- Trigger 2-3 real Telegram messages that cover: one single-platform success, one partial-success mixed-platform result, and one home/menu card. Verify that the live client now shows platform-first titles, no stray HTML tags, and consistent bottom shortcut wording.
+- If the single-platform success body still feels repetitive, remove the remaining `平台已确认发布成功。` sentence from `执行摘要` for that exact case while leaving partial/failure summaries intact.
 - Re-run Telegram `即采即发 > 图片 > 全部平台` for the same Kuaishou image scenario and confirm the worker no longer fails at `CycleContext` construction before platform handling begins.
 - Re-run one Douyin video publish path and verify the assigned collection is still selected after caption fill now that `_select_douyin_collection()` is no longer gated by `_is_image_file(target)`.
 - Trigger one known-success Telegram publish-result card and confirm the operator still sees enough context when the header is followed directly by `执行摘要` and no extra `平台发布成功` subtitle line.
@@ -121,3 +139,11 @@ Last updated: 2026-03-17
 - After Douyin is green, open a separate thread for `kuaishou upload timeout (420s)` using the newest `immediate_publish_kuaishou_*.log`.
 - Re-run the failed Douyin video candidate from `collect_publish_latest|ctim-b1e08111a76a71f4` and confirm the next `immediate_publish_douyin_*.log` contains `Waiting for video editor form readiness...` before the first successful caption verification.
 - If the rerun still fails, capture the next Douyin log around upload completion and compare the page text snapshot with `_read_douyin_video_upload_state()` so the ready heuristic can be tightened around the current creator-center DOM.
+
+## 2026-03-18 Archive Update
+
+- Douyin image upload triage is now narrowed to a post-upload collection issue rather than an upload-entry issue. The newest confirmed live log `runtime/runtime/logs/immediate_publish_douyin_20260317_175430.log` shows native clicking on the right-side phone-preview upload shell, transition into `编辑图片 / 已添加1张图片 / 继续添加`, and successful caption fill before collection handling starts.
+- The remaining Douyin mismatch was traced to collection-resolution precedence, not missing DOM options. The page already exposes `赛博皮卡现车：aawbcc`, while older runs still targeted `赛博皮卡天津港现车`.
+- `src/cybercar/engine.py` now resolves collection names with platform-specific defaults ahead of the shared global fallback, so Douyin keeps `赛博皮卡现车：aawbcc` even when other platforms still use the global `collection_name`.
+- Latest verified local regression command: `pytest tests/test_engine_douyin.py tests/test_engine_douyin_upload.py tests/test_telegram_immediate.py -q` -> `89 passed`.
+- Immediate next real-host check: rerun one Douyin image publish and confirm the new log prints `target=赛博皮卡现车：aawbcc`. If the log still shows the old target, the active worker/process has not picked up the latest repo code yet.

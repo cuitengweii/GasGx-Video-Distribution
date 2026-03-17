@@ -5195,6 +5195,29 @@ def _failure_requires_login(failure: Dict[str, str], error_text: str) -> bool:
     return "登录" in raw and "无需登录" not in raw
 
 
+def _looks_like_explicit_login_gate_error(error_text: str) -> bool:
+    raw = str(error_text or "").strip()
+    if not raw:
+        return False
+    lowered = raw.lower()
+    markers = (
+        "publish blocked by login page",
+        "blocked by login page",
+        "login page",
+        "login gate",
+        "login.html",
+        "needs_login",
+        "scan qr",
+        "scan code",
+        "二维码",
+        "扫码登录",
+        "未登录",
+        "重新登录",
+        "登录失效",
+    )
+    return any(marker in lowered or marker in raw for marker in markers)
+
+
 def _should_probe_platform_login_after_publish_failure(platform: str, error_text: str) -> bool:
     platform_token = str(platform or "").strip().lower()
     raw = str(error_text or "").strip().lower()
@@ -6169,6 +6192,7 @@ def _probe_platform_login_after_publish_failure(
     platform_token = str(platform or "").strip().lower()
     if platform_token != "wechat":
         return "failed", str(error_text or "").strip()
+    explicit_login_signal = _looks_like_explicit_login_gate_error(error_text)
     try:
         from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as core
     except Exception:
@@ -6186,14 +6210,23 @@ def _probe_platform_login_after_publish_failure(
         )
     except Exception as exc:
         _append_log(log_file, f"[Worker] immediate publish login recheck status probe failed platform={platform_token} item={item_id} error={exc}")
-        return "failed", str(error_text or "").strip()
-    if not isinstance(login_status, dict) or not bool(login_status.get("needs_login")):
+        login_status = {"needs_login": False, "probe_error": str(exc)}
+    if not isinstance(login_status, dict):
+        login_status = {"needs_login": False}
+    probe_inconclusive = bool(login_status.get("probe_error")) or not bool(login_status.get("ok", True))
+    if not bool(login_status.get("needs_login")) and not (explicit_login_signal and probe_inconclusive):
         _append_log(
             log_file,
             f"[Worker] immediate publish login recheck kept original failure platform={platform_token} item={item_id} "
             f"needs_login={bool((login_status or {}).get('needs_login'))}",
         )
         return "failed", str(error_text or "").strip()
+    if not bool(login_status.get("needs_login")) and explicit_login_signal and probe_inconclusive:
+        _append_log(
+            log_file,
+            f"[Worker] immediate publish login recheck falling back to explicit login signal "
+            f"platform={platform_token} item={item_id} error={str(error_text or '').strip() or '-'}",
+        )
     result = _request_platform_login_qr(
         platform_name=platform_token,
         bot_token=telegram_bot_token,

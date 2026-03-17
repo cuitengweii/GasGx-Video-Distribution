@@ -486,6 +486,7 @@ XIAOHONGSHU_NOTE_MANAGE_URL = "https://creator.xiaohongshu.com/note/manage"
 KUAISHOU_CONTENT_MANAGE_URL = "https://cp.kuaishou.com/article/manage"
 BILIBILI_UPLOAD_MANAGER_URL = "https://member.bilibili.com/platform/upload-manager"
 WECHAT_COMMENT_REPLY_STATE_FILE = "wechat_comment_reply_state.json"
+WECHAT_COMMENT_REPLY_MARKDOWN_FILE = "wechat_comment_reply_records.md"
 WECHAT_COMMENT_REPLY_RETENTION_DAYS = 30
 LEGACY_BROKEN_WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
     "你是特斯拉 Cybertruck 社区管理者。"
@@ -3598,6 +3599,12 @@ def _default_runtime_config() -> dict[str, Any]:
     return {
         "collection_name": DEFAULT_COLLECTION_NAME,
         "collection_names": DEFAULT_PLATFORM_COLLECTION_NAMES.copy(),
+        "publish": {
+            "platforms": {
+                platform: {"collection_name": name}
+                for platform, name in DEFAULT_PLATFORM_COLLECTION_NAMES.items()
+            },
+        },
         "auto_delete_source_files": DEFAULT_AUTO_DELETE_SOURCE_FILES,
         "exclude_keywords": DEFAULT_EXCLUDE_KEYWORDS.copy(),
         "require_any_keywords": DEFAULT_REQUIRE_ANY_KEYWORDS.copy(),
@@ -3891,9 +3898,21 @@ def _merge_platform_collection_names(raw: Any, fallback: str = "") -> dict[str, 
             name = str(value or "").strip()
             if platform in SUPPORTED_UPLOAD_PLATFORMS and name:
                 result[platform] = name
-    fallback_name = str(fallback or "").strip()
-    if fallback_name and "douyin" not in result:
-        result["douyin"] = fallback_name
+    return result
+
+
+def _merge_publish_platform_config(raw: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    if not isinstance(raw, dict):
+        return result
+    platforms = raw.get("platforms") if isinstance(raw.get("platforms"), dict) else {}
+    for key, value in platforms.items():
+        platform = str(key or "").strip().lower()
+        if platform not in SUPPORTED_UPLOAD_PLATFORMS or not isinstance(value, dict):
+            continue
+        collection_name = str(value.get("collection_name", "") or "").strip()
+        if collection_name:
+            result[platform] = {"collection_name": collection_name}
     return result
 
 
@@ -3908,6 +3927,12 @@ def resolve_platform_collection_name(
     if cli_value:
         return cli_value
     payload = runtime_config if isinstance(runtime_config, dict) else {}
+    publish_cfg = payload.get("publish") if isinstance(payload.get("publish"), dict) else {}
+    platform_cfgs = publish_cfg.get("platforms") if isinstance(publish_cfg.get("platforms"), dict) else {}
+    platform_cfg = platform_cfgs.get(platform) if isinstance(platform_cfgs.get(platform), dict) else {}
+    platform_publish_collection = str(platform_cfg.get("collection_name", "") or "").strip()
+    if platform_publish_collection:
+        return platform_publish_collection
     collection_names = payload.get("collection_names") if isinstance(payload.get("collection_names"), dict) else {}
     platform_specific = str(collection_names.get(platform, "") or "").strip()
     if platform_specific:
@@ -3951,11 +3976,23 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
         payload.get("collection_names"),
         fallback=str(merged.get("collection_name", "") or ""),
     )
+    publish_defaults = defaults.get("publish") if isinstance(defaults.get("publish"), dict) else {}
+    merged["publish"] = {
+        "platforms": _merge_publish_platform_config(publish_defaults),
+    }
+    payload_publish = payload.get("publish") if isinstance(payload.get("publish"), dict) else {}
+    payload_publish_platforms = _merge_publish_platform_config(payload_publish)
+    for platform, cfg in payload_publish_platforms.items():
+        merged["publish"]["platforms"][platform] = dict(cfg)
     for platform in SUPPORTED_UPLOAD_PLATFORMS:
         legacy_key = f"{platform}_collection_name"
         legacy_value = str(payload.get(legacy_key, "") or "").strip()
         if legacy_value:
             merged["collection_names"][platform] = legacy_value
+            merged["publish"]["platforms"][platform] = {"collection_name": legacy_value}
+    for platform, name in merged["collection_names"].items():
+        if platform not in merged["publish"]["platforms"] and str(name or "").strip():
+            merged["publish"]["platforms"][platform] = {"collection_name": str(name).strip()}
     merged["auto_delete_source_files"] = _to_bool(
         payload.get("auto_delete_source_files"),
         default=DEFAULT_AUTO_DELETE_SOURCE_FILES,
@@ -3976,6 +4013,10 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
 
 def _comment_reply_state_path(workspace: Workspace) -> Path:
     return workspace.root / "runtime" / WECHAT_COMMENT_REPLY_STATE_FILE
+
+
+def _comment_reply_markdown_path(workspace: Workspace) -> Path:
+    return workspace.root / "runtime" / WECHAT_COMMENT_REPLY_MARKDOWN_FILE
 
 
 def _load_comment_reply_state(workspace: Workspace) -> dict[str, Any]:
@@ -4001,6 +4042,17 @@ def _save_comment_reply_state(workspace: Workspace, state: dict[str, Any]) -> No
     path = _comment_reply_state_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _append_comment_reply_markdown(path: Path, platform_name: str, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = str(record.get("replied_at") or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    platform = str(platform_name or "").strip().lower() or "unknown"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"## {stamp} | {platform}\n\n")
+        handle.write("```json\n")
+        handle.write(json.dumps(record, ensure_ascii=False, indent=2))
+        handle.write("\n```\n\n")
 
 
 def _prune_comment_reply_state_items(items: dict[str, Any]) -> dict[str, Any]:
@@ -4163,6 +4215,39 @@ def _apply_comment_reply_like_to_reply_wait(
     )
     time.sleep(wait_seconds)
     return float(wait_seconds)
+
+
+def _humanized_wechat_comment_pause(
+    page: Any | None,
+    reason: str,
+    *,
+    minimum_seconds: float = 1.0,
+    maximum_seconds: float = 3.0,
+) -> float:
+    lower = max(0.0, float(minimum_seconds))
+    upper = max(lower, float(maximum_seconds))
+    delay = random.uniform(lower, upper)
+    _log(f"[CommentReply] Humanized pause before {reason}: {delay:.2f}s")
+    if page is not None and hasattr(page, "wait_for_timeout"):
+        try:
+            page.wait_for_timeout(max(1, int(delay * 1000)))
+            return delay
+        except Exception:
+            pass
+    time.sleep(delay)
+    return delay
+
+
+def _humanized_wechat_comment_reaction_pause(page: Any | None, reason: str) -> float:
+    return _humanized_wechat_comment_pause(page, reason, minimum_seconds=0.18, maximum_seconds=0.55)
+
+
+def _humanized_wechat_comment_settle_pause(page: Any | None, reason: str) -> float:
+    return _humanized_wechat_comment_pause(page, reason, minimum_seconds=0.45, maximum_seconds=1.1)
+
+
+def _humanized_wechat_comment_retry_pause(page: Any | None, reason: str) -> float:
+    return _humanized_wechat_comment_pause(page, reason, minimum_seconds=0.25, maximum_seconds=0.8)
 
 
 WECHAT_COMMENT_DOC_HELPER_JS = """
@@ -4463,7 +4548,7 @@ def _collect_recent_commented_posts(page: ChromiumPage, limit: int, debug: bool 
         if stagnant_rounds >= 2:
             break
         _scroll_wechat_post_list(page)
-        time.sleep(1.0)
+        _humanized_publish_retry_pause("wechat commented post list scroll")
     return collected[:target]
 
 
@@ -4639,12 +4724,12 @@ def _maybe_notify_wechat_comment_login_required(
     try:
         login_state = inspect_platform_login_gate(page, "wechat")
     except Exception as exc:
-        return {"ok": False, "sent": False, "error": f"inspect_login_gate_failed: {exc}"}
+        return {"ok": False, "sent": False, "needs_login": False, "error": f"inspect_login_gate_failed: {exc}"}
     page_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
     lowered_url = page_url.lower()
     looks_like_login = bool(login_state.get("needs_login")) or "login.html" in lowered_url or "/platform/login" in lowered_url
     if not looks_like_login:
-        return {"ok": True, "sent": False, "skipped": True, "reason": "not_login_gate", "url": page_url}
+        return {"ok": True, "sent": False, "needs_login": False, "skipped": True, "reason": "not_login_gate", "url": page_url}
     try:
         normalized_reason = str(login_state.get("reason") or login_reason or "comment_manager_not_ready")
         qr_result = send_platform_login_qr_notification(
@@ -4668,6 +4753,7 @@ def _maybe_notify_wechat_comment_login_required(
             payload = dict(qr_result)
             payload["url"] = page_url
             payload["notification_mode"] = "qr"
+            payload["needs_login"] = True
             return payload
 
         result = _send_platform_login_text_notification(
@@ -4686,12 +4772,29 @@ def _maybe_notify_wechat_comment_login_required(
             notify_env_prefix=notify_env_prefix,
         )
     except Exception as exc:
-        return {"ok": False, "sent": False, "error": str(exc), "url": page_url}
+        return {"ok": False, "sent": False, "needs_login": True, "error": str(exc), "url": page_url}
     payload = dict(result) if isinstance(result, dict) else {"ok": bool(result)}
     payload["qr_result"] = qr_result
+    payload["needs_login"] = True
     payload["notification_mode"] = "text" if bool(payload.get("sent")) else "none"
     payload["url"] = page_url
     return payload
+
+
+def _build_wechat_comment_login_failure_result(
+    workspace: Workspace,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": str(reason or "").strip() or "comment_login_required",
+        "state_path": str(_comment_reply_state_path(workspace)),
+        "records": [],
+        "posts_scanned": 0,
+        "posts_selected": 0,
+        "replies_sent": 0,
+    }
 
 
 def extract_comments(page: ChromiumPage) -> list[dict[str, Any]]:
@@ -4879,6 +4982,7 @@ def _open_comment_reply_box(page: ChromiumPage, comment_index: int) -> bool:
 def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> bool:
     if not _open_comment_reply_box(page, comment_index):
         return False
+    _humanized_publish_reaction_pause("wechat comment reply editor focus")
     focus_js = WECHAT_COMMENT_DOC_HELPER_JS + """
     return ((commentIndex) => {
       function clearValue(textarea) {
@@ -4969,6 +5073,7 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
     if not typed:
         return False
 
+    _humanized_publish_reaction_pause("wechat comment submit click")
     js = WECHAT_COMMENT_DOC_HELPER_JS + """
     return ((commentIndex) => {
       function click(el) {
@@ -5235,10 +5340,7 @@ def _playwright_collect_recent_commented_posts(frame: Any, limit: int, debug: bo
         if stagnant_rounds >= 2:
             break
         _playwright_scroll_wechat_list(frame, [".scroll-list", ".scroll-list__wrp.feeds-container", ".feeds-container"])
-        try:
-            frame.page.wait_for_timeout(1000)
-        except Exception:
-            time.sleep(1.0)
+        _humanized_wechat_comment_retry_pause(getattr(frame, "page", None), "wechat commented post list scroll")
     return collected[:target]
 
 
@@ -5312,10 +5414,7 @@ def _playwright_open_comment_manager(
         frame = preferred_frame or _resolve_playwright_wechat_comment_frame(page)
         preferred_frame = None
         if frame is None:
-            try:
-                page.wait_for_timeout(500)
-            except Exception:
-                time.sleep(0.5)
+            _humanized_wechat_comment_retry_pause(page, "wechat comment manager frame resolve retry")
             continue
         js = """
         (args) => {
@@ -5412,10 +5511,7 @@ def _playwright_open_comment_manager(
             message = str(exc)
             if "Frame was detached" in message or "Execution context was destroyed" in message:
                 last_retry_reason = "frame_detached"
-                try:
-                    page.wait_for_timeout(500)
-                except Exception:
-                    time.sleep(0.5)
+                _humanized_wechat_comment_retry_pause(page, "wechat comment manager detached-frame retry")
                 continue
             _log(f"[CommentReply] Playwright open comment manager evaluate failed: {message}")
             result = {"ok": False, "reason": "evaluate_failed"}
@@ -5426,10 +5522,7 @@ def _playwright_open_comment_manager(
             visible_cards = result.get("visible_cards")
             if reason == "feed_not_found" and not visible_cards:
                 last_retry_reason = "feed_not_found_empty_frame"
-                try:
-                    page.wait_for_timeout(500)
-                except Exception:
-                    time.sleep(0.5)
+                _humanized_wechat_comment_retry_pause(page, "wechat comment manager empty-frame retry")
                 continue
             _comment_reply_log(
                 True,
@@ -5443,10 +5536,7 @@ def _playwright_open_comment_manager(
                 + json.dumps(_collect_playwright_comment_manager_diagnostics(page, frame), ensure_ascii=False),
             )
             return False
-        try:
-            page.wait_for_timeout(1200)
-        except Exception:
-            time.sleep(1.2)
+        _humanized_wechat_comment_settle_pause(page, "wechat comment manager open settle")
         confirm_deadline = time.time() + max(1.0, float(timeout_seconds) / 2.0)
         while time.time() < confirm_deadline:
             frame = _resolve_playwright_wechat_comment_frame(page)
@@ -5468,10 +5558,7 @@ def _playwright_open_comment_manager(
                     ready = False
                 if ready:
                     return True
-            try:
-                page.wait_for_timeout(350)
-            except Exception:
-                time.sleep(0.35)
+            _humanized_wechat_comment_retry_pause(page, "wechat comment manager ready-state retry")
         _comment_reply_log(
             True,
             "[CommentReply] Playwright comment manager clicked but not ready: "
@@ -5585,10 +5672,7 @@ def _playwright_wait_comment_items_ready(page: Any, timeout_seconds: float = 6.0
                   return True
           except Exception:
               pass
-      try:
-          page.wait_for_timeout(300)
-      except Exception:
-          time.sleep(0.3)
+      _humanized_wechat_comment_retry_pause(page, "wechat comment items readiness retry")
     return False
 
 
@@ -5682,6 +5766,7 @@ def _playwright_submit_reply(frame: Any, comment_index: int, reply_text: str) ->
         result = frame.evaluate(open_js, {"comment_index": int(comment_index)})
         if not isinstance(result, dict) or not result.get("ok"):
             return False
+        _humanized_wechat_comment_reaction_pause(page, "wechat comment reply editor open")
         deadline = time.time() + 6.0
         textarea_ready_js = """
         (commentIndex) => {
@@ -5700,10 +5785,7 @@ def _playwright_submit_reply(frame: Any, comment_index: int, reply_text: str) ->
                     break
             except Exception:
                 pass
-            if page is not None:
-                page.wait_for_timeout(250)
-            else:
-                time.sleep(0.25)
+            _humanized_wechat_comment_retry_pause(page, "wechat comment reply editor ready retry")
         fill_js = """
         (args) => {
           function setTextareaValue(textarea, text) {
@@ -5771,10 +5853,7 @@ def _playwright_submit_reply(frame: Any, comment_index: int, reply_text: str) ->
                     break
             except Exception:
                 pass
-            if page is not None:
-                page.wait_for_timeout(200)
-            else:
-                time.sleep(0.2)
+            _humanized_wechat_comment_retry_pause(page, "wechat comment reply typing verify retry")
         if not typed:
             fallback_fill_js = """
             (args) => {
@@ -5811,10 +5890,7 @@ def _playwright_submit_reply(frame: Any, comment_index: int, reply_text: str) ->
                         break
                 except Exception:
                     pass
-                if page is not None:
-                    page.wait_for_timeout(200)
-                else:
-                    time.sleep(0.2)
+                _humanized_wechat_comment_retry_pause(page, "wechat comment reply fallback typing verify retry")
         if not typed:
             return False
         submit_ready_js = """
@@ -5838,12 +5914,10 @@ def _playwright_submit_reply(frame: Any, comment_index: int, reply_text: str) ->
                 submit_class = ""
             if submit_class and "disabled" not in submit_class:
                 break
-            if page is not None:
-                page.wait_for_timeout(250)
-            else:
-                time.sleep(0.25)
+            _humanized_wechat_comment_retry_pause(page, "wechat comment submit ready retry")
         if not submit_class or "disabled" in submit_class:
             return False
+        _humanized_wechat_comment_reaction_pause(page, "wechat comment submit click")
         click_submit_js = """
         (commentIndex) => {
           function click(el) {
@@ -5895,10 +5969,7 @@ def _playwright_wait_reply_confirm(frame: Any, comment_index: int, reply_text: s
                 return True
         except Exception:
             pass
-        try:
-            frame.page.wait_for_timeout(400)
-        except Exception:
-            time.sleep(0.4)
+        _humanized_wechat_comment_retry_pause(getattr(frame, "page", None), "wechat reply confirm retry")
     return False
 
 
@@ -6176,6 +6247,7 @@ def run_wechat_comment_reply(
                                 reply_text=reply_text,
                             )
                             reply_records.append(record)
+                            _append_comment_reply_markdown(_comment_reply_markdown_path(workspace), "wechat", record)
                             state["items"] = items
                             state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             _save_comment_reply_state(workspace, state)
@@ -6234,15 +6306,10 @@ def run_wechat_comment_reply(
                 True,
                 "[CommentReply] Login reminder notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
             )
-            return {
-                "ok": False,
-                "reason": "comment_manager_not_ready",
-                "state_path": str(_comment_reply_state_path(workspace)),
-                "records": [],
-                "posts_scanned": 0,
-                "posts_selected": 0,
-                "replies_sent": 0,
-            }
+            return _build_wechat_comment_login_failure_result(
+                workspace,
+                reason="comment_manager_not_ready" if bool(login_notify_result.get("needs_login")) else "comment_manager_not_ready",
+            )
 
         posts = _collect_recent_commented_posts(page, max_posts, debug=debug_enabled)
         _comment_reply_log(debug_enabled, f"Selected commented posts: {len(posts)}")
@@ -6258,6 +6325,25 @@ def run_wechat_comment_reply(
             time.sleep(1.0)
             if not open_comment_manager(page, post):
                 _comment_reply_log(debug_enabled, "Skip post: comment manager not opened")
+                login_notify_result = _maybe_notify_wechat_comment_login_required(
+                    page=page,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    open_url=WECHAT_COMMENT_MANAGER_URL,
+                    login_reason="comment_manager_open_failed",
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_registry_file=telegram_registry_file,
+                    telegram_timeout_seconds=telegram_timeout_seconds,
+                    telegram_api_base=telegram_api_base,
+                    notify_env_prefix=notify_env_prefix,
+                )
+                _comment_reply_log(
+                    True,
+                    "[CommentReply] Open manager login notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
+                )
+                if bool(login_notify_result.get("needs_login")):
+                    return _build_wechat_comment_login_failure_result(workspace, reason="comment_manager_open_failed")
                 continue
             time.sleep(1.0)
 
@@ -6315,9 +6401,47 @@ def run_wechat_comment_reply(
                         _apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
                     if not submit_reply(page, int(comment.get("index") or 0), reply_text):
                         _comment_reply_log(debug_enabled, "Submit reply failed")
+                        login_notify_result = _maybe_notify_wechat_comment_login_required(
+                            page=page,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            open_url=WECHAT_COMMENT_MANAGER_URL,
+                            login_reason="comment_reply_submit_failed",
+                            telegram_bot_token=telegram_bot_token,
+                            telegram_chat_id=telegram_chat_id,
+                            telegram_bot_identifier=telegram_bot_identifier,
+                            telegram_registry_file=telegram_registry_file,
+                            telegram_timeout_seconds=telegram_timeout_seconds,
+                            telegram_api_base=telegram_api_base,
+                            notify_env_prefix=notify_env_prefix,
+                        )
+                        _comment_reply_log(
+                            True,
+                            "[CommentReply] Submit reply login notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
+                        )
+                        if bool(login_notify_result.get("needs_login")):
+                            return _build_wechat_comment_login_failure_result(workspace, reason="comment_reply_submit_failed")
                         continue
                     if not wait_reply_confirm(page, int(comment.get("index") or 0), reply_text):
                         _comment_reply_log(debug_enabled, "Reply confirm timeout")
+                        login_notify_result = _maybe_notify_wechat_comment_login_required(
+                            page=page,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            open_url=WECHAT_COMMENT_MANAGER_URL,
+                            login_reason="comment_reply_confirm_timeout",
+                            telegram_bot_token=telegram_bot_token,
+                            telegram_chat_id=telegram_chat_id,
+                            telegram_bot_identifier=telegram_bot_identifier,
+                            telegram_registry_file=telegram_registry_file,
+                            telegram_timeout_seconds=telegram_timeout_seconds,
+                            telegram_api_base=telegram_api_base,
+                            notify_env_prefix=notify_env_prefix,
+                        )
+                        _comment_reply_log(
+                            True,
+                            "[CommentReply] Reply confirm login notify result: " + json.dumps(login_notify_result, ensure_ascii=False),
+                        )
+                        if bool(login_notify_result.get("needs_login")):
+                            return _build_wechat_comment_login_failure_result(workspace, reason="comment_reply_confirm_timeout")
                         continue
 
                     record = _remember_comment_reply(
@@ -6328,6 +6452,7 @@ def run_wechat_comment_reply(
                         reply_text=reply_text,
                     )
                     reply_records.append(record)
+                    _append_comment_reply_markdown(_comment_reply_markdown_path(workspace), "wechat", record)
                     state["items"] = items
                     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     _save_comment_reply_state(workspace, state)
@@ -6359,6 +6484,7 @@ def run_wechat_comment_reply(
         "ok": True,
         "reason": "",
         "state_path": str(_comment_reply_state_path(workspace)),
+        "markdown_path": str(_comment_reply_markdown_path(workspace)),
         "records": reply_records,
         "posts_scanned": posts_scanned,
         "posts_selected": len(posts),
@@ -11886,7 +12012,7 @@ def _fill_wechat_short_title(ctx: Any, short_title: str) -> str:
         raise RuntimeError("Failed to locate WeChat short title input.")
     if not _input_text_field_with_keyboard(editor, final_title):
         raise RuntimeError("WeChat short title keyboard input failed.")
-    time.sleep(0.3)
+    _humanized_publish_reaction_pause("wechat short title verification")
     current = _read_element_text(editor)
     if re.sub(r"\s+", "", current) == final_title:
         _log(f"[Uploader] WeChat short title filled: {final_title}")
@@ -11903,7 +12029,7 @@ def _fill_caption(ctx: Any, caption: str) -> None:
     if not _input_caption_with_keyboard(editor, caption):
         raise RuntimeError("Caption keyboard input failed on visible editor.")
 
-    time.sleep(0.4)
+    _humanized_publish_reaction_pause("wechat caption verification")
     current = _read_element_text(editor) or _read_caption_text(ctx)
     if REQUIRED_HASHTAGS[0].lower() in current.lower():
         tag_name = "unknown"
@@ -12310,6 +12436,7 @@ def _click_save_draft_button(ctx: Any) -> bool:
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
                 pass
+            _humanized_publish_reaction_pause("wechat save draft click")
             try:
                 btn.click()
             except Exception:
@@ -12392,6 +12519,7 @@ def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, ti
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
+            _humanized_publish_reaction_pause("wechat primary publish click")
             try:
                 result = owner.run_js(js_click)
             except Exception:
@@ -12407,7 +12535,7 @@ def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, ti
                 warned_disabled = True
                 btn_text = str(result.get("text", "") or "").strip() or "发表"
                 _log(f"[Uploader:wechat] Publish button still disabled, waiting: {btn_text}")
-        time.sleep(0.8)
+        _humanized_publish_retry_pause("wechat publish button retry")
     return False
 
 
@@ -13015,7 +13143,7 @@ def _declare_wechat_original(primary_ctx: Any, fallback_ctx: Any, timeout_second
         state = _read_wechat_original_state(primary_ctx, fallback_ctx)
         if _is_wechat_original_dialog_open_from_state(state):
             _dismiss_wechat_original_dialog(primary_ctx, fallback_ctx)
-            time.sleep(0.5)
+            _humanized_publish_settle_pause("wechat original dialog dismiss")
         _log(f"[Uploader:wechat] {message}")
         return False
 
@@ -13031,7 +13159,7 @@ def _declare_wechat_original(primary_ctx: Any, fallback_ctx: Any, timeout_second
             if not bool(state.get("pageCheckboxChecked")):
                 if not _click_wechat_original_page_checkbox(primary_ctx, fallback_ctx):
                     return _fail("Failed to toggle original declaration checkbox, continue without it.")
-                time.sleep(0.6)
+                _humanized_publish_settle_pause("wechat original checkbox toggle")
             while time.time() < end_at:
                 state = _read_wechat_original_state(primary_ctx, fallback_ctx)
                 if _is_wechat_original_dialog_open_from_state(state):
@@ -13039,7 +13167,7 @@ def _declare_wechat_original(primary_ctx: Any, fallback_ctx: Any, timeout_second
                 if _is_wechat_original_declared_from_state(state):
                     _log("[Uploader:wechat] Original declaration enabled without extra dialog.")
                     return True
-                time.sleep(0.4)
+                _humanized_publish_retry_pause("wechat original dialog wait")
             if not _is_wechat_original_dialog_open_from_state(state):
                 return _fail("Original declaration dialog did not appear, continue without it.")
 
@@ -13051,15 +13179,15 @@ def _declare_wechat_original(primary_ctx: Any, fallback_ctx: Any, timeout_second
                     return True
                 return _fail("Original declaration dialog closed unexpectedly, continue without it.")
             if not bool(state.get("dialogAgreementFound")):
-                time.sleep(0.4)
+                _humanized_publish_retry_pause("wechat original agreement wait")
                 continue
             if not bool(state.get("dialogAgreementChecked")):
                 if not _click_wechat_original_dialog_agreement(primary_ctx, fallback_ctx):
                     return _fail("Failed to confirm original declaration agreement, continue without it.")
-                time.sleep(0.5)
+                _humanized_publish_settle_pause("wechat original agreement confirm")
                 continue
             if not _can_confirm_wechat_original_from_state(state):
-                time.sleep(0.4)
+                _humanized_publish_retry_pause("wechat original confirm readiness wait")
                 continue
             if not _click_wechat_original_confirm_button(primary_ctx, fallback_ctx):
                 return _fail("Failed to click original declaration confirm button, continue without it.")
@@ -13071,7 +13199,7 @@ def _declare_wechat_original(primary_ctx: Any, fallback_ctx: Any, timeout_second
                         _log("[Uploader:wechat] Original declaration flow completed.")
                         return True
                     return _fail("Original declaration dialog closed but checkbox did not stick, continue without it.")
-                time.sleep(0.4)
+                _humanized_publish_retry_pause("wechat original confirm result wait")
             return _fail("Original declaration dialog did not close after confirm, continue without it.")
         return _fail("Original declaration timed out, continue without it.")
     except Exception as exc:
@@ -13220,7 +13348,7 @@ def _clear_location_if_selected(ctx: Any) -> None:
             action = ctx.run_js(js_click_none)
         except Exception:
             action = None
-        time.sleep(0.6)
+        _humanized_publish_retry_pause("wechat location picker settle")
         after = _get_location_state(ctx)
         if after.get("isNone"):
             _log("[Uploader] Location cleared to '不显示位置'.")
@@ -13538,12 +13666,12 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
             ctx.run_js(js_collapse_picker)
         except Exception:
             pass
-        time.sleep(0.6)
+        _humanized_publish_retry_pause("wechat collection picker settle")
         after = _get_collection_state(ctx)
         current = str(after.get("current", "") or "")
         if _is_collection_match(current, target):
             # Re-check once to avoid transient reads from the expanded option panel.
-            time.sleep(0.5)
+            _humanized_publish_reaction_pause("wechat collection stability recheck")
             try:
                 ctx.run_js(js_collapse_picker)
             except Exception:
@@ -13686,7 +13814,7 @@ def _fill_draft_once(
     )
     if not file_input:
         _activate_upload_trigger_generic(editor_ctx, page, platform_name="wechat")
-        time.sleep(1.0)
+        _humanized_publish_retry_pause("wechat upload trigger settle")
         editor_ctx = _resolve_post_editor_context(page, timeout_seconds=8)
         file_input = _run_page_action(
             page,
@@ -13697,7 +13825,7 @@ def _fill_draft_once(
     if not file_input and _wechat_context_looks_like_task_center(editor_ctx, page):
         _log("[Uploader:wechat] Task-center context detected; reopening micro create page.")
         _run_page_action(page, "open wechat micro create page", lambda: page.get(WECHAT_MICRO_CREATE_POST_URL))
-        time.sleep(1.0)
+        _humanized_publish_retry_pause("wechat micro create page reopen settle")
         _check_wechat_login_ready(
             page,
             chrome_user_data_dir=chrome_user_data_dir,
@@ -13760,7 +13888,7 @@ def _fill_draft_once(
     if declare_original:
         _declare_wechat_original(editor_ctx, page)
     # 等待前端把描述字段变更同步到页面状态后再保存草稿。
-    time.sleep(0.8)
+    _humanized_publish_settle_pause("wechat publish form settle")
     if save_draft:
         _save_draft(editor_ctx)
         _log("[Success] 草稿已保存。请到草稿箱检查后手动发布。")
@@ -17894,11 +18022,37 @@ def _douyin_collection_select_js() -> str:
         node;
       return clean(title ? (title.innerText || title.textContent || '') : '');
     }
+    function normalizeCollectionValue(txt) {
+      let value = clean(txt || '').replace(/\s+/g, '');
+      if (!value) return '';
+      value = value.split(/[:：]/, 1)[0] || value;
+      return value.trim();
+    }
+    function sharedEdgeLength(left, right, suffix) {
+      if (!left || !right) return 0;
+      const a = suffix ? left.split('').reverse().join('') : left;
+      const b = suffix ? right.split('').reverse().join('') : right;
+      let count = 0;
+      for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+        if (a[i] !== b[i]) break;
+        count += 1;
+      }
+      return count;
+    }
     function optionScore(txt, target) {
       if (!txt) return 0;
-      if (txt === target) return 4;
-      if (txt.startsWith(target) || target.startsWith(txt)) return 3;
-      if (txt.includes(target) || target.includes(txt)) return 2;
+      if (txt === target) return 6;
+      if (txt.startsWith(target) || target.startsWith(txt)) return 5;
+      if (txt.includes(target) || target.includes(txt)) return 4;
+      const normalizedTxt = normalizeCollectionValue(txt);
+      const normalizedTarget = normalizeCollectionValue(target);
+      if (!normalizedTxt || !normalizedTarget) return 0;
+      if (normalizedTxt === normalizedTarget) return 6;
+      if (normalizedTxt.startsWith(normalizedTarget) || normalizedTarget.startsWith(normalizedTxt)) return 5;
+      if (normalizedTxt.includes(normalizedTarget) || normalizedTarget.includes(normalizedTxt)) return 4;
+      const prefix = sharedEdgeLength(normalizedTxt, normalizedTarget, false);
+      const suffix = sharedEdgeLength(normalizedTxt, normalizedTarget, true);
+      if (prefix >= 4 && suffix >= 2) return 3;
       return 0;
     }
 
@@ -17953,7 +18107,7 @@ def _douyin_collection_select_js() -> str:
           bestText = txt;
         }
       }
-      if (bestScore >= 4) break;
+      if (bestScore >= 6) break;
     }
 
     if (!bestNode || bestScore <= 0) {

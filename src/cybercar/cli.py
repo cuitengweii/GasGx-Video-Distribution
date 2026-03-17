@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from .collect import collect
-from .engagement import run_douyin_engagement, run_kuaishou_engagement, run_wechat_engagement
+from .engagement import diagnose_platform_engagement, run_douyin_engagement, run_kuaishou_engagement, run_wechat_engagement
 from .migrate import migrate_legacy_assets
 from .publish import immediate, publish
 from .session import capture_login_qr, login_status, open_login
@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     engage = subparsers.add_parser("engage")
     engage_sub = engage.add_subparsers(dest="engage_command", required=True)
+    diagnose = engage_sub.add_parser("diagnose")
+    diagnose.add_argument("--platform", required=True, choices=["douyin", "kuaishou"])
     for name in ["wechat", "douyin", "kuaishou"]:
         engage_platform = engage_sub.add_parser(name)
         engage_platform.add_argument("--max-posts", type=int, default=0)
@@ -141,6 +143,10 @@ def main() -> int:
             latest_only=bool(args.latest_only),
             debug=bool(args.debug),
         )
+        _print_json(result)
+        return 0 if bool(result.get("ok")) else 1
+    if command == "engage" and args.engage_command == "diagnose":
+        result = diagnose_platform_engagement(str(args.platform))
         _print_json(result)
         return 0 if bool(result.get("ok")) else 1
     if command == "telegram":

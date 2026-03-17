@@ -59,6 +59,22 @@ def test_resolve_platform_collection_name_prefers_platform_specific_value() -> N
     assert engine.resolve_platform_collection_name(runtime_config, "bilibili") == "Global Collection"
 
 
+def test_resolve_platform_collection_name_prefers_publish_platform_config() -> None:
+    runtime_config = {
+        "collection_name": "Global Collection",
+        "collection_names": {
+            "douyin": "Legacy Map Collection",
+        },
+        "publish": {
+            "platforms": {
+                "douyin": {"collection_name": "Structured Douyin Collection"},
+            },
+        },
+    }
+
+    assert engine.resolve_platform_collection_name(runtime_config, "douyin") == "Structured Douyin Collection"
+
+
 def test_resolve_platform_collection_name_supports_legacy_platform_key() -> None:
     runtime_config = {
         "collection_name": "Global Collection",

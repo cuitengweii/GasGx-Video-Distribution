@@ -342,6 +342,15 @@ def _compact_platform_status_value(text: str) -> str:
     return raw
 
 
+def _platform_status_label_suffix(value: str) -> str:
+    compact = str(value or "").strip()
+    if compact.startswith("🔐") or compact.startswith("📣"):
+        return " ❌"
+    if compact.startswith("⚠️"):
+        return " ⚠️"
+    return ""
+
+
 def _platform_status_priority(item: Any) -> tuple[int, str]:
     text = ""
     if isinstance(item, Mapping):
@@ -375,8 +384,9 @@ def _normalize_platform_status_items(items: Sequence[Any]) -> list[Any]:
         value = str(item.get("value") or item.get("text") or "").strip()
         meta = _platform_meta(label or value)
         updated = dict(item)
-        updated["label"] = f"{meta['emoji']} {meta['name']}"
-        updated["value"] = _compact_platform_status_value(value or label)
+        compact_value = _compact_platform_status_value(value or label)
+        updated["label"] = f"{meta['emoji']} {meta['name']}{_platform_status_label_suffix(compact_value)}"
+        updated["value"] = compact_value
         normalized.append(updated)
     return sorted(normalized, key=_platform_status_priority)
 
@@ -750,6 +760,19 @@ def _decorate_positive_header(status: str, title: str, sections: Sequence[Mappin
     return str(fallback or "").strip(), title_text
 
 
+def _decorate_overview_header(status: str, title: str, sections: Sequence[Mapping[str, Any]], fallback: str) -> tuple[str, str]:
+    title_text = str(title or "").strip()
+    titles = {str(section.get("title") or "").strip() for section in sections if isinstance(section, Mapping)}
+    has_platform_layout = "平台状态" in titles and "执行摘要" in titles
+    if not has_platform_layout:
+        return str(fallback or "").strip(), title_text
+    if "即采即发" in title_text:
+        return "📌", "即采即发平台概览"
+    if any(token in title_text for token in ("发布完成", "发布失败", "部分完成", "全部完成")):
+        return "📌", "平台概览"
+    return str(fallback or "").strip(), title_text
+
+
 def _prioritize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = [dict(section) for section in sections if isinstance(section, Mapping)]
     if not normalized:
@@ -986,6 +1009,7 @@ def build_telegram_card(
         sections = []
     sections = _normalize_card_sections(status, list(sections))
     sections = _prune_sections_for_kind(token, status, sections)
+    emoji, title = _decorate_overview_header(status, title, sections, emoji)
     sections = _prioritize_card_sections(
         status,
         _suppress_low_priority_success_sections(
@@ -996,8 +1020,9 @@ def build_telegram_card(
             ),
         ),
     )
-    emoji = _pick_failure_header_emoji(status, sections, emoji)
-    emoji, title = _decorate_positive_header(status, title, sections, emoji)
+    if str(emoji or "").strip() != "📌":
+        emoji = _pick_failure_header_emoji(status, sections, emoji)
+        emoji, title = _decorate_positive_header(status, title, sections, emoji)
     title = _dedupe_bot_title_prefix(title, bot_name)
     title_main, title_context = _split_header_title(title)
     platform_header = _build_platform_header_line(title_main or title)

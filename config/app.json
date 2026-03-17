@@ -19,7 +19,24 @@
     "cookie_file": "config/x_cookies.local.json"
   },
   "publish": {
-    "default_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili"
+    "default_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+    "platforms": {
+      "wechat": {
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+      },
+      "douyin": {
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u73b0\u8f66\uff1aaawbcc"
+      },
+      "xiaohongshu": {
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+      },
+      "kuaishou": {
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+      },
+      "bilibili": {
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66"
+      }
+    }
   },
   "notify": {
     "env_prefix": "CYBERCAR_NOTIFY_"
@@ -32,7 +49,11 @@
     "prefilter_enabled": true,
     "registry_file": "runtime/secrets/telegram_bot_registry.json"
   },
-  "collection_name": "赛博皮卡天津港现车",
+  "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
+  "collection_names": {
+    "douyin": "\u8d5b\u535a\u76ae\u5361\u73b0\u8f66\uff1aaawbcc"
+  },
+  "douyin_collection_name": "\u8d5b\u535a\u76ae\u5361\u73b0\u8f66\uff1aaawbcc",
   "auto_delete_source_files": false,
   "exclude_keywords": [
     "hero wars",
@@ -41,17 +62,17 @@
     "browser game",
     "no downloads",
     "click and go",
-    "点击即可开始",
-    "无需下载",
-    "角色扮演游戏",
-    "小游戏",
-    "游戏广告"
+    "\u70b9\u51fb\u5373\u53ef\u5f00\u59cb",
+    "\u65e0\u9700\u4e0b\u8f7d",
+    "\u89d2\u8272\u626e\u6f14\u6e38\u620f",
+    "\u5c0f\u6e38\u620f",
+    "\u6e38\u620f\u5e7f\u544a"
   ],
   "require_any_keywords": [
     "cybertruck",
     "tesla",
-    "赛博皮卡",
-    "特斯拉"
+    "\u8d5b\u535a\u76ae\u5361",
+    "\u7279\u65af\u62c9"
   ],
   "x_download": {
     "socket_timeout_seconds": 25,
@@ -82,12 +103,12 @@
     "min_like_to_reply_interval_seconds": 1,
     "max_like_to_reply_interval_seconds": 5,
     "auto_like": true,
-    "prompt_template": "请你作为特斯拉 Cybertruck 社区运营，根据粉丝评论生成一条中文回复。\n视频标题：{post_title}\n发布时间：{post_published_text}\n粉丝评论：{comment_content}\n要求：友好、积极、有共鸣，20字以内；不要换行；不要引导私信；不要外链；只返回 JSON。",
+    "prompt_template": "\u8bf7\u4f60\u4f5c\u4e3a\u7279\u65af\u62c9 Cybertruck \u793e\u533a\u8fd0\u8425\uff0c\u6839\u636e\u7c89\u4e1d\u8bc4\u8bba\u751f\u6210\u4e00\u6761\u4e2d\u6587\u56de\u590d\u3002\\n\u89c6\u9891\u6807\u9898\uff1a{post_title}\\n\u53d1\u5e03\u65f6\u95f4\uff1a{post_published_text}\\n\u7c89\u4e1d\u8bc4\u8bba\uff1a{comment_content}\\n\u8981\u6c42\uff1a\u53cb\u597d\u3001\u79ef\u6781\u3001\u6709\u5171\u9e23\uff0c20\u5b57\u4ee5\u5185\uff1b\u4e0d\u8981\u6362\u884c\uff1b\u4e0d\u8981\u5f15\u5bfc\u79c1\u4fe1\uff1b\u4e0d\u8981\u5916\u94fe\uff1b\u53ea\u8fd4\u56de JSON\u3002",
     "fallback_replies": [
-      "谢谢喜欢，一起见证更多精彩。",
-      "感谢关注，欢迎继续交流想法。",
-      "很有共鸣，期待和你继续讨论。",
-      "谢谢支持，后面还有更多惊喜。"
+      "\u8c22\u8c22\u559c\u6b22\uff0c\u4e00\u8d77\u89c1\u8bc1\u66f4\u591a\u7cbe\u5f69\u3002",
+      "\u611f\u8c22\u5173\u6ce8\uff0c\u6b22\u8fce\u7ee7\u7eed\u4ea4\u6d41\u60f3\u6cd5\u3002",
+      "\u5f88\u6709\u5171\u9e23\uff0c\u671f\u5f85\u548c\u4f60\u7ee7\u7eed\u804a\u3002",
+      "\u8c22\u8c22\u652f\u6301\uff0c\u540e\u9762\u8fd8\u6709\u66f4\u591a\u60ca\u559c\u3002"
     ],
     "launch_background": true,
     "debug": false

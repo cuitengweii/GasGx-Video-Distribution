@@ -1883,6 +1883,49 @@ def test_probe_platform_login_after_publish_failure_requests_qr_only_after_confi
     assert qr_requests[0]["refresh_page"] is False
 
 
+def test_probe_platform_login_after_publish_failure_uses_explicit_login_error_when_status_probe_fails(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    qr_requests: list[dict[str, object]] = []
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda core, platform_name: {
+            "platform": "wechat",
+            "debug_port": 9334,
+            "chrome_user_data_dir": r"D:\profiles\wechat",
+            "open_url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("debug port probe failed")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs)) or {"ok": True, "needs_login": True, "sent": True},
+    )
+
+    status, message = worker_impl._probe_platform_login_after_publish_failure(
+        workspace=workspace,
+        item_id="item-video",
+        platform="wechat",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+        error_text="publish blocked by login page",
+    )
+
+    assert status == "login_required"
+    assert "Telegram" in message
+    assert len(qr_requests) == 1
+
+
 def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     video_path = workspace / "2_Processed" / "clip.mp4"

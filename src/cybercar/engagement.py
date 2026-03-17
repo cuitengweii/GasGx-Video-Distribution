@@ -4,7 +4,7 @@ from typing import Any
 
 from . import engine
 from .settings import apply_runtime_environment, load_app_config
-from .services.engagement.runtime import run_platform_comment_reply
+from .services.engagement.runtime import diagnose_platform_comment_page, run_platform_comment_reply
 
 
 def _build_engagement_runtime_config(*, like_only: bool) -> tuple[engine.Workspace, dict[str, Any], dict[str, Any], Any]:
@@ -89,4 +89,21 @@ def run_kuaishou_engagement(
         latest_only=latest_only,
         debug=debug,
         notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
+    )
+
+
+def diagnose_platform_engagement(platform_name: str) -> dict[str, Any]:
+    workspace, _runtime_cfg, chrome_cfg, paths = _build_engagement_runtime_config(like_only=False)
+    platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        return {
+            "ok": False,
+            "platform": platform,
+            "reason": "diagnose_not_supported_for_wechat",
+        }
+    return diagnose_platform_comment_page(
+        platform_name=platform,
+        workspace=workspace,
+        debug_port=int(chrome_cfg.get("default_debug_port") or 9333),
+        chrome_user_data_dir=str(paths.default_profile_dir),
     )
