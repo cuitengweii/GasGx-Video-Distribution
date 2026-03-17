@@ -105,3 +105,90 @@ def test_build_telegram_card_deprioritizes_current_task_and_link_in_success_mach
     assert "• <b>job_id</b>：publish-42" in text
     assert "当前任务" not in text
     assert "当前链路" not in text
+
+
+def test_build_collect_start_card_keeps_only_minimum_sections() -> None:
+    card = telegram_ui.build_telegram_card(
+        "collect_start",
+        {
+            "status": "queued",
+            "title": "候选已整理",
+            "sections": [
+                {"title": "任务概览", "items": [{"label": "目标平台", "value": "抖音 / 小红书"}, {"label": "候选目标", "value": "3条"}]},
+                {"title": "候选信息", "items": [{"label": "标题", "value": "Good morning"}, {"label": "原帖链接", "value": "https://x.test/1"}]},
+                {"title": "发布选项", "items": ["普通发布", "原创发布", "跳过本条"]},
+                {"title": "原帖摘要", "items": ["这段应该被折掉"]},
+                {"title": "机器信息", "items": [{"label": "当前任务", "value": "collect_publish_latest"}]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "<b>📦 任务概览</b>" in text
+    assert "<b>🧾 候选信息</b>" in text
+    assert "<b>🛠️ 发布选项</b>" in text
+    assert "原帖链接" not in text
+    assert "原帖摘要" not in text
+    assert "机器信息" not in text
+
+
+def test_build_failed_card_keeps_platform_status() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {"title": "失败原因", "items": [{"label": "原因", "value": "平台未登录"}]},
+                {"title": "平台状态", "items": [{"label": "小红书", "value": "需要登录"}]},
+                {"title": "任务日志", "items": [{"label": "日志", "value": "publish.log"}]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "<b>⚠️ 失败原因</b>" in text
+    assert "<b>🧩 平台状态</b>" in text
+    assert "<b>🧾 任务日志</b>" in text
+
+
+def test_build_telegram_card_compacts_candidate_source_subtitle() -> None:
+    card = telegram_ui.build_telegram_card(
+        "collect_start",
+        {
+            "status": "queued",
+            "title": "候选已整理",
+            "subtitle": "候选来源：X 搜索结果最近 3 条",
+            "sections": [{"title": "任务概览", "items": [{"label": "候选目标", "value": "3条"}]}],
+        },
+    )
+
+    assert "<i>X最近 3 条</i>" in str(card["text"])
+
+
+def test_build_telegram_card_compacts_processing_subtitle() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "running",
+            "title": "发布处理中",
+            "subtitle": "当前卡片已锁定，等待后台下载素材并分平台执行",
+            "sections": [{"title": "执行摘要", "items": [{"label": "结果", "value": "处理中"}]}],
+        },
+    )
+
+    assert "<i>后台处理中</i>" in str(card["text"])
+
+
+def test_build_telegram_card_compacts_platform_result_subtitle() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "success",
+            "title": "小红书发布已确认",
+            "subtitle": "平台已返回最新处理结果",
+            "sections": [{"title": "执行摘要", "items": [{"label": "结果", "value": "成功"}]}],
+        },
+    )
+
+    assert "<i>已返回平台结果</i>" in str(card["text"])

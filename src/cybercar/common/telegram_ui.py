@@ -439,6 +439,28 @@ def _compact_subtitle_text(subtitle: str) -> str:
     text = re.sub(r"\s+", " ", str(subtitle or "").strip())
     if not text:
         return ""
+    direct_map = {
+        "请直接选择普通发布、原创发布或跳过本条": "请选择发布方式",
+        "平台已返回最新处理结果": "已返回平台结果",
+        "平台已确认发布成功": "平台发布成功",
+        "所有目标平台都已进入终态": "全部平台已完成",
+        "部分平台成功，部分平台需要继续处理": "部分平台待处理",
+        "平台处理失败，请查看原因后重试": "平台处理失败",
+        "后台已接管处理，最终结果以后续平台通知为准": "后台处理中",
+        "当前卡片已锁定，等待后台下载素材并分平台执行": "后台处理中",
+        "当前卡片已锁定，等待后台下载素材": "后台处理中",
+        "当前卡片已锁定，不再重复处理": "卡片已锁定",
+        "当前卡片已锁定，不再进入后续发布": "卡片已锁定",
+    }
+    mapped = direct_map.get(text)
+    if mapped:
+        return mapped
+    candidate_match = re.fullmatch(r"候选来源：X 搜索结果最近 (\d+) 条", text)
+    if candidate_match:
+        return f"X最近 {candidate_match.group(1)} 条"
+    ordered_match = re.fullmatch(r"候选来源：X 搜索结果时间倒序｜目标 (\d+) 条", text)
+    if ordered_match:
+        return f"X倒序｜{ordered_match.group(1)}条"
     text = text.replace("当前配置：", "配置：")
     text = text.replace("当前配置:", "配置：")
     if len(text) <= 28:
@@ -564,6 +586,44 @@ def _trim_success_section_items(title: str, items: Sequence[Any]) -> list[Any]:
     return trimmed or normalized_items[:1]
 
 
+def _prune_sections_for_kind(kind: str, status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    token = str(kind or "").strip().lower()
+    status_token = str(status or "").strip().lower()
+    normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
+    if not normalized:
+        return []
+    if token == "collect_start":
+        allowed_titles = {"任务概览", "候选信息", "发布选项"}
+        pruned = [section for section in normalized if str(section.get("title") or "").strip() in allowed_titles]
+        compacted: list[dict[str, Any]] = []
+        for section in pruned:
+            title = str(section.get("title") or "").strip()
+            items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+            if title == "候选信息":
+                items = [item for item in items if not isinstance(item, Mapping) or str(item.get("label") or "").strip() != "原帖链接"]
+            compacted.append({**section, "items": items[:3] if title != "任务概览" else items[:5]})
+        return compacted
+    if status_token in {"success", "done"}:
+        allowed_titles = {"人工关注", "执行摘要", "候选信息", "机器信息", "任务日志"}
+        return [section for section in normalized if str(section.get("title") or "").strip() in allowed_titles]
+    if status_token in {"failed", "blocked", "alert", "login_required"}:
+        allowed_titles = {
+            "人工关注",
+            "失败原因",
+            "处理建议",
+            "结果说明",
+            "执行摘要",
+            "候选信息",
+            "机器信息",
+            "平台状态",
+            "运行上下文",
+            "任务日志",
+            "下一步",
+        }
+        return [section for section in normalized if str(section.get("title") or "").strip() in allowed_titles]
+    return normalized
+
+
 def _suppress_low_priority_success_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
     status_token = str(status or "").strip().lower()
@@ -628,6 +688,7 @@ def build_telegram_card(
     if not isinstance(sections, Iterable):
         sections = []
     sections = _normalize_card_sections(status, list(sections))
+    sections = _prune_sections_for_kind(token, status, sections)
     sections = _prioritize_card_sections(
         status,
         _suppress_low_priority_success_sections(
