@@ -28,6 +28,7 @@ def test_cli_telegram_recover_subcommand_parses_retries() -> None:
 
 def test_recover_bot_surface_retries_until_refresh_succeeds(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
+    restart_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         "cybercar.telegram.bootstrap._resolve_target",
@@ -40,10 +41,21 @@ def test_recover_bot_surface_retries_until_refresh_succeeds(monkeypatch, tmp_pat
     )
 
     class FakePaths:
+        repo_root = tmp_path
         runtime_root = tmp_path / "runtime"
         log_dir = tmp_path / "logs"
 
     monkeypatch.setattr("cybercar.telegram.bootstrap.get_paths", lambda: FakePaths())
+    monkeypatch.setattr(
+        "cybercar.telegram.bootstrap._restart_worker_process",
+        lambda **kwargs: restart_calls.append(dict(kwargs))
+        or {
+            "pid": 4321,
+            "terminated_pids": [1234],
+            "stdout_log": str(tmp_path / "logs" / "telegram_worker_latest.out.log"),
+            "stderr_log": str(tmp_path / "logs" / "telegram_worker_latest.err.log"),
+        },
+    )
     monkeypatch.setattr(
         "cybercar.telegram.bootstrap._set_clickable_commands",
         lambda **kwargs: calls.append("set"),
@@ -62,5 +74,10 @@ def test_recover_bot_surface_retries_until_refresh_succeeds(monkeypatch, tmp_pat
 
     assert result["ok"] is True
     assert result["attempts"] == 2
+    assert result["worker_pid"] == 4321
+    assert result["terminated_pids"] == [1234]
     assert calls.count("set") == 2
     assert calls.count("home") == 2
+    assert len(restart_calls) == 1
+    assert restart_calls[0]["repo_root"] == tmp_path
+    assert restart_calls[0]["runtime_root"] == tmp_path / "runtime"

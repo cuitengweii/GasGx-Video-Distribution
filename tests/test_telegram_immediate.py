@@ -2594,11 +2594,11 @@ def test_build_process_log_section_sanitizes_garbled_lines(tmp_path: Path) -> No
     workspace = _make_workspace(tmp_path)
     log_path = workspace / "runtime" / "logs" / "home_action_collect_publish_latest_test.log"
     log_path.write_text(
-        "[2026-03-17 05:30:29] [Notify] ̨ѷͣ??? ɼ / ͼƬ / 5ͼƬɼѡ\n",
+        "[2026-03-17 05:30:29] [Notify] ?????? ? / ?? / 5????\n",
         encoding="utf-8",
     )
 
     section = worker_impl._build_process_log_section(workspace)
     items = [str(item.get("value")) if isinstance(item, dict) else str(item) for item in section["items"]]
 
-    assert any("日志文本存在编码异常" in item for item in items)
+    assert any("\u65e5\u5fd7\u6587\u672c\u5b58\u5728\u7f16\u7801\u5f02\u5e38" in item for item in items)

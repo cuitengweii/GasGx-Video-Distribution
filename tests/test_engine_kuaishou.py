@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
 
 from cybercar import engine
 
@@ -102,3 +103,57 @@ def test_click_kuaishou_primary_publish_button_accepts_bottom_publish_work_butto
 
     assert engine._click_kuaishou_primary_publish_button(owner, None) is True
     assert button.clicked is True
+
+
+def test_wait_upload_ready_generic_waits_for_kuaishou_image_editor_form(
+    monkeypatch,
+) -> None:
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.state_calls = 0
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "return (document.body && document.body.innerText) || '';" in script:
+                return "上传图文 发布作品"
+            if "Upload appears completed by image editor readiness" in script:
+                return {}
+            if "const bodyText = norm((document.body && document.body.innerText) || '');" in script:
+                self.state_calls += 1
+                if self.state_calls == 1:
+                    return {
+                        "ready": False,
+                        "busy": False,
+                        "upload_entry": True,
+                        "desc_input": False,
+                        "title_input": False,
+                        "publish_btn": True,
+                        "cancel_btn": False,
+                        "editor_hints": False,
+                        "sample_texts": ["发布作品"],
+                    }
+                return {
+                    "ready": True,
+                    "busy": False,
+                    "upload_entry": False,
+                    "desc_input": True,
+                    "title_input": False,
+                    "publish_btn": True,
+                    "cancel_btn": True,
+                    "editor_hints": True,
+                    "sample_texts": ["作品描述", "取消", "发布"],
+                }
+            return {}
+
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    owner = FakeOwner()
+    result = engine._wait_upload_ready_generic(
+        owner,
+        owner,
+        platform_name="kuaishou",
+        timeout_seconds=30,
+        upload_target=Path("sample.jpg"),
+    )
+
+    assert result is owner
+    assert owner.state_calls >= 2

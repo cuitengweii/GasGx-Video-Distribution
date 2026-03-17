@@ -1123,8 +1123,9 @@ def _looks_like_garbled_log_body(text: str) -> bool:
     if sum(body.count(marker) for marker in markers) >= 2:
         return True
     if body.count("?") >= 4:
+        question_ratio = body.count("?") / max(1, len(body))
         readable_ascii = sum(1 for char in body if char.isascii() and (char.isalnum() or char in " /:._-[]()"))
-        if readable_ascii <= max(6, len(body) // 3):
+        if question_ratio >= 0.2 or readable_ascii <= max(6, len(body) // 3):
             return True
     return False
 

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, Mapping
 
 import requests
 from requests.adapters import HTTPAdapter
+
+try:
+    import winreg  # type: ignore
+except Exception:  # pragma: no cover
+    winreg = None  # type: ignore
 
 DEFAULT_TELEGRAM_API_BASE = "https://api.telegram.org"
 DEFAULT_TIMEOUT_SECONDS = 20
@@ -14,8 +20,82 @@ DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
 _SESSIONS: dict[str, requests.Session] = {}
 
 
+def _env_first(*names: str, default: str = "") -> str:
+    for name in names:
+        key = str(name or "").strip()
+        if not key:
+            continue
+        value = str(os.getenv(key, "") or "").strip()
+        if value:
+            return value
+    return str(default or "").strip()
+
+
+def _parse_bool_token(raw: str, default: bool = False) -> bool:
+    token = str(raw or "").strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _normalize_proxy_url(raw: Any) -> str:
+    token = str(raw or "").strip()
+    if not token:
+        return ""
+    if ";" in token and "=" in token:
+        entries: dict[str, str] = {}
+        for part in token.split(";"):
+            name, sep, value = part.partition("=")
+            if not sep:
+                continue
+            key = str(name or "").strip().lower()
+            normalized = _normalize_proxy_url(value)
+            if normalized:
+                entries[key] = normalized
+        for key in ("https", "http", "socks", "socks5"):
+            if entries.get(key):
+                return entries[key]
+        return ""
+    if "://" not in token:
+        return f"http://{token}"
+    return token
+
+
+def _detect_windows_manual_proxy() -> str:
+    if os.name != "nt" or winreg is None:
+        return ""
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:  # type: ignore[arg-type]
+            enabled = int(winreg.QueryValueEx(key, "ProxyEnable")[0] or 0) > 0
+            server = str(winreg.QueryValueEx(key, "ProxyServer")[0] or "").strip()
+    except Exception:
+        return ""
+    if not enabled or not server:
+        return ""
+    return _normalize_proxy_url(server)
+
+
+def _resolve_session_proxy() -> str:
+    explicit_proxy = _normalize_proxy_url(
+        _env_first(
+            "CYBERCAR_PROXY",
+            "CYBERCAR_HTTPS_PROXY",
+            "CYBERCAR_HTTP_PROXY",
+        )
+    )
+    if explicit_proxy:
+        return explicit_proxy
+    if _parse_bool_token(_env_first("CYBERCAR_USE_SYSTEM_PROXY"), default=False):
+        return _detect_windows_manual_proxy()
+    return ""
+
+
 def _session_key(*, use_post: bool) -> str:
-    return "post" if use_post else "get"
+    proxy_key = _resolve_session_proxy() or "direct"
+    return f"{'post' if use_post else 'get'}|{proxy_key}"
 
 
 def _telegram_session(*, use_post: bool) -> requests.Session:
@@ -26,6 +106,9 @@ def _telegram_session(*, use_post: bool) -> requests.Session:
         adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
+        proxy = _resolve_session_proxy()
+        if proxy and hasattr(session, "proxies"):
+            session.proxies.update({"http": proxy, "https": proxy})
         _SESSIONS[key] = session
     return session
 

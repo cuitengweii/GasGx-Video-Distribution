@@ -13753,6 +13753,7 @@ def _wait_upload_ready_generic(
     bilibili_entry_since = 0.0
     bilibili_busy_since = 0.0
     bilibili_reupload_attempted = False
+    kuaishou_entry_since = 0.0
 
     def _retry_bilibili_upload_once(reason: str) -> bool:
         nonlocal ctx, bilibili_entry_since, bilibili_busy_since, bilibili_reupload_attempted
@@ -13916,6 +13917,109 @@ def _wait_upload_ready_generic(
                 continue
             bilibili_entry_since = 0.0
             bilibili_busy_since = 0.0
+        elif platform_name == "kuaishou" and upload_target is not None and _is_image_file(upload_target):
+            js_state = r"""
+            function isVisible(el) {
+              if (!el) return false;
+              const st = window.getComputedStyle(el);
+              if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+              const r = el.getBoundingClientRect();
+              return r.width > 8 && r.height > 8;
+            }
+            function norm(s) {
+              return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+            }
+            function hasVisibleSelector(selectors) {
+              for (const selector of selectors) {
+                const nodes = Array.from(document.querySelectorAll(selector));
+                if (nodes.some(isVisible)) return true;
+              }
+              return false;
+            }
+            function visibleTexts() {
+              return Array.from(document.querySelectorAll('button, [role="button"], div, span, a, label, input, textarea'))
+                .filter(isVisible)
+                .map(node => norm(node.innerText || node.textContent || node.value || ''))
+                .filter(Boolean)
+                .slice(0, 80);
+            }
+            const bodyText = norm((document.body && document.body.innerText) || '');
+            const texts = visibleTexts();
+            const descInput = hasVisibleSelector([
+              "textarea[placeholder*='作品描述']",
+              "textarea[placeholder*='描述']",
+              "[contenteditable='true']",
+              "div[role='textbox']",
+            ]);
+            const titleInput = hasVisibleSelector([
+              "input[placeholder*='标题']",
+              "input[placeholder*='作品标题']",
+            ]);
+            const uploadEntry = /(上传图文|上传图片|选择图片|拖拽图片|添加图片|点击上传)/.test(bodyText)
+              && !/(作品描述|添加地点|查看权限|发布时间|立即发布|定时发布)/.test(bodyText);
+            const busy = /\b\d{1,3}%\b/.test(bodyText) || /(上传中|正在上传|处理中|正在处理|排队中|校验中)/.test(bodyText);
+            const publishBtn = texts.some(text => /^(发布|发布作品|立即发布|确认发布)$/.test(text));
+            const cancelBtn = texts.some(text => text === '取消');
+            const editorHints = /(作品描述|添加地点|查看权限|发布时间|立即发布|定时发布|所有人可见|好友可见|仅自己可见)/.test(bodyText);
+            const ready = !!((descInput || titleInput || editorHints) && (publishBtn || cancelBtn));
+            return {
+              ready,
+              busy,
+              upload_entry: uploadEntry,
+              desc_input: descInput,
+              title_input: titleInput,
+              publish_btn: publishBtn,
+              cancel_btn: cancelBtn,
+              editor_hints: editorHints,
+              sample_texts: texts.filter(text => /发布|取消|描述|地点|权限|时间/.test(text)).slice(0, 12),
+            };
+            """
+            state: dict[str, Any] = {}
+            for owner in (ctx, page):
+                if not owner:
+                    continue
+                try:
+                    payload = owner.run_js(js_state)
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict) and payload:
+                    state = payload
+                    break
+            ready_hit = bool(state.get("ready"))
+            if ready_hit:
+                _log(
+                    "[Uploader:kuaishou] Upload appears completed by image editor readiness: "
+                    f"desc={bool(state.get('desc_input'))}, "
+                    f"title={bool(state.get('title_input'))}, "
+                    f"publish={bool(state.get('publish_btn'))}, "
+                    f"cancel={bool(state.get('cancel_btn'))}, "
+                    f"editor_hints={bool(state.get('editor_hints'))}"
+                )
+                return ctx
+            busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
+            upload_entry_hit = bool(state.get("upload_entry"))
+            if upload_entry_hit:
+                if kuaishou_entry_since <= 0:
+                    kuaishou_entry_since = time.time()
+                sample_texts = state.get("sample_texts") if isinstance(state.get("sample_texts"), list) else []
+                preview = ",".join(str(item or "").strip() for item in sample_texts if str(item or "").strip())
+                _log(
+                    "[Uploader:kuaishou] Waiting for image editor form readiness..."
+                    + (f" texts={preview}" if preview else "")
+                )
+                if (time.time() - kuaishou_entry_since) >= min(max(45, int(timeout_seconds) // 2), 120):
+                    _log("[Uploader:kuaishou] Image editor readiness missing for too long; keep waiting conservatively.")
+                time.sleep(2.0)
+                continue
+            if busy_hit:
+                _log("[Uploader:kuaishou] Waiting for upload completion...")
+                time.sleep(2.0)
+                continue
+            sample_texts = state.get("sample_texts") if isinstance(state.get("sample_texts"), list) else []
+            if sample_texts:
+                _log(f"[Uploader:kuaishou] Editor not ready yet, continue waiting: {sample_texts}")
+            time.sleep(2.0)
+            continue
         else:
             busy_hit = any(x in text for x in busy_markers)
         if busy_hit:
@@ -14579,6 +14683,7 @@ def _read_generic_file_inputs_snapshot(primary_ctx: Any, fallback_ctx: Any) -> d
 def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
     contexts: list[Any] = []
     seen: set[int] = set()
+    queue: list[Any] = []
 
     def _add(ctx: Any) -> None:
         if not ctx:
@@ -14588,9 +14693,12 @@ def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
             return
         seen.add(key)
         contexts.append(ctx)
+        queue.append(ctx)
 
     for owner in (primary_ctx, fallback_ctx):
         _add(owner)
+    while queue:
+        owner = queue.pop(0)
         if not owner:
             continue
         try:
@@ -14602,7 +14710,251 @@ def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
     return contexts
 
 
+def _read_upload_surface_snapshot_rich(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function collectAllRoots(root) {
+      const roots = [root];
+      const queue = [root];
+      const seen = new Set([root]);
+      while (queue.length) {
+        const current = queue.shift();
+        let nodes = [];
+        try {
+          nodes = Array.from(current.querySelectorAll('*'));
+        } catch (e) {
+          nodes = [];
+        }
+        for (const el of nodes) {
+          const shadow = el && el.shadowRoot;
+          if (shadow && !seen.has(shadow)) {
+            seen.add(shadow);
+            roots.push(shadow);
+            queue.push(shadow);
+          }
+        }
+      }
+      return roots;
+    }
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }
+    function norm(s) {
+      return String(s || '').replace(/\s+/g, ' ').trim();
+    }
+    function looksUploadText(text) {
+      const raw = norm(text || '');
+      const lower = raw.toLowerCase();
+      return (
+        /点击上传|上传图文|上传图片|选择图片|添加图片|直接将图片文件拖入此区域|拖入此区域|图片文件|上传区域/.test(raw) ||
+        /upload|drop|drag|image|picture|file/.test(lower)
+      );
+    }
+    function wrapText(el) {
+      const wrap = el && (el.closest('label, button, [role="button"], div, section, form') || el.parentElement);
+      return norm((wrap && (wrap.innerText || wrap.textContent)) || '').slice(0, 220);
+    }
+    function rectInfo(el) {
+      const r = (el && el.getBoundingClientRect) ? el.getBoundingClientRect() : { width: 0, height: 0 };
+      return {
+        width: Math.round(Number(r.width || 0)),
+        height: Math.round(Number(r.height || 0)),
+      };
+    }
+    const roots = collectAllRoots(document);
+    const seenFileInputs = new Set();
+    const fileInputs = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll("input[type='file']"));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => {
+      if (!el || seenFileInputs.has(el)) return false;
+      seenFileInputs.add(el);
+      return true;
+    }).slice(0, 12).map((el, idx) => ({
+      idx,
+      visible: isVisible(el),
+      accept: String(el.getAttribute('accept') || ''),
+      name: String(el.getAttribute('name') || ''),
+      id: String(el.getAttribute('id') || ''),
+      cls: String(el.className || ''),
+      multiple: el.hasAttribute('multiple'),
+      files: Number((el.files && el.files.length) || 0),
+      wrap: wrapText(el),
+    }));
+    const seenClickables = new Set();
+    const clickables = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll('button, label, [role="button"], div, span, a'));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => {
+      if (!el || seenClickables.has(el)) return false;
+      seenClickables.add(el);
+      return true;
+    }).filter(el => isVisible(el)).map((el, idx) => ({
+      idx,
+      tag: String(el.tagName || ''),
+      text: norm(el.innerText || el.textContent || ''),
+      cls: String(el.className || ''),
+      aria: String(el.getAttribute('aria-label') || ''),
+      wrap: wrapText(el),
+    })).filter(item => /(涓婁紶|鍥剧墖|鍥炬枃|鎷栨嫿|閫夋嫨|鏈湴|娣诲姞|upload|image|drop)/i.test([item.text, item.cls, item.aria, item.wrap].join(' '))).slice(0, 40);
+    const clickablesByText = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll('button, label, [role="button"], div, span, a'));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => isVisible(el)).map((el, idx) => ({
+      idx,
+      tag: String(el.tagName || ''),
+      text: norm(el.innerText || el.textContent || ''),
+      cls: String(el.className || ''),
+      aria: String(el.getAttribute('aria-label') || ''),
+      wrap: wrapText(el),
+    })).filter(item => looksUploadText([item.text, item.cls, item.aria, item.wrap].join(' '))).slice(0, 40);
+    const seenZones = new Set();
+    const uploadZones = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll('div, label, section, article'));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => {
+      if (!el || seenZones.has(el)) return false;
+      seenZones.add(el);
+      return true;
+    }).filter(el => isVisible(el)).map((el, idx) => {
+      const text = norm(el.innerText || el.textContent || '');
+      const cls = String(el.className || '');
+      const attrs = Array.from(el.attributes || [])
+        .filter(attr => /^data-|^aria-/.test(String(attr.name || '')))
+        .slice(0, 8)
+        .map(attr => `${String(attr.name || '')}=${String(attr.value || '')}`);
+      const info = rectInfo(el);
+      const clickableAncestor = el.closest('button, label, [role="button"], a, div');
+      return {
+        idx,
+        tag: String(el.tagName || ''),
+        text,
+        cls,
+        attrs: attrs.join(' | '),
+        width: info.width,
+        height: info.height,
+        clickable_tag: String((clickableAncestor && clickableAncestor.tagName) || ''),
+        clickable_cls: String((clickableAncestor && clickableAncestor.className) || ''),
+      };
+    }).filter(item => /(鐐瑰嚮涓婁紶|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|drop|upload|drag)/i.test([item.text, item.cls, item.attrs, item.clickable_cls].join(' '))).slice(0, 16);
+    const uploadZonesByText = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll('div, label, section, article'));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => isVisible(el)).map((el, idx) => {
+      const text = norm(el.innerText || el.textContent || '');
+      const cls = String(el.className || '');
+      const attrs = Array.from(el.attributes || [])
+        .filter(attr => /^data-|^aria-/.test(String(attr.name || '')))
+        .slice(0, 8)
+        .map(attr => `${String(attr.name || '')}=${String(attr.value || '')}`);
+      const info = rectInfo(el);
+      const clickableAncestor = el.closest('button, label, [role="button"], a, div');
+      return {
+        idx,
+        tag: String(el.tagName || ''),
+        text,
+        cls,
+        attrs: attrs.join(' | '),
+        width: info.width,
+        height: info.height,
+        clickable_tag: String((clickableAncestor && clickableAncestor.tagName) || ''),
+        clickable_cls: String((clickableAncestor && clickableAncestor.className) || ''),
+      };
+    }).filter(item => looksUploadText([item.text, item.cls, item.attrs, item.clickable_cls].join(' '))).slice(0, 16);
+    const mergedClickables = [...clickables, ...clickablesByText].filter((item, idx, arr) =>
+      idx === arr.findIndex(other =>
+        other.tag === item.tag &&
+        other.text === item.text &&
+        other.cls === item.cls &&
+        other.aria === item.aria
+      )
+    ).slice(0, 40);
+    const mergedUploadZones = [...uploadZones, ...uploadZonesByText].filter((item, idx, arr) =>
+      idx === arr.findIndex(other =>
+        other.tag === item.tag &&
+        other.text === item.text &&
+        other.cls === item.cls &&
+        other.attrs === item.attrs
+      )
+    ).slice(0, 16);
+    const iframes = Array.from(document.querySelectorAll('iframe')).slice(0, 12).map((el, idx) => ({
+      idx,
+      src: String(el.getAttribute('src') || ''),
+      name: String(el.getAttribute('name') || ''),
+      visible: isVisible(el),
+    }));
+    const shadowHosts = [];
+    for (const root of roots) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      while (walker.nextNode()) {
+        const el = walker.currentNode;
+        if (el && el.shadowRoot) {
+          shadowHosts.push({
+            tag: String(el.tagName || ''),
+            cls: String(el.className || ''),
+            text: norm(el.innerText || el.textContent || '').slice(0, 120),
+          });
+          if (shadowHosts.length >= 20) break;
+        }
+      }
+      if (shadowHosts.length >= 20) break;
+    }
+    return {
+      url: location.href,
+      title: document.title,
+      file_inputs: fileInputs,
+      clickables: mergedClickables,
+      upload_zones: mergedUploadZones,
+      iframes,
+      shadow_hosts: shadowHosts,
+      root_count: roots.length,
+      body_preview: norm((document.body && document.body.innerText) || '').slice(0, 1200),
+    };
+    """
+    best_payload: dict[str, Any] = {}
+    best_score = -1
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict) or not payload:
+            continue
+        score = (
+            len(payload.get("file_inputs") or []) * 100
+            + len(payload.get("upload_zones") or []) * 10
+            + len(payload.get("clickables") or [])
+            + len(payload.get("shadow_hosts") or []) * 2
+            + min(len(str(payload.get("body_preview") or "")), 200)
+        )
+        if score > best_score:
+            best_payload = payload
+            best_score = score
+    return best_payload
+
+
 def _read_upload_surface_snapshot(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    return _read_upload_surface_snapshot_rich(primary_ctx, fallback_ctx)
     js = r"""
     function isVisible(el) {
       if (!el) return false;
@@ -14812,7 +15164,109 @@ def _stage_generic_upload_via_page_set(
     return False
 
 
+def _read_click_effect_snapshot_rich(owner: Any) -> dict[str, Any]:
+    js = r"""
+    function collectAllRoots(root) {
+      const roots = [root];
+      const queue = [root];
+      const seen = new Set([root]);
+      while (queue.length) {
+        const current = queue.shift();
+        let nodes = [];
+        try {
+          nodes = Array.from(current.querySelectorAll('*'));
+        } catch (e) {
+          nodes = [];
+        }
+        for (const el of nodes) {
+          const shadow = el && el.shadowRoot;
+          if (shadow && !seen.has(shadow)) {
+            seen.add(shadow);
+            roots.push(shadow);
+            queue.push(shadow);
+          }
+        }
+      }
+      return roots;
+    }
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }
+    function norm(s) {
+      return String(s || '').replace(/\s+/g, ' ').trim();
+    }
+    const body = document.body || document.documentElement;
+    const bodyText = norm((body && body.innerText) || '');
+    const roots = collectAllRoots(document);
+    const seenDialogs = new Set();
+    const visibleDialogs = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll('[role="dialog"], .semi-portal, .semi-modal, .modal, .dialog, .popup, .drawer'));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => {
+      if (!el || seenDialogs.has(el)) return false;
+      seenDialogs.add(el);
+      return true;
+    }).filter(isVisible).slice(0, 8).map(el => ({
+      tag: String(el.tagName || ''),
+      cls: String(el.className || ''),
+      text: norm(el.innerText || el.textContent || '').slice(0, 180),
+    }));
+    const seenHints = new Set();
+    const uploadHints = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll('div, span, p, button, label'));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => {
+      if (!el || seenHints.has(el)) return false;
+      seenHints.add(el);
+      return true;
+    }).filter(isVisible).map(el => ({
+      tag: String(el.tagName || ''),
+      cls: String(el.className || ''),
+      text: norm(el.innerText || el.textContent || ''),
+    })).filter(item => /(鐐瑰嚮涓婁紶|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|鏈湴涓婁紶|upload|drop)/i.test([item.text, item.cls].join(' '))).slice(0, 8);
+    const seenFileInputs = new Set();
+    const fileInputs = roots.flatMap(root => {
+      try {
+        return Array.from(root.querySelectorAll("input[type='file']"));
+      } catch (e) {
+        return [];
+      }
+    }).filter(el => {
+      if (!el || seenFileInputs.has(el)) return false;
+      seenFileInputs.add(el);
+      return true;
+    });
+    return {
+      url: String(location.href || ''),
+      body_len: bodyText.length,
+      body_hash: bodyText.slice(0, 800),
+      file_inputs: fileInputs.length,
+      iframe_count: document.querySelectorAll('iframe').length,
+      root_count: roots.length,
+      dialog_count: visibleDialogs.length,
+      dialogs: visibleDialogs,
+      hints: uploadHints,
+    };
+    """
+    try:
+        payload = owner.run_js(js)
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _read_click_effect_snapshot(owner: Any) -> dict[str, Any]:
+    return _read_click_effect_snapshot_rich(owner)
     js = r"""
     function isVisible(el) {
       if (!el) return false;
@@ -14892,7 +15346,271 @@ def _log_click_effect_delta(before: dict[str, Any], after: dict[str, Any], platf
         )
 
 
+def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> None:
+    contexts = _collect_upload_contexts(primary_ctx, fallback_ctx)
+    if platform_name == "bilibili":
+        bilibili_selectors = (
+            "css:div.upload-wrp div.upload-area",
+            "css:div.bcc-upload.upload div.upload-area",
+            "css:div.upload-area",
+            "xpath://div[contains(@class,'upload-area') and contains(normalize-space(.), '涓婁紶瑙嗛')]",
+            "xpath://button[normalize-space(.)='涓婁紶瑙嗛']",
+            "text:涓婁紶瑙嗛",
+        )
+        for owner in contexts:
+            if not owner:
+                continue
+            for selector in bilibili_selectors:
+                try:
+                    ele = owner.ele(selector, timeout=0.8)
+                except Exception:
+                    ele = None
+                if not ele or (not _is_visible_element(ele)):
+                    continue
+                try:
+                    ele.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+                except Exception:
+                    pass
+                try:
+                    ele.click()
+                except Exception:
+                    try:
+                        ele.click(by_js=True)
+                    except Exception:
+                        continue
+                _log(f"[Uploader:bilibili] Upload trigger clicked by selector: {selector}")
+                return
+
+        js_bili = """
+        function collectAllRoots(root) {
+          const roots = [root];
+          const queue = [root];
+          const seen = new Set([root]);
+          while (queue.length) {
+            const current = queue.shift();
+            let nodes = [];
+            try {
+              nodes = Array.from(current.querySelectorAll('*'));
+            } catch (e) {
+              nodes = [];
+            }
+            for (const el of nodes) {
+              const shadow = el && el.shadowRoot;
+              if (shadow && !seen.has(shadow)) {
+                seen.add(shadow);
+                roots.push(shadow);
+                queue.push(shadow);
+              }
+            }
+          }
+          return roots;
+        }
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function norm(s) {
+          return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+        }
+        const seenNodes = new Set();
+        const nodes = collectAllRoots(document)
+          .flatMap(root => {
+            try {
+              return Array.from(root.querySelectorAll('div, button, label, span, a'));
+            } catch (e) {
+              return [];
+            }
+          })
+          .filter(el => {
+            if (!el || seenNodes.has(el)) return false;
+            seenNodes.add(el);
+            return true;
+          })
+          .filter(isVisible)
+          .map(el => {
+            const text = norm(el.innerText || el.textContent || '');
+            const cls = String(el.className || '').toLowerCase();
+            let score = 0;
+            if (/upload-area|bcc-upload/.test(cls)) score += 12;
+            if (text === '涓婁紶瑙嗛') score += 10;
+            if (text.includes('涓婁紶瑙嗛')) score += 8;
+            if (/鐐瑰嚮涓婁紶|鎷栨嫿鍒版鍖哄煙/.test(text)) score += 6;
+            if (el.tagName && el.tagName.toLowerCase() === 'button') score += 4;
+            return {el, score};
+          })
+          .filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score);
+        if (!nodes.length) return 'not_found';
+        nodes[0].el.click();
+        return 'clicked';
+        """
+        for owner in contexts:
+            if not owner:
+                continue
+            try:
+                state = owner.run_js(js_bili)
+            except Exception:
+                state = ""
+            if str(state or "") == "clicked":
+                _log("[Uploader:bilibili] Upload trigger clicked by bilibili JS fallback.")
+                return
+
+    trigger_pattern = (
+        "(涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|娣诲姞鍥剧墖|鍥剧墖涓婁紶|鍥炬枃|涓婁紶|閫夋嫨瑙嗛|鍙戝竷瑙嗛|鎷栨嫿|鐐瑰嚮涓婁紶|娣诲姞瑙嗛|鏈湴涓婁紶|鎶曠|upload|select|video|image|drop)"
+        if platform_name in {"xiaohongshu", "douyin", "kuaishou"}
+        else "(涓婁紶|閫夋嫨瑙嗛|鍙戝竷瑙嗛|鎷栨嫿|鐐瑰嚮涓婁紶|娣诲姞瑙嗛|鏈湴涓婁紶|鎶曠|upload|select|video|drop)"
+    )
+    js = """
+    function collectAllRoots(root) {
+      const roots = [root];
+      const queue = [root];
+      const seen = new Set([root]);
+      while (queue.length) {
+        const current = queue.shift();
+        let nodes = [];
+        try {
+          nodes = Array.from(current.querySelectorAll('*'));
+        } catch (e) {
+          nodes = [];
+        }
+        for (const el of nodes) {
+          const shadow = el && el.shadowRoot;
+          if (shadow && !seen.has(shadow)) {
+            seen.add(shadow);
+            roots.push(shadow);
+            queue.push(shadow);
+          }
+        }
+      }
+      return roots;
+    }
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function looksUploadText(text) {
+      const raw = norm(text || '');
+      const lower = raw.toLowerCase();
+      return (
+        /点击上传|上传图文|上传图片|选择图片|添加图片|直接将图片文件拖入此区域|拖入此区域|图片文件|上传区域/.test(raw) ||
+        /upload|drop|drag|image|picture|file/.test(lower)
+      );
+    }
+    const patterns = new RegExp(__TRIGGER_PATTERN__, 'i');
+    const seenNodes = new Set();
+    const nodes = collectAllRoots(document)
+      .flatMap(root => {
+        try {
+          return Array.from(root.querySelectorAll('button, label, div, span, a, section'));
+        } catch (e) {
+          return [];
+        }
+      })
+      .filter(el => {
+        if (!el || seenNodes.has(el)) return false;
+        seenNodes.add(el);
+        return true;
+      })
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        const cls = String(el.className || '');
+        const aria = String(el.getAttribute('aria-label') || '');
+        const data = Array.from(el.attributes || [])
+          .filter(attr => /^data-|^aria-/.test(String(attr.name || '')))
+          .map(attr => `${String(attr.name || '')}=${String(attr.value || '')}`)
+          .join(' ');
+        if (!patterns.test([text, cls, aria, data].join(' ')) && !looksUploadText([text, cls, aria, data].join(' '))) return null;
+        const rect = el.getBoundingClientRect();
+        const area = Number(rect.width || 0) * Number(rect.height || 0);
+        let score = 0;
+        if (/鐐瑰嚮涓婁紶/.test(text)) score += 80;
+        if (/鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩?.test(text)) score += 60;
+        if (/涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖/.test(text)) score += 50;
+        if (/upload|drop/.test([text, cls, aria, data].join(' ').toLowerCase())) score += 24;
+        if (looksUploadText([text, cls, aria, data].join(' '))) score += 40;
+        if (el.tagName === 'LABEL' || String(el.getAttribute('role') || '').toLowerCase() === 'button') score += 12;
+        if (/upload|drop|drag|image/.test(cls.toLowerCase())) score += 12;
+        if (/x-storage|storage/.test(cls.toLowerCase())) score += 16;
+        if (area > 0 && area < 700000) score += 8;
+        if (area > 0 && area < 120000) score += 8;
+        if (area > 700000) score -= 24;
+        if (text.length > 0 && text.length <= 80) score += 6;
+        if (text.length > 200) score -= 20;
+        return { el, text, cls, area, score };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    const target = nodes[0];
+    if (!target) {
+      const uploadFrame = Array.from(document.querySelectorAll('iframe')).find(el => {
+        const src = String(el.getAttribute('src') || '').toLowerCase();
+        return isVisible(el) && /x-storage|upload|image/.test(src);
+      });
+      if (!uploadFrame) return 'not_found';
+      try {
+        uploadFrame.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (e) {}
+      try {
+        uploadFrame.click();
+      } catch (e) {
+        try {
+          uploadFrame.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+          uploadFrame.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+          uploadFrame.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        } catch (ee) {
+          return 'not_found';
+        }
+      }
+      return 'clicked:iframe-upload|x-storage|0';
+    }
+    try {
+      target.el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } catch (e) {}
+    try {
+      target.el.click();
+    } catch (e) {
+      try {
+        target.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        target.el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      } catch (ee) {
+        return 'click_failed';
+      }
+    }
+    return `clicked:${target.text.slice(0, 80)}|${target.cls.slice(0, 80)}|${Math.round(target.area)}`;
+    """
+    js = js.replace("__TRIGGER_PATTERN__", json.dumps(trigger_pattern))
+    for owner in contexts:
+        if not owner:
+            continue
+        before_snapshot = _read_click_effect_snapshot(owner) if platform_name == "douyin" else {}
+        try:
+            state = owner.run_js(js)
+        except Exception:
+            state = ""
+        if not str(state or "").startswith("clicked:"):
+            continue
+        _log(f"[Uploader:{platform_name}] Upload trigger clicked: {str(state or '')[8:]}")
+        if platform_name == "douyin":
+            time.sleep(0.5)
+            after_snapshot = _read_click_effect_snapshot(owner)
+            _log_click_effect_delta(before_snapshot, after_snapshot, platform_name)
+        return
+
+
 def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> None:
+    return _activate_upload_trigger_generic_v2(primary_ctx, fallback_ctx, platform_name)
+    contexts = _collect_upload_contexts(primary_ctx, fallback_ctx)
     if platform_name == "bilibili":
         # Prefer stable upload-area/button selectors to match B站页面结构。
         bilibili_selectors = (
@@ -14928,6 +15646,29 @@ def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platfo
                 return
 
         js_bili = """
+        function collectAllRoots(root) {
+          const roots = [root];
+          const queue = [root];
+          const seen = new Set([root]);
+          while (queue.length) {
+            const current = queue.shift();
+            let nodes = [];
+            try {
+              nodes = Array.from(current.querySelectorAll('*'));
+            } catch (e) {
+              nodes = [];
+            }
+            for (const el of nodes) {
+              const shadow = el && el.shadowRoot;
+              if (shadow && !seen.has(shadow)) {
+                seen.add(shadow);
+                roots.push(shadow);
+                queue.push(shadow);
+              }
+            }
+          }
+          return roots;
+        }
         function isVisible(el) {
           if (!el) return false;
           const st = window.getComputedStyle(el);
@@ -14938,7 +15679,20 @@ def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platfo
         function norm(s) {
           return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
         }
-        const nodes = Array.from(document.querySelectorAll('div, button, label, span, a'))
+        const seenNodes = new Set();
+        const nodes = collectAllRoots(document)
+          .flatMap(root => {
+            try {
+              return Array.from(root.querySelectorAll('div, button, label, span, a'));
+            } catch (e) {
+              return [];
+            }
+          })
+          .filter(el => {
+            if (!el || seenNodes.has(el)) return false;
+            seenNodes.add(el);
+            return true;
+          })
           .filter(isVisible)
           .map(el => {
             const text = norm(el.innerText || el.textContent || '');
@@ -14985,7 +15739,20 @@ def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platfo
       return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
     }
     const patterns = new RegExp(__TRIGGER_PATTERN__, 'i');
-    const nodes = Array.from(document.querySelectorAll('button, label, div, span, a, section'))
+    const seenNodes = new Set();
+    const nodes = collectAllRoots(document)
+      .flatMap(root => {
+        try {
+          return Array.from(root.querySelectorAll('button, label, div, span, a, section'));
+        } catch (e) {
+          return [];
+        }
+      })
+      .filter(el => {
+        if (!el || seenNodes.has(el)) return false;
+        seenNodes.add(el);
+        return true;
+      })
       .filter(el => isVisible(el))
       .map(el => {
         const text = norm(el.innerText || el.textContent || '');
@@ -15005,7 +15772,9 @@ def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platfo
         if (/upload|drop/.test([text, cls, aria, data].join(' ').toLowerCase())) score += 24;
         if (el.tagName === 'LABEL' || String(el.getAttribute('role') || '').toLowerCase() === 'button') score += 12;
         if (/upload|drop|drag|image/.test(cls.toLowerCase())) score += 12;
+        if (/x-storage|storage/.test(cls.toLowerCase())) score += 16;
         if (area > 0 && area < 700000) score += 8;
+        if (area > 0 && area < 120000) score += 8;
         if (area > 700000) score -= 24;
         if (text.length > 0 && text.length <= 80) score += 6;
         if (text.length > 200) score -= 20;
@@ -15022,6 +15791,8 @@ def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platfo
       target.el.click();
     } catch (e) {
       try {
+        target.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        target.el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
         target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       } catch (ee) {
         return 'click_failed';
