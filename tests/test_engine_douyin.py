@@ -190,6 +190,40 @@ def test_select_douyin_collection_stops_after_first_matching_click(monkeypatch: 
     assert fallback.calls == 0
 
 
+def test_select_douyin_collection_accepts_matching_click_when_state_reader_stays_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    states = [
+        {"hasField": True, "current": "", "episode": "", "source": "empty"},
+        {"hasField": True, "current": "", "episode": "", "source": "empty"},
+    ]
+
+    def fake_get_state(_primary: Any, _fallback: Any) -> dict[str, Any]:
+        if len(states) > 1:
+            return states.pop(0)
+        return states[0]
+
+    class FakeCtx:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run_js(self, script: str, *args: Any) -> Any:
+            self.calls += 1
+            return {
+                "state": "clicked",
+                "option": "赛博皮卡现车：aawbcc",
+                "visible_options": ["赛博皮卡现车：aawbcc"],
+            }
+
+    monkeypatch.setattr(engine, "_get_douyin_collection_state", fake_get_state)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    ctx = FakeCtx()
+    engine._select_douyin_collection(ctx, None, "赛博皮卡现车：aawbcc")
+
+    assert ctx.calls == 1
+
+
 def test_fill_draft_douyin_passes_collection_name_to_generic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = _workspace(tmp_path)
     target = tmp_path / "douyin-image.png"

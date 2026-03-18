@@ -134,6 +134,25 @@ def _save_prefilter_items(workspace: Path, items: dict[str, object]) -> None:
     )
 
 
+def _flush_platform_result_events(workspace: Path, runner: FakeRunner) -> int:
+    args = worker_impl._build_immediate_publish_args(
+        runner=runner,
+        workspace=workspace,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+    )
+    email_settings = runner._build_email_settings(args)
+    return worker_impl._flush_pending_platform_result_events(
+        workspace=workspace,
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+        runner=runner,
+        email_settings=email_settings,
+    )
+
+
 def _video_item(item_id: str = "item-video", **overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "id": item_id,
@@ -891,6 +910,146 @@ def test_run_collect_publish_latest_job_default_mode_reissues_existing_active_pr
     assert "重发当前状态卡" in feedbacks[-1]["sections"][1]["items"][0]
 
 
+def test_run_collect_publish_latest_job_recovers_orphaned_publish_running_and_reissues_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    candidate = {
+        "url": "https://x.test/post/video-orphaned-running",
+        "published_at": "2026-03-15 10:03:00",
+        "display_time": "7m",
+        "tweet_text": "video orphaned running",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"], "video")
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                published_at=candidate["published_at"],
+                display_time=candidate["display_time"],
+                tweet_text=candidate["tweet_text"],
+                status="publish_running",
+                action="publish",
+                message_id=913,
+                platform_results={
+                    "wechat": {
+                        "status": "queued",
+                        "pid": 654321,
+                        "log_path": str(workspace / "runtime" / "logs" / "immediate_publish_wechat.log"),
+                    },
+                    "douyin": {"status": "success"},
+                },
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [candidate]},
+    )
+    monkeypatch.setattr(worker_impl, "_pid_is_running", lambda pid: False if int(pid) == 654321 else True)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert len(runner.sent_candidates) == 1
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "publish_partial"
+    assert item["action"] == "resent_existing_card"
+    assert item["message_id"] != 913
+    platform_results = item["platform_results"]
+    assert isinstance(platform_results, dict)
+    assert platform_results["wechat"]["status"] == "failed"
+    assert "后台发布进程已退出" in str(platform_results["wechat"]["error"])
+    overview_items = feedbacks[-1]["sections"][0]["items"]
+    assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
+
+
+def test_run_collect_publish_latest_job_reissues_active_publish_running_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    candidate = {
+        "url": "https://x.test/post/video-active-running",
+        "published_at": "2026-03-15 10:03:00",
+        "display_time": "7m",
+        "tweet_text": "video active running",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"], "video")
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                published_at=candidate["published_at"],
+                display_time=candidate["display_time"],
+                tweet_text=candidate["tweet_text"],
+                status="publish_running",
+                action="publish",
+                message_id=913,
+                platform_results={
+                    "wechat": {
+                        "status": "queued",
+                        "pid": 654321,
+                        "log_path": str(workspace / "runtime" / "logs" / "immediate_publish_wechat.log"),
+                    },
+                },
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [candidate]},
+    )
+    monkeypatch.setattr(worker_impl, "_pid_is_running", lambda pid: True if int(pid) == 654321 else False)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert len(runner.sent_candidates) == 1
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "publish_running"
+    assert item["action"] == "resent_existing_card"
+    assert item["message_id"] != 913
+    assert item["message_id"] > 0
+    overview_items = feedbacks[-1]["sections"][0]["items"]
+    assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
+
+
 def test_run_collect_publish_latest_job_keeps_reusing_existing_card_when_new_prefilter_sent(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
@@ -983,6 +1142,99 @@ def test_update_prefilter_item_persists_row_changes(tmp_path: Path) -> None:
     assert isinstance(persisted, dict)
     assert persisted["action"] == "resent_existing_card"
     assert persisted["message_id"] == 1201
+
+
+def test_update_prefilter_item_runs_coordination_snapshot_outside_queue_lock(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    item_id = "item-lock-scope"
+    _save_prefilter_items(
+        workspace,
+        {
+            item_id: _video_item(
+                item_id,
+                status="publish_partial",
+                action="publish",
+                message_id=913,
+            ),
+        },
+    )
+
+    original_lock = worker_impl._with_prefilter_queue_lock
+    state = {"inside_lock": False, "calls": []}
+
+    def wrapped_lock(workspace_arg: Path, callback, *, timeout_seconds: float = 30):
+        assert state["inside_lock"] is False
+        state["inside_lock"] = True
+        try:
+            return original_lock(workspace_arg, callback, timeout_seconds=timeout_seconds)
+        finally:
+            state["inside_lock"] = False
+
+    def fake_snapshot(item: dict[str, object], workspace_arg: Path) -> dict[str, object]:
+        assert workspace_arg == workspace
+        state["calls"].append(state["inside_lock"])
+        row = dict(item)
+        row["coordination_summary"] = "outside-lock"
+        return row
+
+    monkeypatch.setattr(worker_impl, "_with_prefilter_queue_lock", wrapped_lock)
+    monkeypatch.setattr(worker_impl, "_apply_coordination_snapshot", fake_snapshot)
+
+    updated = worker_impl._update_prefilter_item(workspace, item_id, updates={"message_id": 1202})
+
+    assert updated["coordination_summary"] == "outside-lock"
+    assert state["calls"] == [False]
+    persisted = _prefilter_items(workspace)[item_id]
+    assert isinstance(persisted, dict)
+    assert persisted["coordination_summary"] == "outside-lock"
+
+
+def test_upsert_immediate_candidate_item_runs_coordination_snapshot_outside_queue_lock(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    original_lock = worker_impl._with_prefilter_queue_lock
+    state = {"inside_lock": False, "calls": []}
+
+    def wrapped_lock(workspace_arg: Path, callback, *, timeout_seconds: float = 30):
+        assert state["inside_lock"] is False
+        state["inside_lock"] = True
+        try:
+            return original_lock(workspace_arg, callback, timeout_seconds=timeout_seconds)
+        finally:
+            state["inside_lock"] = False
+
+    def fake_snapshot(item: dict[str, object], workspace_arg: Path) -> dict[str, object]:
+        assert workspace_arg == workspace
+        state["calls"].append(state["inside_lock"])
+        row = dict(item)
+        row["coordination_summary"] = "outside-lock-upsert"
+        return row
+
+    monkeypatch.setattr(worker_impl, "_with_prefilter_queue_lock", wrapped_lock)
+    monkeypatch.setattr(worker_impl, "_apply_coordination_snapshot", fake_snapshot)
+
+    payload = worker_impl._upsert_immediate_candidate_item(
+        workspace=workspace,
+        candidate={
+            "url": "https://x.test/post/video-lock-scope",
+            "published_at": "2026-03-15 10:05:00",
+            "display_time": "5m",
+            "tweet_text": "lock scope",
+        },
+        profile=DEFAULT_PROFILE,
+        media_kind="video",
+        target_platforms="wechat,douyin",
+        chat_id=CHAT_ID,
+        item_index=1,
+        total_count=1,
+    )
+
+    item = payload["item"]
+    assert isinstance(item, dict)
+    assert item["coordination_summary"] == "outside-lock-upsert"
+    assert state["calls"] == [False]
+    persisted = _prefilter_items(workspace)[str(payload["item_id"])]
+    assert isinstance(persisted, dict)
+    assert persisted["coordination_summary"] == "outside-lock-upsert"
 
 
 def test_run_collect_publish_latest_job_image_records_publish_items(tmp_path: Path, monkeypatch) -> None:
@@ -1887,6 +2139,60 @@ def test_preflight_immediate_platform_login_uses_probe_notification_without_dupl
     assert qr_requests == []
 
 
+def test_preflight_immediate_platform_login_falls_back_to_status_check_when_probe_raises(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    qr_requests: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda core, platform_name: {
+            "platform": "wechat",
+            "debug_port": 9334,
+            "chrome_user_data_dir": r"D:\profiles\wechat",
+            "open_url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+
+    fake_core = FakeCore()
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(
+        fake_core,
+        "probe_platform_session_via_debug_port",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("debug probe failed")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        fake_core,
+        "check_platform_login_status",
+        lambda **kwargs: {
+            "ok": True,
+            "needs_login": True,
+            "reason": "login_url",
+            "url": "https://channels.weixin.qq.com/login.html",
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: qr_requests.append(dict(kwargs)) or {"ok": True, "needs_login": True, "sent": True},
+    )
+
+    result = worker_impl._preflight_immediate_platform_login(
+        platform="wechat",
+        telegram_bot_identifier="",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_command_worker.log",
+    )
+
+    assert result["ready"] is False
+    assert "Telegram" in str(result["error"])
+    assert len(qr_requests) == 1
+
+
 def test_resolve_platform_login_runtime_context_prefers_wechat_publish_url() -> None:
     fake_core = SimpleNamespace(
         DEFAULT_WECHAT_DEBUG_PORT=9334,
@@ -2077,6 +2383,10 @@ def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_p
 
     assert exit_code == 2
     assert len(qr_requests) == 1
+    pending = _prefilter_items(workspace)["item-video"]
+    assert isinstance(pending, dict)
+    assert pending.get("platform_results") in ({}, None)
+    assert _flush_platform_result_events(workspace, fake_runner) == 2
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["status"] == "publish_failed"
@@ -2142,6 +2452,7 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_requ
 
     assert exit_code == 2
     assert len(qr_requests) == 1
+    assert _flush_platform_result_events(workspace, fake_runner) == 2
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["platform_results"]["wechat"]["status"] == "login_required"
@@ -2149,7 +2460,7 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_requ
     assert len(feedbacks) == 2
 
 
-def test_publish_platform_job_wechat_transport_qr_failure_still_sends_feedback_when_queue_write_times_out(tmp_path: Path, monkeypatch) -> None:
+def test_flush_platform_result_events_retries_after_queue_lock_timeout(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     video_path = workspace / "2_Processed" / "clip.mp4"
     video_path.write_text("ok", encoding="utf-8")
@@ -2186,16 +2497,6 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_sends_feedback_w
         },
     )
 
-    original_merge = worker_impl._merge_platform_result
-
-    def flaky_merge(*, workspace: Path, item_id: str, platform: str, updates: dict[str, object]) -> dict[str, object]:
-        status = str(updates.get("status") or "").strip().lower()
-        if status == "running":
-            return original_merge(workspace=workspace, item_id=item_id, platform=platform, updates=updates)
-        raise TimeoutError("Timed out waiting for lock: queue")
-
-    monkeypatch.setattr(worker_impl, "_merge_platform_result", flaky_merge)
-
     item = _video_item(target_platforms="wechat")
     _save_prefilter_items(workspace, {str(item["id"]): item})
 
@@ -2214,6 +2515,33 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_sends_feedback_w
 
     assert exit_code == 2
     assert len(qr_requests) == 1
+    original_merge = worker_impl._merge_platform_result
+    attempts = {"count": 0}
+
+    def flaky_merge(*, workspace: Path, item_id: str, platform: str, updates: dict[str, object]) -> dict[str, object]:
+        attempts["count"] += 1
+        status = str(updates.get("status") or "").strip().lower()
+        if status == "login_required" and attempts["count"] == 2:
+            raise TimeoutError("Timed out waiting for lock: queue")
+        return original_merge(workspace=workspace, item_id=item_id, platform=platform, updates=updates)
+
+    monkeypatch.setattr(worker_impl, "_merge_platform_result", flaky_merge)
+
+    assert _flush_platform_result_events(workspace, fake_runner) == 1
+    interim = _prefilter_items(workspace)["item-video"]
+    assert isinstance(interim, dict)
+    assert interim["platform_results"]["wechat"]["status"] == "running"
+    assert len(feedbacks) == 0
+
+    monkeypatch.setattr(worker_impl, "_merge_platform_result", original_merge)
+    assert _flush_platform_result_events(workspace, fake_runner) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["platform_results"]["wechat"]["status"] == "login_required"
+    assert len(feedbacks) == 2
+    sections = list(feedbacks[0]["sections"])
+    assert any("Telegram" in str(section) for section in sections)
+    return
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["platform_results"]["wechat"]["status"] == "running"
@@ -2273,6 +2601,7 @@ def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_
 
     assert exit_code == 2
     assert len(qr_requests) == 1
+    assert _flush_platform_result_events(workspace, fake_runner) == 2
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["platform_results"]["wechat"]["status"] == "failed"
@@ -2324,6 +2653,7 @@ def test_publish_platform_job_wechat_lock_timeout_does_not_trigger_login_probe(t
 
     assert exit_code == 2
     assert qr_requests == []
+    assert _flush_platform_result_events(workspace, fake_runner) == 1
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["platform_results"]["wechat"]["status"] == "failed"
@@ -2367,6 +2697,7 @@ def test_publish_platform_job_rejects_mismatched_target_before_publish(tmp_path:
 
     assert exit_code == 2
     assert publish_attempts == []
+    assert _flush_platform_result_events(workspace, fake_runner) == 1
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["platform_results"]["wechat"]["status"] == "failed"
@@ -2407,6 +2738,7 @@ def test_publish_platform_job_success_sends_platform_feedback_and_summary(tmp_pa
     )
 
     assert exit_code == 0
+    assert _flush_platform_result_events(workspace, fake_runner) == 2
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["status"] == "publish_done"

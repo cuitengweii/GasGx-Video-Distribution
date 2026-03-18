@@ -119,6 +119,7 @@ DEFAULT_REVIEW_STATE_FILE = "review_state.json"
 DEFAULT_TELEGRAM_PREFILTER_QUEUE_FILE = Path("runtime") / "telegram_prefilter_queue.json"
 DEFAULT_TELEGRAM_PREFILTER_FEEDBACK_HISTORY_FILE = Path("runtime") / "telegram_prefilter_feedback_history.jsonl"
 DEFAULT_PENDING_BACKGROUND_FEEDBACK_FILE = Path("runtime") / "telegram_pending_background_feedback.json"
+DEFAULT_PLATFORM_RESULT_EVENT_DIR = Path("runtime") / "prefilter_platform_result_events"
 DEFAULT_PIPELINE_PRIORITY_REQUEST_DIR = Path("runtime") / "pipeline_priority_requests"
 DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 30
 DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 14 * 86400
@@ -152,7 +153,9 @@ IMMEDIATE_CANDIDATE_REISSUE_STATUSES = {
     "link_pending",
     "publish_requested",
     "publish_confirm_pending",
+    "publish_running",
     "publish_partial",
+    "publish_failed",
 }
 IMMEDIATE_PUBLISH_APPROVED_STATUSES = {
     "publish_requested",
@@ -3899,7 +3902,19 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
             handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        last_error: Optional[BaseException] = None
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                last_error = None
+                break
+            except OSError as exc:
+                last_error = exc
+                if os.name != "nt" or getattr(exc, "winerror", 0) not in {5, 32} or attempt >= 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+        if last_error is not None:
+            raise last_error
     finally:
         if tmp.exists():
             with contextlib.suppress(Exception):
@@ -4563,6 +4578,10 @@ def _pending_background_feedback_path(workspace: Path) -> Path:
     return (workspace / DEFAULT_PENDING_BACKGROUND_FEEDBACK_FILE).resolve()
 
 
+def _platform_result_event_dir(workspace: Path) -> Path:
+    return (workspace / DEFAULT_PLATFORM_RESULT_EVENT_DIR).resolve()
+
+
 def _pipeline_priority_request_dir(workspace: Path) -> Path:
     return (workspace / DEFAULT_PIPELINE_PRIORITY_REQUEST_DIR).resolve()
 
@@ -4648,6 +4667,122 @@ def _enqueue_pending_background_feedback(
     )
     payload["items"] = items[-50:]
     _save_pending_background_feedback(path, payload)
+
+
+def _enqueue_platform_result_event(
+    *,
+    workspace: Path,
+    item_id: str,
+    platform: str,
+    updates: Dict[str, Any],
+) -> Path:
+    event_dir = _platform_result_event_dir(workspace)
+    event_dir.mkdir(parents=True, exist_ok=True)
+    platform_token = str(platform or "").strip().lower()
+    event_id = f"pfrevt-{time.time_ns()}-{os.getpid()}-{platform_token}"
+    token = hashlib.sha1(f"{event_id}:{item_id}".encode("utf-8")).hexdigest()[:12]
+    path = event_dir / f"{time.time_ns():020d}-{os.getpid()}-{platform_token}-{token}.json"
+    payload = {
+        "version": 1,
+        "id": event_id,
+        "item_id": str(item_id or "").strip(),
+        "platform": platform_token,
+        "updates": dict(updates if isinstance(updates, dict) else {}),
+        "pid": int(os.getpid()),
+        "created_at": _now_text(),
+    }
+    _atomic_write_json(path, payload)
+    return path
+
+
+def _load_platform_result_event(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    updates = payload.get("updates", {})
+    if not isinstance(updates, dict):
+        updates = {}
+    payload["updates"] = updates
+    payload["item_id"] = str(payload.get("item_id") or "").strip()
+    payload["platform"] = str(payload.get("platform") or "").strip().lower()
+    return payload
+
+
+def _flush_pending_platform_result_events(
+    *,
+    workspace: Path,
+    bot_token: str,
+    chat_id: str,
+    timeout_seconds: int,
+    log_file: Path,
+    runner: Any = None,
+    email_settings: Any = None,
+) -> int:
+    event_dir = _platform_result_event_dir(workspace)
+    if not event_dir.exists():
+        return 0
+    event_paths = sorted(path for path in event_dir.glob("*.json") if path.is_file())
+    if not event_paths:
+        return 0
+
+    loaded_runner = runner
+    loaded_email_settings = email_settings
+    processed = 0
+    for path in event_paths:
+        payload = _load_platform_result_event(path)
+        item_id = str(payload.get("item_id") or "").strip()
+        platform = str(payload.get("platform") or "").strip().lower()
+        updates = payload.get("updates", {})
+        if not item_id or not platform or not isinstance(updates, dict):
+            _append_log(log_file, f"[Worker] invalid platform result event dropped: {path}")
+            with contextlib.suppress(Exception):
+                path.unlink()
+            continue
+        if not _get_prefilter_item(workspace, item_id):
+            _append_log(log_file, f"[Worker] stale platform result event dropped: item={item_id} platform={platform}")
+            with contextlib.suppress(Exception):
+                path.unlink()
+            continue
+        try:
+            merged = _merge_platform_result(
+                workspace=workspace,
+                item_id=item_id,
+                platform=platform,
+                updates=updates,
+            )
+            result = _normalize_platform_results(merged.get("platform_results")).get(platform, {})
+            status = str((result if isinstance(result, dict) else {}).get("status") or updates.get("status") or "").strip().lower()
+            if _platform_result_is_terminal(status) and str(bot_token or "").strip() and str(chat_id or "").strip():
+                if loaded_runner is None or loaded_email_settings is None:
+                    loaded_runner, _ = _load_runtime_modules()
+                    args = _build_immediate_publish_args(
+                        runner=loaded_runner,
+                        workspace=workspace,
+                        telegram_bot_token=bot_token,
+                        telegram_chat_id=chat_id,
+                    )
+                    loaded_email_settings = loaded_runner._build_email_settings(args)
+                _send_immediate_platform_feedback(
+                    runner=loaded_runner,
+                    email_settings=loaded_email_settings,
+                    workspace=workspace,
+                    item_id=item_id,
+                    platform=platform,
+                )
+            with contextlib.suppress(Exception):
+                path.unlink()
+            processed += 1
+        except Exception as exc:
+            _append_log(
+                log_file,
+                f"[Worker] platform result event flush deferred item={item_id} platform={platform} error={exc}",
+            )
+    return processed
 
 
 def _flush_pending_background_feedback(
@@ -5126,6 +5261,63 @@ def _summarize_platform_results(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _platform_result_is_active(status: str) -> bool:
+    return str(status or "").strip().lower() in {"queued", "running"}
+
+
+def _recover_orphaned_immediate_candidate(
+    *,
+    workspace: Path,
+    item_id: str,
+    item: Dict[str, Any],
+) -> Dict[str, Any]:
+    row = dict(item) if isinstance(item, dict) else {}
+    if not row:
+        return {}
+    status = str(row.get("status") or "").strip().lower()
+    if status not in {"publish_requested", "publish_running"}:
+        return row
+    results = _normalize_platform_results(row.get("platform_results"))
+    if not results:
+        return row
+
+    changed = False
+    for platform, result in list(results.items()):
+        platform_status = str(result.get("status") or "").strip().lower()
+        if not _platform_result_is_active(platform_status):
+            continue
+        pid = int(result.get("pid") or 0)
+        if pid > 0 and _pid_is_running(pid):
+            continue
+        updated = dict(result)
+        updated["status"] = "failed"
+        updated["updated_at"] = _now_text()
+        updated["error"] = "后台发布进程已退出，状态回传中断。请重新发起发布。"
+        updated["failure_reason"] = str(updated.get("failure_reason") or updated["error"]).strip()
+        updated["failure_category"] = str(updated.get("failure_category") or "worker_exit").strip()
+        updated["failure_suggestion"] = str(updated.get("failure_suggestion") or "重新发起发布，若重复出现请查看对应平台日志。").strip()
+        results[platform] = updated
+        changed = True
+
+    if not changed:
+        return row
+
+    row["platform_results"] = results
+    row.update(_summarize_platform_results(row))
+    row["updated_at"] = _now_text()
+    return _update_prefilter_item(
+        workspace,
+        item_id,
+        updates={
+            "platform_results": row.get("platform_results"),
+            "status": row.get("status"),
+            "publish_success_count": row.get("publish_success_count"),
+            "publish_failed_count": row.get("publish_failed_count"),
+            "updated_at": row.get("updated_at"),
+        },
+    )
+
+
 def _merge_platform_result(
     *,
     workspace: Path,
@@ -5345,7 +5537,6 @@ def _upsert_immediate_candidate_item(
             row["prefilter_retry_pending"] = False
             row["prefilter_retry_count"] = 0
             row["prefilter_last_retry_epoch"] = 0.0
-        row = _apply_coordination_snapshot(row, workspace)
         items[item_id] = row
         return {
             "item": dict(row),
@@ -5360,6 +5551,9 @@ def _upsert_immediate_candidate_item(
     payload = _with_prefilter_queue_lock(workspace, _mutate)
     if not isinstance(payload, dict):
         return {"item_id": item_id, "item": {}, "already_sent": False}
+    item = payload.get("item")
+    if isinstance(item, dict):
+        payload["item"] = _refresh_prefilter_item_coordination_snapshot(workspace, item_id, item)
     payload["item_id"] = item_id
     return payload
 
@@ -5437,6 +5631,54 @@ def _apply_coordination_snapshot(item: Dict[str, Any], workspace: Path) -> Dict[
     row["published_platforms"] = list(snapshot.get("published_platforms") or [])
     row["platform_coordination"] = dict(snapshot.get("platform_status") or {})
     return row
+
+
+def _refresh_prefilter_item_coordination_snapshot(
+    workspace: Path,
+    item_id: str,
+    item: Dict[str, Any],
+) -> Dict[str, Any]:
+    row = dict(item) if isinstance(item, dict) else {}
+    if not row:
+        return {}
+    refreshed = _apply_coordination_snapshot(row, workspace)
+    if not isinstance(refreshed, dict):
+        return row
+    patch: Dict[str, Any] = {}
+    for key in (
+        "processed_name",
+        "media_kind",
+        "review_status",
+        "coordination_summary",
+        "published_platforms",
+        "platform_coordination",
+    ):
+        value = refreshed.get(key)
+        current = row.get(key)
+        if value != current:
+            if isinstance(value, dict):
+                patch[key] = dict(value)
+            elif isinstance(value, list):
+                patch[key] = list(value)
+            else:
+                patch[key] = value
+    if not patch:
+        return refreshed
+
+    def _mutate(queue: Dict[str, Any]) -> Dict[str, Any]:
+        items = queue.get("items", {})
+        if not isinstance(items, dict):
+            items = {}
+            queue["items"] = items
+        current = items.get(item_id, {})
+        merged = dict(current) if isinstance(current, dict) else {"id": item_id}
+        merged.update(patch)
+        merged["updated_at"] = _now_text()
+        items[item_id] = merged
+        return dict(merged)
+
+    updated = _with_prefilter_queue_lock(workspace, _mutate)
+    return dict(updated) if isinstance(updated, dict) else refreshed
 
 
 def _item_targets_wechat(item: Dict[str, Any]) -> bool:
@@ -8764,8 +9006,8 @@ def _preflight_immediate_platform_login(
     normalized_platform = str(platform or "").strip().lower()
     if normalized_platform != "wechat":
         return {"ready": True}
+    runtime_ctx = _resolve_platform_login_runtime_context(core, normalized_platform)
     try:
-        runtime_ctx = _resolve_platform_login_runtime_context(core, normalized_platform)
         result = core.probe_platform_session_via_debug_port(
             platform_name=normalized_platform,
             open_url=str(runtime_ctx.get("open_url") or "").strip(),
@@ -8778,7 +9020,37 @@ def _preflight_immediate_platform_login(
             telegram_timeout_seconds=max(10, int(timeout_seconds or 20)),
         )
     except Exception as exc:
-        return {"ready": True, "error": str(exc)}
+        if isinstance(log_file, Path):
+            _append_log(log_file, f"[Worker] preflight login probe failed platform={normalized_platform} error={exc}")
+        fallback_status: Dict[str, Any] = {}
+        try:
+            fallback_status = core.check_platform_login_status(
+                platform_name=normalized_platform,
+                open_url=str(runtime_ctx.get("open_url") or "").strip(),
+                debug_port=int(runtime_ctx.get("debug_port") or 0),
+                chrome_user_data_dir=str(runtime_ctx.get("chrome_user_data_dir") or "").strip(),
+                auto_open_chrome=True,
+                refresh_page=True,
+            )
+        except Exception as fallback_exc:
+            if isinstance(log_file, Path):
+                _append_log(
+                    log_file,
+                    f"[Worker] preflight login fallback failed platform={normalized_platform} error={fallback_exc}",
+                )
+            fallback_status = {"probe_error": str(fallback_exc)}
+        if not isinstance(fallback_status, dict):
+            fallback_status = {}
+        if not bool(fallback_status.get("needs_login")):
+            return {"ready": True, "error": str(exc), "fallback_result": fallback_status}
+        result = {
+            "status": "login_required",
+            "reason": str(fallback_status.get("reason") or "").strip(),
+            "current_url": str(fallback_status.get("url") or "").strip(),
+            "root_cause_hint": str(fallback_status.get("reason") or "").strip() or str(exc),
+            "probe_error": str(exc),
+            "fallback_result": fallback_status,
+        }
     if not isinstance(result, dict):
         return {"ready": True}
     if str(result.get("status") or "").strip().lower() != "login_required":
@@ -9429,10 +9701,11 @@ def _publish_immediate_candidate_platform(
     item = _get_prefilter_item(workspace, item_id)
     if not item:
         return 2
+    log_file = workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log"
     media_kind = _normalize_immediate_collect_media_kind(str(item.get("media_kind") or "video"))
     processed_name = str(item.get("processed_name") or item.get("video_name") or "").strip()
     if not processed_name:
-        _merge_platform_result(
+        _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
@@ -9454,7 +9727,7 @@ def _publish_immediate_candidate_platform(
         if resolved_target is not None:
             target = Path(resolved_target).resolve()
     if not target.exists():
-        _merge_platform_result(
+        _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
@@ -9468,7 +9741,7 @@ def _publish_immediate_candidate_platform(
         target=target,
         source_url=str(item.get("source_url") or "").strip(),
     ):
-        _merge_platform_result(
+        _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
@@ -9493,12 +9766,11 @@ def _publish_immediate_candidate_platform(
             args.xiaohongshu_allow_image = True
         args.wechat_declare_original = bool(_normalize_optional_bool(item.get("wechat_declare_original"))) if platform == "wechat" else False
         email_settings = runner._build_email_settings(args)
-        _merge_platform_result_resilient(
+        _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
             updates={"status": "running", "started_at": _now_text()},
-            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
         )
         ctx = _build_immediate_cycle_context(
             core=core,
@@ -9522,7 +9794,7 @@ def _publish_immediate_candidate_platform(
         )
         event = events[-1] if events else None
         if event is not None and bool(getattr(event, "success", False)):
-            merge_result = _merge_platform_result_resilient(
+            _enqueue_platform_result_event(
                 workspace=workspace,
                 item_id=item_id,
                 platform=platform,
@@ -9534,19 +9806,6 @@ def _publish_immediate_candidate_platform(
                     "failure_category": "",
                     "failure_suggestion": "",
                 },
-                log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-            )
-            _send_immediate_platform_feedback(
-                runner=runner,
-                email_settings=email_settings,
-                workspace=workspace,
-                item_id=item_id,
-                platform=platform,
-                item_override=merge_result.get("item") if bool(merge_result.get("queue_write_failed")) else None,
-                result_override=_normalize_platform_results((merge_result.get("item") or {}).get("platform_results")).get(platform, {})
-                if bool(merge_result.get("queue_write_failed"))
-                else None,
-                send_summary=not bool(merge_result.get("queue_write_failed")),
             )
             return 0
         error_text = str(getattr(event, "error", "") or "") if event is not None else "发布失败"
@@ -9569,7 +9828,7 @@ def _publish_immediate_candidate_platform(
                 error_text=error_text,
             )
             failure = _describe_platform_failure(platform, error_text)
-        merge_result = _merge_platform_result_resilient(
+        _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
@@ -9580,19 +9839,6 @@ def _publish_immediate_candidate_platform(
                 "failure_category": str(failure.get("category") or "").strip(),
                 "failure_suggestion": str(failure.get("suggestion") or "").strip(),
             },
-            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-        )
-        _send_immediate_platform_feedback(
-            runner=runner,
-            email_settings=email_settings,
-            workspace=workspace,
-            item_id=item_id,
-            platform=platform,
-            item_override=merge_result.get("item") if bool(merge_result.get("queue_write_failed")) else None,
-            result_override=_normalize_platform_results((merge_result.get("item") or {}).get("platform_results")).get(platform, {})
-            if bool(merge_result.get("queue_write_failed"))
-            else None,
-            send_summary=not bool(merge_result.get("queue_write_failed")),
         )
         return 0 if duplicate_marker in error_text.lower() else 2
 
@@ -9607,13 +9853,6 @@ def _publish_immediate_candidate_platform(
         error_text = str(exc)
         duplicate_marker = "duplicate target blocked"
         failure = _describe_platform_failure(platform, error_text)
-        args = _build_immediate_publish_args(
-            runner=runner,
-            workspace=workspace,
-            telegram_bot_token=telegram_bot_token,
-            telegram_chat_id=telegram_chat_id,
-        )
-        email_settings = runner._build_email_settings(args)
         result_status = (
             "skipped_duplicate"
             if duplicate_marker in error_text.lower()
@@ -9627,11 +9866,11 @@ def _publish_immediate_candidate_platform(
                 telegram_bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
                 timeout_seconds=timeout_seconds,
-                log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+                log_file=log_file,
                 error_text=error_text,
             )
             failure = _describe_platform_failure(platform, error_text)
-        merge_result = _merge_platform_result_resilient(
+        _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
@@ -9642,19 +9881,6 @@ def _publish_immediate_candidate_platform(
                 "failure_category": str(failure.get("category") or "").strip(),
                 "failure_suggestion": str(failure.get("suggestion") or "").strip(),
             },
-            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-        )
-        _send_immediate_platform_feedback(
-            runner=runner,
-            email_settings=email_settings,
-            workspace=workspace,
-            item_id=item_id,
-            platform=platform,
-            item_override=merge_result.get("item") if bool(merge_result.get("queue_write_failed")) else None,
-            result_override=_normalize_platform_results((merge_result.get("item") or {}).get("platform_results")).get(platform, {})
-            if bool(merge_result.get("queue_write_failed"))
-            else None,
-            send_summary=not bool(merge_result.get("queue_write_failed")),
         )
         return 0 if duplicate_marker in error_text.lower() else 2
 
@@ -9747,12 +9973,14 @@ def _update_prefilter_item(
             items[item_id] = row
         if updates:
             row.update({k: v for k, v in updates.items()})
-        row = _apply_coordination_snapshot(row, workspace)
         row["updated_at"] = _now_text()
         items[item_id] = row
         return dict(row)
 
-    return _with_prefilter_queue_lock(workspace, _mutate)
+    row = _with_prefilter_queue_lock(workspace, _mutate)
+    if not isinstance(row, dict):
+        return {}
+    return _refresh_prefilter_item_coordination_snapshot(workspace, item_id, row)
 
 
 def _get_prefilter_item(workspace: Path, item_id: str) -> dict[str, Any]:
@@ -10454,6 +10682,12 @@ def _run_collect_publish_latest_job(
         item = upserted.get("item") if isinstance(upserted, dict) else {}
         item_id = str(upserted.get("item_id") or "").strip()
         already_sent = bool(upserted.get("already_sent"))
+        if item_id and isinstance(item, dict):
+            item = _recover_orphaned_immediate_candidate(
+                workspace=workspace,
+                item_id=item_id,
+                item=item,
+            )
         current_status = str(item.get("status") or "").strip().lower() if isinstance(item, dict) else ""
         if already_sent:
             if current_status == "down_confirmed":
@@ -10466,16 +10700,17 @@ def _run_collect_publish_latest_job(
         if not item_id or not isinstance(item, dict):
             skipped_duplicates += 1
             continue
-        item = _preflight_immediate_candidate_for_prefilter(
-            workspace=workspace,
-            item_id=item_id,
-            item=item,
-            telegram_bot_identifier=telegram_bot_identifier,
-            telegram_bot_token=telegram_bot_token,
-            telegram_chat_id=telegram_chat_id,
-            timeout_seconds=timeout_seconds,
-            log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-        )
+        if str(item.get("action") or "").strip().lower() != "resent_in_test_mode":
+            item = _preflight_immediate_candidate_for_prefilter(
+                workspace=workspace,
+                item_id=item_id,
+                item=item,
+                telegram_bot_identifier=telegram_bot_identifier,
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id,
+                timeout_seconds=timeout_seconds,
+                log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+            )
         attempted_new_candidates += 1
         try:
             response = _send_immediate_candidate_prefilter_card(
@@ -10565,16 +10800,6 @@ def _run_collect_publish_latest_job(
     if (not immediate_test_mode) and fresh_candidates <= 0 and reusable_items_to_reissue:
         for reusable_item_id, reusable_item in reusable_items_to_reissue[:requested_limit]:
             try:
-                reusable_item = _preflight_immediate_candidate_for_prefilter(
-                    workspace=workspace,
-                    item_id=reusable_item_id,
-                    item=reusable_item,
-                    telegram_bot_identifier=telegram_bot_identifier,
-                    telegram_bot_token=telegram_bot_token,
-                    telegram_chat_id=telegram_chat_id,
-                    timeout_seconds=timeout_seconds,
-                    log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-                )
                 _reissue_immediate_candidate_prefilter_card(
                     runner=runner,
                     email_settings=email_settings,
@@ -12157,6 +12382,15 @@ def main() -> int:
                 if pruned_tasks > 0:
                     _append_log(log_file, f"[Worker] home action tasks pruned: {pruned_tasks}")
                 _cleanup_prefilter_queue(workspace, log_file=log_file)
+                flushed_platform_events = _flush_pending_platform_result_events(
+                    workspace=workspace,
+                    bot_token=bot_token,
+                    chat_id=allowed_chat_id,
+                    timeout_seconds=api_timeout_seconds,
+                    log_file=log_file,
+                )
+                if flushed_platform_events > 0:
+                    _append_log(log_file, f"[Worker] platform result events flushed: {flushed_platform_events}")
                 _flush_pending_background_feedback(
                     workspace=workspace,
                     bot_token=bot_token,

@@ -18518,6 +18518,7 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
         return
 
     js_select = _douyin_collection_select_js()
+    clicked_match_seen = False
     for attempt in range(1, 7):
         action_states: list[str] = []
         visible_options: list[str] = []
@@ -18530,15 +18531,16 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
             except Exception:
                 action = {}
             if isinstance(action, dict):
-                action_states.append(str(action.get("state", "") or ""))
+                state = str(action.get("state", "") or "")
+                action_states.append(state)
+                clicked_option = str(action.get("option", "") or "").strip()
+                if state == "clicked" and _is_douyin_collection_match(clicked_option, target):
+                    clicked_match_seen = True
                 for raw in list(action.get("visible_options") or []):
                     option = str(raw or "").strip()
                     if option and option not in visible_options:
                         visible_options.append(option)
-                if str(action.get("state", "") or "") == "clicked" and _is_douyin_collection_match(
-                    str(action.get("option", "") or ""),
-                    target,
-                ):
+                if state == "clicked" and _is_douyin_collection_match(clicked_option, target):
                     break
             else:
                 action_states.append("none")
@@ -18551,6 +18553,9 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
                 f"[Uploader:douyin] Collection selected: {target}"
                 + (f" (episode={after.get('episode')})" if after.get("episode") else "")
             )
+            return
+        if not current and clicked_match_seen:
+            _log(f"[Uploader:douyin] Collection selected by click confirmation: {target}")
             return
 
         _log(
