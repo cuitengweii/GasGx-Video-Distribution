@@ -2514,7 +2514,7 @@ def _build_home_task_queue_section(
     }
 
 
-def _prefilter_progress_status_label(status: str) -> str:
+def _prefilter_progress_status_label(status: str, row: Optional[Mapping[str, Any]] = None) -> str:
     mapping = {
         "link_pending": "待人工确认",
         "up_confirmed": "待采集",
@@ -2528,6 +2528,8 @@ def _prefilter_progress_status_label(status: str) -> str:
         "send_failed": "卡片发送失败",
     }
     token = str(status or "").strip().lower()
+    if token == "down_confirmed" and _is_prefilter_skipped_terminal(row or {}):
+        return "已跳过"
     return mapping.get(token, token or "未知状态")
 
 
@@ -2543,6 +2545,7 @@ def _is_prefilter_live_for_process_status(row: Dict[str, Any]) -> bool:
     if not isinstance(row, dict):
         return False
     status = str(row.get("status") or "").strip().lower()
+    action = str(row.get("action") or "").strip().lower()
     if status not in {
         "link_pending",
         "up_confirmed",
@@ -2558,12 +2561,22 @@ def _is_prefilter_live_for_process_status(row: Dict[str, Any]) -> bool:
     cutoff = datetime.now() - timedelta(seconds=max(300, int(DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS)))
     if ts < cutoff:
         return False
+    if status == "down_confirmed" and action == "skip":
+        return False
     if status in {"link_pending", "up_confirmed", "down_confirmed"}:
         try:
             return int(row.get("message_id") or 0) > 0
         except Exception:
             return False
     return True
+
+
+def _is_prefilter_skipped_terminal(row: Mapping[str, Any]) -> bool:
+    if not isinstance(row, Mapping):
+        return False
+    status = str(row.get("status") or "").strip().lower()
+    action = str(row.get("action") or "").strip().lower()
+    return status == "down_confirmed" and action == "skip"
 
 
 def _is_prefilter_waiting_for_runtime_lock(row: Dict[str, Any]) -> bool:
@@ -2766,7 +2779,7 @@ def _build_process_prefilter_section(
     for row in highlighted[: max(1, int(limit))]:
         media_kind = _normalize_immediate_collect_media_kind(str(row.get("media_kind") or "video"))
         media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
-        status_label = _prefilter_progress_status_label(str(row.get("status") or ""))
+        status_label = _prefilter_progress_status_label(str(row.get("status") or ""), row)
         updated_at = str(row.get("updated_at") or row.get("created_at") or "").strip() or "-"
         preview = _preview_text(
             row.get("processed_name")
@@ -6164,7 +6177,11 @@ def _upsert_immediate_candidate_item(
         row["candidate_index"] = int(item_index or 0)
         row["candidate_limit"] = int(total_count or 0)
         row["chat_id"] = str(chat_id or row.get("chat_id") or "").strip()
-        if not allow_reuse and existing_status in IMMEDIATE_CANDIDATE_REUSE_STATUSES:
+        existing_is_skipped = _is_prefilter_skipped_terminal(row)
+        if existing_is_skipped:
+            row["status"] = "down_confirmed"
+            row["action"] = "skip"
+        elif not allow_reuse and existing_status in IMMEDIATE_CANDIDATE_REUSE_STATUSES:
             row["status"] = "link_pending"
             row["action"] = "resent_in_test_mode"
             row["message_id"] = 0

@@ -2905,6 +2905,105 @@ def test_build_process_prefilter_section_reports_empty_when_only_history_exists(
     assert any("当前没有活跃的即采即发积压" in str(item) for item in section["items"])
 
 
+def test_build_process_prefilter_section_hides_skipped_down_confirmed_items(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    now_text = worker_impl._now_text()
+    recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _save_prefilter_items(
+        workspace,
+        {
+            "skipped-review": {
+                "id": "skipped-review",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "down_confirmed",
+                "action": "skip",
+                "created_at": recent_text,
+                "updated_at": recent_text,
+                "processed_name": "skipped.mp4",
+                "message_id": 123,
+            },
+            "pending-publish": {
+                "id": "pending-publish",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "down_confirmed",
+                "created_at": recent_text,
+                "updated_at": recent_text,
+                "processed_name": "pending.mp4",
+                "message_id": 124,
+            },
+        },
+    )
+
+    section = worker_impl._build_process_prefilter_section(workspace)
+
+    text = "\n".join(
+        (str(item.get("label") or "") + str(item.get("value") or "")) if isinstance(item, dict) else str(item)
+        for item in section["items"]
+    )
+    assert "当前积压数1" in text
+    assert "pending.mp4" in text
+    assert "skipped.mp4" not in text
+
+
+def test_upsert_immediate_candidate_preserves_skipped_terminal_state(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    candidate = {
+        "url": "https://x.test/post/skipped",
+        "published_at": "2026-03-18 17:45:00",
+        "display_time": "1m",
+        "tweet_text": "skipped candidate",
+        "match_mode": "keyword",
+        "matched_keyword": "cybertruck",
+    }
+    item_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"])
+    _save_prefilter_items(
+        workspace,
+        {
+            item_id: {
+                "id": item_id,
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "down_confirmed",
+                "action": "skip",
+                "created_at": "2026-03-18 17:45:12",
+                "updated_at": "2026-03-18 17:45:36",
+                "tweet_text": "old skipped row",
+                "message_id": 321,
+            }
+        },
+    )
+
+    result = worker_impl._upsert_immediate_candidate_item(
+        workspace=workspace,
+        candidate=candidate,
+        media_kind="video",
+        item_index=1,
+        total_count=1,
+        profile="cybertruck",
+        target_platforms="wechat,douyin",
+        chat_id=CHAT_ID,
+        allow_reuse=False,
+    )
+
+    item = result["item"]
+    assert item["status"] == "down_confirmed"
+    assert item["action"] == "skip"
+    assert item["message_id"] == 321
+
+
+def test_prefilter_progress_status_label_marks_skipped_terminal_items() -> None:
+    assert worker_impl._prefilter_progress_status_label(
+        "down_confirmed",
+        {"status": "down_confirmed", "action": "skip"},
+    ) == "已跳过"
+    assert worker_impl._prefilter_progress_status_label(
+        "down_confirmed",
+        {"status": "down_confirmed", "action": "down"},
+    ) == "待发布"
+
+
 def test_resolve_platform_login_runtime_context_prefers_wechat_publish_url() -> None:
     fake_core = SimpleNamespace(
         DEFAULT_WECHAT_DEBUG_PORT=9334,
