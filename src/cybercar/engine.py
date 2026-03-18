@@ -1570,6 +1570,7 @@ def _prepare_platform_login_qr_notice(
     auto_open_chrome: bool = True,
     refresh_page: bool = False,
     wait_token: str = "",
+    allow_navigation: bool = True,
 ) -> dict[str, Any]:
     platform = str(platform_name or "").strip().lower() or "wechat"
     default_profile_dir = _default_profile_dir_for_platform(platform)
@@ -1593,14 +1594,14 @@ def _prepare_platform_login_qr_notice(
             preserve_current_login_gate = bool(inspect_platform_login_gate(active_page, platform).get("needs_login"))
         except Exception:
             preserve_current_login_gate = False
-    if not preserve_current_login_gate:
+    if allow_navigation and not preserve_current_login_gate:
         active_page = _stabilize_platform_session_page(
             active_page,
             platform_name=platform,
             open_url=open_target_url,
             close_stale_login_tabs=True,
         )
-    if refresh_page:
+    if allow_navigation and refresh_page:
         try:
             active_page.get(open_target_url)
         except Exception:
@@ -1618,7 +1619,7 @@ def _prepare_platform_login_qr_notice(
         _log("[Uploader:wechat] Login QR not ready on initial scan; wait and retry once before fallback.")
         _humanized_publish_settle_pause("wechat login qr retry settle")
         qr_source = _extract_login_qr_source(active_page, timeout_seconds=12.0, platform_name=platform)
-    if not qr_source:
+    if allow_navigation and not qr_source:
         login_entry_url = str(PLATFORM_LOGIN_ENTRY_URLS.get(platform) or "").strip()
         if login_entry_url and login_entry_url != open_target_url:
             _log(
@@ -3346,11 +3347,29 @@ def _should_skip_wechat_qr_notice(cache_key: str, fingerprint: str, ttl_seconds:
     return False
 
 
+def _should_skip_recent_wechat_qr_notice(cache_key: str, ttl_seconds: int) -> bool:
+    key = str(cache_key or "").strip().lower()
+    if not key:
+        return False
+    cached = WECHAT_LOGIN_QR_NOTICE_CACHE.get(key)
+    if not cached:
+        return False
+    _cached_fp, cached_ts = cached
+    return (time.time() - float(cached_ts or 0.0)) < max(10, int(ttl_seconds or 0))
+
+
 def _remember_wechat_qr_notice(cache_key: str, fingerprint: str) -> None:
     key = str(cache_key or "").strip().lower()
     if not key or not fingerprint:
         return
     WECHAT_LOGIN_QR_NOTICE_CACHE[key] = (fingerprint, time.time())
+
+
+def _platform_login_qr_cache_key(platform_name: str, debug_port: Optional[int], chrome_user_data_dir: str) -> str:
+    platform = str(platform_name or "").strip().lower() or "wechat"
+    profile_dir = str(Path(chrome_user_data_dir or _default_profile_dir_for_platform(platform)).expanduser())
+    runtime_debug_port = int(debug_port or _default_debug_port_for_platform(platform))
+    return f"{platform}|{runtime_debug_port}|{profile_dir}"
 
 
 def send_platform_login_qr_notification(
@@ -3372,7 +3391,15 @@ def send_platform_login_qr_notification(
     telegram_timeout_seconds: int = 20,
     telegram_api_base: str = "",
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+    allow_navigation: bool = True,
 ) -> dict[str, Any]:
+    cache_key_hint = _platform_login_qr_cache_key(platform_name, debug_port, chrome_user_data_dir)
+    if (not allow_duplicate) and _should_skip_recent_wechat_qr_notice(
+        cache_key_hint,
+        WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS,
+    ):
+        return {"ok": True, "needs_login": True, "sent": False, "skipped": True, "cache_key": cache_key_hint}
+
     prepared = _prepare_platform_login_qr_notice(
         platform_name=platform_name,
         open_url=open_url,
@@ -3383,6 +3410,7 @@ def send_platform_login_qr_notification(
         auto_open_chrome=auto_open_chrome,
         refresh_page=refresh_page,
         wait_token=wait_token,
+        allow_navigation=allow_navigation,
     )
     if not bool(prepared.get("ok")):
         return prepared
@@ -4960,6 +4988,7 @@ def _maybe_notify_wechat_comment_login_required(
             chrome_user_data_dir=chrome_user_data_dir,
             auto_open_chrome=False,
             refresh_page=False,
+            allow_navigation=False,
             allow_duplicate=False,
             wait_token="",
             telegram_bot_token=telegram_bot_token,

@@ -4028,3 +4028,55 @@ def test_build_failure_feedback_actions_does_not_treat_summary_login_hint_as_log
 
     texts = [str(action.get("text") or "") for action in actions]
     assert texts == ["📍 进度"]
+
+
+def test_build_failure_feedback_actions_omits_login_for_mixed_platform_progress_cards() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {
+                "title": "平台状态",
+                "items": [
+                    {"label": "📱 视频号 ❌", "value": "🔐 需要登录"},
+                    {"label": "🎵 抖音 ❌", "value": "⏳ 发布中"},
+                    {"label": "⚡ 快手", "value": "🕓 已排队"},
+                    {"label": "📝 小红书", "value": "✅ 已确认"},
+                ],
+            }
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    assert texts == ["📍 进度"]
+
+
+def test_build_shared_link_status_card_compacts_body_for_operator_scan() -> None:
+    item = _video_item(
+        target_platforms="wechat,douyin,xiaohongshu,kuaishou,bilibili",
+        source_url="https://x.com/kauai_renatus/status/2033954550592487896",
+        title="JESUS LOVES KAUAI",
+        actor="ocuitengwei",
+        updated_at="2026-03-18 14:02:15",
+    )
+
+    card = worker_impl._build_shared_link_status_card(
+        item=item,
+        title="分享链接已接收",
+        subtitle="后台即采即发任务已排队",
+        status="running",
+        result_items=[
+            "已改机顶即采即发链路排队，后台会先采集素材，再继续进入平台发布。",
+            "如需查看当前进度，可直接点“进度”。",
+        ],
+    )
+
+    text = str(card["text"])
+    assert "<b>⏳ 分享链接已接收</b>" in text
+    assert "· 即采即发 / 视频 / 全部平台｜后台即采即发任务已排队" in text
+    assert "<b>📌 执行摘要</b>" in text
+    assert "如需查看当前进度，可直接点“进度”。" not in text
+    assert "<b>🧾 候选信息</b>" in text
+    assert "原帖链接" not in text
+    assert "操作记录" not in text
+    assert "任务标识" not in text
+    assert "菜单链路" not in text

@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
+from urllib.parse import urlparse
 
 try:
     import winreg  # type: ignore
@@ -413,6 +414,276 @@ def _is_telegram_transport_error_text(value: str) -> bool:
     return any(marker in text for marker in _TELEGRAM_TRANSPORT_ERROR_MARKERS)
 
 
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"]+")
+_SHARED_LINK_ACTIVE_STATUSES = {
+    "collect_requested",
+    "download_running",
+    "publish_requested",
+    "publish_confirm_pending",
+    "publish_running",
+    "publish_partial",
+}
+
+
+def _iter_message_urls(text: str) -> Iterable[str]:
+    raw_text = str(text or "")
+    if not raw_text:
+        return []
+    urls: list[str] = []
+    for match in _URL_PATTERN.finditer(raw_text):
+        token = str(match.group(0) or "").strip().rstrip(".,!?)]}>\"'")
+        if token:
+            urls.append(token)
+    return urls
+
+
+def _normalize_shared_x_status_url(raw_url: str) -> str:
+    candidate = str(raw_url or "").strip()
+    if not candidate:
+        return ""
+    try:
+        parsed = urlparse(candidate)
+    except Exception:
+        return ""
+    scheme = str(parsed.scheme or "").strip().lower()
+    host = str(parsed.netloc or "").strip().lower()
+    path = str(parsed.path or "").strip()
+    if scheme not in {"http", "https"}:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in {"x.com", "twitter.com", "mobile.x.com", "mobile.twitter.com"}:
+        return ""
+    match = re.search(
+        r"/(?:(?:i/(?:web/)?)|([A-Za-z0-9_]{1,32})/)?(?:status|statuses)/(\d+)(?:/|$)",
+        path,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    username = str(match.group(1) or "").strip()
+    status_id = str(match.group(2) or "").strip()
+    if username:
+        return f"https://{host}/{username}/status/{status_id}"
+    return f"https://{host}/i/status/{status_id}"
+
+
+def _extract_shared_immediate_source_url(text: str) -> str:
+    for raw_url in _iter_message_urls(text):
+        normalized = _normalize_shared_x_status_url(raw_url)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _looks_like_shared_link_message(text: str) -> bool:
+    return any(_iter_message_urls(text))
+
+
+def _should_try_shared_link_message(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    lowered = raw.lower()
+    if raw.startswith("/"):
+        return False
+    if _parse_status_command(raw) is not None:
+        return False
+    if _parse_run_command(raw) is not None:
+        return False
+    if bool(_parse_slash_command_request(raw).get("matched")):
+        return False
+    if lowered.startswith("执行 ") or lowered.startswith("cmd "):
+        return False
+    return True
+
+
+def _shared_link_actor(username: str) -> str:
+    token = str(username or "").strip()
+    if not token:
+        return "@telegram"
+    return token if token.startswith("@") else f"@{token}"
+
+
+def _build_shared_link_candidate_text(source_url: str, text: str) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "").strip())
+    if not compact or compact == source_url:
+        return "Telegram 分享链接"
+    if len(compact) > 160:
+        return compact[:157].rstrip() + "..."
+    return compact
+
+
+def _build_shared_link_status_card(
+    *,
+    item: Dict[str, Any],
+    title: str,
+    subtitle: str,
+    status: str,
+    result_items: Sequence[Any],
+) -> Dict[str, Any]:
+    source_url = str(item.get("source_url") or "").strip()
+    sections = [
+        {
+            "title": "执行摘要",
+            "emoji": "📌",
+            "items": list(result_items[:1]),
+        },
+        {
+            "title": "候选信息",
+            "emoji": "🎯",
+            "items": [
+                {"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)},
+                {"label": "标题", "value": _resolve_immediate_item_title(item)},
+            ],
+        },
+    ]
+    return _build_prefilter_action_card(
+        status=status,
+        title=title,
+        subtitle=f"{_menu_breadcrumb_for_item(item)}｜{subtitle}",
+        sections=sections,
+        source_url=source_url,
+        menu_label="",
+        task_identifier="",
+    )
+
+
+def _handle_shared_immediate_link_message(
+    *,
+    text: str,
+    repo_root: Path,
+    workspace: Path,
+    timeout_seconds: int,
+    chat_id: str,
+    username: str,
+    bot_token: str,
+    telegram_bot_identifier: str,
+    default_profile: str,
+    log_file: Path,
+    immediate_test_mode: bool = False,
+) -> Optional[Dict[str, Any]]:
+    source_url = _extract_shared_immediate_source_url(text)
+    if not source_url:
+        if _looks_like_shared_link_message(text):
+            return _normalize_reply_payload(
+                {
+                    "text": "当前只支持直接分享 X/Twitter 单条帖子链接，收到后会按视频即采即发链路处理。",
+                    "reply_markup": _with_process_status_button(),
+                }
+            )
+        return None
+
+    profile = _normalize_profile_name(default_profile)
+    actor = _shared_link_actor(username)
+    media_kind = "video"
+    target_platforms = ",".join(_collect_publish_target_platforms(media_kind))
+    candidate = {
+        "url": source_url,
+        "published_at": "",
+        "display_time": "Telegram 分享",
+        "tweet_text": _build_shared_link_candidate_text(source_url, text),
+        "match_mode": "telegram_share_link",
+        "matched_keyword": "telegram_share_link",
+    }
+    upserted = _upsert_immediate_candidate_item(
+        workspace=workspace,
+        candidate=candidate,
+        profile=profile,
+        media_kind=media_kind,
+        target_platforms=target_platforms,
+        chat_id=chat_id,
+        item_index=1,
+        total_count=1,
+        allow_reuse=True,
+    )
+    item_id = str(upserted.get("item_id") or "").strip()
+    existing_item = upserted.get("item") if isinstance(upserted.get("item"), dict) else {}
+    item = dict(existing_item) if isinstance(existing_item, dict) else {}
+    if not item_id or not item:
+        raise RuntimeError("shared link immediate item create failed")
+
+    status = str(item.get("status") or "").strip().lower()
+    if status in _SHARED_LINK_ACTIVE_STATUSES:
+        _append_log(log_file, f"[Worker] shared link deduped source={source_url} item={item_id} status={status}")
+        return _normalize_reply_payload(
+            _build_shared_link_status_card(
+                item=item,
+                title="分享链接已在处理中",
+                subtitle="同一条链接已有即采即发任务在运行",
+                status="running",
+                result_items=[
+                    "当前链接对应的任务已经在后台执行，无需重复分享。",
+                    "进度和最终结果会继续通过 Telegram 回传。",
+                ],
+            )
+        )
+
+    updated_item = _update_prefilter_item(
+        workspace,
+        item_id,
+        updates={
+            "status": "publish_requested",
+            "updated_at": _now_text(),
+            "actor": actor,
+            "action": "shared_link",
+            "chat_id": str(chat_id or "").strip(),
+            "wechat_declare_original": False,
+            "immediate_test_mode": bool(immediate_test_mode),
+            "shared_via": "telegram_link",
+        },
+    )
+    try:
+        _spawn_immediate_collect_item_job(
+            repo_root=repo_root,
+            workspace=workspace,
+            timeout_seconds=timeout_seconds,
+            profile=profile,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_bot_token=bot_token,
+            telegram_chat_id=chat_id,
+            item_id=item_id,
+            immediate_test_mode=immediate_test_mode,
+        )
+    except Exception as exc:
+        _append_log(log_file, f"[Worker] shared link immediate spawn failed: {exc}")
+        failed_item = _update_prefilter_item(
+            workspace,
+            item_id,
+            updates={
+                "status": "link_pending",
+                "last_error": str(exc),
+                "action": "shared_link_spawn_failed",
+            },
+        )
+        return _normalize_reply_payload(
+            _build_shared_link_status_card(
+                item=failed_item,
+                title="分享链接启动失败",
+                subtitle="后台即采即发任务未成功启动",
+                status="failed",
+                result_items=[
+                    "分享链接已识别，但后台任务启动失败，请稍后重试。",
+                ],
+            )
+        )
+
+    _append_log(log_file, f"[Worker] shared link queued source={source_url} item={item_id}")
+    start_note = "测试模式已放宽前置过滤，后台仍会继续真实采集和平台排队。" if immediate_test_mode else "已按视频即采即发链路排队，后台会先采集素材，再继续进入平台发布。"
+    return _normalize_reply_payload(
+        _build_shared_link_status_card(
+            item=updated_item,
+            title="分享链接已接收",
+            subtitle="后台即采即发任务已排队",
+            status="running",
+            result_items=[
+                start_note,
+                "如需查看当前进度，可直接点“进度”。",
+            ],
+        )
+    )
+
+
 def _post_telegram_multipart_with_retries(
     *,
     bot_token: str,
@@ -793,6 +1064,7 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
         return []
     login_signal_parts: list[str] = []
     merged_text_parts: list[str] = []
+    platform_status_values: list[str] = []
     for section in sections:
         if not isinstance(section, Mapping):
             continue
@@ -805,19 +1077,29 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
                 value = str(item.get("value") or item.get("text") or "").strip()
                 merged_text_parts.append(label)
                 merged_text_parts.append(value)
+                if section_title == "平台状态":
+                    platform_status_values.append(value)
                 if section_title in {"失败原因", "平台状态", "处理建议"}:
                     login_signal_parts.append(label)
                     login_signal_parts.append(value)
             else:
                 text = str(item or "").strip()
                 merged_text_parts.append(text)
+                if section_title == "平台状态":
+                    platform_status_values.append(text)
                 if section_title in {"失败原因", "平台状态", "处理建议"}:
                     login_signal_parts.append(text)
     merged_text = " ".join(part for part in merged_text_parts if part).lower()
     login_text = " ".join(part for part in login_signal_parts if part).lower()
+    has_non_login_platform_progress = any(
+        any(token in str(value or "") for token in ("✅", "⏳", "🕓", "⏭️", "已确认", "发布中", "已排队", "已跳过"))
+        for value in platform_status_values
+    )
     needs_login = status_token == "login_required" or any(
         token in login_text for token in ("登录", "未登录", "扫码", "qr", "login", "sign in")
     )
+    if needs_login and has_non_login_platform_progress and status_token != "login_required":
+        needs_login = False
     is_retryable_transport = any(
         token in merged_text
         for token in ("timeout", "network", "连接", "超时", "上传失败", "upload", "transport", "proxy", "代理")
@@ -11783,6 +12065,33 @@ def handle_command_update(
         return {"handled": False, "last_processed": int(last_processed), "update_id": update_id}
 
     _append_log(log_file, f"[Worker] <= update_id={update_id}, user={username or '-'}, text={text[:120]}")
+
+    shared_link_reply = None
+    if _should_try_shared_link_message(text):
+        shared_link_reply = _handle_shared_immediate_link_message(
+            text=text,
+            repo_root=repo_root,
+            workspace=workspace,
+            timeout_seconds=timeout_seconds,
+            chat_id=chat_id,
+            username=username,
+            bot_token=bot_token,
+            telegram_bot_identifier=telegram_bot_identifier,
+            default_profile=default_profile,
+            log_file=log_file,
+        )
+    if isinstance(shared_link_reply, dict):
+        reply_payload = _normalize_reply_payload(shared_link_reply)
+        _send_reply(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            text=str(reply_payload.get("text") or ""),
+            timeout_seconds=int(_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1)),
+            reply_markup=reply_payload.get("reply_markup") if isinstance(reply_payload.get("reply_markup"), dict) else None,
+        )
+        _append_log(log_file, f"[Worker] => update_id={update_id} shared-link replied.")
+        new_last_processed = max(int(last_processed), update_id)
+        return {"handled": True, "last_processed": new_last_processed, "update_id": update_id}
 
     raw_reply = _handle_command(
         text=text,

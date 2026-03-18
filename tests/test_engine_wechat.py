@@ -107,6 +107,7 @@ def test_comment_login_notification_prefers_qr(monkeypatch: pytest.MonkeyPatch) 
     assert not text_calls
     assert qr_calls[0]["page"] is not None
     assert qr_calls[0]["auto_open_chrome"] is False
+    assert qr_calls[0]["allow_navigation"] is False
 
 
 def test_comment_login_notification_falls_back_to_text(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,6 +191,53 @@ def test_prepare_platform_login_qr_notice_keeps_current_login_gate_page(monkeypa
     assert stabilize_calls == []
 
 
+def test_prepare_platform_login_qr_notice_freezes_existing_page_without_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.get_calls: list[str] = []
+            self.refresh_calls = 0
+            self.url = "https://channels.weixin.qq.com/platform/post/comment"
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(str(url))
+
+        def refresh(self) -> None:
+            self.refresh_calls += 1
+
+    page = FakePage()
+    stabilize_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {"needs_login": False, "url": "https://channels.weixin.qq.com/platform/post/comment"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_stabilize_platform_session_page",
+        lambda current_page, **kwargs: stabilize_calls.append(dict(kwargs)) or current_page,
+    )
+    monkeypatch.setattr(engine, "_is_platform_login_gate", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_extract_login_qr_source", lambda *_args, **_kwargs: "data:image/png;base64,QUJD")
+    monkeypatch.setattr(engine, "_capture_login_qr_screenshot", lambda *_args, **_kwargs: b"png-bytes")
+
+    result = engine._prepare_platform_login_qr_notice(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/comment",
+        page=page,
+        chrome_user_data_dir="D:/profiles/wechat",
+        auto_open_chrome=False,
+        refresh_page=True,
+        allow_navigation=False,
+    )
+
+    assert result["ok"] is True
+    assert result["needs_login"] is True
+    assert stabilize_calls == []
+    assert page.get_calls == []
+    assert page.refresh_calls == 0
+
+
 def test_send_telegram_photo_retries_after_connection_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -269,6 +317,38 @@ def test_send_platform_login_qr_notification_returns_structured_transport_error(
     assert result["needs_login"] is True
     assert result["transport_error"] is True
     assert result["qr_prepared"] is True
+
+
+def test_send_platform_login_qr_notification_skips_preparation_when_recent_qr_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        engine,
+        "_prepare_platform_login_qr_notice",
+        lambda **kwargs: prepare_calls.append(dict(kwargs)) or {"ok": True},
+    )
+    cache_key = engine._platform_login_qr_cache_key("wechat", 9334, "D:/profiles/wechat")
+    engine.WECHAT_LOGIN_QR_NOTICE_CACHE[cache_key.lower()] = ("fp-existing", engine.time.time())
+
+    try:
+        result = engine.send_platform_login_qr_notification(
+            platform_name="wechat",
+            open_url="https://channels.weixin.qq.com/login.html",
+            debug_port=9334,
+            chrome_user_data_dir="D:/profiles/wechat",
+            auto_open_chrome=False,
+            allow_duplicate=False,
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+        )
+    finally:
+        engine.WECHAT_LOGIN_QR_NOTICE_CACHE.pop(cache_key.lower(), None)
+
+    assert result["ok"] is True
+    assert result["needs_login"] is True
+    assert result["sent"] is False
+    assert result["skipped"] is True
+    assert prepare_calls == []
 
 
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
