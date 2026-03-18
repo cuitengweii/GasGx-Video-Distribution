@@ -113,6 +113,25 @@ def _make_callback_update(
     }
 
 
+def _make_message_update(
+    text: str,
+    *,
+    update_id: int = 1,
+    chat_id: str = CHAT_ID,
+    username: str = "tester",
+) -> dict[str, object]:
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": 88,
+            "date": 0,
+            "chat": {"id": chat_id, "type": "private"},
+            "from": {"id": 1001, "username": username},
+            "text": text,
+        },
+    }
+
+
 def _action_tasks(workspace: Path) -> dict[str, object]:
     payload = state.load_state(state.action_queue_path(workspace))
     tasks = payload.get("tasks", {})
@@ -553,6 +572,7 @@ def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_pa
     assert "home_action_collect_publish_latest_test.log" in text
     assert "clip.mp4" in text
     assert "🔄 刷新" in _reply_markup_texts(card["reply_markup"])
+    assert "🧹 队列清理" in _reply_markup_texts(card["reply_markup"])
 
 
 def test_build_process_status_card_hides_old_prefilter_history(tmp_path: Path) -> None:
@@ -590,6 +610,80 @@ def test_build_process_status_card_hides_old_prefilter_history(tmp_path: Path) -
     assert "\u66f4\u65e9\u7684 1 \u6761\u5386\u53f2\u8bb0\u5f55\u5df2\u4ece\u9996\u9875\u7edf\u8ba1\u4e2d\u9690\u85cf" in text
 
 
+def test_build_runtime_status_section_hides_stale_waiting_prefilter_items(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    now_text = worker_impl._now_text()
+    recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _save_prefilter_items(
+        workspace,
+        {
+            "stale-item": _video_item(
+                "stale-item",
+                status="download_running",
+                action="collect_waiting_lock",
+                created_at="2000-01-01 00:00:00",
+                updated_at="2000-01-01 00:00:00",
+            ),
+            "recent-item": _video_item(
+                "recent-item",
+                status="download_running",
+                action="collect_waiting_lock",
+                created_at=recent_text,
+                updated_at=recent_text,
+            ),
+        },
+    )
+
+    section = worker_impl._build_runtime_status_section(workspace)
+    text = "\n".join(
+        (str(item.get("label") or "") + str(item.get("value") or "")) if isinstance(item, dict) else str(item)
+        for item in section["items"]
+    )
+
+    assert "即采即发等待锁1 条｜示例 recent-item" in text
+    assert "stale-item" not in text
+
+
+def test_cleanup_stale_waiting_prefilter_items_removes_only_stale_waiting_rows(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    now_text = worker_impl._now_text()
+    recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _save_prefilter_items(
+        workspace,
+        {
+            "stale-item": _video_item(
+                "stale-item",
+                status="download_running",
+                action="collect_waiting_lock",
+                created_at="2000-01-01 00:00:00",
+                updated_at="2000-01-01 00:00:00",
+            ),
+            "recent-item": _video_item(
+                "recent-item",
+                status="download_running",
+                action="collect_waiting_lock",
+                created_at=recent_text,
+                updated_at=recent_text,
+            ),
+            "publish-item": _video_item(
+                "publish-item",
+                status="publish_running",
+                created_at="2000-01-01 00:00:00",
+                updated_at="2000-01-01 00:00:00",
+            ),
+        },
+    )
+
+    summary = worker_impl._cleanup_stale_waiting_prefilter_items(workspace)
+    items = _prefilter_items(workspace)
+
+    assert summary["removed_stale_waiting"] == 1
+    assert summary["removed_ids"] == ["stale-item"]
+    assert "stale-item" not in items
+    assert "recent-item" in items
+    assert "publish-item" in items
+
+
 def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     record = _install_transport_mocks(monkeypatch)
@@ -603,7 +697,61 @@ def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Pat
     assert len(record.cards) == 1
     card = record.cards[0]["card"]
     assert "即采即发进程查看" in str(card["text"])
-    assert "🔄 刷新" in _reply_markup_texts(card["reply_markup"])
+
+
+def test_handle_home_process_status_cleanup_queue_callback_prunes_stale_waiting_items(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    now_text = worker_impl._now_text()
+    recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _save_prefilter_items(
+        workspace,
+        {
+            "stale-item": _video_item(
+                "stale-item",
+                status="download_running",
+                action="collect_waiting_lock",
+                created_at="2000-01-01 00:00:00",
+                updated_at="2000-01-01 00:00:00",
+            ),
+            "recent-item": _video_item(
+                "recent-item",
+                status="download_running",
+                action="collect_waiting_lock",
+                created_at=recent_text,
+                updated_at=recent_text,
+            ),
+        },
+    )
+    record = _install_transport_mocks(monkeypatch)
+
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "process_status_cleanup_queue"),
+    )
+    result = commands.handle_callback_update(update=update, **_worker_kwargs(workspace))
+
+    assert result["handled"] is True
+    assert len(record.cards) == 1
+    assert "已清理 1 条僵尸等待项" in str(record.cards[0]["card"]["text"])
+    items = _prefilter_items(workspace)
+    assert "stale-item" not in items
+    assert "recent-item" in items
+
+
+def test_handle_command_update_process_status_shortcut_preserves_html_parse_mode(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    replies: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_send_reply", lambda **kwargs: replies.append(dict(kwargs)))
+
+    result = worker_impl.handle_command_update(
+        update=_make_message_update("📍 进度"),
+        **_worker_kwargs(workspace),
+    )
+
+    assert result["handled"] is True
+    assert len(replies) == 1
+    assert replies[0]["parse_mode"] == "HTML"
+    assert "<b>" in str(replies[0]["text"])
 
 
 def test_handle_home_collect_publish_video_queues_task(tmp_path: Path, monkeypatch) -> None:

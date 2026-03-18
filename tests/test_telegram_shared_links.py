@@ -118,7 +118,8 @@ def test_handle_command_update_shared_x_link_queues_immediate_collect_job(tmp_pa
     assert result["handled"] is True
     assert len(spawned) == 1
     assert len(replies) == 1
-    assert "后台即采即发任务已排队" in str(replies[0]["text"])
+    assert replies[0]["parse_mode"] == "HTML"
+    assert "视频即采即发" in str(replies[0]["text"])
     item_id = str(spawned[0]["item_id"])
     item = _prefilter_items(workspace)[item_id]
     assert isinstance(item, dict)
@@ -150,10 +151,42 @@ def test_handle_command_update_shared_x_user_status_link_queues_immediate_collec
     assert result["handled"] is True
     assert len(spawned) == 1
     assert len(replies) == 1
+    assert replies[0]["parse_mode"] == "HTML"
     item_id = str(spawned[0]["item_id"])
     item = _prefilter_items(workspace)[item_id]
     assert isinstance(item, dict)
     assert item["source_url"] == "https://x.com/TeslaHype/status/2034131604747043265"
+
+
+def test_handle_command_update_shared_x_image_link_uses_image_pipeline(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    replies: list[dict[str, object]] = []
+    spawned: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_send_reply", lambda **kwargs: replies.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_probe_shared_link_media_kind", lambda *_args, **_kwargs: "image")
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_immediate_collect_item_job",
+        lambda **kwargs: spawned.append(dict(kwargs))
+        or {"ok": True, "pid": 534, "log_path": str(workspace / "runtime" / "logs" / "shared-link-image.log")},
+    )
+
+    result = worker_impl.handle_command_update(
+        update=_make_message_update("https://x.com/tester/status/2033331774894358749"),
+        **_worker_kwargs(workspace),
+    )
+
+    assert result["handled"] is True
+    assert len(spawned) == 1
+    assert len(replies) == 1
+    assert replies[0]["parse_mode"] == "HTML"
+    assert "图片即采即发" in str(replies[0]["text"])
+    item_id = str(spawned[0]["item_id"])
+    item = _prefilter_items(workspace)[item_id]
+    assert isinstance(item, dict)
+    assert item["media_kind"] == "image"
+    assert item["target_platforms"] == "douyin,xiaohongshu,kuaishou"
 
 
 def test_handle_command_update_shared_x_link_deduplicates_running_item(tmp_path: Path, monkeypatch) -> None:
@@ -194,7 +227,7 @@ def test_handle_command_update_shared_x_link_deduplicates_running_item(tmp_path:
     assert result["handled"] is True
     assert spawned == []
     assert len(replies) == 1
-    assert "同一条链接已有即采即发任务在运行" in str(replies[0]["text"])
+    assert "分享链接已在处理中" in str(replies[0]["text"])
     item = _prefilter_items(workspace)[item_id]
     assert isinstance(item, dict)
     assert item["status"] == "download_running"

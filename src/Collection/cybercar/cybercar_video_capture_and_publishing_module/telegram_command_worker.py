@@ -551,6 +551,42 @@ def _build_shared_link_status_card(
     )
 
 
+def _probe_shared_link_media_kind(source_url: str) -> str:
+    normalized_url = str(source_url or "").strip()
+    if not normalized_url:
+        return "video"
+    match = re.search(r"/status(?:es)?/(\d+)(?:/|$)", normalized_url, flags=re.IGNORECASE)
+    if not match:
+        return "video"
+    status_id = str(match.group(1) or "").strip()
+    if not status_id:
+        return "video"
+    proxy, use_system_proxy = _resolve_worker_network_mode()
+    try:
+        payload = core._fetch_x_syndication_payload(
+            status_id,
+            proxy=(proxy or None),
+            use_system_proxy=use_system_proxy,
+        )
+    except Exception:
+        payload = None
+    if not isinstance(payload, dict) or not payload:
+        return "video"
+    try:
+        video_variants = core._extract_x_video_variants_from_payload(payload)
+    except Exception:
+        video_variants = []
+    if isinstance(video_variants, list) and video_variants:
+        return "video"
+    try:
+        photo_urls = core._extract_x_photo_urls_from_payload(payload)
+    except Exception:
+        photo_urls = []
+    if isinstance(photo_urls, list) and photo_urls:
+        return "image"
+    return "video"
+
+
 def _handle_shared_immediate_link_message(
     *,
     text: str,
@@ -578,7 +614,7 @@ def _handle_shared_immediate_link_message(
 
     profile = _normalize_profile_name(default_profile)
     actor = _shared_link_actor(username)
-    media_kind = "video"
+    media_kind = _probe_shared_link_media_kind(source_url)
     target_platforms = ",".join(_collect_publish_target_platforms(media_kind))
     candidate = {
         "url": source_url,
@@ -671,12 +707,17 @@ def _handle_shared_immediate_link_message(
         )
 
     _append_log(log_file, f"[Worker] shared link queued source={source_url} item={item_id}")
-    start_note = "测试模式已放宽前置过滤，后台仍会继续真实采集和平台排队。" if immediate_test_mode else "已按视频即采即发链路排队，后台会先采集素材，再继续进入平台发布。"
+    media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
+    start_note = (
+        "测试模式已放宽前置过滤，后台仍会继续真实采集和平台排队。"
+        if immediate_test_mode
+        else f"已按{media_label}即采即发链路排队，后台会先采集素材，再继续进入平台发布。"
+    )
     return _normalize_reply_payload(
         _build_shared_link_status_card(
             item=updated_item,
             title="分享链接已接收",
-            subtitle="后台即采即发任务已排队",
+            subtitle=f"后台{media_label}即采即发任务已排队",
             status="running",
             result_items=[
                 start_note,
@@ -834,10 +875,13 @@ def _send_reply(
     text: str,
     timeout_seconds: int,
     reply_markup: Optional[Dict[str, Any]] = None,
+    parse_mode: str = "",
 ) -> None:
     chunks = _split_chunks(text, MAX_REPLY_CHARS) or ["(empty)"]
     for idx, chunk in enumerate(chunks):
         params: Dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+        if str(parse_mode or "").strip():
+            params["parse_mode"] = str(parse_mode or "").strip()
         if idx == 0 and isinstance(reply_markup, dict):
             params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
         _telegram_api(
@@ -2288,9 +2332,9 @@ def _summarize_waiting_prefilter_items(workspace: Path, *, limit: int = 3) -> Di
     for item_id, row in items.items():
         if not isinstance(row, dict):
             continue
-        status = str(row.get("status") or "").strip().lower()
-        action = str(row.get("action") or "").strip().lower()
-        if action != "collect_waiting_lock" and status != "download_running":
+        if not _is_prefilter_waiting_for_runtime_lock(row):
+            continue
+        if _is_stale_waiting_prefilter_item(row):
             continue
         matched.append(str(item_id or "").strip())
     return {"count": len(matched), "ids": matched[: max(1, int(limit))]}
@@ -2520,6 +2564,24 @@ def _is_prefilter_live_for_process_status(row: Dict[str, Any]) -> bool:
         except Exception:
             return False
     return True
+
+
+def _is_prefilter_waiting_for_runtime_lock(row: Dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    status = str(row.get("status") or "").strip().lower()
+    action = str(row.get("action") or "").strip().lower()
+    return action == "collect_waiting_lock" or status == "download_running"
+
+
+def _is_stale_waiting_prefilter_item(row: Dict[str, Any]) -> bool:
+    if not _is_prefilter_waiting_for_runtime_lock(row):
+        return False
+    ts = _prefilter_item_timestamp(row)
+    if ts is None:
+        return True
+    cutoff = datetime.now() - timedelta(seconds=max(300, int(DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS)))
+    return ts < cutoff
 
 
 def _build_process_worker_section(workspace: Path) -> dict[str, Any]:
@@ -2811,11 +2873,14 @@ def _build_process_log_section(
     }
 
 
-def _build_process_status_card(*, default_profile: str, workspace: Path) -> Dict[str, Any]:
+def _build_process_status_card(*, default_profile: str, workspace: Path, status_note: str = "") -> Dict[str, Any]:
     profile = _normalize_profile_name(default_profile)
+    subtitle = f"当前配置：{profile}｜随时查看整个流程是否在推进"
+    if status_note:
+        subtitle = f"{subtitle}｜{status_note}"
     return _build_submenu_card(
         title="即采即发进程查看",
-        subtitle=f"当前配置：{profile}｜随时查看整个流程是否在推进",
+        subtitle=subtitle,
         sections=[
             _build_process_worker_section(workspace),
             _build_runtime_status_section(workspace),
@@ -2830,9 +2895,14 @@ def _build_process_status_card(*, default_profile: str, workspace: Path) -> Dict
                 "row": 0,
             },
             {
+                "text": "🧹 队列清理",
+                "callback_data": build_home_callback_data("cybercar", "process_status_cleanup_queue"),
+                "row": 0,
+            },
+            {
                 "text": "🏠 首页",
                 "callback_data": build_home_callback_data("cybercar", "home"),
-                "row": 0,
+                "row": 1,
             },
         ],
     )
@@ -3712,6 +3782,44 @@ def _handle_home_callback(
         )
         return {"handled": True, "update_id": update_id}
 
+    if action == "process_status_cleanup_queue":
+        cleanup_summary = _cleanup_stale_waiting_prefilter_items(
+            workspace,
+            log_file=workspace / "runtime" / "logs" / "telegram_command_worker.log",
+        )
+        removed_stale_waiting = int(cleanup_summary.get("removed_stale_waiting") or 0)
+        if removed_stale_waiting > 0:
+            answer_interaction_toast(
+                bot_token=bot_token,
+                query_id=query_id,
+                action=action,
+                status="success",
+                timeout_seconds=timeout_seconds,
+            )
+            status_note = f"已清理 {removed_stale_waiting} 条僵尸等待项"
+        else:
+            answer_interaction_toast(
+                bot_token=bot_token,
+                query_id=query_id,
+                action=action,
+                status="success",
+                timeout_seconds=timeout_seconds,
+            )
+            status_note = "没有发现可清理的僵尸等待项"
+        _send_interaction_result_async(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            card=_build_process_status_card(
+                default_profile=resolved_default_profile,
+                workspace=workspace,
+                status_note=status_note,
+            ),
+            timeout_seconds=timeout_seconds,
+            message_id=message_id,
+            inline_message_id=inline_message_id,
+        )
+        return {"handled": True, "update_id": update_id}
+
     if action == "collect_publish_latest_menu":
         media_kind = _parse_media_kind_value(value)
         if value:
@@ -4172,6 +4280,7 @@ def _present_callback_view(
             text=str(normalized.get("text") or ""),
             timeout_seconds=max(20, int(timeout_seconds)),
             reply_markup=reply_markup,
+            parse_mode=str(normalized.get("parse_mode") or ""),
         )
 
 
@@ -5569,6 +5678,44 @@ def _cleanup_prefilter_queue(workspace: Path, *, log_file: Optional[Path] = None
             ),
         )
     return {"removed_terminal": removed_terminal, "removed_polluted": removed_polluted}
+
+
+def _prune_stale_waiting_prefilter_items(queue: Dict[str, Any]) -> Dict[str, Any]:
+    items = queue.get("items", {})
+    if not isinstance(items, dict) or not items:
+        return {"removed_stale_waiting": 0, "removed_ids": []}
+    removed_ids: list[str] = []
+    for item_id, row in list(items.items()):
+        if not isinstance(row, dict):
+            continue
+        if not _is_stale_waiting_prefilter_item(row):
+            continue
+        del items[item_id]
+        removed_ids.append(str(item_id or "").strip())
+    return {
+        "removed_stale_waiting": len(removed_ids),
+        "removed_ids": removed_ids[: max(1, DEFAULT_PROCESS_STATUS_PREFILTER_LIMIT)],
+    }
+
+
+def _cleanup_stale_waiting_prefilter_items(workspace: Path, *, log_file: Optional[Path] = None) -> Dict[str, Any]:
+    summary = _with_prefilter_queue_lock(workspace, _prune_stale_waiting_prefilter_items)
+    if not isinstance(summary, dict):
+        return {"removed_stale_waiting": 0, "removed_ids": []}
+    removed_stale_waiting = int(summary.get("removed_stale_waiting") or 0)
+    removed_ids = [
+        str(token or "").strip()
+        for token in list(summary.get("removed_ids") or [])
+        if str(token or "").strip()
+    ]
+    if removed_stale_waiting > 0 and isinstance(log_file, Path):
+        preview = ", ".join(removed_ids)
+        suffix = f" ids={preview}" if preview else ""
+        _append_log(
+            log_file,
+            f"[Worker] stale waiting prefilter cleanup: removed_stale_waiting={removed_stale_waiting}{suffix}",
+        )
+    return {"removed_stale_waiting": removed_stale_waiting, "removed_ids": removed_ids}
 
 
 def _run_periodic_queue_maintenance(
@@ -12130,6 +12277,7 @@ def handle_command_update(
             text=str(reply_payload.get("text") or ""),
             timeout_seconds=int(_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1)),
             reply_markup=reply_payload.get("reply_markup") if isinstance(reply_payload.get("reply_markup"), dict) else None,
+            parse_mode=str(reply_payload.get("parse_mode") or ""),
         )
         _append_log(log_file, f"[Worker] => update_id={update_id} shared-link replied.")
         new_last_processed = max(int(last_processed), update_id)
@@ -12183,6 +12331,7 @@ def handle_command_update(
         text=str(reply_payload.get("text") or ""),
         timeout_seconds=int(_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1)),
         reply_markup=reply_payload.get("reply_markup") if isinstance(reply_payload.get("reply_markup"), dict) else None,
+        parse_mode=str(reply_payload.get("parse_mode") or ""),
     )
     _append_log(log_file, f"[Worker] => update_id={update_id} replied.")
     new_last_processed = max(int(last_processed), update_id)
