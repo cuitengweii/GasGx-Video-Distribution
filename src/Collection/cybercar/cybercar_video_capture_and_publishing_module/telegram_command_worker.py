@@ -413,6 +413,28 @@ def _is_telegram_transport_error_text(value: str) -> bool:
     return any(marker in text for marker in _TELEGRAM_TRANSPORT_ERROR_MARKERS)
 
 
+def _post_telegram_multipart_with_retries(
+    *,
+    bot_token: str,
+    method: str,
+    data: Dict[str, Any],
+    files: Dict[str, Any],
+    timeout_seconds: int,
+    api_base: str = "",
+    max_retries: int = 2,
+) -> Dict[str, Any]:
+    return _shared_call_telegram_api(
+        bot_token=bot_token,
+        method=method,
+        params=data,
+        files=files,
+        timeout_seconds=max(8, int(timeout_seconds or 20)),
+        api_base=str(api_base or "").strip(),
+        use_post=True,
+        max_retries=max(0, int(max_retries or 0)),
+    )
+
+
 def _is_telegram_poll_network_error(exc: Exception) -> bool:
     return _is_telegram_transport_error_text(str(exc or ""))
 
@@ -3298,6 +3320,19 @@ def _home_action_feedback_title(action: str, status: str, value: str = "") -> st
     return _prefix_menu_title(base_title, _menu_breadcrumb_for_action(action, value))
 
 
+def _home_action_result_title(action: str, status: str, value: str = "", detail: str = "") -> str:
+    action_token = str(action or "").strip().lower()
+    status_token = str(status or "").strip().lower()
+    detail_text = str(detail or "").strip()
+    if action_token == "login_qr" and status_token == "done":
+        if "无需扫码" in detail_text or "当前已登录" in detail_text:
+            base_title = "平台当前已登录"
+        else:
+            base_title = "平台登录二维码已发送"
+        return _prefix_menu_title(base_title, _menu_breadcrumb_for_action(action_token, value))
+    return _home_action_feedback_title(action_token, status_token, value)
+
+
 def _parse_schedule_callback_value(raw: str) -> tuple[str, int, str]:
     token = str(raw or "").strip().lower()
     if not token:
@@ -3759,7 +3794,12 @@ def _handle_home_callback(
         )
         detail = str(raw_result.get("text") or "") if isinstance(raw_result, dict) and "text" in raw_result else str(raw_result or "")
     status = _guess_feedback_status(detail)
-    result_title = _home_action_feedback_title(action, "done" if status == "success" else "failed", value)
+    result_title = _home_action_result_title(
+        action,
+        "done" if status == "success" else "failed",
+        value,
+        detail,
+    )
     if action in {"collect_publish_latest", "comment_reply_run"}:
         result_title = f"{title}已启动"
     send_interaction_result(
@@ -6193,7 +6233,6 @@ def _refresh_platform_login_qr_message(
             telegram_timeout_seconds=timeout_seconds,
         )
         api_base = str(getattr(notify_settings, "telegram_api_base", "") or "").strip()
-        endpoint = core._telegram_api_endpoint(api_base, bot_token, "editMessageMedia")
         filename = str(prepared.get("filename") or "platform_login_qr.png")
         mime = str(prepared.get("mime") or "image/png")
         caption = str(prepared.get("caption") or "")
@@ -6204,8 +6243,9 @@ def _refresh_platform_login_qr_message(
             "caption": caption,
             "parse_mode": "HTML",
         }
-        resp = core.requests.post(
-            endpoint,
+        payload = _post_telegram_multipart_with_retries(
+            bot_token=bot_token,
+            method="editMessageMedia",
             data={
                 "chat_id": str(chat_id or "").strip(),
                 "message_id": int(message_id),
@@ -6219,16 +6259,9 @@ def _refresh_platform_login_qr_message(
                     mime,
                 )
             },
-            timeout=max(8, int(timeout_seconds or 20)),
+            timeout_seconds=max(8, int(timeout_seconds or 20)),
+            api_base=api_base,
         )
-        try:
-            payload = resp.json() if (resp.text or "").strip() else {}
-        except Exception as exc:
-            raise RuntimeError(f"telegram editMessageMedia invalid json response: http_status={resp.status_code}") from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("telegram editMessageMedia invalid response")
-        if not bool(payload.get("ok")):
-            raise RuntimeError(f"telegram editMessageMedia failed: {payload.get('description') or 'unknown'}")
         core._remember_wechat_qr_notice(
             str(prepared.get("cache_key") or ""),
             str(prepared.get("fingerprint") or ""),
@@ -6239,7 +6272,12 @@ def _refresh_platform_login_qr_message(
         return result
     except Exception as exc:
         _append_log(log_file, f"[Worker] platform_login_qr in-place refresh failed: {exc}")
-        return {"ok": False, "needs_login": True, "error": str(exc)}
+        return {
+            "ok": False,
+            "needs_login": True,
+            "transport_error": _is_telegram_transport_error_text(str(exc)),
+            "error": str(exc),
+        }
 
 
 def _resolve_platform_login_runtime_context(
@@ -6789,7 +6827,8 @@ def _probe_platform_login_after_publish_failure(
         chat_id=telegram_chat_id,
         timeout_seconds=max(10, int(timeout_seconds or 20)),
         log_file=log_file,
-        refresh_page=False,
+        refresh_page=True,
+        prefer_login_entry=True,
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
         return "failed", str(error_text or "").strip()
@@ -10663,7 +10702,13 @@ def _run_home_action_job(
                 result_status = "done"
                 exit_code = 0
             else:
-                detail = str(result.get("error") or "获取登录二维码失败，请稍后重试。")
+                if bool(result.get("transport_error")):
+                    detail = (
+                        f"{PUBLISH_PLATFORM_DISPLAY.get(platform_value, platform_value)}登录二维码已抓取，"
+                        "但 Telegram 回传失败（网络抖动），请稍后重试。"
+                    )
+                else:
+                    detail = str(result.get("error") or "获取登录二维码失败，请稍后重试。")
                 result_status = "failed"
                 exit_code = 2
         elif action_token == "collect_publish_latest":
@@ -10726,7 +10771,12 @@ def _run_home_action_job(
         try:
             card = _home_feedback_response(
                 status="success" if result_status == "done" else "failed",
-                title=_home_action_feedback_title(action_token, "done" if result_status == "done" else "failed", value),
+                title=_home_action_result_title(
+                    action_token,
+                    "done" if result_status == "done" else "failed",
+                    value,
+                    _describe_home_action_task(updated_task),
+                ),
                 subtitle=f"当前配置：{resolved_profile}",
                 detail=_describe_home_action_task(updated_task),
                 menu_label=_menu_breadcrumb_for_action(action_token, value),
@@ -10777,7 +10827,12 @@ def _run_home_action_job(
         except Exception:
             _enqueue_pending_background_feedback(
                 workspace=workspace,
-                title=_home_action_feedback_title(action_token, "done" if result_status == "done" else "failed", value),
+                title=_home_action_result_title(
+                    action_token,
+                    "done" if result_status == "done" else "failed",
+                    value,
+                    _describe_home_action_task(updated_task),
+                ),
                 subtitle=f"当前配置：{resolved_profile}",
                 sections=[{"title": "执行结果", "emoji": "📌", "items": [_describe_home_action_task(updated_task)]}],
                 status="success" if result_status == "done" else "failed",

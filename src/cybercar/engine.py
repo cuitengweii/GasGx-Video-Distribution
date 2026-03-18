@@ -1500,9 +1500,29 @@ def _resolve_runtime_telegram_notify_settings(
     )
 
 
-def _telegram_api_endpoint(api_base: str, bot_token: str, method: str) -> str:
-    base = str(api_base or "https://api.telegram.org").strip() or "https://api.telegram.org"
-    return f"{base.rstrip('/')}/bot{str(bot_token or '').strip()}/{str(method or '').strip()}"
+_TELEGRAM_TRANSPORT_ERROR_MARKERS = (
+    "httpsconnectionpool",
+    "connection aborted",
+    "connection reset",
+    "connectionreseterror",
+    "connecttimeout",
+    "connect timeout",
+    "read timeout",
+    "readtimeout",
+    "timed out",
+    "max retries exceeded",
+    "bad gateway",
+    "gateway timeout",
+    "temporarily unavailable",
+    "remote end closed connection",
+)
+
+
+def _is_telegram_transport_error_text(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return any(marker in text for marker in _TELEGRAM_TRANSPORT_ERROR_MARKERS)
 
 
 def _send_telegram_photo(
@@ -1516,8 +1536,8 @@ def _send_telegram_photo(
     api_base: str,
     reply_markup: Optional[dict[str, Any]] = None,
     parse_mode: str = "",
+    max_retries: int = 2,
 ) -> dict[str, Any]:
-    endpoint = _telegram_api_endpoint(api_base, bot_token, "sendPhoto")
     data: dict[str, Any] = {
         "chat_id": str(chat_id or "").strip(),
         "caption": str(caption or "").strip(),
@@ -1526,21 +1546,17 @@ def _send_telegram_photo(
         data["parse_mode"] = str(parse_mode or "").strip()
     if isinstance(reply_markup, dict):
         data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
-    resp = requests.post(
-        endpoint,
-        data=data,
-        files={"photo": (str(filename or "wechat_login_qr.png"), photo_bytes, "image/png")},
-        timeout=max(5, int(timeout_seconds or 20)),
+    mime = "image/png" if str(filename or "").strip().lower().endswith(".png") else "image/jpeg"
+    return shared_call_telegram_api(
+        bot_token=bot_token,
+        method="sendPhoto",
+        params=data,
+        files={"photo": (str(filename or "wechat_login_qr.png"), photo_bytes, mime)},
+        timeout_seconds=max(5, int(timeout_seconds or 20)),
+        api_base=api_base,
+        use_post=True,
+        max_retries=max(0, int(max_retries or 0)),
     )
-    try:
-        payload = resp.json() if (resp.text or "").strip() else {}
-    except Exception as exc:
-        raise RuntimeError(f"telegram sendPhoto invalid json response: http_status={resp.status_code}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("telegram sendPhoto invalid response")
-    if not bool(payload.get("ok")):
-        raise RuntimeError(f"telegram sendPhoto failed: {payload.get('description') or 'unknown'}")
-    return payload
 
 
 def _prepare_platform_login_qr_notice(
@@ -3398,17 +3414,28 @@ def send_platform_login_qr_notification(
     ):
         return {"ok": True, "needs_login": True, "sent": False, "skipped": True, "fingerprint": fingerprint}
 
-    response = _send_telegram_photo(
-        bot_token=settings.telegram_bot_token,
-        chat_id=settings.telegram_chat_id,
-        photo_bytes=photo_bytes,
-        filename=str(prepared.get("filename") or (f"{platform}_login_qr.png" if mime.endswith("png") else f"{platform}_login_qr.jpg")),
-        caption=str(prepared.get("caption") or ""),
-        timeout_seconds=settings.telegram_timeout_seconds,
-        api_base=settings.telegram_api_base,
-        reply_markup=prepared.get("reply_markup") if isinstance(prepared.get("reply_markup"), dict) else None,
-        parse_mode="HTML",
-    )
+    try:
+        response = _send_telegram_photo(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+            photo_bytes=photo_bytes,
+            filename=str(prepared.get("filename") or (f"{platform}_login_qr.png" if mime.endswith("png") else f"{platform}_login_qr.jpg")),
+            caption=str(prepared.get("caption") or ""),
+            timeout_seconds=settings.telegram_timeout_seconds,
+            api_base=settings.telegram_api_base,
+            reply_markup=prepared.get("reply_markup") if isinstance(prepared.get("reply_markup"), dict) else None,
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "needs_login": True,
+            "sent": False,
+            "fingerprint": fingerprint,
+            "transport_error": _is_telegram_transport_error_text(str(exc)),
+            "qr_prepared": True,
+            "error": str(exc),
+        }
     _remember_wechat_qr_notice(cache_key, fingerprint)
     return {
         "ok": True,

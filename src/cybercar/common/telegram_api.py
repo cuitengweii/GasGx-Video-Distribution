@@ -160,6 +160,7 @@ def call_telegram_api(
     bot_token: str,
     method: str,
     params: Mapping[str, Any] | None = None,
+    files: Mapping[str, Any] | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     api_base: str = DEFAULT_TELEGRAM_API_BASE,
     use_post: bool = False,
@@ -188,7 +189,10 @@ def call_telegram_api(
         session = _telegram_session(use_post=use_post)
         try:
             if use_post:
-                resp = session.post(endpoint, data=payload, timeout=timeout)
+                if files:
+                    resp = session.post(endpoint, data=payload, files=dict(files), timeout=timeout)
+                else:
+                    resp = session.post(endpoint, data=payload, timeout=timeout)
             else:
                 resp = session.get(endpoint, params=payload, timeout=timeout)
             break

@@ -224,6 +224,66 @@ def test_refresh_platform_login_qr_message_accepts_telegram_bot_identifier(tmp_p
     assert result["error"] == "invalid qr message id"
 
 
+def test_refresh_platform_login_qr_message_retries_transport_reset(tmp_path: Path, monkeypatch) -> None:
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    remembered: list[tuple[str, str]] = []
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_core,
+        "_prepare_platform_login_qr_notice",
+        lambda **_kwargs: {
+            "ok": True,
+            "needs_login": True,
+            "platform": "wechat",
+            "filename": "wechat_login_qr.png",
+            "mime": "image/png",
+            "caption": "scan me",
+            "reply_markup": {"inline_keyboard": []},
+            "photo_bytes": b"png-bytes",
+            "cache_key": "wechat|9334|D:/profiles/wechat",
+            "fingerprint": "fp-1",
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_resolve_runtime_telegram_notify_settings",
+        lambda **_kwargs: SimpleNamespace(telegram_api_base="https://api.telegram.org"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_remember_wechat_qr_notice",
+        lambda cache_key, fingerprint: remembered.append((str(cache_key), str(fingerprint))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_shared_call_telegram_api",
+        lambda **kwargs: calls.append(dict(kwargs)) or {"ok": True, "result": {"message_id": 88}},
+    )
+
+    result = worker_impl._refresh_platform_login_qr_message(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        message_id=88,
+        timeout_seconds=30,
+        log_file=tmp_path / "telegram_worker.log",
+    )
+
+    assert result["ok"] is True
+    assert result["sent"] is True
+    assert result["edited"] is True
+    assert len(calls) == 1
+    assert calls[0]["method"] == "editMessageMedia"
+    assert calls[0]["use_post"] is True
+    assert calls[0]["max_retries"] == 2
+    assert remembered == [("wechat|9334|D:/profiles/wechat", "fp-1")]
+
+
 def test_build_immediate_cycle_context_passes_platform_collection_names(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     target = workspace / "2_Processed_Images" / "sample.jpg"
@@ -2740,7 +2800,8 @@ def test_probe_platform_login_after_publish_failure_requests_qr_only_after_confi
     assert len(text_notices) == 1
     assert "视频号登录二维码已发送到 Telegram" in message
     assert len(qr_requests) == 1
-    assert qr_requests[0]["refresh_page"] is False
+    assert qr_requests[0]["refresh_page"] is True
+    assert qr_requests[0]["prefer_login_entry"] is True
 
 
 def test_probe_platform_login_after_publish_failure_uses_explicit_login_error_when_status_probe_fails(tmp_path: Path, monkeypatch) -> None:
@@ -3753,6 +3814,46 @@ def test_build_process_log_section_folds_repeated_init_lines(tmp_path: Path) -> 
 
     assert any("已折叠 1 条重复初始化日志" in value for value in values)
     assert any("backend result sent" in value for value in values)
+
+
+def test_run_home_action_job_reports_login_qr_as_qr_sent_before_scan(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    sent_cards: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_request_platform_login_qr",
+        lambda **kwargs: {"ok": True, "needs_login": True, "sent": True},
+    )
+    monkeypatch.setattr(worker_impl, "_send_card_message", lambda **kwargs: sent_cards.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_try_delete_telegram_message", lambda **kwargs: False)
+
+    claim = worker_impl._claim_home_action_task(
+        workspace=workspace,
+        chat_id=CHAT_ID,
+        action="login_qr",
+        value="kuaishou",
+        profile=DEFAULT_PROFILE,
+        username="tester",
+    )
+
+    exit_code = worker_impl._run_home_action_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="cybercar",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        action="login_qr",
+        value="kuaishou",
+        task_key=str(claim["task_key"]),
+    )
+
+    assert exit_code == 0
+    assert len(sent_cards) == 1
+    assert "二维码已发送" in str(sent_cards[0]["card"]["text"])
+    assert "平台登录已完成" not in str(sent_cards[0]["card"]["text"])
 
 
 def test_build_process_log_section_sanitizes_garbled_lines(tmp_path: Path) -> None:

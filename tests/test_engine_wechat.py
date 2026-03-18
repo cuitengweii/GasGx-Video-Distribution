@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from cybercar import engine
 
 
@@ -189,6 +188,87 @@ def test_prepare_platform_login_qr_notice_keeps_current_login_gate_page(monkeypa
     assert result["ok"] is True
     assert result["needs_login"] is True
     assert stabilize_calls == []
+
+
+def test_send_telegram_photo_retries_after_connection_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_call(**kwargs: Any) -> dict[str, Any]:
+        calls.append(dict(kwargs))
+        return {"ok": True, "result": {"message_id": 321}}
+
+    monkeypatch.setattr(engine, "shared_call_telegram_api", fake_call)
+
+    payload = engine._send_telegram_photo(
+        bot_token="token",
+        chat_id="chat",
+        photo_bytes=b"png-bytes",
+        filename="wechat_login_qr.png",
+        caption="scan me",
+        timeout_seconds=15,
+        api_base="https://api.telegram.org",
+        parse_mode="HTML",
+    )
+
+    assert payload["ok"] is True
+    assert len(calls) == 1
+    assert calls[0]["method"] == "sendPhoto"
+    assert calls[0]["use_post"] is True
+    assert calls[0]["max_retries"] == 2
+    assert "files" in calls[0]
+
+
+def test_send_platform_login_qr_notification_returns_structured_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        engine,
+        "_prepare_platform_login_qr_notice",
+        lambda **_kwargs: {
+            "ok": True,
+            "needs_login": True,
+            "platform": "wechat",
+            "profile_dir": "D:/profiles/wechat",
+            "runtime_debug_port": 9334,
+            "open_target_url": "https://channels.weixin.qq.com/login.html",
+            "mime": "image/png",
+            "photo_bytes": b"png-bytes",
+            "filename": "wechat_login_qr.png",
+            "caption": "scan me",
+            "reply_markup": {"inline_keyboard": []},
+            "fingerprint": "fp-1",
+            "cache_key": "wechat|9334|D:/profiles/wechat",
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_runtime_telegram_notify_settings",
+        lambda **_kwargs: engine.NotifySettings(
+            enabled=True,
+            provider="telegram_bot",
+            env_prefix="CYBERCAR_NOTIFY_",
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            telegram_timeout_seconds=20,
+            telegram_api_base="https://api.telegram.org",
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_send_telegram_photo",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("ConnectionResetError(10054)")),
+    )
+
+    result = engine.send_platform_login_qr_notification(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/login.html",
+        telegram_bot_token="token",
+        telegram_chat_id="chat",
+    )
+
+    assert result["ok"] is False
+    assert result["sent"] is False
+    assert result["needs_login"] is True
+    assert result["transport_error"] is True
+    assert result["qr_prepared"] is True
 
 
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
