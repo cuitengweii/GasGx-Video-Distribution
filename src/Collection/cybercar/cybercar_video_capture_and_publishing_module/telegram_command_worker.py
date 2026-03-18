@@ -544,6 +544,8 @@ def _build_shared_link_status_card(
         subtitle=f"{_menu_breadcrumb_for_item(item)}｜{subtitle}",
         sections=sections,
         source_url=source_url,
+        include_source_button=False,
+        action_rows=[[{"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status")}]],
         menu_label="",
         task_identifier="",
     )
@@ -1170,6 +1172,7 @@ def _build_prefilter_action_card(
     subtitle: str,
     sections: list[dict[str, Any]],
     source_url: str = "",
+    include_source_button: bool = True,
     action_rows: Optional[list[list[Dict[str, str]]]] = None,
     menu_label: str = "",
     task_identifier: str = "",
@@ -1190,7 +1193,7 @@ def _build_prefilter_action_card(
     )
     rows: list[list[Dict[str, str]]] = []
     link = str(source_url or "").strip()
-    if link:
+    if include_source_button and link:
         rows.append([{"text": "🔗 原帖", "url": link}])
     for row in action_rows or []:
         if row:
@@ -5725,6 +5728,40 @@ def _platform_result_is_active(status: str) -> bool:
     return str(status or "").strip().lower() in {"queued", "running"}
 
 
+def _recover_platform_result_from_log(workspace: Path, platform: str, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    log_path = _resolve_process_log_path(workspace, str(result.get("log_path") or "").strip())
+    if log_path is None or not log_path.exists():
+        return None
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="ignore")[-16000:]
+    except Exception:
+        return None
+    platform_token = str(platform or "").strip().lower()
+    success_line = ""
+    for line in reversed(tail.splitlines()):
+        text = str(line or "").strip()
+        if not text:
+            continue
+        if f"[Success:{platform_token}]" in text:
+            success_line = text
+            break
+    if not success_line:
+        return None
+    published_at = ""
+    matched = re.search(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", success_line)
+    if matched:
+        published_at = str(matched.group(1) or "").strip()[-8:]
+    updates = dict(result)
+    updates["status"] = "success"
+    updates["updated_at"] = _now_text()
+    updates["published_at"] = published_at or str(updates.get("published_at") or "").strip() or _now_text()[-8:]
+    updates["failure_reason"] = ""
+    updates["failure_category"] = ""
+    updates["failure_suggestion"] = ""
+    updates.pop("error", None)
+    return updates
+
+
 def _recover_orphaned_immediate_candidate(
     *,
     workspace: Path,
@@ -5748,6 +5785,11 @@ def _recover_orphaned_immediate_candidate(
             continue
         pid = int(result.get("pid") or 0)
         if pid > 0 and _pid_is_running(pid):
+            continue
+        recovered = _recover_platform_result_from_log(workspace, platform, result)
+        if isinstance(recovered, dict):
+            results[platform] = recovered
+            changed = True
             continue
         updated = dict(result)
         updated["status"] = "failed"

@@ -1208,6 +1208,84 @@ def test_run_collect_publish_latest_job_recovers_orphaned_publish_running_and_re
     assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
 
 
+def test_run_collect_publish_latest_job_recovers_orphaned_publish_running_from_success_log(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    candidate = {
+        "url": "https://x.test/post/video-orphaned-success",
+        "published_at": "2026-03-15 10:03:00",
+        "display_time": "7m",
+        "tweet_text": "video orphaned success",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"], "video")
+    log_path = workspace / "runtime" / "logs" / "immediate_publish_wechat.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[2026-03-18 14:18:33] [Uploader:wechat] Publish feedback inferred by post-submit state.",
+                "[2026-03-18 14:18:33] [Success:wechat] 发布已确认。",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                published_at=candidate["published_at"],
+                display_time=candidate["display_time"],
+                tweet_text=candidate["tweet_text"],
+                status="publish_running",
+                action="publish",
+                message_id=914,
+                platform_results={
+                    "wechat": {
+                        "status": "queued",
+                        "pid": 654322,
+                        "log_path": str(log_path),
+                    },
+                    "douyin": {"status": "success"},
+                },
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [candidate]},
+    )
+    monkeypatch.setattr(worker_impl, "_pid_is_running", lambda pid: False if int(pid) == 654322 else True)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "publish_done"
+    platform_results = item["platform_results"]
+    assert isinstance(platform_results, dict)
+    assert platform_results["wechat"]["status"] == "success"
+    assert platform_results["wechat"]["published_at"] == "14:18:33"
+    assert "error" not in platform_results["wechat"]
+
+
 def test_run_collect_publish_latest_job_reissues_active_publish_running_card(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
@@ -4080,3 +4158,4 @@ def test_build_shared_link_status_card_compacts_body_for_operator_scan() -> None
     assert "操作记录" not in text
     assert "任务标识" not in text
     assert "菜单链路" not in text
+    assert _reply_markup_texts(card["reply_markup"]) == ["📍 进度", "🏠 首页"]

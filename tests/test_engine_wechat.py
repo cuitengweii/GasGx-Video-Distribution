@@ -238,6 +238,42 @@ def test_prepare_platform_login_qr_notice_freezes_existing_page_without_navigati
     assert page.refresh_calls == 0
 
 
+def test_prepare_platform_login_qr_notice_retries_screenshot_before_source_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    screenshot_calls: list[int] = []
+    source_calls: list[str] = []
+
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {"needs_login": True, "url": "https://channels.weixin.qq.com/login.html"},
+    )
+    monkeypatch.setattr(engine, "_extract_login_qr_source", lambda *_args, **_kwargs: "data:image/png;base64,QUJD")
+
+    def fake_capture(*_args: Any, **_kwargs: Any) -> bytes:
+        screenshot_calls.append(1)
+        return b"" if len(screenshot_calls) == 1 else b"png-bytes"
+
+    monkeypatch.setattr(engine, "_capture_login_qr_screenshot", fake_capture)
+    monkeypatch.setattr(
+        engine,
+        "_load_qr_image_source",
+        lambda source: source_calls.append(str(source)) or ("image/png", b"source-bytes"),
+    )
+
+    result = engine._prepare_platform_login_qr_notice(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        page=object(),
+        chrome_user_data_dir="D:/profiles/wechat",
+        auto_open_chrome=False,
+    )
+
+    assert result["ok"] is True
+    assert len(screenshot_calls) == 2
+    assert source_calls == []
+    assert result["photo_bytes"] == b"png-bytes"
+
+
 def test_send_telegram_photo_retries_after_connection_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 

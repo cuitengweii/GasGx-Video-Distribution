@@ -1647,12 +1647,19 @@ def _prepare_platform_login_qr_notice(
         return {"ok": False, "needs_login": True, "error": f"{platform} login qr not found"}
     mime = "image/png"
     photo_bytes = b""
-    try:
-        photo_bytes = _capture_login_qr_screenshot(active_page, platform_name=platform)
-        if photo_bytes:
-            _log(f"[Uploader:{platform}] Login QR captured via screenshot.")
-    except Exception as exc:
-        _log(f"[Uploader:{platform}] Login QR screenshot capture failed, fallback to source extraction: {exc}")
+    screenshot_error = ""
+    for attempt in range(2):
+        try:
+            photo_bytes = _capture_login_qr_screenshot(active_page, platform_name=platform)
+            if photo_bytes:
+                _log(f"[Uploader:{platform}] Login QR captured via screenshot.")
+                break
+        except Exception as exc:
+            screenshot_error = str(exc)
+        if attempt == 0:
+            _humanized_publish_settle_pause(f"{platform} login qr screenshot retry settle")
+    if (not photo_bytes) and screenshot_error:
+        _log(f"[Uploader:{platform}] Login QR screenshot capture failed, fallback to source extraction: {screenshot_error}")
     if not photo_bytes:
         mime, photo_bytes = _load_qr_image_source(qr_source)
     if not photo_bytes:
