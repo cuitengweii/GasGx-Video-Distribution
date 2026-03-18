@@ -533,15 +533,11 @@ def _extract_douyin_picker_posts(page: Any) -> list[dict[str, Any]]:
           if (/^\\d+$/.test(text)) return false;
           return text.length >= 4;
         }) || '';
-        const countNodes = Array.from(item.querySelectorAll('div, span'))
+        const metricNodes = Array.from(item.querySelectorAll('[class*="right-"] div, [class*="right-"] span'))
           .filter(visible)
-          .map((node) => {
-            const text = norm(node.innerText || node.textContent || '');
-            const rect = node.getBoundingClientRect();
-            return { text, width: rect.width, height: rect.height };
-          })
-          .filter((entry) => /^\\d+$/.test(entry.text) && entry.width <= 64 && entry.height <= 36);
-        const commentCount = countNodes.length ? toInt(countNodes[countNodes.length - 1].text) : 0;
+          .map((node) => norm(node.innerText || node.textContent || ''))
+          .filter((text) => /^\\d+$/.test(text));
+        const commentCount = metricNodes.length ? toInt(metricNodes[metricNodes.length - 1]) : 0;
         return {
           index,
           title,
@@ -1117,10 +1113,10 @@ def _extract_kuaishou_picker_posts(page: Any) -> list[dict[str, Any]]:
       return items.map((item) => {
         const title = norm(item.querySelector('.video-info__content__title') ? item.querySelector('.video-info__content__title').innerText : item.innerText);
         const published = norm(item.querySelector('.video-info__content__date') ? item.querySelector('.video-info__content__date').innerText : '');
-        const metrics = Array.from(item.querySelectorAll('.video-info__content__detail div, .video-info__content__detail span, div, span'))
-          .map((node) => norm(node.innerText || node.textContent || ''))
-          .filter((text) => /^\\d+$/.test(text));
-        const commentCount = metrics.length ? toInt(metrics[metrics.length - 1]) : 0;
+        const metricBlocks = Array.from(item.querySelectorAll('.video-info__content__detail > div')).filter(visible);
+        const commentCount = metricBlocks.length >= 2
+          ? toInt(metricBlocks[1].innerText || metricBlocks[1].textContent || '')
+          : 0;
         return {
           title,
           published_text: published,
@@ -1440,6 +1436,122 @@ def _wait_kuaishou_reply_confirm(page: Any, comment_index: int, reply_text: str,
     return _wait_until(lambda: bool(_run_js_dict(page, js, target).get("ok")), timeout_seconds=timeout_seconds, poll_seconds=0.35)
 
 
+def _submit_kuaishou_reply_v2(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const buttons = Array.from(root.querySelectorAll('.comment-content__btns__btn')).filter(visible);
+      const replyButton = buttons.find((node) => /回复/.test(norm(node.innerText || node.textContent || '')))
+        || buttons[1]
+        || buttons[0];
+      if (!replyButton) return { ok: false };
+      return { ok: click(replyButton) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        const submit = wrapper.querySelector('.comment-content__btns__btn.reply-active, .comment-content__btns__btn[class*="reply-active"]')
+          || Array.from(wrapper.querySelectorAll('button, div, span')).find((node) => /确认|发送/.test(norm(node.innerText || node.textContent || '')) && visible(node));
+        if (input && submit && visible(input) && visible(submit)) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_js = """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function setValue(input, value) {
+        const text = String(value || '');
+        if (!input) return false;
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, text);
+          else input.value = text;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        input.textContent = text;
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+        return true;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        const submit = wrapper.querySelector('.comment-content__btns__btn.reply-active, .comment-content__btns__btn[class*="reply-active"]')
+          || Array.from(wrapper.querySelectorAll('button, div, span')).find((node) => /确认|发送/.test(norm(node.innerText || node.textContent || '')) && visible(node));
+        if (!input || !submit || !visible(input) || !visible(submit)) continue;
+        setValue(input, replyText);
+        return { ok: click(submit) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
+
+
 def _scroll_kuaishou_comments(page: Any) -> None:
     _scroll_container(page, [".comment-list", "main", "body"])
 
@@ -1463,7 +1575,7 @@ PLATFORM_ADAPTERS: dict[str, CommentPlatformAdapter] = {
         open_post=_open_kuaishou_post,
         extract_comments=_extract_kuaishou_comments,
         like_comment_if_needed=_like_kuaishou_comment_if_needed,
-        submit_reply=_submit_kuaishou_reply,
+        submit_reply=_submit_kuaishou_reply_v2,
         wait_reply_confirm=_wait_kuaishou_reply_confirm,
         scroll_comments=_scroll_kuaishou_comments,
     ),
