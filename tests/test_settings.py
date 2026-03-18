@@ -7,6 +7,7 @@ def test_app_config_has_local_runtime_paths() -> None:
     cfg = load_app_config()
     assert cfg["paths"]["runtime_root"] == "runtime"
     assert cfg["network"]["proxy"] == "http://127.0.0.1:33210"
+    assert cfg["cleanup"]["targets"]["processed_videos"]["retention_days"] == 14
 
 
 def test_paths_point_inside_repo() -> None:

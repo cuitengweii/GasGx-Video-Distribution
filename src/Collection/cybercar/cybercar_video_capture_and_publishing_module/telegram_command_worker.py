@@ -122,7 +122,8 @@ DEFAULT_PENDING_BACKGROUND_FEEDBACK_FILE = Path("runtime") / "telegram_pending_b
 DEFAULT_PLATFORM_RESULT_EVENT_DIR = Path("runtime") / "prefilter_platform_result_events"
 DEFAULT_PIPELINE_PRIORITY_REQUEST_DIR = Path("runtime") / "pipeline_priority_requests"
 DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 30
-DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 14 * 86400
+DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 3 * 86400
+DEFAULT_PREFILTER_QUEUE_STATUS_WINDOW_SECONDS = 24 * 3600
 DEFAULT_PLATFORM_LOCK_TIMEOUT_SECONDS = 1800
 TELEGRAM_PREFILTER_CALLBACK_PREFIX = "ctpf"
 TELEGRAM_MENU_CALLBACK_PREFIX = "ctm"
@@ -2165,6 +2166,14 @@ def _prefilter_progress_status_label(status: str) -> str:
     return mapping.get(token, token or "未知状态")
 
 
+def _is_prefilter_recent_for_process_status(row: Dict[str, Any]) -> bool:
+    ts = _prefilter_item_timestamp(row)
+    if ts is None:
+        return False
+    cutoff = datetime.now() - timedelta(seconds=max(3600, int(DEFAULT_PREFILTER_QUEUE_STATUS_WINDOW_SECONDS)))
+    return ts >= cutoff
+
+
 def _build_process_worker_section(workspace: Path) -> dict[str, Any]:
     state = _load_state(_worker_state_path(workspace))
     if not state:
@@ -2280,8 +2289,16 @@ def _build_process_prefilter_section(
         }
 
     items_list = [dict(row) for row in raw_items.values() if isinstance(row, dict)]
+    recent_items = [row for row in items_list if _is_prefilter_recent_for_process_status(row)]
+    if not recent_items:
+        return {
+            "title": "即采即发队列",
+            "emoji": "🪄",
+            "items": ["首页仅统计最近24小时的即采即发记录；当前没有近期队列。"],
+        }
+
     status_counts: dict[str, int] = {}
-    for row in items_list:
+    for row in recent_items:
         status = str(row.get("status") or "").strip().lower() or "unknown"
         status_counts[status] = int(status_counts.get(status, 0)) + 1
 
@@ -2298,7 +2315,8 @@ def _build_process_prefilter_section(
         "send_failed",
     ]
     items: list[Any] = [
-        {"label": "候选总数", "value": str(len(items_list))},
+        {"label": "近期候选数", "value": str(len(recent_items))},
+        {"label": "统计窗口", "value": "最近24小时"},
     ]
     queue_updated_at = str(queue.get("updated_at") or "").strip()
     if queue_updated_at:
@@ -2322,7 +2340,7 @@ def _build_process_prefilter_section(
     highlighted = [
         row
         for row in sorted(
-            items_list,
+            recent_items,
             key=lambda row: _prefilter_item_timestamp(row) or datetime.min,
             reverse=True,
         )
@@ -2330,7 +2348,7 @@ def _build_process_prefilter_section(
     ]
     if not highlighted:
         highlighted = sorted(
-            items_list,
+            recent_items,
             key=lambda row: _prefilter_item_timestamp(row) or datetime.min,
             reverse=True,
         )
@@ -2350,6 +2368,9 @@ def _build_process_prefilter_section(
             limit=72,
         )
         items.append({"label": f"{media_label}｜{status_label}", "value": f"{updated_at}\n{preview}"})
+    hidden_count = max(0, len(items_list) - len(recent_items))
+    if hidden_count > 0:
+        items.append(f"更早的 {hidden_count} 条历史记录已从首页统计中隐藏。")
 
     return {
         "title": "即采即发队列",
@@ -5109,7 +5130,14 @@ def _prune_prefilter_queue(queue: Dict[str, Any]) -> Dict[str, int]:
             removed_polluted += 1
             continue
         status = str(row.get("status") or "").strip().lower()
-        if status not in {"up_confirmed", "down_confirmed", "send_failed"}:
+        if status not in {
+            "up_confirmed",
+            "down_confirmed",
+            "publish_partial",
+            "publish_done",
+            "publish_failed",
+            "send_failed",
+        }:
             continue
         ts = _prefilter_item_timestamp(row)
         if ts is not None and ts < cutoff:
@@ -5914,6 +5942,101 @@ def _request_platform_login_qr(
         }
 
 
+def _send_platform_login_text_notice(
+    *,
+    platform_name: str = "wechat",
+    bot_token: str,
+    chat_id: str,
+    timeout_seconds: int,
+    log_file: Path,
+    login_reason: str = "",
+    qr_error: str = "",
+    wait_token: str = "",
+    telegram_bot_identifier: str = "",
+) -> Dict[str, Any]:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    runtime_ctx = _resolve_platform_login_runtime_context(core, platform)
+    helper = getattr(core, "_send_platform_login_text_notification", None)
+    helper_error = ""
+    if callable(helper):
+        try:
+            result = helper(
+                platform_name=platform,
+                open_url=str(runtime_ctx.get("open_url") or "").strip(),
+                chrome_user_data_dir=str(runtime_ctx.get("chrome_user_data_dir") or "").strip(),
+                login_reason=str(login_reason or "").strip(),
+                qr_error=str(qr_error or "").strip(),
+                wait_token=str(wait_token or "").strip(),
+                telegram_bot_token=str(bot_token or "").strip(),
+                telegram_chat_id=str(chat_id or "").strip(),
+                telegram_bot_identifier=str(telegram_bot_identifier or "").strip(),
+                telegram_timeout_seconds=max(10, int(timeout_seconds or 20)),
+            )
+            if isinstance(result, dict) and bool(result.get("sent")):
+                _append_log(log_file, f"[Worker] platform_login_text_notice platform={platform} sent=True helper=core")
+                return result
+            if isinstance(result, dict):
+                helper_error = str(result.get("error") or "").strip()
+        except Exception as exc:
+            helper_error = str(exc)
+            _append_log(log_file, f"[Worker] platform_login_text_notice core helper failed: {exc}")
+
+    display_name = str(PUBLISH_PLATFORM_DISPLAY.get(platform, platform) or platform)
+    sections: list[dict[str, Any]] = [
+        {
+            "title": "登录状态",
+            "emoji": "🔐",
+            "items": [f"{display_name}当前未登录，需要重新登录。"],
+        },
+        {
+            "title": "处理建议",
+            "emoji": "🧭",
+            "items": [
+                {"label": "平台", "value": display_name},
+                {"label": "登录页", "value": str(runtime_ctx.get('open_url') or '').strip() or "-"},
+            ],
+        },
+    ]
+    reason_text = str(login_reason or "").strip()
+    qr_error_text = str(qr_error or "").strip()
+    if reason_text or qr_error_text or helper_error:
+        details: list[Any] = []
+        if reason_text:
+            details.append({"label": "原因", "value": reason_text})
+        if qr_error_text:
+            details.append({"label": "二维码状态", "value": qr_error_text})
+        if helper_error:
+            details.append({"label": "补充信息", "value": helper_error})
+        sections.append({"title": "诊断信息", "emoji": "📝", "items": details})
+
+    try:
+        message_id = _send_text_message(
+            bot_token=str(bot_token or "").strip(),
+            chat_id=str(chat_id or "").strip(),
+            text=_build_text_notice("平台登录提醒", sections, title_emoji="🔐"),
+            timeout_seconds=max(10, int(timeout_seconds or 20)),
+        )
+        sent = int(message_id) > 0
+        _append_log(log_file, f"[Worker] platform_login_text_notice platform={platform} sent={sent} helper=fallback")
+        return {
+            "ok": sent,
+            "sent": sent,
+            "message_id": int(message_id),
+            "fallback": True,
+            "error": "" if sent else (helper_error or "text notice send returned empty message id"),
+        }
+    except Exception as exc:
+        error_text = str(exc or "").strip() or helper_error or "text notice send failed"
+        _append_log(log_file, f"[Worker] platform_login_text_notice failed: {error_text}")
+        return {
+            "ok": False,
+            "sent": False,
+            "fallback": True,
+            "transport_error": _is_telegram_transport_error_text(error_text),
+            "error": error_text,
+        }
+
+
 def _refresh_platform_login_qr_message(
     *,
     platform_name: str,
@@ -6530,6 +6653,14 @@ def _probe_platform_login_after_publish_failure(
             f"[Worker] immediate publish login recheck falling back to explicit login signal "
             f"platform={platform_token} item={item_id} error={str(error_text or '').strip() or '-'}",
         )
+    text_result = _send_platform_login_text_notice(
+        platform_name=platform_token,
+        bot_token=telegram_bot_token,
+        chat_id=telegram_chat_id,
+        timeout_seconds=max(10, int(timeout_seconds or 20)),
+        log_file=log_file,
+        login_reason=str((login_status or {}).get("reason") or "").strip() or str(error_text or "").strip(),
+    )
     result = _request_platform_login_qr(
         platform_name=platform_token,
         bot_token=telegram_bot_token,
@@ -6540,27 +6671,25 @@ def _probe_platform_login_after_publish_failure(
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
         return "failed", str(error_text or "").strip()
+    notices: list[str] = []
+    if bool(text_result.get("sent")):
+        notices.append("已向 Telegram 发送登录提醒")
+    elif str(text_result.get("error") or "").strip():
+        notices.append(f"登录提醒发送失败：{str(text_result.get('error') or '').strip()}")
+    if bool(result.get("sent")):
+        notices.append("视频号登录二维码已发送到 Telegram")
+    elif bool(result.get("skipped")):
+        notices.append("视频号登录二维码近期已发送，可直接查看最近一条二维码消息")
+    elif bool(result.get("transport_error")):
+        notices.append("Telegram 网络抖动导致二维码暂未送达，可稍后重试")
+    elif str(result.get("error") or "").strip():
+        notices.append(f"视频号登录二维码发送失败：{str(result.get('error') or '').strip()}")
+    notice = "；".join(list(dict.fromkeys([str(part or "").strip() for part in notices if str(part or "").strip()]))).strip()
     if bool(result.get("transport_error")):
-        notice = "视频号需要重新登录；Telegram 网络抖动导致二维码暂未送达，可稍后重试"
         _append_log(
             log_file,
             f"[Worker] immediate publish login recheck transport degraded platform={platform_token} item={item_id}",
         )
-        return "login_required", notice
-    if not (bool(result.get("sent")) or bool(result.get("skipped"))):
-        _append_log(
-            log_file,
-            f"[Worker] immediate publish login recheck inconclusive platform={platform_token} item={item_id} "
-            f"error={result.get('error') or '-'}",
-        )
-        return "failed", str(error_text or "").strip()
-    notice = ""
-    if bool(result.get("sent")):
-        notice = "视频号登录二维码已发送到 Telegram"
-    elif bool(result.get("skipped")):
-        notice = "视频号登录二维码近期已发送，可直接查看最近一条二维码消息"
-    elif str(result.get("error") or "").strip():
-        notice = f"视频号登录二维码发送失败：{str(result.get('error') or '').strip()}"
     merged_error = str(error_text or "").strip()
     if notice and notice not in merged_error:
         merged_error = f"{merged_error}；{notice}" if merged_error else notice
@@ -9061,16 +9190,50 @@ def _preflight_immediate_platform_login(
         or str(result.get("current_url") or "").strip()
         or "视频号未登录"
     )
+    text_result: Dict[str, Any] = {}
     qr_result: Dict[str, Any] = {}
+    notices: list[str] = []
     if bool(result.get("notified")):
         qr_result = dict(result.get("qr_result") or {}) if isinstance(result.get("qr_result"), dict) else {}
+        text_result = dict(result.get("text_result") or {}) if isinstance(result.get("text_result"), dict) else {}
         notification_mode = str(result.get("notification_mode") or "").strip().lower()
         if notification_mode == "qr":
-            error_text = f"{error_text}；登录二维码已发送到 Telegram"
+            notices.append("登录二维码已发送到 Telegram")
         elif notification_mode == "text":
-            error_text = f"{error_text}；已向 Telegram 发送登录提醒"
-        return {"ready": False, "error": error_text, "result": result, "qr_result": qr_result}
+            notices.append("已向 Telegram 发送登录提醒")
+        if notification_mode != "text" and str(telegram_bot_token or "").strip() and str(telegram_chat_id or "").strip():
+            text_result = _send_platform_login_text_notice(
+                platform_name=normalized_platform,
+                bot_token=str(telegram_bot_token or "").strip(),
+                chat_id=str(telegram_chat_id or "").strip(),
+                timeout_seconds=max(10, int(timeout_seconds or 20)),
+                log_file=Path(log_file) if log_file is not None else Path.cwd() / "runtime" / "logs" / "telegram_command_worker.log",
+                login_reason=str(result.get("reason") or "").strip() or error_text,
+                qr_error=str(qr_result.get("error") or "").strip(),
+                telegram_bot_identifier=str(telegram_bot_identifier or "").strip(),
+            )
+        if bool(text_result.get("sent")):
+            notices.append("已向 Telegram 发送登录提醒")
+        elif str(text_result.get("error") or "").strip():
+            notices.append(f"登录提醒发送失败：{str(text_result.get('error') or '').strip()}")
+        notices = list(dict.fromkeys([str(part or "").strip() for part in notices if str(part or "").strip()]))
+        if notices:
+            error_text = f"{error_text}；{'；'.join(notices)}"
+        return {"ready": False, "error": error_text, "result": result, "qr_result": qr_result, "text_result": text_result}
     if str(telegram_bot_token or "").strip() and str(telegram_chat_id or "").strip():
+        text_result = _send_platform_login_text_notice(
+            platform_name=normalized_platform,
+            bot_token=str(telegram_bot_token or "").strip(),
+            chat_id=str(telegram_chat_id or "").strip(),
+            timeout_seconds=max(10, int(timeout_seconds or 20)),
+            log_file=Path(log_file) if log_file is not None else Path.cwd() / "runtime" / "logs" / "telegram_command_worker.log",
+            login_reason=str(result.get("reason") or "").strip() or error_text,
+            telegram_bot_identifier=str(telegram_bot_identifier or "").strip(),
+        )
+        if bool(text_result.get("sent")):
+            notices.append("已向 Telegram 发送登录提醒")
+        elif str(text_result.get("error") or "").strip():
+            notices.append(f"登录提醒发送失败：{str(text_result.get('error') or '').strip()}")
         qr_result = _request_platform_login_qr(
             platform_name=normalized_platform,
             bot_token=str(telegram_bot_token or "").strip(),
@@ -9080,14 +9243,17 @@ def _preflight_immediate_platform_login(
             refresh_page=True,
         )
         if bool(qr_result.get("sent")):
-            error_text = f"{error_text}；登录二维码已发送到 Telegram"
+            notices.append("登录二维码已发送到 Telegram")
         elif bool(qr_result.get("skipped")):
-            error_text = f"{error_text}；登录二维码已在近期发送"
+            notices.append("登录二维码已在近期发送")
         elif bool(qr_result.get("transport_error")):
-            error_text = f"{error_text}；Telegram 网络抖动导致二维码暂未送达，可稍后重试"
+            notices.append("Telegram 网络抖动导致二维码暂未送达，可稍后重试")
         elif str(qr_result.get("error") or "").strip():
-            error_text = f"{error_text}；二维码发送失败：{str(qr_result.get('error') or '').strip()}"
-    return {"ready": False, "error": error_text, "result": result, "qr_result": qr_result}
+            notices.append(f"二维码发送失败：{str(qr_result.get('error') or '').strip()}")
+    notices = list(dict.fromkeys([str(part or "").strip() for part in notices if str(part or "").strip()]))
+    if notices:
+        error_text = f"{error_text}；{'；'.join(notices)}"
+    return {"ready": False, "error": error_text, "result": result, "qr_result": qr_result, "text_result": text_result}
 
 
 def _finalize_immediate_collect_target(

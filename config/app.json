@@ -18,6 +18,39 @@
   "x": {
     "cookie_file": "config/x_cookies.local.json"
   },
+  "cleanup": {
+    "enabled": true,
+    "targets": {
+      "downloads": {
+        "enabled": true,
+        "retention_days": 3
+      },
+      "downloads_images": {
+        "enabled": true,
+        "retention_days": 3
+      },
+      "processed_videos": {
+        "enabled": true,
+        "retention_days": 14
+      },
+      "processed_images": {
+        "enabled": true,
+        "retention_days": 14
+      },
+      "archive": {
+        "enabled": true,
+        "retention_days": 30
+      },
+      "sorted_batches": {
+        "enabled": true,
+        "retention_days": 7
+      },
+      "debug_workspaces": {
+        "enabled": true,
+        "retention_days": 3
+      }
+    }
+  },
   "publish": {
     "default_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
     "platforms": {

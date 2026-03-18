@@ -18,6 +18,14 @@ def test_cli_login_subcommand_parses_platform() -> None:
     assert args.platform == "wechat"
 
 
+def test_cli_cleanup_subcommand_parses_apply_and_print_files() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["cleanup", "--apply", "--print-files"])
+    assert args.command == "cleanup"
+    assert args.apply is True
+    assert args.print_files is True
+
+
 def test_cli_engage_douyin_subcommand_parses_options() -> None:
     parser = build_parser()
     args = parser.parse_args(["engage", "douyin", "--max-posts", "5", "--latest-only"])

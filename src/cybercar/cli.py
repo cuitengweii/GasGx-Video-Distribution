@@ -4,6 +4,7 @@ import argparse
 import json
 from typing import Any
 
+from .cleanup import run_cleanup
 from .collect import collect
 from .engagement import diagnose_platform_engagement, run_douyin_engagement, run_kuaishou_engagement, run_wechat_engagement
 from .migrate import migrate_legacy_assets
@@ -24,6 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--platforms", default="")
         sub.add_argument("--limit", type=int, default=0)
         sub.add_argument("--keyword", default="")
+
+    cleanup = subparsers.add_parser("cleanup")
+    cleanup.add_argument("--apply", action="store_true", help="Delete expired files instead of dry-run preview.")
+    cleanup.add_argument("--print-files", action="store_true", help="Include matched file paths in the JSON summary.")
 
     login_parser = subparsers.add_parser("login")
     login_sub = login_parser.add_subparsers(dest="login_command", required=True)
@@ -121,6 +126,9 @@ def main() -> int:
             keyword=str(args.keyword),
             passthrough=passthrough,
         )
+    if command == "cleanup":
+        _print_json(run_cleanup(apply=bool(args.apply), print_files=bool(args.print_files)))
+        return 0
     if command == "login":
         if args.login_command == "status":
             _print_json(login_status(str(args.platform)))
