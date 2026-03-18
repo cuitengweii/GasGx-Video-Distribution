@@ -515,6 +515,7 @@ def _default_config_path() -> str:
 
 DEFAULT_CONFIG_PATH = _default_config_path()
 DEFAULT_REVIEW_STATE_FILE = "review_state.json"
+DEFAULT_CANDIDATE_LEDGER_FILE = "candidate_ledger.json"
 DEFAULT_NOTIFY_PROVIDER = "telegram_bot"
 DEFAULT_NOTIFY_ENV_PREFIX = "CYBERCAR_NOTIFY_"
 WECHAT_POST_LIST_URL = "https://channels.weixin.qq.com/platform/post/list"
@@ -8778,6 +8779,230 @@ def _load_review_state_entries(state_path: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _candidate_ledger_path(workspace: Workspace) -> Path:
+    return workspace.root / DEFAULT_CANDIDATE_LEDGER_FILE
+
+
+def _make_x_candidate_id(status_id: str, media_key: str = "") -> str:
+    clean_status_id = str(status_id or "").strip()
+    if not clean_status_id:
+        return ""
+    clean_media_key = str(media_key or "").strip() or clean_status_id
+    return f"x:{clean_status_id}:{clean_media_key}"
+
+
+def _candidate_state_rank(state: str) -> int:
+    normalized = str(state or "").strip().lower()
+    ranks = {
+        "new_discovered": 10,
+        "downloaded": 20,
+        "processed": 30,
+        "review_pending": 35,
+        "review_skipped": 40,
+        "rejected": 40,
+        "approved": 40,
+        "published": 50,
+        "publish_failed_terminal": 50,
+        "failed_terminal": 50,
+    }
+    return int(ranks.get(normalized, 0))
+
+
+def _load_candidate_ledger_payload(workspace: Workspace) -> dict[str, Any]:
+    path = _candidate_ledger_path(workspace)
+    if not path.exists():
+        return {"version": 1, "updated_at": "", "items": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"version": 1, "updated_at": "", "items": {}}
+    if not isinstance(payload, dict):
+        return {"version": 1, "updated_at": "", "items": {}}
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        payload["items"] = {}
+    return payload
+
+
+def _save_candidate_ledger_payload(workspace: Workspace, payload: dict[str, Any]) -> None:
+    snapshot = dict(payload or {})
+    snapshot["version"] = 1
+    snapshot["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if not isinstance(snapshot.get("items"), dict):
+        snapshot["items"] = {}
+    _candidate_ledger_path(workspace).write_text(
+        json.dumps(snapshot, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _extract_status_ids_from_history(path: Path) -> set[str]:
+    result: set[str] = set()
+    for raw_line in _load_line_history(path):
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        if line.startswith("twitter "):
+            token = line.split(" ", 1)[1].strip()
+            if token.isdigit():
+                result.add(token)
+            continue
+        head = line.split(":", 1)[0].strip()
+        if head.isdigit():
+            result.add(head)
+            continue
+        if line.isdigit():
+            result.add(line)
+    return result
+
+
+def _upsert_candidate_ledger_entry(
+    items: dict[str, dict[str, Any]],
+    *,
+    candidate_id: str,
+    status_id: str,
+    media_key: str,
+    media_kind: str,
+    state: str,
+    status_url: str = "",
+    processed_name: str = "",
+) -> bool:
+    clean_candidate_id = str(candidate_id or "").strip()
+    clean_status_id = str(status_id or "").strip()
+    if not clean_candidate_id or not clean_status_id:
+        return False
+    normalized_state = str(state or "").strip().lower()
+    existing = dict(items.get(clean_candidate_id, {}) or {})
+    changed = False
+    next_rank = _candidate_state_rank(normalized_state)
+    prev_state = str(existing.get("state", "") or "").strip().lower()
+    if next_rank >= _candidate_state_rank(prev_state):
+        if prev_state != normalized_state:
+            existing["state"] = normalized_state
+            changed = True
+    for key, value in (
+        ("candidate_id", clean_candidate_id),
+        ("source", "x"),
+        ("status_id", clean_status_id),
+        ("media_key", str(media_key or "").strip() or clean_status_id),
+        ("media_kind", _normalize_media_kind(media_kind or "video")),
+        ("status_url", str(status_url or "").strip()),
+        ("processed_name", str(processed_name or "").strip()),
+    ):
+        if value and existing.get(key) != value:
+            existing[key] = value
+            changed = True
+    if changed:
+        existing["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        items[clean_candidate_id] = existing
+    return changed
+
+
+def _review_status_to_candidate_state(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"approved", "rejected", "review_skipped", "skipped"}:
+        return "review_skipped" if normalized in {"review_skipped", "skipped"} else normalized
+    return ""
+
+
+def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[str, Any]]:
+    payload = _load_candidate_ledger_payload(workspace)
+    items: dict[str, dict[str, Any]] = {
+        str(key): dict(value)
+        for key, value in (payload.get("items", {}) or {}).items()
+        if isinstance(value, dict)
+    }
+    changed = False
+
+    for media_kind in ("video", "image"):
+        for status_id in _extract_status_ids_from_history(_workspace_history_file(workspace, media_kind)):
+            candidate_id = _make_x_candidate_id(status_id, status_id)
+            changed = _upsert_candidate_ledger_entry(
+                items,
+                candidate_id=candidate_id,
+                status_id=status_id,
+                media_key=status_id,
+                media_kind=media_kind,
+                state="downloaded",
+            ) or changed
+
+    processed_lookup = _processed_index_lookup(workspace)
+    for process_item in _load_fingerprint_index(workspace):
+        if not isinstance(process_item, dict):
+            continue
+        meta = _metadata_from_index_item(process_item)
+        status_id = str(meta.get("status_id", "") or "").strip()
+        if not status_id:
+            continue
+        media_key = str(meta.get("media_id", "") or "").strip() or status_id
+        candidate_id = _make_x_candidate_id(status_id, media_key)
+        changed = _upsert_candidate_ledger_entry(
+            items,
+            candidate_id=candidate_id,
+            status_id=status_id,
+            media_key=media_key,
+            media_kind=str(process_item.get("media_kind", "") or "video"),
+            state="processed",
+            status_url=str(meta.get("status_url", "") or "").strip(),
+            processed_name=str(process_item.get("processed_name", "") or "").strip(),
+        ) or changed
+
+    review_entries = _load_review_state_entries(_resolve_review_state_path(workspace))
+    for review_entry in review_entries.values():
+        if not isinstance(review_entry, dict):
+            continue
+        review_state = _review_status_to_candidate_state(str(review_entry.get("status", "") or ""))
+        if not review_state:
+            continue
+        processed_name = str(review_entry.get("processed_name", "") or "").strip()
+        if not processed_name:
+            continue
+        process_item = dict(processed_lookup.get(processed_name, {}) or {})
+        meta = _metadata_from_index_item(process_item if process_item else {"processed_name": processed_name})
+        status_id = str(meta.get("status_id", "") or "").strip()
+        if not status_id:
+            continue
+        media_key = str(meta.get("media_id", "") or "").strip() or status_id
+        candidate_id = _make_x_candidate_id(status_id, media_key)
+        changed = _upsert_candidate_ledger_entry(
+            items,
+            candidate_id=candidate_id,
+            status_id=status_id,
+            media_key=media_key,
+            media_kind=str(review_entry.get("media_kind", "") or process_item.get("media_kind", "") or "video"),
+            state=review_state,
+            status_url=str(meta.get("status_url", "") or "").strip(),
+            processed_name=processed_name,
+        ) or changed
+
+    for platform in SUPPORTED_UPLOAD_PLATFORMS:
+        for media_kind in ("video", "image"):
+            for upload_item in _load_uploaded_fingerprint_index(workspace, platform=platform, media_kind=media_kind):
+                if not isinstance(upload_item, dict):
+                    continue
+                meta = _metadata_from_index_item(upload_item)
+                status_id = str(meta.get("status_id", "") or "").strip()
+                if not status_id:
+                    continue
+                media_key = str(meta.get("media_id", "") or "").strip() or status_id
+                candidate_id = _make_x_candidate_id(status_id, media_key)
+                changed = _upsert_candidate_ledger_entry(
+                    items,
+                    candidate_id=candidate_id,
+                    status_id=status_id,
+                    media_key=media_key,
+                    media_kind=media_kind,
+                    state="published",
+                    status_url=str(meta.get("status_url", "") or "").strip(),
+                    processed_name=str(upload_item.get("processed_name", "") or "").strip(),
+                ) or changed
+
+    if changed or payload.get("items") != items:
+        payload["items"] = items
+        _save_candidate_ledger_payload(workspace, payload)
+    return items
+
+
 def _get_review_state_entry(
     entries: dict[str, dict[str, Any]],
     processed_name: str,
@@ -9719,76 +9944,108 @@ def download_from_x(
         discovered_urls: list[str] = []
         live_discovery_error: Optional[str] = None
         if auto_discover_x:
-            discover_limit = max(max(1, int(limit)) * 6, int(x_discovery_url_limit))
-            try:
-                discovered_urls = discover_x_video_urls(
-                    keyword=keyword,
-                    url_limit=discover_limit,
-                    scroll_rounds=x_discovery_scroll_rounds,
-                    scroll_wait_seconds=x_discovery_scroll_wait,
-                    debug_port=debug_port,
-                    auto_open_chrome=auto_open_chrome,
-                    chrome_path=chrome_path,
-                    chrome_user_data_dir=chrome_user_data_dir,
-                    include_images=include_images,
-                    require_text_keyword_match=require_text_keyword_match,
-                )
-                if discovered_urls:
-                    discovery_source = "keyword_live_search"
-            except Exception as exc:
-                _log(f"[Downloader] X auto-discovery failed: {exc}")
-                live_discovery_error = str(exc)
-                if _is_x_login_required_error(live_discovery_error):
-                    if auto_open_chrome:
-                        try:
-                            _open_visible_x_login_page(
-                                debug_port=debug_port,
-                                chrome_user_data_dir=chrome_user_data_dir,
-                                chrome_path=chrome_path,
-                            )
-                        except Exception as login_exc:
-                            _log(f"[Downloader] Failed to open visible X login page: {login_exc}")
-                    raise RuntimeError(
-                        "X 页面未登录，已停止自动回退下载。"
-                        "请先在可见 Chrome 窗口中完成登录，然后重试。"
-                        f" profile={chrome_user_data_dir}, port={debug_port}"
-                    ) from exc
-                discovered_urls = []
-            if not discovered_urls:
-                if require_x_live_discovery:
-                    reason = live_discovery_error or "keyword live discovery returned no URLs"
-                    raise RuntimeError(
-                        "X keyword live discovery is required for this run, "
-                        f"but it failed before any URL was collected: {reason}"
-                    )
-                discovered_urls = discover_x_urls_via_seed_accounts(
-                    keyword=keyword,
-                    url_limit=discover_limit,
-                    chrome_user_data_dir=chrome_user_data_dir,
-                    include_images=include_images,
-                    proxy=effective_proxy,
-                    use_system_proxy=effective_use_system_proxy,
-                    x_cookie_file=x_cookie_file,
-                )
-                if discovered_urls:
-                    discovery_source = "seed_accounts_fallback"
-                    _log(
-                        "[Downloader] WARNING: keyword-page discovery is unavailable; "
-                        "falling back to seed-account discovery only. Fresh posts visible on "
-                        "the live X search page may be missed in this run."
-                    )
-
-        if discovered_urls:
-            discovered_urls, skipped_urls = _filter_already_processed_x_urls(workspace, discovered_urls)
-            if skipped_urls:
-                skipped_names = ", ".join(item["processed_name"] for item in skipped_urls[:3] if item.get("processed_name"))
-                suffix = f" examples={skipped_names}" if skipped_names else ""
-                _log(f"[Downloader] Skip already-collected discovered URLs: {len(skipped_urls)}.{suffix}")
-        if discovered_urls:
             target_limit = max(1, int(limit))
-            # Image discovery already uses filter:media and falls back to direct image download,
-            # so it does not need the same oversized candidate window as video collection.
             candidate_multiplier = 3 if include_images else 8
+            desired_candidate_count = target_limit if effective_fail_fast else max(target_limit * candidate_multiplier, 12)
+            round_configs = (
+                (1, max(target_limit * 4, int(x_discovery_url_limit), 24), int(x_discovery_scroll_rounds), float(x_discovery_scroll_wait)),
+                (2, max(target_limit * 6, int(x_discovery_url_limit), 36), int(x_discovery_scroll_rounds) + 2, min(3.0, float(x_discovery_scroll_wait) + 0.4)),
+                (3, max(target_limit * 8, int(x_discovery_url_limit), 48), int(x_discovery_scroll_rounds) + 4, min(3.0, float(x_discovery_scroll_wait) + 0.8)),
+            )
+            seen_unseen_urls: set[str] = set()
+            filtered_seen_total = 0
+            for round_no, discover_limit, round_scrolls, round_wait in round_configs:
+                if len(discovered_urls) >= desired_candidate_count:
+                    break
+                round_urls: list[str] = []
+                round_source = ""
+                try:
+                    round_urls = discover_x_video_urls(
+                        keyword=keyword,
+                        url_limit=discover_limit,
+                        scroll_rounds=max(2, int(round_scrolls)),
+                        scroll_wait_seconds=max(0.3, float(round_wait)),
+                        debug_port=debug_port,
+                        auto_open_chrome=auto_open_chrome,
+                        chrome_path=chrome_path,
+                        chrome_user_data_dir=chrome_user_data_dir,
+                        include_images=include_images,
+                        require_text_keyword_match=require_text_keyword_match,
+                    )
+                    if round_urls:
+                        round_source = "keyword_live_search"
+                except Exception as exc:
+                    _log(f"[Downloader] X auto-discovery failed on round {round_no}: {exc}")
+                    live_discovery_error = str(exc)
+                    if _is_x_login_required_error(live_discovery_error):
+                        if auto_open_chrome:
+                            try:
+                                _open_visible_x_login_page(
+                                    debug_port=debug_port,
+                                    chrome_user_data_dir=chrome_user_data_dir,
+                                    chrome_path=chrome_path,
+                                )
+                            except Exception as login_exc:
+                                _log(f"[Downloader] Failed to open visible X login page: {login_exc}")
+                        raise RuntimeError(
+                            "X 页面未登录，已停止自动回退下载。"
+                            "请先在可见 Chrome 窗口中完成登录，然后重试。"
+                            f" profile={chrome_user_data_dir}, port={debug_port}"
+                        ) from exc
+                    round_urls = []
+                if not round_urls:
+                    if require_x_live_discovery and round_no == 1:
+                        reason = live_discovery_error or "keyword live discovery returned no URLs"
+                        raise RuntimeError(
+                            "X keyword live discovery is required for this run, "
+                            f"but it failed before any URL was collected: {reason}"
+                        )
+                    round_urls = discover_x_urls_via_seed_accounts(
+                        keyword=keyword,
+                        url_limit=discover_limit,
+                        chrome_user_data_dir=chrome_user_data_dir,
+                        include_images=include_images,
+                        proxy=effective_proxy,
+                        use_system_proxy=effective_use_system_proxy,
+                        x_cookie_file=x_cookie_file,
+                    )
+                    if round_urls:
+                        round_source = "seed_accounts_fallback"
+                        _log(
+                            "[Downloader] WARNING: keyword-page discovery is unavailable; "
+                            "falling back to seed-account discovery only. Fresh posts visible on "
+                            "the live X search page may be missed in this run."
+                        )
+
+                filtered_round_urls, skipped_urls = _filter_already_processed_x_urls(workspace, round_urls)
+                filtered_seen_total += len(skipped_urls)
+                if skipped_urls:
+                    skipped_names = ", ".join(item["processed_name"] for item in skipped_urls[:3] if item.get("processed_name"))
+                    suffix = f" examples={skipped_names}" if skipped_names else ""
+                    _log(f"[Downloader] Skip already-collected discovered URLs on round {round_no}: {len(skipped_urls)}.{suffix}")
+                added_this_round = 0
+                for raw_url in filtered_round_urls:
+                    normalized_url = _normalize_x_status_url(raw_url) or ""
+                    if not normalized_url or normalized_url in seen_unseen_urls:
+                        continue
+                    seen_unseen_urls.add(normalized_url)
+                    discovered_urls.append(normalized_url)
+                    added_this_round += 1
+                    if len(discovered_urls) >= desired_candidate_count:
+                        break
+                if round_source:
+                    discovery_source = round_source
+                _log(
+                    "[Downloader] Discovery round summary: "
+                    f"round={round_no}, source={round_source or 'none'}, discovered={len(round_urls)}, "
+                    f"filtered_seen={len(skipped_urls)}, added={added_this_round}, usable_total={len(discovered_urls)}, "
+                    f"target_new={target_limit}, desired_candidates={desired_candidate_count}"
+                )
+                if effective_fail_fast and discovered_urls:
+                    break
+            if filtered_seen_total:
+                _log(f"[Downloader] Total previously-seen URLs filtered before download: {filtered_seen_total}")
+        if discovered_urls:
             if effective_fail_fast:
                 candidate_url_count = min(len(discovered_urls), target_limit)
             else:
@@ -10270,6 +10527,7 @@ def process_video_fingerprint(
         existing_items = video_fingerprint_index if media_kind == "video" else image_fingerprint_index
         existing_items.extend(new_items)
         _save_fingerprint_index(workspace, existing_items, media_kind=media_kind)
+        _record_processed_candidates_in_ledger(workspace, new_items)
         total_new_fingerprint_items += len(new_items)
     if total_new_fingerprint_items:
         _log(f"[Processor] Fingerprint index updated: +{total_new_fingerprint_items}")
@@ -11263,6 +11521,26 @@ def _filter_already_processed_x_urls(
     workspace: Workspace,
     urls: Iterable[str],
 ) -> tuple[list[str], list[dict[str, str]]]:
+    ledger_items = _refresh_collect_candidate_ledger(workspace)
+    status_lookup: dict[str, dict[str, str]] = {}
+    for item in ledger_items.values():
+        if not isinstance(item, dict):
+            continue
+        status_id = str(item.get("status_id", "") or "").strip()
+        if not status_id:
+            continue
+        state = str(item.get("state", "") or "").strip().lower()
+        if not state:
+            continue
+        current = status_lookup.get(status_id)
+        if current and _candidate_state_rank(current.get("state", "")) > _candidate_state_rank(state):
+            continue
+        status_lookup[status_id] = {
+            "state": state,
+            "processed_name": str(item.get("processed_name", "") or "").strip(),
+            "status_url": str(item.get("status_url", "") or "").strip(),
+        }
+
     remaining: list[str] = []
     skipped: list[dict[str, str]] = []
     seen_urls: set[str] = set()
@@ -11275,13 +11553,13 @@ def _filter_already_processed_x_urls(
         if normalized_url in seen_urls:
             continue
         seen_urls.add(normalized_url)
-        target, item = _find_processed_target_by_source(workspace, source_url=normalized_url)
-        if target is None:
+        status_id = _extract_status_id_from_url(normalized_url)
+        ledger_match = status_lookup.get(status_id, {}) if status_id else {}
+        if not ledger_match:
             remaining.append(url)
             continue
-        processed_name = str((item or {}).get("processed_name", "") or "").strip() or target.name
-        status_id = str((item or {}).get("status_id", "") or "").strip() or _extract_status_id_from_url(normalized_url)
-        skip_key = f"{normalized_url}|{processed_name}|{status_id}"
+        processed_name = str(ledger_match.get("processed_name", "") or "").strip()
+        skip_key = f"{normalized_url}|{processed_name}|{status_id}|{ledger_match.get('state', '')}"
         if skip_key in seen_keys:
             continue
         seen_keys.add(skip_key)
@@ -11290,9 +11568,44 @@ def _filter_already_processed_x_urls(
                 "url": normalized_url,
                 "processed_name": processed_name,
                 "status_id": status_id,
+                "state": str(ledger_match.get("state", "") or "").strip(),
             }
         )
     return remaining, skipped
+
+
+def _record_processed_candidates_in_ledger(workspace: Workspace, items: list[dict[str, Any]]) -> None:
+    if not items:
+        return
+    payload = _load_candidate_ledger_payload(workspace)
+    ledger_items: dict[str, dict[str, Any]] = {
+        str(key): dict(value)
+        for key, value in (payload.get("items", {}) or {}).items()
+        if isinstance(value, dict)
+    }
+    changed = False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        meta = _metadata_from_index_item(item)
+        status_id = str(meta.get("status_id", "") or "").strip()
+        if not status_id:
+            continue
+        media_key = str(meta.get("media_id", "") or "").strip() or status_id
+        candidate_id = _make_x_candidate_id(status_id, media_key)
+        changed = _upsert_candidate_ledger_entry(
+            ledger_items,
+            candidate_id=candidate_id,
+            status_id=status_id,
+            media_key=media_key,
+            media_kind=str(item.get("media_kind", "") or "video"),
+            state="processed",
+            status_url=str(meta.get("status_url", "") or "").strip(),
+            processed_name=str(item.get("processed_name", "") or "").strip(),
+        ) or changed
+    if changed:
+        payload["items"] = ledger_items
+        _save_candidate_ledger_payload(workspace, payload)
 
 
 def build_content_coordination_snapshot(

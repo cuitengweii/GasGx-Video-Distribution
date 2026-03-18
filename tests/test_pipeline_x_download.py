@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -330,3 +331,136 @@ def test_download_from_x_skips_compat_search_when_fail_fast_has_no_discovered_ur
     assert files == []
     assert commands == []
     assert any("fail-fast enabled and no discovered URLs available" in line for line in logs)
+
+
+def test_filter_already_processed_x_urls_uses_collect_ledger_sources(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.history.write_text("111:abc\n", encoding="utf-8")
+    (workspace.root / "content_fingerprint_index.json").write_text(
+        json.dumps(
+            [
+                {
+                    "processed_name": "DRAFT_222__reviewed.mp4",
+                    "media_kind": "video",
+                    "status_url": "https://x.com/reviewed/status/222",
+                    "status_id": "222",
+                    "media_id": "222",
+                    "title_text": "reviewed clip",
+                    "description_text": "reviewed clip",
+                    "uploader_text": "reviewed",
+                }
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (workspace.root / engine.DEFAULT_REVIEW_STATE_FILE).write_text(
+        json.dumps(
+            {
+                "items": {
+                    "video|DRAFT_222__reviewed.mp4": {
+                        "status": "approved",
+                        "processed_name": "DRAFT_222__reviewed.mp4",
+                        "media_kind": "video",
+                    }
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (workspace.root / "uploaded_content_fingerprint_index.json").write_text(
+        json.dumps(
+            [
+                {
+                    "processed_name": "DRAFT_333__published.mp4",
+                    "media_kind": "video",
+                    "status_url": "https://x.com/published/status/333",
+                    "status_id": "333",
+                    "media_id": "333",
+                    "title_text": "published clip",
+                    "description_text": "published clip",
+                    "uploader_text": "published",
+                }
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    remaining, skipped = engine._filter_already_processed_x_urls(
+        workspace,
+        [
+            "https://x.com/history/status/111",
+            "https://x.com/reviewed/status/222",
+            "https://x.com/published/status/333",
+            "https://x.com/fresh/status/444",
+        ],
+    )
+
+    assert remaining == ["https://x.com/fresh/status/444"]
+    assert {(item["status_id"], item["state"]) for item in skipped} == {
+        ("111", "downloaded"),
+        ("222", "approved"),
+        ("333", "published"),
+    }
+    assert (workspace.root / engine.DEFAULT_CANDIDATE_LEDGER_FILE).exists()
+
+
+def test_download_from_x_opens_extra_discovery_rounds_after_seen_filter(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.history.write_text("111:abc\n", encoding="utf-8")
+    logs: list[str] = []
+    selected_batches: list[list[str]] = []
+    discovery_calls: list[int] = []
+
+    monkeypatch.setattr(engine, "_log", lambda message: logs.append(str(message)))
+    monkeypatch.setattr(engine, "_ensure_binary", lambda name: None)
+    monkeypatch.setattr(engine, "_resolve_network_proxy", lambda proxy, use_system_proxy=False: (proxy, use_system_proxy))
+    monkeypatch.setattr(engine, "_export_x_cookies_for_ytdlp", lambda *args, **kwargs: (None, "skipped-empty"))
+    monkeypatch.setattr(engine, "_build_subprocess_network_env", lambda proxy=None, use_system_proxy=False: {})
+    monkeypatch.setattr(engine, "discover_x_urls_via_seed_accounts", lambda **kwargs: [])
+
+    def fake_discover_x_video_urls(**kwargs):
+        discovery_calls.append(int(kwargs["url_limit"]))
+        if len(discovery_calls) == 1:
+            return ["https://x.com/history/status/111"]
+        if len(discovery_calls) == 2:
+            return [
+                "https://x.com/history/status/111",
+                "https://x.com/fresh/status/222",
+            ]
+        return [
+            "https://x.com/history/status/111",
+            "https://x.com/fresh/status/222",
+            "https://x.com/fresh/status/333",
+        ]
+
+    def fake_run_ytdlp_download_with_retries(cmd, *, selected_urls, **kwargs):
+        selected_batches.append(list(selected_urls))
+        return (
+            subprocess.CompletedProcess(args=["yt-dlp"], returncode=0, stdout="", stderr=""),
+            engine.XDownloadRetryStats(),
+        )
+
+    monkeypatch.setattr(engine, "discover_x_video_urls", fake_discover_x_video_urls)
+    monkeypatch.setattr(engine, "_run_ytdlp_download_with_retries", fake_run_ytdlp_download_with_retries)
+
+    files = engine.download_from_x(
+        workspace=workspace,
+        keyword="Cybertruck",
+        limit=2,
+        tweet_urls=[],
+        auto_discover_x=True,
+        x_download_fail_fast=False,
+    )
+
+    assert files == []
+    assert len(discovery_calls) == 3
+    assert selected_batches == [["https://x.com/fresh/status/222", "https://x.com/fresh/status/333"]]
+    assert any("round=2" in line for line in logs)
+    assert any("round=3" in line for line in logs)
+    assert any("Total previously-seen URLs filtered before download: 3" in line for line in logs)
