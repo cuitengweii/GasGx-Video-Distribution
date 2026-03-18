@@ -126,6 +126,7 @@ DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 30
 DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 3 * 86400
 DEFAULT_PREFILTER_QUEUE_STATUS_WINDOW_SECONDS = 24 * 3600
 DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS = 30 * 60
+DEFAULT_QUEUE_MAINTENANCE_INTERVAL_SECONDS = 5 * 60
 DEFAULT_PLATFORM_LOCK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 TELEGRAM_PREFILTER_CALLBACK_PREFIX = "ctpf"
 TELEGRAM_MENU_CALLBACK_PREFIX = "ctm"
@@ -1055,6 +1056,7 @@ def _refresh_home_surface_on_startup(
     timeout_seconds: int,
     log_file: Path,
     default_profile: str,
+    force_refresh: bool = False,
 ) -> None:
     clean_chat_id = str(chat_id or "").strip()
     if not clean_chat_id:
@@ -1065,10 +1067,10 @@ def _refresh_home_surface_on_startup(
     shortcut_state = _load_state(shortcut_state_path)
     home_chat_id = str(home_state.get("chat_id") or "").strip()
     shortcut_chat_id = str(shortcut_state.get("chat_id") or "").strip()
-    home_needs_refresh = (not home_chat_id) or (
+    home_needs_refresh = force_refresh or (not home_chat_id) or (
         home_chat_id == clean_chat_id and int(home_state.get("surface_version") or 0) < int(DEFAULT_HOME_SURFACE_VERSION)
     )
-    shortcut_needs_refresh = (not shortcut_chat_id) or (
+    shortcut_needs_refresh = force_refresh or (not shortcut_chat_id) or (
         shortcut_chat_id == clean_chat_id
         and (
             int(shortcut_state.get("surface_version") or 0) < int(DEFAULT_HOME_SURFACE_VERSION)
@@ -1085,7 +1087,7 @@ def _refresh_home_surface_on_startup(
             bot_kind="cybercar",
             card=_build_home_card(
                 default_profile=default_profile,
-                status_note="已同步新版首页",
+                status_note="已刷新首页状态" if force_refresh else "已同步新版首页",
                 workspace=workspace,
                 chat_id=clean_chat_id,
             ),
@@ -1105,7 +1107,7 @@ def _refresh_home_surface_on_startup(
         )
     _append_log(
         log_file,
-        f"[Worker] startup home surface refresh completed. home={home_needs_refresh}, shortcut={shortcut_needs_refresh}",
+        f"[Worker] startup home surface refresh completed. force={force_refresh}, home={home_needs_refresh}, shortcut={shortcut_needs_refresh}",
     )
 
 
@@ -4511,6 +4513,30 @@ def _prune_home_action_tasks(workspace: Path) -> int:
     return removed
 
 
+def _home_action_log_stale(workspace: Path, log_path: str, *, stale_seconds: float) -> bool:
+    resolved = _resolve_process_log_path(workspace, log_path)
+    if resolved is None or (not resolved.exists()):
+        return False
+    try:
+        age_seconds = max(0.0, time.time() - float(resolved.stat().st_mtime))
+    except Exception:
+        return False
+    return age_seconds > float(stale_seconds)
+
+
+def _terminate_pid_best_effort(pid: int, *, log_file: Optional[Path] = None) -> bool:
+    clean_pid = int(pid or 0)
+    if clean_pid <= 0:
+        return False
+    try:
+        os.kill(clean_pid, 9)
+        return True
+    except Exception as exc:
+        if isinstance(log_file, Path):
+            _append_log(log_file, f"[Worker] terminate pid warning pid={clean_pid} error={exc}")
+        return False
+
+
 def _recover_orphaned_home_action_tasks(
     *,
     workspace: Path,
@@ -4534,11 +4560,28 @@ def _recover_orphaned_home_action_tasks(
             if status not in HOME_ACTION_ACTIVE_STATUSES:
                 continue
             pid = int(task.get("pid") or 0)
-            if pid <= 0 or _pid_is_running(pid):
+            updated_epoch = float(task.get("updated_epoch") or 0.0)
+            age_seconds = (now_epoch - updated_epoch) if updated_epoch > 0 else float("inf")
+            process_alive = pid > 0 and _pid_is_running(pid)
+            stale_timeout = float(DEFAULT_ACTION_QUEUE_STALE_SECONDS)
+            log_stale = _home_action_log_stale(
+                workspace,
+                str(task.get("log_path") or "").strip(),
+                stale_seconds=stale_timeout,
+            )
+            orphaned = pid <= 0 or not process_alive
+            zombie = process_alive and age_seconds > stale_timeout and log_stale
+            if not orphaned and not zombie:
                 continue
             action = str(task.get("action") or "").strip().lower()
+            if zombie:
+                _terminate_pid_best_effort(pid, log_file=log_file)
             task["status"] = "blocked"
-            task["detail"] = "后台进程已退出，但当前卡片回传中断。请查看最近结果消息；如仍无结果，请重新发起一次。"
+            task["detail"] = (
+                "后台进程已退出，但当前卡片回传中断。请查看最近结果消息；如仍无结果，请重新发起一次。"
+                if orphaned
+                else "后台任务超过30分钟无进展，已按失活回收。请查看最近日志；如需继续，请重新发起一次。"
+            )
             task["updated_at"] = now_text
             task["updated_epoch"] = now_epoch
             changed = True
@@ -4553,6 +4596,7 @@ def _recover_orphaned_home_action_tasks(
                     "detail": str(task.get("detail") or "").strip(),
                     "log_path": str(task.get("log_path") or "").strip(),
                     "updated_at": str(task.get("updated_at") or "").strip(),
+                    "recovery_reason": "zombie" if zombie else "orphaned",
                 }
             )
         if changed:
@@ -5200,6 +5244,33 @@ def _cleanup_prefilter_queue(workspace: Path, *, log_file: Optional[Path] = None
             ),
         )
     return {"removed_terminal": removed_terminal, "removed_polluted": removed_polluted}
+
+
+def _run_periodic_queue_maintenance(
+    workspace: Path,
+    *,
+    log_file: Path,
+    last_run_epoch: float = 0.0,
+    interval_seconds: int = DEFAULT_QUEUE_MAINTENANCE_INTERVAL_SECONDS,
+    force: bool = False,
+) -> Dict[str, Any]:
+    now_epoch = time.time()
+    interval = max(30, int(interval_seconds or DEFAULT_QUEUE_MAINTENANCE_INTERVAL_SECONDS))
+    if not force and last_run_epoch > 0 and (now_epoch - float(last_run_epoch)) < interval:
+        return {"ran": False, "last_run_epoch": float(last_run_epoch)}
+
+    pruned_tasks = _prune_home_action_tasks(workspace)
+    if pruned_tasks > 0:
+        _append_log(log_file, f"[Worker] home action tasks pruned: {pruned_tasks}")
+    prefilter_summary = _cleanup_prefilter_queue(workspace, log_file=log_file)
+    return {
+        "ran": True,
+        "last_run_epoch": now_epoch,
+        "pruned_tasks": int(pruned_tasks or 0),
+        "prefilter_removed_terminal": int(prefilter_summary.get("removed_terminal") or 0),
+        "prefilter_removed_polluted": int(prefilter_summary.get("removed_polluted") or 0),
+        "ran_at": _now_text(),
+    }
 
 
 def _with_prefilter_queue_lock(
@@ -12565,6 +12636,22 @@ def main() -> int:
         except Exception as exc:
             _append_log(log_file, f"[Worker] startup home surface refresh skipped: {exc}")
 
+        queue_maintenance_epoch = 0.0
+        maintenance = _run_periodic_queue_maintenance(
+            workspace,
+            log_file=log_file,
+            last_run_epoch=queue_maintenance_epoch,
+            force=True,
+        )
+        if bool(maintenance.get("ran")):
+            queue_maintenance_epoch = float(maintenance.get("last_run_epoch") or queue_maintenance_epoch)
+            _update_worker_state(
+                state_file,
+                pid=os.getpid(),
+                last_queue_maintenance_at=str(maintenance.get("ran_at") or ""),
+                last_queue_maintenance_epoch=queue_maintenance_epoch,
+            )
+
         while True:
             try:
                 _update_worker_state(
@@ -12583,10 +12670,19 @@ def main() -> int:
                     timeout_seconds=api_timeout_seconds,
                     log_file=log_file,
                 )
-                pruned_tasks = _prune_home_action_tasks(workspace)
-                if pruned_tasks > 0:
-                    _append_log(log_file, f"[Worker] home action tasks pruned: {pruned_tasks}")
-                _cleanup_prefilter_queue(workspace, log_file=log_file)
+                maintenance = _run_periodic_queue_maintenance(
+                    workspace,
+                    log_file=log_file,
+                    last_run_epoch=queue_maintenance_epoch,
+                )
+                if bool(maintenance.get("ran")):
+                    queue_maintenance_epoch = float(maintenance.get("last_run_epoch") or queue_maintenance_epoch)
+                    _update_worker_state(
+                        state_file,
+                        pid=os.getpid(),
+                        last_queue_maintenance_at=str(maintenance.get("ran_at") or ""),
+                        last_queue_maintenance_epoch=queue_maintenance_epoch,
+                    )
                 flushed_platform_events = _flush_pending_platform_result_events(
                     workspace=workspace,
                     bot_token=bot_token,

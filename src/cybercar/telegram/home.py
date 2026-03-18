@@ -21,4 +21,5 @@ def refresh_home_surface(
         timeout_seconds=timeout_seconds,
         log_file=Path(log_file),
         default_profile=default_profile,
+        force_refresh=True,
     )

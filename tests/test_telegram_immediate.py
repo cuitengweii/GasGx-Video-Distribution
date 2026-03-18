@@ -360,6 +360,63 @@ def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
     assert worker_impl._normalize_shortcut_text("⚡ 即采即发") == "即采即发"
 
 
+def test_refresh_home_surface_on_startup_force_refresh_updates_home_and_shortcut(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    home_state_path = worker_impl._home_state_path(workspace)
+    shortcut_state_path = worker_impl._home_shortcut_state_path(workspace)
+    worker_impl._save_state(
+        home_state_path,
+        {
+            "chat_id": CHAT_ID,
+            "message_id": 2781,
+            "recent_message_ids": [2781],
+            "surface_version": worker_impl.DEFAULT_HOME_SURFACE_VERSION,
+            "updated_at": "2026-03-18 03:36:04",
+        },
+    )
+    worker_impl._save_state(
+        shortcut_state_path,
+        {
+            "chat_id": CHAT_ID,
+            "message_id": 3051,
+            "recent_message_ids": [3051],
+            "keyboard_version": worker_impl.DEFAULT_HOME_SHORTCUT_KEYBOARD_VERSION,
+            "surface_version": worker_impl.DEFAULT_HOME_SURFACE_VERSION,
+            "updated_at": "2026-03-18 03:36:04",
+        },
+    )
+
+    sent: list[dict[str, object]] = []
+    shortcuts: list[dict[str, object]] = []
+    monkeypatch.setattr(worker_impl, "_append_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "send_or_update_home_message",
+        lambda **kwargs: sent.append(dict(kwargs)) or {"ok": True, "action": "sent", "message_id": 4001},
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_ensure_home_shortcut_keyboard",
+        lambda **kwargs: shortcuts.append(dict(kwargs)),
+    )
+
+    worker_impl._refresh_home_surface_on_startup(
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        workspace=workspace,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+        default_profile=DEFAULT_PROFILE,
+        force_refresh=True,
+    )
+
+    assert len(sent) == 1
+    assert sent[0]["force_new"] is True
+    assert "已刷新首页状态" in str(sent[0]["card"]["text"])
+    assert len(shortcuts) == 1
+    assert shortcuts[0]["force_refresh"] is True
+
+
 def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     worker_state_path = workspace / worker_impl.DEFAULT_STATE_FILE
@@ -709,6 +766,71 @@ def test_recover_orphaned_home_action_notifies_when_loading_placeholder_exists(t
     assert isinstance(task, dict)
     assert task["status"] == "blocked"
     assert task["loading_message_id"] == 0
+
+
+def test_recover_orphaned_home_action_marks_stale_running_task_blocked(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    sent_cards: list[dict[str, object]] = []
+    terminated: list[int] = []
+    log_path = workspace / "runtime" / "logs" / "stale_home_action.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("stale", encoding="utf-8")
+    stale_epoch = worker_impl.time.time() - (worker_impl.DEFAULT_ACTION_QUEUE_STALE_SECONDS + 120)
+    os.utime(log_path, (stale_epoch, stale_epoch))
+
+    monkeypatch.setattr(worker_impl, "_append_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_pid_is_running", lambda pid: True)
+    monkeypatch.setattr(worker_impl, "_terminate_pid_best_effort", lambda pid, log_file=None: terminated.append(int(pid)) or True)
+    monkeypatch.setattr(worker_impl, "_send_card_message", lambda **kwargs: sent_cards.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_try_delete_telegram_message",
+        lambda **kwargs: True,
+    )
+
+    claimed = worker_impl._claim_home_action_task(
+        workspace=workspace,
+        chat_id=CHAT_ID,
+        action="collect_publish_latest",
+        value="video:1",
+        profile=DEFAULT_PROFILE,
+        username="tester",
+    )
+    task_key = str(claimed["task_key"])
+    worker_impl._update_home_action_task(
+        workspace,
+        task_key,
+        status="running",
+        detail="still running",
+        pid=24680,
+        log_path=str(log_path),
+        extra={"loading_message_id": 902},
+    )
+    payload = state.load_state(state.action_queue_path(workspace))
+    tasks = payload.get("tasks", {})
+    assert isinstance(tasks, dict)
+    task = tasks.get(task_key, {})
+    assert isinstance(task, dict)
+    task["updated_epoch"] = stale_epoch
+    task["updated_at"] = "2000-01-01 00:00:00"
+    tasks[task_key] = task
+    payload["tasks"] = tasks
+    state.save_state(state.action_queue_path(workspace), payload)
+
+    recovered = worker_impl._recover_orphaned_home_action_tasks(
+        workspace=workspace,
+        bot_token=BOT_TOKEN,
+        timeout_seconds=30,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+    )
+
+    assert recovered == 1
+    assert terminated == [24680]
+    assert len(sent_cards) == 1
+    task = _action_tasks(workspace)[task_key]
+    assert isinstance(task, dict)
+    assert task["status"] == "blocked"
+    assert "30分钟无进展" in str(task["detail"])
 
 
 def test_run_collect_publish_latest_job_video_records_prefilter_items(tmp_path: Path, monkeypatch) -> None:
@@ -1708,6 +1830,54 @@ def test_cleanup_prefilter_queue_removes_old_publish_terminal_rows(tmp_path: Pat
     assert summary["removed_terminal"] == 2
     assert summary["removed_polluted"] == 0
     assert set(items) == {"recent-running"}
+
+
+def test_run_periodic_queue_maintenance_skips_when_interval_not_reached(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    calls: list[str] = []
+
+    monkeypatch.setattr(worker_impl, "_prune_home_action_tasks", lambda workspace: calls.append("tasks") or 2)
+    monkeypatch.setattr(
+        worker_impl,
+        "_cleanup_prefilter_queue",
+        lambda workspace, log_file=None: calls.append("prefilter") or {"removed_terminal": 1, "removed_polluted": 1},
+    )
+
+    result = worker_impl._run_periodic_queue_maintenance(
+        workspace,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+        last_run_epoch=worker_impl.time.time(),
+        interval_seconds=300,
+    )
+
+    assert result["ran"] is False
+    assert calls == []
+
+
+def test_run_periodic_queue_maintenance_runs_and_reports_summary(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    calls: list[str] = []
+
+    monkeypatch.setattr(worker_impl, "_prune_home_action_tasks", lambda workspace: calls.append("tasks") or 2)
+    monkeypatch.setattr(
+        worker_impl,
+        "_cleanup_prefilter_queue",
+        lambda workspace, log_file=None: calls.append("prefilter") or {"removed_terminal": 3, "removed_polluted": 1},
+    )
+
+    result = worker_impl._run_periodic_queue_maintenance(
+        workspace,
+        log_file=workspace / "runtime" / "logs" / "telegram_worker.log",
+        last_run_epoch=0.0,
+        interval_seconds=300,
+        force=True,
+    )
+
+    assert result["ran"] is True
+    assert result["pruned_tasks"] == 2
+    assert result["prefilter_removed_terminal"] == 3
+    assert result["prefilter_removed_polluted"] == 1
+    assert calls == ["tasks", "prefilter"]
 
 
 def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatch, tmp_path: Path) -> None:

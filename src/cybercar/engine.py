@@ -298,7 +298,7 @@ MAX_BLOCKING_WAIT_SECONDS = 30
 UPLOAD_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DRAFT_SAVE_TIMEOUT_SECONDS = 25
 DRAFT_SAVE_RETRY_COUNT = 3
-CHROME_LAUNCH_TIMEOUT_SECONDS = 60
+CHROME_LAUNCH_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 X_DISCOVERY_URL_LIMIT = 24
 X_DISCOVERY_SCROLL_ROUNDS = 8
 X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS = 1.0
@@ -2917,10 +2917,32 @@ def _browser_tabs(page: ChromiumPage) -> list[Any]:
     getter = getattr(page, "get_tabs", None)
     if not callable(getter):
         return tabs
+
+    def _get_tabs_with_timeout(timeout_seconds: int) -> list[Any]:
+        holder: dict[str, Any] = {}
+
+        def _runner() -> None:
+            try:
+                try:
+                    holder["result"] = list(getter(tab_type="page"))
+                except TypeError:
+                    holder["result"] = list(getter())
+            except Exception as exc:
+                holder["error"] = exc
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join(timeout_seconds)
+        if thread.is_alive():
+            raise TimeoutError(f"get_tabs timeout ({timeout_seconds}s)")
+        if "error" in holder:
+            raise holder["error"]
+        return holder.get("result") if isinstance(holder.get("result"), list) else []
+
     try:
-        raw_tabs = list(getter(tab_type="page"))
-    except TypeError:
-        raw_tabs = list(getter())
+        raw_tabs = _get_tabs_with_timeout(
+            int(_normalize_blocking_timeout(8, CHROME_LAUNCH_TIMEOUT_SECONDS, minimum=1))
+        )
     except Exception:
         raw_tabs = []
     for tab in raw_tabs:
@@ -2932,6 +2954,18 @@ def _browser_tabs(page: ChromiumPage) -> list[Any]:
         seen.add(key)
         tabs.append(tab)
     return tabs
+
+
+def _disconnect_chrome_page_quietly(page: Any) -> None:
+    for method_name in ("quit", "close"):
+        method = getattr(page, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            method()
+            return
+        except Exception:
+            continue
 
 
 def _wechat_session_tab_score(url: str, open_url: str = "") -> int:
@@ -3101,8 +3135,16 @@ def probe_platform_session_via_debug_port(
 
     login_state = inspect_platform_login_gate(page, platform)
     current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
+    if platform == "wechat" and "channels.weixin.qq.com/login" in current_url.lower():
+        login_state = {
+            **dict(login_state or {}),
+            "needs_login": True,
+            "reason": str(login_state.get("reason") or "").strip() or "login_url",
+            "matched_marker": str(login_state.get("matched_marker") or "").strip() or "channels.weixin.qq.com/login",
+            "url": current_url,
+        }
     if not _is_platform_session_monitor_relevant_url(platform, current_url, resolved_open_url):
-        return {
+        result = {
             "ok": True,
             "status": "ignored",
             "platform": platform,
@@ -3110,6 +3152,8 @@ def probe_platform_session_via_debug_port(
             "current_url": current_url,
             "reason": str(login_state.get("reason") or "").strip(),
         }
+        _disconnect_chrome_page_quietly(page)
+        return result
 
     recent_session_ready = bool(profile_dir) and _has_recent_platform_session_ready(platform, profile_dir)
     diagnostics = _build_platform_login_diagnostics(
@@ -3127,7 +3171,7 @@ def probe_platform_session_via_debug_port(
                 url=current_url or resolved_open_url,
                 diagnostics=diagnostics,
             )
-        return {
+        result = {
             "ok": True,
             "status": "ready",
             "platform": platform,
@@ -3135,6 +3179,8 @@ def probe_platform_session_via_debug_port(
             "current_url": current_url,
             "diagnostics": diagnostics,
         }
+        _disconnect_chrome_page_quietly(page)
+        return result
 
     login_reason = str(login_state.get("reason") or "").strip()
     should_notify = bool(profile_dir) and _should_send_platform_login_monitor_notice(
@@ -3163,6 +3209,7 @@ def probe_platform_session_via_debug_port(
     }
     if not should_notify:
         result["notification_skipped"] = True
+        _disconnect_chrome_page_quietly(page)
         return result
 
     qr_result = send_platform_login_qr_notification(
@@ -3187,6 +3234,7 @@ def probe_platform_session_via_debug_port(
     if bool(qr_result.get("sent")):
         result["notified"] = True
         result["notification_mode"] = "qr"
+        _disconnect_chrome_page_quietly(page)
         return result
 
     text_result = _send_platform_login_text_notification(
@@ -3207,6 +3255,7 @@ def probe_platform_session_via_debug_port(
     if bool(text_result.get("sent")):
         result["notified"] = True
         result["notification_mode"] = "text"
+    _disconnect_chrome_page_quietly(page)
     return result
 
 
@@ -9703,6 +9752,12 @@ def download_from_x(
                 "--no-overwrites",
             ]
         else:
+            if not auto_discover_x:
+                _log("[Downloader] X auto-discovery disabled and no tweet URLs provided; skip compat search fallback.")
+                return []
+            if effective_fail_fast:
+                _log("[Downloader] X fail-fast enabled and no discovered URLs available; skip compat search fallback.")
+                return []
             search_url = f"https://x.com/search?q={quote_plus(keyword)}&src=typed_query&f=live"
             _log("[Downloader] Fallback to direct X search URL (compatibility may be unstable)")
             discovery_source = "compat_search_url"
@@ -10479,7 +10534,7 @@ def _launch_chrome_debug(
 
 
 def _wait_chrome_debug_port(debug_port: int, timeout_seconds: int = CHROME_LAUNCH_TIMEOUT_SECONDS) -> bool:
-    end_at = time.time() + timeout_seconds
+    end_at = time.time() + _normalize_blocking_timeout(timeout_seconds, CHROME_LAUNCH_TIMEOUT_SECONDS, minimum=1)
     while time.time() < end_at:
         if _is_chrome_debug_port_ready(debug_port):
             return True
@@ -10807,15 +10862,12 @@ def _connect_chrome(
     )
     addr = f"127.0.0.1:{debug_port}"
     last_error: Optional[Exception] = None
+    connect_timeout_seconds = int(
+        _normalize_blocking_timeout(CHROME_LAUNCH_TIMEOUT_SECONDS, CHROME_LAUNCH_TIMEOUT_SECONDS, minimum=1)
+    )
 
     # 部分环境下 DrissionPage 在子线程中初始化 ChromiumPage 会卡住，
     # 先在主线程直连一次，失败再走带超时的回退模式。
-    try:
-        return ChromiumPage(addr)
-    except Exception as exc:
-        last_error = exc
-        _log(f"[Uploader] Chrome direct connect fallback: {exc}")
-
     def _call_with_timeout(factory: Callable[[], ChromiumPage], timeout_seconds: int = 12) -> ChromiumPage:
         holder: dict[str, Any] = {}
 
@@ -10836,6 +10888,12 @@ def _connect_chrome(
             raise RuntimeError("connect failed without result")
         return holder["result"]
 
+    try:
+        return _call_with_timeout(lambda: ChromiumPage(addr), timeout_seconds=connect_timeout_seconds)
+    except Exception as exc:
+        last_error = exc
+        _log(f"[Uploader] Chrome direct connect fallback: {exc}")
+
     for mode_name in ("opts_address", "opts_port"):
         try:
             opts = ChromiumOptions()
@@ -10844,9 +10902,15 @@ def _connect_chrome(
             if mode_name == "opts_port" and hasattr(opts, "set_local_port"):
                 opts = opts.set_local_port(debug_port)
             try:
-                return _call_with_timeout(lambda: ChromiumPage(addr_or_opts=opts))
+                return _call_with_timeout(
+                    lambda: ChromiumPage(addr_or_opts=opts),
+                    timeout_seconds=connect_timeout_seconds,
+                )
             except TypeError:
-                return _call_with_timeout(lambda: ChromiumPage(opts))
+                return _call_with_timeout(
+                    lambda: ChromiumPage(opts),
+                    timeout_seconds=connect_timeout_seconds,
+                )
         except TimeoutError as exc:
             last_error = exc
             _log(f"[Uploader] Chrome connect timeout on mode: {mode_name}")

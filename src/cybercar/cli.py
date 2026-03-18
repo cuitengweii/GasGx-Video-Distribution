@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from typing import Any
 
 from .cleanup import run_cleanup
@@ -99,6 +101,16 @@ def _print_json(payload: Any) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _print_json_and_hard_exit(payload: Any, code: int = 0) -> int:
+    _print_json(payload)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(code)
+
+
 def main() -> int:
     parser = build_parser()
     args, passthrough = parser.parse_known_args()
@@ -131,13 +143,10 @@ def main() -> int:
         return 0
     if command == "login":
         if args.login_command == "status":
-            _print_json(login_status(str(args.platform)))
-            return 0
+            return _print_json_and_hard_exit(login_status(str(args.platform)))
         if args.login_command == "open":
-            _print_json(open_login(str(args.platform)))
-            return 0
-        _print_json(capture_login_qr(str(args.platform)))
-        return 0
+            return _print_json_and_hard_exit(open_login(str(args.platform)))
+        return _print_json_and_hard_exit(capture_login_qr(str(args.platform)))
     if command == "engage" and args.engage_command in {"wechat", "douyin", "kuaishou"}:
         runner = {
             "wechat": run_wechat_engagement,

@@ -276,3 +276,57 @@ def test_next_x_discovery_scroll_wait_seconds_clamps_to_minimum_window(monkeypat
 
     assert wait_seconds == 1.0
     assert captured["range"] == (1.0, 1.0)
+
+
+def test_download_from_x_skips_compat_search_when_auto_discovery_disabled(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path)
+    logs: list[str] = []
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(engine, "_log", lambda message: logs.append(str(message)))
+    monkeypatch.setattr(engine, "_ensure_binary", lambda name: None)
+    monkeypatch.setattr(engine, "_resolve_network_proxy", lambda proxy, use_system_proxy=False: (proxy, use_system_proxy))
+    monkeypatch.setattr(engine, "_build_subprocess_network_env", lambda proxy=None, use_system_proxy=False: {})
+    monkeypatch.setattr(engine, "_export_x_cookies_for_ytdlp", lambda *args, **kwargs: (None, "skipped-empty"))
+    monkeypatch.setattr(engine, "_run_command_result", lambda cmd, step_name, env=None: commands.append(list(cmd)) or subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    files = engine.download_from_x(
+        workspace=workspace,
+        keyword="Cybertruck",
+        limit=1,
+        tweet_urls=[],
+        auto_discover_x=False,
+        x_download_fail_fast=False,
+    )
+
+    assert files == []
+    assert commands == []
+    assert any("auto-discovery disabled" in line for line in logs)
+
+
+def test_download_from_x_skips_compat_search_when_fail_fast_has_no_discovered_urls(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path)
+    logs: list[str] = []
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(engine, "_log", lambda message: logs.append(str(message)))
+    monkeypatch.setattr(engine, "_ensure_binary", lambda name: None)
+    monkeypatch.setattr(engine, "_resolve_network_proxy", lambda proxy, use_system_proxy=False: (proxy, use_system_proxy))
+    monkeypatch.setattr(engine, "_build_subprocess_network_env", lambda proxy=None, use_system_proxy=False: {})
+    monkeypatch.setattr(engine, "_export_x_cookies_for_ytdlp", lambda *args, **kwargs: (None, "skipped-empty"))
+    monkeypatch.setattr(engine, "discover_x_video_urls", lambda **kwargs: [])
+    monkeypatch.setattr(engine, "discover_x_urls_via_seed_accounts", lambda **kwargs: [])
+    monkeypatch.setattr(engine, "_run_command_result", lambda cmd, step_name, env=None: commands.append(list(cmd)) or subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    files = engine.download_from_x(
+        workspace=workspace,
+        keyword="Cybertruck",
+        limit=1,
+        tweet_urls=[],
+        auto_discover_x=True,
+        x_download_fail_fast=True,
+    )
+
+    assert files == []
+    assert commands == []
+    assert any("fail-fast enabled and no discovered URLs available" in line for line in logs)
