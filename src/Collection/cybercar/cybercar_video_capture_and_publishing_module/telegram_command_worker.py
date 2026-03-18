@@ -6015,6 +6015,7 @@ def _request_platform_login_qr(
     timeout_seconds: int,
     log_file: Path,
     refresh_page: bool = False,
+    prefer_login_entry: bool = False,
 ) -> Dict[str, Any]:
     try:
         from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as core
@@ -6022,7 +6023,11 @@ def _request_platform_login_qr(
         import main as core  # type: ignore
 
     try:
-        runtime_ctx = _resolve_platform_login_runtime_context(core, platform_name)
+        runtime_ctx = _resolve_platform_login_runtime_context(
+            core,
+            platform_name,
+            prefer_login_entry=bool(prefer_login_entry),
+        )
         platform = runtime_ctx["platform"]
         result = core.send_platform_login_qr_notification(
             platform_name=platform,
@@ -6237,7 +6242,12 @@ def _refresh_platform_login_qr_message(
         return {"ok": False, "needs_login": True, "error": str(exc)}
 
 
-def _resolve_platform_login_runtime_context(core: Any, platform_name: str) -> Dict[str, Any]:
+def _resolve_platform_login_runtime_context(
+    core: Any,
+    platform_name: str,
+    *,
+    prefer_login_entry: bool = False,
+) -> Dict[str, Any]:
     platform = str(platform_name or "wechat").strip().lower() or "wechat"
     if platform == "wechat":
         debug_port = int(os.getenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", str(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", 9334))))
@@ -6259,7 +6269,9 @@ def _resolve_platform_login_runtime_context(core: Any, platform_name: str) -> Di
     login_entry_url = str((getattr(core, "PLATFORM_LOGIN_ENTRY_URLS", {}) or {}).get(platform) or "").strip()
     # For publish-capable platforms, probe the business page first so a stale
     # login helper URL does not force the active tab back to login.html.
-    open_url = create_url or login_entry_url
+    # Manual login requests can opt into the dedicated login entry directly
+    # so the user gets a QR code immediately.
+    open_url = login_entry_url if prefer_login_entry and login_entry_url else (create_url or login_entry_url)
     return {
         "platform": platform,
         "debug_port": debug_port,
@@ -7133,8 +7145,11 @@ def _normalize_command_key(text: str) -> str:
     lowered = token.lower().replace("\ufe0f", "")
     shortcut_map = {
         "首页": "首页",
+        "⚡ 即采即发": "即采即发",
         "✨ 即采即发": "即采即发",
+        "📍 进度": "进程查看",
         "📍 进程查看": "进程查看",
+        "🔐 登录": "平台登录",
         "🔐 平台登录": "平台登录",
         "💬 点赞评论": "点赞评论",
     }
@@ -10637,6 +10652,7 @@ def _run_home_action_job(
                 timeout_seconds=timeout_seconds,
                 log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
                 refresh_page=True,
+                prefer_login_entry=True,
             )
             if bool(result.get("sent")):
                 detail = f"{PUBLISH_PLATFORM_DISPLAY.get(platform_value, platform_value)}登录二维码已发送，请查看最新消息。"
@@ -11537,6 +11553,7 @@ def _handle_command(
                 timeout_seconds=timeout_seconds,
                 log_file=audit_file.parent / "telegram_command_worker.log",
                 refresh_page=True,
+                prefer_login_entry=True,
             )
             if bool(result.get("sent")):
                 return "视频号登录二维码已发送，请扫码。"

@@ -360,6 +360,12 @@ def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
     assert worker_impl._normalize_shortcut_text("⚡ 即采即发") == "即采即发"
 
 
+def test_normalize_command_key_accepts_new_short_labels() -> None:
+    assert worker_impl._normalize_command_key("🔐 登录") == "平台登录"
+    assert worker_impl._normalize_command_key("📍 进度") == "进程查看"
+    assert worker_impl._normalize_command_key("⚡ 即采即发") == "即采即发"
+
+
 def test_refresh_home_surface_on_startup_force_refresh_updates_home_and_shortcut(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     home_state_path = worker_impl._home_state_path(workspace)
@@ -2625,6 +2631,24 @@ def test_resolve_platform_login_runtime_context_prefers_wechat_publish_url() -> 
     runtime_ctx = worker_impl._resolve_platform_login_runtime_context(fake_core, "wechat")
 
     assert runtime_ctx["open_url"] == "https://channels.weixin.qq.com/platform/post/create"
+
+
+def test_resolve_platform_login_runtime_context_can_prefer_wechat_login_entry() -> None:
+    fake_core = SimpleNamespace(
+        DEFAULT_WECHAT_DEBUG_PORT=9334,
+        DEFAULT_WECHAT_CHROME_USER_DATA_DIR=r"D:\profiles\wechat",
+        DEFAULT_CHROME_USER_DATA_DIR=r"D:\profiles\default",
+        PLATFORM_CREATE_POST_URLS={"wechat": "https://channels.weixin.qq.com/platform/post/create"},
+        PLATFORM_LOGIN_ENTRY_URLS={"wechat": "https://channels.weixin.qq.com/login.html"},
+    )
+
+    runtime_ctx = worker_impl._resolve_platform_login_runtime_context(
+        fake_core,
+        "wechat",
+        prefer_login_entry=True,
+    )
+
+    assert runtime_ctx["open_url"] == "https://channels.weixin.qq.com/login.html"
 
 
 def test_probe_platform_login_after_publish_failure_keeps_original_error_when_session_ready(tmp_path: Path, monkeypatch) -> None:
