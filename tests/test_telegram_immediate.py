@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2344,6 +2345,102 @@ def test_preflight_immediate_platform_login_sends_text_notice_before_qr(tmp_path
     assert events == ["text", "qr"]
     assert "已向 Telegram 发送登录提醒" in str(result["error"])
     assert "Telegram 网络抖动导致二维码暂未送达" in str(result["error"])
+
+
+def test_build_process_prefilter_section_hides_unsent_and_terminal_history(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    now_text = worker_impl._now_text()
+    recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _save_prefilter_items(
+        workspace,
+        {
+            "unsent-link": {
+                "id": "unsent-link",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "link_pending",
+                "created_at": recent_text,
+                "updated_at": recent_text,
+                "tweet_text": "pending but unsent",
+                "message_id": 0,
+            },
+            "active-publish": {
+                "id": "active-publish",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "publish_running",
+                "created_at": recent_text,
+                "updated_at": recent_text,
+                "processed_name": "active.mp4",
+            },
+            "partial-history": {
+                "id": "partial-history",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "publish_partial",
+                "created_at": "2026-03-18 08:40:00",
+                "updated_at": "2026-03-18 08:40:00",
+                "processed_name": "partial.mp4",
+            },
+            "done-history": {
+                "id": "done-history",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "publish_done",
+                "created_at": "2026-03-18 08:35:00",
+                "updated_at": "2026-03-18 08:35:00",
+                "processed_name": "done.mp4",
+            },
+        },
+    )
+
+    section = worker_impl._build_process_prefilter_section(workspace)
+
+    assert section["title"] == "即采即发队列"
+    text = "\n".join(
+        (str(item.get("label") or "") + str(item.get("value") or "")) if isinstance(item, dict) else str(item)
+        for item in section["items"]
+    )
+    assert "当前积压数1" in text
+    assert "发布中1" in text
+    assert "待人工确认" not in text
+    assert "部分完成" not in text
+    assert "全部完成" not in text
+
+
+def test_build_process_prefilter_section_reports_empty_when_only_history_exists(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    now_text = worker_impl._now_text()
+    recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _save_prefilter_items(
+        workspace,
+        {
+            "unsent-link": {
+                "id": "unsent-link",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "link_pending",
+                "created_at": recent_text,
+                "updated_at": recent_text,
+                "tweet_text": "pending but unsent",
+                "message_id": 0,
+            },
+            "partial-history": {
+                "id": "partial-history",
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "publish_partial",
+                "created_at": "2026-03-18 08:40:00",
+                "updated_at": "2026-03-18 08:40:00",
+                "processed_name": "partial.mp4",
+            },
+        },
+    )
+
+    section = worker_impl._build_process_prefilter_section(workspace)
+
+    assert section["title"] == "即采即发队列"
+    assert any("当前没有活跃的即采即发积压" in str(item) for item in section["items"])
 
 
 def test_resolve_platform_login_runtime_context_prefers_wechat_publish_url() -> None:

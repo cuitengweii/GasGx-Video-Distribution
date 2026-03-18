@@ -32,7 +32,7 @@ def test_resolve_platform_publish_mode_with_config_prefers_wechat_structured_def
     assert mode.save_draft is True
     assert mode.publish_now is False
     assert pipeline._resolve_wechat_declare_original(args, runtime_config) is True
-    assert pipeline._resolve_platform_upload_timeout(args, runtime_config, "wechat", minimum=30) == 480
+    assert pipeline._resolve_platform_upload_timeout(args, runtime_config, "wechat", minimum=30) == 30
 
 
 def test_resolve_platform_publish_mode_with_config_reads_bilibili_random_schedule_defaults() -> None:
@@ -43,7 +43,7 @@ def test_resolve_platform_publish_mode_with_config_reads_bilibili_random_schedul
         no_save_draft=False,
         kuaishou_auto_publish_random_schedule=False,
         bilibili_auto_publish_random_schedule=False,
-        upload_timeout=420,
+        upload_timeout=30,
         bilibili_random_schedule_max_minutes=pipeline.DEFAULT_BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES,
     )
     runtime_config = {
@@ -74,4 +74,4 @@ def test_resolve_platform_publish_mode_with_config_reads_bilibili_random_schedul
         )
         == 360
     )
-    assert pipeline._resolve_platform_upload_timeout(args, runtime_config, "bilibili", minimum=600) == 900
+    assert pipeline._resolve_platform_upload_timeout(args, runtime_config, "bilibili", minimum=600) == 30

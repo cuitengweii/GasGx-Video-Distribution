@@ -294,7 +294,8 @@ PLATFORM_LOGIN_PAGE_HINTS = {
 }
 SUPPORTED_UPLOAD_PLATFORMS = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili")
 DEFAULT_UPLOAD_PLATFORMS = "wechat"
-UPLOAD_TIMEOUT_SECONDS = 420
+MAX_BLOCKING_WAIT_SECONDS = 30
+UPLOAD_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DRAFT_SAVE_TIMEOUT_SECONDS = 25
 DRAFT_SAVE_RETRY_COUNT = 3
 CHROME_LAUNCH_TIMEOUT_SECONDS = 60
@@ -304,9 +305,9 @@ X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS = 1.0
 WECHAT_LOGIN_QR_REFRESH_CALLBACK_PREFIX = "ctqr"
 WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS = 120
 WECHAT_LOGIN_QR_NOTICE_CACHE: dict[str, tuple[str, float]] = {}
-PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS = 300
+PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 PLATFORM_LOGIN_CONFIRM_POLL_SECONDS = 2.0
-PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS = 600
+PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 WECHAT_RECENT_READY_ROUTE_ERROR_RECHECKS = 4
 WECHAT_RECENT_READY_ROUTE_ERROR_RECHECK_SLEEP_SECONDS = 2.0
 X_DISCOVERY_SCROLL_WAIT_SECONDS = 3.0
@@ -350,11 +351,11 @@ DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
         "publish_now": True,
         "auto_publish_random_schedule": False,
         "random_schedule_max_minutes": BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
-        "upload_timeout": max(600, UPLOAD_TIMEOUT_SECONDS),
+        "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
     },
 }
-KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 150
-WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 90
+KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
+WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DEFAULT_AUTO_DELETE_SOURCE_FILES = False
 SPARK_CHAT_TIMEOUT_SECONDS = 20
 DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE = 12
@@ -2816,7 +2817,7 @@ def _has_recent_platform_session_ready(platform_name: str, profile_dir: str, *, 
     updated_at = float(payload.get("updated_at") or 0.0)
     if updated_at <= 0:
         return False
-    return (time.time() - updated_at) <= max(60, int(max_age_seconds or 0))
+    return (time.time() - updated_at) <= _normalize_blocking_timeout(max_age_seconds, 60, minimum=1)
 
 
 def _should_send_platform_login_monitor_notice(
@@ -2839,7 +2840,11 @@ def _should_send_platform_login_monitor_notice(
     updated_at = float(payload.get("updated_at") or 0.0)
     if updated_at <= 0:
         return True
-    return (time.time() - updated_at) >= max(60, int(min_repeat_seconds or 0))
+    return (time.time() - updated_at) >= _normalize_blocking_timeout(
+        min_repeat_seconds,
+        PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS,
+        minimum=1,
+    )
 
 
 def _trim_platform_debug_text(value: str, limit: int = 240) -> str:
@@ -3493,7 +3498,11 @@ def _wait_for_platform_login_confirmation(
 ) -> bool:
     platform = str(platform_name or "").strip().lower() or "wechat"
     profile_dir = str(Path(chrome_user_data_dir).expanduser())
-    deadline = time.time() + max(30, int(timeout_seconds or PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS))
+    deadline = time.time() + _normalize_blocking_timeout(
+        timeout_seconds,
+        PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS,
+        minimum=1,
+    )
     last_confirmed_at = 0.0
     next_auto_refresh_at = time.time() + max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
     while time.time() < deadline:
@@ -3724,6 +3733,16 @@ def _coerce_int(value: Any, default: int, *, minimum: int = 0) -> int:
     except Exception:
         parsed = default
     return max(minimum, parsed)
+
+
+def _normalize_blocking_timeout(value: Any, default: int, *, minimum: int = 1) -> int:
+    normalized_minimum = max(1, min(MAX_BLOCKING_WAIT_SECONDS, int(minimum)))
+    fallback = max(normalized_minimum, min(MAX_BLOCKING_WAIT_SECONDS, int(default)))
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = fallback
+    return max(normalized_minimum, min(MAX_BLOCKING_WAIT_SECONDS, parsed))
 
 
 def _coerce_float(value: Any, default: float, *, minimum: float = 0.0) -> float:
@@ -3982,10 +4001,10 @@ def _merge_publish_platform_config(raw: Any) -> dict[str, Any]:
                 minimum=1,
             )
         if "upload_timeout" in value:
-            merged["upload_timeout"] = _coerce_int(
+            merged["upload_timeout"] = _normalize_blocking_timeout(
                 value.get("upload_timeout"),
                 int(merged.get("upload_timeout", UPLOAD_TIMEOUT_SECONDS) or UPLOAD_TIMEOUT_SECONDS),
-                minimum=30,
+                minimum=1,
             )
         result[platform] = merged
     return result
@@ -4110,10 +4129,14 @@ def _resolve_platform_upload_timeout_from_runtime(
     minimum: int,
 ) -> int:
     configured = resolve_platform_publish_config(runtime_config, platform_name)
-    configured_timeout = max(minimum, int(configured.get("upload_timeout", cli_default) or cli_default))
-    normalized_cli = max(1, int(cli_timeout or cli_default))
-    if normalized_cli != cli_default:
-        return max(minimum, normalized_cli)
+    configured_timeout = _normalize_blocking_timeout(
+        configured.get("upload_timeout", cli_default),
+        cli_default,
+        minimum=minimum,
+    )
+    normalized_cli = _normalize_blocking_timeout(cli_timeout, cli_default, minimum=minimum)
+    if normalized_cli != _normalize_blocking_timeout(cli_default, cli_default, minimum=minimum):
+        return normalized_cli
     return configured_timeout
 
 
@@ -14182,7 +14205,7 @@ def _wait_upload_ready_generic(
         "转载",
     )
     bilibili_upload_entry_markers = ("点击上传或将视频拖拽到此区域", "当前审核队列快速", "视频大小16G以内", "拖拽到此区域")
-    end_at = time.time() + max(30, int(timeout_seconds))
+    end_at = time.time() + _normalize_blocking_timeout(timeout_seconds, UPLOAD_TIMEOUT_SECONDS, minimum=1)
     bilibili_entry_since = 0.0
     bilibili_busy_since = 0.0
     bilibili_reupload_attempted = False
@@ -17778,7 +17801,11 @@ def _fill_bilibili_title_from_caption(
     }
     return {state: 'set', value: norm(el.value || el.innerText || el.textContent || '')};
     """
-    deadline = time.time() + max(30, int(timeout_seconds))
+    deadline = time.time() + _normalize_blocking_timeout(
+        timeout_seconds,
+        WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS,
+        minimum=1,
+    )
     waited_log_at = 0.0
     last_js_state = ""
     last_js_value = ""

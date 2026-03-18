@@ -59,4 +59,4 @@ def test_resolve_platform_publish_config_reads_structured_platform_settings() ->
     assert payload["save_draft"] is True
     assert payload["publish_now"] is False
     assert payload["declare_original"] is True
-    assert payload["upload_timeout"] == 480
+    assert payload["upload_timeout"] == 30

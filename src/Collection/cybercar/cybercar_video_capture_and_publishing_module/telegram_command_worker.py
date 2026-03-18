@@ -90,7 +90,8 @@ DEFAULT_POLLER_LOCK_STALE_SECONDS = 300
 DEFAULT_WECHAT_COMMENT_REPLY_STATE_FILE = Path("runtime") / "wechat_comment_reply_state.json"
 DEFAULT_POLL_INTERVAL_SECONDS = 0
 DEFAULT_POLL_TIMEOUT_SECONDS = 10
-DEFAULT_TIMEOUT_SECONDS = 900
+MAX_BLOCKING_WAIT_SECONDS = 30
+DEFAULT_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DEFAULT_POLL_NETWORK_FAILURE_RESTART_THRESHOLD = 6
 DEFAULT_TELEGRAM_POST_RETRY_COUNT = 3
 DEFAULT_HOME_FORCE_NEW_DEBOUNCE_SECONDS = 6
@@ -108,9 +109,9 @@ DEFAULT_PROCESS_STATUS_LOG_SCAN_LINES = 40
 DEFAULT_IMMEDIATE_REVIEW_WAIT_SECONDS = 18
 DEFAULT_IMMEDIATE_CANDIDATE_LIMIT = 10
 DEFAULT_IMMEDIATE_COLLECT_LOCK_RETRY_SECONDS = 12
-DEFAULT_IMMEDIATE_COLLECT_LOCK_MAX_WAIT_SECONDS = 240
+DEFAULT_IMMEDIATE_COLLECT_LOCK_MAX_WAIT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DEFAULT_IMMEDIATE_PUBLISH_LOCK_RETRY_SECONDS = 15
-DEFAULT_IMMEDIATE_PUBLISH_LOCK_MAX_WAIT_SECONDS = 180
+DEFAULT_IMMEDIATE_PUBLISH_LOCK_MAX_WAIT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 COLLECT_PUBLISH_CANDIDATE_OPTIONS = [1, 3, 5, 10, 15, 30]
 COMMENT_REPLY_POST_OPTIONS = [3, 5, 7, 10]
 COLLECT_PUBLISH_DISCOVERY_MULTIPLIER = 4
@@ -124,7 +125,8 @@ DEFAULT_PIPELINE_PRIORITY_REQUEST_DIR = Path("runtime") / "pipeline_priority_req
 DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 30
 DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 3 * 86400
 DEFAULT_PREFILTER_QUEUE_STATUS_WINDOW_SECONDS = 24 * 3600
-DEFAULT_PLATFORM_LOCK_TIMEOUT_SECONDS = 1800
+DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS = 30 * 60
+DEFAULT_PLATFORM_LOCK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 TELEGRAM_PREFILTER_CALLBACK_PREFIX = "ctpf"
 TELEGRAM_MENU_CALLBACK_PREFIX = "ctm"
 TELEGRAM_WECHAT_QR_CALLBACK_PREFIX = "ctqr"
@@ -348,6 +350,16 @@ def _append_log(log_file: Path, message: str) -> None:
             fh.write(line + "\n")
     except Exception:
         pass
+
+
+def _normalize_blocking_timeout(value: Any, default: float, *, minimum: float = 1.0) -> float:
+    normalized_minimum = max(1.0, min(float(MAX_BLOCKING_WAIT_SECONDS), float(minimum)))
+    fallback = max(normalized_minimum, min(float(MAX_BLOCKING_WAIT_SECONDS), float(default)))
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = fallback
+    return max(normalized_minimum, min(float(MAX_BLOCKING_WAIT_SECONDS), parsed))
 
 
 def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
@@ -1077,7 +1089,7 @@ def _refresh_home_surface_on_startup(
                 workspace=workspace,
                 chat_id=clean_chat_id,
             ),
-            timeout_seconds=max(30, int(timeout_seconds)),
+            timeout_seconds=int(_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1)),
             force_new=True,
         )
         _mark_home_surface_state_version(home_state_path, DEFAULT_HOME_SURFACE_VERSION)
@@ -2174,6 +2186,33 @@ def _is_prefilter_recent_for_process_status(row: Dict[str, Any]) -> bool:
     return ts >= cutoff
 
 
+def _is_prefilter_live_for_process_status(row: Dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    status = str(row.get("status") or "").strip().lower()
+    if status not in {
+        "link_pending",
+        "up_confirmed",
+        "down_confirmed",
+        "download_running",
+        "publish_requested",
+        "publish_running",
+    }:
+        return False
+    ts = _prefilter_item_timestamp(row)
+    if ts is None:
+        return False
+    cutoff = datetime.now() - timedelta(seconds=max(300, int(DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS)))
+    if ts < cutoff:
+        return False
+    if status in {"link_pending", "up_confirmed", "down_confirmed"}:
+        try:
+            return int(row.get("message_id") or 0) > 0
+        except Exception:
+            return False
+    return True
+
+
 def _build_process_worker_section(workspace: Path) -> dict[str, Any]:
     state = _load_state(_worker_state_path(workspace))
     if not state:
@@ -2289,16 +2328,22 @@ def _build_process_prefilter_section(
         }
 
     items_list = [dict(row) for row in raw_items.values() if isinstance(row, dict)]
-    recent_items = [row for row in items_list if _is_prefilter_recent_for_process_status(row)]
-    if not recent_items:
+    live_items = [row for row in items_list if _is_prefilter_live_for_process_status(row)]
+    if not live_items:
+        hidden_count = len([row for row in items_list if _is_prefilter_recent_for_process_status(row)])
         return {
             "title": "即采即发队列",
             "emoji": "🪄",
-            "items": ["首页仅统计最近24小时的即采即发记录；当前没有近期队列。"],
+            "items": [
+                (
+                    f"当前没有活跃的即采即发积压。"
+                    + (f" 已隐藏 {hidden_count} 条近期历史记录。" if hidden_count > 0 else "")
+                )
+            ],
         }
 
     status_counts: dict[str, int] = {}
-    for row in recent_items:
+    for row in live_items:
         status = str(row.get("status") or "").strip().lower() or "unknown"
         status_counts[status] = int(status_counts.get(status, 0)) + 1
 
@@ -2309,14 +2354,10 @@ def _build_process_prefilter_section(
         "download_running",
         "publish_requested",
         "publish_running",
-        "publish_partial",
-        "publish_done",
-        "publish_failed",
-        "send_failed",
     ]
     items: list[Any] = [
-        {"label": "近期候选数", "value": str(len(recent_items))},
-        {"label": "统计窗口", "value": "最近24小时"},
+        {"label": "当前积压数", "value": str(len(live_items))},
+        {"label": "活跃窗口", "value": "最近30分钟（仅统计当前活跃项）"},
     ]
     queue_updated_at = str(queue.get("updated_at") or "").strip()
     if queue_updated_at:
@@ -2334,13 +2375,11 @@ def _build_process_prefilter_section(
         "download_running",
         "publish_requested",
         "publish_running",
-        "publish_partial",
-        "send_failed",
     }
     highlighted = [
         row
         for row in sorted(
-            recent_items,
+            live_items,
             key=lambda row: _prefilter_item_timestamp(row) or datetime.min,
             reverse=True,
         )
@@ -2348,7 +2387,7 @@ def _build_process_prefilter_section(
     ]
     if not highlighted:
         highlighted = sorted(
-            recent_items,
+            live_items,
             key=lambda row: _prefilter_item_timestamp(row) or datetime.min,
             reverse=True,
         )
@@ -2368,9 +2407,9 @@ def _build_process_prefilter_section(
             limit=72,
         )
         items.append({"label": f"{media_label}｜{status_label}", "value": f"{updated_at}\n{preview}"})
-    hidden_count = max(0, len(items_list) - len(recent_items))
+    hidden_count = max(0, len(items_list) - len(live_items))
     if hidden_count > 0:
-        items.append(f"更早的 {hidden_count} 条历史记录已从首页统计中隐藏。")
+        items.append(f"已隐藏 {hidden_count} 条非活跃历史记录。")
 
     return {
         "title": "即采即发队列",
@@ -7980,7 +8019,7 @@ def _run_direct_xiaohongshu_image_publish(
                 workspace,
                 "xiaohongshu",
                 _publish_once_under_lock,
-                timeout_seconds=max(60, float(timeout_seconds)),
+                timeout_seconds=_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1),
             )
         )
     except Exception as exc:
@@ -8120,7 +8159,7 @@ def _run_direct_kuaishou_image_publish(
                 workspace,
                 "kuaishou",
                 _publish_once_under_lock,
-                timeout_seconds=max(60, float(timeout_seconds)),
+                timeout_seconds=_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1),
             )
         )
     except Exception as exc:
@@ -10013,7 +10052,7 @@ def _publish_immediate_candidate_platform(
             workspace,
             platform,
             _publish_once_under_lock,
-            timeout_seconds=max(60, float(timeout_seconds)),
+            timeout_seconds=_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1),
         )
     except Exception as exc:
         error_text = str(exc)
@@ -11629,7 +11668,7 @@ def handle_command_update(
             state_file=_home_state_path(workspace),
             bot_kind="cybercar",
             card=raw_reply["home_card"],
-            timeout_seconds=max(30, int(timeout_seconds)),
+            timeout_seconds=int(_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1)),
             force_new=force_new_home,
         )
         _ensure_home_shortcut_keyboard(
@@ -11648,7 +11687,7 @@ def handle_command_update(
         bot_token=bot_token,
         chat_id=chat_id,
         text=str(reply_payload.get("text") or ""),
-        timeout_seconds=max(30, int(timeout_seconds)),
+        timeout_seconds=int(_normalize_blocking_timeout(timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1)),
         reply_markup=reply_payload.get("reply_markup") if isinstance(reply_payload.get("reply_markup"), dict) else None,
     )
     _append_log(log_file, f"[Worker] => update_id={update_id} replied.")
@@ -12312,7 +12351,7 @@ def main() -> int:
     poll_interval = max(0, int(args.poll_interval_seconds))
     poll_timeout = max(1, int(args.poll_timeout_seconds))
     poll_network_failure_restart_threshold = max(0, int(args.poll_network_failure_restart_threshold))
-    timeout_seconds = max(30, int(args.timeout_seconds))
+    timeout_seconds = int(_normalize_blocking_timeout(args.timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1))
     allow_shell = bool(args.allow_shell)
     api_timeout_seconds = max(10, poll_timeout + 15)
     consecutive_poll_failures = 0

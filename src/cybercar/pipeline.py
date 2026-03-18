@@ -551,16 +551,21 @@ def _resolve_platform_upload_timeout(
     *,
     minimum: int,
 ) -> int:
-    default_timeout = int(getattr(core, "UPLOAD_TIMEOUT_SECONDS", 420))
-    cli_timeout = max(1, int(getattr(args, "upload_timeout", default_timeout) or default_timeout))
+    hard_cap = int(getattr(core, "MAX_BLOCKING_WAIT_SECONDS", 30) or 30)
+    normalized_minimum = max(1, min(hard_cap, int(minimum)))
+    default_timeout = max(normalized_minimum, min(hard_cap, int(getattr(core, "UPLOAD_TIMEOUT_SECONDS", 30) or 30)))
+    cli_timeout = max(1, min(hard_cap, int(getattr(args, "upload_timeout", default_timeout) or default_timeout)))
     config = (
         core.resolve_platform_publish_config(runtime_config, platform)
         if hasattr(core, "resolve_platform_publish_config")
         else {}
     )
-    configured_timeout = max(minimum, int(config.get("upload_timeout", default_timeout) or default_timeout))
+    configured_timeout = max(
+        normalized_minimum,
+        min(hard_cap, int(config.get("upload_timeout", default_timeout) or default_timeout)),
+    )
     if cli_timeout != default_timeout:
-        return max(minimum, cli_timeout)
+        return max(normalized_minimum, cli_timeout)
     return configured_timeout
 
 
