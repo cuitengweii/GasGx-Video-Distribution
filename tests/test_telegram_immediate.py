@@ -433,6 +433,23 @@ def test_home_reply_keyboard_uses_same_short_labels_as_inline_actions() -> None:
     assert texts == ["🔐 登录", "📍 进度", "⚡ 即采即发", "💬 点赞评论"]
 
 
+def test_comment_reply_menu_card_merges_same_count_into_single_action() -> None:
+    card = worker_impl._build_comment_reply_menu_card(default_profile=DEFAULT_PROFILE)
+    texts = _reply_markup_texts(card["reply_markup"])
+
+    assert "💬 3个" in texts
+    assert "💬 5个" in texts
+    assert "💬 7个" in texts
+    assert "💬 10个" in texts
+
+
+def test_comment_reply_request_value_normalizes_platform_modes() -> None:
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "3") == "all:3"
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "wechat:5") == "wechat:5"
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "douyin") == "douyin:3"
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "kuaishou:7") == "kuaishou:7"
+
+
 def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
     assert worker_impl._normalize_shortcut_text("🔐 登录") == "平台登录"
     assert worker_impl._normalize_shortcut_text("📍 进度") == "进程查看"
@@ -2853,6 +2870,171 @@ def test_preflight_immediate_platform_login_sends_text_notice_before_qr(tmp_path
     assert events == ["text", "qr"]
     assert "已向 Telegram 发送登录提醒" in str(result["error"])
     assert "Telegram 网络抖动导致二维码暂未送达" in str(result["error"])
+
+
+def test_run_comment_reply_job_routes_to_douyin_engagement(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    sent_texts: list[str] = []
+    sent_cards: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_send_reply", lambda **kwargs: sent_texts.append(str(kwargs["text"])) or None)
+    monkeypatch.setattr(worker_impl, "_send_card_message", lambda **kwargs: sent_cards.append(dict(kwargs)) or None)
+    monkeypatch.setattr(worker_impl, "_build_comment_reply_result_card", lambda result: {"result": result})
+    monkeypatch.setattr(
+        worker_impl,
+        "_load_engagement_module",
+        lambda: SimpleNamespace(
+            run_douyin_engagement=lambda **kwargs: {
+                "ok": True,
+                "platform": "douyin",
+                "records": [
+                    {
+                        "post_title": "CyberTruck clip",
+                        "comment_author": "tester",
+                        "comment_time": "1h",
+                        "comment_preview": "Looks great",
+                        "reply_text": "Thanks!",
+                        "replied_at": "2026-03-19 10:00:00",
+                    }
+                ],
+                "posts_scanned": 1,
+                "posts_selected": 1,
+                "replies_sent": 1,
+            }
+        ),
+    )
+
+    exit_code = worker_impl._run_comment_reply_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        platform="douyin",
+        post_limit=1,
+    )
+
+    assert exit_code == 0
+    assert any("目标平台：抖音" in text for text in sent_texts)
+    assert any("最近 1 个有评论视频" in text for text in sent_texts)
+    assert any("[抖音] Reply 1" in text for text in sent_texts)
+    assert any("Comment: Looks great" in text for text in sent_texts)
+    assert sent_cards[-1]["card"]["result"]["platform"] == "douyin"
+
+
+def test_run_comment_reply_job_all_runs_three_platforms(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    sent_texts: list[str] = []
+    sent_cards: list[dict[str, object]] = []
+
+    class FakeCommentCore(FakeCore):
+        def _load_runtime_config(self, path: str) -> dict[str, object]:
+            return {"comment_reply": {"debug": True}}
+
+        def run_wechat_comment_reply(self, **kwargs: object) -> dict[str, object]:
+            return {
+                "ok": True,
+                "platform": "wechat",
+                "state_path": "wechat_state.json",
+                "markdown_path": "wechat_records.md",
+                "records": [{"post_title": "wechat post", "comment_author": "w", "comment_time": "1m", "comment_preview": "cw", "reply_text": "rw", "replied_at": "2026-03-19 10:00:00"}],
+                "posts_scanned": 1,
+                "posts_selected": 1,
+                "replies_sent": 1,
+            }
+
+    monkeypatch.setattr(worker_impl, "_send_reply", lambda **kwargs: sent_texts.append(str(kwargs["text"])) or None)
+    monkeypatch.setattr(worker_impl, "_send_card_message", lambda **kwargs: sent_cards.append(dict(kwargs)) or None)
+    monkeypatch.setattr(worker_impl, "_build_comment_reply_result_card", lambda result: {"result": result})
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (SimpleNamespace(), FakeCommentCore()))
+    monkeypatch.setattr(
+        worker_impl,
+        "_load_engagement_module",
+        lambda: SimpleNamespace(
+            run_douyin_engagement=lambda **kwargs: {
+                "ok": True,
+                "platform": "douyin",
+                "state_path": "douyin_state.json",
+                "markdown_path": "douyin_records.md",
+                "records": [{"post_title": "douyin post", "comment_author": "d", "comment_time": "2m", "comment_preview": "cd", "reply_text": "rd", "replied_at": "2026-03-19 10:01:00"}],
+                "posts_scanned": 2,
+                "posts_selected": 1,
+                "replies_sent": 1,
+            },
+            run_kuaishou_engagement=lambda **kwargs: {
+                "ok": True,
+                "platform": "kuaishou",
+                "state_path": "kuaishou_state.json",
+                "markdown_path": "kuaishou_records.md",
+                "records": [{"post_title": "kuaishou post", "comment_author": "k", "comment_time": "3m", "comment_preview": "ck", "reply_text": "rk", "replied_at": "2026-03-19 10:02:00"}],
+                "posts_scanned": 3,
+                "posts_selected": 2,
+                "replies_sent": 1,
+            },
+        ),
+    )
+
+    exit_code = worker_impl._run_comment_reply_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        platform="all",
+        post_limit=3,
+    )
+
+    assert exit_code == 0
+    assert any("目标平台：视频号 / 抖音 / 快手" in text for text in sent_texts)
+    assert any("[视频号] Reply 1" in text for text in sent_texts)
+    assert any("[抖音] Reply 2" in text for text in sent_texts)
+    assert any("[快手] Reply 3" in text for text in sent_texts)
+    aggregate = sent_cards[-1]["card"]["result"]
+    assert aggregate["platform"] == "all"
+    assert aggregate["replies_sent"] == 3
+    assert len(aggregate["platform_results"]) == 3
+
+
+def test_run_comment_reply_job_routes_to_kuaishou_engagement(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    sent_cards: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_send_reply", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_send_card_message", lambda **kwargs: sent_cards.append(dict(kwargs)) or None)
+    monkeypatch.setattr(worker_impl, "_build_comment_reply_result_card", lambda result: {"result": result})
+    monkeypatch.setattr(
+        worker_impl,
+        "_load_engagement_module",
+        lambda: SimpleNamespace(
+            run_kuaishou_engagement=lambda **kwargs: {
+                "ok": True,
+                "platform": "kuaishou",
+                "records": [],
+                "posts_scanned": 1,
+                "posts_selected": 1,
+                "replies_sent": 1,
+            }
+        ),
+    )
+
+    exit_code = worker_impl._run_comment_reply_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_identifier="",
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        platform="kuaishou",
+        post_limit=1,
+    )
+
+    assert exit_code == 0
+    assert sent_cards[-1]["card"]["result"]["platform"] == "kuaishou"
 
 
 def test_build_process_prefilter_section_hides_unsent_and_terminal_history(tmp_path: Path) -> None:

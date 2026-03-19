@@ -199,6 +199,78 @@ def test_run_kuaishou_focused_engagement_delegates_to_runtime(monkeypatch, tmp_p
     assert captured["notify_env_prefix"] == "KS_NOTIFY_"
 
 
+def test_run_douyin_focused_generated_engagement_delegates_to_runtime(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+        default_profile_dir = tmp_path / "default"
+
+    monkeypatch.setattr(engagement, "apply_runtime_environment", lambda: FakePaths())
+    monkeypatch.setattr(
+        engagement,
+        "load_app_config",
+        lambda: {
+            "chrome": {"default_debug_port": 9777},
+            "notify": {"env_prefix": "DY_NOTIFY_"},
+            "comment_reply": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(engagement.engine, "init_workspace", lambda root: f"workspace:{root}")
+
+    def fake_reply_douyin_focused_generated(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "platform": "douyin", "replies_sent": 1}
+
+    monkeypatch.setattr(engagement, "reply_douyin_focused_generated", fake_reply_douyin_focused_generated)
+
+    result = engagement.run_douyin_focused_generated_engagement(debug=True, ignore_state=True)
+
+    assert result == {"ok": True, "platform": "douyin", "replies_sent": 1}
+    assert captured["workspace"] == f"workspace:{FakePaths.runtime_root}"
+    assert captured["debug_port"] == 9777
+    assert captured["chrome_user_data_dir"] == str(FakePaths.default_profile_dir)
+    assert captured["debug"] is True
+    assert captured["ignore_state"] is True
+    assert captured["notify_env_prefix"] == "DY_NOTIFY_"
+
+
+def test_run_kuaishou_focused_generated_engagement_delegates_to_runtime(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+        default_profile_dir = tmp_path / "default"
+
+    monkeypatch.setattr(engagement, "apply_runtime_environment", lambda: FakePaths())
+    monkeypatch.setattr(
+        engagement,
+        "load_app_config",
+        lambda: {
+            "chrome": {"default_debug_port": 9888},
+            "notify": {"env_prefix": "KS_NOTIFY_"},
+            "comment_reply": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(engagement.engine, "init_workspace", lambda root: f"workspace:{root}")
+
+    def fake_reply_kuaishou_focused_generated(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "platform": "kuaishou", "replies_sent": 1}
+
+    monkeypatch.setattr(engagement, "reply_kuaishou_focused_generated", fake_reply_kuaishou_focused_generated)
+
+    result = engagement.run_kuaishou_focused_generated_engagement(debug=True, ignore_state=True)
+
+    assert result == {"ok": True, "platform": "kuaishou", "replies_sent": 1}
+    assert captured["workspace"] == f"workspace:{FakePaths.runtime_root}"
+    assert captured["debug_port"] == 9888
+    assert captured["chrome_user_data_dir"] == str(FakePaths.default_profile_dir)
+    assert captured["debug"] is True
+    assert captured["ignore_state"] is True
+    assert captured["notify_env_prefix"] == "KS_NOTIFY_"
+
+
 def test_diagnose_platform_engagement_delegates_to_runtime(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 

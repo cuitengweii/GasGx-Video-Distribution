@@ -50,6 +50,16 @@ except Exception:
     _get_cybercar_paths = None  # type: ignore
 
 
+def _load_engagement_module() -> Any:
+    try:
+        from cybercar import engagement as engagement_module
+    except Exception:
+        import importlib
+
+        engagement_module = importlib.import_module("cybercar.engagement")
+    return engagement_module
+
+
 def _default_repo_root_path() -> Path:
     if _get_cybercar_paths is not None:
         try:
@@ -115,6 +125,7 @@ DEFAULT_IMMEDIATE_PUBLISH_LOCK_RETRY_SECONDS = 15
 DEFAULT_IMMEDIATE_PUBLISH_LOCK_MAX_WAIT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 COLLECT_PUBLISH_CANDIDATE_OPTIONS = [1, 3, 5, 10, 15, 30]
 COMMENT_REPLY_POST_OPTIONS = [3, 5, 7, 10]
+COMMENT_REPLY_PLATFORM_ORDER = ["wechat", "douyin", "kuaishou"]
 COLLECT_PUBLISH_DISCOVERY_MULTIPLIER = 4
 COLLECT_PUBLISH_MAX_DISCOVERY_CANDIDATES = 120
 DEFAULT_REVIEW_STATE_FILE = "review_state.json"
@@ -1855,7 +1866,8 @@ def _menu_breadcrumb_for_action(action: str, value: str = "") -> str:
         parts.append(_menu_media_label(action_token, media_kind))
         parts.append(_menu_count_label(count))
     elif action_token == "comment_reply_run":
-        limit = _parse_comment_reply_post_limit(value_token)
+        platform_token, limit = _parse_comment_reply_request_value(value_token)
+        parts.append(_menu_platform_label(platform_token))
         parts.append(f"{max(1, int(limit))}条")
 
     return " / ".join(part for part in parts if str(part or "").strip())
@@ -1982,7 +1994,7 @@ def _build_task_identifier(
             elif action_token == "login_qr":
                 parts.append(value_token)
             elif action_token == "comment_reply_run":
-                parts.append(str(_parse_comment_reply_post_limit(value_token)))
+                parts.append(_normalize_comment_reply_request_value(value_token))
             else:
                 parts.append(_task_identifier_slug(value_token))
         timestamp = _task_identifier_timestamp(log_path=log_path, updated_at=updated_at)
@@ -3078,6 +3090,37 @@ def _parse_comment_reply_post_limit(raw: str) -> int:
     return value if value in allowed else int(COMMENT_REPLY_POST_OPTIONS[0])
 
 
+def _parse_comment_reply_request_value(raw: str) -> tuple[str, int]:
+    token = str(raw or "").strip().lower()
+    default_limit = int(COMMENT_REPLY_POST_OPTIONS[0])
+    if not token:
+        return "all", default_limit
+    parts = [part.strip().lower() for part in token.split(":") if str(part).strip()]
+    if not parts:
+        return "all", default_limit
+    if len(parts) == 1 and parts[0].isdigit():
+        return "all", _parse_comment_reply_post_limit(parts[0])
+    platform = _normalize_platform_tokens([parts[0]])
+    platform_token = platform[0] if platform else ("all" if parts[0] in ALL_PLATFORM_ALIAS_SET else "wechat")
+    limit_token = parts[1] if len(parts) > 1 else ""
+    if platform_token in {"all", "wechat"}:
+        return platform_token, _parse_comment_reply_post_limit(limit_token)
+    return platform_token, _parse_comment_reply_post_limit(limit_token)
+
+
+def _normalize_comment_reply_request_value(raw: str) -> str:
+    platform, post_limit = _parse_comment_reply_request_value(raw)
+    return f"{platform}:{max(1, int(post_limit))}"
+
+
+def _resolve_comment_reply_platforms(platform: str) -> list[str]:
+    token = str(platform or "").strip().lower()
+    if token in {"", "all"}:
+        return COMMENT_REPLY_PLATFORM_ORDER.copy()
+    normalized = _normalize_platform_tokens([token])
+    return normalized if normalized else COMMENT_REPLY_PLATFORM_ORDER.copy()
+
+
 def _resolve_collect_publish_discovery_limit(candidate_limit: int) -> int:
     requested = max(1, int(candidate_limit))
     return min(
@@ -3196,22 +3239,22 @@ def _build_comment_reply_menu_card(*, default_profile: str) -> Dict[str, Any]:
     for idx, count in enumerate(COMMENT_REPLY_POST_OPTIONS):
         actions.append(
             {
-                "text": f"💬 最近 {count} 个",
-                "callback_data": build_home_callback_data("cybercar", "comment_reply_run", str(count)),
+                "text": f"💬 {count}个",
+                "callback_data": build_home_callback_data("cybercar", "comment_reply_run", f"all:{count}"),
                 "row": idx // 2,
             }
         )
     actions.append({"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": 2})
     return _build_submenu_card(
         title="点赞评论",
-        subtitle=f"当前配置：{profile}｜只统计有评论的视频",
+        subtitle=f"当前配置：{profile}｜同一数量会依次执行视频号、抖音、快手",
         sections=[
             {
                 "title": "执行说明",
                 "emoji": "⚙️",
                 "items": [
-                    "从视频号最近的视频里，按时间顺序只处理有评论的视频。",
-                    "会自动点赞一级评论，并生成友好、鼓励、共鸣的简短回复。",
+                    "点击一个数量后，会按同样的数量依次执行视频号、抖音、快手三个平台。",
+                    "三个平台都走自动选作品或视频的评论任务，不要求手工提前聚焦输入框。",
                     "执行完成后会把短视频标题、原评论、自动回复结果发回 Telegram。",
                 ],
             }
@@ -4124,7 +4167,11 @@ def _handle_home_callback(
                     f"只有你明确点击“普通发布”或“原创发布”的候选，才会进入{_format_platform_text(target_platforms)}发布。"
                 )
             elif action == "comment_reply_run":
-                detail = "评论自动回复后台任务已启动，完成后会回传命中结果。"
+                comment_platform, comment_limit = _parse_comment_reply_request_value(value)
+                if comment_platform == "all":
+                    detail = f"三平台点赞评论后台任务已启动，本轮会按相同数量检查最近 {max(1, int(comment_limit))} 个有评论视频。"
+                else:
+                    detail = f"{_menu_platform_label(comment_platform)}点赞评论后台任务已启动，本轮会检查最近 {max(1, int(comment_limit))} 个有评论视频。"
             elif action == "login_qr":
                 detail = "正在检查登录会话并准备二维码消息。"
             elif action == "publish_run":
@@ -4787,7 +4834,7 @@ def _normalize_home_action_value(action: str, value: str) -> str:
         media_kind, count = _parse_collect_publish_request_value(raw)
         return f"{media_kind}:{count}"
     if action_token == "comment_reply_run":
-        return str(_parse_comment_reply_post_limit(raw))
+        return _normalize_comment_reply_request_value(raw)
     return raw.lower()
 
 
@@ -8176,6 +8223,7 @@ def _spawn_comment_reply_job(
     telegram_bot_identifier: str,
     telegram_bot_token: str,
     telegram_chat_id: str,
+    platform: str,
     post_limit: int,
 ) -> Dict[str, Any]:
     log_dir = (workspace / DEFAULT_LOG_SUBDIR).resolve()
@@ -8185,8 +8233,12 @@ def _spawn_comment_reply_job(
     module_root = repo_root_path
     explicit_bot_token = str(telegram_bot_token or "").strip()
     explicit_chat_id = str(telegram_chat_id or "").strip()
-    task_identifier = _build_task_identifier(action="comment_reply_run", value=str(max(1, int(post_limit))), log_path=str(log_path))
-    menu_label = _menu_breadcrumb_for_action("comment_reply_run", str(max(1, int(post_limit))))
+    normalized_platform, normalized_limit = _parse_comment_reply_request_value(f"{platform}:{post_limit}")
+    action_value = _normalize_comment_reply_request_value(
+        f"{normalized_platform}:{normalized_limit}" if normalized_platform == "wechat" else normalized_platform
+    )
+    task_identifier = _build_task_identifier(action="comment_reply_run", value=action_value, log_path=str(log_path))
+    menu_label = _menu_breadcrumb_for_action("comment_reply_run", action_value)
     cmd = [
         sys.executable,
         "-m",
@@ -8202,6 +8254,8 @@ def _spawn_comment_reply_job(
         "--run-comment-reply-job",
         "--comment-reply-post-limit",
         str(max(1, int(post_limit))),
+        "--comment-reply-platform",
+        normalized_platform,
     ]
     if explicit_bot_token:
         cmd += ["--telegram-bot-token", explicit_bot_token]
@@ -11041,10 +11095,12 @@ def _publish_immediate_candidate(
 
 def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
     payload = result if isinstance(result, dict) else {}
+    platform_token = _normalize_platform_tokens([str(payload.get("platform") or "wechat")])
+    platform_name = _menu_platform_label(platform_token[0] if platform_token else "wechat")
     reply_count = int(payload.get("replies_sent") or 0)
     login_required = bool(payload.get("login_required"))
     status = "success" if bool(payload.get("ok")) and reply_count > 0 else "failed"
-    title = "点赞评论已完成" if status == "success" else "点赞评论未完成"
+    title = f"{platform_name}点赞评论已完成" if status == "success" else f"{platform_name}点赞评论未完成"
     subtitle = "已返回本次命中的短视频和评论内容，便于直接复查。"
     if login_required:
         subtitle = "视频号当前未登录，本轮未执行点赞评论。"
@@ -11056,11 +11112,32 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
                 {"label": "扫描视频", "value": str(int(payload.get("posts_scanned") or 0))},
                 {"label": "命中视频", "value": str(int(payload.get("posts_selected") or 0))},
                 {"label": "实际回复", "value": str(reply_count)},
+                {"label": "目标平台", "value": platform_name},
                 {"label": "状态文件", "value": str(payload.get("state_path") or "-").strip() or "-"},
             ],
         }
     ]
     reason = str(payload.get("reason") or "").strip()
+    platform_results = payload.get("platform_results") if isinstance(payload.get("platform_results"), list) else []
+    if platform_results:
+        platform_items: list[str] = []
+        for raw in platform_results:
+            if not isinstance(raw, dict):
+                continue
+            item_platform = _menu_platform_label(str(raw.get("platform") or ""))
+            item_status = "success" if bool(raw.get("ok")) else "failed"
+            item_reason = str(raw.get("reason") or "").strip()
+            item_replies = int(raw.get("replies_sent") or 0)
+            detail = f"{item_platform}: {item_status}, replies={item_replies}"
+            if item_reason:
+                detail += f", reason={item_reason}"
+            platform_items.append(detail)
+        if platform_items:
+            sections.append({
+                "title": "平台结果",
+                "emoji": "🧭",
+                "items": platform_items,
+            })
     if login_required:
         notify_items: list[str] = []
         login_url = str(payload.get("login_url") or "").strip()
@@ -11130,6 +11207,33 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
         [[{"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home")}]]
     )
     return card
+
+
+def _build_comment_reply_record_texts(result: Dict[str, Any]) -> list[str]:
+    payload = result if isinstance(result, dict) else {}
+    platform_token = _normalize_platform_tokens([str(payload.get("platform") or "wechat")])
+    platform_name = _menu_platform_label(platform_token[0] if platform_token else "wechat")
+    records = payload.get("records") if isinstance(payload.get("records"), list) else []
+    messages: list[str] = []
+    for idx, raw in enumerate(records, start=1):
+        if not isinstance(raw, dict):
+            continue
+        record_platform_token = _normalize_platform_tokens([str(raw.get("platform") or "")])
+        record_platform_name = _menu_platform_label(record_platform_token[0]) if record_platform_token else platform_name
+        author = str(raw.get("comment_author") or "-").strip() or "-"
+        comment_time = str(raw.get("comment_time") or "-").strip() or "-"
+        replied_at = str(raw.get("replied_at") or "-").strip() or "-"
+        lines = [
+            f"[{record_platform_name}] Reply {idx}",
+            f"Post: {_preview_text(raw.get('post_title'), limit=120) or '-'}",
+            f"Author: {author}",
+            f"Comment Time: {comment_time}",
+            f"Comment: {_preview_text(raw.get('comment_preview'), limit=200) or '-'}",
+            f"Reply: {_preview_text(raw.get('reply_text'), limit=200) or '-'}",
+            f"Replied At: {replied_at}",
+        ]
+        messages.append("\n".join(lines))
+    return messages
 
 
 def _run_home_action_job(
@@ -11281,6 +11385,7 @@ def _run_home_action_job(
             detail = f"{media_label}即采即发后台任务已结束，请查看后续预审卡片或总结结果。"
             result_status = "done" if exit_code == 0 else "failed"
         elif action_token == "comment_reply_run":
+            comment_platform, comment_limit = _parse_comment_reply_request_value(value)
             exit_code = _run_comment_reply_job(
                 repo_root=repo_root,
                 workspace=workspace,
@@ -11289,9 +11394,10 @@ def _run_home_action_job(
                 telegram_bot_identifier=telegram_bot_identifier,
                 telegram_bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
-                post_limit=max(1, _parse_comment_reply_post_limit(value)),
+                platform=comment_platform,
+                post_limit=max(1, int(comment_limit)),
             )
-            detail = "评论自动回复后台任务已结束，请查看最新结果卡片。"
+            detail = f"{_menu_platform_label(comment_platform)}评论自动回复后台任务已结束，请查看最新结果卡片。"
             result_status = "done" if exit_code == 0 else "failed"
         else:
             detail = "当前动作未实现。"
@@ -11402,46 +11508,140 @@ def _run_comment_reply_job(
     telegram_bot_identifier: str,
     telegram_bot_token: str,
     telegram_chat_id: str,
+    platform: str,
     post_limit: int,
 ) -> int:
-    _, core = _load_runtime_modules()
-    workspace_ctx = core.init_workspace(str(workspace))
-    config_path = _default_runtime_config_path(repo_root)
-    runtime_config = core._load_runtime_config(str(config_path))
+    requested_platform = str(platform or "").strip().lower()
+    comment_platform = "all" if requested_platform in {"", "all"} else (_normalize_platform_tokens([requested_platform])[0] if _normalize_platform_tokens([requested_platform]) else "wechat")
+    target_platforms = _resolve_comment_reply_platforms(comment_platform)
+    platform_label = " / ".join(_menu_platform_label(item) for item in target_platforms)
     if telegram_bot_token and telegram_chat_id:
         try:
+            startup_text = (
+                "点赞评论启动中\n"
+                f"目标平台：{platform_label}\n"
+                f"目标：最近 {max(1, int(post_limit))} 个有评论视频\n"
+                "完成后会回传短视频标题、原评论、自动回复结果。"
+            )
             _send_reply(
                 bot_token=telegram_bot_token,
                 chat_id=telegram_chat_id,
-                text=(
-                    "点赞评论启动中\n"
-                    f"目标：最近 {max(1, int(post_limit))} 个有评论视频\n"
-                    "完成后会回传短视频标题、原评论、自动回复结果。"
-                ),
+                text=startup_text,
                 timeout_seconds=max(10, int(timeout_seconds)),
             )
         except Exception:
             pass
     try:
-        result = core.run_wechat_comment_reply(
-            workspace=workspace_ctx,
-            runtime_config=runtime_config,
-            debug_port=int(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", 9334)),
-            chrome_path=None,
-            chrome_user_data_dir=str(getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", "") or ""),
-            auto_open_chrome=True,
-            max_posts_override=max(1, int(post_limit)),
-            max_replies_override=0,
-            latest_only=False,
-            debug=bool(runtime_config.get("comment_reply", {}).get("debug")) if isinstance(runtime_config.get("comment_reply"), dict) else False,
-            telegram_bot_identifier=telegram_bot_identifier,
-            telegram_bot_token=telegram_bot_token,
-            telegram_chat_id=telegram_chat_id,
-            telegram_registry_file="",
-            telegram_timeout_seconds=max(10, int(timeout_seconds)),
-            telegram_api_base="",
-            notify_env_prefix=str(getattr(core, "DEFAULT_NOTIFY_ENV_PREFIX", "CYBERCAR_NOTIFY_")),
+        _, core = _load_runtime_modules()
+        engagement_module = _load_engagement_module()
+        runtime_config: dict[str, Any] = {}
+        workspace_ctx = None
+        if "wechat" in target_platforms:
+            workspace_ctx = core.init_workspace(str(workspace))
+            config_path = _default_runtime_config_path(repo_root)
+            runtime_config = core._load_runtime_config(str(config_path))
+
+        platform_results: list[dict[str, Any]] = []
+        all_records: list[dict[str, Any]] = []
+        total_scanned = 0
+        total_selected = 0
+        total_replies = 0
+        for platform_name in target_platforms:
+            if platform_name == "wechat":
+                platform_result = core.run_wechat_comment_reply(
+                    workspace=workspace_ctx,
+                    runtime_config=runtime_config,
+                    debug_port=int(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", 9334)),
+                    chrome_path=None,
+                    chrome_user_data_dir=str(getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", "") or ""),
+                    auto_open_chrome=True,
+                    max_posts_override=max(1, int(post_limit)),
+                    max_replies_override=0,
+                    latest_only=False,
+                    debug=bool(runtime_config.get("comment_reply", {}).get("debug")) if isinstance(runtime_config.get("comment_reply"), dict) else False,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    telegram_registry_file="",
+                    telegram_timeout_seconds=max(10, int(timeout_seconds)),
+                    telegram_api_base="",
+                    notify_env_prefix=str(getattr(core, "DEFAULT_NOTIFY_ENV_PREFIX", "CYBERCAR_NOTIFY_")),
+                )
+            elif platform_name == "douyin":
+                platform_result = engagement_module.run_douyin_engagement(
+                    max_posts=max(1, int(post_limit)),
+                    max_replies=0,
+                    like_only=False,
+                    latest_only=False,
+                    debug=True,
+                )
+            elif platform_name == "kuaishou":
+                platform_result = engagement_module.run_kuaishou_engagement(
+                    max_posts=max(1, int(post_limit)),
+                    max_replies=0,
+                    like_only=False,
+                    latest_only=False,
+                    debug=True,
+                )
+            else:
+                platform_result = {
+                    "ok": False,
+                    "platform": platform_name,
+                    "reason": f"unsupported comment reply platform: {platform_name}",
+                    "records": [],
+                    "posts_scanned": 0,
+                    "posts_selected": 0,
+                    "replies_sent": 0,
+                }
+            if not isinstance(platform_result, dict):
+                platform_result = {
+                    "ok": False,
+                    "platform": platform_name,
+                    "reason": "invalid_result",
+                    "records": [],
+                    "posts_scanned": 0,
+                    "posts_selected": 0,
+                    "replies_sent": 0,
+                }
+            platform_result["platform"] = platform_name
+            platform_results.append(platform_result)
+            total_scanned += int(platform_result.get("posts_scanned") or 0)
+            total_selected += int(platform_result.get("posts_selected") or 0)
+            total_replies += int(platform_result.get("replies_sent") or 0)
+            for raw in (platform_result.get("records") if isinstance(platform_result.get("records"), list) else []):
+                if not isinstance(raw, dict):
+                    continue
+                item = dict(raw)
+                item["platform"] = platform_name
+                all_records.append(item)
+        joined_state_paths = " | ".join(
+            str(item.get("state_path") or "").strip()
+            for item in platform_results
+            if isinstance(item, dict) and str(item.get("state_path") or "").strip()
         )
+        joined_markdown_paths = " | ".join(
+            str(item.get("markdown_path") or "").strip()
+            for item in platform_results
+            if isinstance(item, dict) and str(item.get("markdown_path") or "").strip()
+        )
+        failed_reasons = [
+            f"{_menu_platform_label(str(item.get('platform') or ''))}: {str(item.get('reason') or '').strip()}"
+            for item in platform_results
+            if isinstance(item, dict) and str(item.get("reason") or "").strip()
+        ]
+        result = {
+            "ok": total_replies > 0 or any(bool(item.get("ok")) for item in platform_results if isinstance(item, dict)),
+            "platform": "all" if len(target_platforms) > 1 else target_platforms[0],
+            "target_platforms": target_platforms,
+            "reason": "; ".join(failed_reasons),
+            "state_path": joined_state_paths,
+            "markdown_path": joined_markdown_paths,
+            "records": all_records,
+            "posts_scanned": total_scanned,
+            "posts_selected": total_selected,
+            "replies_sent": total_replies,
+            "platform_results": platform_results,
+        }
         if telegram_bot_token and telegram_chat_id:
             _send_card_message(
                 bot_token=telegram_bot_token,
@@ -11449,6 +11649,13 @@ def _run_comment_reply_job(
                 card=_build_comment_reply_result_card(result if isinstance(result, dict) else {}),
                 timeout_seconds=max(10, int(timeout_seconds)),
             )
+            for detail_text in _build_comment_reply_record_texts(result if isinstance(result, dict) else {}):
+                _send_reply(
+                    bot_token=telegram_bot_token,
+                    chat_id=telegram_chat_id,
+                    text=detail_text,
+                    timeout_seconds=max(10, int(timeout_seconds)),
+                )
         return 0 if bool(result.get("ok")) else 2
     except Exception as exc:
         if telegram_bot_token and telegram_chat_id:
@@ -13054,6 +13261,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--run-comment-reply-job", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--comment-reply-post-limit", type=int, default=3, help=argparse.SUPPRESS)
+    parser.add_argument("--comment-reply-platform", default="wechat", help=argparse.SUPPRESS)
     parser.add_argument("--run-home-action-job", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--home-action", default="", help=argparse.SUPPRESS)
     parser.add_argument("--home-action-value", default="", help=argparse.SUPPRESS)
@@ -13180,6 +13388,7 @@ def main() -> int:
             telegram_bot_identifier=telegram_bot_identifier,
             telegram_bot_token=bot_token,
             telegram_chat_id=allowed_chat_id,
+            platform=str(getattr(args, "comment_reply_platform", "wechat") or "wechat"),
             post_limit=max(1, int(getattr(args, "comment_reply_post_limit", 3) or 3)),
         )
     if bool(getattr(args, "run_immediate_publish_item_job", False)):

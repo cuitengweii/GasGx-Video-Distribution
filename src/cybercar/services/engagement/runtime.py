@@ -4170,6 +4170,195 @@ def reply_douyin_focused_generated(
     )
 
 
+def reply_kuaishou_focused_generated(
+    *,
+    workspace: engine.Workspace,
+    runtime_config: dict[str, Any],
+    debug_port: int,
+    ignore_state: bool = False,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = "",
+    auto_open_chrome: bool = True,
+    debug: bool = False,
+    notify_env_prefix: str = engine.DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    del notify_env_prefix
+
+    platform = "kuaishou"
+    state_path = str(_state_path(workspace, platform))
+    markdown_path = str(_markdown_path(workspace, platform))
+    base_result = {
+        "ok": False,
+        "platform": platform,
+        "reason": "",
+        "state_path": state_path,
+        "markdown_path": markdown_path,
+        "records": [],
+        "posts_scanned": 0,
+        "posts_selected": 0,
+        "replies_sent": 0,
+    }
+
+    comment_cfg = engine._merge_comment_reply_config(runtime_config.get("comment_reply"))
+    reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
+    state = _load_state(workspace, platform)
+    items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    page = engine._connect_chrome(
+        debug_port=int(debug_port),
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=KUAISHOU_COMMENT_MANAGER_URL,
+    )
+    time.sleep(0.3)
+
+    page_meta = _run_js_dict(
+        page,
+        """
+        return {
+          ok: true,
+          url: String(location.href || ''),
+          title: String(document.title || '')
+        };
+        """,
+    )
+    current_url = str(page_meta.get("url") or "").strip()
+    current_title = str(page_meta.get("title") or "").strip()
+    if "cp.kuaishou.com/article/comment" not in current_url:
+        base_result["reason"] = "kuaishou_comment_page_not_open"
+        base_result["current_url"] = current_url
+        base_result["current_title"] = current_title
+        return base_result
+
+    focus_info = _run_js_dict(
+        page,
+        """
+        return (() => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function visible(node) {
+            if (!node) return false;
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+          }
+          function toElement(node) {
+            if (!node) return null;
+            return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+          }
+          function isEditable(node) {
+            return !!node && (
+              node.isContentEditable
+              || node.tagName === 'TEXTAREA'
+              || node.tagName === 'INPUT'
+              || String(node.getAttribute('contenteditable') || '').toLowerCase() === 'true'
+            );
+          }
+          function resolveInput() {
+            const active = document.activeElement;
+            if (isEditable(active)) return active;
+            const selection = window.getSelection ? window.getSelection() : null;
+            const anchor = selection && selection.anchorNode ? toElement(selection.anchorNode) : null;
+            if (isEditable(anchor)) return anchor;
+            const anchorEditable = anchor ? anchor.closest('[contenteditable="true"], textarea, input') : null;
+            if (isEditable(anchorEditable)) return anchorEditable;
+            const activeEditable = active ? active.closest('[contenteditable="true"], textarea, input') : null;
+            if (isEditable(activeEditable)) return activeEditable;
+            const wrapper = anchor ? (anchor.closest('.comment-input__wrapper, .comment-input-wrapper') || null) : (active ? active.closest('.comment-input__wrapper, .comment-input-wrapper') : null);
+            if (!wrapper) return null;
+            const nested = wrapper.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+            return isEditable(nested) ? nested : null;
+          }
+          const input = resolveInput();
+          const wrapper = input ? (input.closest('.comment-input__wrapper, .comment-input-wrapper') || input.parentElement) : null;
+          const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+          let root = null;
+          for (const candidate of roots) {
+            const scopes = [candidate, candidate.nextElementSibling, candidate.parentElement, candidate.parentElement && candidate.parentElement.nextElementSibling].filter(Boolean);
+            if (wrapper && scopes.some((scope) => scope === wrapper || scope.contains(wrapper))) {
+              root = candidate;
+              break;
+            }
+            if (candidate.querySelector('.comment-content__btns__btn.reply-active')) {
+              root = candidate;
+            }
+          }
+          const index = root ? roots.indexOf(root) : -1;
+          return {
+            ok: !!input && index >= 0,
+            comment_index: index,
+            author: norm(root && root.querySelector('.comment-content__username') ? root.querySelector('.comment-content__username').innerText : ''),
+            time_text: norm(root && root.querySelector('.comment-content__date') ? root.querySelector('.comment-content__date').innerText : ''),
+            content: norm(root && root.querySelector('.comment-content__detail') ? root.querySelector('.comment-content__detail').innerText : ''),
+            input_text: norm(input ? (input.innerText || input.textContent || input.value || '') : '')
+          };
+        })();
+        """,
+    )
+    if not bool(focus_info.get("ok")):
+        base_result["reason"] = "focused_reply_editor_not_ready"
+        base_result["current_url"] = current_url
+        base_result["current_title"] = current_title
+        base_result["focus_info"] = focus_info
+        return base_result
+
+    comment_index = max(0, int(focus_info.get("comment_index") or 0))
+    comments = _extract_kuaishou_comments(page)
+    comment = dict(comments[comment_index]) if 0 <= comment_index < len(comments) else {
+        "index": comment_index,
+        "author": str(focus_info.get("author") or "").strip(),
+        "time_text": str(focus_info.get("time_text") or "").strip(),
+        "content": str(focus_info.get("content") or "").strip(),
+        "has_reply": False,
+        "liked": False,
+    }
+    comment["index"] = comment_index
+    post = _extract_current_kuaishou_post(page) or {
+        "post_key": _build_post_key("", ""),
+        "title": "",
+        "published_text": "",
+        "comment_count": len(comments) if comments else 1,
+        "has_comments": True,
+    }
+    fingerprint = engine._comment_reply_fingerprint(post, comment)
+    if (not bool(ignore_state)) and (fingerprint in items or bool(comment.get("has_reply"))):
+        base_result["reason"] = "duplicate_or_has_reply"
+        base_result["posts_scanned"] = 1
+        base_result["posts_selected"] = 1
+        return base_result
+
+    reply_text = engine.generate_comment_reply(
+        post=post,
+        comment=comment,
+        spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
+        prompt_template=str(comment_cfg.get("prompt_template") or engine.DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
+        fallback_replies=list(comment_cfg.get("fallback_replies") or engine.DEFAULT_COMMENT_REPLY_FALLBACKS),
+        max_chars=reply_max_chars,
+    )
+    if not reply_text:
+        base_result["reason"] = "reply_text_empty"
+        base_result["posts_scanned"] = 1
+        base_result["posts_selected"] = 1
+        return base_result
+
+    return reply_kuaishou_focused_editor(
+        workspace=workspace,
+        runtime_config=runtime_config,
+        debug_port=debug_port,
+        reply_text=reply_text,
+        ignore_state=ignore_state,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        auto_open_chrome=auto_open_chrome,
+        debug=debug,
+        notify_env_prefix=engine.DEFAULT_NOTIFY_ENV_PREFIX,
+    )
+
+
 def reply_kuaishou_focused_editor(
     *,
     workspace: engine.Workspace,

@@ -9,6 +9,7 @@ from .services.engagement.runtime import (
     reply_douyin_focused_generated,
     reply_douyin_focused_editor,
     reply_kuaishou_focused_editor,
+    reply_kuaishou_focused_generated,
     run_platform_comment_reply,
 )
 
@@ -107,6 +108,42 @@ def run_kuaishou_engagement(
         max_replies_override=max_replies,
         latest_only=latest_only,
         debug=debug,
+        notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
+    )
+
+
+def run_douyin_focused_generated_engagement(
+    *,
+    debug: bool = False,
+    ignore_state: bool = False,
+) -> dict[str, Any]:
+    workspace, runtime_cfg, chrome_cfg, paths = _build_engagement_runtime_config(like_only=False)
+    app_config = load_app_config()
+    return reply_douyin_focused_generated(
+        workspace=workspace,
+        runtime_config=runtime_cfg,
+        debug_port=int(chrome_cfg.get("default_debug_port") or 9333),
+        chrome_user_data_dir=str(paths.default_profile_dir),
+        debug=debug,
+        ignore_state=ignore_state,
+        notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
+    )
+
+
+def run_kuaishou_focused_generated_engagement(
+    *,
+    debug: bool = False,
+    ignore_state: bool = False,
+) -> dict[str, Any]:
+    workspace, runtime_cfg, chrome_cfg, paths = _build_engagement_runtime_config(like_only=False)
+    app_config = load_app_config()
+    return reply_kuaishou_focused_generated(
+        workspace=workspace,
+        runtime_config=runtime_cfg,
+        debug_port=int(chrome_cfg.get("default_debug_port") or 9333),
+        chrome_user_data_dir=str(paths.default_profile_dir),
+        debug=debug,
+        ignore_state=ignore_state,
         notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
     )
 
