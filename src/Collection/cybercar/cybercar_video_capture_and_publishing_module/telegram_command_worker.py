@@ -1104,6 +1104,35 @@ def _with_process_status_button(reply_markup: Optional[Dict[str, Any]] = None) -
     return _build_inline_keyboard(rows)
 
 
+def _extract_collect_publish_item_id_from_task_identifier(task_identifier: str) -> str:
+    token = str(task_identifier or "").strip()
+    if not token:
+        return ""
+    parts = token.split("|", 1)
+    if len(parts) != 2:
+        return ""
+    if str(parts[0] or "").strip().lower() != "collect_publish_latest":
+        return ""
+    return str(parts[1] or "").strip()
+
+
+def _resolve_failure_feedback_retry_item_id(sections: Sequence[Mapping[str, Any]]) -> str:
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        if str(section.get("title") or "").strip() != "任务标识":
+            continue
+        items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        for item in items:
+            if isinstance(item, Mapping):
+                item_id = _extract_collect_publish_item_id_from_task_identifier(str(item.get("value") or ""))
+            else:
+                item_id = _extract_collect_publish_item_id_from_task_identifier(str(item or ""))
+            if item_id:
+                return item_id
+    return ""
+
+
 def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     status_token = str(status or "").strip().lower()
     if status_token not in {"failed", "blocked", "alert", "login_required"}:
@@ -1111,6 +1140,7 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
     login_signal_parts: list[str] = []
     merged_text_parts: list[str] = []
     platform_status_values: list[str] = []
+    retry_item_id = _resolve_failure_feedback_retry_item_id(sections)
     for section in sections:
         if not isinstance(section, Mapping):
             continue
@@ -1165,6 +1195,16 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
         return actions
     if is_retryable_transport:
         actions.append({"text": "🔄 刷新", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
+        actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
+        return actions
+    if retry_item_id:
+        actions.append(
+            {
+                "text": "🔁 补发",
+                "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|retry_failed_publish|{retry_item_id}",
+                "row": row,
+            }
+        )
         actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
         return actions
     actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
@@ -2561,6 +2601,8 @@ def _is_prefilter_live_for_process_status(row: Dict[str, Any]) -> bool:
     cutoff = datetime.now() - timedelta(seconds=max(300, int(DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS)))
     if ts < cutoff:
         return False
+    if _is_prefilter_overflow_review_item(row):
+        return False
     if status == "down_confirmed" and action == "skip":
         return False
     if status in {"link_pending", "up_confirmed", "down_confirmed"}:
@@ -2577,6 +2619,23 @@ def _is_prefilter_skipped_terminal(row: Mapping[str, Any]) -> bool:
     status = str(row.get("status") or "").strip().lower()
     action = str(row.get("action") or "").strip().lower()
     return status == "down_confirmed" and action == "skip"
+
+
+def _is_prefilter_overflow_review_item(row: Mapping[str, Any]) -> bool:
+    if not isinstance(row, Mapping):
+        return False
+    status = str(row.get("status") or "").strip().lower()
+    if status not in {"link_pending", "up_confirmed", "down_confirmed"}:
+        return False
+    try:
+        candidate_index = int(row.get("candidate_index") or 0)
+    except Exception:
+        candidate_index = 0
+    try:
+        candidate_limit = int(row.get("candidate_limit") or 0)
+    except Exception:
+        candidate_limit = 0
+    return candidate_index > 0 and candidate_limit > 0 and candidate_index > candidate_limit
 
 
 def _is_prefilter_waiting_for_runtime_lock(row: Dict[str, Any]) -> bool:
@@ -3796,12 +3855,12 @@ def _handle_home_callback(
         return {"handled": True, "update_id": update_id}
 
     if action == "process_status_cleanup_queue":
-        cleanup_summary = _cleanup_stale_waiting_prefilter_items(
+        cleanup_summary = _cleanup_inactive_prefilter_items(
             workspace,
             log_file=workspace / "runtime" / "logs" / "telegram_command_worker.log",
         )
-        removed_stale_waiting = int(cleanup_summary.get("removed_stale_waiting") or 0)
-        if removed_stale_waiting > 0:
+        removed_inactive = int(cleanup_summary.get("removed_inactive") or 0)
+        if removed_inactive > 0:
             answer_interaction_toast(
                 bot_token=bot_token,
                 query_id=query_id,
@@ -3809,7 +3868,7 @@ def _handle_home_callback(
                 status="success",
                 timeout_seconds=timeout_seconds,
             )
-            status_note = f"已清理 {removed_stale_waiting} 条僵尸等待项"
+            status_note = f"已清理 {removed_inactive} 条非活跃队列项"
         else:
             answer_interaction_toast(
                 bot_token=bot_token,
@@ -3818,7 +3877,7 @@ def _handle_home_callback(
                 status="success",
                 timeout_seconds=timeout_seconds,
             )
-            status_note = "没有发现可清理的僵尸等待项"
+            status_note = "没有发现可清理的非活跃队列项"
         _send_interaction_result_async(
             bot_token=bot_token,
             chat_id=chat_id,
@@ -5693,42 +5752,48 @@ def _cleanup_prefilter_queue(workspace: Path, *, log_file: Optional[Path] = None
     return {"removed_terminal": removed_terminal, "removed_polluted": removed_polluted}
 
 
-def _prune_stale_waiting_prefilter_items(queue: Dict[str, Any]) -> Dict[str, Any]:
+def _prune_inactive_prefilter_items_for_manual_cleanup(queue: Dict[str, Any]) -> Dict[str, Any]:
     items = queue.get("items", {})
     if not isinstance(items, dict) or not items:
-        return {"removed_stale_waiting": 0, "removed_ids": []}
+        return {"removed_inactive": 0, "removed_ids": []}
     removed_ids: list[str] = []
     for item_id, row in list(items.items()):
         if not isinstance(row, dict):
             continue
-        if not _is_stale_waiting_prefilter_item(row):
+        if bool(row.get("prefilter_retry_pending")):
+            continue
+        if _is_prefilter_overflow_review_item(row):
+            del items[item_id]
+            removed_ids.append(str(item_id or "").strip())
+            continue
+        if _is_prefilter_live_for_process_status(row):
             continue
         del items[item_id]
         removed_ids.append(str(item_id or "").strip())
     return {
-        "removed_stale_waiting": len(removed_ids),
+        "removed_inactive": len(removed_ids),
         "removed_ids": removed_ids[: max(1, DEFAULT_PROCESS_STATUS_PREFILTER_LIMIT)],
     }
 
 
-def _cleanup_stale_waiting_prefilter_items(workspace: Path, *, log_file: Optional[Path] = None) -> Dict[str, Any]:
-    summary = _with_prefilter_queue_lock(workspace, _prune_stale_waiting_prefilter_items)
+def _cleanup_inactive_prefilter_items(workspace: Path, *, log_file: Optional[Path] = None) -> Dict[str, Any]:
+    summary = _with_prefilter_queue_lock(workspace, _prune_inactive_prefilter_items_for_manual_cleanup)
     if not isinstance(summary, dict):
-        return {"removed_stale_waiting": 0, "removed_ids": []}
-    removed_stale_waiting = int(summary.get("removed_stale_waiting") or 0)
+        return {"removed_inactive": 0, "removed_ids": []}
+    removed_inactive = int(summary.get("removed_inactive") or 0)
     removed_ids = [
         str(token or "").strip()
         for token in list(summary.get("removed_ids") or [])
         if str(token or "").strip()
     ]
-    if removed_stale_waiting > 0 and isinstance(log_file, Path):
+    if removed_inactive > 0 and isinstance(log_file, Path):
         preview = ", ".join(removed_ids)
         suffix = f" ids={preview}" if preview else ""
         _append_log(
             log_file,
-            f"[Worker] stale waiting prefilter cleanup: removed_stale_waiting={removed_stale_waiting}{suffix}",
+            f"[Worker] manual prefilter cleanup: removed_inactive={removed_inactive}{suffix}",
         )
-    return {"removed_stale_waiting": removed_stale_waiting, "removed_ids": removed_ids}
+    return {"removed_inactive": removed_inactive, "removed_ids": removed_ids}
 
 
 def _run_periodic_queue_maintenance(
@@ -6256,7 +6321,7 @@ def _parse_prefilter_callback_data(data: str) -> Optional[tuple[str, str]]:
         "down": "skip",
     }
     action = legacy_aliases.get(action, action)
-    if action not in {"up", "skip", "publish_normal", "publish_original"} or not item_id:
+    if action not in {"up", "skip", "publish_normal", "publish_original", "retry_failed_publish"} or not item_id:
         return None
     return action, item_id
 
@@ -12562,7 +12627,61 @@ def handle_callback_update(
             _append_log(log_file, f"[Worker] edit prefilter card failed: {exc}")
             return False
 
-    if action in {"publish_normal", "publish_original"}:
+    if action == "retry_failed_publish":
+        if workflow != "immediate_manual_publish":
+            callback_reply = "该候选不支持失败补发。"
+        else:
+            retry_platforms = [
+                platform
+                for platform, payload in _normalize_platform_results(item.get("platform_results")).items()
+                if str((payload or {}).get("status") or "").strip().lower() in {"failed", "login_required"}
+            ]
+            if not retry_platforms:
+                callback_reply = "当前没有可补发的失败平台。"
+            else:
+                runner, core = _load_runtime_modules()
+                queue_result = _queue_immediate_platform_jobs(
+                    workspace=workspace,
+                    repo_root=repo_root,
+                    timeout_seconds=timeout_seconds,
+                    profile=default_profile,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_bot_token=bot_token,
+                    telegram_chat_id=chat_id,
+                    item_id=item_id,
+                    item=item,
+                    immediate_test_mode=immediate_test_mode,
+                )
+                refreshed_item = queue_result.get("item") if isinstance(queue_result.get("item"), dict) else _get_prefilter_item(workspace, item_id) or item
+                spawned = int(queue_result.get("spawned") or 0)
+                failed = int(queue_result.get("failed") or 0)
+                skipped_duplicate = int(queue_result.get("skipped_duplicate") or 0)
+                retried_labels = _format_platform_text(retry_platforms)
+                if spawned > 0:
+                    callback_reply = f"🔁 已补发失败平台：{retried_labels}"
+                elif skipped_duplicate > 0 and failed <= 0:
+                    callback_reply = f"🔁 失败平台已去重跳过：{retried_labels}"
+                else:
+                    callback_reply = f"⚠️ 失败平台补发未启动：{retried_labels}"
+                card_update = _build_prefilter_status_card(
+                    item=refreshed_item,
+                    title="失败平台已补发" if spawned > 0 else "失败平台补发未启动",
+                    subtitle="后台只重试之前失败或需要登录的平台" if spawned > 0 else "失败平台未成功重新排队，请查看进度和日志",
+                    status="running" if spawned > 0 else "failed",
+                    result_section_title="执行状态",
+                    result_items=[
+                        f"本次补发范围：{retried_labels}",
+                        "成功平台不会重复触发，后台只会重跑失败平台。",
+                    ]
+                    + (
+                        ["部分平台仍未重新排队，请查看进度中的平台状态。"]
+                        if failed > 0 and spawned > 0
+                        else []
+                    ),
+                )
+                should_clear_buttons = False
+                _answer_callback_immediately(callback_reply)
+    elif action in {"publish_normal", "publish_original"}:
         if workflow != "immediate_manual_publish":
             callback_reply = "该候选不支持直接发布。"
         elif status in {"publish_requested", "download_running", "publish_running", "publish_done"}:

@@ -4,7 +4,13 @@ from typing import Any
 
 from . import engine
 from .settings import apply_runtime_environment, load_app_config
-from .services.engagement.runtime import diagnose_platform_comment_page, run_platform_comment_reply
+from .services.engagement.runtime import (
+    diagnose_platform_comment_page,
+    reply_douyin_focused_generated,
+    reply_douyin_focused_editor,
+    reply_kuaishou_focused_editor,
+    run_platform_comment_reply,
+)
 
 
 def _build_engagement_runtime_config(*, like_only: bool) -> tuple[engine.Workspace, dict[str, Any], dict[str, Any], Any]:
@@ -54,6 +60,19 @@ def run_douyin_engagement(
 ) -> dict[str, Any]:
     workspace, runtime_cfg, chrome_cfg, paths = _build_engagement_runtime_config(like_only=like_only)
     app_config = load_app_config()
+    focused_result = reply_douyin_focused_generated(
+        workspace=workspace,
+        runtime_config=runtime_cfg,
+        debug_port=int(chrome_cfg.get("default_debug_port") or 9333),
+        chrome_user_data_dir=str(paths.default_profile_dir),
+        debug=debug,
+        notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
+    )
+    if bool(focused_result.get("ok")) or str(focused_result.get("reason") or "") not in {
+        "douyin_comment_page_not_open",
+        "focused_reply_editor_not_ready",
+    }:
+        return focused_result
     return run_platform_comment_reply(
         platform_name="douyin",
         workspace=workspace,
@@ -88,6 +107,46 @@ def run_kuaishou_engagement(
         max_replies_override=max_replies,
         latest_only=latest_only,
         debug=debug,
+        notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
+    )
+
+
+def run_douyin_focused_engagement(
+    *,
+    reply_text: str,
+    debug: bool = False,
+    ignore_state: bool = False,
+) -> dict[str, Any]:
+    workspace, runtime_cfg, chrome_cfg, paths = _build_engagement_runtime_config(like_only=False)
+    app_config = load_app_config()
+    return reply_douyin_focused_editor(
+        workspace=workspace,
+        runtime_config=runtime_cfg,
+        debug_port=int(chrome_cfg.get("default_debug_port") or 9333),
+        chrome_user_data_dir=str(paths.default_profile_dir),
+        reply_text=str(reply_text or ""),
+        debug=debug,
+        ignore_state=ignore_state,
+        notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
+    )
+
+
+def run_kuaishou_focused_engagement(
+    *,
+    reply_text: str,
+    debug: bool = False,
+    ignore_state: bool = False,
+) -> dict[str, Any]:
+    workspace, runtime_cfg, chrome_cfg, paths = _build_engagement_runtime_config(like_only=False)
+    app_config = load_app_config()
+    return reply_kuaishou_focused_editor(
+        workspace=workspace,
+        runtime_config=runtime_cfg,
+        debug_port=int(chrome_cfg.get("default_debug_port") or 9333),
+        chrome_user_data_dir=str(paths.default_profile_dir),
+        reply_text=str(reply_text or ""),
+        debug=debug,
+        ignore_state=ignore_state,
         notify_env_prefix=str((app_config.get("notify") or {}).get("env_prefix") or "CYBERCAR_NOTIFY_"),
     )
 

@@ -52,6 +52,26 @@ def test_cli_engage_diagnose_subcommand_parses_platform() -> None:
     assert args.platform == "douyin"
 
 
+def test_cli_engage_douyin_focused_subcommand_parses_reply_text() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["engage", "douyin-focused", "--reply-text", "hello", "--debug", "--ignore-state"])
+    assert args.command == "engage"
+    assert args.engage_command == "douyin-focused"
+    assert args.reply_text == "hello"
+    assert args.debug is True
+    assert args.ignore_state is True
+
+
+def test_cli_engage_kuaishou_focused_subcommand_parses_reply_text() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["engage", "kuaishou-focused", "--reply-text", "hello", "--debug", "--ignore-state"])
+    assert args.command == "engage"
+    assert args.engage_command == "kuaishou-focused"
+    assert args.reply_text == "hello"
+    assert args.debug is True
+    assert args.ignore_state is True
+
+
 def test_cli_telegram_recover_subcommand_parses_retries() -> None:
     parser = build_parser()
     args = parser.parse_args(["telegram", "recover", "--retries", "5"])

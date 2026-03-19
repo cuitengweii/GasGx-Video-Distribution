@@ -968,19 +968,1619 @@ def _submit_douyin_reply(page: Any, comment_index: int, reply_text: str) -> bool
     return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
 
 
+def _submit_douyin_reply_v2(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const actions = Array.from(root.querySelectorAll('[class*="operations-"] [class*="item-"]')).filter(visible);
+      const replyAction = actions.find((node) => norm(node.innerText || node.textContent || '') === '回复');
+      if (!replyAction) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(replyAction) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary') && text === '发送';
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = scope.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (input && visible(input) && sendButton) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_js = """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function setValue(input, value) {
+        const text = String(value || '');
+        if (!input) return false;
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, text);
+          else input.value = text;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        input.textContent = text;
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+        return true;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')
+          && text === '发送'
+          && String(node.getAttribute('aria-disabled') || '').toLowerCase() != 'true'
+          && !node.disabled;
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = scope.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (!input || !visible(input) || !sendButton) continue;
+        setValue(input, replyText);
+        return { ok: click(sendButton) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
+
+
+def _submit_douyin_reply_v3(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const actions = Array.from(root.querySelectorAll('[class*="operations-"] [class*="item-"]')).filter(visible);
+      const replyAction = actions.find((node) => norm(node.innerText || node.textContent || '') === '回复');
+      if (!replyAction) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(replyAction) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary') && text === '发送';
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = scope.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (input && visible(input) && sendButton) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_js = """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function triggerEditable(input, prefix, reply) {
+        const text = String(reply || '');
+        const fullText = `${String(prefix || '')}${text}`;
+        input.focus();
+        try {
+          const selection = window.getSelection();
+          if (selection) {
+            const range = document.createRange();
+            range.selectNodeContents(input);
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+        } catch (e) {}
+        try {
+          document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
+        } catch (e) {}
+        input.textContent = fullText;
+        try {
+          document.execCommand('insertText', false, fullText);
+        } catch (e) {}
+        input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, data: text, inputType: 'insertText' }));
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        return norm(input.innerText || input.textContent || '').includes(norm(text));
+      }
+      function setValue(input, value) {
+        const reply = String(value || '');
+        if (!input) return false;
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, reply);
+          else input.value = reply;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        const current = norm(input.innerText || input.textContent || '');
+        const nextText = current && current.startsWith('回复') && !current.includes(reply) ? `${current}${reply}` : reply;
+        return triggerEditable(input, nextText);
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')
+          && text === '发送'
+          && String(node.getAttribute('aria-disabled') || '').toLowerCase() !== 'true'
+          && !node.disabled;
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = scope.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+        if (!input || !visible(input)) continue;
+        if (!setValue(input, replyText)) continue;
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (!sendButton) continue;
+        return { ok: click(sendButton) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
+
+
+def _submit_douyin_reply_v4(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const actions = Array.from(root.querySelectorAll('[class*="operations-"] [class*="item-"]')).filter(visible);
+      const replyAction = actions.find((node) => norm(node.innerText || node.textContent || '') === '回复');
+      if (!replyAction) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(replyAction) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary') && text === '发送';
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = scope.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (input && visible(input) && sendButton) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_js = """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function placeCaretAtEnd(node) {
+        try {
+          const selection = window.getSelection();
+          if (!selection) return;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          range.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        } catch (e) {}
+      }
+      function setValue(input, value) {
+        const reply = String(value || '');
+        if (!input) return false;
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, reply);
+          else input.value = reply;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        const currentRaw = String(input.innerText || input.textContent || '');
+        const current = norm(currentRaw);
+        const hasReplyPrefix = current && current.startsWith('回复') && !current.includes(norm(reply));
+        const fullText = hasReplyPrefix ? `${currentRaw}${reply}` : reply;
+        input.focus();
+        placeCaretAtEnd(input);
+        try {
+          document.execCommand('insertText', false, reply);
+        } catch (e) {}
+        const afterExec = norm(input.innerText || input.textContent || '');
+        if (!afterExec.includes(norm(reply))) {
+          input.textContent = fullText;
+        }
+        input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, data: reply, inputType: 'insertText' }));
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: reply, inputType: 'insertText' }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        return norm(input.innerText || input.textContent || '').includes(norm(reply));
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')
+          && text === '发送'
+          && String(node.getAttribute('aria-disabled') || '').toLowerCase() !== 'true'
+          && !node.disabled;
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = scope.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+        if (!input || !visible(input)) continue;
+        if (!setValue(input, replyText)) continue;
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (!sendButton) continue;
+        return { ok: click(sendButton) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
+
+
+def _submit_douyin_reply_v5(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const actions = Array.from(root.querySelectorAll('[class*="operations-"] [class*="item-"]')).filter(visible);
+      const replyAction = actions.find((node) => norm(node.innerText || node.textContent || '') === '回复');
+      if (!replyAction) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(replyAction) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary') && text === '发送';
+      }
+      function findEditor(scope) {
+        const exact = Array.from(scope.querySelectorAll('div[contenteditable="true"]')).find((node) => {
+          if (!visible(node)) return false;
+          const placeholder = norm(node.getAttribute('placeholder') || node.getAttribute('aria-placeholder') || '');
+          const cls = String(node.className || '');
+          return placeholder.startsWith('回复') || cls.includes('input-');
+        });
+        if (exact) return exact;
+        return scope.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = findEditor(scope);
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (input && visible(input) && sendButton) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_js = """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function placeCaretAtEnd(node) {
+        try {
+          const selection = window.getSelection();
+          if (!selection) return;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          range.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        } catch (e) {}
+      }
+      function findEditor(scope) {
+        const exact = Array.from(scope.querySelectorAll('div[contenteditable="true"]')).find((node) => {
+          if (!visible(node)) return false;
+          const placeholder = norm(node.getAttribute('placeholder') || node.getAttribute('aria-placeholder') || '');
+          const cls = String(node.className || '');
+          return placeholder.startsWith('回复') || cls.includes('input-');
+        });
+        if (exact) return exact;
+        return scope.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+      }
+      function setValue(input, value) {
+        const reply = String(value || '');
+        if (!input) return false;
+        click(input);
+        input.focus();
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, reply);
+          else input.value = reply;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        const currentRaw = String(input.innerText || input.textContent || '');
+        const current = norm(currentRaw);
+        const hasReplyPrefix = current && current.startsWith('回复') && !current.includes(norm(reply));
+        const fullText = hasReplyPrefix ? `${currentRaw}${reply}` : reply;
+        placeCaretAtEnd(input);
+        try {
+          document.execCommand('insertText', false, reply);
+        } catch (e) {}
+        const afterExec = norm(input.innerText || input.textContent || '');
+        if (!afterExec.includes(norm(reply))) {
+          input.textContent = fullText;
+        }
+        input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, data: reply, inputType: 'insertText' }));
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: reply, inputType: 'insertText' }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        return norm(input.innerText || input.textContent || '').includes(norm(reply));
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')
+          && text === '发送'
+          && String(node.getAttribute('aria-disabled') || '').toLowerCase() !== 'true'
+          && !node.disabled;
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = findEditor(scope);
+        if (!input || !visible(input)) continue;
+        if (!setValue(input, replyText)) continue;
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (!sendButton) continue;
+        return { ok: click(sendButton) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
+
+
+def _submit_douyin_reply_v6(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const actions = Array.from(root.querySelectorAll('[class*="operations-"] [class*="item-"]')).filter(visible);
+      const replyAction = actions.find((node) => norm(node.innerText || node.textContent || '') === '回复');
+      if (!replyAction) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(replyAction) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary') && text === '发送';
+      }
+      function findEditor(scope) {
+        const candidates = Array.from(scope.querySelectorAll(
+          'div[class*="reply-content-"] div[class*="input-"][contenteditable="true"], div[class*="wrap-"] div[class*="input-"][contenteditable="true"], div[class*="input-"][contenteditable="true"], div[contenteditable="true"][placeholder], div[contenteditable="true"][aria-placeholder], div[contenteditable="true"][aria-label]'
+        )).filter(visible);
+        return candidates[0] || null;
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = findEditor(scope);
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (input && sendButton) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    activate_editor_js = """
+    return ((commentIndex) => {
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.focus(); } catch (e) {}
+        try { node.click(); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        try { node.dispatchEvent(new FocusEvent('focus', { bubbles: true })); } catch (e) {}
+        return true;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function findEditor(scope) {
+        const candidates = Array.from(scope.querySelectorAll(
+          'div[class*="reply-content-"] div[class*="input-"][contenteditable="true"], div[class*="wrap-"] div[class*="input-"][contenteditable="true"], div[class*="input-"][contenteditable="true"], div[contenteditable="true"][placeholder], div[contenteditable="true"][aria-placeholder], div[contenteditable="true"][aria-label]'
+        )).filter(visible);
+        return candidates[0] || null;
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = findEditor(scope);
+        if (!input) continue;
+        click(input);
+        const active = document.activeElement === input;
+        const selection = window.getSelection();
+        const selectedInside = !!(selection && selection.anchorNode && input.contains(selection.anchorNode));
+        return { ok: active || selectedInside || true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, activate_editor_js, int(comment_index)).get("ok")):
+        return False
+
+    fill_js = """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.focus(); } catch (e) {}
+        try { node.click(); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+        return true;
+      }
+      function placeCaretAtEnd(node) {
+        try {
+          const selection = window.getSelection();
+          if (!selection) return;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          range.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        } catch (e) {}
+      }
+      function findEditor(scope) {
+        const candidates = Array.from(scope.querySelectorAll(
+          'div[class*="reply-content-"] div[class*="input-"][contenteditable="true"], div[class*="wrap-"] div[class*="input-"][contenteditable="true"], div[class*="input-"][contenteditable="true"], div[contenteditable="true"][placeholder], div[contenteditable="true"][aria-placeholder], div[contenteditable="true"][aria-label]'
+        )).filter(visible);
+        return candidates[0] || null;
+      }
+      function setValue(input, value) {
+        const reply = String(value || '');
+        if (!input) return false;
+        click(input);
+        input.focus();
+        const currentRaw = String(input.innerText || input.textContent || '');
+        const current = norm(currentRaw);
+        const hasReplyPrefix = current && current.startsWith('回复') && !current.includes(norm(reply));
+        const fullText = hasReplyPrefix ? `${currentRaw}${reply}` : reply;
+        placeCaretAtEnd(input);
+        try {
+          document.execCommand('insertText', false, reply);
+        } catch (e) {}
+        const afterExec = norm(input.innerText || input.textContent || '');
+        if (!afterExec.includes(norm(reply))) {
+          input.textContent = fullText;
+        }
+        input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, data: reply, inputType: 'insertText' }));
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: reply, inputType: 'insertText' }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        return norm(input.innerText || input.textContent || '').includes(norm(reply));
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function isSendButton(node) {
+        if (!visible(node)) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        return node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')
+          && text === '发送'
+          && String(node.getAttribute('aria-disabled') || '').toLowerCase() !== 'true'
+          && !node.disabled;
+      }
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const input = findEditor(scope);
+        if (!input) continue;
+        if (!setValue(input, replyText)) continue;
+        const sendButton = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSendButton);
+        if (!sendButton) continue;
+        return { ok: click(sendButton) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
+
+
+def _submit_douyin_reply_v7(page: Any, comment_index: int, reply_text: str) -> bool:
+    if not bool(
+        _run_js_dict(
+            page,
+            """
+            return ((commentIndex) => {
+              function norm(value) {
+                return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+              }
+              function visible(node) {
+                if (!node) return false;
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+              }
+              function click(node) {
+                if (!node) return false;
+                try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                try { node.click(); return true; } catch (e) {}
+                try { node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+                try { node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+                try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+                return false;
+              }
+              function isRoot(node) {
+                return visible(node)
+                  && !!node.querySelector('[class*="username-"]')
+                  && !!node.querySelector('[class*="comment-content-text-"]')
+                  && !!node.querySelector('[class*="operations-"]');
+              }
+              const roots = [];
+              const seen = new Set();
+              for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+                let node = op;
+                while (node && node !== document.body) {
+                  if (isRoot(node)) {
+                    if (!seen.has(node)) {
+                      seen.add(node);
+                      roots.push(node);
+                    }
+                    break;
+                  }
+                  node = node.parentElement;
+                }
+              }
+              const root = roots[Number(commentIndex)];
+              if (!root) return { ok: false, reason: 'comment_not_found' };
+              const actions = Array.from(root.querySelectorAll('[class*="operations-"] [class*="item-"]')).filter(visible);
+              const replyAction = actions.find((node) => norm(node.innerText || node.textContent || '') === '回复');
+              if (!replyAction) return { ok: false, reason: 'reply_button_not_found' };
+              return { ok: click(replyAction) };
+            })(arguments[0]);
+            """,
+            int(comment_index),
+        ).get("ok")
+    ):
+        return False
+
+    selector_candidates = (
+        "css:div[contenteditable='true'][placeholder*='回复']",
+        "css:div[contenteditable='true'][aria-placeholder*='回复']",
+        "css:div[contenteditable='true'][aria-label*='回复']",
+        "xpath://div[@contenteditable='true' and (contains(@placeholder,'回复') or contains(@aria-placeholder,'回复') or contains(@aria-label,'回复'))][1]",
+        "css:div[class*='input-'][contenteditable='true']",
+        "xpath://div[contains(@class,'input-') and @contenteditable='true'][1]",
+    )
+
+    editor = None
+    if hasattr(page, "ele"):
+        for selector in selector_candidates:
+            try:
+                candidate = page.ele(selector, timeout=1.5)
+            except Exception:
+                candidate = None
+            if not candidate:
+                continue
+            if not engine._is_visible_element(candidate):
+                continue
+            editor = candidate
+            break
+
+    if editor is not None:
+        try:
+            editor.click(by_js=False)
+        except Exception:
+            try:
+                editor.click(by_js=True)
+            except Exception:
+                pass
+        if not engine._input_text_field_with_keyboard(editor, str(reply_text or "")):
+            return False
+        return _click_douyin_send_near_active_editor(page)
+
+        send_selectors = (
+            "xpath://button[contains(@class,'douyin-creator-interactive-button-primary') and normalize-space()='发送']",
+            "css:button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary",
+        )
+        for selector in send_selectors:
+            try:
+                btn = page.ele(selector, timeout=1.0)
+            except Exception:
+                btn = None
+            if not btn:
+                continue
+            if not engine._is_visible_element(btn):
+                continue
+            try:
+                btn.click()
+                return True
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                    return True
+                except Exception:
+                    continue
+        return False
+
+    return _submit_douyin_reply_v6(page, comment_index, reply_text)
+
+
+def _submit_douyin_reply_v8(page: Any, comment_index: int, reply_text: str) -> bool:
+    if not bool(
+        _run_js_dict(
+            page,
+            """
+            return ((commentIndex) => {
+              function norm(value) {
+                return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+              }
+              function visible(node) {
+                if (!node) return false;
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+              }
+              function click(node) {
+                if (!node) return false;
+                try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                try { node.click(); return true; } catch (e) {}
+                try { node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+                try { node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+                try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+                return false;
+              }
+              function isRoot(node) {
+                return visible(node)
+                  && !!node.querySelector('[class*="username-"]')
+                  && !!node.querySelector('[class*="comment-content-text-"]')
+                  && !!node.querySelector('[class*="operations-"]');
+              }
+              const roots = [];
+              const seen = new Set();
+              for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+                let node = op;
+                while (node && node !== document.body) {
+                  if (isRoot(node)) {
+                    if (!seen.has(node)) {
+                      seen.add(node);
+                      roots.push(node);
+                    }
+                    break;
+                  }
+                  node = node.parentElement;
+                }
+              }
+              const root = roots[Number(commentIndex)];
+              if (!root) return { ok: false, reason: 'comment_not_found' };
+              const actions = Array.from(root.querySelectorAll('[class*="operations-"] [class*="item-"]')).filter(visible);
+              const replyAction = actions.find((node) => norm(node.innerText || node.textContent || '') === '回复');
+              if (!replyAction) return { ok: false, reason: 'reply_button_not_found' };
+              return { ok: click(replyAction) };
+            })(arguments[0]);
+            """,
+            int(comment_index),
+        ).get("ok")
+    ):
+        return False
+
+    selector_candidates = (
+        "css:div[contenteditable='true'][placeholder*='回复']",
+        "css:div[contenteditable='true'][aria-placeholder*='回复']",
+        "css:div[contenteditable='true'][aria-label*='回复']",
+        "css:div[class*='reply-content-'] div[class*='input-'][contenteditable='true']",
+        "css:div[class*='wrap-'] div[class*='input-'][contenteditable='true']",
+        "css:div[class*='input-'][contenteditable='true']",
+        "xpath://div[@contenteditable='true' and (contains(@placeholder,'回复') or contains(@aria-placeholder,'回复') or contains(@aria-label,'回复'))][1]",
+        "xpath://div[contains(@class,'input-') and @contenteditable='true'][1]",
+    )
+
+    editor = None
+    if hasattr(page, "ele"):
+        for selector in selector_candidates:
+            try:
+                candidate = page.ele(selector, timeout=1.2)
+            except Exception:
+                candidate = None
+            if not candidate:
+                continue
+            if not engine._is_visible_element(candidate):
+                continue
+            editor = candidate
+            break
+
+    clean_reply_text = str(reply_text or "").strip()
+    active_editor_ready = bool(
+        _run_js_dict(
+            page,
+            """
+            return (() => {
+              function norm(value) {
+                return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+              }
+              const active = document.activeElement;
+              if (!active) return { ok: false };
+              const editable = active.isContentEditable || String(active.getAttribute('contenteditable') || '').toLowerCase() === 'true';
+              if (!editable) return { ok: false };
+              const attrs = [
+                active.getAttribute('placeholder') || '',
+                active.getAttribute('aria-placeholder') || '',
+                active.getAttribute('aria-label') || '',
+                String(active.className || ''),
+              ].join(' ');
+              return { ok: /回复/.test(norm(attrs)) || String(active.className || '').includes('input-') };
+            })();
+            """,
+        ).get("ok")
+    )
+
+    if editor is None and not active_editor_ready:
+        return _submit_douyin_reply_v7(page, comment_index, reply_text)
+
+    if editor is not None:
+        try:
+            editor.click(by_js=False)
+        except Exception:
+            try:
+                editor.click(by_js=True)
+            except Exception:
+                pass
+
+        try:
+            editor.run_js(
+                """
+                this.focus();
+                try {
+                  const selection = window.getSelection();
+                  if (selection) {
+                    const range = document.createRange();
+                    range.selectNodeContents(this);
+                    range.collapse(false);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                  }
+                } catch (e) {}
+                """
+            )
+        except Exception:
+            pass
+
+    typed = False
+    if hasattr(page, "run_cdp") and clean_reply_text:
+        try:
+            page.run_cdp("Input.insertText", text=clean_reply_text)
+            typed = True
+        except Exception:
+            typed = False
+
+    if not typed and not engine._input_text_field_with_keyboard(editor, clean_reply_text):
+        return False
+
+    verify_js = """
+    return ((replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      const active = document.activeElement;
+      if (!active) return { ok: false };
+      const text = norm(active.innerText || active.textContent || active.value || '');
+      return { ok: !!(norm(replyText) && text.includes(norm(replyText))) };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, verify_js, clean_reply_text).get("ok")), timeout_seconds=3.0, poll_seconds=0.2):
+        return False
+    return _click_douyin_send_near_active_editor(page)
+
+    send_selectors = (
+        "xpath://button[contains(@class,'douyin-creator-interactive-button-primary') and normalize-space()='发送']",
+        "css:button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary",
+    )
+    for selector in send_selectors:
+        try:
+            btn = page.ele(selector, timeout=0.8)
+        except Exception:
+            btn = None
+        if not btn:
+            continue
+        if not engine._is_visible_element(btn):
+            continue
+        try:
+            btn.click()
+            return True
+        except Exception:
+            try:
+                btn.click(by_js=True)
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def _submit_douyin_reply_v9(page: Any, comment_index: int, reply_text: str) -> bool:
+    clean_reply_text = str(reply_text or "").strip()
+    active_editor_ready = bool(
+        _run_js_dict(
+            page,
+            """
+            return (() => {
+              function norm(value) {
+                return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+              }
+              const active = document.activeElement;
+              if (!active) return { ok: false };
+              const editable = active.isContentEditable || String(active.getAttribute('contenteditable') || '').toLowerCase() === 'true';
+              if (!editable) return { ok: false };
+              const attrs = [
+                active.getAttribute('placeholder') || '',
+                active.getAttribute('aria-placeholder') || '',
+                active.getAttribute('aria-label') || '',
+                String(active.className || ''),
+              ].join(' ');
+              return { ok: /鍥炲/.test(norm(attrs)) || String(active.className || '').includes('input-') };
+            })();
+            """,
+        ).get("ok")
+    )
+
+    if active_editor_ready and clean_reply_text:
+        typed = False
+        if hasattr(page, "run_cdp"):
+            try:
+                page.run_cdp("Input.insertText", text=clean_reply_text)
+                typed = True
+            except Exception:
+                typed = False
+
+        verify_js = """
+        return ((replyText) => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          const active = document.activeElement;
+          if (!active) return { ok: false };
+          const text = norm(active.innerText || active.textContent || active.value || '');
+          return { ok: !!(norm(replyText) && text.includes(norm(replyText))) };
+        })(arguments[0]);
+        """
+        if typed and _wait_until(lambda: bool(_run_js_dict(page, verify_js, clean_reply_text).get("ok")), timeout_seconds=3.0, poll_seconds=0.2):
+            return _click_douyin_send_near_active_editor(page)
+            send_selectors = (
+                "xpath://button[contains(@class,'douyin-creator-interactive-button-primary') and normalize-space()='鍙戦€?]",
+                "css:button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary",
+            )
+            if hasattr(page, "ele"):
+                for selector in send_selectors:
+                    try:
+                        btn = page.ele(selector, timeout=0.8)
+                    except Exception:
+                        btn = None
+                    if not btn:
+                        continue
+                    if not engine._is_visible_element(btn):
+                        continue
+                    try:
+                        btn.click()
+                        return True
+                    except Exception:
+                        try:
+                            btn.click(by_js=True)
+                            return True
+                        except Exception:
+                            continue
+
+    return _submit_douyin_reply_v8(page, comment_index, reply_text)
+
+
 def _wait_douyin_reply_confirm(page: Any, comment_index: int, reply_text: str, timeout_seconds: float = 12.0) -> bool:
     target = re.sub(r"\s+", "", str(reply_text or "").strip())
     js = """
-    return ((replyText) => {
+    return ((commentIndex, replyText) => {
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, '').trim();
       }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function isRoot(node) {
+        return visible(node)
+          && !!node.querySelector('[class*="username-"]')
+          && !!node.querySelector('[class*="comment-content-text-"]')
+          && !!node.querySelector('[class*="operations-"]');
+      }
+      function cleanText(node) {
+        if (!node) return '';
+        const clone = node.cloneNode(true);
+        Array.from(clone.querySelectorAll('[class*="reply-content-"], [class*="wrap-"], textarea, input, [contenteditable="true"], [class*="operations-"], button')).forEach((child) => child.remove());
+        return norm(clone.innerText || clone.textContent || '');
+      }
       const target = norm(replyText);
-      const bodyText = norm((document.body || document.documentElement).innerText || '');
-      return !!(target && bodyText.includes(target));
-    })(arguments[0]);
+      const roots = [];
+      const seen = new Set();
+      for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+        let node = op;
+        while (node && node !== document.body) {
+          if (isRoot(node)) {
+            if (!seen.has(node)) {
+              seen.add(node);
+              roots.push(node);
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const root = roots[Number(commentIndex)];
+      if (!root || !target) return false;
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      return scopes.some((scope) => cleanText(scope).includes(target));
+    })(arguments[0], arguments[1]);
     """
-    return _wait_until(lambda: bool(_run_js_dict(page, js, target).get("ok")), timeout_seconds=timeout_seconds, poll_seconds=0.35)
+    return _wait_until(
+        lambda: bool(_run_js_dict(page, js, int(comment_index), target).get("ok")),
+        timeout_seconds=timeout_seconds,
+        poll_seconds=0.35,
+    )
+
+
+def _click_douyin_send_near_active_editor(page: Any) -> bool:
+    payload = _run_js_dict(
+        page,
+        """
+        return (() => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function visible(node) {
+            if (!node) return false;
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+          }
+          function isSend(node) {
+            if (!visible(node)) return false;
+            if (!node.matches('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')) return false;
+            if (String(node.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return false;
+            if (node.disabled) return false;
+            return norm(node.innerText || node.textContent || '') === '\\u53d1\\u9001';
+          }
+          const active = document.activeElement;
+          if (!active) return { ok: false, reason: 'active_editor_missing' };
+          const activeRect = active.getBoundingClientRect();
+          const scopes = [];
+          const seen = new Set();
+          for (const node of [active, active.parentElement, active.parentElement && active.parentElement.parentElement, active.closest('[class*="reply-content-"]'), active.closest('[class*="wrap-"]')]) {
+            if (!node || seen.has(node)) continue;
+            seen.add(node);
+            scopes.push(node);
+          }
+          let sendButton = null;
+          for (const scope of scopes) {
+            const direct = Array.from(scope.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).find(isSend);
+            if (direct) {
+              sendButton = direct;
+              break;
+            }
+          }
+          if (!sendButton) {
+            const candidates = Array.from(document.querySelectorAll('button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary')).filter(isSend);
+            candidates.sort((left, right) => {
+              const a = left.getBoundingClientRect();
+              const b = right.getBoundingClientRect();
+              const da = Math.abs(a.top - activeRect.top) + Math.abs(a.left - activeRect.left);
+              const db = Math.abs(b.top - activeRect.top) + Math.abs(b.left - activeRect.left);
+              return da - db;
+            });
+            sendButton = candidates[0] || null;
+          }
+          if (!sendButton) return { ok: false, reason: 'send_button_not_found' };
+          try { sendButton.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+          try { sendButton.click(); return { ok: true }; } catch (e) {}
+          try { sendButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+          try { sendButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+          try { sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return { ok: true }; } catch (e) {}
+          return { ok: false, reason: 'send_click_failed' };
+        })();
+        """,
+    )
+    return bool(payload.get("ok"))
 
 
 def _scroll_douyin_comments(page: Any) -> None:
@@ -1281,6 +2881,8 @@ def _extract_kuaishou_comments(page: Any) -> list[dict[str, Any]]:
         const author = norm(root.querySelector('.comment-content__username') ? root.querySelector('.comment-content__username').innerText : '');
         const timeText = norm(root.querySelector('.comment-content__date') ? root.querySelector('.comment-content__date').innerText : '');
         const content = norm(root.querySelector('.comment-content__detail') ? root.querySelector('.comment-content__detail').innerText : '');
+        const detailNodes = Array.from(root.querySelectorAll('.comment-content__detail')).filter(visible);
+        const replyMarkers = Array.from(root.querySelectorAll('[class*="reply-"], .reply-content, .reply-list, .comment-reply')).filter(visible);
         const buttons = Array.from(root.querySelectorAll('.comment-content__btns__btn')).filter(visible);
         const likeButton = buttons[0] || null;
         const likeColor = likeButton ? window.getComputedStyle(likeButton).color : '';
@@ -1289,7 +2891,7 @@ def _extract_kuaishou_comments(page: Any) -> list[dict[str, Any]]:
           author,
           time_text: timeText,
           content,
-          has_reply: false,
+          has_reply: detailNodes.length > 1 || replyMarkers.length > 0,
           liked: !!(likeButton && !/rgb\\(140,\\s*140,\\s*140\\)|#8c8c8c/i.test(String(likeColor || ''))),
         };
       }).filter((item) => item.content || item.author || item.time_text);
@@ -1424,16 +3026,36 @@ def _submit_kuaishou_reply(page: Any, comment_index: int, reply_text: str) -> bo
 def _wait_kuaishou_reply_confirm(page: Any, comment_index: int, reply_text: str, timeout_seconds: float = 12.0) -> bool:
     target = re.sub(r"\s+", "", str(reply_text or "").strip())
     js = """
-    return ((replyText) => {
+    return ((commentIndex, replyText) => {
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, '').trim();
       }
       const target = norm(replyText);
-      const bodyText = norm((document.body || document.documentElement).innerText || '');
-      return !!(target && bodyText.includes(target));
-    })(arguments[0]);
+      if (!target) return { ok: false };
+      const roots = Array.from(document.querySelectorAll('.comment-content'));
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const scopes = [
+        root,
+        root.nextElementSibling,
+        root.parentElement,
+        root.parentElement && root.parentElement.nextElementSibling,
+      ].filter(Boolean);
+      for (const scope of scopes) {
+        const text = cleanText(scope);
+        if (!text) continue;
+        if (text.includes(target)) {
+          return { ok: true };
+        }
+      }
+      return { ok: false, reason: 'reply_not_visible_near_comment' };
+    })(arguments[0], arguments[1]);
     """
-    return _wait_until(lambda: bool(_run_js_dict(page, js, target).get("ok")), timeout_seconds=timeout_seconds, poll_seconds=0.35)
+    return _wait_until(
+        lambda: bool(_run_js_dict(page, js, int(comment_index), target).get("ok")),
+        timeout_seconds=timeout_seconds,
+        poll_seconds=0.35,
+    )
 
 
 def _submit_kuaishou_reply_v2(page: Any, comment_index: int, reply_text: str) -> bool:
@@ -1552,6 +3174,451 @@ def _submit_kuaishou_reply_v2(page: Any, comment_index: int, reply_text: str) ->
     return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
 
 
+def _submit_kuaishou_reply_v3(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const buttons = Array.from(root.querySelectorAll('.comment-content__btns__btn')).filter(visible);
+      const replyButton = buttons.find((node) => /回复/.test(norm(node.innerText || node.textContent || '')))
+        || buttons[1]
+        || buttons[0];
+      if (!replyButton) return { ok: false };
+      return { ok: click(replyButton) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        const submit = scope.querySelector('.comment-content__btns__btn.reply-active, .comment-content__btns__btn[class*="reply-active"]')
+          || Array.from(scope.querySelectorAll('button, div, span')).find((node) => /确认/.test(norm(node.innerText || node.textContent || '')) && visible(node));
+        if (input && submit && visible(input) && visible(submit)) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_js = """
+    return ((commentIndex, replyText) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function setValue(input, value) {
+        const text = String(value || '');
+        if (!input) return false;
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, text);
+          else input.value = text;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        input.textContent = text;
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+        return true;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        const submit = scope.querySelector('.comment-content__btns__btn.reply-active, .comment-content__btns__btn[class*="reply-active"]')
+          || Array.from(scope.querySelectorAll('button, div, span')).find((node) => /确认/.test(norm(node.innerText || node.textContent || '')) && visible(node));
+        if (!input || !submit || !visible(input) || !visible(submit)) continue;
+        setValue(input, replyText);
+        return { ok: click(submit) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    return bool(_run_js_dict(page, fill_js, int(comment_index), str(reply_text or "")).get("ok"))
+
+
+def _submit_kuaishou_reply_v4(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const buttons = Array.from(root.querySelectorAll('.comment-content__btns__btn')).filter(visible);
+      const replyButton = buttons.find((node) => /回复/.test(norm(node.innerText || node.textContent || '')))
+        || buttons[1]
+        || buttons[0];
+      if (!replyButton) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(replyButton) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_editor_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        if (input && visible(input)) {
+          return { ok: true };
+        }
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_editor_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_only_js = """
+    return ((commentIndex, replyText) => {
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function setValue(input, value) {
+        const text = String(value || '');
+        if (!input) return false;
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, text);
+          else input.value = text;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        input.textContent = text;
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+        return true;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        if (!input || !visible(input)) continue;
+        return { ok: setValue(input, replyText) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    if not bool(_run_js_dict(page, fill_only_js, int(comment_index), str(reply_text or "")).get("ok")):
+        return False
+
+    wait_confirm_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const button = Array.from(scope.querySelectorAll('button, div, span'))
+          .find((node) => /确认/.test(norm(node.innerText || node.textContent || '')) && visible(node));
+        if (button) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, wait_confirm_js, int(comment_index)).get("ok")), timeout_seconds=3.0, poll_seconds=0.2):
+        return False
+
+    click_confirm_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const button = Array.from(scope.querySelectorAll('button, div, span'))
+          .find((node) => /确认/.test(norm(node.innerText || node.textContent || '')) && visible(node));
+        if (!button) continue;
+        return { ok: click(button) };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    return bool(_run_js_dict(page, click_confirm_js, int(comment_index)).get("ok"))
+
+
+def _submit_kuaishou_reply_v5(page: Any, comment_index: int, reply_text: str) -> bool:
+    open_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false, reason: 'comment_not_found' };
+      const buttons = Array.from(root.querySelectorAll('.comment-content__btns__btn')).filter(visible);
+      const replyButton = buttons.find((node) => norm(node.innerText || node.textContent || '') === '回复') || buttons[1] || buttons[0];
+      if (!replyButton) return { ok: false, reason: 'reply_button_not_found' };
+      return { ok: click(replyButton) };
+    })(arguments[0]);
+    """
+    if not bool(_run_js_dict(page, open_js, int(comment_index)).get("ok")):
+        return False
+
+    locate_editor_js = """
+    return ((commentIndex) => {
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        if (input && visible(input)) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, locate_editor_js, int(comment_index)).get("ok")), timeout_seconds=5.0, poll_seconds=0.25):
+        return False
+
+    fill_only_js = """
+    return ((commentIndex, replyText) => {
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function setValue(input, value) {
+        const text = String(value || '');
+        if (!input) return false;
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          const proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (setter && setter.set) setter.set.call(input, text);
+          else input.value = text;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        input.textContent = text;
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+        return true;
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const wrapper = scope.querySelector('.comment-input__wrapper, .comment-input-wrapper');
+        if (!wrapper || !visible(wrapper)) continue;
+        const input = wrapper.querySelector('textarea, input[type="text"], input:not([type]), [contenteditable="true"]');
+        if (!input || !visible(input)) continue;
+        return { ok: setValue(input, replyText) };
+      }
+      return { ok: false };
+    })(arguments[0], arguments[1]);
+    """
+    if not bool(_run_js_dict(page, fill_only_js, int(comment_index), str(reply_text or "")).get("ok")):
+        return False
+
+    wait_confirm_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function isConfirmButton(node) {
+        return !!node
+          && visible(node)
+          && node.matches('.comment-input__wrapper__control__btns .comment-btn.sure-btn.sure-btn--is-active, .comment-btn.sure-btn.sure-btn--is-active')
+          && norm(node.innerText || node.textContent || '') === '确认';
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const button = Array.from(scope.querySelectorAll('.comment-input__wrapper__control__btns .comment-btn.sure-btn.sure-btn--is-active, .comment-btn.sure-btn.sure-btn--is-active')).find(isConfirmButton);
+        if (button) return { ok: true };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    if not _wait_until(lambda: bool(_run_js_dict(page, wait_confirm_js, int(comment_index)).get("ok")), timeout_seconds=3.0, poll_seconds=0.2):
+        return False
+
+    click_confirm_js = """
+    return ((commentIndex) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(node) {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+        try { node.click(); return true; } catch (e) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+        return false;
+      }
+      function isConfirmButton(node) {
+        return !!node
+          && visible(node)
+          && node.matches('.comment-input__wrapper__control__btns .comment-btn.sure-btn.sure-btn--is-active, .comment-btn.sure-btn.sure-btn--is-active')
+          && norm(node.innerText || node.textContent || '') === '确认';
+      }
+      const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+      const root = roots[Number(commentIndex)];
+      if (!root) return { ok: false };
+      const scopes = [root, root.nextElementSibling, root.parentElement, root.parentElement && root.parentElement.nextElementSibling].filter(Boolean);
+      for (const scope of scopes) {
+        const button = Array.from(scope.querySelectorAll('.comment-input__wrapper__control__btns .comment-btn.sure-btn.sure-btn--is-active, .comment-btn.sure-btn.sure-btn--is-active')).find(isConfirmButton);
+        if (!button) continue;
+        return { ok: click(button) };
+      }
+      return { ok: false };
+    })(arguments[0]);
+    """
+    return bool(_run_js_dict(page, click_confirm_js, int(comment_index)).get("ok"))
+
+
 def _scroll_kuaishou_comments(page: Any) -> None:
     _scroll_container(page, [".comment-list", "main", "body"])
 
@@ -1564,7 +3631,7 @@ PLATFORM_ADAPTERS: dict[str, CommentPlatformAdapter] = {
         open_post=_open_douyin_post,
         extract_comments=_extract_douyin_comments,
         like_comment_if_needed=_like_douyin_comment_if_needed,
-        submit_reply=_submit_douyin_reply,
+        submit_reply=_submit_douyin_reply_v9,
         wait_reply_confirm=_wait_douyin_reply_confirm,
         scroll_comments=_scroll_douyin_comments,
     ),
@@ -1575,7 +3642,7 @@ PLATFORM_ADAPTERS: dict[str, CommentPlatformAdapter] = {
         open_post=_open_kuaishou_post,
         extract_comments=_extract_kuaishou_comments,
         like_comment_if_needed=_like_kuaishou_comment_if_needed,
-        submit_reply=_submit_kuaishou_reply_v2,
+        submit_reply=_submit_kuaishou_reply_v5,
         wait_reply_confirm=_wait_kuaishou_reply_confirm,
         scroll_comments=_scroll_kuaishou_comments,
     ),
@@ -1620,6 +3687,841 @@ def _snapshot_page_text(page: Any) -> str:
         """,
     )
     return str(payload.get("text") or "")
+
+
+def reply_douyin_focused_editor(
+    *,
+    workspace: engine.Workspace,
+    runtime_config: dict[str, Any],
+    debug_port: int,
+    reply_text: str,
+    ignore_state: bool = False,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = "",
+    auto_open_chrome: bool = True,
+    debug: bool = False,
+    notify_env_prefix: str = engine.DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    del runtime_config
+    del notify_env_prefix
+
+    platform = "douyin"
+    clean_reply_text = str(reply_text or "").strip()
+    state_path = str(_state_path(workspace, platform))
+    markdown_path = str(_markdown_path(workspace, platform))
+    empty_result = {
+        "ok": False,
+        "platform": platform,
+        "reason": "",
+        "state_path": state_path,
+        "markdown_path": markdown_path,
+        "records": [],
+        "posts_scanned": 0,
+        "posts_selected": 0,
+        "replies_sent": 0,
+    }
+    if not clean_reply_text:
+        empty_result["reason"] = "reply_text_empty"
+        return empty_result
+
+    state = _load_state(workspace, platform)
+    items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    page = engine._connect_chrome(
+        debug_port=int(debug_port),
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=DOUYIN_COMMENT_MANAGER_URL,
+    )
+    time.sleep(0.3)
+
+    page_meta = _run_js_dict(
+        page,
+        """
+        return {
+          ok: true,
+          url: String(location.href || ''),
+          title: String(document.title || '')
+        };
+        """,
+    )
+    current_url = str(page_meta.get("url") or "").strip()
+    current_title = str(page_meta.get("title") or "").strip()
+    if "creator.douyin.com/creator-micro/interactive/comment" not in current_url:
+        empty_result["reason"] = "douyin_comment_page_not_open"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    focus_info = _run_js_dict(
+        page,
+        """
+        return (() => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function visible(node) {
+            if (!node) return false;
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+          }
+          function isRoot(node) {
+            if (!visible(node)) return false;
+            return !!node.querySelector('[class*="username-"]')
+              && !!node.querySelector('[class*="time-"]')
+              && !!node.querySelector('[class*="comment-content-text-"]')
+              && !!node.querySelector('[class*="operations-"]');
+          }
+          const active = document.activeElement;
+          const editable = !!active && (active.isContentEditable || String(active.getAttribute('contenteditable') || '').toLowerCase() === 'true');
+          const roots = [];
+          const seen = new Set();
+          for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+            let node = op;
+            while (node && node !== document.body) {
+              if (isRoot(node)) {
+                if (!seen.has(node)) {
+                  seen.add(node);
+                  roots.push(node);
+                }
+                break;
+              }
+              node = node.parentElement;
+            }
+          }
+          let root = null;
+          if (active) {
+            for (const candidate of roots) {
+              if (candidate.contains(active)) {
+                root = candidate;
+                break;
+              }
+            }
+          }
+          const index = root ? roots.indexOf(root) : -1;
+          return {
+            ok: editable && index >= 0,
+            editable,
+            comment_index: index,
+            author: norm(root && root.querySelector('[class*="username-"]') ? root.querySelector('[class*="username-"]').innerText : ''),
+            time_text: norm(root && root.querySelector('[class*="time-"]') ? root.querySelector('[class*="time-"]').innerText : ''),
+            content: norm(root && root.querySelector('[class*="comment-content-text-"]') ? root.querySelector('[class*="comment-content-text-"]').innerText : ''),
+            active_text: norm(active ? (active.innerText || active.textContent || active.value || '') : '')
+          };
+        })();
+        """,
+    )
+    if not bool(focus_info.get("ok")):
+        empty_result["reason"] = "focused_reply_editor_not_ready"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        empty_result["focus_info"] = focus_info
+        return empty_result
+
+    comment_index = max(0, int(focus_info.get("comment_index") or 0))
+    comments = _extract_douyin_comments(page)
+    comment: dict[str, Any]
+    if 0 <= comment_index < len(comments):
+        comment = dict(comments[comment_index])
+    else:
+        comment = {
+            "index": comment_index,
+            "author": str(focus_info.get("author") or "").strip(),
+            "time_text": str(focus_info.get("time_text") or "").strip(),
+            "content": str(focus_info.get("content") or "").strip(),
+            "has_reply": False,
+            "liked": False,
+        }
+    comment["index"] = comment_index
+
+    post = _extract_current_douyin_post(page) or {
+        "post_key": _build_post_key("", ""),
+        "title": "",
+        "published_text": "",
+        "comment_count": len(comments) if comments else 1,
+        "has_comments": True,
+    }
+
+    engine._comment_reply_log(
+        debug,
+        f"[douyin-focused] Active comment index={comment_index} author={engine._single_line_preview(str(comment.get('author') or ''), 24)}",
+    )
+
+    typed = False
+    if hasattr(page, "run_cdp"):
+        try:
+            page.run_cdp("Input.insertText", text=clean_reply_text)
+            typed = True
+        except Exception:
+            typed = False
+
+    if not typed:
+        typed = bool(
+            _run_js_dict(
+                page,
+                """
+                return ((replyText) => {
+                  const active = document.activeElement;
+                  if (!active) return { ok: false };
+                  const editable = active.isContentEditable || String(active.getAttribute('contenteditable') || '').toLowerCase() === 'true';
+                  if (!editable) return { ok: false };
+                  try { active.focus(); } catch (e) {}
+                  try {
+                    document.execCommand('insertText', false, String(replyText || ''));
+                  } catch (e) {}
+                  const text = String(active.innerText || active.textContent || active.value || '');
+                  return { ok: text.includes(String(replyText || '')) };
+                })(arguments[0]);
+                """,
+                clean_reply_text,
+            ).get("ok")
+        )
+
+    if not typed and hasattr(page, "ele"):
+        try:
+            active_ele = page.ele("css:[contenteditable='true']:focus", timeout=0.5)
+        except Exception:
+            active_ele = None
+        if active_ele:
+            typed = engine._input_text_field_with_keyboard(active_ele, clean_reply_text)
+
+    typed_ready = _wait_until(
+        lambda: bool(
+            _run_js_dict(
+                page,
+                """
+                return ((replyText) => {
+                  function norm(value) {
+                    return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+                  }
+                  const active = document.activeElement;
+                  if (!active) return { ok: false };
+                  const text = norm(active.innerText || active.textContent || active.value || '');
+                  return { ok: !!(norm(replyText) && text.includes(norm(replyText))) };
+                })(arguments[0]);
+                """,
+                clean_reply_text,
+            ).get("ok")
+        ),
+        timeout_seconds=3.0,
+        poll_seconds=0.2,
+    )
+    if not typed_ready:
+        empty_result["reason"] = "reply_text_not_inserted"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        empty_result["focus_info"] = focus_info
+        return empty_result
+    send_clicked = _click_douyin_send_near_active_editor(page)
+    if not send_clicked:
+        empty_result["reason"] = "send_button_not_clicked"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    send_clicked = True
+    if False and hasattr(page, "ele"):
+        for selector in (
+            "xpath://button[contains(@class,'douyin-creator-interactive-button-primary') and not(@disabled)]",
+            "css:button.douyin-creator-interactive-button.douyin-creator-interactive-button-primary",
+        ):
+            try:
+                btn = page.ele(selector, timeout=0.8)
+            except Exception:
+                btn = None
+            if not btn or not engine._is_visible_element(btn):
+                continue
+            try:
+                disabled_attr = str(btn.attr("disabled") or "").strip().lower()
+            except Exception:
+                disabled_attr = ""
+            if disabled_attr in {"true", "disabled"}:
+                continue
+            try:
+                btn.click()
+                send_clicked = True
+                break
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                    send_clicked = True
+                    break
+                except Exception:
+                    continue
+    if not send_clicked:
+        empty_result["reason"] = "send_button_not_clicked"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    if not _wait_douyin_reply_confirm(page, comment_index, clean_reply_text, 12.0):
+        empty_result["reason"] = "reply_confirm_timeout"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    fingerprint = engine._comment_reply_fingerprint(post, comment)
+    record = engine._remember_comment_reply(
+        items,
+        fingerprint=fingerprint,
+        post=post,
+        comment=comment,
+        reply_text=clean_reply_text,
+    )
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _save_state(workspace, platform, state)
+    engine._append_comment_reply_markdown(_markdown_path(workspace, platform), platform, record)
+    return {
+        "ok": True,
+        "platform": platform,
+        "reason": "",
+        "state_path": state_path,
+        "markdown_path": markdown_path,
+        "records": [record],
+        "posts_scanned": 1,
+        "posts_selected": 1,
+        "replies_sent": 1,
+        "current_url": current_url,
+        "current_title": current_title,
+    }
+
+
+def reply_douyin_focused_generated(
+    *,
+    workspace: engine.Workspace,
+    runtime_config: dict[str, Any],
+    debug_port: int,
+    ignore_state: bool = False,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = "",
+    auto_open_chrome: bool = True,
+    debug: bool = False,
+    notify_env_prefix: str = engine.DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    del notify_env_prefix
+
+    platform = "douyin"
+    state_path = str(_state_path(workspace, platform))
+    markdown_path = str(_markdown_path(workspace, platform))
+    base_result = {
+        "ok": False,
+        "platform": platform,
+        "reason": "",
+        "state_path": state_path,
+        "markdown_path": markdown_path,
+        "records": [],
+        "posts_scanned": 0,
+        "posts_selected": 0,
+        "replies_sent": 0,
+    }
+
+    comment_cfg = engine._merge_comment_reply_config(runtime_config.get("comment_reply"))
+    reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
+    state = _load_state(workspace, platform)
+    items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    page = engine._connect_chrome(
+        debug_port=int(debug_port),
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=DOUYIN_COMMENT_MANAGER_URL,
+    )
+    time.sleep(0.3)
+
+    page_meta = _run_js_dict(
+        page,
+        """
+        return {
+          ok: true,
+          url: String(location.href || ''),
+          title: String(document.title || '')
+        };
+        """,
+    )
+    current_url = str(page_meta.get("url") or "").strip()
+    current_title = str(page_meta.get("title") or "").strip()
+    if "creator.douyin.com/creator-micro/interactive/comment" not in current_url:
+        base_result["reason"] = "douyin_comment_page_not_open"
+        base_result["current_url"] = current_url
+        base_result["current_title"] = current_title
+        return base_result
+
+    focus_info = _run_js_dict(
+        page,
+        """
+        return (() => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function visible(node) {
+            if (!node) return false;
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+          }
+          function isRoot(node) {
+            if (!visible(node)) return false;
+            return !!node.querySelector('[class*="username-"]')
+              && !!node.querySelector('[class*="time-"]')
+              && !!node.querySelector('[class*="comment-content-text-"]')
+              && !!node.querySelector('[class*="operations-"]');
+          }
+          const active = document.activeElement;
+          const editable = !!active && (active.isContentEditable || String(active.getAttribute('contenteditable') || '').toLowerCase() === 'true');
+          const roots = [];
+          const seen = new Set();
+          for (const op of Array.from(document.querySelectorAll('[class*="operations-"]'))) {
+            let node = op;
+            while (node && node !== document.body) {
+              if (isRoot(node)) {
+                if (!seen.has(node)) {
+                  seen.add(node);
+                  roots.push(node);
+                }
+                break;
+              }
+              node = node.parentElement;
+            }
+          }
+          let root = null;
+          if (active) {
+            for (const candidate of roots) {
+              if (candidate.contains(active)) {
+                root = candidate;
+                break;
+              }
+            }
+          }
+          const index = root ? roots.indexOf(root) : -1;
+          return {
+            ok: editable && index >= 0,
+            comment_index: index,
+            author: norm(root && root.querySelector('[class*="username-"]') ? root.querySelector('[class*="username-"]').innerText : ''),
+            time_text: norm(root && root.querySelector('[class*="time-"]') ? root.querySelector('[class*="time-"]').innerText : ''),
+            content: norm(root && root.querySelector('[class*="comment-content-text-"]') ? root.querySelector('[class*="comment-content-text-"]').innerText : '')
+          };
+        })();
+        """,
+    )
+    if not bool(focus_info.get("ok")):
+        base_result["reason"] = "focused_reply_editor_not_ready"
+        base_result["current_url"] = current_url
+        base_result["current_title"] = current_title
+        return base_result
+
+    comments = _extract_douyin_comments(page)
+    comment_index = max(0, int(focus_info.get("comment_index") or 0))
+    comment = dict(comments[comment_index]) if 0 <= comment_index < len(comments) else {
+        "index": comment_index,
+        "author": str(focus_info.get("author") or "").strip(),
+        "time_text": str(focus_info.get("time_text") or "").strip(),
+        "content": str(focus_info.get("content") or "").strip(),
+        "has_reply": False,
+        "liked": False,
+    }
+    comment["index"] = comment_index
+    post = _extract_current_douyin_post(page) or {
+        "post_key": _build_post_key("", ""),
+        "title": "",
+        "published_text": "",
+        "comment_count": len(comments) if comments else 1,
+        "has_comments": True,
+    }
+    fingerprint = engine._comment_reply_fingerprint(post, comment)
+    if (not bool(ignore_state)) and (fingerprint in items or bool(comment.get("has_reply"))):
+        base_result["reason"] = "duplicate_or_has_reply"
+        base_result["posts_scanned"] = 1
+        base_result["posts_selected"] = 1
+        return base_result
+
+    reply_text = engine.generate_comment_reply(
+        post=post,
+        comment=comment,
+        spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
+        prompt_template=str(comment_cfg.get("prompt_template") or engine.DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
+        fallback_replies=list(comment_cfg.get("fallback_replies") or engine.DEFAULT_COMMENT_REPLY_FALLBACKS),
+        max_chars=reply_max_chars,
+    )
+    if not reply_text:
+        base_result["reason"] = "reply_text_empty"
+        base_result["posts_scanned"] = 1
+        base_result["posts_selected"] = 1
+        return base_result
+
+    return reply_douyin_focused_editor(
+        workspace=workspace,
+        runtime_config=runtime_config,
+        debug_port=debug_port,
+        reply_text=reply_text,
+        ignore_state=ignore_state,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        auto_open_chrome=auto_open_chrome,
+        debug=debug,
+        notify_env_prefix=engine.DEFAULT_NOTIFY_ENV_PREFIX,
+    )
+
+
+def reply_kuaishou_focused_editor(
+    *,
+    workspace: engine.Workspace,
+    runtime_config: dict[str, Any],
+    debug_port: int,
+    reply_text: str,
+    ignore_state: bool = False,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = "",
+    auto_open_chrome: bool = True,
+    debug: bool = False,
+    notify_env_prefix: str = engine.DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    del runtime_config
+    del notify_env_prefix
+
+    platform = "kuaishou"
+    clean_reply_text = str(reply_text or "").strip()
+    state_path = str(_state_path(workspace, platform))
+    markdown_path = str(_markdown_path(workspace, platform))
+    empty_result = {
+        "ok": False,
+        "platform": platform,
+        "reason": "",
+        "state_path": state_path,
+        "markdown_path": markdown_path,
+        "records": [],
+        "posts_scanned": 0,
+        "posts_selected": 0,
+        "replies_sent": 0,
+    }
+    if not clean_reply_text:
+        empty_result["reason"] = "reply_text_empty"
+        return empty_result
+
+    state = _load_state(workspace, platform)
+    items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    page = engine._connect_chrome(
+        debug_port=int(debug_port),
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=KUAISHOU_COMMENT_MANAGER_URL,
+    )
+    time.sleep(0.3)
+
+    page_meta = _run_js_dict(
+        page,
+        """
+        return {
+          ok: true,
+          url: String(location.href || ''),
+          title: String(document.title || '')
+        };
+        """,
+    )
+    current_url = str(page_meta.get("url") or "").strip()
+    current_title = str(page_meta.get("title") or "").strip()
+    if "cp.kuaishou.com/article/comment" not in current_url:
+        empty_result["reason"] = "kuaishou_comment_page_not_open"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    focus_info = _run_js_dict(
+        page,
+        """
+        return (() => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function visible(node) {
+            if (!node) return false;
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+          }
+          function toElement(node) {
+            if (!node) return null;
+            return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+          }
+          function isEditable(node) {
+            return !!node && (
+              node.isContentEditable
+              || node.tagName === 'TEXTAREA'
+              || node.tagName === 'INPUT'
+              || String(node.getAttribute('contenteditable') || '').toLowerCase() === 'true'
+            );
+          }
+          function resolveInput() {
+            const active = document.activeElement;
+            if (isEditable(active)) return active;
+            const selection = window.getSelection ? window.getSelection() : null;
+            const anchor = selection && selection.anchorNode ? toElement(selection.anchorNode) : null;
+            if (isEditable(anchor)) return anchor;
+            const anchorEditable = anchor ? anchor.closest('[contenteditable="true"], textarea, input') : null;
+            if (isEditable(anchorEditable)) return anchorEditable;
+            const activeEditable = active ? active.closest('[contenteditable="true"], textarea, input') : null;
+            if (isEditable(activeEditable)) return activeEditable;
+            const wrapper = anchor ? (anchor.closest('.comment-input__wrapper, .comment-input-wrapper') || null) : (active ? active.closest('.comment-input__wrapper, .comment-input-wrapper') : null);
+            if (!wrapper) return null;
+            const nested = wrapper.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+            return isEditable(nested) ? nested : null;
+          }
+          const input = resolveInput();
+          const wrapper = input ? (input.closest('.comment-input__wrapper, .comment-input-wrapper') || input.parentElement) : null;
+          const roots = Array.from(document.querySelectorAll('.comment-content')).filter(visible);
+          let root = null;
+          for (const candidate of roots) {
+            const scopes = [candidate, candidate.nextElementSibling, candidate.parentElement, candidate.parentElement && candidate.parentElement.nextElementSibling].filter(Boolean);
+            if (wrapper && scopes.some((scope) => scope === wrapper || scope.contains(wrapper))) {
+              root = candidate;
+              break;
+            }
+            if (candidate.querySelector('.comment-content__btns__btn.reply-active')) {
+              root = candidate;
+            }
+          }
+          const index = root ? roots.indexOf(root) : -1;
+          return {
+            ok: !!input && index >= 0,
+            comment_index: index,
+            author: norm(root && root.querySelector('.comment-content__username') ? root.querySelector('.comment-content__username').innerText : ''),
+            time_text: norm(root && root.querySelector('.comment-content__date') ? root.querySelector('.comment-content__date').innerText : ''),
+            content: norm(root && root.querySelector('.comment-content__detail') ? root.querySelector('.comment-content__detail').innerText : ''),
+            input_text: norm(input ? (input.innerText || input.textContent || input.value || '') : '')
+          };
+        })();
+        """,
+    )
+    if not bool(focus_info.get("ok")):
+        empty_result["reason"] = "focused_reply_editor_not_ready"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        empty_result["focus_info"] = focus_info
+        return empty_result
+
+    comment_index = max(0, int(focus_info.get("comment_index") or 0))
+    comments = _extract_kuaishou_comments(page)
+    comment = dict(comments[comment_index]) if 0 <= comment_index < len(comments) else {
+        "index": comment_index,
+        "author": str(focus_info.get("author") or "").strip(),
+        "time_text": str(focus_info.get("time_text") or "").strip(),
+        "content": str(focus_info.get("content") or "").strip(),
+        "has_reply": False,
+        "liked": False,
+    }
+    comment["index"] = comment_index
+
+    post = _extract_current_kuaishou_post(page) or {
+        "post_key": _build_post_key("", ""),
+        "title": "",
+        "published_text": "",
+        "comment_count": len(comments) if comments else 1,
+        "has_comments": True,
+    }
+    fingerprint = engine._comment_reply_fingerprint(post, comment)
+    if (not bool(ignore_state)) and (fingerprint in items or bool(comment.get("has_reply"))):
+        empty_result["reason"] = "duplicate_or_has_reply"
+        empty_result["posts_scanned"] = 1
+        empty_result["posts_selected"] = 1
+        return empty_result
+
+    typed = False
+    if hasattr(page, "run_cdp"):
+        try:
+            page.run_cdp("Input.insertText", text=clean_reply_text)
+            typed = True
+        except Exception:
+            typed = False
+    if not typed:
+        typed = bool(
+            _run_js_dict(
+                page,
+                """
+                return ((replyText) => {
+                  function toElement(node) {
+                    if (!node) return null;
+                    return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+                  }
+                  function isEditable(node) {
+                    return !!node && (
+                      node.isContentEditable
+                      || node.tagName === 'TEXTAREA'
+                      || node.tagName === 'INPUT'
+                      || String(node.getAttribute('contenteditable') || '').toLowerCase() === 'true'
+                    );
+                  }
+                  function resolveInput() {
+                    const active = document.activeElement;
+                    if (isEditable(active)) return active;
+                    const selection = window.getSelection ? window.getSelection() : null;
+                    const anchor = selection && selection.anchorNode ? toElement(selection.anchorNode) : null;
+                    if (isEditable(anchor)) return anchor;
+                    const anchorEditable = anchor ? anchor.closest('[contenteditable="true"], textarea, input') : null;
+                    if (isEditable(anchorEditable)) return anchorEditable;
+                    const activeEditable = active ? active.closest('[contenteditable="true"], textarea, input') : null;
+                    if (isEditable(activeEditable)) return activeEditable;
+                    const wrapper = anchor ? (anchor.closest('.comment-input__wrapper, .comment-input-wrapper') || null) : (active ? active.closest('.comment-input__wrapper, .comment-input-wrapper') : null);
+                    if (!wrapper) return null;
+                    return wrapper.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+                  }
+                  const active = resolveInput();
+                  if (!active) return { ok: false };
+                  const text = String(replyText || '');
+                  if (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT') {
+                    active.value = text;
+                    active.dispatchEvent(new Event('input', { bubbles: true }));
+                    active.dispatchEvent(new Event('change', { bubbles: true }));
+                    return { ok: true };
+                  }
+                  active.textContent = text;
+                  active.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+                  return { ok: true };
+                })(arguments[0]);
+                """,
+                clean_reply_text,
+            ).get("ok")
+        )
+    typed_ready = _wait_until(
+        lambda: bool(
+            _run_js_dict(
+                page,
+                """
+                return ((replyText) => {
+                  function norm(value) {
+                    return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+                  }
+                  function toElement(node) {
+                    if (!node) return null;
+                    return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+                  }
+                  function isEditable(node) {
+                    return !!node && (
+                      node.isContentEditable
+                      || node.tagName === 'TEXTAREA'
+                      || node.tagName === 'INPUT'
+                      || String(node.getAttribute('contenteditable') || '').toLowerCase() === 'true'
+                    );
+                  }
+                  function resolveInput() {
+                    const active = document.activeElement;
+                    if (isEditable(active)) return active;
+                    const selection = window.getSelection ? window.getSelection() : null;
+                    const anchor = selection && selection.anchorNode ? toElement(selection.anchorNode) : null;
+                    if (isEditable(anchor)) return anchor;
+                    const anchorEditable = anchor ? anchor.closest('[contenteditable="true"], textarea, input') : null;
+                    if (isEditable(anchorEditable)) return anchorEditable;
+                    const activeEditable = active ? active.closest('[contenteditable="true"], textarea, input') : null;
+                    if (isEditable(activeEditable)) return activeEditable;
+                    const wrapper = anchor ? (anchor.closest('.comment-input__wrapper, .comment-input-wrapper') || null) : (active ? active.closest('.comment-input__wrapper, .comment-input-wrapper') : null);
+                    if (!wrapper) return null;
+                    return wrapper.querySelector('[contenteditable="true"], textarea, input[type="text"], input:not([type])');
+                  }
+                  const active = resolveInput();
+                  if (!active) return { ok: false };
+                  const text = norm(active.innerText || active.textContent || active.value || '');
+                  return { ok: !!(norm(replyText) && text.includes(norm(replyText))) };
+                })(arguments[0]);
+                """,
+                clean_reply_text,
+            ).get("ok")
+        ),
+        timeout_seconds=3.0,
+        poll_seconds=0.2,
+    )
+    if not typed_ready:
+        empty_result["reason"] = "reply_text_not_inserted"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    confirm_clicked = bool(
+        _run_js_dict(
+            page,
+            """
+            return (() => {
+              function norm(value) {
+                return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+              }
+              function visible(node) {
+                if (!node) return false;
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+              }
+              function click(node) {
+                if (!node) return false;
+                try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                try { node.click(); return true; } catch (e) {}
+                try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+                return false;
+              }
+              function toElement(node) {
+                if (!node) return null;
+                return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+              }
+              const active = document.activeElement;
+              const selection = window.getSelection ? window.getSelection() : null;
+              const anchor = selection && selection.anchorNode ? toElement(selection.anchorNode) : null;
+              const wrapper = (anchor && anchor.closest('.comment-input__wrapper, .comment-input-wrapper'))
+                || (active && active.closest('.comment-input__wrapper, .comment-input-wrapper'))
+                || (anchor ? anchor.parentElement : null)
+                || (active ? active.parentElement : null);
+              if (!wrapper) return { ok: false };
+              const button = wrapper.querySelector('.comment-input__wrapper__control__btns .comment-btn.sure-btn.sure-btn--is-active')
+                || wrapper.querySelector('.comment-btn.sure-btn.sure-btn--is-active')
+                || Array.from(wrapper.querySelectorAll('button, div, span')).find((node) => visible(node) && norm(node.innerText || node.textContent || '') === '确认');
+              return { ok: click(button) };
+            })();
+            """,
+        ).get("ok")
+    )
+    if not confirm_clicked:
+        empty_result["reason"] = "confirm_button_not_clicked"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    if not _wait_kuaishou_reply_confirm(page, comment_index, clean_reply_text, 12.0):
+        empty_result["reason"] = "reply_confirm_timeout"
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
+
+    record = engine._remember_comment_reply(
+        items,
+        fingerprint=fingerprint,
+        post=post,
+        comment=comment,
+        reply_text=clean_reply_text,
+    )
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _save_state(workspace, platform, state)
+    engine._append_comment_reply_markdown(_markdown_path(workspace, platform), platform, record)
+    return {
+        "ok": True,
+        "platform": platform,
+        "reason": "",
+        "state_path": state_path,
+        "markdown_path": markdown_path,
+        "records": [record],
+        "posts_scanned": 1,
+        "posts_selected": 1,
+        "replies_sent": 1,
+        "current_url": current_url,
+        "current_title": current_title,
+    }
 
 
 def diagnose_platform_comment_page(

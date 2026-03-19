@@ -8,7 +8,14 @@ from typing import Any
 
 from .cleanup import run_cleanup
 from .collect import collect
-from .engagement import diagnose_platform_engagement, run_douyin_engagement, run_kuaishou_engagement, run_wechat_engagement
+from .engagement import (
+    diagnose_platform_engagement,
+    run_douyin_engagement,
+    run_douyin_focused_engagement,
+    run_kuaishou_focused_engagement,
+    run_kuaishou_engagement,
+    run_wechat_engagement,
+)
 from .migrate import migrate_legacy_assets
 from .publish import immediate, publish
 from .session import capture_login_qr, login_status, open_login
@@ -51,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
         engage_platform.add_argument("--like-only", action="store_true")
         engage_platform.add_argument("--latest-only", action="store_true")
         engage_platform.add_argument("--debug", action="store_true")
+    douyin_focused = engage_sub.add_parser("douyin-focused")
+    douyin_focused.add_argument("--reply-text", required=True)
+    douyin_focused.add_argument("--debug", action="store_true")
+    douyin_focused.add_argument("--ignore-state", action="store_true")
+    kuaishou_focused = engage_sub.add_parser("kuaishou-focused")
+    kuaishou_focused.add_argument("--reply-text", required=True)
+    kuaishou_focused.add_argument("--debug", action="store_true")
+    kuaishou_focused.add_argument("--ignore-state", action="store_true")
 
     telegram = subparsers.add_parser("telegram")
     telegram_sub = telegram.add_subparsers(dest="telegram_command", required=True)
@@ -164,6 +179,22 @@ def main() -> int:
         return 0 if bool(result.get("ok")) else 1
     if command == "engage" and args.engage_command == "diagnose":
         result = diagnose_platform_engagement(str(args.platform))
+        _print_json(result)
+        return 0 if bool(result.get("ok")) else 1
+    if command == "engage" and args.engage_command == "douyin-focused":
+        result = run_douyin_focused_engagement(
+            reply_text=str(args.reply_text),
+            debug=bool(args.debug),
+            ignore_state=bool(args.ignore_state),
+        )
+        _print_json(result)
+        return 0 if bool(result.get("ok")) else 1
+    if command == "engage" and args.engage_command == "kuaishou-focused":
+        result = run_kuaishou_focused_engagement(
+            reply_text=str(args.reply_text),
+            debug=bool(args.debug),
+            ignore_state=bool(args.ignore_state),
+        )
         _print_json(result)
         return 0 if bool(result.get("ok")) else 1
     if command == "telegram":

@@ -2403,23 +2403,41 @@ def _extract_login_qr_source_from_context(ctx: Any, platform_name: str = "") -> 
 
 def _build_login_qr_rect_script(platform_name: str) -> str:
     platform = str(platform_name or "").strip().lower()
-    selectors = [
-        "[class*='qrcode'] img",
-        "[class*='qrcode'] canvas",
-        "[class*='qr-code'] img",
-        "[class*='qr-code'] canvas",
-        ".qrcode img",
-        ".qrcode canvas",
-        ".qrcode-wrap img",
-        ".qrcode-wrap canvas",
-        ".qrcode-area img",
-        ".qrcode-area canvas",
-        ".login-qrcode-wrap img",
-        ".login-qrcode-wrap canvas",
-        "img.qrcode",
-        "canvas",
-    ]
-    if platform != "wechat":
+    if platform == "wechat":
+        selectors = [
+            "[class*='qrcode'] img",
+            "[class*='qrcode'] canvas",
+            "[class*='qr-code'] img",
+            "[class*='qr-code'] canvas",
+            ".qrcode img",
+            ".qrcode canvas",
+            ".qrcode-wrap img",
+            ".qrcode-wrap canvas",
+            ".qrcode-area img",
+            ".qrcode-area canvas",
+            ".login-qrcode-wrap img",
+            ".login-qrcode-wrap canvas",
+            "[class*='scan'] img",
+            "[class*='scan'] canvas",
+            "img.qrcode",
+        ]
+    else:
+        selectors = [
+            "[class*='qrcode'] img",
+            "[class*='qrcode'] canvas",
+            "[class*='qr-code'] img",
+            "[class*='qr-code'] canvas",
+            ".qrcode img",
+            ".qrcode canvas",
+            ".qrcode-wrap img",
+            ".qrcode-wrap canvas",
+            ".qrcode-area img",
+            ".qrcode-area canvas",
+            ".login-qrcode-wrap img",
+            ".login-qrcode-wrap canvas",
+            "img.qrcode",
+            "canvas",
+        ]
         selectors.extend(
             [
                 "[class*='scan'] img",
@@ -8791,6 +8809,32 @@ def _make_x_candidate_id(status_id: str, media_key: str = "") -> str:
     return f"x:{clean_status_id}:{clean_media_key}"
 
 
+def _resolve_x_candidate_identity(
+    *,
+    status_url: str = "",
+    status_id: str = "",
+    media_id: str = "",
+    media_kind: str = "video",
+    processed_name: str = "",
+) -> tuple[str, str, str]:
+    normalized_kind = _normalize_media_kind(media_kind or "video")
+    resolved_status_url = _normalize_x_status_url(str(status_url or "").strip()) or ""
+    resolved_status_id = _extract_status_id_from_url(resolved_status_url) or str(status_id or "").strip()
+    raw_media_id = str(media_id or "").strip()
+    fallback_media_id, _, _ = _split_source_name_tokens(str(processed_name or "").strip())
+    raw_media_id = raw_media_id or fallback_media_id
+
+    if normalized_kind == "image":
+        if resolved_status_id and raw_media_id.lower().startswith(resolved_status_id.lower()):
+            resolved_media_key = raw_media_id
+        else:
+            resolved_media_key = raw_media_id or resolved_status_id
+    else:
+        resolved_media_key = resolved_status_id or raw_media_id
+
+    return resolved_status_url, resolved_status_id, resolved_media_key
+
+
 def _candidate_state_rank(state: str) -> int:
     normalized = str(state or "").strip().lower()
     ranks = {
@@ -8907,11 +8951,29 @@ def _review_status_to_candidate_state(status: str) -> str:
 
 def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[str, Any]]:
     payload = _load_candidate_ledger_payload(workspace)
-    items: dict[str, dict[str, Any]] = {
-        str(key): dict(value)
-        for key, value in (payload.get("items", {}) or {}).items()
-        if isinstance(value, dict)
-    }
+    items: dict[str, dict[str, Any]] = {}
+    for value in (payload.get("items", {}) or {}).values():
+        if not isinstance(value, dict):
+            continue
+        normalized_url, normalized_status_id, normalized_media_key = _resolve_x_candidate_identity(
+            status_url=str(value.get("status_url", "") or "").strip(),
+            status_id=str(value.get("status_id", "") or "").strip(),
+            media_id=str(value.get("media_key", "") or value.get("media_id", "") or "").strip(),
+            media_kind=str(value.get("media_kind", "") or "video"),
+            processed_name=str(value.get("processed_name", "") or "").strip(),
+        )
+        if not normalized_status_id:
+            continue
+        _upsert_candidate_ledger_entry(
+            items,
+            candidate_id=_make_x_candidate_id(normalized_status_id, normalized_media_key),
+            status_id=normalized_status_id,
+            media_key=normalized_media_key,
+            media_kind=str(value.get("media_kind", "") or "video"),
+            state=str(value.get("state", "") or "").strip().lower(),
+            status_url=normalized_url,
+            processed_name=str(value.get("processed_name", "") or "").strip(),
+        )
     changed = False
 
     for media_kind in ("video", "image"):
@@ -8931,10 +8993,15 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
         if not isinstance(process_item, dict):
             continue
         meta = _metadata_from_index_item(process_item)
-        status_id = str(meta.get("status_id", "") or "").strip()
+        status_url, status_id, media_key = _resolve_x_candidate_identity(
+            status_url=str(meta.get("status_url", "") or "").strip(),
+            status_id=str(meta.get("status_id", "") or "").strip(),
+            media_id=str(meta.get("media_id", "") or "").strip(),
+            media_kind=str(process_item.get("media_kind", "") or "video"),
+            processed_name=str(process_item.get("processed_name", "") or "").strip(),
+        )
         if not status_id:
             continue
-        media_key = str(meta.get("media_id", "") or "").strip() or status_id
         candidate_id = _make_x_candidate_id(status_id, media_key)
         changed = _upsert_candidate_ledger_entry(
             items,
@@ -8943,7 +9010,7 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
             media_key=media_key,
             media_kind=str(process_item.get("media_kind", "") or "video"),
             state="processed",
-            status_url=str(meta.get("status_url", "") or "").strip(),
+            status_url=status_url,
             processed_name=str(process_item.get("processed_name", "") or "").strip(),
         ) or changed
 
@@ -8959,10 +9026,15 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
             continue
         process_item = dict(processed_lookup.get(processed_name, {}) or {})
         meta = _metadata_from_index_item(process_item if process_item else {"processed_name": processed_name})
-        status_id = str(meta.get("status_id", "") or "").strip()
+        status_url, status_id, media_key = _resolve_x_candidate_identity(
+            status_url=str(meta.get("status_url", "") or "").strip(),
+            status_id=str(meta.get("status_id", "") or "").strip(),
+            media_id=str(meta.get("media_id", "") or "").strip(),
+            media_kind=str(review_entry.get("media_kind", "") or process_item.get("media_kind", "") or "video"),
+            processed_name=processed_name,
+        )
         if not status_id:
             continue
-        media_key = str(meta.get("media_id", "") or "").strip() or status_id
         candidate_id = _make_x_candidate_id(status_id, media_key)
         changed = _upsert_candidate_ledger_entry(
             items,
@@ -8971,7 +9043,7 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
             media_key=media_key,
             media_kind=str(review_entry.get("media_kind", "") or process_item.get("media_kind", "") or "video"),
             state=review_state,
-            status_url=str(meta.get("status_url", "") or "").strip(),
+            status_url=status_url,
             processed_name=processed_name,
         ) or changed
 
@@ -8981,10 +9053,15 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
                 if not isinstance(upload_item, dict):
                     continue
                 meta = _metadata_from_index_item(upload_item)
-                status_id = str(meta.get("status_id", "") or "").strip()
+                status_url, status_id, media_key = _resolve_x_candidate_identity(
+                    status_url=str(meta.get("status_url", "") or "").strip(),
+                    status_id=str(meta.get("status_id", "") or "").strip(),
+                    media_id=str(meta.get("media_id", "") or "").strip(),
+                    media_kind=media_kind,
+                    processed_name=str(upload_item.get("processed_name", "") or "").strip(),
+                )
                 if not status_id:
                     continue
-                media_key = str(meta.get("media_id", "") or "").strip() or status_id
                 candidate_id = _make_x_candidate_id(status_id, media_key)
                 changed = _upsert_candidate_ledger_entry(
                     items,
@@ -8993,9 +9070,76 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
                     media_key=media_key,
                     media_kind=media_kind,
                     state="published",
-                    status_url=str(meta.get("status_url", "") or "").strip(),
+                    status_url=status_url,
                     processed_name=str(upload_item.get("processed_name", "") or "").strip(),
                 ) or changed
+
+    preferred_by_processed_name: dict[str, str] = {}
+    for candidate_id, item in items.items():
+        if not isinstance(item, dict):
+            continue
+        processed_name = str(item.get("processed_name", "") or "").strip()
+        if not processed_name:
+            continue
+        normalized_kind = _normalize_media_kind(str(item.get("media_kind", "") or "video"))
+        if normalized_kind != "video":
+            continue
+        current_best_id = preferred_by_processed_name.get(processed_name, "")
+        if not current_best_id:
+            preferred_by_processed_name[processed_name] = candidate_id
+            continue
+        current_best = dict(items.get(current_best_id, {}) or {})
+        current_score = (
+            _candidate_state_rank(str(current_best.get("state", "") or "")),
+            1 if str(current_best.get("status_url", "") or "").strip() else 0,
+        )
+        candidate_score = (
+            _candidate_state_rank(str(item.get("state", "") or "")),
+            1 if str(item.get("status_url", "") or "").strip() else 0,
+        )
+        if candidate_score >= current_score:
+            preferred_by_processed_name[processed_name] = candidate_id
+
+    stale_candidate_ids: list[str] = []
+    for candidate_id, item in items.items():
+        if not isinstance(item, dict):
+            continue
+        processed_name = str(item.get("processed_name", "") or "").strip()
+        if not processed_name:
+            continue
+        if _normalize_media_kind(str(item.get("media_kind", "") or "video")) != "video":
+            continue
+        if preferred_by_processed_name.get(processed_name, "") != candidate_id:
+            stale_candidate_ids.append(candidate_id)
+
+    processed_video_source_ids: set[str] = set()
+    for item in items.values():
+        if not isinstance(item, dict):
+            continue
+        if _normalize_media_kind(str(item.get("media_kind", "") or "video")) != "video":
+            continue
+        processed_name = str(item.get("processed_name", "") or "").strip()
+        if not processed_name:
+            continue
+        source_media_id, _, _ = _split_source_name_tokens(processed_name)
+        if source_media_id:
+            processed_video_source_ids.add(source_media_id)
+    for candidate_id, item in items.items():
+        if not isinstance(item, dict):
+            continue
+        if _normalize_media_kind(str(item.get("media_kind", "") or "video")) != "video":
+            continue
+        if str(item.get("processed_name", "") or "").strip():
+            continue
+        if str(item.get("status_url", "") or "").strip():
+            continue
+        stale_status_id = str(item.get("status_id", "") or "").strip()
+        if stale_status_id and stale_status_id in processed_video_source_ids:
+            stale_candidate_ids.append(candidate_id)
+
+    for candidate_id in stale_candidate_ids:
+        items.pop(candidate_id, None)
+        changed = True
 
     if changed or payload.get("items") != items:
         payload["items"] = items
@@ -9257,6 +9401,16 @@ def _metadata_from_index_item(item: dict[str, Any]) -> dict[str, str]:
         "uploader_signature": str(item.get("uploader_signature", "") or base.get("uploader_signature", "") or ""),
         "text_signature": str(item.get("text_signature", "") or base.get("text_signature", "") or ""),
     }
+    resolved_status_url, resolved_status_id, resolved_media_key = _resolve_x_candidate_identity(
+        status_url=str(merged.get("status_url", "") or "").strip(),
+        status_id=str(merged.get("status_id", "") or "").strip(),
+        media_id=str(merged.get("media_id", "") or "").strip(),
+        media_kind=str(item.get("media_kind", "") or "video"),
+        processed_name=str(item.get("processed_name", "") or item.get("source_name", "") or "").strip(),
+    )
+    merged["status_url"] = resolved_status_url
+    merged["status_id"] = resolved_status_id
+    merged["media_id"] = resolved_media_key
     return merged
 
 
@@ -9914,13 +10068,18 @@ def download_from_x(
     discovery_started_at = time.monotonic()
 
     cleaned_urls = _dedupe_urls(tweet_urls or [])
+    discovery_rounds_executed = 0
+    filtered_seen_total = 0
+    target_limit = max(1, int(limit))
+    desired_candidate_count = target_limit
     if cleaned_urls:
         filtered_urls, skipped_urls = _filter_already_processed_x_urls(workspace, cleaned_urls)
+        filtered_seen_total = len(skipped_urls)
         if skipped_urls:
             skipped_names = ", ".join(item["processed_name"] for item in skipped_urls[:3] if item.get("processed_name"))
             suffix = f" examples={skipped_names}" if skipped_names else ""
             _log(f"[Downloader] Skip already-collected tweet URLs: {len(skipped_urls)}.{suffix}")
-        selected_urls = filtered_urls[: max(1, int(limit))]
+        selected_urls = filtered_urls[:target_limit]
         if not selected_urls:
             _log("[Downloader] All provided tweet URLs already exist in processed registry; skip download.")
             return []
@@ -9944,7 +10103,6 @@ def download_from_x(
         discovered_urls: list[str] = []
         live_discovery_error: Optional[str] = None
         if auto_discover_x:
-            target_limit = max(1, int(limit))
             candidate_multiplier = 3 if include_images else 8
             desired_candidate_count = target_limit if effective_fail_fast else max(target_limit * candidate_multiplier, 12)
             round_configs = (
@@ -9953,10 +10111,10 @@ def download_from_x(
                 (3, max(target_limit * 8, int(x_discovery_url_limit), 48), int(x_discovery_scroll_rounds) + 4, min(3.0, float(x_discovery_scroll_wait) + 0.8)),
             )
             seen_unseen_urls: set[str] = set()
-            filtered_seen_total = 0
             for round_no, discover_limit, round_scrolls, round_wait in round_configs:
                 if len(discovered_urls) >= desired_candidate_count:
                     break
+                discovery_rounds_executed = round_no
                 round_urls: list[str] = []
                 round_source = ""
                 try:
@@ -10227,6 +10385,17 @@ def download_from_x(
             _log(f"  - {p.name}")
     else:
         _log("[Downloader] No new files downloaded (archive dedupe may have skipped all).")
+    delivered_media_files = len([p for p in new_files if (_is_image_file(p) if include_images else _is_video_file(p))])
+    _log(
+        "[Downloader] Collect summary: "
+        f"target_new={target_limit}, "
+        f"desired_candidates={desired_candidate_count}, "
+        f"provided_urls={len(cleaned_urls)}, "
+        f"discovery_rounds={discovery_rounds_executed}, "
+        f"filtered_seen={filtered_seen_total}, "
+        f"selected_urls={len(selected_urls)}, "
+        f"delivered={delivered_media_files}"
+    )
     _log(
         "[Downloader] X stage summary: "
         f"initial_batch_failures={retry_stats.initial_batch_failures}, "
@@ -11588,10 +11757,15 @@ def _record_processed_candidates_in_ledger(workspace: Workspace, items: list[dic
         if not isinstance(item, dict):
             continue
         meta = _metadata_from_index_item(item)
-        status_id = str(meta.get("status_id", "") or "").strip()
+        status_url, status_id, media_key = _resolve_x_candidate_identity(
+            status_url=str(meta.get("status_url", "") or "").strip(),
+            status_id=str(meta.get("status_id", "") or "").strip(),
+            media_id=str(meta.get("media_id", "") or "").strip(),
+            media_kind=str(item.get("media_kind", "") or "video"),
+            processed_name=str(item.get("processed_name", "") or "").strip(),
+        )
         if not status_id:
             continue
-        media_key = str(meta.get("media_id", "") or "").strip() or status_id
         candidate_id = _make_x_candidate_id(status_id, media_key)
         changed = _upsert_candidate_ledger_entry(
             ledger_items,
@@ -11600,7 +11774,7 @@ def _record_processed_candidates_in_ledger(workspace: Workspace, items: list[dic
             media_key=media_key,
             media_kind=str(item.get("media_kind", "") or "video"),
             state="processed",
-            status_url=str(meta.get("status_url", "") or "").strip(),
+            status_url=status_url,
             processed_name=str(item.get("processed_name", "") or "").strip(),
         ) or changed
     if changed:

@@ -464,3 +464,63 @@ def test_download_from_x_opens_extra_discovery_rounds_after_seen_filter(tmp_path
     assert any("round=2" in line for line in logs)
     assert any("round=3" in line for line in logs)
     assert any("Total previously-seen URLs filtered before download: 3" in line for line in logs)
+    assert any(
+        "Collect summary:" in line
+        and "target_new=2" in line
+        and "desired_candidates=16" in line
+        and "discovery_rounds=3" in line
+        and "filtered_seen=3" in line
+        and "selected_urls=2" in line
+        and "delivered=0" in line
+        for line in logs
+    )
+
+
+def test_refresh_collect_candidate_ledger_normalizes_video_status_id_from_status_url(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace.root / "content_fingerprint_index.json").write_text(
+        json.dumps(
+            [
+                {
+                    "processed_name": "DRAFT_2034238391055949824__Giggly_Georgy_in__Self_Driving.mp4",
+                    "media_kind": "video",
+                    "status_url": "https://x.com/DakotaGeorgy/status/2034238454293528593",
+                    "status_id": "2034238454293528593",
+                    "media_id": "2034238391055949824",
+                    "title_text": "Self Driving",
+                    "description_text": "Self Driving",
+                    "uploader_text": "DakotaGeorgy",
+                }
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    ledger_path = workspace.root / engine.DEFAULT_CANDIDATE_LEDGER_FILE
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "items": {
+                    "x:2034238391055949824:2034238391055949824": {
+                        "candidate_id": "x:2034238391055949824:2034238391055949824",
+                        "status_id": "2034238391055949824",
+                        "media_key": "2034238391055949824",
+                        "media_kind": "video",
+                        "state": "downloaded",
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    items = engine._refresh_collect_candidate_ledger(workspace)
+
+    assert "x:2034238454293528593:2034238454293528593" in items
+    assert "x:2034238391055949824:2034238391055949824" not in items
+    assert items["x:2034238454293528593:2034238454293528593"]["processed_name"] == "DRAFT_2034238391055949824__Giggly_Georgy_in__Self_Driving.mp4"
+    assert items["x:2034238454293528593:2034238454293528593"]["state"] == "processed"

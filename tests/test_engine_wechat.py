@@ -274,6 +274,21 @@ def test_prepare_platform_login_qr_notice_retries_screenshot_before_source_fallb
     assert result["photo_bytes"] == b"png-bytes"
 
 
+def test_build_login_qr_rect_script_wechat_skips_bare_canvas_selector() -> None:
+    script = engine._build_login_qr_rect_script("wechat")
+
+    assert "\"canvas\"" not in script
+    assert "[class*='qrcode'] canvas" in script
+    assert "[class*='scan'] canvas" in script
+
+
+def test_build_login_qr_rect_script_non_wechat_keeps_bare_canvas_selector() -> None:
+    script = engine._build_login_qr_rect_script("kuaishou")
+
+    assert "\"canvas\"" in script
+    assert "img[alt*='qrcode' i]" in script
+
+
 def test_send_telegram_photo_retries_after_connection_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 

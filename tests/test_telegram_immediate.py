@@ -644,7 +644,7 @@ def test_build_runtime_status_section_hides_stale_waiting_prefilter_items(tmp_pa
     assert "stale-item" not in text
 
 
-def test_cleanup_stale_waiting_prefilter_items_removes_only_stale_waiting_rows(tmp_path: Path) -> None:
+def test_cleanup_inactive_prefilter_items_removes_hidden_history_and_keeps_live_retry_rows(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     now_text = worker_impl._now_text()
     recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -671,17 +671,44 @@ def test_cleanup_stale_waiting_prefilter_items_removes_only_stale_waiting_rows(t
                 created_at="2000-01-01 00:00:00",
                 updated_at="2000-01-01 00:00:00",
             ),
+            "skipped-item": _video_item(
+                "skipped-item",
+                status="down_confirmed",
+                action="skip",
+                created_at=recent_text,
+                updated_at=recent_text,
+                message_id=123,
+            ),
+            "retry-item": _video_item(
+                "retry-item",
+                status="send_failed",
+                created_at=recent_text,
+                updated_at=recent_text,
+                prefilter_retry_pending=True,
+            ),
+            "overflow-item": _video_item(
+                "overflow-item",
+                status="link_pending",
+                created_at=recent_text,
+                updated_at=recent_text,
+                message_id=456,
+                candidate_index=2,
+                candidate_limit=1,
+            ),
         },
     )
 
-    summary = worker_impl._cleanup_stale_waiting_prefilter_items(workspace)
+    summary = worker_impl._cleanup_inactive_prefilter_items(workspace)
     items = _prefilter_items(workspace)
 
-    assert summary["removed_stale_waiting"] == 1
-    assert summary["removed_ids"] == ["stale-item"]
+    assert summary["removed_inactive"] == 4
+    assert summary["removed_ids"] == ["stale-item", "publish-item", "skipped-item"]
     assert "stale-item" not in items
     assert "recent-item" in items
-    assert "publish-item" in items
+    assert "publish-item" not in items
+    assert "skipped-item" not in items
+    assert "retry-item" in items
+    assert "overflow-item" not in items
 
 
 def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Path, monkeypatch) -> None:
@@ -699,7 +726,7 @@ def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Pat
     assert "即采即发进程查看" in str(card["text"])
 
 
-def test_handle_home_process_status_cleanup_queue_callback_prunes_stale_waiting_items(tmp_path: Path, monkeypatch) -> None:
+def test_handle_home_process_status_cleanup_queue_callback_prunes_inactive_items(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     now_text = worker_impl._now_text()
     recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -720,6 +747,23 @@ def test_handle_home_process_status_cleanup_queue_callback_prunes_stale_waiting_
                 created_at=recent_text,
                 updated_at=recent_text,
             ),
+            "skipped-item": _video_item(
+                "skipped-item",
+                status="down_confirmed",
+                action="skip",
+                created_at=recent_text,
+                updated_at=recent_text,
+                message_id=123,
+            ),
+            "overflow-item": _video_item(
+                "overflow-item",
+                status="link_pending",
+                created_at=recent_text,
+                updated_at=recent_text,
+                message_id=456,
+                candidate_index=2,
+                candidate_limit=1,
+            ),
         },
     )
     record = _install_transport_mocks(monkeypatch)
@@ -731,10 +775,12 @@ def test_handle_home_process_status_cleanup_queue_callback_prunes_stale_waiting_
 
     assert result["handled"] is True
     assert len(record.cards) == 1
-    assert "已清理 1 条僵尸等待项" in str(record.cards[0]["card"]["text"])
+    assert "已清理 3 条非活跃队列项" in str(record.cards[0]["card"]["text"])
     items = _prefilter_items(workspace)
     assert "stale-item" not in items
     assert "recent-item" in items
+    assert "skipped-item" not in items
+    assert "overflow-item" not in items
 
 
 def test_handle_command_update_process_status_shortcut_preserves_html_parse_mode(tmp_path: Path, monkeypatch) -> None:
@@ -4052,6 +4098,52 @@ def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monke
     assert "\u5373\u91c7\u5373\u53d1\u542f\u52a8\u5931\u8d25" in str(record.updated_cards[-1]["card"]["text"])
 
 
+def test_handle_prefilter_retry_failed_publish_requeues_failed_platforms_only(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+    queue_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (SimpleNamespace(), FakeCore()))
+
+    def queue_immediate_platform_jobs(**kwargs: object) -> dict[str, object]:
+        queue_calls.append(dict(kwargs))
+        updated = worker_impl._update_prefilter_item(
+            workspace,
+            str(kwargs["item_id"]),
+            updates={
+                "status": "publish_running",
+                "platform_results": {
+                    "wechat": {"status": "queued"},
+                    "douyin": {"status": "success"},
+                },
+                "action": "publish",
+            },
+        )
+        return {"spawned": 1, "failed": 0, "skipped_duplicate": 0, "item": updated}
+
+    monkeypatch.setattr(worker_impl, "_queue_immediate_platform_jobs", queue_immediate_platform_jobs)
+
+    item = _video_item(
+        status="publish_partial",
+        platform_results={
+            "wechat": {"status": "failed"},
+            "douyin": {"status": "success"},
+        },
+    )
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    result = commands.handle_callback_update(
+        update=_make_callback_update("ctpf|retry_failed_publish|item-video"),
+        **_worker_kwargs(workspace),
+    )
+
+    assert result["handled"] is True
+    assert len(queue_calls) == 1
+    assert queue_calls[0]["item_id"] == "item-video"
+    assert len(record.updated_cards) == 1
+    assert "失败平台已补发" in str(record.updated_cards[-1]["card"]["text"])
+
+
 def test_prefilter_queue_lock_recovers_when_owner_pid_is_dead(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     queue_path = state.prefilter_queue_path(workspace)
@@ -4316,6 +4408,21 @@ def test_build_failure_feedback_actions_uses_progress_for_generic_failures() -> 
 
     texts = [str(action.get("text") or "") for action in actions]
     assert texts == ["📍 进度"]
+
+
+def test_build_failure_feedback_actions_adds_retry_for_collect_publish_summary() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {"title": "任务标识", "items": [{"label": "当前任务", "value": "collect_publish_latest|item-video"}]},
+            {"title": "平台状态", "items": [{"label": "🎥 视频号", "value": "❌ 发布失败"}]},
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    callbacks = [str(action.get("callback_data") or "") for action in actions]
+    assert texts == ["🔁 补发", "📍 进度"]
+    assert callbacks[0] == "ctpf|retry_failed_publish|item-video"
 
 
 def test_build_failure_feedback_actions_prefers_refresh_for_retryable_failures() -> None:
