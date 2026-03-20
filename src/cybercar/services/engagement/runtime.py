@@ -25,6 +25,8 @@ COMMENT_REPLY_MARKDOWN_FILES = {
 }
 
 COMMENT_REPLY_RETENTION_DAYS = 30
+COMMENT_REPLY_SELF_AUTHOR_MARKERS = ("cybercar",)
+COMMENT_REPLY_SELF_AUTHOR_TOKENS = ("作者", "author", "浣滆")
 
 
 @dataclass(frozen=True)
@@ -106,8 +108,48 @@ def _normalize_post_title(text: str) -> str:
     return re.sub(r"\s+", "", str(text or "")).strip().lower()
 
 
+def _normalize_comment_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _should_skip_comment_reply(
+    comment: dict[str, Any],
+    *,
+    self_author_markers: tuple[str, ...] = COMMENT_REPLY_SELF_AUTHOR_MARKERS,
+) -> tuple[bool, str]:
+    author_text = _normalize_comment_text(comment.get("author") if isinstance(comment, dict) else "")
+    content_text = _normalize_comment_text(comment.get("content") if isinstance(comment, dict) else "")
+    if not content_text:
+        return True, "empty_comment_content"
+    if not author_text:
+        return False, ""
+    author_norm = re.sub(r"\s+", "", author_text).lower()
+    if "作者" in author_text and any(marker and marker in author_norm for marker in self_author_markers):
+        return True, "self_author_comment"
+    return False, ""
+
+
 def _normalize_post_digits(text: str) -> str:
     return re.sub(r"\D+", "", str(text or ""))
+
+
+def _should_skip_comment_reply_guarded(
+    comment: dict[str, Any],
+    *,
+    self_author_markers: tuple[str, ...] = COMMENT_REPLY_SELF_AUTHOR_MARKERS,
+) -> tuple[bool, str]:
+    author_text = _normalize_comment_text(comment.get("author") if isinstance(comment, dict) else "")
+    content_text = _normalize_comment_text(comment.get("content") if isinstance(comment, dict) else "")
+    if not content_text:
+        return True, "empty_comment_content"
+    if not author_text:
+        return False, ""
+    author_norm = re.sub(r"\s+", "", author_text).lower()
+    has_self_author_token = any(token and token in author_norm for token in COMMENT_REPLY_SELF_AUTHOR_TOKENS)
+    has_self_author_marker = any(marker and marker in author_norm for marker in self_author_markers)
+    if has_self_author_token and has_self_author_marker:
+        return True, "self_author_comment"
+    return False, ""
 
 
 def _same_published_text(left: str, right: str) -> bool:
@@ -3850,6 +3892,14 @@ def reply_douyin_focused_editor(
         debug,
         f"[douyin-focused] Active comment index={comment_index} author={engine._single_line_preview(str(comment.get('author') or ''), 24)}",
     )
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    if should_skip:
+        empty_result["reason"] = skip_reason
+        empty_result["posts_scanned"] = 1
+        empty_result["posts_selected"] = 1
+        empty_result["current_url"] = current_url
+        empty_result["current_title"] = current_title
+        return empty_result
 
     typed = False
     if hasattr(page, "run_cdp"):
@@ -4022,6 +4072,12 @@ def reply_douyin_focused_generated(
 
     comment_cfg = engine._merge_comment_reply_config(runtime_config.get("comment_reply"))
     reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
+    configured_markers = tuple(
+        str(item or "").strip().lower()
+        for item in (comment_cfg.get("self_author_markers") if isinstance(comment_cfg.get("self_author_markers"), list) else [])
+        if str(item or "").strip()
+    )
+    self_author_markers = configured_markers or COMMENT_REPLY_SELF_AUTHOR_MARKERS
     state = _load_state(workspace, platform)
     items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
     state["items"] = items
@@ -4135,6 +4191,12 @@ def reply_douyin_focused_generated(
         "comment_count": len(comments) if comments else 1,
         "has_comments": True,
     }
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    if should_skip:
+        base_result["reason"] = skip_reason
+        base_result["posts_scanned"] = 1
+        base_result["posts_selected"] = 1
+        return base_result
     fingerprint = engine._comment_reply_fingerprint(post, comment)
     if (not bool(ignore_state)) and (fingerprint in items or bool(comment.get("has_reply"))):
         base_result["reason"] = "duplicate_or_has_reply"
@@ -4324,6 +4386,12 @@ def reply_kuaishou_focused_generated(
         "comment_count": len(comments) if comments else 1,
         "has_comments": True,
     }
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    if should_skip:
+        base_result["reason"] = skip_reason
+        base_result["posts_scanned"] = 1
+        base_result["posts_selected"] = 1
+        return base_result
     fingerprint = engine._comment_reply_fingerprint(post, comment)
     if (not bool(ignore_state)) and (fingerprint in items or bool(comment.get("has_reply"))):
         base_result["reason"] = "duplicate_or_has_reply"
@@ -4518,6 +4586,12 @@ def reply_kuaishou_focused_editor(
         "comment_count": len(comments) if comments else 1,
         "has_comments": True,
     }
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    if should_skip:
+        empty_result["reason"] = skip_reason
+        empty_result["posts_scanned"] = 1
+        empty_result["posts_selected"] = 1
+        return empty_result
     fingerprint = engine._comment_reply_fingerprint(post, comment)
     if (not bool(ignore_state)) and (fingerprint in items or bool(comment.get("has_reply"))):
         empty_result["reason"] = "duplicate_or_has_reply"
@@ -4891,6 +4965,13 @@ def run_platform_comment_reply(
                 if len(reply_records) >= max_replies:
                     break
                 if not isinstance(comment, dict):
+                    continue
+                should_skip, skip_reason = _should_skip_comment_reply_guarded(comment, self_author_markers=self_author_markers)
+                if should_skip:
+                    engine._comment_reply_log(
+                        debug_enabled,
+                        f"[{platform}] Skip comment: {skip_reason} author={engine._single_line_preview(str(comment.get('author') or ''), 24)}",
+                    )
                     continue
                 fingerprint = engine._comment_reply_fingerprint(post, comment)
                 if fingerprint in seen_comment_fingerprints:

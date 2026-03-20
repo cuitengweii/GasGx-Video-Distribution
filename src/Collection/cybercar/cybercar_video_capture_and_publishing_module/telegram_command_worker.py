@@ -173,6 +173,10 @@ IMMEDIATE_CANDIDATE_REISSUE_STATUSES = {
     "publish_partial",
     "publish_failed",
 }
+IMMEDIATE_CANDIDATE_TERMINAL_SKIP_STATUSES = {
+    "down_confirmed",
+    "publish_done",
+}
 IMMEDIATE_PUBLISH_APPROVED_STATUSES = {
     "publish_requested",
     "download_running",
@@ -1131,13 +1135,18 @@ def _resolve_failure_feedback_retry_item_id(sections: Sequence[Mapping[str, Any]
     for section in sections:
         if not isinstance(section, Mapping):
             continue
-        if str(section.get("title") or "").strip() != "任务标识":
-            continue
         items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        section_title = str(section.get("title") or "").strip()
         for item in items:
             if isinstance(item, Mapping):
-                item_id = _extract_collect_publish_item_id_from_task_identifier(str(item.get("value") or ""))
+                label = str(item.get("label") or "").strip()
+                value = str(item.get("value") or item.get("text") or "")
+                if section_title not in {"任务标识", "机器信息"} and label != "当前任务":
+                    continue
+                item_id = _extract_collect_publish_item_id_from_task_identifier(value)
             else:
+                if section_title not in {"任务标识", "机器信息"}:
+                    continue
                 item_id = _extract_collect_publish_item_id_from_task_identifier(str(item or ""))
             if item_id:
                 return item_id
@@ -3100,11 +3109,12 @@ def _parse_comment_reply_request_value(raw: str) -> tuple[str, int]:
         return "all", default_limit
     if len(parts) == 1 and parts[0].isdigit():
         return "all", _parse_comment_reply_post_limit(parts[0])
-    platform = _normalize_platform_tokens([parts[0]])
-    platform_token = platform[0] if platform else ("all" if parts[0] in ALL_PLATFORM_ALIAS_SET else "wechat")
+    if parts[0] in ALL_PLATFORM_ALIAS_SET:
+        platform_token = "all"
+    else:
+        platform = _normalize_platform_tokens([parts[0]])
+        platform_token = platform[0] if platform else "wechat"
     limit_token = parts[1] if len(parts) > 1 else ""
-    if platform_token in {"all", "wechat"}:
-        return platform_token, _parse_comment_reply_post_limit(limit_token)
     return platform_token, _parse_comment_reply_post_limit(limit_token)
 
 
@@ -4142,6 +4152,7 @@ def _handle_home_callback(
             message_id=message_id,
             inline_message_id=inline_message_id,
         )
+        queued_value = str(task.get("value") or value).strip() or str(value or "").strip()
         try:
             raw_result = _spawn_home_action_job(
                 repo_root=repo_root,
@@ -4152,13 +4163,13 @@ def _handle_home_callback(
                 telegram_bot_token=bot_token,
                 telegram_chat_id=chat_id,
                 action=action,
-                value=value,
+                value=queued_value,
                 task_key=task_key,
                 immediate_test_mode=immediate_test_mode,
             )
             detail = "后台任务已启动。"
             if action == "collect_publish_latest":
-                media_kind, _count = _parse_collect_publish_request_value(value)
+                media_kind, _count = _parse_collect_publish_request_value(queued_value)
                 media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
                 target_platforms = _collect_publish_target_platforms(media_kind)
                 detail = (
@@ -4167,7 +4178,7 @@ def _handle_home_callback(
                     f"只有你明确点击“普通发布”或“原创发布”的候选，才会进入{_format_platform_text(target_platforms)}发布。"
                 )
             elif action == "comment_reply_run":
-                comment_platform, comment_limit = _parse_comment_reply_request_value(value)
+                comment_platform, comment_limit = _parse_comment_reply_request_value(queued_value)
                 if comment_platform == "all":
                     detail = f"三平台点赞评论后台任务已启动，本轮会按相同数量检查最近 {max(1, int(comment_limit))} 个有评论视频。"
                 else:
@@ -4194,13 +4205,13 @@ def _handle_home_callback(
                 card=_ensure_card_has_home_button(
                     _home_feedback_response(
                         status="running",
-                        title=_home_action_feedback_title(action, "running", value),
+                        title=_home_action_feedback_title(action, "running", queued_value),
                         subtitle=f"当前配置：{resolved_default_profile}",
                         detail=_describe_home_action_task(updated_task),
-                        menu_label=_menu_breadcrumb_for_action(action, value),
+                        menu_label=_menu_breadcrumb_for_action(action, queued_value),
                         task_identifier=_build_task_identifier(
                             action=action,
-                            value=value,
+                            value=queued_value,
                             log_path=str(updated_task.get("log_path") or ""),
                             updated_at=str(updated_task.get("updated_at") or ""),
                         ),
@@ -4834,7 +4845,12 @@ def _normalize_home_action_value(action: str, value: str) -> str:
         media_kind, count = _parse_collect_publish_request_value(raw)
         return f"{media_kind}:{count}"
     if action_token == "comment_reply_run":
-        return _normalize_comment_reply_request_value(raw)
+        _, post_limit = _parse_comment_reply_request_value(raw)
+        # Telegram comment-reply menu now uses a merged count-only workflow.
+        # Force any legacy per-platform callback (for example "wechat:5")
+        # onto the new all-platform route so stale inline keyboards still
+        # trigger the expected three-platform execution.
+        return f"all:{max(1, int(post_limit))}"
     return raw.lower()
 
 
@@ -6293,6 +6309,9 @@ def _upsert_immediate_candidate_item(
         if existing_is_skipped:
             row["status"] = "down_confirmed"
             row["action"] = "skip"
+        elif existing_status == "publish_done":
+            row["status"] = "publish_done"
+            row["action"] = str(row.get("action") or "publish").strip() or "publish"
         elif not allow_reuse and existing_status in IMMEDIATE_CANDIDATE_REUSE_STATUSES:
             row["status"] = "link_pending"
             row["action"] = "resent_in_test_mode"
@@ -6300,13 +6319,6 @@ def _upsert_immediate_candidate_item(
             row["platform_results"] = {}
             row["publish_success_count"] = 0
             row["publish_failed_count"] = 0
-            row["prefilter_retry_pending"] = False
-            row["prefilter_retry_count"] = 0
-            row["prefilter_last_retry_epoch"] = 0.0
-        elif existing_status == "publish_done":
-            row["status"] = "link_pending"
-            row["action"] = "resent_after_terminal_state"
-            row["message_id"] = 0
             row["prefilter_retry_pending"] = False
             row["prefilter_retry_count"] = 0
             row["prefilter_last_retry_epoch"] = 0.0
@@ -11726,6 +11738,7 @@ def _run_collect_publish_latest_job(
         platforms=target_platforms,
         menu_label=_menu_breadcrumb_for_action("collect_publish_latest", f"{normalized_media_kind}:{requested_limit}"),
     )
+    workspace_ctx = runner.core.init_workspace(str(workspace))
     discovered = _discover_latest_live_candidates(
         repo_root=repo_root,
         timeout_seconds=timeout_seconds,
@@ -11735,7 +11748,40 @@ def _run_collect_publish_latest_job(
         allow_search_inferred_match=immediate_test_mode,
         include_images=(normalized_media_kind == "image"),
     )
-    candidates = [item for item in (discovered.get("candidates") or []) if isinstance(item, dict) and str(item.get("url") or "").strip()]
+    raw_candidates = [item for item in (discovered.get("candidates") or []) if isinstance(item, dict) and str(item.get("url") or "").strip()]
+    filtered_seen_candidates = 0
+    candidates = raw_candidates
+    filter_seen_urls = getattr(core, "_filter_already_processed_x_urls", None)
+    filter_workspace_ctx = workspace_ctx
+    modern_engine = None
+    if not callable(filter_seen_urls):
+        try:
+            from cybercar import engine as modern_engine
+        except Exception:
+            modern_engine = None  # type: ignore[assignment]
+        filter_seen_urls = getattr(modern_engine, "_filter_already_processed_x_urls", None)
+    if callable(filter_seen_urls) and not hasattr(filter_workspace_ctx, "root"):
+        if modern_engine is None:
+            try:
+                from cybercar import engine as modern_engine
+            except Exception:
+                modern_engine = None  # type: ignore[assignment]
+        if modern_engine is not None:
+            try:
+                filter_workspace_ctx = modern_engine.init_workspace(str(workspace))
+            except Exception:
+                filter_workspace_ctx = workspace_ctx
+    if raw_candidates and callable(filter_seen_urls):
+        filtered_urls, skipped_urls = filter_seen_urls(
+            filter_workspace_ctx,
+            [str(item.get("url") or "").strip() for item in raw_candidates],
+        )
+        filtered_url_set = {str(url or "").strip() for url in filtered_urls if str(url or "").strip()}
+        candidates = [
+            item for item in raw_candidates
+            if str(item.get("url") or "").strip() in filtered_url_set
+        ]
+        filtered_seen_candidates = len(skipped_urls)
     if not candidates:
         _send_background_feedback(
             runner=runner,
@@ -11749,11 +11795,15 @@ def _run_collect_publish_latest_job(
                     platforms=target_platforms,
                     discovery_limit=discovery_limit,
                     discovered_count=0,
+                    skipped_count=filtered_seen_candidates,
                 ),
                 {
                     "title": "结果说明",
                     "emoji": "⚠️",
-                    "items": [f"按 X 搜索结果时间倒序扫描后，未发现可用 X {media_label}帖子。"],
+                    "items": [
+                        f"按 X 搜索结果时间倒序扫描后，未发现可用 X {media_label}帖子。",
+                        *([f"本轮已有 {filtered_seen_candidates} 条历史候选被采集账本直接过滤。"] if filtered_seen_candidates > 0 else []),
+                    ],
                 }
             ],
             status="failed",
@@ -11770,7 +11820,6 @@ def _run_collect_publish_latest_job(
     attempted_new_candidates = 0
     last_send_error = ""
     total_candidates = len(candidates)
-    workspace_ctx = runner.core.init_workspace(str(workspace))
     reusable_items_to_reissue: list[tuple[str, Dict[str, Any]]] = []
     for idx, candidate in enumerate(candidates, start=1):
         if fresh_candidates >= requested_limit or attempted_new_candidates >= requested_limit:
@@ -11796,6 +11845,9 @@ def _run_collect_publish_latest_job(
                 item=item,
             )
         current_status = str(item.get("status") or "").strip().lower() if isinstance(item, dict) else ""
+        if current_status in IMMEDIATE_CANDIDATE_TERMINAL_SKIP_STATUSES:
+            skipped_duplicates += 1
+            continue
         if already_sent:
             if current_status == "down_confirmed":
                 skipped_duplicates += 1
@@ -11902,7 +11954,6 @@ def _run_collect_publish_latest_job(
                     "prefilter_last_retry_at": "",
                 },
             )
-            skipped_duplicates += 1
 
     if (not immediate_test_mode) and fresh_candidates <= 0 and reusable_items_to_reissue:
         for reusable_item_id, reusable_item in reusable_items_to_reissue[:requested_limit]:
@@ -11954,7 +12005,7 @@ def _run_collect_publish_latest_job(
                     discovered_count=total_candidates,
                     sent_count=fresh_candidates + reissued_candidates,
                     reused_count=reused_candidates,
-                    skipped_count=skipped_duplicates,
+                    skipped_count=skipped_duplicates + filtered_seen_candidates,
                 ),
                 *(
                     [
@@ -11967,6 +12018,36 @@ def _run_collect_publish_latest_job(
                     if next_step_items
                     else []
                 ),
+            ],
+            status="done",
+            platforms=target_platforms,
+            menu_label=_menu_breadcrumb_for_action("collect_publish_latest", f"{normalized_media_kind}:{requested_limit}"),
+        )
+        return 0
+
+    if skipped_duplicates > 0 or filtered_seen_candidates > 0:
+        _send_background_feedback(
+            runner=runner,
+            email_settings=email_settings,
+            workspace=workspace,
+            title=f"{media_label}即采即发候选已跳过",
+            subtitle=f"候选来源：X 搜索结果最近 {requested_limit} 条",
+            sections=[
+                _build_immediate_task_overview_section(
+                    requested_limit=requested_limit,
+                    platforms=target_platforms,
+                    discovered_count=total_candidates,
+                    sent_count=0,
+                    reused_count=0,
+                    skipped_count=skipped_duplicates + filtered_seen_candidates,
+                ),
+                {
+                    "title": "结果说明",
+                    "emoji": "🧹",
+                    "items": [
+                        "本轮命中的候选都已在历史采集/审核/发布记录中出现，因此未重复创建新预审卡。",
+                    ],
+                },
             ],
             status="done",
             platforms=target_platforms,
@@ -11987,7 +12068,7 @@ def _run_collect_publish_latest_job(
                 discovered_count=total_candidates,
                 sent_count=sent_candidates,
                 reused_count=reused_candidates,
-                skipped_count=skipped_duplicates,
+                skipped_count=skipped_duplicates + filtered_seen_candidates,
             ),
             {
                 "title": "失败线索",

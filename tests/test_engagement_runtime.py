@@ -316,3 +316,23 @@ def test_extract_kuaishou_comments_marks_reply_flag_from_runtime_payload(monkeyp
     result = runtime._extract_kuaishou_comments(object())
 
     assert result[0]["has_reply"] is True
+
+
+def test_should_skip_comment_reply_guarded_skips_self_author_comment() -> None:
+    comment = {
+        "author": "CyberCar 作者",
+        "content": "谢谢支持，后面还有更多惊喜。",
+    }
+    should_skip, reason = runtime._should_skip_comment_reply_guarded(comment)
+    assert should_skip is True
+    assert reason == "self_author_comment"
+
+
+def test_should_skip_comment_reply_guarded_skips_empty_comment_content() -> None:
+    comment = {
+        "author": "normal_user",
+        "content": "   ",
+    }
+    should_skip, reason = runtime._should_skip_comment_reply_guarded(comment)
+    assert should_skip is True
+    assert reason == "empty_comment_content"

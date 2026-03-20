@@ -402,6 +402,40 @@ def test_send_platform_login_qr_notification_skips_preparation_when_recent_qr_ex
     assert prepare_calls == []
 
 
+def test_wechat_publish_feedback_timeout_is_extended_to_60_seconds() -> None:
+    assert engine.WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS == 60
+
+
+def test_is_wechat_publish_confirmed_from_state_accepts_manage_progress_state() -> None:
+    assert engine._is_wechat_publish_confirmed_from_state(
+        {
+            "failure_hint": False,
+            "success_hint": False,
+            "progress_hint": True,
+            "manage_hint": True,
+            "compose_hint": False,
+            "has_draft_action": False,
+            "has_publish_action": False,
+            "url": "https://channels.weixin.qq.com/platform/post/list",
+        }
+    )
+
+
+def test_is_wechat_publish_confirmed_from_state_rejects_compose_progress_state() -> None:
+    assert not engine._is_wechat_publish_confirmed_from_state(
+        {
+            "failure_hint": False,
+            "success_hint": False,
+            "progress_hint": True,
+            "manage_hint": False,
+            "compose_hint": True,
+            "has_draft_action": True,
+            "has_publish_action": True,
+            "url": "https://channels.weixin.qq.com/platform/post/create",
+        }
+    )
+
+
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
     cfg = engine._merge_comment_reply_config({})
 

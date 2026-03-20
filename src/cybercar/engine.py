@@ -355,7 +355,7 @@ DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
     },
 }
 KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
-WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
+WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 60
 DEFAULT_AUTO_DELETE_SOURCE_FILES = False
 SPARK_CHAT_TIMEOUT_SECONDS = 20
 DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE = 12
@@ -13459,25 +13459,37 @@ def _is_wechat_publish_confirmed_from_state(state: dict[str, Any]) -> bool:
         return False
     if bool(state.get("success_hint")):
         return True
+    url = str(state.get("url", "") or "").lower()
+    manage_url = any(
+        token in url
+        for token in (
+            "/platform/post/list",
+            "/platform/post/history",
+            "/platform/content/manage",
+            "/platform/content/list",
+            "/micro/content/post/list",
+            "/micro/content/post/history",
+        )
+    )
+    if (
+        bool(state.get("progress_hint"))
+        and (manage_url or bool(state.get("manage_hint")))
+        and (not bool(state.get("compose_hint")))
+        and (not bool(state.get("has_draft_action")))
+    ):
+        return True
     if bool(state.get("progress_hint")):
         return False
-    url = str(state.get("url", "") or "").lower()
     if (
-        any(
-            token in url
-            for token in (
-                "/platform/post/list",
-                "/platform/post/history",
-                "/platform/content/manage",
-                "/platform/content/list",
-                "/micro/content/post/list",
-                "/micro/content/post/history",
-            )
-        )
+        manage_url
         and (not bool(state.get("has_publish_action")))
     ):
         return True
-    if bool(state.get("manage_hint")) and (not bool(state.get("has_publish_action"))) and (not bool(state.get("compose_hint"))):
+    if (
+        bool(state.get("manage_hint"))
+        and (not bool(state.get("compose_hint")))
+        and (not bool(state.get("has_draft_action")))
+    ):
         return True
     return False
 

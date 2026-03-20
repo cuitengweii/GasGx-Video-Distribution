@@ -445,9 +445,10 @@ def test_comment_reply_menu_card_merges_same_count_into_single_action() -> None:
 
 def test_comment_reply_request_value_normalizes_platform_modes() -> None:
     assert worker_impl._normalize_home_action_value("comment_reply_run", "3") == "all:3"
-    assert worker_impl._normalize_home_action_value("comment_reply_run", "wechat:5") == "wechat:5"
-    assert worker_impl._normalize_home_action_value("comment_reply_run", "douyin") == "douyin:3"
-    assert worker_impl._normalize_home_action_value("comment_reply_run", "kuaishou:7") == "kuaishou:7"
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "all:5") == "all:5"
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "wechat:5") == "all:5"
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "douyin") == "all:3"
+    assert worker_impl._normalize_home_action_value("comment_reply_run", "kuaishou:7") == "all:7"
 
 
 def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
@@ -923,6 +924,36 @@ def test_handle_home_collect_publish_image_queues_task(tmp_path: Path, monkeypat
     assert task["value"] == "image:5"
     assert task["status"] == "running"
     assert "\u56fe\u7247" in str(task["detail"])
+
+
+def test_handle_home_comment_reply_legacy_platform_callback_spawns_all_platforms(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    _install_transport_mocks(monkeypatch)
+    spawned: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_home_action_job",
+        lambda **kwargs: spawned.append(dict(kwargs)) or {
+            "ok": True,
+            "pid": 777,
+            "log_path": str(workspace / "runtime" / "logs" / "home-comment.log"),
+        },
+    )
+
+    # Simulate stale Telegram inline keyboard callback data.
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "comment_reply_run", "wechat:10"),
+    )
+    commands.handle_callback_update(update=update, **_worker_kwargs(workspace))
+
+    assert len(spawned) == 1
+    assert spawned[0]["value"] == "all:10"
+    tasks = _action_tasks(workspace)
+    task = next(iter(tasks.values()))
+    assert isinstance(task, dict)
+    assert task["value"] == "all:10"
+    assert task["status"] == "running"
 
 
 def test_handle_home_collect_publish_deduplicates_running_task(tmp_path: Path, monkeypatch) -> None:
@@ -3221,6 +3252,126 @@ def test_upsert_immediate_candidate_preserves_skipped_terminal_state(tmp_path: P
     assert item["message_id"] == 321
 
 
+def test_upsert_immediate_candidate_preserves_publish_done_terminal_state(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    candidate = {
+        "url": "https://x.test/post/published",
+        "published_at": "2026-03-18 17:45:00",
+        "display_time": "1m",
+        "tweet_text": "published candidate",
+        "match_mode": "keyword",
+        "matched_keyword": "cybertruck",
+    }
+    item_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"])
+    _save_prefilter_items(
+        workspace,
+        {
+            item_id: {
+                "id": item_id,
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "publish_done",
+                "action": "publish",
+                "created_at": "2026-03-18 17:45:12",
+                "updated_at": "2026-03-18 17:45:36",
+                "tweet_text": "old published row",
+                "message_id": 654,
+            }
+        },
+    )
+
+    result = worker_impl._upsert_immediate_candidate_item(
+        workspace=workspace,
+        candidate=candidate,
+        media_kind="video",
+        item_index=1,
+        total_count=1,
+        profile="cybertruck",
+        target_platforms="wechat,douyin",
+        chat_id=CHAT_ID,
+        allow_reuse=True,
+    )
+
+    item = result["item"]
+    assert item["status"] == "publish_done"
+    assert item["action"] == "publish"
+    assert item["message_id"] == 654
+
+
+def test_run_collect_publish_latest_job_filters_candidates_seen_in_collect_ledger(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    sent_urls: list[str] = []
+    seen_candidate = {
+        "url": "https://x.com/seen/status/111",
+        "published_at": "2026-03-20 10:00:00",
+        "display_time": "2m",
+        "tweet_text": "seen candidate",
+    }
+    fresh_candidate = {
+        "url": "https://x.com/fresh/status/222",
+        "published_at": "2026-03-20 10:01:00",
+        "display_time": "1m",
+        "tweet_text": "fresh candidate",
+    }
+    (workspace / "candidate_ledger.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-03-20 10:05:00",
+                "items": {
+                    "x:111:111": {
+                        "candidate_id": "x:111:111",
+                        "status_id": "111",
+                        "status_url": "https://x.com/seen/status/111",
+                        "state": "published",
+                        "processed_name": "seen.mp4",
+                        "updated_at": "2026-03-20 10:05:00",
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [seen_candidate, fresh_candidate]},
+    )
+
+    original_send = worker_impl._send_immediate_candidate_prefilter_card
+
+    def capture_send(*args: object, **kwargs: object) -> dict[str, object]:
+        item = dict(kwargs.get("item") or {})
+        sent_urls.append(str(item.get("source_url") or ""))
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(worker_impl, "_send_immediate_candidate_prefilter_card", capture_send)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=2,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert sent_urls == ["https://x.com/fresh/status/222"]
+    overview_items = feedbacks[-1]["sections"][0]["items"]
+    assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
+
+
 def test_prefilter_progress_status_label_marks_skipped_terminal_items() -> None:
     assert worker_impl._prefilter_progress_status_label(
         "down_confirmed",
@@ -4597,6 +4748,21 @@ def test_build_failure_feedback_actions_adds_retry_for_collect_publish_summary()
         status="failed",
         sections=[
             {"title": "任务标识", "items": [{"label": "当前任务", "value": "collect_publish_latest|item-video"}]},
+            {"title": "平台状态", "items": [{"label": "🎥 视频号", "value": "❌ 发布失败"}]},
+        ],
+    )
+
+    texts = [str(action.get("text") or "") for action in actions]
+    callbacks = [str(action.get("callback_data") or "") for action in actions]
+    assert texts == ["🔁 补发", "📍 进度"]
+    assert callbacks[0] == "ctpf|retry_failed_publish|item-video"
+
+
+def test_build_failure_feedback_actions_adds_retry_when_task_identifier_is_compacted_into_machine_info() -> None:
+    actions = worker_impl._build_failure_feedback_actions(
+        status="failed",
+        sections=[
+            {"title": "机器信息", "items": [{"label": "当前任务", "value": "collect_publish_latest|item-video"}]},
             {"title": "平台状态", "items": [{"label": "🎥 视频号", "value": "❌ 发布失败"}]},
         ],
     )
