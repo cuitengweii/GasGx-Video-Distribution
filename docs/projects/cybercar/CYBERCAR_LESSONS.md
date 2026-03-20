@@ -1,6 +1,6 @@
 # CyberCar Lessons
 
-Last updated: 2026-03-17
+Last updated: 2026-03-21
 
 ## 2026-03-15
 
@@ -62,3 +62,17 @@ Last updated: 2026-03-17
 - Root cause: `_wait_upload_ready_generic()` treated the Douyin video page as upload-complete as soon as the page stopped showing generic busy markers, but the real creator form had not rendered a visible caption editor yet.
 - Earlier detection: compare the upload-complete log line with the first caption-fill attempt in the same `immediate_publish_douyin_*.log`; if "upload appears completed" is immediately followed by `candidates=0`, the ready heuristic is ahead of the live DOM.
 - Prevention: keep a platform-specific Douyin video editor-state probe and require real editor evidence before entering caption verification; add regression coverage for the "upload shell first, editor ready later" sequence.
+
+## 2026-03-20
+
+- Symptom: Xiaohongshu immediate publish logs showed successful upload, successful title fill, successful caption fill, and a clickable publish button, but the run ended with `publish not confirmed` / `page returned to draft/compose state`.
+- Root cause: this incident was traced to an account-side publish restriction / ban rather than a local automation breakage.
+- Earlier detection: if Xiaohongshu reaches the compose form, accepts media plus text, and then repeatedly fails only after the publish click, check account status first before debugging selectors or upload bindings.
+- Prevention: keep a standing operator reminder that this exact Xiaohongshu failure signature is a high-priority account-ban / account-limit indicator, and surface that diagnosis explicitly in future bot/log messaging.
+
+## 2026-03-21
+
+- Symptom: rerunning immediate collect-publish could hit an existing `link_pending` candidate and finish without sending any Telegram review card, even when the original pending card was no longer practically recoverable from chat.
+- Root cause: `link_pending` was added to the reusable-state set, but `_should_reissue_immediate_candidate_card(...)` still blocked `link_pending` from the reissue path, creating a reuse/reissue state-machine mismatch.
+- Earlier detection: every time a status is promoted into the reusable set, add a paired regression test that proves the default rerun path either reissues that state or intentionally recreates it.
+- Prevention: keep reuse and reissue semantics aligned for all active prefilter states, and explicitly regression-test "pending card disappeared, rerun should recover it" before landing Telegram workflow changes.

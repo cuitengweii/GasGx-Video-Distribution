@@ -1378,6 +1378,66 @@ def test_run_collect_publish_latest_job_default_mode_reissues_existing_active_pr
     assert "重发当前状态卡" in feedbacks[-1]["sections"][1]["items"][0]
 
 
+def test_run_collect_publish_latest_job_default_mode_reissues_existing_link_pending_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    candidate = {
+        "url": "https://x.test/post/video-reused-orphaned",
+        "published_at": "2026-03-15 10:03:00",
+        "display_time": "7m",
+        "tweet_text": "video reused orphaned",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"], "video")
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                published_at=candidate["published_at"],
+                display_time=candidate["display_time"],
+                tweet_text=candidate["tweet_text"],
+                status="link_pending",
+                action="sent",
+                message_id=913,
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [candidate]},
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert len(runner.sent_candidates) == 1
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "link_pending"
+    assert item["action"] == "resent_existing_card"
+    assert item["message_id"] != 913
+    assert item["message_id"] > 0
+    overview_items = feedbacks[-1]["sections"][0]["items"]
+    assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
+
+
 def test_run_collect_publish_latest_job_recovers_orphaned_publish_running_and_reissues_card(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
@@ -3370,6 +3430,207 @@ def test_run_collect_publish_latest_job_filters_candidates_seen_in_collect_ledge
     assert sent_urls == ["https://x.com/fresh/status/222"]
     overview_items = feedbacks[-1]["sections"][0]["items"]
     assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
+
+
+def test_prefilter_skip_syncs_source_url_to_collect_ledger_and_blocks_rerun(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    sent_urls: list[str] = []
+    source_url = "https://x.com/repeat/status/111"
+
+    changed = worker_impl._record_prefilter_skip_source_in_collect_ledger(
+        workspace=workspace,
+        source_url=source_url,
+        media_kind="video",
+    )
+
+    assert changed is True
+
+    original_send = worker_impl._send_immediate_candidate_prefilter_card
+
+    def capture_send(*args: object, **kwargs: object) -> dict[str, object]:
+        item = dict(kwargs.get("item") or {})
+        sent_urls.append(str(item.get("source_url") or ""))
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": DEFAULT_PROFILE,
+            "candidates": [
+                {
+                    "url": source_url,
+                    "published_at": "2026-03-21T06:41:00.000Z",
+                    "display_time": "1m",
+                    "tweet_text": "repeat candidate",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(worker_impl, "_send_immediate_candidate_prefilter_card", capture_send)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert sent_urls == []
+    assert feedbacks[-1]["status"] == "done"
+    overview_items = feedbacks[-1]["sections"][0]["items"]
+    assert any(isinstance(entry, dict) and entry.get("label") == "失败/跳过" and str(entry.get("value") or "").startswith("1 ") for entry in overview_items)
+
+
+def test_run_collect_publish_latest_job_extends_discovery_rounds_until_new_candidates_filled(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    sent_urls: list[str] = []
+    discovery_limits: list[int] = []
+    seen_candidate = {
+        "url": "https://x.com/seen/status/111",
+        "published_at": "2026-03-20 10:00:00",
+        "display_time": "2m",
+        "tweet_text": "seen candidate",
+    }
+    fresh_candidate_one = {
+        "url": "https://x.com/fresh/status/222",
+        "published_at": "2026-03-20 10:01:00",
+        "display_time": "1m",
+        "tweet_text": "Cybertruck delivery clip one",
+    }
+    fresh_candidate_two = {
+        "url": "https://x.com/fresh/status/333",
+        "published_at": "2026-03-20 10:02:00",
+        "display_time": "1m",
+        "tweet_text": "Cybertruck delivery clip two",
+    }
+    (workspace / "candidate_ledger.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-03-20 10:05:00",
+                "items": {
+                    "x:111:111": {
+                        "candidate_id": "x:111:111",
+                        "status_id": "111",
+                        "status_url": "https://x.com/seen/status/111",
+                        "state": "published",
+                        "processed_name": "seen.mp4",
+                        "updated_at": "2026-03-20 10:05:00",
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    def discover_latest_live_candidates(**kwargs: object) -> dict[str, object]:
+        limit = int(kwargs.get("discovery_limit") or 0)
+        discovery_limits.append(limit)
+        if limit <= 4:
+            candidates = [seen_candidate, fresh_candidate_one]
+        else:
+            candidates = [seen_candidate, fresh_candidate_one, fresh_candidate_two]
+        return {"keyword": DEFAULT_PROFILE, "candidates": candidates}
+
+    original_send = worker_impl._send_immediate_candidate_prefilter_card
+
+    def capture_send(*args: object, **kwargs: object) -> dict[str, object]:
+        item = dict(kwargs.get("item") or {})
+        sent_urls.append(str(item.get("source_url") or ""))
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_discover_latest_live_candidates", discover_latest_live_candidates)
+    monkeypatch.setattr(worker_impl, "_send_immediate_candidate_prefilter_card", capture_send)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=2,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert discovery_limits == [4, 8]
+    assert sent_urls == ["https://x.com/fresh/status/222", "https://x.com/fresh/status/333"]
+
+
+def test_run_collect_publish_latest_job_collapses_same_story_candidates(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    feedbacks: list[dict[str, object]] = []
+    sent_urls: list[str] = []
+    same_story_one = {
+        "url": "https://x.com/story/status/111",
+        "published_at": "2026-03-20 10:00:00",
+        "display_time": "2m",
+        "tweet_text": "67-year-old Karen Cooke Lewis scratched a Tesla Cybertruck in North Carolina and was arrested",
+    }
+    same_story_two = {
+        "url": "https://x.com/story/status/222",
+        "published_at": "2026-03-20 10:01:00",
+        "display_time": "1m",
+        "tweet_text": "Karen Cooke Lewis, 67, was arrested in North Carolina after scratching a Tesla Cybertruck with nails",
+    }
+    unique_story = {
+        "url": "https://x.com/story/status/333",
+        "published_at": "2026-03-20 10:02:00",
+        "display_time": "1m",
+        "tweet_text": "Cybertruck was spotted in Beijing yesterday by Ming",
+    }
+
+    original_send = worker_impl._send_immediate_candidate_prefilter_card
+
+    def capture_send(*args: object, **kwargs: object) -> dict[str, object]:
+        item = dict(kwargs.get("item") or {})
+        sent_urls.append(str(item.get("source_url") or ""))
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [same_story_one, same_story_two, unique_story]},
+    )
+    monkeypatch.setattr(worker_impl, "_send_immediate_candidate_prefilter_card", capture_send)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=2,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert sent_urls == ["https://x.com/story/status/111", "https://x.com/story/status/333"]
+    overview_items = feedbacks[-1]["sections"][0]["items"]
+    assert any(isinstance(entry, dict) and entry.get("label") == "同题材折叠" and str(entry.get("value") or "").startswith("1 ") for entry in overview_items)
 
 
 def test_prefilter_progress_status_label_marks_skipped_terminal_items() -> None:

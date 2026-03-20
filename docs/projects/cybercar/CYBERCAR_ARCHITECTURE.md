@@ -1,6 +1,6 @@
 # CyberCar Architecture
 
-Last updated: 2026-03-18
+Last updated: 2026-03-21
 
 ## Top-Level Structure
 
@@ -52,6 +52,12 @@ Last updated: 2026-03-18
 - Douyin collection selection now depends on locating the full collection row container and then enumerating its visible dropdown controls, because the current creator page no longer guarantees that the text label and the real trigger share a shallow wrapper node.
 - The Douyin upload-entry path now tries native selector clicks before JS scorer fallback, prioritizing the right-side phone-preview upload shell (`phone-screen` / `container-*`) and the dedicated upload button over the broader outer `content-right` wrapper.
 - Collection resolution is now platform-aware inside `src/cybercar/engine.py`: CLI override stays highest, then `collection_names[platform]`, then legacy `<platform>_collection_name`, then `DEFAULT_PLATFORM_COLLECTION_NAMES[platform]`, and only then the shared global `collection_name`.
+
+## Immediate Review Recovery Flow
+
+- `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py` now treats immediate latest-candidate discovery as a multi-stage reducer: discovery rounds expand the X window, unique URLs are accumulated, previously processed/rejected URLs are filtered through `candidate_ledger`, and same-story duplicates are collapsed before queue upsert or Telegram send.
+- Existing prefilter rows are no longer split into "reusable but unrecoverable" pending state. The worker can reissue current cards for `link_pending`, `publish_requested`, `publish_running`, and related active states through `_reissue_immediate_candidate_prefilter_card(...)`.
+- The prefilter downvote callback now feeds the collect ledger directly via `_record_prefilter_skip_source_in_collect_ledger(...)`, which links Telegram operator decisions back into the collect-side duplicate filter without waiting for a later process/download artifact.
 
 ## Command Flow
 

@@ -128,6 +128,7 @@ COMMENT_REPLY_POST_OPTIONS = [3, 5, 7, 10]
 COMMENT_REPLY_PLATFORM_ORDER = ["wechat", "douyin", "kuaishou"]
 COLLECT_PUBLISH_DISCOVERY_MULTIPLIER = 4
 COLLECT_PUBLISH_MAX_DISCOVERY_CANDIDATES = 120
+COLLECT_PUBLISH_DISCOVERY_ROUND_MULTIPLIERS = (2, 4, 6)
 DEFAULT_REVIEW_STATE_FILE = "review_state.json"
 DEFAULT_TELEGRAM_PREFILTER_QUEUE_FILE = Path("runtime") / "telegram_prefilter_queue.json"
 DEFAULT_TELEGRAM_PREFILTER_FEEDBACK_HISTORY_FILE = Path("runtime") / "telegram_prefilter_feedback_history.jsonl"
@@ -176,6 +177,65 @@ IMMEDIATE_CANDIDATE_REISSUE_STATUSES = {
 IMMEDIATE_CANDIDATE_TERMINAL_SKIP_STATUSES = {
     "down_confirmed",
     "publish_done",
+}
+IMMEDIATE_STORY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "after",
+    "around",
+    "be",
+    "been",
+    "but",
+    "by",
+    "caught",
+    "for",
+    "from",
+    "got",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "hers",
+    "him",
+    "his",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "like",
+    "live",
+    "me",
+    "my",
+    "new",
+    "no",
+    "not",
+    "of",
+    "on",
+    "or",
+    "our",
+    "she",
+    "that",
+    "the",
+    "their",
+    "them",
+    "they",
+    "this",
+    "to",
+    "using",
+    "was",
+    "were",
+    "who",
+    "with",
+    "woman",
+    "you",
+    "your",
 }
 IMMEDIATE_PUBLISH_APPROVED_STATUSES = {
     "publish_requested",
@@ -3137,6 +3197,105 @@ def _resolve_collect_publish_discovery_limit(candidate_limit: int) -> int:
         COLLECT_PUBLISH_MAX_DISCOVERY_CANDIDATES,
         max(requested, requested * COLLECT_PUBLISH_DISCOVERY_MULTIPLIER),
     )
+
+
+def _resolve_collect_publish_round_limits(candidate_limit: int, discovery_limit: Optional[int] = None) -> list[int]:
+    requested = max(1, int(candidate_limit))
+    baseline = _resolve_collect_publish_discovery_limit(requested)
+    if discovery_limit is not None:
+        try:
+            baseline = max(requested, int(discovery_limit))
+        except Exception:
+            baseline = _resolve_collect_publish_discovery_limit(requested)
+    values: list[int] = []
+    for multiplier in COLLECT_PUBLISH_DISCOVERY_ROUND_MULTIPLIERS:
+        value = min(COLLECT_PUBLISH_MAX_DISCOVERY_CANDIDATES, max(requested, requested * int(multiplier)))
+        values.append(value)
+    values.append(min(COLLECT_PUBLISH_MAX_DISCOVERY_CANDIDATES, baseline))
+    values = sorted({max(requested, int(value)) for value in values})
+    return values[:3]
+
+
+def _candidate_source_url(candidate: Mapping[str, Any]) -> str:
+    return str(candidate.get("url") or "").strip()
+
+
+def _normalize_candidate_story_text(raw_text: str) -> str:
+    text = str(raw_text or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"https?://\S+", " ", text)
+    text = text.replace("’", "'").replace("“", '"').replace("”", '"')
+    text = re.sub(r"[@#]", " ", text)
+    text = re.sub(r"[^0-9a-z\u00c0-\u024f\u4e00-\u9fff]+", " ", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _candidate_story_tokens(candidate: Mapping[str, Any]) -> list[str]:
+    normalized = _normalize_candidate_story_text(str(candidate.get("tweet_text") or ""))
+    if not normalized:
+        return []
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[0-9a-z\u00c0-\u024f\u4e00-\u9fff]+", normalized, flags=re.IGNORECASE):
+        clean = str(token or "").strip().lower()
+        if not clean or clean in seen:
+            continue
+        if clean in IMMEDIATE_STORY_STOPWORDS:
+            continue
+        if clean.isdigit() or len(clean) >= 3 or re.search(r"[\u4e00-\u9fff]", clean):
+            seen.add(clean)
+            tokens.append(clean)
+    return tokens[:16]
+
+
+def _same_story_tokens(left_tokens: Sequence[str], right_tokens: Sequence[str]) -> bool:
+    left_set = {str(token or "").strip().lower() for token in left_tokens if str(token or "").strip()}
+    right_set = {str(token or "").strip().lower() for token in right_tokens if str(token or "").strip()}
+    if not left_set or not right_set:
+        return False
+    common = left_set & right_set
+    if not common:
+        return False
+    smaller = min(len(left_set), len(right_set))
+    union = left_set | right_set
+    overlap = len(common) / max(1, smaller)
+    jaccard = len(common) / max(1, len(union))
+    if len(common) >= 5 and overlap >= 0.6:
+        return True
+    if len(common) >= 4 and jaccard >= 0.5:
+        return True
+    if len(common) >= 3 and overlap >= 0.8:
+        return True
+    return False
+
+
+def _collapse_collect_publish_same_story_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    collapsed: list[dict[str, Any]] = []
+    kept_story_texts: list[str] = []
+    kept_story_tokens: list[list[str]] = []
+    collapsed_count = 0
+    for candidate in candidates:
+        row = dict(candidate)
+        story_text = _normalize_candidate_story_text(str(row.get("tweet_text") or ""))
+        story_tokens = _candidate_story_tokens(row)
+        is_same_story = False
+        for existing_text, existing_tokens in zip(kept_story_texts, kept_story_tokens):
+            if story_text and existing_text and story_text == existing_text:
+                is_same_story = True
+                break
+            if _same_story_tokens(story_tokens, existing_tokens):
+                is_same_story = True
+                break
+        if is_same_story:
+            collapsed_count += 1
+            continue
+        kept_story_texts.append(story_text)
+        kept_story_tokens.append(story_tokens)
+        collapsed.append(row)
+    return collapsed, collapsed_count
 
 
 def _build_media_pick_card(*, title: str, subtitle: str, media_action: str, default_profile: str) -> Dict[str, Any]:
@@ -6334,7 +6493,7 @@ def _upsert_immediate_candidate_item(
                 allow_reuse
                 and
                 existing_message_id > 0
-                and existing_status in (IMMEDIATE_CANDIDATE_REUSE_STATUSES - {"link_pending"})
+                and existing_status in IMMEDIATE_CANDIDATE_REUSE_STATUSES
             ),
         }
 
@@ -7541,6 +7700,46 @@ def _apply_review_reject(
     items[review_key] = base
     _save_review_state(state_path, state)
     return True
+
+
+def _record_prefilter_skip_source_in_collect_ledger(
+    *,
+    workspace: Path,
+    source_url: str,
+    media_kind: str = "video",
+    processed_name: str = "",
+) -> bool:
+    clean_source_url = str(source_url or "").strip()
+    if not clean_source_url:
+        return False
+    try:
+        workspace_ctx = core.init_workspace(str(workspace))
+        status_id = str(core._extract_status_id_from_url(clean_source_url) or "").strip()
+        if not status_id:
+            return False
+        payload = core._load_candidate_ledger_payload(workspace_ctx)
+        items = payload.get("items", {})
+        if not isinstance(items, dict):
+            items = {}
+            payload["items"] = items
+        changed = core._upsert_candidate_ledger_entry(
+            items,
+            candidate_id=core._make_x_candidate_id(status_id, status_id),
+            status_id=status_id,
+            media_key=status_id,
+            media_kind=str(media_kind or "video"),
+            state="review_skipped",
+            status_url=clean_source_url,
+            processed_name=str(processed_name or "").strip(),
+        )
+        if not changed:
+            return False
+        payload["version"] = int(payload.get("version") or 1)
+        payload["updated_at"] = _now_text()
+        core._save_candidate_ledger_payload(workspace_ctx, payload)
+        return True
+    except Exception:
+        return False
 
 
 def _apply_review_pending_block(*, workspace: Path, video_name: str, item_id: str, media_kind: str = "video") -> bool:
@@ -9132,6 +9331,8 @@ def _build_immediate_task_overview_section(
     sent_count: Optional[int] = None,
     reused_count: Optional[int] = None,
     skipped_count: Optional[int] = None,
+    collapsed_count: Optional[int] = None,
+    discovery_rounds: Optional[int] = None,
 ) -> dict[str, Any]:
     resolved_platforms = list(platforms or PUBLISH_PLATFORM_ORDER.copy())
     items: list[Any] = [
@@ -9148,6 +9349,10 @@ def _build_immediate_task_overview_section(
         items.append({"label": "沿用在审", "value": f"{max(0, int(reused_count))} 条"})
     if skipped_count is not None:
         items.append({"label": "失败/跳过", "value": f"{max(0, int(skipped_count))} 条"})
+    if collapsed_count is not None:
+        items.append({"label": "同题材折叠", "value": f"{max(0, int(collapsed_count))} 条"})
+    if discovery_rounds is not None:
+        items.append({"label": "扫描轮次", "value": f"{max(0, int(discovery_rounds))} 轮"})
     return {
         "title": "任务概览",
         "emoji": "📦",
@@ -11713,6 +11918,7 @@ def _run_collect_publish_latest_job(
     target_platforms = _collect_publish_target_platforms(normalized_media_kind)
     requested_limit = max(1, int(candidate_limit))
     discovery_limit = _resolve_collect_publish_discovery_limit(requested_limit)
+    round_limits = _resolve_collect_publish_round_limits(requested_limit, discovery_limit)
     _send_background_feedback(
         runner=runner,
         email_settings=email_settings,
@@ -11739,18 +11945,6 @@ def _run_collect_publish_latest_job(
         menu_label=_menu_breadcrumb_for_action("collect_publish_latest", f"{normalized_media_kind}:{requested_limit}"),
     )
     workspace_ctx = runner.core.init_workspace(str(workspace))
-    discovered = _discover_latest_live_candidates(
-        repo_root=repo_root,
-        timeout_seconds=timeout_seconds,
-        profile=profile,
-        candidate_limit=requested_limit,
-        discovery_limit=discovery_limit,
-        allow_search_inferred_match=immediate_test_mode,
-        include_images=(normalized_media_kind == "image"),
-    )
-    raw_candidates = [item for item in (discovered.get("candidates") or []) if isinstance(item, dict) and str(item.get("url") or "").strip()]
-    filtered_seen_candidates = 0
-    candidates = raw_candidates
     filter_seen_urls = getattr(core, "_filter_already_processed_x_urls", None)
     filter_workspace_ctx = workspace_ctx
     modern_engine = None
@@ -11771,18 +11965,95 @@ def _run_collect_publish_latest_job(
                 filter_workspace_ctx = modern_engine.init_workspace(str(workspace))
             except Exception:
                 filter_workspace_ctx = workspace_ctx
-    if raw_candidates and callable(filter_seen_urls):
-        filtered_urls, skipped_urls = filter_seen_urls(
-            filter_workspace_ctx,
-            [str(item.get("url") or "").strip() for item in raw_candidates],
+    filtered_seen_candidates = 0
+    same_story_collapsed = 0
+    total_candidates = 0
+    discovery_rounds_used = 0
+    raw_candidates_discovered = 0
+    candidates: list[dict[str, Any]] = []
+    seen_discovered_urls: set[str] = set()
+    for round_no, round_limit in enumerate(round_limits, start=1):
+        discovery_rounds_used = round_no
+        discovered = _discover_latest_live_candidates(
+            repo_root=repo_root,
+            timeout_seconds=timeout_seconds,
+            profile=profile,
+            candidate_limit=requested_limit,
+            discovery_limit=round_limit,
+            allow_search_inferred_match=immediate_test_mode,
+            include_images=(normalized_media_kind == "image"),
         )
-        filtered_url_set = {str(url or "").strip() for url in filtered_urls if str(url or "").strip()}
-        candidates = [
-            item for item in raw_candidates
-            if str(item.get("url") or "").strip() in filtered_url_set
+        raw_candidates = [
+            dict(item)
+            for item in (discovered.get("candidates") or [])
+            if isinstance(item, dict) and _candidate_source_url(item)
         ]
-        filtered_seen_candidates = len(skipped_urls)
+        fresh_round_candidates: list[dict[str, Any]] = []
+        for candidate in raw_candidates:
+            source_url = _candidate_source_url(candidate)
+            if not source_url or source_url in seen_discovered_urls:
+                continue
+            seen_discovered_urls.add(source_url)
+            fresh_round_candidates.append(candidate)
+        raw_candidates_discovered += len(fresh_round_candidates)
+        total_candidates = len(seen_discovered_urls)
+        if not fresh_round_candidates:
+            continue
+        filtered_round_candidates = fresh_round_candidates
+        if callable(filter_seen_urls):
+            filtered_urls, skipped_urls = filter_seen_urls(
+                filter_workspace_ctx,
+                [_candidate_source_url(item) for item in fresh_round_candidates],
+            )
+            filtered_url_set = {str(url or "").strip() for url in filtered_urls if str(url or "").strip()}
+            filtered_round_candidates = [
+                item
+                for item in fresh_round_candidates
+                if _candidate_source_url(item) in filtered_url_set
+            ]
+            filtered_seen_candidates += len(skipped_urls)
+        if not filtered_round_candidates:
+            continue
+        collapsed_existing = candidates + filtered_round_candidates
+        collapsed_all, collapsed_count = _collapse_collect_publish_same_story_candidates(collapsed_existing)
+        same_story_collapsed += collapsed_count
+        candidates = collapsed_all
+        if len(candidates) >= requested_limit:
+            break
+    candidates = candidates[:requested_limit]
     if not candidates:
+        if filtered_seen_candidates > 0 or same_story_collapsed > 0 or raw_candidates_discovered > 0:
+            _send_background_feedback(
+                runner=runner,
+                email_settings=email_settings,
+                workspace=workspace,
+                title=f"{media_label}即采即发候选已跳过",
+                subtitle=f"候选来源：X 搜索结果最近 {requested_limit} 条",
+                sections=[
+                    _build_immediate_task_overview_section(
+                        requested_limit=requested_limit,
+                        platforms=target_platforms,
+                        discovery_limit=round_limits[-1] if round_limits else discovery_limit,
+                        discovered_count=total_candidates,
+                        sent_count=0,
+                        reused_count=0,
+                        skipped_count=filtered_seen_candidates,
+                        collapsed_count=same_story_collapsed,
+                        discovery_rounds=discovery_rounds_used,
+                    ),
+                    {
+                        "title": "结果说明",
+                        "emoji": "🧹",
+                        "items": [
+                            "本轮扫描到了候选，但历史账本过滤和同题材折叠后，没有新的预审卡需要发出。",
+                        ],
+                    },
+                ],
+                status="done",
+                platforms=target_platforms,
+                menu_label=_menu_breadcrumb_for_action("collect_publish_latest", f"{normalized_media_kind}:{requested_limit}"),
+            )
+            return 0
         _send_background_feedback(
             runner=runner,
             email_settings=email_settings,
@@ -11793,9 +12064,11 @@ def _run_collect_publish_latest_job(
                 _build_immediate_task_overview_section(
                     requested_limit=requested_limit,
                     platforms=target_platforms,
-                    discovery_limit=discovery_limit,
+                    discovery_limit=round_limits[-1] if round_limits else discovery_limit,
                     discovered_count=0,
                     skipped_count=filtered_seen_candidates,
+                    collapsed_count=same_story_collapsed,
+                    discovery_rounds=discovery_rounds_used,
                 ),
                 {
                     "title": "结果说明",
@@ -11819,7 +12092,6 @@ def _run_collect_publish_latest_job(
     fresh_candidates = 0
     attempted_new_candidates = 0
     last_send_error = ""
-    total_candidates = len(candidates)
     reusable_items_to_reissue: list[tuple[str, Dict[str, Any]]] = []
     for idx, candidate in enumerate(candidates, start=1):
         if fresh_candidates >= requested_limit or attempted_new_candidates >= requested_limit:
@@ -12002,10 +12274,13 @@ def _run_collect_publish_latest_job(
                 _build_immediate_task_overview_section(
                     requested_limit=requested_limit,
                     platforms=target_platforms,
+                    discovery_limit=round_limits[-1] if round_limits else discovery_limit,
                     discovered_count=total_candidates,
                     sent_count=fresh_candidates + reissued_candidates,
                     reused_count=reused_candidates,
                     skipped_count=skipped_duplicates + filtered_seen_candidates,
+                    collapsed_count=same_story_collapsed,
+                    discovery_rounds=discovery_rounds_used,
                 ),
                 *(
                     [
@@ -12036,16 +12311,19 @@ def _run_collect_publish_latest_job(
                 _build_immediate_task_overview_section(
                     requested_limit=requested_limit,
                     platforms=target_platforms,
+                    discovery_limit=round_limits[-1] if round_limits else discovery_limit,
                     discovered_count=total_candidates,
                     sent_count=0,
                     reused_count=0,
                     skipped_count=skipped_duplicates + filtered_seen_candidates,
+                    collapsed_count=same_story_collapsed,
+                    discovery_rounds=discovery_rounds_used,
                 ),
                 {
                     "title": "结果说明",
                     "emoji": "🧹",
                     "items": [
-                        "本轮命中的候选都已在历史采集/审核/发布记录中出现，因此未重复创建新预审卡。",
+                        "本轮命中的候选都已在历史采集/审核/发布记录中出现，或被同题材折叠，因此未重复创建新预审卡。",
                     ],
                 },
             ],
@@ -12065,10 +12343,13 @@ def _run_collect_publish_latest_job(
             _build_immediate_task_overview_section(
                 requested_limit=requested_limit,
                 platforms=target_platforms,
+                discovery_limit=round_limits[-1] if round_limits else discovery_limit,
                 discovered_count=total_candidates,
                 sent_count=sent_candidates,
                 reused_count=reused_candidates,
                 skipped_count=skipped_duplicates + filtered_seen_candidates,
+                collapsed_count=same_story_collapsed,
+                discovery_rounds=discovery_rounds_used,
             ),
             {
                 "title": "失败线索",
@@ -13190,6 +13471,12 @@ def handle_callback_update(
             item_id=item_id,
             media_kind=str(item.get("media_kind") or "video"),
         )
+        ledger_changed = _record_prefilter_skip_source_in_collect_ledger(
+            workspace=workspace,
+            source_url=str(item.get("source_url") or "").strip(),
+            media_kind=str(item.get("media_kind") or "video"),
+            processed_name=str(item.get("processed_name") or item.get("video_name") or "").strip(),
+        )
         updated_item = _update_prefilter_item(
             workspace,
             item_id,
@@ -13224,6 +13511,8 @@ def handle_callback_update(
             _append_log(log_file, f"[Worker] Prefilter downvote applied: {video_name} by {actor} ({item_id})")
         else:
             _append_log(log_file, f"[Worker] Prefilter downvote duplicate: {video_name} by {actor} ({item_id})")
+        if ledger_changed:
+            _append_log(log_file, f"[Worker] Prefilter skip synced to collect ledger: {str(item.get('source_url') or '').strip()} ({item_id})")
         try:
             _append_prefilter_feedback_event(
                 workspace=workspace,

@@ -1,6 +1,6 @@
 # CyberCar State
 
-Last updated: 2026-03-18
+Last updated: 2026-03-21
 
 ## Scope
 
@@ -10,6 +10,8 @@ Last updated: 2026-03-18
 
 ## Latest Milestone
 
+- Immediate collect-publish candidate recovery was hardened on 2026-03-21: the Telegram worker now expands X discovery in rounds, collapses same-story duplicates before card issuance, syncs explicit prefilter skips into `candidate_ledger.json`, and reissues existing `link_pending` review cards on rerun so stale or missing pending cards can be recovered without minting duplicate review rows.
+- Captured a new Xiaohongshu failure-triage rule from the 2026-03-20 live incident: when upload, title fill, and caption fill all succeed but publish stays on the compose page with repeated `publish not confirmed` / `page returned to draft/compose state`, treat account suspension / account-level publish restriction as the first diagnosis before chasing DOM-selector regressions.
 - Finished a full Telegram operator-card cleanup pass focused on scan speed: platform result cards now put the platform title first, drop the redundant `CyberCar` prefix, weaken menu-path context lines, and hide duplicate success subtitle lines on single-platform success cards.
 - Unified Telegram surface wording across inline actions, persistent reply-keyboard shortcuts, and help copy: operators now see the same short labels (`🔐 登录`, `📍 进度`, `⚡ 即采即发`, `💬 点赞评论`) instead of mixed old/new phrases like `平台登录` and `进程查看`.
 - Hardened Telegram card rendering against malformed HTML fragments from upstream payloads: title/subtitle/section/item text is now stripped of stray `<b>/<i>` markup before rendering so a single broken tag no longer downgrades an entire card into raw literal markup output.
@@ -41,6 +43,9 @@ Last updated: 2026-03-18
 
 ## Current Status
 
+- `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py` now runs immediate latest-candidate discovery as a staged pipeline: expand discovery window (`2x/4x/6x` plus baseline cap), accumulate unique X URLs, filter already-seen sources through `candidate_ledger`, then collapse same-story duplicates before prefilter card creation.
+- The same worker now treats an existing `link_pending` row as recoverable state rather than terminal reuse-only state. When a rerun hits a previously sent-but-still-pending candidate, the worker reissues the current review card with `action=resent_existing_card` instead of silently counting it as reused and exiting.
+- Prefilter downvote / skip actions now write the original X status URL into the collect candidate ledger as `review_skipped`, so later immediate scans suppress explicitly rejected sources before creating a new Telegram review card.
 - `src/cybercar/common/telegram_ui.py` now owns the current Telegram header layout contract: platform-result cards render as `平台主标题 -> 弱化路径行 -> 正文`, and single-platform success cards no longer keep an extra `平台发布成功` line when the title already says `某平台已确认`.
 - The Telegram UI layer now sanitizes subtitle text, section titles, item labels, item values, and plain string items with `_strip_html_like_markup(...)`, which prevents malformed upstream markup from surfacing as literal `<b>` / `<i>` text in menu cards.
 - `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py` now keeps the home reply keyboard and shortcut parser aligned on the short operator vocabulary: `登录 / 进度 / 即采即发 / 点赞评论`.
@@ -84,6 +89,7 @@ Last updated: 2026-03-18
 
 ## Open Work
 
+- Same-story collapse is only regression-covered on English paraphrases right now. Chinese paraphrase variants can still evade token-overlap collapse because the current tokenizer does not split CJK text into multiple overlap anchors.
 - The Telegram card system still needs one live-bot validation pass against real messages after the latest “platform-first title / hidden single-platform success subtitle / weak path line” changes, to confirm Telegram clients do not cache or visually merge older card layouts.
 - Menu-card and result-card shortening is now largely stable, but one more real-message review is still needed to decide whether single-platform success cards should also drop the redundant `平台已确认发布成功。` sentence from the `执行摘要` body.
 - Real-host validation is still required for the reported Kuaishou image publish failure path: re-run `即采即发 > 图片 > 全部平台` and verify that the current repo no longer surfaces the old `CycleContext.__init__()` crash before platform handling starts.
@@ -109,6 +115,8 @@ Last updated: 2026-03-18
 
 ## Next Step
 
+- Add one focused regression pass for same-story collapse on Chinese captions and tighten tokenization if reruns still emit duplicate Chinese story cards for the same X incident.
+- Run one real Telegram `即采即发 > 视频 > 1条` recovery check with an existing `link_pending` item whose old card is no longer visible, and verify the worker now sends a refreshed review card instead of ending on pure "沿用在审".
 - Trigger 2-3 real Telegram messages that cover: one single-platform success, one partial-success mixed-platform result, and one home/menu card. Verify that the live client now shows platform-first titles, no stray HTML tags, and consistent bottom shortcut wording.
 - If the single-platform success body still feels repetitive, remove the remaining `平台已确认发布成功。` sentence from `执行摘要` for that exact case while leaving partial/failure summaries intact.
 - Re-run Telegram `即采即发 > 图片 > 全部平台` for the same Kuaishou image scenario and confirm the worker no longer fails at `CycleContext` construction before platform handling begins.

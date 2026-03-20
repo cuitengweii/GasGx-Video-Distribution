@@ -1,6 +1,6 @@
 # CyberCar Decisions
 
-Last updated: 2026-03-18
+Last updated: 2026-03-21
 
 ## 2026-03-15
 
@@ -39,6 +39,13 @@ Last updated: 2026-03-18
 - A generic WeChat publish failure is no longer sufficient evidence for `login_required`. The worker must run `check_platform_login_status()` first and only request a QR code after the session probe confirms a true login loss.
 - When success cards must compress `机器信息`, the renderer should prefer log and task/ID style clues over low-signal fields such as duration so machine-oriented debugging context survives the cut.
 - Douyin video upload readiness may not fall back to a generic "not busy anymore" completion rule. The publish flow must wait for explicit video-editor evidence such as caption/title inputs, publish controls, or other stable editor hints before caption verification begins.
+
+## 2026-03-21
+
+- Existing Telegram immediate-review rows in `link_pending` remain rerunnable recovery state. A later collect-publish scan must be allowed to reissue the current review card instead of treating that row as a permanently satisfied reuse hit.
+- Immediate latest-candidate discovery now expands in bounded rounds and only stops once enough fresh candidates remain after ledger filtering. Candidate-window growth is part of the default recovery strategy, not a test-only path.
+- Explicit prefilter skips must be written into `candidate_ledger.json` as `review_skipped` so later scans suppress sources the operator already rejected.
+- Same-story folding belongs between ledger filtering and prefilter card creation so multiple X posts about the same incident do not consume the requested review budget before the operator sees them.
 
 ## 2026-03-18
 
