@@ -356,6 +356,10 @@ DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
 }
 KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 60
+WECHAT_PUBLISH_FEEDBACK_GRACE_SECONDS = 45
+WECHAT_PUBLISH_POST_LIST_PROBE_AFTER_SECONDS = 12
+WECHAT_PUBLISH_POST_LIST_FALLBACK_AFTER_SECONDS = 24
+WECHAT_PUBLISH_POST_LIST_PROBE_INTERVAL_SECONDS = 6
 DEFAULT_AUTO_DELETE_SOURCE_FILES = False
 SPARK_CHAT_TIMEOUT_SECONDS = 20
 DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE = 12
@@ -13494,6 +13498,18 @@ def _is_wechat_publish_confirmed_from_state(state: dict[str, Any]) -> bool:
     return False
 
 
+def _is_wechat_publish_submission_in_flight(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if bool(state.get("failure_hint")):
+        return False
+    if bool(state.get("success_hint")):
+        return True
+    if bool(state.get("progress_hint")):
+        return True
+    return bool(state.get("manage_hint")) and (not bool(state.get("compose_hint")))
+
+
 def _merge_wechat_original_state(base: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base or {})
     for key in (
@@ -14012,6 +14028,19 @@ def _wait_wechat_publish_feedback(
     end_at = time.time() + max(10, int(timeout_seconds))
     warned = False
     no_tip_clicked = False
+    verify_page = fallback_ctx if hasattr(fallback_ctx, "get") and hasattr(fallback_ctx, "run_js") else None
+    verify_probe_page = None
+    last_post_list_probe_at = 0.0
+    loop_started_at = time.time()
+    grace_extended = False
+
+    def _close_verify_probe_page() -> None:
+        if verify_probe_page is not None and verify_probe_page is not verify_page:
+            try:
+                verify_probe_page.close()
+            except Exception:
+                pass
+
     while time.time() < end_at:
         if not no_tip_clicked:
             no_tip_clicked = _click_first_matching_button(
@@ -14028,24 +14057,66 @@ def _wait_wechat_publish_feedback(
         )
         state = _read_wechat_publish_state(primary_ctx, fallback_ctx)
         if _is_wechat_publish_confirmed_from_state(state):
+            _close_verify_probe_page()
             _log("[Uploader:wechat] Publish feedback inferred by post-submit state.")
             return
         if bool(state.get("failure_hint")):
             state_actions = state.get("action_texts")
+            _close_verify_probe_page()
             raise RuntimeError(
                 "wechat page shows publish failure marker: "
                 f"url={state.get('url') or '-'}, actions={state_actions if isinstance(state_actions, list) else []}"
             )
+        now = time.time()
+        elapsed_seconds = max(0.0, now - loop_started_at)
+        submission_in_flight = _is_wechat_publish_submission_in_flight(state)
+        if (
+            submission_in_flight
+            and (not grace_extended)
+            and elapsed_seconds >= WECHAT_PUBLISH_POST_LIST_PROBE_AFTER_SECONDS
+        ):
+            end_at += WECHAT_PUBLISH_FEEDBACK_GRACE_SECONDS
+            grace_extended = True
+            _log(
+                "[Uploader:wechat] Publish submission is still in flight; "
+                f"extend confirmation window by {WECHAT_PUBLISH_FEEDBACK_GRACE_SECONDS}s."
+            )
+        should_probe_post_list = (
+            bool(verify_page)
+            and bool(str(expected_title or "").strip())
+            and (now - last_post_list_probe_at) >= WECHAT_PUBLISH_POST_LIST_PROBE_INTERVAL_SECONDS
+            and (
+                (submission_in_flight and elapsed_seconds >= WECHAT_PUBLISH_POST_LIST_PROBE_AFTER_SECONDS)
+                or elapsed_seconds >= WECHAT_PUBLISH_POST_LIST_FALLBACK_AFTER_SECONDS
+            )
+        )
+        if should_probe_post_list:
+            if verify_probe_page is None:
+                try:
+                    verify_probe_page = _prepare_upload_tab(verify_page)
+                except Exception:
+                    verify_probe_page = verify_page
+            last_post_list_probe_at = now
+            verified_card = _verify_wechat_publish_in_post_list(
+                verify_probe_page or verify_page,
+                expected_title=expected_title,
+                timeout_seconds=6.0,
+            )
+            if verified_card:
+                _close_verify_probe_page()
+                return
         if not warned:
             warned = True
             _log("[Uploader:wechat] Waiting publish feedback...")
         time.sleep(1.0)
+    _close_verify_probe_page()
 
     actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
     if actions:
         _log(f"[Uploader:wechat] Visible action texts after publish click: {actions}")
     state = _read_wechat_publish_state(primary_ctx, fallback_ctx)
     if _is_wechat_publish_confirmed_from_state(state):
+        _close_verify_probe_page()
         _log("[Uploader:wechat] Publish feedback inferred by final state check.")
         return
     state_actions = state.get("action_texts")
@@ -14054,7 +14125,6 @@ def _wait_wechat_publish_feedback(
     state_url = str(state.get("url", "") or "").strip()
     if state_url:
         _log(f"[Uploader:wechat] Final publish-state url: {state_url}")
-    verify_page = fallback_ctx if hasattr(fallback_ctx, "get") and hasattr(fallback_ctx, "run_js") else None
     if verify_page is not None:
         verified_card = _verify_wechat_publish_in_post_list(
             verify_page,
@@ -14062,7 +14132,9 @@ def _wait_wechat_publish_feedback(
             timeout_seconds=min(24.0, max(10.0, float(timeout_seconds) / 3.0)),
         )
         if verified_card:
+            _close_verify_probe_page()
             return
+    _close_verify_probe_page()
     raise RuntimeError(f"wechat publish not confirmed within {timeout_seconds}s.")
 
 

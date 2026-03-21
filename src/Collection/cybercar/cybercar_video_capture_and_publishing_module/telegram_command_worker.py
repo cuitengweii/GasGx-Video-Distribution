@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 try:
     import winreg  # type: ignore
@@ -139,6 +139,7 @@ DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 30
 DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 3 * 86400
 DEFAULT_PREFILTER_QUEUE_STATUS_WINDOW_SECONDS = 24 * 3600
 DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS = 30 * 60
+DEFAULT_IMMEDIATE_PREFILTER_PENDING_EXPIRY_SECONDS = 10 * 60
 DEFAULT_QUEUE_MAINTENANCE_INTERVAL_SECONDS = 5 * 60
 DEFAULT_PLATFORM_LOCK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 TELEGRAM_PREFILTER_CALLBACK_PREFIX = "ctpf"
@@ -176,6 +177,7 @@ IMMEDIATE_CANDIDATE_REISSUE_STATUSES = {
 }
 IMMEDIATE_CANDIDATE_TERMINAL_SKIP_STATUSES = {
     "down_confirmed",
+    "expired_pending",
     "publish_done",
 }
 IMMEDIATE_STORY_STOPWORDS = {
@@ -2469,6 +2471,24 @@ def _inspect_runtime_execution_state(workspace: Path) -> Dict[str, Any]:
     }
 
 
+def _summarize_process_queue_status(workspace: Path) -> Dict[str, Any]:
+    queue = _load_prefilter_queue(_prefilter_queue_path(workspace))
+    raw_items = queue.get("items", {})
+    if not isinstance(raw_items, dict) or not raw_items:
+        return {"idle": True, "value": "空闲"}
+
+    live_items = [dict(row) for row in raw_items.values() if isinstance(row, dict) and _is_prefilter_live_for_process_status(row)]
+    if not live_items:
+        return {"idle": True, "value": "空闲"}
+
+    publish_running = [
+        row for row in live_items if str(row.get("status") or "").strip().lower() == "publish_running"
+    ]
+    if publish_running:
+        return {"idle": False, "value": f"发布中 {len(publish_running)} 条"}
+    return {"idle": False, "value": f"活跃候选 {len(live_items)} 条"}
+
+
 def _build_runtime_status_section(workspace: Optional[Path]) -> dict[str, Any]:
     if workspace is None:
         return {
@@ -2481,35 +2501,48 @@ def _build_runtime_status_section(workspace: Optional[Path]) -> dict[str, Any]:
     lock_state = runtime_state.get("lock", {})
     active_tasks = list(runtime_state.get("active_tasks") or [])
     waiting_prefilter = runtime_state.get("waiting_prefilter", {})
+    queue_state = _summarize_process_queue_status(workspace)
     items: list[Any] = []
+    all_idle = False
 
     if bool(lock_state.get("alive")):
         mode = str(lock_state.get("mode") or "pipeline").strip() or "pipeline"
         pid = int(lock_state.get("pid") or 0)
         age_minutes = int(lock_state.get("age_minutes") or 0)
-        items.append({"label": "全局流水线锁", "value": f"占用中｜{mode}｜PID {pid}｜约 {age_minutes} 分钟"})
+        items.append({"label": "⚠️ 全局流水线锁", "value": f"占用中｜{mode}｜PID {pid}｜约 {age_minutes} 分钟"})
     elif bool(lock_state.get("exists")):
-        items.append({"label": "全局流水线锁", "value": "发现残留锁文件，但占锁进程已不在。"})
+        items.append({"label": "⚠️ 全局流水线锁", "value": "发现残留锁文件，但占锁进程已不在。"})
     else:
-        items.append({"label": "全局流水线锁", "value": "空闲"})
+        items.append({"label": "✅ 全局流水线锁", "value": "空闲"})
 
     if active_tasks:
         preview = active_tasks[0]
         title = _home_action_title(str(preview.get("action") or ""))
         updated_at = str(preview.get("updated_at") or "").strip() or "-"
-        items.append({"label": "后台任务", "value": f"{title} 正在执行｜最近更新 {updated_at}｜共 {len(active_tasks)} 条"})
+        items.append({"label": "⚠️ 后台任务", "value": f"{title} 正在执行｜最近更新 {updated_at}｜共 {len(active_tasks)} 条"})
     else:
-        items.append({"label": "后台任务", "value": "无互斥任务在运行"})
+        items.append({"label": "✅ 后台任务", "value": "无互斥任务在运行"})
+
+    queue_label = "✅ 即采即发队列" if bool(queue_state.get("idle")) else "⚠️ 即采即发队列"
+    items.append({"label": queue_label, "value": str(queue_state.get("value") or "空闲")})
 
     waiting_count = int(waiting_prefilter.get("count") or 0)
     if waiting_count > 0:
         ids = ", ".join(str(token or "").strip() for token in waiting_prefilter.get("ids", []) if str(token or "").strip())
         suffix = f"｜示例 {ids}" if ids else ""
-        items.append({"label": "即采即发等待锁", "value": f"{waiting_count} 条{suffix}"})
+        items.append({"label": "⚠️ 即采即发等待锁", "value": f"{waiting_count} 条{suffix}"})
+
+    all_idle = (
+        not bool(lock_state.get("alive"))
+        and not bool(lock_state.get("exists"))
+        and not active_tasks
+        and int(waiting_prefilter.get("count") or 0) <= 0
+        and bool(queue_state.get("idle"))
+    )
 
     return {
-        "title": "执行状态",
-        "emoji": "🧯",
+        "title": "可继续操作" if all_idle else "执行状态",
+        "emoji": "✅" if all_idle else "🧯",
         "items": items,
     }
 
@@ -2638,6 +2671,7 @@ def _build_home_task_queue_section(
 def _prefilter_progress_status_label(status: str, row: Optional[Mapping[str, Any]] = None) -> str:
     mapping = {
         "link_pending": "待人工确认",
+        "expired_pending": "已过期",
         "up_confirmed": "待采集",
         "down_confirmed": "待发布",
         "download_running": "下载中",
@@ -2700,6 +2734,31 @@ def _is_prefilter_skipped_terminal(row: Mapping[str, Any]) -> bool:
     status = str(row.get("status") or "").strip().lower()
     action = str(row.get("action") or "").strip().lower()
     return status == "down_confirmed" and action == "skip"
+
+
+def _is_prefilter_expired_terminal(row: Mapping[str, Any]) -> bool:
+    if not isinstance(row, Mapping):
+        return False
+    status = str(row.get("status") or "").strip().lower()
+    action = str(row.get("action") or "").strip().lower()
+    return status == "expired_pending" and action == "expired"
+
+
+def _is_prefilter_filtered_terminal(row: Mapping[str, Any]) -> bool:
+    return _is_prefilter_skipped_terminal(row) or _is_prefilter_expired_terminal(row)
+
+
+def _is_stale_link_pending_prefilter_item(row: Mapping[str, Any]) -> bool:
+    if not isinstance(row, Mapping):
+        return False
+    status = str(row.get("status") or "").strip().lower()
+    if status != "link_pending":
+        return False
+    ts = _prefilter_item_timestamp(dict(row))
+    if ts is None:
+        return False
+    cutoff = datetime.now() - timedelta(seconds=max(60, int(DEFAULT_IMMEDIATE_PREFILTER_PENDING_EXPIRY_SECONDS)))
+    return ts < cutoff
 
 
 def _is_prefilter_overflow_review_item(row: Mapping[str, Any]) -> bool:
@@ -2879,18 +2938,28 @@ def _build_process_prefilter_section(
         "publish_requested",
         "publish_running",
     ]
+    status_emoji_map = {
+        "link_pending": "📝",
+        "up_confirmed": "📥",
+        "down_confirmed": "📦",
+        "download_running": "📥",
+        "publish_requested": "🕓",
+        "publish_running": "✅",
+    }
     items: list[Any] = [
-        {"label": "当前积压数", "value": str(len(live_items))},
-        {"label": "活跃窗口", "value": "最近30分钟（仅统计当前活跃项）"},
+        {"label": "📊 当前积压数", "value": str(len(live_items))},
+        {"label": "🕒 活跃窗口", "value": "最近30分钟（仅统计当前活跃项）"},
     ]
     queue_updated_at = str(queue.get("updated_at") or "").strip()
     if queue_updated_at:
-        items.append({"label": "队列更新时间", "value": queue_updated_at})
+        items.append({"label": "🕒 队列更新时间", "value": queue_updated_at})
     for status in ordered_statuses:
         count = int(status_counts.get(status) or 0)
         if count <= 0:
             continue
-        items.append({"label": _prefilter_progress_status_label(status), "value": str(count)})
+        status_label = _prefilter_progress_status_label(status)
+        status_emoji = status_emoji_map.get(status, "•")
+        items.append({"label": f"{status_emoji} {status_label}", "value": str(count)})
 
     active_like_statuses = {
         "link_pending",
@@ -2938,6 +3007,62 @@ def _build_process_prefilter_section(
     return {
         "title": "即采即发队列",
         "emoji": "🪄",
+        "items": items,
+    }
+
+
+def _build_process_active_publish_section(
+    workspace: Path,
+    *,
+    limit: int = DEFAULT_PROCESS_STATUS_PREFILTER_LIMIT,
+) -> Optional[dict[str, Any]]:
+    queue = _load_prefilter_queue(_prefilter_queue_path(workspace))
+    raw_items = queue.get("items", {})
+    if not isinstance(raw_items, dict) or not raw_items:
+        return None
+
+    live_items = [
+        dict(row)
+        for row in raw_items.values()
+        if isinstance(row, dict) and _is_prefilter_live_for_process_status(row)
+    ]
+    highlighted = [
+        row
+        for row in sorted(
+            live_items,
+            key=lambda row: _prefilter_item_timestamp(row) or datetime.min,
+            reverse=True,
+        )
+        if str(row.get("status") or "").strip().lower() == "publish_running"
+    ]
+    if not highlighted:
+        return None
+
+    items: list[Any] = []
+    queue_updated_at = str(queue.get("updated_at") or "").strip()
+    if queue_updated_at:
+        items.append({"label": "✅ 队列更新时间", "value": queue_updated_at})
+
+    for row in highlighted[: max(1, int(limit))]:
+        media_kind = _normalize_immediate_collect_media_kind(str(row.get("media_kind") or "video"))
+        media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
+        updated_at = str(row.get("updated_at") or row.get("created_at") or "").strip() or "-"
+        preview = _preview_text(
+            row.get("processed_name")
+            or row.get("video_name")
+            or row.get("tweet_text")
+            or row.get("source_url")
+            or row.get("id")
+            or "",
+            limit=72,
+        )
+        items.append({"label": f"✅ {media_label}｜发布中", "value": f"{updated_at}\n{preview}"})
+
+    if not items:
+        return None
+    return {
+        "title": "当前发布中",
+        "emoji": "✅",
         "items": items,
     }
 
@@ -3031,20 +3156,27 @@ def _build_process_status_card(*, default_profile: str, workspace: Path, status_
     subtitle = f"当前配置：{profile}｜随时查看整个流程是否在推进"
     if status_note:
         subtitle = f"{subtitle}｜{status_note}"
+    sections: list[dict[str, Any]] = []
+    active_publish_section = _build_process_active_publish_section(workspace)
+    if isinstance(active_publish_section, dict):
+        sections.append(active_publish_section)
+    sections.extend(
+        [
+            _build_runtime_status_section(workspace),
+            _build_process_task_section(workspace),
+            _build_process_worker_section(workspace),
+            _build_process_prefilter_section(workspace),
+            _build_process_log_section(workspace),
+        ]
+    )
     return _build_submenu_card(
         title="即采即发进程查看",
         subtitle=subtitle,
-        sections=[
-            _build_process_worker_section(workspace),
-            _build_runtime_status_section(workspace),
-            _build_process_task_section(workspace),
-            _build_process_prefilter_section(workspace),
-            _build_process_log_section(workspace),
-        ],
+        sections=sections,
         actions=[
             {
                 "text": "🔄 刷新",
-                "callback_data": build_home_callback_data("cybercar", "process_status"),
+                "callback_data": build_home_callback_data("cybercar", "process_status_refresh"),
                 "row": 0,
             },
             {
@@ -4061,6 +4193,25 @@ def _handle_home_callback(
                 workspace=workspace,
             ),
             timeout_seconds=timeout_seconds,
+        )
+        return {"handled": True, "update_id": update_id}
+
+    if action == "process_status_refresh":
+        answer_interaction_toast(
+            bot_token=bot_token,
+            query_id=query_id,
+            action="process_status",
+            status="success",
+            timeout_seconds=timeout_seconds,
+        )
+        _send_interaction_result_async(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            card=_build_process_status_card(
+                default_profile=resolved_default_profile,
+                workspace=workspace,
+            ),
+            timeout_seconds=timeout_seconds,
             message_id=message_id,
             inline_message_id=inline_message_id,
         )
@@ -4072,6 +4223,7 @@ def _handle_home_callback(
             log_file=workspace / "runtime" / "logs" / "telegram_command_worker.log",
         )
         removed_inactive = int(cleanup_summary.get("removed_inactive") or 0)
+        filter_synced = int(cleanup_summary.get("filter_synced") or 0)
         if removed_inactive > 0:
             answer_interaction_toast(
                 bot_token=bot_token,
@@ -4080,7 +4232,7 @@ def _handle_home_callback(
                 status="success",
                 timeout_seconds=timeout_seconds,
             )
-            status_note = f"已清理 {removed_inactive} 条非活跃队列项"
+            status_note = f"已清理 {removed_inactive} 条非活跃队列项，其中 {filter_synced} 条已纳入后续采集过滤"
         else:
             answer_interaction_toast(
                 bot_token=bot_token,
@@ -5944,6 +6096,7 @@ def _prune_prefilter_queue(queue: Dict[str, Any]) -> Dict[str, int]:
         if status not in {
             "up_confirmed",
             "down_confirmed",
+            "expired_pending",
             "publish_partial",
             "publish_done",
             "publish_failed",
@@ -5977,16 +6130,41 @@ def _cleanup_prefilter_queue(workspace: Path, *, log_file: Optional[Path] = None
 def _prune_inactive_prefilter_items_for_manual_cleanup(queue: Dict[str, Any]) -> Dict[str, Any]:
     items = queue.get("items", {})
     if not isinstance(items, dict) or not items:
-        return {"removed_inactive": 0, "removed_ids": []}
+        return {"removed_inactive": 0, "removed_ids": [], "filter_synced": 0}
     removed_ids: list[str] = []
+    filter_synced = 0
     for item_id, row in list(items.items()):
         if not isinstance(row, dict):
             continue
         if bool(row.get("prefilter_retry_pending")):
             continue
+        status = str(row.get("status") or "").strip().lower()
+        should_sync_filter = False
         if _is_prefilter_overflow_review_item(row):
+            should_sync_filter = True
             del items[item_id]
             removed_ids.append(str(item_id or "").strip())
+            if _record_prefilter_source_in_collect_ledger(
+                workspace=Path(queue.get("_workspace_path") or ""),
+                source_url=str(row.get("source_url") or "").strip(),
+                media_kind=str(row.get("media_kind") or "video"),
+                processed_name=str(row.get("processed_name") or row.get("video_name") or "").strip(),
+                state="review_skipped",
+            ):
+                filter_synced += 1
+            continue
+        if status in {"link_pending", "up_confirmed", "down_confirmed", "expired_pending", "send_failed"}:
+            should_sync_filter = status in {"link_pending", "up_confirmed", "down_confirmed", "expired_pending"}
+            del items[item_id]
+            removed_ids.append(str(item_id or "").strip())
+            if should_sync_filter and _record_prefilter_source_in_collect_ledger(
+                workspace=Path(queue.get("_workspace_path") or ""),
+                source_url=str(row.get("source_url") or "").strip(),
+                media_kind=str(row.get("media_kind") or "video"),
+                processed_name=str(row.get("processed_name") or row.get("video_name") or "").strip(),
+                state="review_skipped",
+            ):
+                filter_synced += 1
             continue
         if _is_prefilter_live_for_process_status(row):
             continue
@@ -5995,14 +6173,23 @@ def _prune_inactive_prefilter_items_for_manual_cleanup(queue: Dict[str, Any]) ->
     return {
         "removed_inactive": len(removed_ids),
         "removed_ids": removed_ids[: max(1, DEFAULT_PROCESS_STATUS_PREFILTER_LIMIT)],
+        "filter_synced": filter_synced,
     }
 
 
 def _cleanup_inactive_prefilter_items(workspace: Path, *, log_file: Optional[Path] = None) -> Dict[str, Any]:
-    summary = _with_prefilter_queue_lock(workspace, _prune_inactive_prefilter_items_for_manual_cleanup)
+    def _mutate(queue: Dict[str, Any]) -> Dict[str, Any]:
+        queue["_workspace_path"] = str(workspace)
+        try:
+            return _prune_inactive_prefilter_items_for_manual_cleanup(queue)
+        finally:
+            queue.pop("_workspace_path", None)
+
+    summary = _with_prefilter_queue_lock(workspace, _mutate)
     if not isinstance(summary, dict):
-        return {"removed_inactive": 0, "removed_ids": []}
+        return {"removed_inactive": 0, "removed_ids": [], "filter_synced": 0}
     removed_inactive = int(summary.get("removed_inactive") or 0)
+    filter_synced = int(summary.get("filter_synced") or 0)
     removed_ids = [
         str(token or "").strip()
         for token in list(summary.get("removed_ids") or [])
@@ -6013,9 +6200,9 @@ def _cleanup_inactive_prefilter_items(workspace: Path, *, log_file: Optional[Pat
         suffix = f" ids={preview}" if preview else ""
         _append_log(
             log_file,
-            f"[Worker] manual prefilter cleanup: removed_inactive={removed_inactive}{suffix}",
+            f"[Worker] manual prefilter cleanup: removed_inactive={removed_inactive}, filter_synced={filter_synced}{suffix}",
         )
-    return {"removed_inactive": removed_inactive, "removed_ids": removed_ids}
+    return {"removed_inactive": removed_inactive, "removed_ids": removed_ids, "filter_synced": filter_synced}
 
 
 def _run_periodic_queue_maintenance(
@@ -6045,6 +6232,39 @@ def _run_periodic_queue_maintenance(
     }
 
 
+def _expire_stale_link_pending_prefilter_items(
+    workspace: Path,
+    queue: Dict[str, Any],
+) -> Dict[str, int]:
+    items = queue.get("items", {})
+    if not isinstance(items, dict) or not items:
+        return {"expired_pending": 0, "ledger_synced": 0}
+    expired_pending = 0
+    ledger_synced = 0
+    for item_id, row in list(items.items()):
+        if not isinstance(row, dict):
+            continue
+        if not _is_stale_link_pending_prefilter_item(row):
+            continue
+        updated_row = dict(row)
+        updated_row["status"] = "expired_pending"
+        updated_row["action"] = "expired"
+        updated_row["expired_at"] = _now_text()
+        updated_row["prefilter_warning"] = "预审卡片超过 10 分钟未处理，已自动过期并纳入后续过滤。"
+        updated_row["updated_at"] = _now_text()
+        items[item_id] = updated_row
+        expired_pending += 1
+        if _record_prefilter_source_in_collect_ledger(
+            workspace=workspace,
+            source_url=str(updated_row.get("source_url") or "").strip(),
+            media_kind=str(updated_row.get("media_kind") or "video"),
+            processed_name=str(updated_row.get("processed_name") or updated_row.get("video_name") or "").strip(),
+            state="review_skipped",
+        ):
+            ledger_synced += 1
+    return {"expired_pending": expired_pending, "ledger_synced": ledger_synced}
+
+
 def _with_prefilter_queue_lock(
     workspace: Path,
     callback: Callable[[Dict[str, Any]], Any],
@@ -6055,6 +6275,7 @@ def _with_prefilter_queue_lock(
     lock_dir = _acquire_file_lock(queue_path, timeout_seconds=timeout_seconds)
     try:
         queue = _load_prefilter_queue(queue_path)
+        _expire_stale_link_pending_prefilter_items(workspace, queue)
         result = callback(queue)
         _save_prefilter_queue(queue_path, queue)
         return result
@@ -6464,10 +6685,14 @@ def _upsert_immediate_candidate_item(
         row["candidate_index"] = int(item_index or 0)
         row["candidate_limit"] = int(total_count or 0)
         row["chat_id"] = str(chat_id or row.get("chat_id") or "").strip()
-        existing_is_skipped = _is_prefilter_skipped_terminal(row)
-        if existing_is_skipped:
-            row["status"] = "down_confirmed"
-            row["action"] = "skip"
+        existing_is_filtered_terminal = _is_prefilter_filtered_terminal(row)
+        if existing_is_filtered_terminal:
+            if _is_prefilter_expired_terminal(row):
+                row["status"] = "expired_pending"
+                row["action"] = "expired"
+            else:
+                row["status"] = "down_confirmed"
+                row["action"] = "skip"
         elif existing_status == "publish_done":
             row["status"] = "publish_done"
             row["action"] = str(row.get("action") or "publish").strip() or "publish"
@@ -7702,12 +7927,13 @@ def _apply_review_reject(
     return True
 
 
-def _record_prefilter_skip_source_in_collect_ledger(
+def _record_prefilter_source_in_collect_ledger(
     *,
     workspace: Path,
     source_url: str,
     media_kind: str = "video",
     processed_name: str = "",
+    state: str = "review_skipped",
 ) -> bool:
     clean_source_url = str(source_url or "").strip()
     if not clean_source_url:
@@ -7728,7 +7954,7 @@ def _record_prefilter_skip_source_in_collect_ledger(
             status_id=status_id,
             media_key=status_id,
             media_kind=str(media_kind or "video"),
-            state="review_skipped",
+            state=str(state or "review_skipped").strip() or "review_skipped",
             status_url=clean_source_url,
             processed_name=str(processed_name or "").strip(),
         )
@@ -7740,6 +7966,22 @@ def _record_prefilter_skip_source_in_collect_ledger(
         return True
     except Exception:
         return False
+
+
+def _record_prefilter_skip_source_in_collect_ledger(
+    *,
+    workspace: Path,
+    source_url: str,
+    media_kind: str = "video",
+    processed_name: str = "",
+) -> bool:
+    return _record_prefilter_source_in_collect_ledger(
+        workspace=workspace,
+        source_url=source_url,
+        media_kind=media_kind,
+        processed_name=processed_name,
+        state="review_skipped",
+    )
 
 
 def _apply_review_pending_block(*, workspace: Path, video_name: str, item_id: str, media_kind: str = "video") -> bool:
@@ -11138,11 +11380,14 @@ def _update_prefilter_item(
 
 
 def _get_prefilter_item(workspace: Path, item_id: str) -> dict[str, Any]:
-    queue = _load_prefilter_queue(_prefilter_queue_path(workspace))
-    items = queue.get("items", {})
-    if not isinstance(items, dict):
-        return {}
-    row = items.get(item_id, {})
+    def _read(queue: Dict[str, Any]) -> dict[str, Any]:
+        items = queue.get("items", {})
+        if not isinstance(items, dict):
+            return {}
+        row = items.get(item_id, {})
+        return dict(row) if isinstance(row, dict) else {}
+
+    row = _with_prefilter_queue_lock(workspace, _read)
     return dict(row) if isinstance(row, dict) else {}
 
 
@@ -11164,6 +11409,8 @@ def _wait_for_immediate_review(
                 status = str(row.get("status") or "").strip().lower()
                 if status == "down_confirmed":
                     return {"blocked": True, "reason": "你已点击跳过本条，全部平台停止发布。"}
+                if status == "expired_pending":
+                    return {"blocked": True, "reason": "预审卡片超过 10 分钟未处理，已自动过期并停止继续发布。"}
                 if status == "up_confirmed":
                     return {"blocked": False, "reason": "你已确认保留本条，继续发布。"}
         review_state = workspace / DEFAULT_REVIEW_STATE_FILE
@@ -11392,24 +11639,30 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
     for idx, record in enumerate(records[:5], start=1):
         if not isinstance(record, dict):
             continue
+        record_platform_token = _normalize_platform_tokens([str(record.get("platform") or "")])
+        active_platform_token = record_platform_token[0] if record_platform_token else (platform_token[0] if platform_token else "wechat")
         published_text = str(record.get("post_published_text") or "").strip()
         comment_author = str(record.get("comment_author") or "").strip()
         comment_time = str(record.get("comment_time") or "").strip()
         author_line = comment_author or "-"
         if comment_time:
             author_line = f"{author_line}｜{comment_time}"
+        link_label, link_value = _resolve_comment_reply_post_link(record, active_platform_token)
+        item_lines = [
+            {"label": "短视频", "value": _preview_text(record.get("post_title"), limit=120) or "-"},
+            {"label": "发布时间", "value": published_text or "-"},
+            {"label": "评论用户", "value": author_line},
+            {"label": "原评论", "value": _preview_text(record.get("comment_preview"), limit=160) or "-"},
+            {"label": "自动回复", "value": _preview_text(record.get("reply_text"), limit=160) or "-"},
+            {"label": "回复时间", "value": str(record.get("replied_at") or "-").strip() or "-"},
+        ]
+        if link_label and link_value:
+            item_lines.insert(1, {"label": link_label, "value": link_value})
         sections.append(
             {
                 "title": f"回复 {idx}",
                 "emoji": "💬",
-                "items": [
-                    {"label": "短视频", "value": _preview_text(record.get("post_title"), limit=120) or "-"},
-                    {"label": "发布时间", "value": published_text or "-"},
-                    {"label": "评论用户", "value": author_line},
-                    {"label": "原评论", "value": _preview_text(record.get("comment_preview"), limit=160) or "-"},
-                    {"label": "自动回复", "value": _preview_text(record.get("reply_text"), limit=160) or "-"},
-                    {"label": "回复时间", "value": str(record.get("replied_at") or "-").strip() or "-"},
-                ],
+                "items": item_lines,
             }
         )
 
@@ -11426,6 +11679,24 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
     return card
 
 
+def _resolve_comment_reply_post_link(raw: Dict[str, Any], platform_token: str) -> tuple[str, str]:
+    if not isinstance(raw, dict):
+        return "", ""
+    for key in ("post_url", "post_public_url", "public_url", "share_url", "url"):
+        value = str(raw.get(key) or "").strip()
+        if value.startswith("http://") or value.startswith("https://"):
+            return "Post URL", value
+    title = str(raw.get("post_title") or "").strip()
+    if not title:
+        return "", ""
+    encoded_title = quote(title)
+    if platform_token == "douyin":
+        return "Search URL", f"https://www.douyin.com/search/{encoded_title}"
+    if platform_token == "kuaishou":
+        return "Search URL", f"https://www.kuaishou.com/search/video?searchKey={encoded_title}"
+    return "", ""
+
+
 def _build_comment_reply_record_texts(result: Dict[str, Any]) -> list[str]:
     payload = result if isinstance(result, dict) else {}
     platform_token = _normalize_platform_tokens([str(payload.get("platform") or "wechat")])
@@ -11437,6 +11708,7 @@ def _build_comment_reply_record_texts(result: Dict[str, Any]) -> list[str]:
             continue
         record_platform_token = _normalize_platform_tokens([str(raw.get("platform") or "")])
         record_platform_name = _menu_platform_label(record_platform_token[0]) if record_platform_token else platform_name
+        active_platform_token = record_platform_token[0] if record_platform_token else (platform_token[0] if platform_token else "wechat")
         author = str(raw.get("comment_author") or "-").strip() or "-"
         comment_time = str(raw.get("comment_time") or "-").strip() or "-"
         replied_at = str(raw.get("replied_at") or "-").strip() or "-"
@@ -11449,6 +11721,9 @@ def _build_comment_reply_record_texts(result: Dict[str, Any]) -> list[str]:
             f"Reply: {_preview_text(raw.get('reply_text'), limit=200) or '-'}",
             f"Replied At: {replied_at}",
         ]
+        link_label, link_value = _resolve_comment_reply_post_link(raw, active_platform_token)
+        if link_label and link_value:
+            lines.insert(2, f"{link_label}: {link_value}")
         messages.append("\n".join(lines))
     return messages
 
@@ -12117,8 +12392,17 @@ def _run_collect_publish_latest_job(
                 item=item,
             )
         current_status = str(item.get("status") or "").strip().lower() if isinstance(item, dict) else ""
+        has_active_pending_card = (
+            (not immediate_test_mode)
+            and isinstance(item, dict)
+            and current_status == "link_pending"
+            and int(item.get("message_id") or 0) > 0
+        )
         if current_status in IMMEDIATE_CANDIDATE_TERMINAL_SKIP_STATUSES:
             skipped_duplicates += 1
+            continue
+        if has_active_pending_card:
+            reused_candidates += 1
             continue
         if already_sent:
             if current_status == "down_confirmed":

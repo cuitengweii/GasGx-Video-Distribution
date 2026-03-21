@@ -436,6 +436,110 @@ def test_is_wechat_publish_confirmed_from_state_rejects_compose_progress_state()
     )
 
 
+def test_is_wechat_publish_submission_in_flight_accepts_progress_state() -> None:
+    assert engine._is_wechat_publish_submission_in_flight(
+        {
+            "failure_hint": False,
+            "success_hint": False,
+            "progress_hint": True,
+            "manage_hint": False,
+            "compose_hint": True,
+        }
+    )
+
+
+def test_wait_wechat_publish_feedback_probes_post_list_early(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = {"now": 0.0}
+    verify_calls: list[tuple[str, float, float]] = []
+
+    class FakePage:
+        def get(self, _url: str) -> None:
+            return None
+
+        def run_js(self, _script: str, *_args: Any) -> Any:
+            return {}
+
+    monkeypatch.setattr(engine.time, "time", lambda: float(clock["now"]))
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: clock.__setitem__("now", float(clock["now"]) + float(seconds)))
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_read_wechat_publish_state",
+        lambda *_args, **_kwargs: {
+            "failure_hint": False,
+            "success_hint": False,
+            "progress_hint": True,
+            "manage_hint": False,
+            "compose_hint": True,
+            "has_draft_action": True,
+            "has_publish_action": True,
+            "url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+
+    def fake_verify(page: Any, expected_title: str, timeout_seconds: float = 0.0) -> dict[str, Any]:
+        verify_calls.append((expected_title, float(timeout_seconds), float(clock["now"])))
+        assert page is not None
+        return {"title": expected_title}
+
+    monkeypatch.setattr(engine, "_verify_wechat_publish_in_post_list", fake_verify)
+
+    engine._wait_wechat_publish_feedback(None, FakePage(), expected_title="发布标题", timeout_seconds=60)
+
+    assert verify_calls
+    assert verify_calls[0][0] == "发布标题"
+    assert verify_calls[0][1] == 6.0
+    assert verify_calls[0][2] < 60.0
+
+
+def test_wait_wechat_publish_feedback_extends_deadline_for_inflight_submission(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = {"now": 0.0}
+    verify_calls: list[float] = []
+
+    class FakePage:
+        def get(self, _url: str) -> None:
+            return None
+
+        def run_js(self, _script: str, *_args: Any) -> Any:
+            return {}
+
+    monkeypatch.setattr(engine.time, "time", lambda: float(clock["now"]))
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: clock.__setitem__("now", float(clock["now"]) + float(seconds)))
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_read_wechat_publish_state",
+        lambda *_args, **_kwargs: {
+            "failure_hint": False,
+            "success_hint": False,
+            "progress_hint": True,
+            "manage_hint": False,
+            "compose_hint": True,
+            "has_draft_action": True,
+            "has_publish_action": True,
+            "url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+
+    def fake_verify(_page: Any, expected_title: str, timeout_seconds: float = 0.0) -> dict[str, Any] | None:
+        del expected_title, timeout_seconds
+        verify_calls.append(float(clock["now"]))
+        if clock["now"] >= 70.0:
+            return {"title": "发布标题"}
+        return None
+
+    monkeypatch.setattr(engine, "_verify_wechat_publish_in_post_list", fake_verify)
+
+    engine._wait_wechat_publish_feedback(None, FakePage(), expected_title="发布标题", timeout_seconds=60)
+
+    assert verify_calls
+    assert max(verify_calls) >= 70.0
+    assert clock["now"] >= 70.0
+    assert clock["now"] < 105.0
+
+
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
     cfg = engine._merge_comment_reply_config({})
 

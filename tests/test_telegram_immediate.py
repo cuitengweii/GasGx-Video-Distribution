@@ -451,6 +451,75 @@ def test_comment_reply_request_value_normalizes_platform_modes() -> None:
     assert worker_impl._normalize_home_action_value("comment_reply_run", "kuaishou:7") == "all:7"
 
 
+def test_build_comment_reply_record_texts_includes_post_url_when_available() -> None:
+    messages = worker_impl._build_comment_reply_record_texts(
+        {
+            "platform": "douyin",
+            "records": [
+                {
+                    "post_title": "douyin post",
+                    "post_url": "https://www.douyin.com/video/1234567890",
+                    "comment_author": "tester",
+                    "comment_time": "1m",
+                    "comment_preview": "Looks great",
+                    "reply_text": "Thanks",
+                    "replied_at": "2026-03-21 18:00:00",
+                }
+            ],
+        }
+    )
+
+    assert any("Post URL: https://www.douyin.com/video/1234567890" in text for text in messages)
+
+
+def test_build_comment_reply_record_texts_falls_back_to_public_search_url() -> None:
+    messages = worker_impl._build_comment_reply_record_texts(
+        {
+            "platform": "kuaishou",
+            "records": [
+                {
+                    "post_title": "Cybertruck test clip",
+                    "comment_author": "tester",
+                    "comment_time": "1m",
+                    "comment_preview": "Looks great",
+                    "reply_text": "Thanks",
+                    "replied_at": "2026-03-21 18:00:00",
+                }
+            ],
+        }
+    )
+
+    assert any("Search URL: https://www.kuaishou.com/search/video?searchKey=Cybertruck%20test%20clip" in text for text in messages)
+
+
+def test_build_comment_reply_result_card_includes_post_link_field() -> None:
+    card = worker_impl._build_comment_reply_result_card(
+        {
+            "ok": True,
+            "platform": "douyin",
+            "state_path": "douyin_state.json",
+            "records": [
+                {
+                    "post_title": "douyin post",
+                    "post_url": "https://www.douyin.com/video/1234567890",
+                    "post_published_text": "2026-03-21 18:00:00",
+                    "comment_author": "tester",
+                    "comment_time": "1m",
+                    "comment_preview": "Looks great",
+                    "reply_text": "Thanks",
+                    "replied_at": "2026-03-21 18:01:00",
+                }
+            ],
+            "posts_scanned": 1,
+            "posts_selected": 1,
+            "replies_sent": 1,
+        }
+    )
+
+    assert "Post URL" in str(card.get("text") or "")
+    assert "https://www.douyin.com/video/1234567890" in str(card.get("text") or "")
+
+
 def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
     assert worker_impl._normalize_shortcut_text("🔐 登录") == "平台登录"
     assert worker_impl._normalize_shortcut_text("📍 进度") == "进程查看"
@@ -584,13 +653,55 @@ def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_pa
     text = str(card["text"])
 
     assert "即采即发进程查看" in text
+    assert "当前发布中" in text
+    assert "执行状态" in text
+    assert "⚠️ 后台任务" in text
+    assert "⚠️ 即采即发队列" in text
     assert "Bot 心跳" in text
     assert "当前活跃任务" in text
     assert "即采即发队列" in text
     assert "home_action_collect_publish_latest_test.log" in text
     assert "clip.mp4" in text
+    assert "队列更新时间" in text
+    assert "✅ 队列更新时间" in text
+    assert "✅ 视频｜发布中" in text
+    assert "📊 当前积压数" in text
+    assert "✅ 发布中" in text
+    assert text.index("当前发布中") < text.index("Bot 心跳")
+    assert text.index("当前活跃任务") < text.index("Bot 心跳")
     assert "🔄 刷新" in _reply_markup_texts(card["reply_markup"])
     assert "🧹 队列清理" in _reply_markup_texts(card["reply_markup"])
+
+
+def test_build_process_status_card_groups_ready_signals_when_everything_is_idle(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    worker_state_path = workspace / worker_impl.DEFAULT_STATE_FILE
+    worker_state_path.parent.mkdir(parents=True, exist_ok=True)
+    worker_state_path.write_text(
+        json.dumps(
+            {
+                "status": "polling",
+                "worker_heartbeat_at": "2026-03-21 10:30:00",
+                "last_processed_update_id": 67139670,
+                "consecutive_poll_failures": 0,
+                "last_error": "",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    card = worker_impl._build_process_status_card(
+        default_profile=DEFAULT_PROFILE,
+        workspace=workspace,
+    )
+    text = str(card["text"])
+
+    assert "可继续操作" in text
+    assert "✅ 全局流水线锁" in text
+    assert "✅ 后台任务" in text
+    assert "✅ 即采即发队列" in text
+    assert "空闲" in text
 
 
 def test_build_process_status_card_hides_old_prefilter_history(tmp_path: Path) -> None:
@@ -623,9 +734,10 @@ def test_build_process_status_card_hides_old_prefilter_history(tmp_path: Path) -
 
     assert "recent.mp4" in text
     assert "old.mp4" not in text
-    assert "\u8fd1\u671f\u5019\u9009\u6570" in text
-    assert "\u6700\u8fd124\u5c0f\u65f6" in text
-    assert "\u66f4\u65e9\u7684 1 \u6761\u5386\u53f2\u8bb0\u5f55\u5df2\u4ece\u9996\u9875\u7edf\u8ba1\u4e2d\u9690\u85cf" in text
+    assert "当前发布中" in text
+    assert "当前积压数" in text
+    assert "活跃窗口" in text
+    assert "已隐藏 1 条非活跃历史记录" in text
 
 
 def test_build_runtime_status_section_hides_stale_waiting_prefilter_items(tmp_path: Path) -> None:
@@ -683,6 +795,15 @@ def test_cleanup_inactive_prefilter_items_removes_hidden_history_and_keeps_live_
                 created_at=recent_text,
                 updated_at=recent_text,
             ),
+            "pending-item": _video_item(
+                "pending-item",
+                status="link_pending",
+                action="sent",
+                source_url="https://x.com/pending/status/123",
+                created_at=recent_text,
+                updated_at=recent_text,
+                message_id=789,
+            ),
             "publish-item": _video_item(
                 "publish-item",
                 status="publish_running",
@@ -719,14 +840,59 @@ def test_cleanup_inactive_prefilter_items_removes_hidden_history_and_keeps_live_
     summary = worker_impl._cleanup_inactive_prefilter_items(workspace)
     items = _prefilter_items(workspace)
 
-    assert summary["removed_inactive"] == 4
-    assert summary["removed_ids"] == ["stale-item", "publish-item", "skipped-item"]
+    assert summary["removed_inactive"] == 5
+    assert summary["filter_synced"] == 1
+    assert summary["removed_ids"] == ["stale-item", "pending-item", "publish-item"]
     assert "stale-item" not in items
     assert "recent-item" in items
+    assert "pending-item" not in items
     assert "publish-item" not in items
     assert "skipped-item" not in items
     assert "retry-item" in items
     assert "overflow-item" not in items
+
+    ledger = json.loads((workspace / "candidate_ledger.json").read_text(encoding="utf-8"))
+    ledger_items = ledger.get("items", {})
+    assert ledger_items["x:123:123"]["state"] == "review_skipped"
+
+
+def test_cleanup_inactive_prefilter_items_removes_pending_cards_and_syncs_collect_filter(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    now_text = worker_impl._now_text()
+    recent_text = (worker_impl._parse_worker_time_text(now_text) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _save_prefilter_items(
+        workspace,
+        {
+            "pending-item": _video_item(
+                "pending-item",
+                status="link_pending",
+                action="sent",
+                source_url="https://x.com/pending/status/456",
+                created_at=recent_text,
+                updated_at=recent_text,
+                message_id=777,
+            ),
+            "recent-item": _video_item(
+                "recent-item",
+                status="download_running",
+                action="collect_waiting_lock",
+                created_at=recent_text,
+                updated_at=recent_text,
+            ),
+        },
+    )
+
+    summary = worker_impl._cleanup_inactive_prefilter_items(workspace)
+    items = _prefilter_items(workspace)
+
+    assert summary["removed_inactive"] == 1
+    assert summary["filter_synced"] == 1
+    assert "pending-item" not in items
+    assert "recent-item" in items
+
+    ledger = json.loads((workspace / "candidate_ledger.json").read_text(encoding="utf-8"))
+    ledger_items = ledger.get("items", {})
+    assert ledger_items["x:456:456"]["state"] == "review_skipped"
 
 
 def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Path, monkeypatch) -> None:
@@ -740,6 +906,25 @@ def test_handle_home_process_status_callback_renders_progress_card(tmp_path: Pat
 
     assert result["handled"] is True
     assert len(record.cards) == 1
+    assert int(record.cards[0].get("message_id") or 0) == 0
+    assert str(record.cards[0].get("inline_message_id") or "") == ""
+    card = record.cards[0]["card"]
+    assert "即采即发进程查看" in str(card["text"])
+
+
+def test_handle_home_process_status_refresh_callback_edits_existing_progress_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "process_status_refresh"),
+        message_id=321,
+    )
+    result = commands.handle_callback_update(update=update, **_worker_kwargs(workspace))
+
+    assert result["handled"] is True
+    assert len(record.cards) == 1
+    assert int(record.cards[0].get("message_id") or 0) == 321
     card = record.cards[0]["card"]
     assert "即采即发进程查看" in str(card["text"])
 
@@ -1378,7 +1563,7 @@ def test_run_collect_publish_latest_job_default_mode_reissues_existing_active_pr
     assert "重发当前状态卡" in feedbacks[-1]["sections"][1]["items"][0]
 
 
-def test_run_collect_publish_latest_job_default_mode_reissues_existing_link_pending_card(tmp_path: Path, monkeypatch) -> None:
+def test_run_collect_publish_latest_job_default_mode_keeps_existing_link_pending_card_without_resend(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
     runner = FakeRunner(core)
@@ -1427,15 +1612,77 @@ def test_run_collect_publish_latest_job_default_mode_reissues_existing_link_pend
     )
 
     assert exit_code == 0
-    assert len(runner.sent_candidates) == 1
+    assert runner.sent_candidates == []
     item = _prefilter_items(workspace)[existing_id]
     assert isinstance(item, dict)
     assert item["status"] == "link_pending"
-    assert item["action"] == "resent_existing_card"
-    assert item["message_id"] != 913
-    assert item["message_id"] > 0
+    assert item["action"] == "sent"
+    assert item["message_id"] == 913
     overview_items = feedbacks[-1]["sections"][0]["items"]
     assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
+
+
+def test_run_collect_publish_latest_job_expires_stale_link_pending_card_and_filters_rerun(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    candidate = {
+        "url": "https://x.com/repeat/status/111",
+        "published_at": "2026-03-15 10:04:00",
+        "display_time": "6m",
+        "tweet_text": "video stale pending",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(candidate["url"], candidate["published_at"], "video")
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                published_at=candidate["published_at"],
+                display_time=candidate["display_time"],
+                tweet_text=candidate["tweet_text"],
+                status="link_pending",
+                action="sent",
+                message_id=913,
+                created_at="2026-03-15 09:40:00",
+                updated_at="2026-03-15 09:49:00",
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [candidate]},
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert runner.sent_candidates == []
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "expired_pending"
+    assert item["action"] == "expired"
+    assert item["message_id"] == 913
+
+    ledger = json.loads((workspace / "candidate_ledger.json").read_text(encoding="utf-8"))
+    ledger_items = ledger.get("items", {})
+    assert ledger_items["x:111:111"]["state"] == "review_skipped"
+    assert ledger_items["x:111:111"]["status_url"] == candidate["url"]
 
 
 def test_run_collect_publish_latest_job_recovers_orphaned_publish_running_and_reissues_card(tmp_path: Path, monkeypatch) -> None:

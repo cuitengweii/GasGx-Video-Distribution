@@ -4896,6 +4896,12 @@ def run_platform_comment_reply(
     max_posts = max(1, int(max_posts_override or comment_cfg.get("max_posts_per_run") or 1))
     max_replies = 1 if latest_only else max(1, int(max_replies_override or comment_cfg.get("max_replies_per_run") or 1))
     reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
+    configured_markers = tuple(
+        str(item or "").strip().lower()
+        for item in (comment_cfg.get("self_author_markers") if isinstance(comment_cfg.get("self_author_markers"), list) else [])
+        if str(item or "").strip()
+    )
+    self_author_markers = configured_markers or COMMENT_REPLY_SELF_AUTHOR_MARKERS
     debug_enabled = bool(debug or comment_cfg.get("debug"))
 
     state = _load_state(workspace, platform)
