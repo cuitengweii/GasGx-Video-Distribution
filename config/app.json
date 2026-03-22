@@ -138,11 +138,11 @@
   },
   "spark_ai": {
     "enabled": true,
-    "url": "",
-    "app_id": "",
-    "api_key": "",
-    "api_secret": "",
-    "domain": "generalv3.5",
+    "url": "wss://spark-api.xf-yun.com/v1.1/chat",
+    "app_id": "d22d765a",
+    "api_key": "a9f75f66c849c8199fe2b481f6f3805d",
+    "api_secret": "OTY1ZWU3NzlmM2FkNzA0NTczNzg3ZjZi",
+    "domain": "lite",
     "temperature": 0.3,
     "max_tokens": 512
   },
@@ -150,13 +150,17 @@
     "enabled": true,
     "max_posts_per_run": 50,
     "max_replies_per_run": 20,
+    "reply_min_chars": 5,
     "reply_max_chars": 20,
     "min_reply_interval_seconds": 1,
     "max_reply_interval_seconds": 5,
     "min_like_to_reply_interval_seconds": 1,
     "max_like_to_reply_interval_seconds": 5,
     "auto_like": true,
-    "prompt_template": "\u8bf7\u4f60\u4f5c\u4e3a\u7279\u65af\u62c9 Cybertruck \u793e\u533a\u8fd0\u8425\uff0c\u6839\u636e\u7c89\u4e1d\u8bc4\u8bba\u751f\u6210\u4e00\u6761\u4e2d\u6587\u56de\u590d\u3002\\n\u89c6\u9891\u6807\u9898\uff1a{post_title}\\n\u53d1\u5e03\u65f6\u95f4\uff1a{post_published_text}\\n\u7c89\u4e1d\u8bc4\u8bba\uff1a{comment_content}\\n\u8981\u6c42\uff1a\u53cb\u597d\u3001\u79ef\u6781\u3001\u6709\u5171\u9e23\uff0c20\u5b57\u4ee5\u5185\uff1b\u4e0d\u8981\u6362\u884c\uff1b\u4e0d\u8981\u5f15\u5bfc\u79c1\u4fe1\uff1b\u4e0d\u8981\u5916\u94fe\uff1b\u53ea\u8fd4\u56de JSON\u3002",
+    "self_author_markers": [
+      "cybercar"
+    ],
+    "prompt_template": "\u8bf7\u4f60\u4f5c\u4e3a\u4e00\u4e2a\u559c\u6b22 Cybertruck \u7684\u7231\u597d\u8005\uff0c\u9488\u5bf9\u7528\u6237\u8bc4\u8bba\u751f\u6210\u4e00\u53e5\u4e2d\u6587\u56de\u590d\u3002\\n\u89c6\u9891\u6807\u9898\uff1a{post_title}\\n\u53d1\u5e03\u65f6\u95f4\uff1a{post_published_text}\\n\u7528\u6237\u6635\u79f0\uff1a{comment_author}\\n\u8bc4\u8bba\u65f6\u95f4\uff1a{comment_time}\\n\u7528\u6237\u8bc4\u8bba\uff1a{comment_content}\\n\u8981\u6c42\uff1a\u56de\u590d\u81ea\u7136\u3001\u771f\u8bda\u3001\u6709\u5171\u9e23\uff0c\u76ee\u6807\u5b57\u6570 {reply_target_chars} \u5b57\uff0c\u5141\u8bb8\u8303\u56f4 {reply_min_chars}-{reply_max_chars} \u5b57\uff0c\u4e0d\u8981\u6362\u884c\uff0c\u4e0d\u8981\u5916\u94fe\uff0c\u53ea\u8fd4\u56de JSON\u3002",
     "fallback_replies": [
       "\u8c22\u8c22\u559c\u6b22\uff0c\u4e00\u8d77\u89c1\u8bc1\u66f4\u591a\u7cbe\u5f69\u3002",
       "\u611f\u8c22\u5173\u6ce8\uff0c\u6b22\u8fce\u7ee7\u7eed\u4ea4\u6d41\u60f3\u6cd5\u3002",

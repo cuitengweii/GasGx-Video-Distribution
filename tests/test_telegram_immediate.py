@@ -462,6 +462,7 @@ def test_build_comment_reply_record_texts_includes_post_url_when_available() -> 
                     "comment_author": "tester",
                     "comment_time": "1m",
                     "comment_preview": "Looks great",
+                    "reply_provider": "spark",
                     "reply_text": "Thanks",
                     "replied_at": "2026-03-21 18:00:00",
                 }
@@ -470,6 +471,7 @@ def test_build_comment_reply_record_texts_includes_post_url_when_available() -> 
     )
 
     assert any("Post URL: https://www.douyin.com/video/1234567890" in text for text in messages)
+    assert any("Provider: spark" in text for text in messages)
 
 
 def test_build_comment_reply_record_texts_falls_back_to_public_search_url() -> None:
@@ -482,6 +484,7 @@ def test_build_comment_reply_record_texts_falls_back_to_public_search_url() -> N
                     "comment_author": "tester",
                     "comment_time": "1m",
                     "comment_preview": "Looks great",
+                    "reply_provider": "fallback",
                     "reply_text": "Thanks",
                     "replied_at": "2026-03-21 18:00:00",
                 }
@@ -490,6 +493,7 @@ def test_build_comment_reply_record_texts_falls_back_to_public_search_url() -> N
     )
 
     assert any("Search URL: https://www.kuaishou.com/search/video?searchKey=Cybertruck%20test%20clip" in text for text in messages)
+    assert any("Provider: fallback" in text for text in messages)
 
 
 def test_build_comment_reply_result_card_includes_post_link_field() -> None:
@@ -506,6 +510,7 @@ def test_build_comment_reply_result_card_includes_post_link_field() -> None:
                     "comment_author": "tester",
                     "comment_time": "1m",
                     "comment_preview": "Looks great",
+                    "reply_provider": "spark",
                     "reply_text": "Thanks",
                     "replied_at": "2026-03-21 18:01:00",
                 }
@@ -518,6 +523,8 @@ def test_build_comment_reply_result_card_includes_post_link_field() -> None:
 
     assert "Post URL" in str(card.get("text") or "")
     assert "https://www.douyin.com/video/1234567890" in str(card.get("text") or "")
+    assert "回复来源" in str(card.get("text") or "")
+    assert "spark" in str(card.get("text") or "")
 
 
 def test_normalize_shortcut_text_accepts_new_short_labels() -> None:

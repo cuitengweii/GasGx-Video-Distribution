@@ -336,3 +336,39 @@ def test_should_skip_comment_reply_guarded_skips_empty_comment_content() -> None
     should_skip, reason = runtime._should_skip_comment_reply_guarded(comment)
     assert should_skip is True
     assert reason == "empty_comment_content"
+
+
+def test_should_skip_comment_reply_guarded_skips_exact_self_author_name() -> None:
+    comment = {
+        "author": "CyberCar",
+        "content": "hello",
+    }
+
+    should_skip, reason = runtime._should_skip_comment_reply_guarded(comment)
+
+    assert should_skip is True
+    assert reason == "self_author_comment"
+
+
+def test_should_skip_comment_reply_guarded_skips_self_author_reply_prefix() -> None:
+    comment = {
+        "author": "CyberCar回复张某先生",
+        "content": "谢谢关注",
+    }
+
+    should_skip, reason = runtime._should_skip_comment_reply_guarded(comment)
+
+    assert should_skip is True
+    assert reason == "self_author_comment"
+
+
+def test_should_skip_comment_reply_guarded_keeps_other_user_replying_to_self() -> None:
+    comment = {
+        "author": "张某先生回复CyberCar",
+        "content": "这是真的吗",
+    }
+
+    should_skip, reason = runtime._should_skip_comment_reply_guarded(comment)
+
+    assert should_skip is False
+    assert reason == ""

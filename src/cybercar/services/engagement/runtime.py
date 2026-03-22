@@ -27,6 +27,18 @@ COMMENT_REPLY_MARKDOWN_FILES = {
 COMMENT_REPLY_RETENTION_DAYS = 30
 COMMENT_REPLY_SELF_AUTHOR_MARKERS = ("cybercar",)
 COMMENT_REPLY_SELF_AUTHOR_TOKENS = ("作者", "author", "浣滆")
+COMMENT_REPLY_SELF_AUTHOR_TOKENS = (
+    "\u4f5c\u8005",
+    "\u56de\u590d",
+    "author",
+    "reply",
+)
+COMMENT_REPLY_SELF_AUTHOR_PREFIXES = (
+    ":",
+    "\uff1a",
+    "-",
+    "\u2014",
+)
 
 
 @dataclass(frozen=True)
@@ -150,6 +162,71 @@ def _should_skip_comment_reply_guarded(
     if has_self_author_token and has_self_author_marker:
         return True, "self_author_comment"
     return False, ""
+
+
+def _normalize_self_author_marker(text: str) -> str:
+    return re.sub(r"\s+", "", str(text or "")).strip().lower()
+
+
+def _author_matches_self(author_text: str, self_author_markers: tuple[str, ...]) -> bool:
+    author_norm = _normalize_self_author_marker(author_text)
+    if not author_norm:
+        return False
+    for marker in self_author_markers:
+        marker_norm = _normalize_self_author_marker(marker)
+        if not marker_norm:
+            continue
+        if author_norm == marker_norm:
+            return True
+        if not author_norm.startswith(marker_norm):
+            continue
+        suffix = author_norm[len(marker_norm) :]
+        if not suffix:
+            return True
+        if any(suffix.startswith(token) for token in COMMENT_REPLY_SELF_AUTHOR_TOKENS):
+            return True
+        if any(suffix.startswith(prefix) for prefix in COMMENT_REPLY_SELF_AUTHOR_PREFIXES):
+            return True
+    return False
+
+
+def _resolve_self_author_markers(comment_cfg: dict[str, Any]) -> tuple[str, ...]:
+    configured_markers = tuple(
+        _normalize_self_author_marker(item)
+        for item in (comment_cfg.get("self_author_markers") if isinstance(comment_cfg.get("self_author_markers"), list) else [])
+        if _normalize_self_author_marker(item)
+    )
+    return configured_markers or COMMENT_REPLY_SELF_AUTHOR_MARKERS
+
+
+def _resolve_reply_length_bounds(comment_cfg: dict[str, Any]) -> tuple[int, int]:
+    reply_min_chars = max(5, int(comment_cfg.get("reply_min_chars") or 5))
+    reply_max_chars = max(reply_min_chars, int(comment_cfg.get("reply_max_chars") or 20))
+    return reply_min_chars, reply_max_chars
+
+
+def _should_skip_comment_reply(
+    comment: dict[str, Any],
+    *,
+    self_author_markers: tuple[str, ...] = COMMENT_REPLY_SELF_AUTHOR_MARKERS,
+) -> tuple[bool, str]:
+    author_text = _normalize_comment_text(comment.get("author") if isinstance(comment, dict) else "")
+    content_text = _normalize_comment_text(comment.get("content") if isinstance(comment, dict) else "")
+    if not content_text:
+        return True, "empty_comment_content"
+    if not author_text:
+        return False, ""
+    if _author_matches_self(author_text, self_author_markers):
+        return True, "self_author_comment"
+    return False, ""
+
+
+def _should_skip_comment_reply_guarded(
+    comment: dict[str, Any],
+    *,
+    self_author_markers: tuple[str, ...] = COMMENT_REPLY_SELF_AUTHOR_MARKERS,
+) -> tuple[bool, str]:
+    return _should_skip_comment_reply(comment, self_author_markers=self_author_markers)
 
 
 def _same_published_text(left: str, right: str) -> bool:
@@ -3737,6 +3814,7 @@ def reply_douyin_focused_editor(
     runtime_config: dict[str, Any],
     debug_port: int,
     reply_text: str,
+    reply_provider: str = "",
     ignore_state: bool = False,
     chrome_path: Optional[str] = None,
     chrome_user_data_dir: str = "",
@@ -3744,7 +3822,6 @@ def reply_douyin_focused_editor(
     debug: bool = False,
     notify_env_prefix: str = engine.DEFAULT_NOTIFY_ENV_PREFIX,
 ) -> dict[str, Any]:
-    del runtime_config
     del notify_env_prefix
 
     platform = "douyin"
@@ -3765,6 +3842,8 @@ def reply_douyin_focused_editor(
     if not clean_reply_text:
         empty_result["reason"] = "reply_text_empty"
         return empty_result
+    comment_cfg = engine._merge_comment_reply_config(runtime_config.get("comment_reply"))
+    self_author_markers = _resolve_self_author_markers(comment_cfg)
 
     state = _load_state(workspace, platform)
     items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
@@ -3892,7 +3971,7 @@ def reply_douyin_focused_editor(
         debug,
         f"[douyin-focused] Active comment index={comment_index} author={engine._single_line_preview(str(comment.get('author') or ''), 24)}",
     )
-    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment, self_author_markers=self_author_markers)
     if should_skip:
         empty_result["reason"] = skip_reason
         empty_result["posts_scanned"] = 1
@@ -4021,6 +4100,7 @@ def reply_douyin_focused_editor(
         post=post,
         comment=comment,
         reply_text=clean_reply_text,
+        reply_provider=reply_provider,
     )
     state["items"] = items
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -4071,13 +4151,8 @@ def reply_douyin_focused_generated(
     }
 
     comment_cfg = engine._merge_comment_reply_config(runtime_config.get("comment_reply"))
-    reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
-    configured_markers = tuple(
-        str(item or "").strip().lower()
-        for item in (comment_cfg.get("self_author_markers") if isinstance(comment_cfg.get("self_author_markers"), list) else [])
-        if str(item or "").strip()
-    )
-    self_author_markers = configured_markers or COMMENT_REPLY_SELF_AUTHOR_MARKERS
+    reply_min_chars, reply_max_chars = _resolve_reply_length_bounds(comment_cfg)
+    self_author_markers = _resolve_self_author_markers(comment_cfg)
     state = _load_state(workspace, platform)
     items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
     state["items"] = items
@@ -4191,7 +4266,7 @@ def reply_douyin_focused_generated(
         "comment_count": len(comments) if comments else 1,
         "has_comments": True,
     }
-    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment, self_author_markers=self_author_markers)
     if should_skip:
         base_result["reason"] = skip_reason
         base_result["posts_scanned"] = 1
@@ -4204,14 +4279,17 @@ def reply_douyin_focused_generated(
         base_result["posts_selected"] = 1
         return base_result
 
-    reply_text = engine.generate_comment_reply(
+    reply_result = engine.generate_comment_reply_result(
         post=post,
         comment=comment,
         spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
         prompt_template=str(comment_cfg.get("prompt_template") or engine.DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
         fallback_replies=list(comment_cfg.get("fallback_replies") or engine.DEFAULT_COMMENT_REPLY_FALLBACKS),
+        min_chars=reply_min_chars,
         max_chars=reply_max_chars,
     )
+    reply_text = str(reply_result.get("reply_text") or "").strip()
+    reply_provider = str(reply_result.get("reply_provider") or "").strip()
     if not reply_text:
         base_result["reason"] = "reply_text_empty"
         base_result["posts_scanned"] = 1
@@ -4223,6 +4301,7 @@ def reply_douyin_focused_generated(
         runtime_config=runtime_config,
         debug_port=debug_port,
         reply_text=reply_text,
+        reply_provider=reply_provider,
         ignore_state=ignore_state,
         chrome_path=chrome_path,
         chrome_user_data_dir=chrome_user_data_dir,
@@ -4262,7 +4341,8 @@ def reply_kuaishou_focused_generated(
     }
 
     comment_cfg = engine._merge_comment_reply_config(runtime_config.get("comment_reply"))
-    reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
+    reply_min_chars, reply_max_chars = _resolve_reply_length_bounds(comment_cfg)
+    self_author_markers = _resolve_self_author_markers(comment_cfg)
     state = _load_state(workspace, platform)
     items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
     state["items"] = items
@@ -4386,7 +4466,7 @@ def reply_kuaishou_focused_generated(
         "comment_count": len(comments) if comments else 1,
         "has_comments": True,
     }
-    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment, self_author_markers=self_author_markers)
     if should_skip:
         base_result["reason"] = skip_reason
         base_result["posts_scanned"] = 1
@@ -4399,14 +4479,17 @@ def reply_kuaishou_focused_generated(
         base_result["posts_selected"] = 1
         return base_result
 
-    reply_text = engine.generate_comment_reply(
+    reply_result = engine.generate_comment_reply_result(
         post=post,
         comment=comment,
         spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
         prompt_template=str(comment_cfg.get("prompt_template") or engine.DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
         fallback_replies=list(comment_cfg.get("fallback_replies") or engine.DEFAULT_COMMENT_REPLY_FALLBACKS),
+        min_chars=reply_min_chars,
         max_chars=reply_max_chars,
     )
+    reply_text = str(reply_result.get("reply_text") or "").strip()
+    reply_provider = str(reply_result.get("reply_provider") or "").strip()
     if not reply_text:
         base_result["reason"] = "reply_text_empty"
         base_result["posts_scanned"] = 1
@@ -4418,6 +4501,7 @@ def reply_kuaishou_focused_generated(
         runtime_config=runtime_config,
         debug_port=debug_port,
         reply_text=reply_text,
+        reply_provider=reply_provider,
         ignore_state=ignore_state,
         chrome_path=chrome_path,
         chrome_user_data_dir=chrome_user_data_dir,
@@ -4433,6 +4517,7 @@ def reply_kuaishou_focused_editor(
     runtime_config: dict[str, Any],
     debug_port: int,
     reply_text: str,
+    reply_provider: str = "",
     ignore_state: bool = False,
     chrome_path: Optional[str] = None,
     chrome_user_data_dir: str = "",
@@ -4440,7 +4525,6 @@ def reply_kuaishou_focused_editor(
     debug: bool = False,
     notify_env_prefix: str = engine.DEFAULT_NOTIFY_ENV_PREFIX,
 ) -> dict[str, Any]:
-    del runtime_config
     del notify_env_prefix
 
     platform = "kuaishou"
@@ -4461,6 +4545,8 @@ def reply_kuaishou_focused_editor(
     if not clean_reply_text:
         empty_result["reason"] = "reply_text_empty"
         return empty_result
+    comment_cfg = engine._merge_comment_reply_config(runtime_config.get("comment_reply"))
+    self_author_markers = _resolve_self_author_markers(comment_cfg)
 
     state = _load_state(workspace, platform)
     items = _prune_state_items(state.get("items") if isinstance(state, dict) else {})
@@ -4586,7 +4672,7 @@ def reply_kuaishou_focused_editor(
         "comment_count": len(comments) if comments else 1,
         "has_comments": True,
     }
-    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment)
+    should_skip, skip_reason = _should_skip_comment_reply_guarded(comment, self_author_markers=self_author_markers)
     if should_skip:
         empty_result["reason"] = skip_reason
         empty_result["posts_scanned"] = 1
@@ -4767,6 +4853,7 @@ def reply_kuaishou_focused_editor(
         post=post,
         comment=comment,
         reply_text=clean_reply_text,
+        reply_provider=reply_provider,
     )
     state["items"] = items
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -4895,13 +4982,8 @@ def run_platform_comment_reply(
 
     max_posts = max(1, int(max_posts_override or comment_cfg.get("max_posts_per_run") or 1))
     max_replies = 1 if latest_only else max(1, int(max_replies_override or comment_cfg.get("max_replies_per_run") or 1))
-    reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
-    configured_markers = tuple(
-        str(item or "").strip().lower()
-        for item in (comment_cfg.get("self_author_markers") if isinstance(comment_cfg.get("self_author_markers"), list) else [])
-        if str(item or "").strip()
-    )
-    self_author_markers = configured_markers or COMMENT_REPLY_SELF_AUTHOR_MARKERS
+    reply_min_chars, reply_max_chars = _resolve_reply_length_bounds(comment_cfg)
+    self_author_markers = _resolve_self_author_markers(comment_cfg)
     debug_enabled = bool(debug or comment_cfg.get("debug"))
 
     state = _load_state(workspace, platform)
@@ -4985,14 +5067,17 @@ def run_platform_comment_reply(
                 seen_comment_fingerprints.add(fingerprint)
                 if fingerprint in items or bool(comment.get("has_reply")):
                     continue
-                reply_text = engine.generate_comment_reply(
+                reply_result = engine.generate_comment_reply_result(
                     post=post,
                     comment=comment,
                     spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
                     prompt_template=str(comment_cfg.get("prompt_template") or engine.DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
                     fallback_replies=list(comment_cfg.get("fallback_replies") or engine.DEFAULT_COMMENT_REPLY_FALLBACKS),
+                    min_chars=reply_min_chars,
                     max_chars=reply_max_chars,
                 )
+                reply_text = str(reply_result.get("reply_text") or "").strip()
+                reply_provider = str(reply_result.get("reply_provider") or "").strip()
                 if not reply_text:
                     continue
                 last_reply_at = engine._apply_comment_reply_wait(
@@ -5015,6 +5100,7 @@ def run_platform_comment_reply(
                     post=post,
                     comment=comment,
                     reply_text=reply_text,
+                    reply_provider=reply_provider,
                 )
                 reply_records.append(record)
                 engine._append_comment_reply_markdown(_markdown_path(workspace, platform), platform, record)

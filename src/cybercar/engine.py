@@ -568,6 +568,34 @@ DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE = (
     "粉丝评论：{comment_content}\n"
     "要求：友好、积极、有共鸣；20字以内；不要换行；不要引导私信；不要外链；只返回 JSON。"
 )
+WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
+    "\u4f60\u662f\u4e00\u4f4d\u559c\u6b22 Cybertruck \u7684\u7231\u597d\u8005\uff0c"
+    "\u7528\u4e2d\u6587\u7ed9\u51fa\u81ea\u7136\u3001\u771f\u8bda\u3001\u6709\u5171\u9e23\u7684\u8bc4\u8bba\u56de\u590d\u3002"
+    "\u4f60\u5fc5\u987b\u53ea\u8f93\u51fa JSON \u5bf9\u8c61\uff0c\u683c\u5f0f\u4e3a {\"reply\":\"...\"}\u3002"
+    "reply \u5fc5\u987b\u662f\u5355\u884c\u4e2d\u6587\uff0c\u4e0d\u8981\u5f15\u5bfc\u79c1\u4fe1\uff0c\u4e0d\u8981\u5916\u94fe\uff0c"
+    "\u4e0d\u8981\u5192\u5145\u5b98\u65b9\uff0c\u4e5f\u4e0d\u8981\u548c\u81ea\u5df1\u5bf9\u8bdd\u3002"
+)
+DEFAULT_COMMENT_REPLY_FALLBACKS = [
+    "\u8fd9\u6761\u5f88\u6709\u611f\u89c9\uff0c\u8c22\u8c22\u4f60\u3002",
+    "\u6211\u4e5f\u5f88\u5403\u8fd9\u79cd\u6c14\u8d28\u3002",
+    "\u8c22\u8c22\u4f60\uff0c\u771f\u7684\u5f88\u6709\u5171\u9e23\u3002",
+    "\u770b\u5230\u8fd9\u6761\u6211\u4e5f\u5f88\u5174\u594b\u3002",
+]
+DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE = (
+    "\u8bf7\u4f60\u4f5c\u4e3a\u4e00\u4e2a\u559c\u6b22 Cybertruck \u7684\u7231\u597d\u8005\uff0c"
+    "\u9488\u5bf9\u7528\u6237\u8bc4\u8bba\u751f\u6210\u4e00\u53e5\u4e2d\u6587\u56de\u590d\u3002\n"
+    "\u89c6\u9891\u6807\u9898\uff1a{post_title}\n"
+    "\u53d1\u5e03\u65f6\u95f4\uff1a{post_published_text}\n"
+    "\u7528\u6237\u6635\u79f0\uff1a{comment_author}\n"
+    "\u8bc4\u8bba\u65f6\u95f4\uff1a{comment_time}\n"
+    "\u7528\u6237\u8bc4\u8bba\uff1a{comment_content}\n"
+    "\u8981\u6c42\uff1a"
+    "\u56de\u590d\u8981\u50cf\u771f\u4eba\u4ea4\u6d41\uff0c"
+    "\u4ee5\u559c\u6b22 Cybertruck \u7684\u89c6\u89d2\u56de\u5e94\uff0c"
+    "\u76ee\u6807\u5b57\u6570 {reply_target_chars} \u5b57\uff0c"
+    "\u5141\u8bb8\u8303\u56f4 {reply_min_chars}-{reply_max_chars} \u5b57\uff0c"
+    "\u4e0d\u8981\u6362\u884c\uff0c\u4e0d\u8981\u5916\u94fe\uff0c\u53ea\u8fd4\u56de JSON\u3002"
+)
 PLATFORM_NOTIFY_NAME = {
     "wechat": "视频号",
     "douyin": "抖音",
@@ -3831,12 +3859,14 @@ def _default_runtime_config() -> dict[str, Any]:
             "enabled": True,
             "max_posts_per_run": 50,
             "max_replies_per_run": 20,
+            "reply_min_chars": 5,
             "reply_max_chars": 20,
             "min_reply_interval_seconds": 1,
             "max_reply_interval_seconds": 5,
             "min_like_to_reply_interval_seconds": 1,
             "max_like_to_reply_interval_seconds": 5,
             "auto_like": True,
+            "self_author_markers": ["cybercar"],
             "prompt_template": DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE,
             "fallback_replies": DEFAULT_COMMENT_REPLY_FALLBACKS.copy(),
             "launch_background": True,
@@ -4051,9 +4081,14 @@ def _merge_comment_reply_config(raw: Any) -> dict[str, Any]:
     except Exception:
         cfg["max_replies_per_run"] = int(defaults["max_replies_per_run"])
     try:
-        cfg["reply_max_chars"] = max(6, int(raw.get("reply_max_chars", defaults["reply_max_chars"])))
+        cfg["reply_min_chars"] = max(5, int(raw.get("reply_min_chars", defaults["reply_min_chars"])))
+    except Exception:
+        cfg["reply_min_chars"] = int(defaults["reply_min_chars"])
+    try:
+        cfg["reply_max_chars"] = max(5, int(raw.get("reply_max_chars", defaults["reply_max_chars"])))
     except Exception:
         cfg["reply_max_chars"] = int(defaults["reply_max_chars"])
+    cfg["reply_max_chars"] = max(int(cfg["reply_min_chars"]), int(cfg["reply_max_chars"]))
     try:
         cfg["min_reply_interval_seconds"] = max(
             0,
@@ -4106,6 +4141,15 @@ def _merge_comment_reply_config(raw: Any) -> dict[str, Any]:
         cfg["fallback_replies"] = clean or list(defaults["fallback_replies"])
     else:
         cfg["fallback_replies"] = list(defaults["fallback_replies"])
+    self_author_markers = raw.get("self_author_markers")
+    if isinstance(self_author_markers, list):
+        cfg["self_author_markers"] = [
+            str(item or "").strip().lower()
+            for item in self_author_markers
+            if str(item or "").strip()
+        ] or list(defaults["self_author_markers"])
+    else:
+        cfg["self_author_markers"] = list(defaults["self_author_markers"])
     return cfg
 
 
@@ -4395,6 +4439,7 @@ def _remember_comment_reply(
     post: dict[str, Any],
     comment: dict[str, Any],
     reply_text: str,
+    reply_provider: str = "",
 ) -> dict[str, Any]:
     replied_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     record = {
@@ -4406,6 +4451,7 @@ def _remember_comment_reply(
         "comment_time": str(comment.get("time_text") or "").strip(),
         "comment_preview": _single_line_preview(str(comment.get("content") or "").strip(), limit=120),
         "reply_text": str(reply_text or "").strip(),
+        "reply_provider": str(reply_provider or "").strip(),
         "replied_at": replied_at,
     }
     items[str(fingerprint or "").strip()] = record
@@ -6346,6 +6392,92 @@ def generate_comment_reply(
     return "" if _looks_like_broken_comment_reply(fallback_clean) else fallback_clean
 
 
+def _comment_reply_length_ok(text: str, min_chars: int, max_chars: int) -> bool:
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    return int(min_chars) <= len(clean) <= int(max_chars)
+
+
+def generate_comment_reply_result(
+    *,
+    post: dict[str, Any],
+    comment: dict[str, Any],
+    spark_ai: Optional[dict[str, Any]],
+    prompt_template: str,
+    fallback_replies: list[str],
+    min_chars: int,
+    max_chars: int,
+) -> dict[str, str]:
+    reply_min_chars = max(5, int(min_chars or 5))
+    reply_max_chars = max(reply_min_chars, int(max_chars or 20))
+    reply_target_chars = random.randint(reply_min_chars, reply_max_chars)
+    fallback_pool = [str(item or "").strip() for item in fallback_replies if str(item or "").strip()]
+    if not fallback_pool:
+        fallback_pool = DEFAULT_COMMENT_REPLY_FALLBACKS.copy()
+    ranged_fallbacks = [
+        item
+        for item in fallback_pool
+        if _comment_reply_length_ok(_sanitize_comment_reply_text(item, reply_max_chars), reply_min_chars, reply_max_chars)
+    ]
+    fallback_candidates = ranged_fallbacks or fallback_pool
+    fallback_text = random.choice(fallback_candidates)
+
+    client = SharedSparkAIClient(spark_ai, timeout_seconds=SPARK_CHAT_TIMEOUT_SECONDS)
+    if client.is_ready():
+        prompt = str(prompt_template or "").format(
+            post_title=str(post.get("title") or "").strip(),
+            post_published_text=str(post.get("published_text") or "").strip(),
+            comment_content=str(comment.get("content") or "").strip(),
+            comment_author=str(comment.get("author") or "").strip(),
+            comment_time=str(comment.get("time_text") or "").strip(),
+            reply_min_chars=reply_min_chars,
+            reply_max_chars=reply_max_chars,
+            reply_target_chars=reply_target_chars,
+        )
+        raw = client.chat(prompt, system_prompt=WECHAT_COMMENT_REPLY_SYSTEM_PROMPT)
+        payload = shared_extract_json_object(raw or "")
+        candidate = ""
+        if isinstance(payload, dict):
+            candidate = str(payload.get("reply") or "").strip()
+        if not candidate:
+            candidate = str(raw or "").strip()
+        clean = _sanitize_comment_reply_text(candidate, max_chars=reply_max_chars)
+        if clean and _comment_reply_length_ok(clean, reply_min_chars, reply_max_chars) and not _looks_like_broken_comment_reply(clean):
+            return {"reply_text": clean, "reply_provider": "spark"}
+
+    fallback_clean = _sanitize_comment_reply_text(fallback_text, max_chars=reply_max_chars)
+    if _looks_like_broken_comment_reply(fallback_clean):
+        return {"reply_text": "", "reply_provider": "fallback"}
+    if _comment_reply_length_ok(fallback_clean, reply_min_chars, reply_max_chars):
+        return {"reply_text": fallback_clean, "reply_provider": "fallback"}
+    return {"reply_text": "", "reply_provider": "fallback"}
+
+
+def generate_comment_reply(
+    *,
+    post: dict[str, Any],
+    comment: dict[str, Any],
+    spark_ai: Optional[dict[str, Any]],
+    prompt_template: str,
+    fallback_replies: list[str],
+    min_chars: int,
+    max_chars: int,
+) -> str:
+    return str(
+        generate_comment_reply_result(
+            post=post,
+            comment=comment,
+            spark_ai=spark_ai,
+            prompt_template=prompt_template,
+            fallback_replies=fallback_replies,
+            min_chars=min_chars,
+            max_chars=max_chars,
+        ).get("reply_text")
+        or ""
+    )
+
+
 def run_wechat_comment_reply(
     *,
     workspace: Workspace,
@@ -6380,7 +6512,8 @@ def run_wechat_comment_reply(
 
     max_posts = max(1, int(max_posts_override or comment_cfg.get("max_posts_per_run") or 1))
     max_replies = 1 if latest_only else max(1, int(max_replies_override or comment_cfg.get("max_replies_per_run") or 1))
-    reply_max_chars = max(6, int(comment_cfg.get("reply_max_chars") or 20))
+    reply_min_chars = max(5, int(comment_cfg.get("reply_min_chars") or 5))
+    reply_max_chars = max(reply_min_chars, int(comment_cfg.get("reply_max_chars") or 20))
     debug_enabled = bool(debug or comment_cfg.get("debug"))
 
     state = _load_comment_reply_state(workspace)
@@ -6482,14 +6615,17 @@ def run_wechat_comment_reply(
                                     f"Skip comment: has-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
                                 )
                                 continue
-                            reply_text = generate_comment_reply(
+                            reply_result = generate_comment_reply_result(
                                 post=post,
                                 comment=comment,
                                 spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
                                 prompt_template=str(comment_cfg.get("prompt_template") or DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
                                 fallback_replies=list(comment_cfg.get("fallback_replies") or DEFAULT_COMMENT_REPLY_FALLBACKS),
+                                min_chars=reply_min_chars,
                                 max_chars=reply_max_chars,
                             )
+                            reply_text = str(reply_result.get("reply_text") or "").strip()
+                            reply_provider = str(reply_result.get("reply_provider") or "").strip()
                             if not reply_text:
                                 _comment_reply_log(
                                     debug_enabled,
@@ -6559,6 +6695,7 @@ def run_wechat_comment_reply(
                                 post=post,
                                 comment=comment,
                                 reply_text=reply_text,
+                                reply_provider=reply_provider,
                             )
                             reply_records.append(record)
                             _append_comment_reply_markdown(_comment_reply_markdown_path(workspace), "wechat", record)
@@ -6696,14 +6833,17 @@ def run_wechat_comment_reply(
                         )
                         continue
 
-                    reply_text = generate_comment_reply(
+                    reply_result = generate_comment_reply_result(
                         post=post,
                         comment=comment,
                         spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
                         prompt_template=str(comment_cfg.get("prompt_template") or DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE),
                         fallback_replies=list(comment_cfg.get("fallback_replies") or DEFAULT_COMMENT_REPLY_FALLBACKS),
+                        min_chars=reply_min_chars,
                         max_chars=reply_max_chars,
                     )
+                    reply_text = str(reply_result.get("reply_text") or "").strip()
+                    reply_provider = str(reply_result.get("reply_provider") or "").strip()
                     if not reply_text:
                         _comment_reply_log(
                             debug_enabled,
@@ -6777,6 +6917,7 @@ def run_wechat_comment_reply(
                         post=post,
                         comment=comment,
                         reply_text=reply_text,
+                        reply_provider=reply_provider,
                     )
                     reply_records.append(record)
                     _append_comment_reply_markdown(_comment_reply_markdown_path(workspace), "wechat", record)

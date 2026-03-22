@@ -11653,6 +11653,7 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
             {"label": "发布时间", "value": published_text or "-"},
             {"label": "评论用户", "value": author_line},
             {"label": "原评论", "value": _preview_text(record.get("comment_preview"), limit=160) or "-"},
+            {"label": "回复来源", "value": str(record.get("reply_provider") or "-").strip() or "-"},
             {"label": "自动回复", "value": _preview_text(record.get("reply_text"), limit=160) or "-"},
             {"label": "回复时间", "value": str(record.get("replied_at") or "-").strip() or "-"},
         ]
@@ -11718,6 +11719,7 @@ def _build_comment_reply_record_texts(result: Dict[str, Any]) -> list[str]:
             f"Author: {author}",
             f"Comment Time: {comment_time}",
             f"Comment: {_preview_text(raw.get('comment_preview'), limit=200) or '-'}",
+            f"Provider: {str(raw.get('reply_provider') or '-').strip() or '-'}",
             f"Reply: {_preview_text(raw.get('reply_text'), limit=200) or '-'}",
             f"Replied At: {replied_at}",
         ]

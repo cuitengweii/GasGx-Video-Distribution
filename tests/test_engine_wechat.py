@@ -593,10 +593,13 @@ def test_find_upload_file_input_uses_fast_probe_and_generic_fallback(monkeypatch
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
     cfg = engine._merge_comment_reply_config({})
 
+    assert cfg["reply_min_chars"] == 5
+    assert cfg["reply_max_chars"] == 20
     assert cfg["min_reply_interval_seconds"] == 1
     assert cfg["max_reply_interval_seconds"] == 5
     assert cfg["min_like_to_reply_interval_seconds"] == 1
     assert cfg["max_like_to_reply_interval_seconds"] == 5
+    assert cfg["self_author_markers"] == ["cybercar"]
 
 
 def test_apply_comment_reply_like_to_reply_wait_uses_random_interval(monkeypatch: pytest.MonkeyPatch) -> None:
