@@ -13502,6 +13502,8 @@ def _is_wechat_publish_confirmed_from_state(state: dict[str, Any]) -> bool:
         return True
     if bool(state.get("progress_hint")):
         return False
+    if manage_url and (not bool(state.get("compose_hint"))):
+        return True
     if (
         manage_url
         and (not bool(state.get("has_publish_action")))

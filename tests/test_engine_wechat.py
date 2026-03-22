@@ -437,6 +437,21 @@ def test_is_wechat_publish_confirmed_from_state_rejects_compose_progress_state()
     )
 
 
+def test_is_wechat_publish_confirmed_from_state_accepts_manage_list_with_publish_entry() -> None:
+    assert engine._is_wechat_publish_confirmed_from_state(
+        {
+            "failure_hint": False,
+            "success_hint": False,
+            "progress_hint": False,
+            "manage_hint": False,
+            "compose_hint": False,
+            "has_draft_action": False,
+            "has_publish_action": True,
+            "url": "https://channels.weixin.qq.com/micro/content/post/list",
+        }
+    )
+
+
 def test_is_wechat_publish_submission_in_flight_accepts_progress_state() -> None:
     assert engine._is_wechat_publish_submission_in_flight(
         {
