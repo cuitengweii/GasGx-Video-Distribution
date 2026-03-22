@@ -3015,6 +3015,27 @@ def _disconnect_chrome_page_quietly(page: Any) -> None:
             continue
 
 
+def _get_page_frames_with_timeout(page: Any, timeout_seconds: float = 2.5) -> list[Any]:
+    holder: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            holder["result"] = list(page.get_frames(timeout=max(0.2, float(timeout_seconds))))
+        except Exception as exc:
+            holder["error"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(max(0.2, float(timeout_seconds)))
+    if thread.is_alive():
+        _log(f"[Uploader] get_frames timed out after {float(timeout_seconds):.1f}s; continue without waiting.")
+        return []
+    if "error" in holder:
+        return []
+    result = holder.get("result")
+    return result if isinstance(result, list) else []
+
+
 def _wechat_session_tab_score(url: str, open_url: str = "") -> int:
     lowered = str(url or "").strip().lower()
     if not lowered or "channels.weixin.qq.com/" not in lowered:
@@ -12277,10 +12298,7 @@ def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) 
     last_frames: list[Any] = []
 
     while time.time() < end_at:
-        try:
-            frames = list(page.get_frames(timeout=2))
-        except Exception:
-            frames = []
+        frames = _get_page_frames_with_timeout(page, timeout_seconds=2.5)
         last_frames = frames
 
         candidates: list[tuple[int, Any, str]] = []
@@ -14624,18 +14642,25 @@ def _prepare_upload_tab(page: ChromiumPage, auto_accept_alert: bool = True) -> C
 
 def _find_upload_file_input(primary_ctx: Any, fallback_ctx: Any) -> Any:
     selectors = (
+        "xpath://input[@type='file' and contains(translate(@accept,'VIDEO','video'),'video')]",
         "xpath://input[@type='file']",
         "css:input[type='file']",
     )
-    for owner in (primary_ctx, fallback_ctx):
+    fallback_candidate = None
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
         for selector in selectors:
             try:
-                ele = owner.ele(selector, timeout=8)
+                ele = owner.ele(selector, timeout=1.2)
                 if ele:
-                    return ele
+                    if _is_visible_element(ele):
+                        return ele
+                    if fallback_candidate is None:
+                        fallback_candidate = ele
             except Exception:
                 continue
-    return None
+    if fallback_candidate is not None:
+        return fallback_candidate
+    return _find_upload_file_input_generic(primary_ctx, fallback_ctx, prefer_video=True)
 
 
 def _fill_draft_once(
@@ -16174,10 +16199,7 @@ def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
         owner = queue.pop(0)
         if not owner:
             continue
-        try:
-            frames = list(owner.get_frames(timeout=1.5))
-        except Exception:
-            frames = []
+        frames = _get_page_frames_with_timeout(owner, timeout_seconds=1.5)
         for frame in frames:
             _add(frame)
     return contexts

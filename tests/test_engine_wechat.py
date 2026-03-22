@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
@@ -538,6 +539,40 @@ def test_wait_wechat_publish_feedback_extends_deadline_for_inflight_submission(m
     assert max(verify_calls) >= 70.0
     assert clock["now"] >= 70.0
     assert clock["now"] < 105.0
+
+
+def test_get_page_frames_with_timeout_returns_empty_when_browser_hangs() -> None:
+    class FakePage:
+        def get_frames(self, timeout: float = 0.0) -> list[Any]:
+            del timeout
+            time.sleep(0.5)
+            return [object()]
+
+    started_at = time.perf_counter()
+    frames = engine._get_page_frames_with_timeout(FakePage(), timeout_seconds=0.05)
+    elapsed = time.perf_counter() - started_at
+
+    assert frames == []
+    assert elapsed < 0.35
+
+
+def test_find_upload_file_input_uses_fast_probe_and_generic_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    probe_timeouts: list[float] = []
+    fallback_result = object()
+
+    class FakeOwner:
+        def ele(self, _selector: str, timeout: float = 0.0) -> Any:
+            probe_timeouts.append(float(timeout))
+            return None
+
+    monkeypatch.setattr(engine, "_collect_upload_contexts", lambda *_args, **_kwargs: [FakeOwner()])
+    monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: fallback_result)
+
+    result = engine._find_upload_file_input(object(), object())
+
+    assert result is fallback_result
+    assert probe_timeouts
+    assert max(probe_timeouts) <= 1.2
 
 
 def test_merge_comment_reply_config_uses_short_random_waits() -> None:
