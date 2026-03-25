@@ -290,6 +290,76 @@ def test_build_login_qr_rect_script_non_wechat_keeps_bare_canvas_selector() -> N
     assert "img[alt*='qrcode' i]" in script
 
 
+def test_prepare_platform_login_qr_surface_wechat_restores_window_and_scrolls(monkeypatch: pytest.MonkeyPatch) -> None:
+    pauses: list[str] = []
+
+    class FakeCtx:
+        def __init__(self) -> None:
+            self.scripts: list[str] = []
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            self.scripts.append(script)
+            return {"prepared": True, "reason": "wechat-scroll-qr-into-view"}
+
+    class FakePage(FakeCtx):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cdp_calls: list[tuple[str, dict[str, Any]]] = []
+            self.frame = FakeCtx()
+
+        def run_cdp(self, method: str, **kwargs: Any) -> dict[str, Any]:
+            self.cdp_calls.append((method, dict(kwargs)))
+            if method == "Browser.getWindowForTarget":
+                return {"windowId": 7}
+            return {}
+
+        def get_frames(self, timeout: float | None = None) -> list[FakeCtx]:
+            assert timeout == 1.2
+            return [self.frame]
+
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda reason: pauses.append(str(reason)))
+
+    page = FakePage()
+    engine._prepare_platform_login_qr_surface(page, "wechat")
+
+    assert page.cdp_calls[0] == ("Browser.getWindowForTarget", {})
+    assert page.cdp_calls[1][0] == "Browser.setWindowBounds"
+    assert page.cdp_calls[1][1]["bounds"]["windowState"] == "normal"
+    assert page.cdp_calls[2][0] == "Browser.setWindowBounds"
+    assert page.cdp_calls[2][1]["bounds"]["width"] == 1280
+    assert page.scripts
+    assert pauses == ["wechat login qr surface settle"]
+
+
+def test_capture_login_qr_screenshot_prepares_wechat_surface_before_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_calls: list[str] = []
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.screenshot_calls: list[dict[str, Any]] = []
+
+        def get_frames(self, timeout: float | None = None) -> list[Any]:
+            assert timeout == 1.5
+            return []
+
+        def run_js(self, _script: str, *_args: Any) -> Any:
+            return {"left": 12, "top": 24, "right": 220, "bottom": 232}
+
+        def get_screenshot(self, **kwargs: Any) -> bytes:
+            self.screenshot_calls.append(dict(kwargs))
+            return b"png-bytes"
+
+    monkeypatch.setattr(engine, "_prepare_platform_login_qr_surface", lambda _page, platform: prepare_calls.append(str(platform)))
+
+    page = FakePage()
+    shot = engine._capture_login_qr_screenshot(page, "wechat")
+
+    assert shot == b"png-bytes"
+    assert prepare_calls == ["wechat"]
+    assert page.screenshot_calls[0]["left_top"] == (12, 24)
+    assert page.screenshot_calls[0]["right_bottom"] == (220, 232)
+
+
 def test_send_telegram_photo_retries_after_connection_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 

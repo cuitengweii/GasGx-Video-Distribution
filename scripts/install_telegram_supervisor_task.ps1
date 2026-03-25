@@ -18,13 +18,13 @@ if ($EnsureEveryMinutes -lt 1) {
 }
 
 $root = if ($RepoRoot) { [System.IO.Path]::GetFullPath($RepoRoot) } else { Split-Path -Parent $PSScriptRoot }
-$scriptPath = [System.IO.Path]::GetFullPath((Join-Path $root "scripts\telegram_supervisor.ps1"))
-$onceScriptPath = [System.IO.Path]::GetFullPath((Join-Path $root "scripts\telegram_supervisor_once.ps1"))
-if (-not (Test-Path $scriptPath)) {
-    throw "telegram_supervisor.ps1 not found: $scriptPath"
+$supervisorLauncherPath = [System.IO.Path]::GetFullPath((Join-Path $root "scripts\telegram_supervisor_hidden.vbs"))
+$ensureLauncherPath = [System.IO.Path]::GetFullPath((Join-Path $root "scripts\telegram_supervisor_once_hidden.vbs"))
+if (-not (Test-Path $supervisorLauncherPath)) {
+    throw "telegram_supervisor_hidden.vbs not found: $supervisorLauncherPath"
 }
-if (-not (Test-Path $onceScriptPath)) {
-    throw "telegram_supervisor_once.ps1 not found: $onceScriptPath"
+if (-not (Test-Path $ensureLauncherPath)) {
+    throw "telegram_supervisor_once_hidden.vbs not found: $ensureLauncherPath"
 }
 
 $resolvedPython = [string]$PythonExe
@@ -33,10 +33,7 @@ $supervisorTaskName = "${TaskPrefix}_Supervisor"
 $ensureTaskName = "${TaskPrefix}_Ensure"
 
 $supervisorArgument = @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-WindowStyle", "Hidden",
-    "-File", ('"{0}"' -f $scriptPath),
+    ('"{0}"' -f $supervisorLauncherPath),
     "-PythonExe", ('"{0}"' -f $resolvedPython),
     "--check-interval-seconds", [string]$CheckIntervalSeconds,
     "--stale-heartbeat-seconds", [string]$StaleHeartbeatSeconds,
@@ -45,10 +42,7 @@ $supervisorArgument = @(
 ) -join " "
 
 $ensureArgument = @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-WindowStyle", "Hidden",
-    "-File", ('"{0}"' -f $onceScriptPath),
+    ('"{0}"' -f $ensureLauncherPath),
     "-PythonExe", ('"{0}"' -f $resolvedPython)
 ) -join " "
 
@@ -63,8 +57,18 @@ function Invoke-Schtasks {
     }
 }
 
-$supervisorCommand = ('powershell.exe {0}' -f $supervisorArgument)
-$ensureCommand = ('powershell.exe {0}' -f $ensureArgument)
+$supervisorCommand = @(
+    "wscript.exe",
+    "//B",
+    "//Nologo",
+    $supervisorArgument
+) -join " "
+$ensureCommand = @(
+    "wscript.exe",
+    "//B",
+    "//Nologo",
+    $ensureArgument
+) -join " "
 $ensureStartTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
 
 $supervisorCreateArgs = @(
@@ -107,6 +111,8 @@ if ($StartNow) {
     user_id = $resolvedUser
     supervisor_task = $supervisorTaskName
     ensure_task = $ensureTaskName
+    supervisor_launcher = $supervisorLauncherPath
+    ensure_launcher = $ensureLauncherPath
     check_interval_seconds = $CheckIntervalSeconds
     stale_heartbeat_seconds = $StaleHeartbeatSeconds
     startup_grace_seconds = $StartupGraceSeconds

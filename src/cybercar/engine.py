@@ -2541,6 +2541,8 @@ def _build_login_qr_rect_script(platform_name: str) -> str:
 
 def _capture_login_qr_screenshot(page: ChromiumPage, platform_name: str = "") -> bytes:
     platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        _prepare_platform_login_qr_surface(page, platform)
     contexts: list[Any] = []
     if platform == "wechat":
         try:
@@ -2579,6 +2581,56 @@ def _capture_login_qr_screenshot(page: ChromiumPage, platform_name: str = "") ->
 
 def _build_login_qr_prepare_script(platform_name: str) -> str:
     platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        return r"""
+        const selectors = [
+          "[class*='qrcode'] img",
+          "[class*='qrcode'] canvas",
+          "[class*='qr-code'] img",
+          "[class*='qr-code'] canvas",
+          ".qrcode img",
+          ".qrcode canvas",
+          ".qrcode-wrap img",
+          ".qrcode-wrap canvas",
+          ".qrcode-area img",
+          ".qrcode-area canvas",
+          ".login-qrcode-wrap img",
+          ".login-qrcode-wrap canvas",
+          "[class*='scan'] img",
+          "[class*='scan'] canvas",
+          "img.qrcode"
+        ];
+        const isReady = (el) => {
+          if (!el) return false;
+          const rect = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
+          if (!rect) return false;
+          return rect.width >= 80 && rect.height >= 80;
+        };
+        let best = null;
+        for (const selector of selectors) {
+          const nodes = Array.from(document.querySelectorAll(selector));
+          for (const node of nodes) {
+            if (!isReady(node)) continue;
+            const rect = node.getBoundingClientRect();
+            const area = Number(rect.width || 0) * Number(rect.height || 0);
+            if (!best || area > best.area) best = { node, rect, area };
+          }
+          if (best) break;
+        }
+        if (!best) return { prepared: false, reason: "wechat-no-qr-node" };
+        try { document.documentElement.style.zoom = "1"; } catch (e) {}
+        try { document.body.style.zoom = "1"; } catch (e) {}
+        try {
+          best.node.scrollIntoView({ block: "center", inline: "center" });
+        } catch (e) {}
+        try {
+          const rect = best.node.getBoundingClientRect();
+          const nextLeft = Math.max(0, window.scrollX + rect.left - Math.max(24, (window.innerWidth - rect.width) / 2));
+          const nextTop = Math.max(0, window.scrollY + rect.top - Math.max(24, (window.innerHeight - rect.height) / 2));
+          window.scrollTo({ left: nextLeft, top: nextTop, behavior: "instant" });
+        } catch (e) {}
+        return { prepared: true, reason: "wechat-scroll-qr-into-view" };
+        """
     if platform == "kuaishou":
         return r"""
         function norm(s) {
@@ -2730,10 +2782,41 @@ def _prepare_login_qr_context(ctx: Any, platform_name: str = "") -> dict[str, An
     return result if isinstance(result, dict) else {}
 
 
+def _ensure_login_qr_window_ready(page: ChromiumPage, platform_name: str = "") -> None:
+    platform = str(platform_name or "").strip().lower()
+    if platform != "wechat":
+        return
+    run_cdp = getattr(page, "run_cdp", None)
+    if not callable(run_cdp):
+        return
+    try:
+        payload = run_cdp("Browser.getWindowForTarget")
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    window_id = payload.get("windowId")
+    if not window_id:
+        return
+    try:
+        run_cdp("Browser.setWindowBounds", windowId=window_id, bounds={"windowState": "normal"})
+    except Exception:
+        pass
+    try:
+        run_cdp(
+            "Browser.setWindowBounds",
+            windowId=window_id,
+            bounds={"left": 40, "top": 40, "width": 1280, "height": 960, "windowState": "normal"},
+        )
+    except Exception:
+        pass
+
+
 def _prepare_platform_login_qr_surface(page: ChromiumPage, platform_name: str = "") -> None:
     platform = str(platform_name or "").strip().lower()
-    if platform not in {"kuaishou", "xiaohongshu"}:
+    if platform not in {"wechat", "kuaishou", "xiaohongshu"}:
         return
+    _ensure_login_qr_window_ready(page, platform)
     contexts: list[Any] = [page]
     try:
         contexts.extend(list(page.get_frames(timeout=1.2)))
@@ -2741,7 +2824,7 @@ def _prepare_platform_login_qr_surface(page: ChromiumPage, platform_name: str = 
         pass
     for ctx in contexts:
         payload = _prepare_login_qr_context(ctx, platform)
-        if bool(payload.get("clicked")):
+        if bool(payload.get("clicked")) or bool(payload.get("prepared")):
             _humanized_publish_settle_pause(f"{platform} login qr surface settle")
             return
 
@@ -2751,7 +2834,7 @@ def _extract_login_qr_source(page: ChromiumPage, timeout_seconds: float = 6.0, p
     platform = str(platform_name or "").strip().lower()
     next_prepare_at = 0.0
     while time.time() < end_at:
-        if platform in {"kuaishou", "xiaohongshu"} and time.time() >= next_prepare_at:
+        if platform in {"wechat", "kuaishou", "xiaohongshu"} and time.time() >= next_prepare_at:
             _prepare_platform_login_qr_surface(page, platform)
             next_prepare_at = time.time() + 1.0
         contexts: list[Any] = []
