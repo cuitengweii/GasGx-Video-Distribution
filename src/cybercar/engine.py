@@ -176,6 +176,8 @@ DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
     "douyin": "赛博皮卡现车：aawbcc",
 }
 DEFAULT_KUAISHOU_RANDOM_SCHEDULE_MAX_MINUTES = 45
+COMMENT_INTERACTION_WAIT_MIN_SECONDS = 3.0
+COMMENT_INTERACTION_WAIT_MAX_SECONDS = 10.0
 CREATE_POST_URL = "https://channels.weixin.qq.com/platform/post/create"
 WECHAT_MICRO_CREATE_POST_URL = "https://channels.weixin.qq.com/micro/content/post/create"
 DOUYIN_CREATE_POST_URL = "https://creator.douyin.com/creator-micro/content/upload"
@@ -3944,10 +3946,10 @@ def _default_runtime_config() -> dict[str, Any]:
             "max_replies_per_run": 20,
             "reply_min_chars": 5,
             "reply_max_chars": 20,
-            "min_reply_interval_seconds": 1,
-            "max_reply_interval_seconds": 5,
-            "min_like_to_reply_interval_seconds": 1,
-            "max_like_to_reply_interval_seconds": 5,
+            "min_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MIN_SECONDS),
+            "max_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
+            "min_like_to_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MIN_SECONDS),
+            "max_like_to_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
             "auto_like": True,
             "self_author_markers": ["cybercar"],
             "prompt_template": DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE,
@@ -4650,8 +4652,8 @@ def _humanized_wechat_comment_pause(
     page: Any | None,
     reason: str,
     *,
-    minimum_seconds: float = 1.0,
-    maximum_seconds: float = 3.0,
+    minimum_seconds: float = COMMENT_INTERACTION_WAIT_MIN_SECONDS,
+    maximum_seconds: float = COMMENT_INTERACTION_WAIT_MAX_SECONDS,
 ) -> float:
     lower = max(0.0, float(minimum_seconds))
     upper = max(lower, float(maximum_seconds))
@@ -4668,15 +4670,30 @@ def _humanized_wechat_comment_pause(
 
 
 def _humanized_wechat_comment_reaction_pause(page: Any | None, reason: str) -> float:
-    return _humanized_wechat_comment_pause(page, reason, minimum_seconds=0.18, maximum_seconds=0.55)
+    return _humanized_wechat_comment_pause(
+        page,
+        reason,
+        minimum_seconds=COMMENT_INTERACTION_WAIT_MIN_SECONDS,
+        maximum_seconds=COMMENT_INTERACTION_WAIT_MAX_SECONDS,
+    )
 
 
 def _humanized_wechat_comment_settle_pause(page: Any | None, reason: str) -> float:
-    return _humanized_wechat_comment_pause(page, reason, minimum_seconds=0.45, maximum_seconds=1.1)
+    return _humanized_wechat_comment_pause(
+        page,
+        reason,
+        minimum_seconds=COMMENT_INTERACTION_WAIT_MIN_SECONDS,
+        maximum_seconds=COMMENT_INTERACTION_WAIT_MAX_SECONDS,
+    )
 
 
 def _humanized_wechat_comment_retry_pause(page: Any | None, reason: str) -> float:
-    return _humanized_wechat_comment_pause(page, reason, minimum_seconds=0.25, maximum_seconds=0.8)
+    return _humanized_wechat_comment_pause(
+        page,
+        reason,
+        minimum_seconds=COMMENT_INTERACTION_WAIT_MIN_SECONDS,
+        maximum_seconds=COMMENT_INTERACTION_WAIT_MAX_SECONDS,
+    )
 
 
 WECHAT_COMMENT_DOC_HELPER_JS = """

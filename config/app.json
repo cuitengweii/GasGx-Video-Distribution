@@ -152,10 +152,10 @@
     "max_replies_per_run": 20,
     "reply_min_chars": 5,
     "reply_max_chars": 20,
-    "min_reply_interval_seconds": 1,
-    "max_reply_interval_seconds": 5,
-    "min_like_to_reply_interval_seconds": 1,
-    "max_like_to_reply_interval_seconds": 5,
+    "min_reply_interval_seconds": 3,
+    "max_reply_interval_seconds": 10,
+    "min_like_to_reply_interval_seconds": 3,
+    "max_like_to_reply_interval_seconds": 10,
     "auto_like": true,
     "self_author_markers": [
       "cybercar"

@@ -660,51 +660,57 @@ def test_find_upload_file_input_uses_fast_probe_and_generic_fallback(monkeypatch
     assert max(probe_timeouts) <= 1.2
 
 
-def test_merge_comment_reply_config_uses_short_random_waits() -> None:
+def test_merge_comment_reply_config_uses_longer_random_waits() -> None:
     cfg = engine._merge_comment_reply_config({})
 
     assert cfg["reply_min_chars"] == 5
     assert cfg["reply_max_chars"] == 20
-    assert cfg["min_reply_interval_seconds"] == 1
-    assert cfg["max_reply_interval_seconds"] == 5
-    assert cfg["min_like_to_reply_interval_seconds"] == 1
-    assert cfg["max_like_to_reply_interval_seconds"] == 5
+    assert cfg["min_reply_interval_seconds"] == 3
+    assert cfg["max_reply_interval_seconds"] == 10
+    assert cfg["min_like_to_reply_interval_seconds"] == 3
+    assert cfg["max_like_to_reply_interval_seconds"] == 10
     assert cfg["self_author_markers"] == ["cybercar"]
 
 
 def test_apply_comment_reply_like_to_reply_wait_uses_random_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     waits: list[float] = []
 
-    monkeypatch.setattr(engine.random, "uniform", lambda a, b: 3.25)
+    monkeypatch.setattr(engine.random, "uniform", lambda a, b: 6.25)
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: waits.append(float(seconds)))
 
     waited = engine._apply_comment_reply_like_to_reply_wait(
         {
-            "min_like_to_reply_interval_seconds": 1,
-            "max_like_to_reply_interval_seconds": 5,
+            "min_like_to_reply_interval_seconds": 3,
+            "max_like_to_reply_interval_seconds": 10,
         },
         debug=False,
     )
 
-    assert waited == 3.25
-    assert waits == [3.25]
+    assert waited == 6.25
+    assert waits == [6.25]
 
 
 def test_humanized_wechat_comment_pause_prefers_page_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     timeout_calls: list[int] = []
     sleep_calls: list[float] = []
+    uniform_calls: list[tuple[float, float]] = []
 
     class FakePage:
         def wait_for_timeout(self, milliseconds: int) -> None:
             timeout_calls.append(int(milliseconds))
 
-    monkeypatch.setattr(engine.random, "uniform", lambda a, b: 0.42)
+    def fake_uniform(a: float, b: float) -> float:
+        uniform_calls.append((float(a), float(b)))
+        return 4.2
+
+    monkeypatch.setattr(engine.random, "uniform", fake_uniform)
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: sleep_calls.append(float(seconds)))
 
     waited = engine._humanized_wechat_comment_reaction_pause(FakePage(), "wechat comment submit click")
 
-    assert waited == 0.42
-    assert timeout_calls == [420]
+    assert waited == 4.2
+    assert uniform_calls == [(3.0, 10.0)]
+    assert timeout_calls == [4200]
     assert sleep_calls == []
 
 
