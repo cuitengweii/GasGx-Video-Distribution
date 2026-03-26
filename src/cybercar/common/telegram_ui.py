@@ -967,6 +967,20 @@ def _suppress_low_priority_success_sections(status: str, sections: Sequence[Mapp
     return compacted
 
 
+def _hide_redundant_publish_success_sections(
+    kind: str,
+    status: str,
+    sections: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    token = str(kind or "").strip().lower()
+    status_token = str(status or "").strip().lower()
+    normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
+    if token != "publish_result" or status_token not in {"success", "done"}:
+        return normalized
+    summary_title = "\u6267\u884c\u6458\u8981"
+    return [section for section in normalized if str(section.get("title") or "").strip() != summary_title]
+
+
 def build_reply_markup(actions: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     keyboard: list[list[dict[str, str]]] = []
     if not actions:
@@ -1020,6 +1034,7 @@ def build_telegram_card(
             ),
         ),
     )
+    sections = _hide_redundant_publish_success_sections(token, status, sections)
     if str(emoji or "").strip() != "📌":
         emoji = _pick_failure_header_emoji(status, sections, emoji)
         emoji, title = _decorate_positive_header(status, title, sections, emoji)
@@ -1027,14 +1042,17 @@ def build_telegram_card(
     title_main, title_context = _split_header_title(title)
     platform_header = _build_platform_header_line(title_main or title)
     subtitle = _decorate_card_subtitle(status, subtitle, sections)
+    hide_success_context_line = token == "publish_result" and status in {"success", "done"}
     if platform_header:
         header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(platform_header)}</b>"]
-        if title_context:
+        if title_context and not hide_success_context_line:
             header.append(f"<i>{_render_inline_text(_decorate_context_line(title_context))}</i>")
         if subtitle and not _should_hide_platform_subtitle_line(status, platform_header, subtitle):
             header.append(f"<i>{_render_inline_text(_decorate_platform_subtitle_line(status, subtitle))}</i>")
     else:
         header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(title_main or title)}</b>"]
+        if hide_success_context_line:
+            title_context = ""
         header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
         if header_subtitle_parts:
             header.append(f"<i>{_render_inline_text(_decorate_context_line('｜'.join(header_subtitle_parts)))}</i>")

@@ -346,8 +346,8 @@ def test_build_telegram_card_splits_prefixed_title_into_title_and_subtitle() -> 
     text = str(card["text"])
     lines = text.splitlines()
     assert lines[0] == "<b>✅ ⚡ 快手已确认</b>"
-    assert lines[1] == "<i>· 即采即发 / 图片 / 全部平台</i>"
-    assert "\n\n<b>📌 执行摘要</b>" in text
+    assert all("即采即发 / 图片 / 全部平台" not in line for line in lines)
+    assert "<b>📌 执行摘要</b>" not in text
 
 
 def test_build_telegram_card_prioritizes_platform_result_sections_by_operator_flow() -> None:
@@ -409,8 +409,8 @@ def test_build_telegram_card_places_platform_title_on_dedicated_header_line() ->
     text = str(card["text"])
     lines = text.splitlines()
     assert lines[0] == "<b>✅ 📝 小红书已确认</b>"
-    assert lines[1] == "<i>· 即采即发 / 图片 / 全部平台</i>"
-    assert "\n\n<b>📌 执行摘要</b>" in text
+    assert all("即采即发 / 图片 / 全部平台" not in line for line in lines)
+    assert "<b>📌 执行摘要</b>" not in text
 
 
 def test_build_telegram_card_splits_prefixed_badge_title_into_stacked_platform_header() -> None:
@@ -426,8 +426,8 @@ def test_build_telegram_card_splits_prefixed_badge_title_into_stacked_platform_h
 
     lines = str(card["text"]).splitlines()
     assert lines[0] == "<b>✅ 🎵 抖音已确认</b>"
-    assert lines[1] == "<i>· 即采即发 / 图片 / 全部平台</i>"
-    assert "\n\n<b>📌 执行摘要</b>" in str(card["text"])
+    assert all("即采即发 / 图片 / 全部平台" not in line for line in lines)
+    assert "<b>📌 执行摘要</b>" not in str(card["text"])
 
 
 def test_build_telegram_card_normalizes_platform_status_items_with_platform_emojis() -> None:
