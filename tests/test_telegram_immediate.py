@@ -303,6 +303,140 @@ def test_refresh_platform_login_qr_message_retries_transport_reset(tmp_path: Pat
     assert remembered == [("wechat|9334|D:/profiles/wechat", "fp-1")]
 
 
+def test_refresh_platform_login_qr_message_prefers_wechat_login_entry(tmp_path: Path, monkeypatch) -> None:
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    runtime_ctx_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda _core, _platform_name, prefer_login_entry=False: runtime_ctx_calls.append(bool(prefer_login_entry)) or {
+            "platform": "wechat",
+            "open_url": "https://channels.weixin.qq.com/login.html",
+            "debug_port": 9334,
+            "chrome_user_data_dir": "D:/profiles/wechat",
+        },
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_prepare_platform_login_qr_notice",
+        lambda **kwargs: {
+            "ok": True,
+            "needs_login": True,
+            "platform": "wechat",
+            "filename": "wechat_login_qr.png",
+            "mime": "image/png",
+            "caption": "scan me",
+            "reply_markup": {"inline_keyboard": []},
+            "photo_bytes": b"png-bytes",
+            "cache_key": "wechat|9334|D:/profiles/wechat",
+            "fingerprint": "fp-login-entry",
+            "open_target_url": kwargs.get("open_url"),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_resolve_runtime_telegram_notify_settings",
+        lambda **_kwargs: SimpleNamespace(telegram_api_base="https://api.telegram.org"),
+        raising=False,
+    )
+    monkeypatch.setattr(worker_core, "_remember_wechat_qr_notice", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(
+        worker_impl,
+        "_shared_call_telegram_api",
+        lambda **_kwargs: {"ok": True, "result": {"message_id": 88}},
+    )
+
+    result = worker_impl._refresh_platform_login_qr_message(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        message_id=88,
+        timeout_seconds=30,
+        log_file=tmp_path / "telegram_worker.log",
+    )
+
+    assert result["ok"] is True
+    assert runtime_ctx_calls == [True]
+    assert result["open_target_url"] == "https://channels.weixin.qq.com/login.html"
+
+
+def test_refresh_platform_login_qr_message_retries_when_fingerprint_unchanged(tmp_path: Path, monkeypatch) -> None:
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    prepare_calls: list[str] = []
+    remembered: list[tuple[str, str]] = []
+    worker_core.WECHAT_LOGIN_QR_NOTICE_CACHE = {"wechat|9334|d:/profiles/wechat": ("fp-old", 123.0)}
+
+    def fake_prepare(**_kwargs):
+        prepare_calls.append("call")
+        fingerprint = "fp-old" if len(prepare_calls) == 1 else "fp-new"
+        return {
+            "ok": True,
+            "needs_login": True,
+            "platform": "wechat",
+            "filename": "wechat_login_qr.png",
+            "mime": "image/png",
+            "caption": "scan me",
+            "reply_markup": {"inline_keyboard": []},
+            "photo_bytes": b"png-new" if fingerprint == "fp-new" else b"png-old",
+            "cache_key": "wechat|9334|D:/profiles/wechat",
+            "fingerprint": fingerprint,
+        }
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda _core, _platform_name, prefer_login_entry=False: {
+            "platform": "wechat",
+            "open_url": "https://channels.weixin.qq.com/login.html",
+            "debug_port": 9334,
+            "chrome_user_data_dir": "D:/profiles/wechat",
+        },
+    )
+    monkeypatch.setattr(worker_core, "_prepare_platform_login_qr_notice", fake_prepare, raising=False)
+    monkeypatch.setattr(
+        worker_core,
+        "_resolve_runtime_telegram_notify_settings",
+        lambda **_kwargs: SimpleNamespace(telegram_api_base="https://api.telegram.org"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_platform_login_qr_cache_key",
+        lambda platform_name, debug_port, chrome_user_data_dir: f"{platform_name}|{debug_port}|{chrome_user_data_dir}",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_remember_wechat_qr_notice",
+        lambda cache_key, fingerprint: remembered.append((str(cache_key), str(fingerprint))),
+        raising=False,
+    )
+    monkeypatch.setattr(worker_impl.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_shared_call_telegram_api",
+        lambda **_kwargs: {"ok": True, "result": {"message_id": 88}},
+    )
+
+    result = worker_impl._refresh_platform_login_qr_message(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        message_id=88,
+        timeout_seconds=30,
+        log_file=tmp_path / "telegram_worker.log",
+    )
+
+    assert result["ok"] is True
+    assert result["sent"] is True
+    assert len(prepare_calls) == 2
+    assert remembered == [("wechat|9334|D:/profiles/wechat", "fp-new")]
+
+
 def test_build_immediate_cycle_context_passes_platform_collection_names(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     target = workspace / "2_Processed_Images" / "sample.jpg"

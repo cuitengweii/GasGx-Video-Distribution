@@ -7208,17 +7208,62 @@ def _refresh_platform_login_qr_message(
         return {"ok": False, "needs_login": True, "error": "invalid qr message id"}
 
     try:
-        runtime_ctx = _resolve_platform_login_runtime_context(core, platform_name)
+        runtime_ctx = _resolve_platform_login_runtime_context(core, platform_name, prefer_login_entry=True)
         platform = runtime_ctx["platform"]
-        prepared = core._prepare_platform_login_qr_notice(
-            platform_name=platform,
-            open_url=runtime_ctx["open_url"],
-            debug_port=runtime_ctx["debug_port"],
-            chrome_user_data_dir=runtime_ctx["chrome_user_data_dir"],
-            auto_open_chrome=True,
-            refresh_page=True,
-            wait_token=wait_token,
-        )
+        cache_key = ""
+        previous_fingerprint = ""
+        cache_key_builder = getattr(core, "_platform_login_qr_cache_key", None)
+        qr_notice_cache = getattr(core, "WECHAT_LOGIN_QR_NOTICE_CACHE", None)
+        if callable(cache_key_builder):
+            try:
+                cache_key = str(
+                    cache_key_builder(
+                        platform,
+                        runtime_ctx["debug_port"],
+                        runtime_ctx["chrome_user_data_dir"],
+                    )
+                    or ""
+                ).strip()
+            except Exception:
+                cache_key = ""
+        if cache_key and isinstance(qr_notice_cache, dict):
+            cached = qr_notice_cache.get(cache_key.lower())
+            if not cached:
+                cached = qr_notice_cache.get(cache_key)
+            if isinstance(cached, tuple) and cached:
+                previous_fingerprint = str(cached[0] or "").strip()
+
+        prepared: Dict[str, Any] | None = None
+        attempt_count = 2 if platform == "wechat" else 1
+        for attempt_index in range(attempt_count):
+            prepared = core._prepare_platform_login_qr_notice(
+                platform_name=platform,
+                open_url=runtime_ctx["open_url"],
+                debug_port=runtime_ctx["debug_port"],
+                chrome_user_data_dir=runtime_ctx["chrome_user_data_dir"],
+                auto_open_chrome=True,
+                refresh_page=True,
+                wait_token=wait_token,
+            )
+            if not isinstance(prepared, dict):
+                return {"ok": False, "needs_login": True, "error": "invalid qr payload"}
+            if not bool(prepared.get("ok")):
+                return prepared
+            current_fingerprint = str(prepared.get("fingerprint") or "").strip()
+            if (
+                platform == "wechat"
+                and attempt_index == 0
+                and previous_fingerprint
+                and current_fingerprint
+                and current_fingerprint == previous_fingerprint
+            ):
+                _append_log(
+                    log_file,
+                    f"[Worker] platform_login_qr fingerprint unchanged after refresh; retry once platform={platform}",
+                )
+                time.sleep(1.0)
+                continue
+            break
         if not isinstance(prepared, dict):
             return {"ok": False, "needs_login": True, "error": "invalid qr payload"}
         if not bool(prepared.get("ok")):
