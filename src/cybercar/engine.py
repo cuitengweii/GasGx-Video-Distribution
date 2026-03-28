@@ -14285,7 +14285,11 @@ def _wait_wechat_publish_feedback(
     fallback_ctx: Any,
     expected_title: str = "",
     timeout_seconds: int = WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS,
+    publish_click_confirmed: bool = False,
 ) -> None:
+    if bool(publish_click_confirmed):
+        _log("[Uploader:wechat] Publish button click accepted; skip delayed confirmation.")
+        return
     end_at = time.time() + max(10, int(timeout_seconds))
     warned = False
     no_tip_clicked = False
@@ -15041,7 +15045,12 @@ def _fill_draft_once(
             ("确认发表", "确认发布", "继续发表", "继续发布"),
             platform_name="wechat",
         )
-        _wait_wechat_publish_feedback(editor_ctx, page, expected_title=wechat_short_title)
+        _wait_wechat_publish_feedback(
+            editor_ctx,
+            page,
+            expected_title=wechat_short_title,
+            publish_click_confirmed=True,
+        )
         _log("[Success:wechat] 发布已确认。")
     else:
         _log("[Success] 视频已上传并填写文案（未保存草稿）。请在当前页手动保存或发布。")

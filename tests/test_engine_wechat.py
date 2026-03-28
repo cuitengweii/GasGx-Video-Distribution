@@ -626,6 +626,70 @@ def test_wait_wechat_publish_feedback_extends_deadline_for_inflight_submission(m
     assert clock["now"] < 105.0
 
 
+def test_wait_wechat_publish_feedback_accepts_publish_click_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    read_calls: list[str] = []
+    log_messages: list[str] = []
+
+    monkeypatch.setattr(
+        engine,
+        "_read_wechat_publish_state",
+        lambda *_args, **_kwargs: read_calls.append("read") or {},
+    )
+    monkeypatch.setattr(engine, "_log", lambda message: log_messages.append(str(message)))
+
+    engine._wait_wechat_publish_feedback(None, None, publish_click_confirmed=True)
+
+    assert read_calls == []
+    assert any("Publish button click accepted" in item for item in log_messages)
+
+
+def test_fill_draft_once_passes_publish_click_confirmation_to_feedback(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    target = tmp_path / "wechat-publish.mp4"
+    target.write_bytes(b"video")
+    wait_calls: list[dict[str, Any]] = []
+
+    class FakeFileInput:
+        def input(self, _path: str) -> None:
+            return None
+
+    class FakePage:
+        url = "https://channels.weixin.qq.com/platform/post/create"
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_wechat_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda *_args, **_kwargs: "editor")
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _name, action, retries=3: action())
+    monkeypatch.setattr(engine, "_find_upload_file_input", lambda *_args, **_kwargs: FakeFileInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready", lambda _page, ctx, timeout_seconds=0: ctx)
+    monkeypatch.setattr(engine, "_clear_location_if_selected", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_wechat_short_title", lambda *_args, **_kwargs: "发布标题")
+    monkeypatch.setattr(engine, "_select_collection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_wechat_primary_publish_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    def fake_wait(*_args: Any, **kwargs: Any) -> None:
+        wait_calls.append(dict(kwargs))
+
+    monkeypatch.setattr(engine, "_wait_wechat_publish_feedback", fake_wait)
+
+    result = engine._fill_draft_once(
+        FakePage(),
+        target,
+        "caption",
+        "collection",
+        False,
+        True,
+        False,
+        30,
+    )
+
+    assert result == "editor"
+    assert wait_calls == [{"expected_title": "发布标题", "publish_click_confirmed": True}]
+
+
 def test_get_page_frames_with_timeout_returns_empty_when_browser_hangs() -> None:
     class FakePage:
         def get_frames(self, timeout: float = 0.0) -> list[Any]:
