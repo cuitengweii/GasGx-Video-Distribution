@@ -2282,6 +2282,63 @@ def test_run_collect_publish_latest_job_image_records_publish_items(tmp_path: Pa
     assert runner.sent_candidates[0]["mode"] == "immediate_manual_publish"
 
 
+def test_run_collect_publish_latest_job_image_filters_out_video_candidates(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    probe_calls: list[str] = []
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": DEFAULT_PROFILE,
+            "candidates": [
+                {"url": "https://x.com/mix/status/101", "published_at": "2026-03-15T10:05:00Z", "display_time": "1m", "tweet_text": "video one"},
+                {"url": "https://x.com/mix/status/102", "published_at": "2026-03-15T10:04:00Z", "display_time": "2m", "tweet_text": "video two"},
+                {"url": "https://x.com/mix/status/103", "published_at": "2026-03-15T10:03:00Z", "display_time": "3m", "tweet_text": "video three"},
+                {"url": "https://x.com/mix/status/104", "published_at": "2026-03-15T10:02:00Z", "display_time": "4m", "tweet_text": "video four"},
+                {"url": "https://x.com/mix/status/105", "published_at": "2026-03-15T10:01:00Z", "display_time": "5m", "tweet_text": "image one"},
+            ],
+        },
+    )
+
+    def probe_media_kind(url: str) -> str:
+        probe_calls.append(url)
+        return "image" if url.endswith("/105") else "video"
+
+    monkeypatch.setattr(worker_impl, "_probe_shared_link_media_kind", probe_media_kind)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=5,
+        media_kind="image",
+    )
+
+    assert exit_code == 0
+    assert len(runner.sent_candidates) == 1
+    items = _prefilter_items(workspace)
+    assert len(items) == 1
+    only_item = next(iter(items.values()))
+    assert isinstance(only_item, dict)
+    assert only_item["source_url"] == "https://x.com/mix/status/105"
+    assert only_item["media_kind"] == "image"
+    assert set(probe_calls) == {
+        "https://x.com/mix/status/101",
+        "https://x.com/mix/status/102",
+        "https://x.com/mix/status/103",
+        "https://x.com/mix/status/104",
+        "https://x.com/mix/status/105",
+    }
+
+
 def test_build_telegram_prefilter_reply_markup_hides_original_for_image_publish() -> None:
     reply_markup = pipeline._build_telegram_prefilter_reply_markup(
         "https://x.test/post/image-1",

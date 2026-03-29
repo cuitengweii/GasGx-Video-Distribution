@@ -3352,6 +3352,26 @@ def _candidate_source_url(candidate: Mapping[str, Any]) -> str:
     return str(candidate.get("url") or "").strip()
 
 
+def _candidate_matches_collect_publish_media_kind(candidate: Mapping[str, Any], media_kind: str) -> bool:
+    normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind)
+    if normalized_media_kind != "image":
+        return True
+
+    raw_candidate_media_kind = str(candidate.get("media_kind") or "").strip().lower()
+    if raw_candidate_media_kind in {"image", "photo"}:
+        return True
+    if raw_candidate_media_kind in {"video", "animated_gif", "gif"}:
+        return False
+
+    source_url = _candidate_source_url(candidate)
+    if not _extract_x_status_id_from_url(source_url):
+        return True
+    try:
+        return _probe_shared_link_media_kind(source_url) == "image"
+    except Exception:
+        return False
+
+
 def _normalize_candidate_story_text(raw_text: str) -> str:
     text = str(raw_text or "").strip().lower()
     if not text:
@@ -12289,6 +12309,7 @@ def _run_collect_publish_latest_job(
                 filter_workspace_ctx = workspace_ctx
     filtered_seen_candidates = 0
     same_story_collapsed = 0
+    media_kind_filtered_candidates = 0
     total_candidates = 0
     discovery_rounds_used = 0
     raw_candidates_discovered = 0
@@ -12319,6 +12340,14 @@ def _run_collect_publish_latest_job(
             fresh_round_candidates.append(candidate)
         raw_candidates_discovered += len(fresh_round_candidates)
         total_candidates = len(seen_discovered_urls)
+        if fresh_round_candidates and normalized_media_kind == "image":
+            image_round_candidates: list[dict[str, Any]] = []
+            for candidate in fresh_round_candidates:
+                if _candidate_matches_collect_publish_media_kind(candidate, normalized_media_kind):
+                    image_round_candidates.append(candidate)
+                else:
+                    media_kind_filtered_candidates += 1
+            fresh_round_candidates = image_round_candidates
         if not fresh_round_candidates:
             continue
         filtered_round_candidates = fresh_round_candidates
@@ -12344,7 +12373,12 @@ def _run_collect_publish_latest_job(
             break
     candidates = candidates[:requested_limit]
     if not candidates:
-        if filtered_seen_candidates > 0 or same_story_collapsed > 0 or raw_candidates_discovered > 0:
+        if (
+            filtered_seen_candidates > 0
+            or same_story_collapsed > 0
+            or media_kind_filtered_candidates > 0
+            or raw_candidates_discovered > 0
+        ):
             _send_background_feedback(
                 runner=runner,
                 email_settings=email_settings,
@@ -12359,7 +12393,7 @@ def _run_collect_publish_latest_job(
                         discovered_count=total_candidates,
                         sent_count=0,
                         reused_count=0,
-                        skipped_count=filtered_seen_candidates,
+                        skipped_count=filtered_seen_candidates + media_kind_filtered_candidates,
                         collapsed_count=same_story_collapsed,
                         discovery_rounds=discovery_rounds_used,
                     ),
@@ -12368,6 +12402,11 @@ def _run_collect_publish_latest_job(
                         "emoji": "🧹",
                         "items": [
                             "本轮扫描到了候选，但历史账本过滤和同题材折叠后，没有新的预审卡需要发出。",
+                            *(
+                                [f"其中有 {media_kind_filtered_candidates} 条候选不包含图片，已按图片模式自动过滤。"]
+                                if media_kind_filtered_candidates > 0
+                                else []
+                            ),
                         ],
                     },
                 ],
@@ -12388,7 +12427,7 @@ def _run_collect_publish_latest_job(
                     platforms=target_platforms,
                     discovery_limit=round_limits[-1] if round_limits else discovery_limit,
                     discovered_count=0,
-                    skipped_count=filtered_seen_candidates,
+                    skipped_count=filtered_seen_candidates + media_kind_filtered_candidates,
                     collapsed_count=same_story_collapsed,
                     discovery_rounds=discovery_rounds_used,
                 ),
@@ -12609,7 +12648,7 @@ def _run_collect_publish_latest_job(
                     discovered_count=total_candidates,
                     sent_count=fresh_candidates + reissued_candidates,
                     reused_count=reused_candidates,
-                    skipped_count=skipped_duplicates + filtered_seen_candidates,
+                    skipped_count=skipped_duplicates + filtered_seen_candidates + media_kind_filtered_candidates,
                     collapsed_count=same_story_collapsed,
                     discovery_rounds=discovery_rounds_used,
                 ),
@@ -12631,7 +12670,7 @@ def _run_collect_publish_latest_job(
         )
         return 0
 
-    if skipped_duplicates > 0 or filtered_seen_candidates > 0:
+    if skipped_duplicates > 0 or filtered_seen_candidates > 0 or media_kind_filtered_candidates > 0:
         _send_background_feedback(
             runner=runner,
             email_settings=email_settings,
@@ -12646,7 +12685,7 @@ def _run_collect_publish_latest_job(
                     discovered_count=total_candidates,
                     sent_count=0,
                     reused_count=0,
-                    skipped_count=skipped_duplicates + filtered_seen_candidates,
+                    skipped_count=skipped_duplicates + filtered_seen_candidates + media_kind_filtered_candidates,
                     collapsed_count=same_story_collapsed,
                     discovery_rounds=discovery_rounds_used,
                 ),
@@ -12678,7 +12717,7 @@ def _run_collect_publish_latest_job(
                 discovered_count=total_candidates,
                 sent_count=sent_candidates,
                 reused_count=reused_candidates,
-                skipped_count=skipped_duplicates + filtered_seen_candidates,
+                skipped_count=skipped_duplicates + filtered_seen_candidates + media_kind_filtered_candidates,
                 collapsed_count=same_story_collapsed,
                 discovery_rounds=discovery_rounds_used,
             ),
