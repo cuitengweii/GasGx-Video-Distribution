@@ -60,3 +60,60 @@ def test_resolve_platform_publish_config_reads_structured_platform_settings() ->
     assert payload["publish_now"] is False
     assert payload["declare_original"] is True
     assert payload["upload_timeout"] == 30
+
+
+def test_load_runtime_config_merges_sources_and_cross_border_publish_settings(tmp_path) -> None:
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(
+        """
+{
+  "sources": {
+    "platforms": "douyin,xiaohongshu",
+    "keywords": ["cybertruck", "tesla"],
+    "watch_accounts": {
+      "douyin": ["https://www.douyin.com/user/demo"],
+      "xiaohongshu": ["https://www.xiaohongshu.com/user/profile/demo"]
+    }
+  },
+  "publish": {
+    "platforms": {
+      "tiktok": {
+        "publish_now": true,
+        "save_draft": false,
+        "upload_timeout": 30
+      },
+      "x": {
+        "publish_now": true,
+        "save_draft": false,
+        "upload_timeout": 30
+      }
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    payload = engine._load_runtime_config(str(config_path))
+
+    assert payload["sources"]["platforms"] == "douyin,xiaohongshu"
+    assert payload["sources"]["keywords"] == ["cybertruck", "tesla"]
+    assert payload["sources"]["watch_accounts"]["douyin"] == ["https://www.douyin.com/user/demo"]
+    assert payload["publish"]["platforms"]["tiktok"]["publish_now"] is True
+    assert payload["publish"]["platforms"]["x"]["publish_now"] is True
+
+
+def test_load_runtime_config_accepts_utf8_bom_json(tmp_path) -> None:
+    config_path = tmp_path / "runtime_bom.json"
+    config_path.write_text(
+        '{"publish":{"platforms":{"x":{"publish_now":false,"save_draft":false}}}}',
+        encoding="utf-8-sig",
+    )
+
+    payload = engine._load_runtime_config(str(config_path))
+
+    assert payload["publish"]["platforms"]["x"]["publish_now"] is False
+
+
+def test_normalize_upload_platforms_accepts_tiktok_and_x_literals() -> None:
+    assert engine._normalize_upload_platforms("wechat,tiktok,x") == ["wechat", "tiktok", "x"]

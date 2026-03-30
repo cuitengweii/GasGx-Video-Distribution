@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote_plus, urlparse
 
 import requests
 
@@ -73,48 +74,60 @@ DEFAULT_BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES = max(
 )
 PLATFORM_CN = {
     "collect": "采集",
+    "x": "X",
     "wechat": "视频号",
     "douyin": "抖音",
     "xiaohongshu": "小红书",
     "kuaishou": "快手",
     "bilibili": "B站",
+    "tiktok": "TikTok",
 }
 PLATFORM_LOGO = {
     "collect": "🔎",
+    "x": "𝕏",
     "wechat": "📱",
     "douyin": "🎵",
     "xiaohongshu": "📝",
     "kuaishou": "⚡",
     "bilibili": "📺",
+    "tiktok": "🎬",
 }
 PLATFORM_LOGO_FETCH_URL = {
+    "x": "https://www.google.com/s2/favicons?domain=x.com&sz=128",
     "wechat": "https://www.google.com/s2/favicons?domain=channels.weixin.qq.com&sz=128",
     "douyin": "https://www.google.com/s2/favicons?domain=creator.douyin.com&sz=128",
     "xiaohongshu": "https://www.google.com/s2/favicons?domain=creator.xiaohongshu.com&sz=128",
     "kuaishou": "https://www.google.com/s2/favicons?domain=cp.kuaishou.com&sz=128",
     "bilibili": "https://www.google.com/s2/favicons?domain=member.bilibili.com&sz=128",
+    "tiktok": "https://www.google.com/s2/favicons?domain=www.tiktok.com&sz=128",
 }
 PLATFORM_BANNER_LABEL = {
+    "x": "X",
     "wechat": "WECHAT",
     "douyin": "DOUYIN",
     "xiaohongshu": "XHS",
     "kuaishou": "KUAISHOU",
     "bilibili": "BILIBILI",
+    "tiktok": "TIKTOK",
 }
 PLATFORM_BANNER_ACCENT = {
+    "x": (15, 20, 25),
     "wechat": (7, 193, 96),
     "douyin": (17, 17, 17),
     "xiaohongshu": (255, 36, 66),
     "kuaishou": (255, 106, 0),
     "bilibili": (0, 174, 236),
+    "tiktok": (0, 0, 0),
 }
 PLATFORM_LOGIN_URL = {
     "collect": "https://x.com/search?q=Cybertruck%20filter%3Avideos&src=typed_query&f=live",
+    "x": "https://x.com/compose/post",
     "wechat": "https://channels.weixin.qq.com/platform/post/create",
     "douyin": "https://creator.douyin.com/creator-micro/content/upload",
     "xiaohongshu": "https://creator.xiaohongshu.com/publish/publish",
     "kuaishou": "https://cp.kuaishou.com/article/publish/video",
     "bilibili": "https://member.bilibili.com/platform/upload/video/frame",
+    "tiktok": "https://www.tiktok.com/upload?lang=en",
 }
 
 
@@ -2458,6 +2471,91 @@ def _load_extra_urls(args: argparse.Namespace) -> list[str]:
     return core._dedupe_urls(urls)
 
 
+def _load_source_urls(args: argparse.Namespace) -> list[str]:
+    urls: list[str] = []
+    if getattr(args, "source_url_file", ""):
+        urls.extend(core._load_urls_file(str(getattr(args, "source_url_file", "")).strip()))
+    if getattr(args, "source_url", None):
+        urls.extend(list(getattr(args, "source_url") or []))
+    return core._dedupe_urls(urls)
+
+
+def _resolve_source_platforms(args: argparse.Namespace, runtime_config: dict[str, Any]) -> list[str]:
+    raw_cli = str(getattr(args, "source_platforms", "") or "").strip()
+    if raw_cli:
+        return core._normalize_source_platforms(raw_cli)
+    source_cfg = runtime_config.get("sources") if isinstance(runtime_config.get("sources"), dict) else {}
+    raw_cfg = source_cfg.get("platforms")
+    return core._normalize_source_platforms(raw_cfg)
+
+
+def _resolve_source_keywords(args: argparse.Namespace, runtime_config: dict[str, Any]) -> list[str]:
+    raw_cli = str(getattr(args, "source_keywords", "") or "").strip()
+    if raw_cli:
+        return core._normalize_keyword_list(raw_cli, [])
+    source_cfg = runtime_config.get("sources") if isinstance(runtime_config.get("sources"), dict) else {}
+    from_config = core._normalize_keyword_list(source_cfg.get("keywords"), [])
+    if from_config:
+        return from_config
+    default_keyword = str(getattr(args, "keyword", "") or "").strip()
+    return [default_keyword] if default_keyword else []
+
+
+def _build_source_search_urls(source_platforms: list[str], keywords: list[str]) -> list[str]:
+    urls: list[str] = []
+    if not keywords:
+        return urls
+    for platform in source_platforms:
+        if platform == "douyin":
+            urls.extend(
+                [
+                    f"https://www.douyin.com/search/{quote_plus(keyword)}?type=video"
+                    for keyword in keywords
+                ]
+            )
+        elif platform == "xiaohongshu":
+            urls.extend(
+                [
+                    f"https://www.xiaohongshu.com/search_result?keyword={quote_plus(keyword)}"
+                    for keyword in keywords
+                ]
+            )
+    return core._dedupe_urls(urls)
+
+
+def _is_url_for_source_platform(url: str, platform: str) -> bool:
+    token = str(platform or "").strip().lower()
+    value = str(url or "").strip()
+    if not value:
+        return False
+    try:
+        host = str(urlparse(value).netloc or "").lower()
+    except Exception:
+        return False
+    if host.startswith("www."):
+        host = host[4:]
+    if token == "x":
+        return host in {"x.com", "twitter.com", "mobile.x.com", "mobile.twitter.com"}
+    if token == "douyin":
+        return "douyin.com" in host
+    if token == "xiaohongshu":
+        return ("xiaohongshu.com" in host) or ("xhslink.com" in host) or ("rednote.com" in host)
+    return False
+
+
+def _resolve_source_watch_urls(source_platforms: list[str], runtime_config: dict[str, Any]) -> list[str]:
+    source_cfg = runtime_config.get("sources") if isinstance(runtime_config.get("sources"), dict) else {}
+    watch_accounts = source_cfg.get("watch_accounts") if isinstance(source_cfg.get("watch_accounts"), dict) else {}
+    urls: list[str] = []
+    for platform in source_platforms:
+        entries = watch_accounts.get(platform) if isinstance(watch_accounts.get(platform), list) else []
+        for item in entries:
+            token = str(item or "").strip()
+            if token.startswith("http://") or token.startswith("https://"):
+                urls.append(token)
+    return core._dedupe_urls(urls)
+
+
 def _run_collect_once(
     args: argparse.Namespace,
     email_settings: Optional[EmailSettings] = None,
@@ -2522,6 +2620,11 @@ def _run_collect_once(
     )
     x_cookie_file = str(getattr(args, "x_cookie_file", "") or "").strip() or getattr(core, "DEFAULT_X_COOKIE_FILE", "")
     x_debug_port = max(1, int(getattr(args, "x_debug_port", getattr(core, "DEFAULT_X_DEBUG_PORT", args.debug_port)) or args.debug_port))
+    source_platforms = _resolve_source_platforms(args, runtime_config)
+    source_keywords = _resolve_source_keywords(args, runtime_config)
+    source_watch_urls = _resolve_source_watch_urls(source_platforms, runtime_config)
+    source_urls = _load_source_urls(args)
+    source_search_urls = _build_source_search_urls(source_platforms, source_keywords)
 
     core._log(
         "[Collector] Config "
@@ -2540,6 +2643,10 @@ def _run_collect_once(
         f"x_download_socket_timeout={x_download_policy.socket_timeout_seconds}, "
         f"x_download_retries={x_download_policy.download_retries}, "
         f"x_download_fail_fast={x_download_policy.fail_fast}, "
+        f"source_platforms={','.join(source_platforms)}, "
+        f"source_keywords={len(source_keywords)}, "
+        f"source_watch_urls={len(source_watch_urls)}, "
+        f"source_urls={len(source_urls)}, "
         f"network_mode={network_mode}"
     )
 
@@ -2552,8 +2659,17 @@ def _run_collect_once(
         0,
         int(getattr(args, "xiaohongshu_extra_images_per_run", DEFAULT_XIAOHONGSHU_EXTRA_IMAGES_PER_RUN)),
     )
+    x_source_urls = core._dedupe_urls(
+        list(extra_urls) + [url for url in source_urls if _is_url_for_source_platform(url, "x")]
+    )
+    domestic_source_urls = core._dedupe_urls(
+        [url for url in source_urls if _is_url_for_source_platform(url, "douyin") or _is_url_for_source_platform(url, "xiaohongshu")]
+        + source_watch_urls
+        + source_search_urls
+    )
+    x_collect_enabled = "x" in source_platforms
 
-    if collect_media_kind == "image":
+    if collect_media_kind == "image" and x_collect_enabled:
         target_image_count = max(collect_limit, xhs_extra_images_per_run, 1)
         image_discovery_url_limit = max(int(args.x_discovery_url_limit), max(90, xhs_extra_images_per_run * 30))
         image_discovery_scroll_rounds = max(int(args.x_discovery_scroll_rounds), 16)
@@ -2568,7 +2684,7 @@ def _run_collect_once(
             workspace,
             keyword=args.keyword,
             limit=collect_limit,
-            tweet_urls=extra_urls,
+            tweet_urls=x_source_urls,
             proxy=proxy,
             use_system_proxy=use_system_proxy,
             include_images=True,
@@ -2592,7 +2708,7 @@ def _run_collect_once(
             x_download_batch_retry_sleep=x_download_policy.batch_retry_sleep_seconds,
             x_download_fail_fast=x_download_policy.fail_fast,
         )
-    else:
+    elif x_collect_enabled:
         # First collect video sources to satisfy the planned per-slot video quota.
         if x_download_policy.fail_fast:
             # In latest-first fail-fast mode, keep X discovery/download fan-out
@@ -2604,7 +2720,7 @@ def _run_collect_once(
             workspace,
             keyword=args.keyword,
             limit=video_collect_limit,
-            tweet_urls=extra_urls,
+            tweet_urls=x_source_urls,
             proxy=proxy,
             use_system_proxy=use_system_proxy,
             include_images=False,
@@ -2651,7 +2767,7 @@ def _run_collect_once(
                     workspace,
                     keyword=args.keyword,
                     limit=image_collect_limit,
-                    tweet_urls=extra_urls,
+                    tweet_urls=x_source_urls,
                     proxy=proxy,
                     use_system_proxy=use_system_proxy,
                     include_images=True,
@@ -2680,6 +2796,36 @@ def _run_collect_once(
                     "[Collector] Xiaohongshu image-source top-up skipped after failure: "
                     f"{exc}"
                 )
+    else:
+        core._log("[Collector] X source collect is disabled for this run (source_platforms excludes x).")
+
+    domestic_enabled_platforms = [platform for platform in source_platforms if platform in {"douyin", "xiaohongshu"}]
+    if domestic_enabled_platforms:
+        if domestic_source_urls:
+            include_images_for_domestic = bool(collect_media_kind == "image" or xiaohongshu_allow_image)
+            for platform in domestic_enabled_platforms:
+                platform_urls = [url for url in domestic_source_urls if _is_url_for_source_platform(url, platform)]
+                if not platform_urls:
+                    continue
+                try:
+                    core.download_from_source_urls(
+                        workspace,
+                        source_urls=platform_urls,
+                        source_platform=platform,
+                        limit=collect_limit,
+                        include_images=include_images_for_domestic,
+                        proxy=proxy,
+                        use_system_proxy=use_system_proxy,
+                    )
+                except Exception as exc:
+                    core._log(
+                        f"[Collector] Domestic source download failed on {platform}, continue with next platform: {exc}"
+                    )
+        else:
+            core._log(
+                "[Collector] Domestic source platforms configured but no usable source URLs were found. "
+                "Provide sources.watch_accounts URLs, --source-url/--source-url-file, or source keywords."
+            )
     processed_outputs = core.process_video_fingerprint(
         workspace,
         proxy=proxy,
@@ -2822,6 +2968,11 @@ def _publish_once(
         runtime_debug_port = int(getattr(args, "wechat_debug_port", args.debug_port))
         runtime_chrome_user_data_dir = (
             str(getattr(args, "wechat_chrome_user_data_dir", "") or "").strip() or ctx.chrome_user_data_dir
+        )
+    elif platform == "x":
+        runtime_debug_port = int(getattr(args, "x_debug_port", args.debug_port))
+        runtime_chrome_user_data_dir = (
+            str(getattr(args, "x_chrome_user_data_dir", "") or "").strip() or ctx.chrome_user_data_dir
         )
 
     caption = (args.caption or "").strip() or None
@@ -2976,6 +3127,42 @@ def _publish_once(
                     minimum=BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
                 ),
                 upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "bilibili", minimum=600),
+                auto_open_chrome=not args.no_auto_open_chrome,
+                chrome_path=ctx.chrome_path,
+                chrome_user_data_dir=runtime_chrome_user_data_dir,
+                telegram_bot_token=email_settings.telegram_bot_token,
+                telegram_chat_id=email_settings.telegram_chat_id,
+                telegram_timeout_seconds=email_settings.telegram_timeout_seconds,
+                telegram_api_base=email_settings.telegram_api_base,
+                notify_env_prefix=email_settings.env_prefix,
+            )
+        elif platform == "tiktok":
+            used_target = core.fill_draft_tiktok(
+                ctx.workspace,
+                caption=caption,
+                target_video=target,
+                debug_port=runtime_debug_port,
+                save_draft=publish_mode.save_draft,
+                publish_now=publish_mode.publish_now,
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "tiktok", minimum=30),
+                auto_open_chrome=not args.no_auto_open_chrome,
+                chrome_path=ctx.chrome_path,
+                chrome_user_data_dir=runtime_chrome_user_data_dir,
+                telegram_bot_token=email_settings.telegram_bot_token,
+                telegram_chat_id=email_settings.telegram_chat_id,
+                telegram_timeout_seconds=email_settings.telegram_timeout_seconds,
+                telegram_api_base=email_settings.telegram_api_base,
+                notify_env_prefix=email_settings.env_prefix,
+            )
+        elif platform == "x":
+            used_target = core.fill_draft_x(
+                ctx.workspace,
+                caption=caption,
+                target_video=target,
+                debug_port=runtime_debug_port,
+                save_draft=publish_mode.save_draft,
+                publish_now=publish_mode.publish_now,
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "x", minimum=30),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -3808,7 +3995,7 @@ def _build_effective_runtime_snapshot(args: argparse.Namespace) -> dict[str, Any
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Hourly CyberCar pipeline: collect from X, process, export sorted outputs, "
+            "Hourly CyberCar pipeline: collect from X/domestic sources, process, export sorted outputs, "
             "then distribute by platform with delayed follow-up scheduling."
         )
     )
@@ -3824,6 +4011,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tweet-url", action="append", default=[], help="Specific X post URL(s).")
     parser.add_argument("--tweet-url-file", default="", help="Text file with one X URL per line.")
+    parser.add_argument(
+        "--source-platforms",
+        default="",
+        help="Comma-separated source platforms: x,douyin,xiaohongshu. Empty means runtime config/default.",
+    )
+    parser.add_argument(
+        "--source-keywords",
+        default="",
+        help="Comma-separated discovery keywords for domestic source platforms.",
+    )
+    parser.add_argument(
+        "--source-url",
+        action="append",
+        default=[],
+        help="Optional explicit source URL(s) for domestic platforms.",
+    )
+    parser.add_argument(
+        "--source-url-file",
+        default="",
+        help="Text file with one source URL per line for domestic platforms.",
+    )
     parser.add_argument("--no-x-auto-discover", action="store_true")
     parser.add_argument(
         "--require-x-live-discovery",
@@ -3926,7 +4134,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--upload-platforms",
         default="wechat,douyin,xiaohongshu,kuaishou",
-        help="Comma-separated platforms: wechat,douyin,xiaohongshu,kuaishou,bilibili",
+        help="Comma-separated platforms: wechat,douyin,xiaohongshu,kuaishou,bilibili,tiktok,x",
     )
     parser.set_defaults(xiaohongshu_allow_image=True)
     parser.add_argument(

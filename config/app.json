@@ -52,7 +52,7 @@
     }
   },
   "publish": {
-    "default_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+    "default_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili,tiktok,x",
     "platforms": {
       "wechat": {
         "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
@@ -87,6 +87,18 @@
         "publish_now": true,
         "auto_publish_random_schedule": false,
         "random_schedule_max_minutes": 240,
+        "upload_timeout": 30
+      },
+      "tiktok": {
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
+        "save_draft": false,
+        "publish_now": true,
+        "upload_timeout": 30
+      },
+      "x": {
+        "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
+        "save_draft": false,
+        "publish_now": true,
         "upload_timeout": 30
       }
     }
@@ -127,6 +139,19 @@
     "\u8d5b\u535a\u76ae\u5361",
     "\u7279\u65af\u62c9"
   ],
+  "sources": {
+    "platforms": "douyin,xiaohongshu",
+    "keywords": [
+      "cybertruck",
+      "tesla",
+      "\u8d5b\u535a\u76ae\u5361",
+      "\u7279\u65af\u62c9"
+    ],
+    "watch_accounts": {
+      "douyin": [],
+      "xiaohongshu": []
+    }
+  },
   "x_download": {
     "socket_timeout_seconds": 25,
     "extractor_retries": 2,

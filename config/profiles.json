@@ -23,6 +23,18 @@
         "特斯拉"
       ],
       "upload_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+      "target_platforms": "tiktok,x",
+      "source_platforms": "douyin,xiaohongshu",
+      "source_keywords": [
+        "cybertruck",
+        "tesla",
+        "赛博皮卡",
+        "特斯拉"
+      ],
+      "source_watch_accounts": {
+        "douyin": [],
+        "xiaohongshu": []
+      },
       "collect_limit": 10,
       "publish_limit": 3
     },
@@ -43,6 +55,18 @@
         "特斯拉"
       ],
       "upload_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+      "target_platforms": "tiktok,x",
+      "source_platforms": "douyin,xiaohongshu",
+      "source_keywords": [
+        "cybercar",
+        "tesla",
+        "赛博皮卡",
+        "特斯拉"
+      ],
+      "source_watch_accounts": {
+        "douyin": [],
+        "xiaohongshu": []
+      },
       "collect_limit": 10,
       "publish_limit": 3
     }

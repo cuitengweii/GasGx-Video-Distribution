@@ -113,7 +113,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _print_json(payload: Any) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        stdout = getattr(sys, "stdout", None)
+        encoding = str(getattr(stdout, "encoding", "") or "utf-8")
+        buffer = getattr(stdout, "buffer", None)
+        if buffer is not None:
+            buffer.write(text.encode(encoding, errors="replace") + b"\n")
+            return
+        print(json.dumps(payload, ensure_ascii=True, indent=2))
 
 
 def _print_json_and_hard_exit(payload: Any, code: int = 0) -> int:

@@ -169,6 +169,90 @@ def test_run_collect_once_uses_dedicated_x_session_settings(tmp_path: Path, monk
     assert all(item["x_cookie_file"] == str(tmp_path / "config" / "x_cookies.alt.json") for item in captured)
 
 
+def test_run_collect_once_collects_domestic_source_urls_when_configured(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin,xiaohongshu",
+            "keywords": [],
+            "watch_accounts": {"douyin": [], "xiaohongshu": []},
+        },
+        "x_download": {},
+    }
+    captured_x = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    captured_domestic: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        pipeline.core,
+        "download_from_source_urls",
+        lambda *args, **kwargs: captured_domestic.append(dict(kwargs)) or [],
+    )
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin,xiaohongshu",
+            "--source-url",
+            "https://www.douyin.com/video/123",
+            "--source-url",
+            "https://www.xiaohongshu.com/explore/456",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    assert captured_x == []
+    assert len(captured_domestic) == 2
+    assert {item["source_platform"] for item in captured_domestic} == {"douyin", "xiaohongshu"}
+
+
+def test_run_collect_once_continues_when_one_domestic_source_platform_fails(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin,xiaohongshu",
+            "keywords": [],
+            "watch_accounts": {"douyin": [], "xiaohongshu": []},
+        },
+        "x_download": {},
+    }
+    captured_x = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    captured_domestic: list[dict[str, object]] = []
+
+    def fake_download_from_source_urls(*args, **kwargs):
+        payload = dict(kwargs)
+        if payload.get("source_platform") == "douyin":
+            raise RuntimeError("douyin source failed")
+        captured_domestic.append(payload)
+        return []
+
+    monkeypatch.setattr(pipeline.core, "download_from_source_urls", fake_download_from_source_urls)
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin,xiaohongshu",
+            "--source-url",
+            "https://www.douyin.com/video/123",
+            "--source-url",
+            "https://www.xiaohongshu.com/explore/456",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    assert captured_x == []
+    assert len(captured_domestic) == 1
+    assert captured_domestic[0]["source_platform"] == "xiaohongshu"
+
+
 def test_build_parser_uses_configured_proxy_defaults(monkeypatch) -> None:
     monkeypatch.setattr(pipeline.core, "_default_network_proxy", lambda: "http://127.0.0.1:33210")
     monkeypatch.setattr(pipeline.core, "_default_use_system_proxy", lambda: False)

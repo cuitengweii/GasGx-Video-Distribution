@@ -5,7 +5,7 @@ Standalone CyberCar workspace extracted from the legacy monorepo.
 ## Core scope
 
 - Manual collect/publish review through the Telegram bot
-- Five-platform login/session checks
+- Multi-platform login/session checks (including TikTok/X)
 - WeChat like/comment automation
 - No scheduled collect/publish tasks in the standalone repo
 
@@ -27,10 +27,11 @@ For unattended resilience on Windows, install the watchdog tasks with `scripts/i
 ## Supporting commands
 
 ```powershell
-python -m cybercar immediate --profile cybertruck --platforms wechat,douyin,xiaohongshu,kuaishou,bilibili --limit 3
-python -m cybercar collect --profile cybertruck --limit 3
-python -m cybercar publish --profile cybertruck --platforms wechat,douyin,xiaohongshu,kuaishou,bilibili --limit 3
+python -m cybercar immediate --profile cybertruck --platforms tiktok,x --limit 3
+python -m cybercar collect --profile cybertruck --limit 3 --source-platforms douyin,xiaohongshu --source-keywords cybertruck,tesla
+python -m cybercar publish --profile cybertruck --platforms tiktok,x --limit 3
 python -m cybercar login open --platform x
+python -m cybercar login open --platform tiktok
 python -m cybercar login status --platform wechat
 python -m cybercar login open --platform douyin
 python -m cybercar login qr --platform wechat
@@ -46,9 +47,9 @@ python -m cybercar migrate-legacy
 - `profiles/`: local browser profiles
 - `docs/`: state/decisions/architecture/runbooks
 
-## X Collect Isolation
+## X Session Isolation
 
-- X collect now uses its own Chrome profile at `profiles/x_collect` and debug port `9335` by default.
+- X collect/publish now uses its own Chrome profile at `profiles/x_collect` and debug port `9335` by default.
 - Manual X cookies can be edited in `config/x_cookies.local.json`; this file is ignored by git.
 - `config/x_cookies.example.json` shows the supported structure, including `active_account` switching.
 - If `config/x_cookies.local.json` has values, they override the X collect profile cookies during GraphQL discovery and yt-dlp downloads.
@@ -56,4 +57,5 @@ python -m cybercar migrate-legacy
 ```powershell
 python -m cybercar login open --platform x
 python -m cybercar collect --profile cybertruck --limit 3 --x-debug-port 9335 --x-chrome-user-data-dir D:\code\CyberCar\profiles\x_collect --x-cookie-file D:\code\CyberCar\config\x_cookies.local.json
+python -m cybercar publish --profile cybertruck --platforms x --limit 3 --x-debug-port 9335 --x-chrome-user-data-dir D:\code\CyberCar\profiles\x_collect
 ```

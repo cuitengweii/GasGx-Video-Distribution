@@ -18,11 +18,18 @@ class ProfileMapping:
         self.keyword = str(payload.get("keyword") or "").strip()
         self.exclude_keywords = _normalize_list(payload.get("exclude_keywords"))
         self.require_any_keywords = _normalize_list(payload.get("require_any_keywords"))
-        upload_platforms = payload.get("upload_platforms")
+        upload_platforms = payload.get("target_platforms") or payload.get("upload_platforms")
         if isinstance(upload_platforms, list):
             self.upload_platforms = ",".join(_normalize_list(upload_platforms))
         else:
             self.upload_platforms = str(upload_platforms or "").strip()
+        source_platforms = payload.get("source_platforms")
+        if isinstance(source_platforms, list):
+            self.source_platforms = ",".join(_normalize_list(source_platforms))
+        else:
+            self.source_platforms = str(source_platforms or "").strip()
+        self.source_keywords = _normalize_list(payload.get("source_keywords"))
+        self.source_watch_accounts = _normalize_watch_accounts(payload.get("source_watch_accounts"))
         self.collect_limit = _to_int(payload.get("collect_limit"), 0)
         self.publish_limit = _to_int(payload.get("publish_limit"), 0)
 
@@ -55,6 +62,20 @@ def _to_int(raw: Any, default: int) -> int:
     return value if value > 0 else default
 
 
+def _normalize_watch_accounts(raw: Any) -> dict[str, list[str]]:
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, list[str]] = {}
+    for key, value in raw.items():
+        platform = str(key or "").strip().lower()
+        if not platform:
+            continue
+        entries = _normalize_list(value)
+        if entries:
+            result[platform] = entries
+    return result
+
+
 def _resolve_profile(profile_name: str) -> ProfileMapping:
     cfg = load_profile_config()
     profiles = cfg.get("profiles") if isinstance(cfg.get("profiles"), dict) else {}
@@ -72,6 +93,16 @@ def _merge_runtime_config(base: dict[str, Any], profile: ProfileMapping) -> dict
         merged["exclude_keywords"] = profile.exclude_keywords
     if profile.require_any_keywords:
         merged["require_any_keywords"] = profile.require_any_keywords
+    if profile.source_platforms or profile.source_keywords or profile.source_watch_accounts:
+        sources = merged.get("sources") if isinstance(merged.get("sources"), dict) else {}
+        merged_sources = dict(sources)
+        if profile.source_platforms:
+            merged_sources["platforms"] = profile.source_platforms
+        if profile.source_keywords:
+            merged_sources["keywords"] = list(profile.source_keywords)
+        if profile.source_watch_accounts:
+            merged_sources["watch_accounts"] = dict(profile.source_watch_accounts)
+        merged["sources"] = merged_sources
     return merged
 
 

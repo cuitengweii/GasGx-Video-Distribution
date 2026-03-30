@@ -75,3 +75,32 @@ def test_resolve_platform_publish_mode_with_config_reads_bilibili_random_schedul
         == 360
     )
     assert pipeline._resolve_platform_upload_timeout(args, runtime_config, "bilibili", minimum=600) == 30
+
+
+def test_resolve_platform_publish_mode_with_config_reads_x_platform_defaults() -> None:
+    args = SimpleNamespace(
+        wechat_publish_now=False,
+        publish_only=False,
+        wechat_save_draft_only=False,
+        no_save_draft=False,
+        kuaishou_auto_publish_random_schedule=False,
+        bilibili_auto_publish_random_schedule=False,
+        upload_timeout=30,
+    )
+    runtime_config = {
+        "publish": {
+            "platforms": {
+                "x": {
+                    "save_draft": False,
+                    "publish_now": True,
+                    "upload_timeout": 120,
+                }
+            }
+        }
+    }
+
+    mode = pipeline._resolve_platform_publish_mode_with_config(args, "x", runtime_config)
+
+    assert mode.save_draft is False
+    assert mode.publish_now is True
+    assert pipeline._resolve_platform_upload_timeout(args, runtime_config, "x", minimum=30) == 30

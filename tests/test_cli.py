@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+from cybercar import cli
 from cybercar.cli import build_parser
 from cybercar.telegram.bootstrap import recover_bot_surface
 
@@ -18,12 +21,51 @@ def test_cli_login_subcommand_parses_platform() -> None:
     assert args.platform == "wechat"
 
 
+def test_cli_login_subcommand_accepts_tiktok_platform() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["login", "open", "--platform", "tiktok"])
+    assert args.command == "login"
+    assert args.login_command == "open"
+    assert args.platform == "tiktok"
+
+
+def test_cli_login_subcommand_accepts_x_platform() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["login", "open", "--platform", "x"])
+    assert args.command == "login"
+    assert args.login_command == "open"
+    assert args.platform == "x"
+
+
 def test_cli_cleanup_subcommand_parses_apply_and_print_files() -> None:
     parser = build_parser()
     args = parser.parse_args(["cleanup", "--apply", "--print-files"])
     assert args.command == "cleanup"
     assert args.apply is True
     assert args.print_files is True
+
+
+def test_print_json_falls_back_when_console_cannot_encode(monkeypatch) -> None:
+    class _DummyBuffer:
+        def __init__(self) -> None:
+            self.chunks: list[bytes] = []
+
+        def write(self, data: bytes) -> int:
+            self.chunks.append(bytes(data))
+            return len(data)
+
+    dummy_buffer = _DummyBuffer()
+    monkeypatch.setattr(cli.sys, "stdout", SimpleNamespace(encoding="gbk", buffer=dummy_buffer))
+
+    def _broken_print(_text: str) -> None:
+        raise UnicodeEncodeError("gbk", "ə", 0, 1, "illegal multibyte sequence")
+
+    monkeypatch.setattr("builtins.print", _broken_print)
+
+    cli._print_json({"message": "ə"})
+
+    merged = b"".join(dummy_buffer.chunks).decode("gbk", errors="replace")
+    assert '"message": "?"' in merged
 
 
 def test_cli_engage_douyin_subcommand_parses_options() -> None:

@@ -1,30 +1,20 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """
-CyberCar 草稿助手（Windows 优先）。
+CyberCar 鑽夌鍔╂墜锛圵indows 浼樺厛锛夈€?
+鐜鍑嗗锛?1) Python 渚濊禆锛?   pip install DrissionPage
+   锛堝苟纭繚 yt-dlp銆乫fmpeg 鍦?PATH 涓級
 
-环境准备：
-1) Python 依赖：
-   pip install DrissionPage
-   （并确保 yt-dlp、ffmpeg 在 PATH 中）
-
-2) 工具安装：
-   - yt-dlp: https://github.com/yt-dlp/yt-dlp
+2) 宸ュ叿瀹夎锛?   - yt-dlp: https://github.com/yt-dlp/yt-dlp
    - ffmpeg: https://ffmpeg.org/download.html
 
-3) 默认会自动启动 Chrome 调试模式并打开视频号发布页。
-   如需手动启动，可使用：
-   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ^
+3) 榛樿浼氳嚜鍔ㄥ惎鍔?Chrome 璋冭瘯妯″紡骞舵墦寮€瑙嗛鍙峰彂甯冮〉銆?   濡傞渶鎵嬪姩鍚姩锛屽彲浣跨敤锛?   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ^
      --remote-debugging-port=9333 ^
      --user-data-dir="D:\\ChromeDebugProfile_CyberCar"
 
-4) 在该 Chrome 配置中登录微信视频号助手（首次需要）：
-   https://channels.weixin.qq.com/platform/post/create
+4) 鍦ㄨ Chrome 閰嶇疆涓櫥褰曞井淇¤棰戝彿鍔╂墜锛堥娆￠渶瑕侊級锛?   https://channels.weixin.qq.com/platform/post/create
 
-说明：
-- 本脚本用于授权内容处理流程。
-- 默认只负责上传与填写草稿；仅在显式即时发布模式下会点击发表。
-"""
+璇存槑锛?- 鏈剼鏈敤浜庢巿鏉冨唴瀹瑰鐞嗘祦绋嬨€?- 榛樿鍙礋璐ｄ笂浼犱笌濉啓鑽夌锛涗粎鍦ㄦ樉寮忓嵆鏃跺彂甯冩ā寮忎笅浼氱偣鍑诲彂琛ㄣ€?"""
 
 import argparse
 import base64
@@ -170,10 +160,10 @@ REQUIRED_CAPTION_KEYWORD = "特斯拉 Cybertruck"
 DEFAULT_HASHTAGS = " ".join(REQUIRED_HASHTAGS)
 KUAISHOU_HASHTAG_LIMIT = 4
 KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#特斯拉Cybertruck"]
-DEFAULT_CAPTION = f"Cybertruck 赛博皮卡最新画面！\n\n{DEFAULT_HASHTAGS}"
+DEFAULT_CAPTION = f"Cybertruck 璧涘崥鐨崱鏈€鏂扮敾闈紒\n\n{DEFAULT_HASHTAGS}"
 DEFAULT_COLLECTION_NAME = "赛博皮卡天津港现车"
 DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
-    "douyin": "赛博皮卡现车：aawbcc",
+    "douyin": "璧涘崥鐨崱鐜拌溅锛歛awbcc",
 }
 DEFAULT_KUAISHOU_RANDOM_SCHEDULE_MAX_MINUTES = 45
 COMMENT_INTERACTION_WAIT_MIN_SECONDS = 3.0
@@ -189,6 +179,8 @@ XIAOHONGSHU_CREATE_POST_URL = "https://creator.xiaohongshu.com/publish/publish"
 KUAISHOU_CREATE_POST_URL = "https://cp.kuaishou.com/article/publish/video"
 KUAISHOU_CREATE_IMAGE_POST_URL = "https://cp.kuaishou.com/article/publish/video?tabType=2"
 BILIBILI_CREATE_POST_URL = "https://member.bilibili.com/platform/upload/video/frame"
+TIKTOK_CREATE_POST_URL = "https://www.tiktok.com/upload?lang=en"
+X_CREATE_POST_URL = "https://x.com/compose/post"
 X_LOGIN_URL = "https://x.com/i/flow/login"
 X_COLLECT_LIVE_URL = "https://x.com/search?q=Cybertruck%20filter%3Avideos&src=typed_query&f=live"
 PLATFORM_CREATE_POST_URLS = {
@@ -197,15 +189,19 @@ PLATFORM_CREATE_POST_URLS = {
     "xiaohongshu": XIAOHONGSHU_CREATE_POST_URL,
     "kuaishou": KUAISHOU_CREATE_POST_URL,
     "bilibili": BILIBILI_CREATE_POST_URL,
+    "tiktok": "TikTok",
+    "tiktok": TIKTOK_CREATE_POST_URL,
+    "x": X_CREATE_POST_URL,
 }
 PLATFORM_LOGIN_ENTRY_URLS = {
     "collect": X_LOGIN_URL,
-    "x": X_LOGIN_URL,
+    "x": X_CREATE_POST_URL,
     "wechat": "https://channels.weixin.qq.com/login.html",
     "douyin": DOUYIN_CREATE_POST_URL,
     "xiaohongshu": "https://creator.xiaohongshu.com/login",
     "kuaishou": "https://passport.kuaishou.com/pc/account/login",
     "bilibili": "https://passport.bilibili.com/login",
+    "tiktok": "https://www.tiktok.com/login",
 }
 PLATFORM_LOGIN_DISPLAY_NAMES = {
     "collect": "X采集",
@@ -215,6 +211,7 @@ PLATFORM_LOGIN_DISPLAY_NAMES = {
     "xiaohongshu": "小红书",
     "kuaishou": "快手",
     "bilibili": "B站",
+    "tiktok": "TikTok",
 }
 PLATFORM_LOGIN_PAGE_HINTS = {
     "collect": {
@@ -222,9 +219,9 @@ PLATFORM_LOGIN_PAGE_HINTS = {
         "text_markers": (
             "Sign in to X",
             "Log in to X",
-            "登录 X",
-            "登录到 X",
-            "手机、邮件地址或用户名",
+            "鐧诲綍 X",
+            "鐧诲綍鍒?X",
+            "鎵嬫満銆侀偖浠跺湴鍧€鎴栫敤鎴峰悕",
             "Phone, email, or username",
         ),
     },
@@ -233,10 +230,23 @@ PLATFORM_LOGIN_PAGE_HINTS = {
         "text_markers": (
             "Sign in to X",
             "Log in to X",
-            "登录 X",
-            "登录到 X",
-            "手机、邮件地址或用户名",
+            "鐧诲綍 X",
+            "鐧诲綍鍒?X",
+            "鎵嬫満銆侀偖浠跺湴鍧€鎴栫敤鎴峰悕",
             "Phone, email, or username",
+        ),
+    },
+    "tiktok": {
+        "url_tokens": ("tiktok.com/login",),
+        "text_markers": (
+            "Log in",
+            "Use QR code",
+            "Use phone / email / username",
+            "Don't have an account?",
+            "登录",
+            "使用二维码登录",
+            "使用手机号码/电子邮箱/用户名登录",
+            "还没有账号？",
         ),
     },
     "wechat": {
@@ -248,7 +258,6 @@ PLATFORM_LOGIN_PAGE_HINTS = {
             "请先登录",
             "登录后继续",
             "账号登录",
-            "帐号登录",
             "手机验证码登录",
         ),
     },
@@ -294,8 +303,10 @@ PLATFORM_LOGIN_PAGE_HINTS = {
         ),
     },
 }
-SUPPORTED_UPLOAD_PLATFORMS = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili")
+SUPPORTED_UPLOAD_PLATFORMS = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili", "tiktok", "x")
 DEFAULT_UPLOAD_PLATFORMS = "wechat"
+SUPPORTED_SOURCE_PLATFORMS = ("x", "douyin", "xiaohongshu")
+DEFAULT_SOURCE_PLATFORMS = "x"
 MAX_BLOCKING_WAIT_SECONDS = 30
 UPLOAD_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DRAFT_SAVE_TIMEOUT_SECONDS = 25
@@ -353,6 +364,18 @@ DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
         "publish_now": True,
         "auto_publish_random_schedule": False,
         "random_schedule_max_minutes": BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
+        "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
+    },
+    "tiktok": {
+        "collection_name": DEFAULT_COLLECTION_NAME,
+        "save_draft": False,
+        "publish_now": True,
+        "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
+    },
+    "x": {
+        "collection_name": DEFAULT_COLLECTION_NAME,
+        "save_draft": False,
+        "publish_now": True,
         "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
     },
 }
@@ -535,27 +558,27 @@ WECHAT_COMMENT_REPLY_STATE_FILE = "wechat_comment_reply_state.json"
 WECHAT_COMMENT_REPLY_MARKDOWN_FILE = "wechat_comment_reply_records.md"
 WECHAT_COMMENT_REPLY_RETENTION_DAYS = 30
 LEGACY_BROKEN_WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
-    "你是特斯拉 Cybertruck 社区管理者。"
+    "你是特斯拉 Cybertruck 社区管理员。"
     "你必须只输出 JSON 对象，格式为 {\"reply\":\"...\"}。"
-    "reply 必须是中文、友好、鼓励、共鸣、20 字以内，不要换行，不要引导私信，不要外链。"
+    "reply 必须是中文、友好、鼓励、有共鸣，20 字以内，不要换行，不要引导私信，不要外链。"
 )
 LEGACY_BROKEN_DEFAULT_COMMENT_REPLY_FALLBACKS = [
-    "谢谢喜欢，一起见证更多精彩",
-    "感谢关注，欢迎继续交流想法",
-    "很有共鸣，期待和你继续讨论",
-    "谢谢支持，后面还有更多惊喜",
+    "谢谢喜欢，一起见证更多精彩。",
+    "感谢关注，欢迎继续交流想法。",
+    "很有共鸣，期待和你继续讨论。",
+    "谢谢支持，后面还有更多惊喜。",
 ]
 LEGACY_BROKEN_DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE = (
-    "请你作为特斯拉 Cybertruck 社区管理者，根据粉丝评论生成一条中文回复。\n"
+    "请你作为特斯拉 Cybertruck 社区管理员，根据粉丝评论生成一条中文回复。\n"
     "视频标题：{post_title}\n"
-    "视频时间：{post_published_text}\n"
+    "发布时间：{post_published_text}\n"
     "粉丝评论：{comment_content}\n"
-    "要求：友好、鼓励、共鸣；20字以内；不要换行；不要引导私信；不要外链；只返回 JSON。"
+    "要求：友好、鼓励、有共鸣；20字以内；不要换行；不要引导私信；不要外链；只返回 JSON。"
 )
 WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
     "你是特斯拉 Cybertruck 社区运营。"
     "你必须只输出 JSON 对象，格式为 {\"reply\":\"...\"}。"
-    "reply 必须是中文、友好、积极、共鸣感强，20 字以内，不要换行，不要引导私信，不要外链。"
+    "reply 必须是中文、友好、积极、有共鸣感，20 字以内，不要换行，不要引导私信，不要外链。"
 )
 DEFAULT_COMMENT_REPLY_FALLBACKS = [
     "谢谢喜欢，一起见证更多精彩。",
@@ -606,9 +629,9 @@ PLATFORM_NOTIFY_NAME = {
     "bilibili": "哔哩哔哩",
 }
 PLATFORM_NOTIFY_LOGO = {
-    "wechat": "🟢",
+    "wechat": "📱",
     "douyin": "🎵",
-    "xiaohongshu": "📕",
+    "xiaohongshu": "📝",
     "kuaishou": "⚡",
     "bilibili": "📺",
 }
@@ -1182,19 +1205,19 @@ def _resolve_caption_details_for_notify(target_video: Path, manual_caption: str)
 
 def _platform_notify_badge(platform: str) -> str:
     token = str(platform or "").strip().lower()
-    name = PLATFORM_NOTIFY_NAME.get(token, token or "未知平台")
-    logo = PLATFORM_NOTIFY_LOGO.get(token, "📌")
+    name = PLATFORM_NOTIFY_NAME.get(token, token or "鏈煡骞冲彴")
+    logo = PLATFORM_NOTIFY_LOGO.get(token, "馃搶")
     return f"{logo} {name}"
 
 
 def _platform_display_name(platform: str) -> str:
     token = str(platform or "").strip().lower()
-    return str(PLATFORM_NOTIFY_NAME.get(token, token or "未知平台"))
+    return str(PLATFORM_NOTIFY_NAME.get(token, token or "鏈煡骞冲彴"))
 
 
 def _platform_display_with_logo(platform: str) -> str:
     token = str(platform or "").strip().lower()
-    logo = str(PLATFORM_NOTIFY_LOGO.get(token, "📌") or "📌")
+    logo = str(PLATFORM_NOTIFY_LOGO.get(token, "馃搶") or "馃搶")
     return f"{logo} {_platform_display_name(token)}"
 
 
@@ -1203,9 +1226,9 @@ def _is_unfinished_edit_state(text: str, action_texts: Optional[Sequence[str]] =
     normalized_actions = " ".join(str(item or "") for item in (action_texts or ()))
     combined = f"{normalized_text}\n{normalized_actions}"
     state_markers = (
-        "继续编辑",
-        "未发布的视频",
-        "未提交的视频",
+        "缁х画缂栬緫",
+        "鏈彂甯冪殑瑙嗛",
+        "鏈彁浜ょ殑瑙嗛",
         "未完成视频",
         "未完成作品",
         "unfinished-video dialog",
@@ -1218,7 +1241,7 @@ def _is_unfinished_edit_state(text: str, action_texts: Optional[Sequence[str]] =
 def classify_publish_failure_reason(platform_name: str, error_text: str) -> str:
     raw = str(error_text or "").strip()
     if not raw:
-        return "发布失败，请检查页面状态后重试"
+        return "鍙戝竷澶辫触锛岃妫€鏌ラ〉闈㈢姸鎬佸悗閲嶈瘯"
 
     text = _normalize_text(raw, limit=600)
     lower = text.lower()
@@ -1266,11 +1289,11 @@ def classify_publish_failure_reason(platform_name: str, error_text: str) -> str:
         "title too long",
         "内容不符合规范",
         "请填写",
-        "请补充",
+        "请补全",
     )
     network_markers = (
-        "网络异常",
-        "请求失败",
+        "缃戠粶寮傚父",
+        "璇锋眰澶辫触",
         "ssl",
         "connection",
         "timeout",
@@ -1296,30 +1319,30 @@ def classify_publish_failure_reason(platform_name: str, error_text: str) -> str:
     debug_markers = (
         "chrome debug port",
         "debug port",
-        "调试端口",
-        "未检测到 chrome",
+        "璋冭瘯绔彛",
+        "鏈娴嬪埌 chrome",
         "自动启动 chrome 后仍未就绪",
     )
 
     if _is_unfinished_edit_state(raw):
-        return "页面停留在继续编辑/未完成作品状态，请先处理弹窗后重试"
+        return "页面停留在继续编辑或未完成作品状态，请先处理弹窗后重试"
     if any(marker in text for marker in login_markers) or any(marker in lower for marker in login_markers):
         return "未登录，请先完成扫码登录后重试"
     if any(marker in text for marker in no_media_markers) or any(marker in lower for marker in no_media_markers):
         return "没有可发布素材"
     if any(marker in text for marker in draft_markers) or any(marker in lower for marker in draft_markers):
-        return "发布未完成，平台已回到草稿页"
+        return "鍙戝竷鏈畬鎴愶紝骞冲彴宸插洖鍒拌崏绋块〉"
     if any(marker in text for marker in validation_markers) or any(marker in lower for marker in validation_markers):
-        return "平台校验未通过，请检查标题、文案或素材"
+        return "骞冲彴鏍￠獙鏈€氳繃锛岃妫€鏌ユ爣棰樸€佹枃妗堟垨绱犳潗"
     if any(marker in text for marker in network_markers) or any(marker in lower for marker in network_markers):
-        return "网络异常，请稍后重试"
+        return "缃戠粶寮傚父锛岃绋嶅悗閲嶈瘯"
     if any(marker in text for marker in debug_markers) or any(marker in lower for marker in debug_markers):
         return "浏览器连接未就绪，请检查调试浏览器后重试"
     if any(marker in text for marker in ambiguous_result_markers) or any(marker in lower for marker in ambiguous_result_markers):
-        return "发布结果未明确，需核实是否已提交到作品管理"
+        return "鍙戝竷缁撴灉鏈槑纭紝闇€鏍稿疄鏄惁宸叉彁浜ゅ埌浣滃搧绠＄悊"
     if any(marker in text for marker in page_state_markers) or any(marker in lower for marker in page_state_markers):
-        return "页面状态异常，未找到上传或发布入口"
-    return "发布失败，请检查页面状态后重试"
+        return "椤甸潰鐘舵€佸紓甯革紝鏈壘鍒颁笂浼犳垨鍙戝竷鍏ュ彛"
+    return "鍙戝竷澶辫触锛岃妫€鏌ラ〉闈㈢姸鎬佸悗閲嶈瘯"
 
 
 def describe_publish_failure(platform_name: str, error_text: str) -> dict[str, str]:
@@ -1328,28 +1351,28 @@ def describe_publish_failure(platform_name: str, error_text: str) -> dict[str, s
     if not friendly_reason:
         return {"reason": "", "category": "", "suggestion": "", "raw_signal": raw}
 
-    category = "发布失败"
-    suggestion = "请检查平台页面状态后重试"
+    category = "鍙戝竷澶辫触"
+    suggestion = "璇锋鏌ュ钩鍙伴〉闈㈢姸鎬佸悗閲嶈瘯"
     if friendly_reason.startswith("未登录"):
-        category = "登录失效"
+        category = "鐧诲綍澶辨晥"
         suggestion = "先完成扫码登录，再重新触发发布"
-    elif "草稿" in friendly_reason:
-        category = "回退草稿"
-        suggestion = "打开平台草稿箱核对内容，并重新执行发布"
-    elif "校验" in friendly_reason:
-        category = "平台校验失败"
-        suggestion = "检查标题、文案、封面或素材是否满足平台要求"
+    elif "鑽夌" in friendly_reason:
+        category = "鍥為€€鑽夌"
+        suggestion = "打开平台草稿箱核对内容，再重新执行发布"
+    elif "鏍￠獙" in friendly_reason:
+        category = "骞冲彴鏍￠獙澶辫触"
+        suggestion = "妫€鏌ユ爣棰樸€佹枃妗堛€佸皝闈㈡垨绱犳潗鏄惁婊¤冻骞冲彴瑕佹眰"
     elif "结果未明确" in friendly_reason:
         category = "发布结果未确认"
         suggestion = "先到作品管理核实是否已提交，确认未发布后再重试"
-    elif "网络异常" in friendly_reason:
-        category = "网络异常"
-        suggestion = "检查网络连通性后重试"
+    elif "缃戠粶寮傚父" in friendly_reason:
+        category = "缃戠粶寮傚父"
+        suggestion = "妫€鏌ョ綉缁滆繛閫氭€у悗閲嶈瘯"
     elif "页面状态" in friendly_reason:
         category = "页面状态异常"
-        suggestion = "确认发布页已正确加载，并且存在可点击的上传/发布入口"
-    elif "浏览器连接未就绪" in friendly_reason:
-        category = "浏览器未就绪"
+        suggestion = "纭鍙戝竷椤靛凡姝ｇ‘鍔犺浇锛屽苟涓斿瓨鍦ㄥ彲鐐瑰嚮鐨勪笂浼?鍙戝竷鍏ュ彛"
+    elif "娴忚鍣ㄨ繛鎺ユ湭灏辩华" in friendly_reason:
+        category = "娴忚鍣ㄦ湭灏辩华"
         suggestion = "确认 Chrome 调试端口可用后重试"
 
     return {
@@ -1376,7 +1399,7 @@ def _notify_desc_prefix10(target_video: Path, manual_caption: str, meta: dict[st
         chinese_chars = re.findall(r"[\u4e00-\u9fff]", compact)
         if chinese_chars:
             return "".join(chinese_chars)[:10]
-    return "暂无中文描述"
+    return "鏆傛棤涓枃鎻忚堪"
 
 
 def _build_publish_notification_message(
@@ -1464,8 +1487,7 @@ def _build_notify_settings(args: argparse.Namespace) -> NotifySettings:
         )
     resolved_telegram = shared_resolve_telegram_bot_settings(
         {
-            # 标识优先仍保留；但允许显式入参作为兜底（例如 Telegram 菜单触发时透传 chat_id）。
-            "bot_token": telegram_bot_token,
+            # 鏍囪瘑浼樺厛浠嶄繚鐣欙紱浣嗗厑璁告樉寮忓叆鍙備綔涓哄厹搴曪紙渚嬪 Telegram 鑿滃崟瑙﹀彂鏃堕€忎紶 chat_id锛夈€?            "bot_token": telegram_bot_token,
             "chat_id": telegram_chat_id,
             "registry_file": telegram_registry_file,
             "timeout_seconds": telegram_timeout_seconds,
@@ -1988,7 +2010,7 @@ def _build_login_qr_extract_script(platform_name: str) -> str:
           '[class*="qrcode"] img',
           '[class*="qr-code"] img',
           '[data-testid*="qrcode"] img',
-          'img[alt*="二维码"]',
+          'img[alt*="浜岀淮鐮?]',
           'img[alt*="qrcode" i]'
         ];
         const containerSelectors = [
@@ -2176,7 +2198,7 @@ def _build_login_qr_extract_script(platform_name: str) -> str:
           '[id*="scan_code"] img',
           '[class*="qrcode"] img',
           '[class*="qrcode"] canvas',
-          'img[alt="二维码"]'
+          'img[alt="浜岀淮鐮?]'
         ];
         const rootSelectors = [
           '#douyin_login_comp_scan_code',
@@ -2884,7 +2906,7 @@ def _read_platform_login_signal(platform_name: str, profile_dir: str) -> dict[st
     if not path.exists():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -3927,6 +3949,14 @@ def _default_runtime_config() -> dict[str, Any]:
                 for platform, name in DEFAULT_PLATFORM_COLLECTION_NAMES.items()
             },
         },
+        "sources": {
+            "platforms": DEFAULT_SOURCE_PLATFORMS,
+            "keywords": [],
+            "watch_accounts": {
+                "douyin": [],
+                "xiaohongshu": [],
+            },
+        },
         "auto_delete_source_files": DEFAULT_AUTO_DELETE_SOURCE_FILES,
         "exclude_keywords": DEFAULT_EXCLUDE_KEYWORDS.copy(),
         "require_any_keywords": DEFAULT_REQUIRE_ANY_KEYWORDS.copy(),
@@ -4143,6 +4173,72 @@ def _normalize_upload_platforms(raw: str) -> list[str]:
     return result
 
 
+def _normalize_source_platforms(raw: Any) -> list[str]:
+    if isinstance(raw, (list, tuple)):
+        tokens = [str(x or "").strip().lower() for x in raw if str(x or "").strip()]
+    else:
+        tokens = [x.strip().lower() for x in re.split(r"[,\s]+", str(raw or "")) if x.strip()]
+    if not tokens:
+        tokens = [DEFAULT_SOURCE_PLATFORMS]
+    result: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token in {"twitter", "twitter.com"}:
+            token = "x"
+        elif token in {"xhs", "rednote"}:
+            token = "xiaohongshu"
+        if token in seen:
+            continue
+        if token not in SUPPORTED_SOURCE_PLATFORMS:
+            supported = ", ".join(SUPPORTED_SOURCE_PLATFORMS)
+            raise ValueError(f"Unsupported source platform: {token}. Supported: {supported}")
+        seen.add(token)
+        result.append(token)
+    return result
+
+
+def _normalize_source_watch_accounts(raw: Any) -> dict[str, list[str]]:
+    defaults = {platform: [] for platform in SUPPORTED_SOURCE_PLATFORMS if platform != "x"}
+    if not isinstance(raw, dict):
+        return defaults
+    payload = {platform: [] for platform in defaults}
+    for key, value in raw.items():
+        platform = str(key or "").strip().lower()
+        if platform in {"xhs", "rednote"}:
+            platform = "xiaohongshu"
+        if platform not in payload:
+            continue
+        if isinstance(value, str):
+            entries = [part.strip() for part in re.split(r"[,\n\r]+", value) if str(part or "").strip()]
+        elif isinstance(value, list):
+            entries = [str(part or "").strip() for part in value if str(part or "").strip()]
+        else:
+            entries = []
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in entries:
+            marker = item.lower()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(item)
+        payload[platform] = deduped
+    return payload
+
+
+def _merge_sources_config(raw: Any) -> dict[str, Any]:
+    payload = raw if isinstance(raw, dict) else {}
+    try:
+        platforms = ",".join(_normalize_source_platforms(payload.get("platforms")))
+    except ValueError:
+        platforms = DEFAULT_SOURCE_PLATFORMS
+    return {
+        "platforms": platforms,
+        "keywords": _normalize_keyword_list(payload.get("keywords"), []),
+        "watch_accounts": _normalize_source_watch_accounts(payload.get("watch_accounts")),
+    }
+
+
 def _default_spark_ai_config() -> dict[str, Any]:
     return shared_default_spark_settings()
 
@@ -4352,7 +4448,7 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
         return defaults.copy()
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         _log(f"[Config] Failed to parse config, fallback to defaults: {path} ({exc})")
         return defaults.copy()
@@ -4398,6 +4494,17 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
         payload.get("require_any_keywords"),
         DEFAULT_REQUIRE_ANY_KEYWORDS,
     )
+    source_payload = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+    if "source_platforms" in payload and "platforms" not in source_payload:
+        source_payload = dict(source_payload)
+        source_payload["platforms"] = payload.get("source_platforms")
+    if "source_keywords" in payload and "keywords" not in source_payload:
+        source_payload = dict(source_payload)
+        source_payload["keywords"] = payload.get("source_keywords")
+    if "source_watch_accounts" in payload and "watch_accounts" not in source_payload:
+        source_payload = dict(source_payload)
+        source_payload["watch_accounts"] = payload.get("source_watch_accounts")
+    merged["sources"] = _merge_sources_config(source_payload)
     merged["x_download"] = _merge_x_download_config(payload.get("x_download"))
     merged["spark_ai"] = _merge_spark_ai_config(payload.get("spark_ai"))
     merged["comment_reply"] = _merge_comment_reply_config(payload.get("comment_reply"))
@@ -4826,23 +4933,23 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
           '[class*="commentCount"]',
           '[data-testid*="comment"]',
           '[data-role*="comment"]',
-          '[aria-label*="评论"]',
-          '[title*="评论"]',
+          '[aria-label*="璇勮"]',
+          '[title*="璇勮"]',
         ];
         for (const selector of selectors) {
           const node = card.querySelector(selector);
           const text = norm(node ? (node.innerText || node.textContent || '') : '');
           const count = toInt(text);
           if (count > 0) return { count, hasComments: true, source: text || selector };
-          if (/评论/.test(text)) return { count: 0, hasComments: true, source: text || selector };
+          if (/璇勮/.test(text)) return { count: 0, hasComments: true, source: text || selector };
         }
         const fullText = norm(card.innerText || card.textContent || '');
-        const explicitMatch = fullText.match(/(\\d+)\\s*(?:条)?评论/);
+        const explicitMatch = fullText.match(/(\\d+)\\s*(?:鏉??璇勮/);
         if (explicitMatch) {
           const count = toInt(explicitMatch[1]);
           return { count, hasComments: count > 0, source: explicitMatch[0] };
         }
-        if (/有新评论|新评论|评论/.test(fullText) && !/关闭评论/.test(fullText)) {
+        if (/鏈夋柊璇勮|鏂拌瘎璁簗璇勮/.test(fullText) && !/鍏抽棴璇勮/.test(fullText)) {
           return { count: 0, hasComments: true, source: fullText };
         }
         return { count: 0, hasComments: false, source: '' };
@@ -5271,16 +5378,16 @@ def extract_comments(page: ChromiumPage) -> list[dict[str, Any]]:
         const noise = [
           author,
           timeText,
-          '回复',
-          '删除',
-          '置顶',
-          '投诉',
-          '移入黑名单',
-          '仅能置顶一条评论',
-          '取消',
-          '替换置顶',
-          '作者赞过',
-          '点赞',
+          '鍥炲',
+          '鍒犻櫎',
+          '缃《',
+          '鎶曡瘔',
+          '绉诲叆榛戝悕鍗?,
+          '浠呰兘缃《涓€鏉¤瘎璁?,
+          '鍙栨秷',
+          '鏇挎崲缃《',
+          '浣滆€呰禐杩?,
+          '鐐硅禐',
         ].filter(Boolean);
         for (const token of noise) {
           reduced = reduced.split(norm(token)).join(' ');
@@ -5306,7 +5413,7 @@ def extract_comments(page: ChromiumPage) -> list[dict[str, Any]]:
           if (!timeText && /(\\d{4}[\\/-]\\d{1,2}[\\/-]\\d{1,2})|(\\d{1,2}:\\d{2})/.test(text)) {
             timeText = text;
           }
-          if (!author && text !== content && text.length <= 40 && !/回复|评论|作者回复过/.test(text)) {
+          if (!author && text !== content && text.length <= 40 && !/鍥炲|璇勮|浣滆€呭洖澶嶈繃/.test(text)) {
             author = text;
           }
           if (author && timeText) break;
@@ -5413,7 +5520,7 @@ def _open_comment_reply_box(page: ChromiumPage, comment_index: int) -> bool:
       const item = items[Number(commentIndex)];
       if (!item) return { ok: false, reason: 'comment_not_found' };
       const icon = item.querySelector('.weui-icon-outlined-comment');
-      const button = (icon && icon.closest('.action-item')) || Array.from(item.querySelectorAll('.action-item')).find((node) => /回复/.test(norm(node.innerText || node.textContent || '')));
+      const button = (icon && icon.closest('.action-item')) || Array.from(item.querySelectorAll('.action-item')).find((node) => /鍥炲/.test(norm(node.innerText || node.textContent || '')));
       if (!button) return { ok: false, reason: 'reply_button_not_found' };
       return { ok: click(button), reason: 'clicked' };
     })(arguments[0]);
@@ -5567,7 +5674,7 @@ def wait_reply_confirm(page: ChromiumPage, comment_index: int, reply_text: str, 
       }
       const doc = resolveWechatCommentDoc();
       const bodyText = norm(doc && (doc.innerText || doc.textContent || ''));
-      if (bodyText.includes(norm(targetText)) || bodyText.includes('已回复')) {
+      if (bodyText.includes(norm(targetText)) || bodyText.includes('宸插洖澶?)) {
         return true;
       }
       const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
@@ -5674,23 +5781,23 @@ def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
           '[class*="commentCount"]',
           '[data-testid*="comment"]',
           '[data-role*="comment"]',
-          '[aria-label*="评论"]',
-          '[title*="评论"]',
+          '[aria-label*="璇勮"]',
+          '[title*="璇勮"]',
         ];
         for (const selector of selectors) {
           const node = card.querySelector(selector);
           const text = norm(node ? (node.innerText || node.textContent || '') : '');
           const count = toInt(text);
           if (count > 0) return { count, hasComments: true, source: text || selector };
-          if (/评论/.test(text)) return { count: 0, hasComments: true, source: text || selector };
+          if (/璇勮/.test(text)) return { count: 0, hasComments: true, source: text || selector };
         }
         const fullText = norm(card.innerText || card.textContent || '');
-        const explicitMatch = fullText.match(/(\\d+)\\s*(?:条)?评论/);
+        const explicitMatch = fullText.match(/(\\d+)\\s*(?:鏉??璇勮/);
         if (explicitMatch) {
           const count = toInt(explicitMatch[1]);
           return { count, hasComments: count > 0, source: explicitMatch[0] };
         }
-        if (/有新评论|新评论|评论/.test(fullText) && !/关闭评论/.test(fullText)) {
+        if (/鏈夋柊璇勮|鏂拌瘎璁簗璇勮/.test(fullText) && !/鍏抽棴璇勮/.test(fullText)) {
           return { count: 0, hasComments: true, source: fullText };
         }
         return { count: 0, hasComments: false, source: '' };
@@ -6055,16 +6162,16 @@ def _playwright_extract_comments(frame: Any) -> list[dict[str, Any]]:
         const noise = [
           author,
           timeText,
-          '回复',
-          '删除',
-          '置顶',
-          '投诉',
-          '移入黑名单',
-          '仅能置顶一条评论',
-          '取消',
-          '替换置顶',
-          '作者赞过',
-          '点赞',
+          '鍥炲',
+          '鍒犻櫎',
+          '缃《',
+          '鎶曡瘔',
+          '绉诲叆榛戝悕鍗?,
+          '浠呰兘缃《涓€鏉¤瘎璁?,
+          '鍙栨秷',
+          '鏇挎崲缃《',
+          '浣滆€呰禐杩?,
+          '鐐硅禐',
         ].filter(Boolean);
         for (const token of noise) {
           reduced = reduced.split(norm(token)).join(' ');
@@ -6440,9 +6547,9 @@ def _sanitize_comment_reply_text(raw: str, max_chars: int) -> str:
     text = re.sub(r"https?://\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"[\r\n\t]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    text = text.strip("\"'`“”‘’「」[]【】")
+    text = text.strip("\"'`“”‘’[]【】")
     if len(text) > max_chars:
-        text = text[: max_chars].rstrip(" ，,。.!！?？")
+        text = text[: max_chars].rstrip(" ，。!?！？")
     return text.strip()
 
 
@@ -7514,7 +7621,7 @@ def _check_x_login_ready(page: ChromiumPage) -> None:
     url = (page.url or "").lower()
     if "/i/flow/login" in url or "/login" in url:
         raise RuntimeError("X 页面未登录。请先在该 Chrome 用户目录中登录 X 账号，再重试。")
-    for marker in ("text:Sign in", "text:Log in", "text:登录", "text:注册"):
+    for marker in ("text:Sign in", "text:Log in", "text:鐧诲綍", "text:娉ㄥ唽"):
         try:
             ele = page.ele(marker, timeout=0.6)
             if ele and _is_visible_element(ele):
@@ -7605,11 +7712,11 @@ def _match_platform_login_gate_from_snapshot(
             }
 
     if platform == "wechat":
-        if "二维码已过期" in compact_text or ("点击刷新" in compact_text and ("扫码登录" in compact_text or "微信扫码登录" in compact_text)):
+        if "浜岀淮鐮佸凡杩囨湡" in compact_text or ("鐐瑰嚮鍒锋柊" in compact_text and ("鎵爜鐧诲綍" in compact_text or "寰俊鎵爜鐧诲綍" in compact_text)):
             return {
                 "needs_login": True,
                 "reason": "wechat_qr_expired",
-                "matched_marker": "二维码已过期",
+                "matched_marker": "浜岀淮鐮佸凡杩囨湡",
                 "url": url_text,
             }
         if (
@@ -7887,7 +7994,7 @@ def _check_platform_login_ready(
             return
         _clear_platform_login_signal(platform, chrome_user_data_dir, wait_token)
         raise RuntimeError(
-            f"{display_name}未登录，已通过 Telegram 发送登录提醒。"
+            f"{display_name} 未登录，已通过 Telegram 发送登录提醒。"
             f"请先完成登录后再重试。会话目录：{profile_dir}"
         )
 
@@ -7936,7 +8043,7 @@ def _discover_media_urls_in_x_page(
     const articles = Array.from(document.querySelectorAll('article[data-testid=\"tweet\"], article'));
     for (const article of articles) {
       const txt = (article.innerText || '').toLowerCase();
-      const promoted = txt.includes('promoted') || txt.includes('广告') || txt.includes('赞助');
+      const promoted = txt.includes('promoted') || txt.includes('骞垮憡') || txt.includes('璧炲姪');
       if (promoted) continue;
       if (needKeyword && key && !txt.includes(key)) continue;
       const hasVideo = !!article.querySelector(
@@ -8956,7 +9063,7 @@ def discover_x_urls_via_seed_accounts(
 def _load_urls_file(path: str) -> list[str]:
     file_path = Path(path)
     if not file_path.exists():
-        raise RuntimeError(f"tweet-url 文件不存在: {file_path}")
+        raise RuntimeError(f"tweet-url 鏂囦欢涓嶅瓨鍦? {file_path}")
 
     urls: list[str] = []
     for line in file_path.read_text(encoding="utf-8").splitlines():
@@ -9811,10 +9918,10 @@ def _generate_bilingual_caption_with_spark(base_text: str, spark_ai: Optional[di
     user_prompt = (
         "根据素材信息生成短视频描述，返回 JSON：{\"zh\":\"...\",\"en\":\"...\"}。\n"
         "要求：\n"
-        "1) zh 为中文，en 为英文；都要贴合素材内容。\n"
+        "1) zh 为中文，en 为英文，且都要贴合素材内容。\n"
         "2) zh 必须包含完整关键词：特斯拉 Cybertruck。\n"
         "3) en 必须包含关键词：Tesla Cybertruck。\n"
-        "4) 禁止加 #话题、禁止引号、禁止换行。\n"
+        "4) 禁止添加 #话题、引号、换行。\n"
         "5) 每个字段建议 30-80 个字符。\n"
         f"素材信息：{base_text}"
     )
@@ -9875,7 +9982,7 @@ def _split_caption_candidates(text: str) -> list[str]:
         part = part.strip()
         if not part:
             continue
-        sub_parts = re.split(r"(?<=[。！？.!?;；])\s*", part)
+        sub_parts = re.split(r"(?<=[銆傦紒锛?!?;锛沒)\s*", part)
         for seg in sub_parts:
             seg = _normalize_text(seg, limit=200)
             if len(seg) >= 10:
@@ -9958,7 +10065,7 @@ def _extract_semantic_caption_from_info(info: dict[str, Any]) -> str:
     if not best:
         return ""
 
-    # 过短时拼接次优候选，尽量贴近视频内容。
+    # When the top candidate is too short, merge with the runner-up.
     if len(best) < 26 and len(scored) > 1:
         extra = _normalize_text(scored[1][0], limit=80)
         if extra and extra.lower() != best.lower():
@@ -9996,9 +10103,7 @@ def _caption_from_info_json(
 
 def _compute_video_content_fingerprint(video_path: Path) -> Optional[str]:
     """
-    通过采样低分辨率灰度帧构建内容指纹。
-    同视频不同作者转发、重复搬运时可较稳定识别。
-    """
+    閫氳繃閲囨牱浣庡垎杈ㄧ巼鐏板害甯ф瀯寤哄唴瀹规寚绾广€?    鍚岃棰戜笉鍚屼綔鑰呰浆鍙戙€侀噸澶嶆惉杩愭椂鍙緝绋冲畾璇嗗埆銆?    """
 
     width = 12
     height = 12
@@ -10153,7 +10258,7 @@ def _match_duplicate_by_fingerprint(
 def _ensure_required_hashtags(caption: str) -> str:
     text = (caption or "").strip()
     if not text:
-        text = "Cybertruck 赛博皮卡最新画面！"
+        text = "Cybertruck 璧涘崥鐨崱鏈€鏂扮敾闈紒"
     if REQUIRED_CAPTION_KEYWORD not in text:
         text = f"{text}\n{REQUIRED_CAPTION_KEYWORD}"
 
@@ -10243,6 +10348,77 @@ def _archive_with_sidecar(src: Path, workspace: Workspace, auto_delete_source_fi
         if dst.exists():
             dst.unlink()
         shutil.move(str(file_path), str(dst))
+
+
+def download_from_source_urls(
+    workspace: Workspace,
+    source_urls: Optional[list[str]] = None,
+    *,
+    source_platform: str = "",
+    limit: int = DEFAULT_LIMIT,
+    include_images: bool = False,
+    proxy: Optional[str] = None,
+    use_system_proxy: bool = False,
+) -> list[Path]:
+    platform = str(source_platform or "").strip().lower() or "generic"
+    urls = _dedupe_urls(source_urls or [])
+    if not urls:
+        _log(f"[Downloader:{platform}] No source URLs provided.")
+        return []
+
+    _ensure_binary("yt-dlp")
+    media_kind = "image" if include_images else "video"
+    download_dir = _workspace_download_dir(workspace, media_kind)
+    history_file = _workspace_history_file(workspace, media_kind)
+    before = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+    effective_proxy, effective_use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    network_mode = "explicit_proxy" if effective_proxy else ("system_proxy" if effective_use_system_proxy else "direct_tun")
+    _log(
+        f"[Downloader:{platform}] Starting URL batch download: urls={len(urls)}, "
+        f"limit={max(1, int(limit))}, media_kind={media_kind}, network_mode={network_mode}"
+    )
+
+    cmd = [
+        "yt-dlp",
+        "--ignore-errors",
+        "--no-abort-on-error",
+        "--download-archive",
+        str(history_file),
+        "--write-info-json",
+        "-P",
+        str(download_dir),
+        "-o",
+        "%(extractor)s_%(id)s__%(uploader)s__%(title).80s.%(ext)s",
+        "--restrict-filenames",
+        "--no-overwrites",
+        "--playlist-end",
+        str(max(1, int(limit))),
+    ]
+    if not include_images:
+        cmd += ["--match-filter", "duration > 5"]
+    if effective_proxy:
+        cmd += ["--proxy", effective_proxy]
+    cmd += urls
+
+    command_env = _build_subprocess_network_env(
+        proxy=effective_proxy,
+        use_system_proxy=effective_use_system_proxy,
+    )
+    result = _run_command_result(cmd, step_name=f"Downloader:{platform}", env=command_env)
+    if result.returncode != 0 and str(result.stderr or "").strip():
+        _console_print(str(result.stderr).strip())
+
+    after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
+    new_files = sorted(Path(p) for p in (after - before))
+    media_files = [p for p in new_files if (_is_image_file(p) if include_images else _is_video_file(p))]
+    if result.returncode != 0 and not media_files:
+        raise RuntimeError(f"{platform} source URL batch download failed with exit code {result.returncode}")
+
+    _log(
+        f"[Downloader:{platform}] URL batch summary: "
+        f"new_files={len(new_files)}, delivered_media={len(media_files)}"
+    )
+    return media_files
 
 
 def download_from_x(
@@ -10691,9 +10867,7 @@ def process_video_fingerprint(
     on_output_ready: Optional[Callable[[Path, dict[str, Any]], None]] = None,
 ) -> list[Path]:
     """
-    保持用户要求的函数名。
-    该实现只做兼容性转码和元数据清理，不包含规避检测逻辑。
-    """
+    淇濇寔鐢ㄦ埛瑕佹眰鐨勫嚱鏁板悕銆?    璇ュ疄鐜板彧鍋氬吋瀹规€ц浆鐮佸拰鍏冩暟鎹竻鐞嗭紝涓嶅寘鍚閬挎娴嬮€昏緫銆?    """
 
     _log("[Processor] Starting video processing")
     video_download_dir = _workspace_download_dir(workspace, "video")
@@ -11001,7 +11175,7 @@ def _resolve_chrome_executable(chrome_path: Optional[str] = None) -> str:
         found = shutil.which(chrome_path)
         if found:
             return found
-        raise RuntimeError(f"指定的 chrome 路径不可用: {chrome_path}")
+        raise RuntimeError(f"鎸囧畾鐨?chrome 璺緞涓嶅彲鐢? {chrome_path}")
 
     candidates: list[str] = []
     if os.name == "nt":
@@ -11566,7 +11740,7 @@ def _ensure_chrome_debug_port(
             return
         if conflict_message:
             raise RuntimeError(conflict_message)
-        raise RuntimeError(f"未检测到 Chrome 调试端口 {debug_port}。请先启动 Chrome：\n{launch_cmd}")
+        raise RuntimeError(f"鏈娴嬪埌 Chrome 璋冭瘯绔彛 {debug_port}銆傝鍏堝惎鍔?Chrome锛歕n{launch_cmd}")
 
     if conflict_message:
         raise RuntimeError(conflict_message)
@@ -11589,8 +11763,8 @@ def _ensure_chrome_debug_port(
         return
 
     raise RuntimeError(
-        f"自动启动 Chrome 后仍未就绪 (port {debug_port})。"
-        f"\n请手动执行：\n{launch_cmd}"
+        f"自动启动 Chrome 后仍未就绪(port {debug_port})。"
+        f"\n璇锋墜鍔ㄦ墽琛岋細\n{launch_cmd}"
     )
 
 
@@ -11622,8 +11796,8 @@ def _connect_chrome(
         _normalize_blocking_timeout(CHROME_LAUNCH_TIMEOUT_SECONDS, CHROME_LAUNCH_TIMEOUT_SECONDS, minimum=1)
     )
 
-    # 部分环境下 DrissionPage 在子线程中初始化 ChromiumPage 会卡住，
-    # 先在主线程直连一次，失败再走带超时的回退模式。
+    # In some environments DrissionPage may block when ChromiumPage is initialized
+    # from a child thread. Try direct connect first, then use timeout fallback.
     def _call_with_timeout(factory: Callable[[], ChromiumPage], timeout_seconds: int = 12) -> ChromiumPage:
         holder: dict[str, Any] = {}
 
@@ -11686,8 +11860,7 @@ def _is_alert_error(exc: Exception) -> bool:
 
 
 def _dismiss_alerts(page: ChromiumPage, max_rounds: int = 5) -> int:
-    # DrissionPage 在部分“遗留弹窗”状态下，handle_alert 可能阻塞。
-    # 这里保留函数接口，但不主动调用阻塞式处理。
+    # Keep a safe no-op to avoid blocking on unstable alert handling.
     return 0
 
 
@@ -12123,16 +12296,16 @@ def build_content_coordination_snapshot(
             }
 
     summary_bits: list[str] = []
-    summary_bits.append("已采" if target is not None else "未采")
+    summary_bits.append("宸查噰" if target is not None else "鏈噰")
     if review_status:
         review_map = {
-            "approved": "已审核通过",
+            "approved": "宸插鏍搁€氳繃",
             "rejected": "已审核拒绝",
             "blocked": "待审核",
         }
-        summary_bits.append(review_map.get(review_status, f"审核状态:{review_status}"))
+        summary_bits.append(review_map.get(review_status, f"瀹℃牳鐘舵€?{review_status}"))
     if published_platforms:
-        summary_bits.append("已发:" + ",".join(published_platforms))
+        summary_bits.append("宸插彂:" + ",".join(published_platforms))
 
     return {
         "source_url": normalized_source_url,
@@ -12366,7 +12539,7 @@ def _dedupe_targets_by_content(
 
         fp = _compute_video_content_fingerprint(target)
         if not fp:
-            # 指纹失败时仍允许上传，避免误伤可用视频；仍会由 filename history 防止重复。
+            # If fingerprinting fails, still allow upload and rely on filename history as fallback.
             for key in target_meta_keys:
                 local_meta_key_map.setdefault(key, target.name)
             result.append(target)
@@ -12505,10 +12678,10 @@ def _load_caption_for_video(target: Path) -> Optional[str]:
 
 def _extract_upload_progress(content: str) -> str:
     for pattern in (
-        r"(上传中[^\n]{0,48}\d{1,3}%)",
-        r"(处理中[^\n]{0,48}\d{1,3}%)",
-        r"(转码中[^\n]{0,48}\d{1,3}%)",
-        r"((?:上传中|处理中|转码中)[^\n]{0,80})",
+        r"(涓婁紶涓璠^\n]{0,48}\d{1,3}%)",
+        r"(澶勭悊涓璠^\n]{0,48}\d{1,3}%)",
+        r"(杞爜涓璠^\n]{0,48}\d{1,3}%)",
+        r"((?:涓婁紶涓瓅澶勭悊涓瓅杞爜涓?[^\n]{0,80})",
     ):
         match = re.search(pattern, content or "")
         if match:
@@ -12534,8 +12707,7 @@ def _is_visible_element(ele: Any) -> bool:
 
 
 def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) -> Any:
-    # 视频号发布页内容在 iframe 中，这里带重试锁定可用 iframe，避免命中顶层隐藏控件。
-    end_at = time.time() + max(1, timeout_seconds)
+    # 瑙嗛鍙峰彂甯冮〉鍐呭鍦?iframe 涓紝杩欓噷甯﹂噸璇曢攣瀹氬彲鐢?iframe锛岄伩鍏嶅懡涓《灞傞殣钘忔帶浠躲€?    end_at = time.time() + max(1, timeout_seconds)
     last_frames: list[Any] = []
 
     while time.time() < end_at:
@@ -12549,9 +12721,9 @@ def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) 
                     """
                     const text = (document.body && document.body.innerText) || '';
                     const hasDescLabel = !!Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-                      .find(el => ((el.textContent || '').trim() === '视频描述'));
+                      .find(el => ((el.textContent || '').trim() === '瑙嗛鎻忚堪'));
                     const hasSaveBtn = !!Array.from(document.querySelectorAll('button, .form-btns *'))
-                      .find(el => /保存草稿/.test((el.innerText || '').trim()));
+                      .find(el => /淇濆瓨鑽夌/.test((el.innerText || '').trim()));
                     const hasUploadInput = !!document.querySelector('input[type=\"file\"]');
                     return {
                       url: location.href,
@@ -12574,9 +12746,9 @@ def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) 
             score = 0
             if "micro/content/post/create" in url:
                 score += 3
-            if has_desc or ("视频描述" in text):
+            if has_desc or ("瑙嗛鎻忚堪" in text):
                 score += 2
-            if has_save or ("保存草稿" in text):
+            if has_save or ("淇濆瓨鑽夌" in text):
                 score += 2
             if has_upload:
                 score += 1
@@ -12600,8 +12772,8 @@ def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) 
                   url,
                   text: text.slice(0, 1200),
                   hasUploadInput: !!document.querySelector('input[type="file"]'),
-                  hasImageEditor: /作品描述|封面设置|选择一张图片作为封面|添加位置|同步至头条/.test(text),
-                  hasVideoEditor: /视频描述|发布设置|保存草稿/.test(text),
+                  hasImageEditor: /浣滃搧鎻忚堪|灏侀潰璁剧疆|閫夋嫨涓€寮犲浘鐗囦綔涓哄皝闈娣诲姞浣嶇疆|鍚屾鑷冲ご鏉?.test(text),
+                  hasVideoEditor: /瑙嗛鎻忚堪|鍙戝竷璁剧疆|淇濆瓨鑽夌/.test(text),
                 };
                 """
             )
@@ -12620,7 +12792,7 @@ def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) 
                 or has_top_upload
                 or has_image_editor
                 or has_video_editor
-                or ("作品描述" in top_text)
+                or ("浣滃搧鎻忚堪" in top_text)
             ):
                 _log(f"[Uploader] Top-level editor context selected: {top_url or 'unknown'}")
                 return page
@@ -12657,9 +12829,9 @@ def _wechat_context_looks_like_task_center(primary_ctx: Any, fallback_ctx: Any) 
         return False
     joined = " ".join(str(item or "") for item in actions)
     markers = (
-        "任务管理",
-        "任务完成进度",
-        "任务奖励",
+        "浠诲姟绠＄悊",
+        "浠诲姟瀹屾垚杩涘害",
+        "浠诲姟濂栧姳",
         "可查看具体任务说明",
     )
     return any(marker in joined for marker in markers)
@@ -12680,16 +12852,16 @@ def _read_editor_status(ctx: Any) -> dict[str, Any]:
       || document.querySelector('.upload');
     const uploadHidden = uploadRoot ? window.getComputedStyle(uploadRoot).display === 'none' : false;
     const formBtnsReady = Array.from(document.querySelectorAll('.form-btns button, .form-btns, button'))
-      .some(el => isVisible(el) && /(保存草稿|发表)/.test((el.innerText || '').trim()));
+      .some(el => isVisible(el) && /(淇濆瓨鑽夌|鍙戣〃)/.test((el.innerText || '').trim()));
     const descLabelReady = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .some(el => isVisible(el) && (el.textContent || '').trim() === '视频描述');
+      .some(el => isVisible(el) && (el.textContent || '').trim() === '瑙嗛鎻忚堪');
     const descEditorReady = Array.from(document.querySelectorAll(
-      '.post-desc-box [contenteditable], div.input-editor[contenteditable], [contenteditable][data-placeholder*="描述"]'
+      '.post-desc-box [contenteditable], div.input-editor[contenteditable], [contenteditable][data-placeholder*="鎻忚堪"]'
     )).some(el => isVisible(el));
     const mediaReady = Array.from(document.querySelectorAll('.cover-preview-wrap img, .post-media-wrap, .post-media-preview-wrap'))
       .some(el => isVisible(el));
-    const progressMatch = bodyText.match(/(上传中[^\\n]{0,48}[0-9]{1,3}%|处理中[^\\n]{0,48}[0-9]{1,3}%|转码中[^\\n]{0,48}[0-9]{1,3}%)/);
-    const busy = /(上传中|处理中|转码中|正在上传|正在处理|上传视频)/.test(bodyText);
+    const progressMatch = bodyText.match(/(涓婁紶涓璠^\\n]{0,48}[0-9]{1,3}%|澶勭悊涓璠^\\n]{0,48}[0-9]{1,3}%|杞爜涓璠^\\n]{0,48}[0-9]{1,3}%)/);
+    const busy = /(涓婁紶涓瓅澶勭悊涓瓅杞爜涓瓅姝ｅ湪涓婁紶|姝ｅ湪澶勭悊|涓婁紶瑙嗛)/.test(bodyText);
     const done = !!(uploadHidden && formBtnsReady && descLabelReady && descEditorReady && mediaReady && !busy);
     return {
       text: bodyText,
@@ -12742,7 +12914,7 @@ def _wait_upload_ready(page: ChromiumPage, ctx: Any, timeout_seconds: int = UPLO
         time.sleep(2)
     raise TimeoutError(
         f"Upload timeout ({timeout_seconds}s). "
-        "页面可能仍在上传/转码。请检查发布页当前状态文案。"
+        "页面可能仍在上传/转码。请检查发布页当前状态。"
     )
 
 
@@ -12756,7 +12928,7 @@ def _read_caption_text(ctx: Any) -> str:
       return r.width > 8 && r.height > 8;
     }
     const item = Array.from(document.querySelectorAll('.form-item'))
-      .find(el => /视频描述/.test((el.querySelector('.label')?.textContent || '').trim()));
+      .find(el => /瑙嗛鎻忚堪/.test((el.querySelector('.label')?.textContent || '').trim()));
     if (item) {
       const local = item.querySelector('[contenteditable], textarea, input');
       if (local && isVisible(local)) {
@@ -12830,14 +13002,14 @@ def _is_bad_caption_field(ele: Any) -> bool:
         attrs = ""
     text = str(attrs or "")
     return ("textarea-body" in text) or bool(
-        re.search(r"search|product|goods|location|link|topic|tag|商品|链接|位置|搜索", text, re.IGNORECASE)
+        re.search(r"search|product|goods|location|link|topic|tag|鍟嗗搧|閾炬帴|浣嶇疆|鎼滅储", text, re.IGNORECASE)
     )
 
 
 def _find_visible_caption_editor(ctx: Any) -> Optional[Any]:
     selectors = (
         "css:.post-desc-box .input-editor[contenteditable]",
-        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and normalize-space()='视频描述']]//*[@contenteditable='true'][1]",
+        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and normalize-space()='瑙嗛鎻忚堪']]//*[@contenteditable='true'][1]",
         "css:div.input-editor[contenteditable]",
         "xpath://div[contains(@class,'post-desc-box')]//*[@contenteditable='true'][1]",
         "css:div[contenteditable='true']",
@@ -12993,7 +13165,7 @@ def _build_wechat_short_title(caption: str) -> str:
             line = str(line or "").strip()
             if not line:
                 continue
-            for part in re.split(r"[。！？!?；;：:，,|/]+", line):
+            for part in re.split(r"[銆傦紒锛??锛?锛?锛?|/]+", line):
                 candidate = _normalize_wechat_short_title_candidate(part)
                 if candidate:
                     candidates.append(candidate)
@@ -13014,11 +13186,11 @@ def _build_wechat_short_title(caption: str) -> str:
         if 6 <= length <= 16:
             score += 10.0
         score -= abs(length - 10) * 0.35
-        if "赛博皮卡" in normalized:
+        if "璧涘崥鐨崱" in normalized:
             score += 4.0
         if "特斯拉" in normalized:
             score += 2.0
-        for keyword in ("实拍", "测试", "越野", "雪地", "交付", "续航", "充电", "评测"):
+        for keyword in ("瀹炴媿", "娴嬭瘯", "瓒婇噹", "闆湴", "浜や粯", "缁埅", "鍏呯數", "璇勬祴"):
             if keyword in normalized:
                 score += 0.8
         if score > best_score:
@@ -13033,12 +13205,12 @@ def _build_wechat_short_title(caption: str) -> str:
 
 def _find_wechat_short_title_input(ctx: Any) -> Optional[Any]:
     selectors = (
-        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and contains(normalize-space(.), '短标题')]]//input[not(@type='hidden')][1]",
-        "xpath://input[contains(@placeholder,'概括视频主要内容')][1]",
+        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and contains(normalize-space(.), '鐭爣棰?)]]//input[not(@type='hidden')][1]",
+        "xpath://input[contains(@placeholder,'姒傛嫭瑙嗛涓昏鍐呭')][1]",
         "xpath://div[contains(@class,'post-short-title-wrap')]//input[not(@type='hidden')][1]",
         "css:.post-short-title-wrap input[type='text']",
-        "css:input[placeholder*='概括视频主要内容']",
-        "css:input[placeholder*='字数建议6-16个字符']",
+        "css:input[placeholder*='姒傛嫭瑙嗛涓昏鍐呭']",
+        "css:input[placeholder*='瀛楁暟寤鸿6-16涓瓧绗?]",
     )
     for selector in selectors:
         try:
@@ -13098,14 +13270,14 @@ def _fill_caption(ctx: Any, caption: str) -> None:
 
 def _wait_draft_saved(ctx: Any, timeout_seconds: int = DRAFT_SAVE_TIMEOUT_SECONDS) -> bool:
     success_markers = ("已保存", "保存成功", "草稿已保存", "已存为草稿")
-    blocker_markers = ("无法保存草稿", "若要保存草稿，需先取消定时发表", "定时发表将无法保存草稿")
-    failure_markers = ("保存失败", "保存出错", "网络异常", "请求失败")
+    blocker_markers = ("无法保存草稿", "若要保存草稿，需先取消定时发布", "定时发布将无法保存草稿")
+    failure_markers = ("淇濆瓨澶辫触", "淇濆瓨鍑洪敊", "缃戠粶寮傚父", "璇锋眰澶辫触")
     end_at = time.time() + timeout_seconds
     warned = False
     while time.time() < end_at:
         text = str(_read_editor_status(ctx).get("text", ""))
         if any(m in text for m in blocker_markers):
-            raise RuntimeError("当前页面开启了定时发表，无法保存草稿，请先切换为“不定时”。")
+            raise RuntimeError("当前页面开启了定时发布，无法保存草稿，请先切换为不定时。")
         if any(m in text for m in failure_markers):
             raise RuntimeError("页面提示保存草稿失败，请检查网络或页面状态。")
         if any(m in text for m in success_markers):
@@ -13407,7 +13579,7 @@ def _detect_bilibili_publish_via_network(ctx: Any) -> tuple[bool, str]:
         '"message":"fail"',
         '"success":false',
     )
-    publish_url_markers = ("archive", "submit", "publish", "稿件", "add")
+    publish_url_markers = ("archive", "submit", "publish", "绋夸欢", "add")
 
     for item in reversed(events):
         method = str(item.get("method", "") or "").upper()
@@ -13442,7 +13614,7 @@ def _diagnose_bilibili_publish_attempt(
         signal = f"{url}\n{body}".lower()
         if method not in {"POST", "PUT"}:
             continue
-        if not any(token in signal for token in ("archive", "submit", "publish", "稿件", "add")):
+        if not any(token in signal for token in ("archive", "submit", "publish", "绋夸欢", "add")):
             continue
         relevant_events.append(item)
 
@@ -13470,8 +13642,8 @@ def _diagnose_bilibili_publish_attempt(
 def _click_save_draft_button(ctx: Any) -> bool:
     selectors = (
         "css:.form-btns button.weui-desktop-btn_default",
-        "xpath://button[contains(., '保存草稿')]",
-        "text:保存草稿",
+        "xpath://button[contains(., '淇濆瓨鑽夌')]",
+        "text:淇濆瓨鑽夌",
     )
     for selector in selectors:
         try:
@@ -13524,7 +13696,7 @@ def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, ti
     for (const el of nodes) {
       const text = norm(el.innerText || el.textContent || '');
       if (!text || text.length > 18) continue;
-      if (!/^(发表|发布|立即发表|立即发布)$/.test(text)) continue;
+      if (!/^(鍙戣〃|鍙戝竷|绔嬪嵆鍙戣〃|绔嬪嵆鍙戝竷)$/.test(text)) continue;
       const attrs = [
         String(el.className || ''),
         String(el.getAttribute('type') || ''),
@@ -13533,13 +13705,13 @@ def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, ti
       const wrap = el.closest('.form-btns, .weui-desktop-btn_wrp, .weui-desktop-popover_target, form, section, div') || el.parentElement || el;
       const wrapText = norm((wrap && wrap.innerText) || '');
       let score = 0;
-      if (text === '发表') score += 18;
-      else if (text === '立即发表') score += 16;
-      else if (text === '发布') score += 12;
+      if (text === '鍙戣〃') score += 18;
+      else if (text === '绔嬪嵆鍙戣〃') score += 16;
+      else if (text === '鍙戝竷') score += 12;
       else score += 10;
       if (/primary/.test(attrs)) score += 12;
       if (/form-btns/.test(String((wrap && wrap.className) || ''))) score += 8;
-      if (/保存草稿|手机预览/.test(wrapText)) score += 4;
+      if (/淇濆瓨鑽夌|鎵嬫満棰勮/.test(wrapText)) score += 4;
       if (isDisabled(el)) score -= 40;
       if (score > bestScore) {
         bestScore = score;
@@ -13576,12 +13748,12 @@ def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, ti
                 continue
             state = str(result.get("state", "") or "").strip().lower()
             if state == "clicked":
-                text = str(result.get("text", "") or "").strip() or "发表"
+                text = str(result.get("text", "") or "").strip() or "鍙戣〃"
                 _log(f"[Uploader:wechat] Clicked publish button: {text}")
                 return True
             if state == "disabled" and not warned_disabled:
                 warned_disabled = True
-                btn_text = str(result.get("text", "") or "").strip() or "发表"
+                btn_text = str(result.get("text", "") or "").strip() or "鍙戣〃"
                 _log(f"[Uploader:wechat] Publish button still disabled, waiting: {btn_text}")
         _humanized_publish_retry_pause("wechat publish button retry")
     return False
@@ -13589,14 +13761,12 @@ def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, ti
 
 def _save_draft(ctx: Any, retry_count: int = DRAFT_SAVE_RETRY_COUNT) -> None:
     """
-    只点击一次“保存草稿”，其余重试仅做被动确认。
-    微信页面在弱网或 toast 丢失时二次点击可能产生重复草稿。
-    """
+    鍙偣鍑讳竴娆♀€滀繚瀛樿崏绋库€濓紝鍏朵綑閲嶈瘯浠呭仛琚姩纭銆?    寰俊椤甸潰鍦ㄥ急缃戞垨 toast 涓㈠け鏃朵簩娆＄偣鍑诲彲鑳戒骇鐢熼噸澶嶈崏绋裤€?    """
     tries = max(1, int(retry_count))
     _reset_wechat_draft_save_probe(ctx)
     clicked = _click_save_draft_button(ctx)
     if not clicked:
-        raise RuntimeError("Failed to locate '保存草稿' button. Please save draft manually on page.")
+        raise RuntimeError("Failed to locate '淇濆瓨鑽夌' button. Please save draft manually on page.")
 
     if _wait_draft_saved(ctx):
         return
@@ -13646,14 +13816,14 @@ def _read_wechat_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str,
       actions.push(t);
       if (actions.length >= 32) break;
     }
-    const hasPublishAction = actions.some(t => /^(发表|发布|立即发表|立即发布|确认发表|确认发布|继续发表|继续发布)$/.test(t));
-    const hasDraftAction = actions.some(t => /草稿|暂存|保存草稿|保存为草稿/.test(t));
-    const successHint = /(发表成功|发布成功|发表完成|发布完成|已发表|已发布|已提交审核|提交成功|内容已发布|作品已发布|发表后可在.*查看|去发表记录查看|发表记录)/.test(text);
-    const progressHint = /(发表中|发布中|提交中|处理中|正在发表|正在发布|正在提交|审核中)/.test(text);
-    const failureHint = /(发表失败|发布失败|提交失败|网络异常|请完善|不能为空|违规|未通过|驳回)/.test(text);
-    const manageHint = /(发表记录|内容管理|创作中心|作品管理|内容已发布|查看已发表|发表成功)/.test(text)
+    const hasPublishAction = actions.some(t => /^(鍙戣〃|鍙戝竷|绔嬪嵆鍙戣〃|绔嬪嵆鍙戝竷|纭鍙戣〃|纭鍙戝竷|缁х画鍙戣〃|缁х画鍙戝竷)$/.test(t));
+    const hasDraftAction = actions.some(t => /鑽夌|鏆傚瓨|淇濆瓨鑽夌|淇濆瓨涓鸿崏绋?.test(t));
+    const successHint = /(鍙戣〃鎴愬姛|鍙戝竷鎴愬姛|鍙戣〃瀹屾垚|鍙戝竷瀹屾垚|宸插彂琛▅宸插彂甯億宸叉彁浜ゅ鏍竱鎻愪氦鎴愬姛|鍐呭宸插彂甯億浣滃搧宸插彂甯億鍙戣〃鍚庡彲鍦?*鏌ョ湅|鍘诲彂琛ㄨ褰曟煡鐪媩鍙戣〃璁板綍)/.test(text);
+    const progressHint = /(鍙戣〃涓瓅鍙戝竷涓瓅鎻愪氦涓瓅澶勭悊涓瓅姝ｅ湪鍙戣〃|姝ｅ湪鍙戝竷|姝ｅ湪鎻愪氦|瀹℃牳涓?/.test(text);
+    const failureHint = /(鍙戣〃澶辫触|鍙戝竷澶辫触|鎻愪氦澶辫触|缃戠粶寮傚父|璇峰畬鍠剕涓嶈兘涓虹┖|杩濊|鏈€氳繃|椹冲洖)/.test(text);
+    const manageHint = /(鍙戣〃璁板綍|鍐呭绠＄悊|鍒涗綔涓績|浣滃搧绠＄悊|鍐呭宸插彂甯億鏌ョ湅宸插彂琛▅鍙戣〃鎴愬姛)/.test(text)
       || /\\/platform\\/(post|content)\\/(list|manage|history)/.test(url);
-    const composeHint = /(短标题|视频描述|保存草稿|手机预览|发表动态|添加到合集|声明原创|定时发表)/.test(text)
+    const composeHint = /(鐭爣棰榺瑙嗛鎻忚堪|淇濆瓨鑽夌|鎵嬫満棰勮|鍙戣〃鍔ㄦ€亅娣诲姞鍒板悎闆唡澹版槑鍘熷垱|瀹氭椂鍙戣〃)/.test(text)
       || /\\/platform\\/post\\/create/.test(url)
       || /\\/micro\\/content\\/post\\/create/.test(url);
     return {
@@ -13865,15 +14035,15 @@ def _read_wechat_original_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str
     ))
       .filter(el => isVisible(el))
       .filter(el => !el.closest('.declare-original-dialog'))
-      .filter(el => /声明原创/.test(norm(el.innerText || el.textContent || '')))
+      .filter(el => /澹版槑鍘熷垱/.test(norm(el.innerText || el.textContent || '')))
       .slice(0, 80);
     const pageContainer = bestCandidate(pageCandidates, el => {
       const text = norm(el.innerText || el.textContent || '');
       let score = 0;
       if (el.closest('.declare-original-checkbox')) score += 20;
       if (el.querySelector('input[type="checkbox"]')) score += 10;
-      if (/声明原创/.test(text)) score += 8;
-      if (/原创标记|广告收入/.test(text)) score += 4;
+      if (/澹版槑鍘熷垱/.test(text)) score += 8;
+      if (/鍘熷垱鏍囪|骞垮憡鏀跺叆/.test(text)) score += 4;
       return score;
     });
     const pageInfo = checkboxInfo(pageContainer);
@@ -13882,13 +14052,13 @@ def _read_wechat_original_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str
       '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
     ))
       .filter(el => isVisible(el))
-      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .filter(el => /鍘熷垱鏉冪泭|鍘熷垱澹版槑椤荤煡|澹版槑鍘熷垱|浣跨敤鏉℃/.test(norm(el.innerText || el.textContent || '')))
       .slice(0, 40);
     const dialog = bestCandidate(dialogCandidates, el => {
       const text = norm(el.innerText || el.textContent || '');
       let score = 0;
-      if (/原创权益/.test(text)) score += 20;
-      if (/原创声明须知|使用条款/.test(text)) score += 10;
+      if (/鍘熷垱鏉冪泭/.test(text)) score += 20;
+      if (/鍘熷垱澹版槑椤荤煡|浣跨敤鏉℃/.test(text)) score += 10;
       if (/declare-original-dialog/.test(String(el.className || ''))) score += 8;
       return score;
     });
@@ -13901,21 +14071,21 @@ def _read_wechat_original_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str
         '.original-proto-wrapper, label.ant-checkbox-wrapper, label, div, span'
       ))
         .filter(el => isVisible(el))
-        .filter(el => /我已阅读并同意|原创声明须知|使用条款/.test(norm(el.innerText || el.textContent || '')))
+        .filter(el => /鎴戝凡闃呰骞跺悓鎰弢鍘熷垱澹版槑椤荤煡|浣跨敤鏉℃/.test(norm(el.innerText || el.textContent || '')))
         .slice(0, 40);
       const agreementContainer = bestCandidate(agreementCandidates, el => {
         const text = norm(el.innerText || el.textContent || '');
         let score = 0;
         if (el.closest('.original-proto-wrapper')) score += 20;
         if (el.querySelector('input[type="checkbox"]')) score += 10;
-        if (/我已阅读并同意/.test(text)) score += 8;
+        if (/鎴戝凡闃呰骞跺悓鎰?.test(text)) score += 8;
         return score;
       });
       agreementInfo = checkboxInfo(agreementContainer);
 
       const confirmCandidates = Array.from(dialog.querySelectorAll('button, [role="button"], a, div, span'))
         .filter(el => isVisible(el))
-        .filter(el => norm(el.innerText || el.textContent || '') === '声明原创')
+        .filter(el => norm(el.innerText || el.textContent || '') === '澹版槑鍘熷垱')
         .slice(0, 20);
       const confirmButton = bestCandidate(confirmCandidates, el => {
         let score = 0;
@@ -13987,15 +14157,15 @@ def _click_wechat_original_page_checkbox(primary_ctx: Any, fallback_ctx: Any) ->
     ))
       .filter(el => isVisible(el))
       .filter(el => !el.closest('.declare-original-dialog'))
-      .filter(el => /声明原创/.test(norm(el.innerText || el.textContent || '')))
+      .filter(el => /澹版槑鍘熷垱/.test(norm(el.innerText || el.textContent || '')))
       .slice(0, 80);
     for (const el of candidates) {
       let score = 0;
       const text = norm(el.innerText || el.textContent || '');
       if (el.closest('.declare-original-checkbox')) score += 20;
       if (el.querySelector('input[type="checkbox"]')) score += 10;
-      if (/声明原创/.test(text)) score += 8;
-      if (/原创标记|广告收入/.test(text)) score += 4;
+      if (/澹版槑鍘熷垱/.test(text)) score += 8;
+      if (/鍘熷垱鏍囪|骞垮憡鏀跺叆/.test(text)) score += 4;
       if (score > bestScore) {
         bestScore = score;
         best = el;
@@ -14059,7 +14229,7 @@ def _click_wechat_original_dialog_agreement(primary_ctx: Any, fallback_ctx: Any)
       '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
     ))
       .filter(el => isVisible(el))
-      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .filter(el => /鍘熷垱鏉冪泭|鍘熷垱澹版槑椤荤煡|澹版槑鍘熷垱|浣跨敤鏉℃/.test(norm(el.innerText || el.textContent || '')))
       .slice(0, 20);
     const dialog = dialogs[0];
     if (!dialog) return {state:'dialog_not_found'};
@@ -14069,14 +14239,14 @@ def _click_wechat_original_dialog_agreement(primary_ctx: Any, fallback_ctx: Any)
       '.original-proto-wrapper, label.ant-checkbox-wrapper, label, div, span'
     ))
       .filter(el => isVisible(el))
-      .filter(el => /我已阅读并同意|原创声明须知|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .filter(el => /鎴戝凡闃呰骞跺悓鎰弢鍘熷垱澹版槑椤荤煡|浣跨敤鏉℃/.test(norm(el.innerText || el.textContent || '')))
       .slice(0, 40);
     for (const el of candidates) {
       let score = 0;
       const text = norm(el.innerText || el.textContent || '');
       if (el.closest('.original-proto-wrapper')) score += 20;
       if (el.querySelector('input[type="checkbox"]')) score += 10;
-      if (/我已阅读并同意/.test(text)) score += 8;
+      if (/鎴戝凡闃呰骞跺悓鎰?.test(text)) score += 8;
       if (score > bestScore) {
         bestScore = score;
         best = el;
@@ -14133,7 +14303,7 @@ def _click_wechat_original_confirm_button(primary_ctx: Any, fallback_ctx: Any) -
       '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
     ))
       .filter(el => isVisible(el))
-      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .filter(el => /鍘熷垱鏉冪泭|鍘熷垱澹版槑椤荤煡|澹版槑鍘熷垱|浣跨敤鏉℃/.test(norm(el.innerText || el.textContent || '')))
       .slice(0, 20);
     const dialog = dialogs[0];
     if (!dialog) return {state:'dialog_not_found'};
@@ -14141,7 +14311,7 @@ def _click_wechat_original_confirm_button(primary_ctx: Any, fallback_ctx: Any) -
     let bestScore = -999;
     const candidates = Array.from(dialog.querySelectorAll('button, [role="button"], a, div, span'))
       .filter(el => isVisible(el))
-      .filter(el => norm(el.innerText || el.textContent || '') === '声明原创')
+      .filter(el => norm(el.innerText || el.textContent || '') === '澹版槑鍘熷垱')
       .slice(0, 20);
     for (const el of candidates) {
       let score = 0;
@@ -14173,7 +14343,7 @@ def _click_wechat_original_confirm_button(primary_ctx: Any, fallback_ctx: Any) -
 
 
 def _dismiss_wechat_original_dialog(primary_ctx: Any, fallback_ctx: Any) -> bool:
-    if _click_first_matching_button(primary_ctx, fallback_ctx, ("取消",), platform_name="wechat"):
+    if _click_first_matching_button(primary_ctx, fallback_ctx, ("鍙栨秷",), platform_name="wechat"):
         return True
     js = """
     function isVisible(el) {
@@ -14190,7 +14360,7 @@ def _dismiss_wechat_original_dialog(primary_ctx: Any, fallback_ctx: Any) -> bool
       '.declare-original-dialog, .weui-desktop-dialog, .weui-desktop-dialog_wrp, [role="dialog"]'
     ))
       .filter(el => isVisible(el))
-      .filter(el => /原创权益|原创声明须知|声明原创|使用条款/.test(norm(el.innerText || el.textContent || '')))
+      .filter(el => /鍘熷垱鏉冪泭|鍘熷垱澹版槑椤荤煡|澹版槑鍘熷垱|浣跨敤鏉℃/.test(norm(el.innerText || el.textContent || '')))
       .slice(0, 20);
     const dialog = dialogs[0];
     if (!dialog) return false;
@@ -14311,13 +14481,13 @@ def _wait_wechat_publish_feedback(
             no_tip_clicked = _click_first_matching_button(
                 primary_ctx,
                 fallback_ctx,
-                ("不再提醒",),
+                ("涓嶅啀鎻愰啋",),
                 platform_name="wechat",
             )
         _click_first_matching_button(
             primary_ctx,
             fallback_ctx,
-            ("直接发表", "确认发表", "确认发布", "继续发表", "继续发布"),
+            ("鐩存帴鍙戣〃", "纭鍙戣〃", "纭鍙戝竷", "缁х画鍙戣〃", "缁х画鍙戝竷"),
             platform_name="wechat",
         )
         state = _read_wechat_publish_state(primary_ctx, fallback_ctx)
@@ -14414,14 +14584,14 @@ def _get_location_state(ctx: Any) -> dict[str, Any]:
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && norm(el.textContent) === '位置');
+      .find(el => isVisible(el) && norm(el.textContent) === '浣嶇疆');
     if (!label) return {hasLocationField: false, current: '', isNone: true};
     const item = label.closest('.form-item') || label.parentElement;
     const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
     const nameEl = wrap && (wrap.querySelector('.location-name') || wrap.querySelector('.place') || wrap.querySelector('.position-display-wrap'));
     const currentRaw = norm(nameEl ? nameEl.innerText : '');
-    const current = currentRaw.replace(/^位置/, '').trim();
-    return {hasLocationField: true, current, isNone: (!current || /不显示位置|不显示/.test(current))};
+    const current = currentRaw.replace(/^浣嶇疆/, '').trim();
+    return {hasLocationField: true, current, isNone: (!current || /涓嶆樉绀轰綅缃畖涓嶆樉绀?.test(current))};
     """
     try:
         state = ctx.run_js(js)
@@ -14432,15 +14602,14 @@ def _get_location_state(ctx: Any) -> dict[str, Any]:
 
 def _clear_location_if_selected(ctx: Any) -> None:
     """
-    尝试将“位置”设置为不显示。找不到可用选项时不阻塞主流程。
-    """
+    灏濊瘯灏嗏€滀綅缃€濊缃负涓嶆樉绀恒€傛壘涓嶅埌鍙敤閫夐」鏃朵笉闃诲涓绘祦绋嬨€?    """
     before = _get_location_state(ctx)
     if not before.get("hasLocationField"):
         _log("[Uploader] Location field not found, skip clear.")
         return
 
     if before.get("isNone"):
-        _log("[Uploader] Location already set to '不显示位置'.")
+        _log("[Uploader] Location already set to '涓嶆樉绀轰綅缃?.")
         return
 
     js_click_none = """
@@ -14453,7 +14622,7 @@ def _clear_location_if_selected(ctx: Any) -> None:
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && norm(el.textContent) === '位置');
+      .find(el => isVisible(el) && norm(el.textContent) === '浣嶇疆');
     if (!label) return {state: 'missing_field'};
     const item = label.closest('.form-item') || label.parentElement;
     const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
@@ -14463,13 +14632,13 @@ def _clear_location_if_selected(ctx: Any) -> None:
 
     const pool = Array.from((wrap || document).querySelectorAll('.option-item, .location-item, .name, div, span'))
       .filter(el => isVisible(el));
-    let target = pool.find(el => /^不显示位置$/.test(norm(el.innerText)));
-    if (!target) target = pool.find(el => /不显示位置|不显示|不添加位置/.test(norm(el.innerText)));
+    let target = pool.find(el => /^涓嶆樉绀轰綅缃?/.test(norm(el.innerText)));
+    if (!target) target = pool.find(el => /涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
     if (!target) {
       const globalPool = Array.from(document.querySelectorAll('.option-item, .location-item, .name, div, span'))
         .filter(el => isVisible(el));
-      target = globalPool.find(el => /^不显示位置$/.test(norm(el.innerText)))
-        || globalPool.find(el => /不显示位置|不显示|不添加位置/.test(norm(el.innerText)));
+      target = globalPool.find(el => /^涓嶆樉绀轰綅缃?/.test(norm(el.innerText)))
+        || globalPool.find(el => /涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
     }
     if (!target) return {state: 'option_not_found'};
     target.click();
@@ -14485,12 +14654,12 @@ def _clear_location_if_selected(ctx: Any) -> None:
         _humanized_publish_retry_pause("wechat location picker settle")
         after = _get_location_state(ctx)
         if after.get("isNone"):
-            _log("[Uploader] Location cleared to '不显示位置'.")
+            _log("[Uploader] Location cleared to '涓嶆樉绀轰綅缃?.")
             return
         if isinstance(action, dict) and action.get("state") in {"missing_field", "missing_trigger", "option_not_found"}:
             continue
 
-    _log("[Uploader] Could not find '不显示位置' option, keep current location.")
+    _log("[Uploader] Could not find '涓嶆樉绀轰綅缃? option, keep current location.")
 
 
 def _get_collection_state(ctx: Any) -> dict[str, Any]:
@@ -14505,16 +14674,16 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
     function clean(txt) {
       return norm(txt)
-        .replace(/添加到合集/g, '')
-        .replace(/选择合集/g, '')
-        .replace(/请选择合集/g, '')
-        .replace(/共\\d+个内容/g, '')
-        .replace(/共\\d+条内容/g, '')
-        .replace(/展开|收起|更多/g, '')
+        .replace(/娣诲姞鍒板悎闆?g, '')
+        .replace(/閫夋嫨鍚堥泦/g, '')
+        .replace(/璇烽€夋嫨鍚堥泦/g, '')
+        .replace(/鍏盶\d+涓唴瀹?g, '')
+        .replace(/鍏盶\d+鏉″唴瀹?g, '')
+        .replace(/灞曞紑|鏀惰捣|鏇村/g, '')
         .trim();
     }
     function isPlaceholderText(txt) {
-      return txt === '选择合集' || txt === '请选择合集' || txt === '添加到合集';
+      return txt === '閫夋嫨鍚堥泦' || txt === '璇烽€夋嫨鍚堥泦' || txt === '娣诲姞鍒板悎闆?;
     }
     function stripPickerNodes(root) {
       if (!root) return root;
@@ -14527,7 +14696,7 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
     }
 
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && norm(el.textContent) === '添加到合集');
+      .find(el => isVisible(el) && norm(el.textContent) === '娣诲姞鍒板悎闆?);
     if (!label) return {hasField: false, current: ''};
     const item = label.closest('.form-item') || label.parentElement;
     if (!item) return {hasField: true, current: ''};
@@ -14544,7 +14713,7 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
       '.post-album-display-wrap .name, .post-album-display .name, .post-album-display-wrap .value, ' +
       '.weui-desktop-form__dropdown__value, .weui-desktop-form__dropdown__text, .selector-value, .value, .name, .display, .selected, ' +
       '.post-album-action-text, .post-album-action-text span, .finder-card .post-album-action-text, ' +
-      '.finder-card-flex .post-album-action-text, input[placeholder*=\"合集\"], input[value], [contenteditable=\"true\"]'
+      '.finder-card-flex .post-album-action-text, input[placeholder*=\"鍚堥泦\"], input[value], [contenteditable=\"true\"]'
     ))
       .filter(el => isVisible(el))
       .filter(el => !el.closest(
@@ -14620,13 +14789,13 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
     function clean(txt) {
       return norm(txt)
-        .replace(/添加到合集/g, '')
-        .replace(/加入合集/g, '')
-        .replace(/选择合集/g, '')
-        .replace(/请选择合集/g, '')
-        .replace(/共\\d+个内容/g, '')
-        .replace(/共\\d+条内容/g, '')
-        .replace(/展开|收起|更多/g, '')
+        .replace(/娣诲姞鍒板悎闆?g, '')
+        .replace(/鍔犲叆鍚堥泦/g, '')
+        .replace(/閫夋嫨鍚堥泦/g, '')
+        .replace(/璇烽€夋嫨鍚堥泦/g, '')
+        .replace(/鍏盶\d+涓唴瀹?g, '')
+        .replace(/鍏盶\d+鏉″唴瀹?g, '')
+        .replace(/灞曞紑|鏀惰捣|鏇村/g, '')
         .trim();
     }
     function setInputValue(el, value) {
@@ -14659,13 +14828,13 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
       const placeholder = norm((el.getAttribute && (el.getAttribute('placeholder') || el.getAttribute('data-placeholder'))) || '');
       const ariaLabel = norm((el.getAttribute && el.getAttribute('aria-label')) || '');
       const cls = norm(el.className || '');
-      return /合集/.test(placeholder + ' ' + ariaLabel + ' ' + cls);
+      return /鍚堥泦/.test(placeholder + ' ' + ariaLabel + ' ' + cls);
     }
     const target = norm(arguments[0] || '');
     if (!target) return {state: 'skip'};
 
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && norm(el.textContent) === '添加到合集');
+      .find(el => isVisible(el) && norm(el.textContent) === '娣诲姞鍒板悎闆?);
     if (!label) return {state: 'missing_field'};
     const item = label.closest('.form-item') || label.parentElement;
     if (!item) return {state: 'missing_field'};
@@ -14692,8 +14861,7 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
       setInputValue(searchFields[0], target);
     }
 
-    // 部分页面下拉内容在 post-album-wrap 内但默认隐藏，直接点击 card / option 也可生效。
-    const inlineNameNodes = Array.from(item.querySelectorAll(
+    // 閮ㄥ垎椤甸潰涓嬫媺鍐呭鍦?post-album-wrap 鍐呬絾榛樿闅愯棌锛岀洿鎺ョ偣鍑?card / option 涔熷彲鐢熸晥銆?    const inlineNameNodes = Array.from(item.querySelectorAll(
       '.post-album-wrap .option-item .name, ' +
       '.post-album-wrap .post-album-action-text, .post-album-wrap .post-album-action-text span, ' +
       '.post-album-wrap .finder-card .post-album-action-text, .post-album-wrap .finder-card-flex .post-album-action-text'
@@ -14741,7 +14909,7 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
       for (const node of nodes) {
         const txt = clean(node.innerText || node.textContent);
         if (!txt || txt.length > 80) continue;
-        if (/^(添加到合集|加入合集|请选择合集|选择合集)$/.test(txt)) continue;
+        if (/^(娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦)$/.test(txt)) continue;
         if (!visibleOptions.includes(txt)) visibleOptions.push(txt);
         const s = score(txt);
         if (s > bestScore) {
@@ -14833,9 +15001,9 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
     final_source = str(final_state.get("source", "") or "")
     final_visible = list((action or {}).get("visible_options") or []) if isinstance(action, dict) else []
     raise RuntimeError(
-        f"未能确认合集选择成功: {target}; "
-        f"当前字段值={final_current or '-'}; 读取来源={final_source or '-'}; "
-        f"可见选项={','.join(final_visible[:4]) or '-'}"
+        f"鏈兘纭鍚堥泦閫夋嫨鎴愬姛: {target}; "
+        f"褰撳墠瀛楁鍊?{final_current or '-'}; 璇诲彇鏉ユ簮={final_source or '-'}; "
+        f"鍙閫夐」={','.join(final_visible[:4]) or '-'}"
     )
 
 
@@ -15018,21 +15186,21 @@ def _fill_draft_once(
     _run_page_action(page, "upload file", lambda: file_input.input(str(target)))
     editor_ctx = _wait_upload_ready(page, editor_ctx, timeout_seconds=upload_timeout)
 
-    # 上传完成后重新解析上下文，避免 frame 重绘后句柄失效。
+    # Resolve context again after upload to avoid stale frame references.
     editor_ctx = _resolve_post_editor_context(page)
 
-    _log("[Uploader] Location strategy: 不主动选择位置，沿用当前浏览器网络/代理环境。")
+    _log("[Uploader] Location strategy: keep current browser network/proxy context.")
     _clear_location_if_selected(editor_ctx)
     _fill_caption(editor_ctx, final_caption)
     wechat_short_title = _fill_wechat_short_title(editor_ctx, final_caption)
     _select_collection(editor_ctx, collection_name)
     if declare_original:
         _declare_wechat_original(editor_ctx, page)
-    # 等待前端把描述字段变更同步到页面状态后再保存草稿。
+    # Wait for front-end form state to settle before save/publish.
     _humanized_publish_settle_pause("wechat publish form settle")
     if save_draft:
         _save_draft(editor_ctx)
-        _log("[Success] 草稿已保存。请到草稿箱检查后手动发布。")
+        _log("[Success] 草稿已保存，请到草稿箱检查后手动发布。")
     elif publish_now:
         if not _click_wechat_primary_publish_button(editor_ctx, page):
             actions = _collect_visible_action_texts(editor_ctx, page)
@@ -15042,7 +15210,7 @@ def _fill_draft_once(
         _click_first_matching_button(
             editor_ctx,
             page,
-            ("确认发表", "确认发布", "继续发表", "继续发布"),
+            ("纭鍙戣〃", "纭鍙戝竷", "缁х画鍙戣〃", "缁х画鍙戝竷"),
             platform_name="wechat",
         )
         _wait_wechat_publish_feedback(
@@ -15053,7 +15221,7 @@ def _fill_draft_once(
         )
         _log("[Success:wechat] 发布已确认。")
     else:
-        _log("[Success] 视频已上传并填写文案（未保存草稿）。请在当前页手动保存或发布。")
+        _log("[Success] 视频已上传并填写文案（未保存草稿），请在当前页手动保存或发布。")
     return editor_ctx
 
 
@@ -15179,7 +15347,12 @@ def _wait_upload_ready_generic(
         "创作声明",
         "转载",
     )
-    bilibili_upload_entry_markers = ("点击上传或将视频拖拽到此区域", "当前审核队列快速", "视频大小16G以内", "拖拽到此区域")
+    bilibili_upload_entry_markers = (
+        "点击上传或将视频拖拽到此区域",
+        "当前审核队列快",
+        "视频大小16G以内",
+        "拖拽到此区域",
+    )
     end_at = time.time() + _normalize_blocking_timeout(timeout_seconds, UPLOAD_TIMEOUT_SECONDS, minimum=1)
     bilibili_entry_since = 0.0
     bilibili_busy_since = 0.0
@@ -15246,31 +15419,31 @@ def _wait_upload_ready_generic(
             }
             const text = String((document.body && document.body.innerText) || '');
             const titleInput = hasVisibleSelector([
-              'input[placeholder*="标题"]',
-              'input[aria-label*="标题"]',
+              'input[placeholder*="鏍囬"]',
+              'input[aria-label*="鏍囬"]',
               '.form-item input[type="text"]',
               '.bcc-form-item input[type="text"]',
               'input[maxlength="80"]',
             ]);
             const descInput = hasVisibleSelector([
-              'textarea[placeholder*="简介"]',
-              'textarea[placeholder*="描述"]',
+              'textarea[placeholder*="绠€浠?]',
+              'textarea[placeholder*="鎻忚堪"]',
               '.ql-editor[contenteditable="true"]',
               '[contenteditable="true"]',
             ]);
-            const publishBtn = hasVisibleText(/(立即投稿|投稿|发布|存草稿|定时发布)/);
+            const publishBtn = hasVisibleText(/(绔嬪嵆鎶曠|鎶曠|鍙戝竷|瀛樿崏绋縷瀹氭椂鍙戝竷)/);
             const uploadAreaVisible = hasVisibleSelector([
               '.upload-area',
               '.upload-wrp',
               '.bcc-upload',
             ]);
-            const uploadEntry = uploadAreaVisible && hasVisibleText(/(上传视频|点击上传|拖拽到此区域|拖拽)/);
+            const uploadEntry = uploadAreaVisible && hasVisibleText(/(涓婁紶瑙嗛|鐐瑰嚮涓婁紶|鎷栨嫿鍒版鍖哄煙|鎷栨嫿)/);
             const fileCount = Array.from(document.querySelectorAll("input[type='file']")).reduce((acc, el) => {
               const n = (el && el.files && Number(el.files.length || 0)) || 0;
               return n > acc ? n : acc;
             }, 0);
-            const busy = /\\b\\d{1,3}%\\b/.test(text) || /(上传中|正在上传|处理中|正在处理|转码中|校验中|等待转码|排队中?)/.test(text);
-            const success = /(上传成功|上传完成|完成上传|已上传)/.test(text);
+            const busy = /\\b\\d{1,3}%\\b/.test(text) || /(涓婁紶涓瓅姝ｅ湪涓婁紶|澶勭悊涓瓅姝ｅ湪澶勭悊|杞爜涓瓅鏍￠獙涓瓅绛夊緟杞爜|鎺掗槦涓?)/.test(text);
+            const success = /(涓婁紶鎴愬姛|涓婁紶瀹屾垚|瀹屾垚涓婁紶|宸蹭笂浼?/.test(text);
             const ready = ((titleInput || descInput) && publishBtn) || (success && publishBtn);
             return {
               ready: !!ready,
@@ -15326,13 +15499,13 @@ def _wait_upload_ready_generic(
                 continue
             percent_hit = bool(re.search(r"\\b\\d{1,3}%\\b", text))
             busy_hit = bool(state.get("busy")) or bool(
-                re.search(r"(上传中|正在上传|处理中|正在处理|转码中|等待转码|排队中?|校验中|上传校验中)", text)
+                re.search(r"(涓婁紶涓瓅姝ｅ湪涓婁紶|澶勭悊涓瓅姝ｅ湪澶勭悊|杞爜涓瓅绛夊緟杞爜|鎺掗槦涓?|鏍￠獙涓瓅涓婁紶鏍￠獙涓?", text)
             ) or percent_hit
             if busy_hit:
                 if bilibili_busy_since <= 0:
                     bilibili_busy_since = time.time()
                 _log(f"[Uploader:{platform_name}] Waiting for upload completion...")
-                # Some B站 pages keep static busy words (e.g. "转码") even without active progress.
+                # Some B绔?pages keep static busy words (e.g. "杞爜") even without active progress.
                 # If we still have no progress percentage for a while, continue with best-effort fallback.
                 no_progress_cap = min(max(120, int(timeout_seconds) // 3), 240)
                 if (not percent_hit) and ((time.time() - bilibili_busy_since) >= float(no_progress_cap)):
@@ -15430,21 +15603,21 @@ def _wait_upload_ready_generic(
             const bodyText = norm((document.body && document.body.innerText) || '');
             const texts = visibleTexts();
             const descInput = hasVisibleSelector([
-              "textarea[placeholder*='作品描述']",
-              "textarea[placeholder*='描述']",
+              "textarea[placeholder*='浣滃搧鎻忚堪']",
+              "textarea[placeholder*='鎻忚堪']",
               "[contenteditable='true']",
               "div[role='textbox']",
             ]);
             const titleInput = hasVisibleSelector([
-              "input[placeholder*='标题']",
-              "input[placeholder*='作品标题']",
+              "input[placeholder*='鏍囬']",
+              "input[placeholder*='浣滃搧鏍囬']",
             ]);
-            const uploadEntry = /(上传图文|上传图片|选择图片|拖拽图片|添加图片|点击上传)/.test(bodyText)
-              && !/(作品描述|添加地点|查看权限|发布时间|立即发布|定时发布)/.test(bodyText);
-            const busy = /\b\d{1,3}%\b/.test(bodyText) || /(上传中|正在上传|处理中|正在处理|排队中|校验中)/.test(bodyText);
-            const publishBtn = texts.some(text => /^(发布|发布作品|立即发布|确认发布)$/.test(text));
-            const cancelBtn = texts.some(text => text === '取消');
-            const editorHints = /(作品描述|添加地点|查看权限|发布时间|立即发布|定时发布|所有人可见|好友可见|仅自己可见)/.test(bodyText);
+            const uploadEntry = /(涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|娣诲姞鍥剧墖|鐐瑰嚮涓婁紶)/.test(bodyText)
+              && !/(浣滃搧鎻忚堪|娣诲姞鍦扮偣|鏌ョ湅鏉冮檺|鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷)/.test(bodyText);
+            const busy = /\b\d{1,3}%\b/.test(bodyText) || /(涓婁紶涓瓅姝ｅ湪涓婁紶|澶勭悊涓瓅姝ｅ湪澶勭悊|鎺掗槦涓瓅鏍￠獙涓?/.test(bodyText);
+            const publishBtn = texts.some(text => /^(鍙戝竷|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|纭鍙戝竷)$/.test(text));
+            const cancelBtn = texts.some(text => text === '鍙栨秷');
+            const editorHints = /(浣滃搧鎻忚堪|娣诲姞鍦扮偣|鏌ョ湅鏉冮檺|鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|鎵€鏈変汉鍙|濂藉弸鍙|浠呰嚜宸卞彲瑙?/.test(bodyText);
             const ready = !!((descInput || titleInput || editorHints) && (publishBtn || cancelBtn));
             return {
               ready,
@@ -15455,7 +15628,7 @@ def _wait_upload_ready_generic(
               publish_btn: publishBtn,
               cancel_btn: cancelBtn,
               editor_hints: editorHints,
-              sample_texts: texts.filter(text => /发布|取消|描述|地点|权限|时间/.test(text)).slice(0, 12),
+              sample_texts: texts.filter(text => /鍙戝竷|鍙栨秷|鎻忚堪|鍦扮偣|鏉冮檺|鏃堕棿/.test(text)).slice(0, 12),
             };
             """
             state: dict[str, Any] = {}
@@ -15536,11 +15709,11 @@ def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
     }
     const bodyText = norm((document.body && document.body.innerText) || '');
     const texts = visibleTexts();
-    const imageAdded = /(已添加\d+张图片|已添加图片|编辑图片|继续添加)/.test(bodyText);
-    const uploadEntry = /(点击上传|上传图文|上传图片|拖入此区域|图片文件)/.test(bodyText) && !imageAdded;
-    const busy = /\b\d{1,3}%\b/.test(bodyText) || /(上传中|正在上传|处理中|排队中|校验中)/.test(bodyText);
-    const editorHints = /(作品描述|发布设置|保存权限|发布时间|谁可以看|添加合集)/.test(bodyText);
-    const publishBtn = texts.some(text => /^(发布|发布作品|立即发布|确认发布)$/.test(text));
+    const imageAdded = /(宸叉坊鍔燶d+寮犲浘鐗噟宸叉坊鍔犲浘鐗噟缂栬緫鍥剧墖|缁х画娣诲姞)/.test(bodyText);
+    const uploadEntry = /(鐐瑰嚮涓婁紶|涓婁紶鍥炬枃|涓婁紶鍥剧墖|鎷栧叆姝ゅ尯鍩焲鍥剧墖鏂囦欢)/.test(bodyText) && !imageAdded;
+    const busy = /\b\d{1,3}%\b/.test(bodyText) || /(涓婁紶涓瓅姝ｅ湪涓婁紶|澶勭悊涓瓅鎺掗槦涓瓅鏍￠獙涓?/.test(bodyText);
+    const editorHints = /(浣滃搧鎻忚堪|鍙戝竷璁剧疆|淇濆瓨鏉冮檺|鍙戝竷鏃堕棿|璋佸彲浠ョ湅|娣诲姞鍚堥泦)/.test(bodyText);
+    const publishBtn = texts.some(text => /^(鍙戝竷|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|纭鍙戝竷)$/.test(text));
     return {
       ready: !!(imageAdded && editorHints && publishBtn && !busy),
       busy: !!busy,
@@ -15548,7 +15721,7 @@ def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
       image_added: !!imageAdded,
       editor_hints: !!editorHints,
       publish_btn: !!publishBtn,
-      sample_texts: texts.filter(text => /发布|描述|合集|继续添加|编辑图片|已添加/.test(text)).slice(0, 16),
+      sample_texts: texts.filter(text => /鍙戝竷|鎻忚堪|鍚堥泦|缁х画娣诲姞|缂栬緫鍥剧墖|宸叉坊鍔?.test(text)).slice(0, 16),
     };
     """
     for owner in (primary_ctx, fallback_ctx):
@@ -15592,9 +15765,9 @@ def _read_douyin_video_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
     const bodyText = norm((document.body && document.body.innerText) || '');
     const texts = visibleTexts();
     const captionInput = hasVisibleSelector([
-      "textarea[placeholder*='作品描述']",
-      "textarea[placeholder*='描述']",
-      "textarea[placeholder*='文案']",
+      "textarea[placeholder*='浣滃搧鎻忚堪']",
+      "textarea[placeholder*='鎻忚堪']",
+      "textarea[placeholder*='鏂囨']",
       "div[role='textbox']",
       "div[contenteditable='true']",
       "div[contenteditable='plaintext-only']",
@@ -15602,9 +15775,9 @@ def _read_douyin_video_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
       "[contenteditable='plaintext-only']",
     ]);
     const titleInput = hasVisibleSelector([
-      "input[placeholder*='标题']",
-      "textarea[placeholder*='标题']",
-      "input[aria-label*='标题']",
+      "input[placeholder*='鏍囬']",
+      "textarea[placeholder*='鏍囬']",
+      "input[aria-label*='鏍囬']",
     ]);
     const uploadEntry = /(\u4e0a\u4f20\u89c6\u9891|\u70b9\u51fb\u4e0a\u4f20|\u62d6\u62fd\u89c6\u9891|\u5c06\u89c6\u9891\u62d6\u5165|\u9009\u62e9\u89c6\u9891)/.test(bodyText)
       && !captionInput;
@@ -15696,30 +15869,30 @@ def _score_kuaishou_file_input_candidate(candidate: dict[str, Any], prefer_video
     if prefer_video:
         if "video" in accept or any(ext in accept for ext in (".mp4", ".mov", ".webm", ".avi", ".mkv")):
             score += 180
-        if any(token in wrap for token in ("上传视频", "发布视频", "拖拽视频", "选择视频")):
+        if any(token in wrap for token in ("涓婁紶瑙嗛", "鍙戝竷瑙嗛", "鎷栨嫿瑙嗛", "閫夋嫨瑙嗛")):
             score += 120
-        if "继续编辑" in wrap:
+        if "缁х画缂栬緫" in wrap:
             score += 24
         if "image" in accept or any(ext in accept for ext in (".png", ".jpg", ".jpeg", ".webp")):
             score -= 220
-        if any(token in wrap for token in ("发布图文", "添加图片", "编辑图片", "作品描述", "发布设置")):
+        if any(token in wrap for token in ("鍙戝竷鍥炬枃", "娣诲姞鍥剧墖", "缂栬緫鍥剧墖", "浣滃搧鎻忚堪", "鍙戝竷璁剧疆")):
             score -= 160
     else:
         if "image" in accept or any(ext in accept for ext in (".png", ".jpg", ".jpeg", ".webp")):
             score += 120
         if "multiple" in normalized or bool(candidate.get("multiple")):
             score += 8
-        if "添加图片" in wrap:
+        if "娣诲姞鍥剧墖" in wrap:
             score += 160
-        if "编辑图片" in wrap:
+        if "缂栬緫鍥剧墖" in wrap:
             score += 120
-        if "发布图文" in wrap:
+        if "鍙戝竷鍥炬枃" in wrap:
             score += 80
-        if any(token in wrap for token in ("作品描述", "发布设置", "封面设置")):
+        if any(token in wrap for token in ("浣滃搧鎻忚堪", "鍙戝竷璁剧疆", "灏侀潰璁剧疆")):
             score += 40
         if "video" in accept or any(ext in accept for ext in (".mp4", ".mov", ".webm", ".avi", ".mkv")):
             score -= 260
-        if any(token in wrap for token in ("上传视频", "继续编辑", "放弃", "拖拽视频")):
+        if any(token in wrap for token in ("涓婁紶瑙嗛", "缁х画缂栬緫", "鏀惧純", "鎷栨嫿瑙嗛")):
             score -= 220
     if bool(candidate.get("visible")):
         score += 6
@@ -15768,7 +15941,7 @@ def _find_kuaishou_upload_file_input(
         if (text) samples.push(text.slice(0, 240));
       }
       if (!samples.length) return '';
-      const precise = samples.find(text => /(添加图片|编辑图片|上传图片|上传图文|作品描述|发布设置|上传视频|继续编辑)/.test(text));
+      const precise = samples.find(text => /(娣诲姞鍥剧墖|缂栬緫鍥剧墖|涓婁紶鍥剧墖|涓婁紶鍥炬枃|浣滃搧鎻忚堪|鍙戝竷璁剧疆|涓婁紶瑙嗛|缁х画缂栬緫)/.test(text));
       return precise || samples[0];
     }
     return {
@@ -15829,8 +16002,8 @@ def _ensure_xiaohongshu_upload_mode(
     prefer_video: bool,
     max_rounds: int = 3,
 ) -> bool:
-    target_text = "上传视频" if prefer_video else "上传图文"
-    other_text = "上传图文" if prefer_video else "上传视频"
+    target_text = "涓婁紶瑙嗛" if prefer_video else "涓婁紶鍥炬枃"
+    other_text = "涓婁紶鍥炬枃" if prefer_video else "涓婁紶瑙嗛"
     js_switch = f"""
     const target = {json.dumps(target_text)};
     const other = {json.dumps(other_text)};
@@ -15870,8 +16043,8 @@ def _ensure_xiaohongshu_upload_mode(
     }}
     if (!current) {{
       const bodyText = norm((document.body && document.body.innerText) || '');
-      if (target === '上传图文' && /(上传图文|上传图片|选择图片|拖拽图片)/.test(bodyText)) current = target;
-      if (target === '上传视频' && /(上传视频|拖拽视频)/.test(bodyText)) current = target;
+      if (target === '涓婁紶鍥炬枃' && /(涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖)/.test(bodyText)) current = target;
+      if (target === '涓婁紶瑙嗛' && /(涓婁紶瑙嗛|鎷栨嫿瑙嗛)/.test(bodyText)) current = target;
     }}
     const targetItem = candidates.find(item => item.text === target);
     const available = candidates.map(item => item.text);
@@ -15930,17 +16103,17 @@ def _ensure_douyin_publish_mode(
     prefer_video: bool,
     max_rounds: int = 3,
 ) -> bool:
-    target_text = "上传视频" if prefer_video else "发布图文"
-    other_text = "发布图文" if prefer_video else "上传视频"
+    target_text = "涓婁紶瑙嗛" if prefer_video else "鍙戝竷鍥炬枃"
+    other_text = "鍙戝竷鍥炬枃" if prefer_video else "涓婁紶瑙嗛"
     expected_url_markers = (
         ("creator.douyin.com/creator-micro/content/upload", "creator.douyin.com/creator-micro/content/post/create")
         if prefer_video
         else ("creator.douyin.com/creator-micro/content/post/image",)
     )
     body_patterns = (
-        r"(上传视频|发布视频|选择视频|拖拽视频)"
+        r"(涓婁紶瑙嗛|鍙戝竷瑙嗛|閫夋嫨瑙嗛|鎷栨嫿瑙嗛)"
         if prefer_video
-        else r"(发布图文|上传图文|上传图片|选择图片|拖拽图片|已添加\d+张图片)"
+        else r"(鍙戝竷鍥炬枃|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|宸叉坊鍔燶d+寮犲浘鐗?"
     )
     js_switch = f"""
     const target = {json.dumps(target_text)};
@@ -16053,17 +16226,17 @@ def _ensure_kuaishou_publish_mode(
     prefer_video: bool,
     max_rounds: int = 3,
 ) -> bool:
-    target_text = "上传视频" if prefer_video else "上传图文"
-    other_text = "上传图文" if prefer_video else "上传视频"
+    target_text = "涓婁紶瑙嗛" if prefer_video else "涓婁紶鍥炬枃"
+    other_text = "涓婁紶鍥炬枃" if prefer_video else "涓婁紶瑙嗛"
     expected_url_markers = (
         ("cp.kuaishou.com/article/publish/video?tabtype=2",)
         if not prefer_video
         else ("cp.kuaishou.com/article/publish/video",)
     )
     body_patterns = (
-        r"(上传视频|拖拽视频|选择视频|发布视频)"
+        r"(涓婁紶瑙嗛|鎷栨嫿瑙嗛|閫夋嫨瑙嗛|鍙戝竷瑙嗛)"
         if prefer_video
-        else r"(上传图文|发布图文|上传图片|拖拽图片|选择图片|添加图片|已添加\d+张图片)"
+        else r"(涓婁紶鍥炬枃|鍙戝竷鍥炬枃|涓婁紶鍥剧墖|鎷栨嫿鍥剧墖|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|宸叉坊鍔燶d+寮犲浘鐗?"
     )
     js_switch = f"""
     const target = {json.dumps(target_text)};
@@ -16200,7 +16373,7 @@ def _find_bilibili_upload_file_input(primary_ctx: Any, fallback_ctx: Any) -> Any
       if (el.hasAttribute('multiple')) score += 3;
       if (wrap && isVisible(wrap)) score += 12;
       if (isVisible(el)) score += 2;
-      if (/(上传视频|点击上传|拖拽到此区域|拖拽上传)/.test(wrapText)) score += 8;
+      if (/(涓婁紶瑙嗛|鐐瑰嚮涓婁紶|鎷栨嫿鍒版鍖哄煙|鎷栨嫿涓婁紶)/.test(wrapText)) score += 8;
       if (score > bestScore) {
         bestScore = score;
         bestIdx = i;
@@ -16496,7 +16669,7 @@ def _read_upload_surface_snapshot_rich(primary_ctx: Any, fallback_ctx: Any) -> d
       const raw = norm(text || '');
       const lower = raw.toLowerCase();
       return (
-        /点击上传|上传图文|上传图片|选择图片|添加图片|直接将图片文件拖入此区域|拖入此区域|图片文件|上传区域/.test(raw) ||
+        /鐐瑰嚮涓婁紶|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲鍥剧墖鏂囦欢|涓婁紶鍖哄煙/.test(raw) ||
         /upload|drop|drag|image|picture|file/.test(lower)
       );
     }
@@ -16552,7 +16725,7 @@ def _read_upload_surface_snapshot_rich(primary_ctx: Any, fallback_ctx: Any) -> d
       cls: String(el.className || ''),
       aria: String(el.getAttribute('aria-label') || ''),
       wrap: wrapText(el),
-    })).filter(item => /(涓婁紶|鍥剧墖|鍥炬枃|鎷栨嫿|閫夋嫨|鏈湴|娣诲姞|upload|image|drop)/i.test([item.text, item.cls, item.aria, item.wrap].join(' '))).slice(0, 40);
+    })).filter(item => /(娑撳﹣绱秥閸ュ墽澧東閸ョ偓鏋億閹锋牗瀚縷闁瀚▅閺堫剙婀磡濞ｈ濮瀨upload|image|drop)/i.test([item.text, item.cls, item.aria, item.wrap].join(' '))).slice(0, 40);
     const clickablesByText = roots.flatMap(root => {
       try {
         return Array.from(root.querySelectorAll('button, label, [role="button"], div, span, a'));
@@ -16598,7 +16771,7 @@ def _read_upload_surface_snapshot_rich(primary_ctx: Any, fallback_ctx: Any) -> d
         clickable_tag: String((clickableAncestor && clickableAncestor.tagName) || ''),
         clickable_cls: String((clickableAncestor && clickableAncestor.className) || ''),
       };
-    }).filter(item => /(鐐瑰嚮涓婁紶|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|drop|upload|drag)/i.test([item.text, item.cls, item.attrs, item.clickable_cls].join(' '))).slice(0, 16);
+    }).filter(item => /(閻愮懓鍤稉濠佺炊|閻╁瓨甯寸亸鍡楁禈閻楀洦鏋冩禒鑸靛珛閸忋儲顒濋崠鍝勭厵|閹锋牕鍙嗗銈呭隘閸╃劜娑撳﹣绱堕崶鍓у|娑撳﹣绱堕崶鐐瀮|闁瀚ㄩ崶鍓у|濞ｈ濮為崶鍓у|drop|upload|drag)/i.test([item.text, item.cls, item.attrs, item.clickable_cls].join(' '))).slice(0, 16);
     const uploadZonesByText = roots.flatMap(root => {
       try {
         return Array.from(root.querySelectorAll('div, label, section, article'));
@@ -16745,7 +16918,7 @@ def _read_upload_surface_snapshot(primary_ctx: Any, fallback_ctx: Any) -> dict[s
         aria: String(el.getAttribute('aria-label') || ''),
         wrap: wrapText(el),
       }))
-      .filter(item => /(上传|图片|图文|拖拽|选择|本地|添加|upload|image|drop)/i.test([item.text, item.cls, item.aria, item.wrap].join(' ')))
+      .filter(item => /(涓婁紶|鍥剧墖|鍥炬枃|鎷栨嫿|閫夋嫨|鏈湴|娣诲姞|upload|image|drop)/i.test([item.text, item.cls, item.aria, item.wrap].join(' ')))
       .slice(0, 40);
     const uploadZones = Array.from(document.querySelectorAll('div, label, section, article'))
       .filter(el => isVisible(el))
@@ -16770,7 +16943,7 @@ def _read_upload_surface_snapshot(primary_ctx: Any, fallback_ctx: Any) -> dict[s
           clickable_cls: String((clickableAncestor && clickableAncestor.className) || ''),
         };
       })
-      .filter(item => /(点击上传|直接将图片文件拖入此区域|拖入此区域|上传图片|上传图文|选择图片|添加图片|drop|upload)/i.test([item.text, item.cls, item.attrs, item.clickable_cls].join(' ')))
+      .filter(item => /(鐐瑰嚮涓婁紶|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|drop|upload)/i.test([item.text, item.cls, item.attrs, item.clickable_cls].join(' ')))
       .slice(0, 16);
     const iframes = Array.from(document.querySelectorAll('iframe')).slice(0, 12).map((el, idx) => ({
       idx,
@@ -16937,7 +17110,7 @@ def _stage_kuaishou_image_upload_via_page_set(
     target_path = str(target)
     for stage_round in range(3):
         _ensure_kuaishou_publish_mode(primary_ctx, fallback_ctx, prefer_video=False, max_rounds=2)
-        clicked = _click_first_matching_button(primary_ctx, fallback_ctx, ("上传图片",), platform_name="kuaishou")
+        clicked = _click_first_matching_button(primary_ctx, fallback_ctx, ("涓婁紶鍥剧墖",), platform_name="kuaishou")
         if not clicked:
             _activate_upload_trigger_generic(primary_ctx, fallback_ctx, platform_name="kuaishou")
         _humanized_publish_reaction_pause("kuaishou image upload chooser open")
@@ -17030,7 +17203,7 @@ def _read_click_effect_snapshot_rich(owner: Any) -> dict[str, Any]:
       tag: String(el.tagName || ''),
       cls: String(el.className || ''),
       text: norm(el.innerText || el.textContent || ''),
-    })).filter(item => /(鐐瑰嚮涓婁紶|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|鏈湴涓婁紶|upload|drop)/i.test([item.text, item.cls].join(' '))).slice(0, 8);
+    })).filter(item => /(閻愮懓鍤稉濠佺炊|閻╁瓨甯寸亸鍡楁禈閻楀洦鏋冩禒鑸靛珛閸忋儲顒濋崠鍝勭厵|閹锋牕鍙嗗銈呭隘閸╃劜娑撳﹣绱堕崶鍓у|娑撳﹣绱堕崶鐐瀮|闁瀚ㄩ崶鍓у|濞ｈ濮為崶鍓у|閺堫剙婀存稉濠佺炊|upload|drop)/i.test([item.text, item.cls].join(' '))).slice(0, 8);
     const seenFileInputs = new Set();
     const fileInputs = roots.flatMap(root => {
       try {
@@ -17092,7 +17265,7 @@ def _read_click_effect_snapshot(owner: Any) -> dict[str, Any]:
         cls: String(el.className || ''),
         text: norm(el.innerText || el.textContent || ''),
       }))
-      .filter(item => /(点击上传|直接将图片文件拖入此区域|拖入此区域|上传图片|上传图文|选择图片|添加图片|本地上传|upload|drop)/i.test([item.text, item.cls].join(' ')))
+      .filter(item => /(鐐瑰嚮涓婁紶|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|鏈湴涓婁紶|upload|drop)/i.test([item.text, item.cls].join(' ')))
       .slice(0, 8);
     return {
       url: String(location.href || ''),
@@ -17243,9 +17416,9 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
               let score = 0;
               if (cls.includes('drop-')) score += 220;
               if (cls.includes('content-upload')) score -= 40;
-              if (/点击上传|上传图文|上传图片|选择图片|添加图片|拖入此区域|图片文件|继续添加/.test(fullText)) score += 80;
-              if (/已添加\\d+张图片|已添加图片|编辑图片|继续添加/.test(pageText) && cls.includes('drop-')) score += 120;
-              if (/封面|编辑封面|作为封面/.test(fullText)) score -= 260;
+              if (/鐐瑰嚮涓婁紶|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|鎷栧叆姝ゅ尯鍩焲鍥剧墖鏂囦欢|缁х画娣诲姞/.test(fullText)) score += 80;
+              if (/宸叉坊鍔燶\d+寮犲浘鐗噟宸叉坊鍔犲浘鐗噟缂栬緫鍥剧墖|缁х画娣诲姞/.test(pageText) && cls.includes('drop-')) score += 120;
+              if (/灏侀潰|缂栬緫灏侀潰|浣滀负灏侀潰/.test(fullText)) score -= 260;
               let rect = null;
               try {
                 rect = node.getBoundingClientRect();
@@ -17288,7 +17461,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
         """
         douyin_native_selectors = (
             "css:button[class*='container-drag-btn']",
-            "xpath://button[contains(normalize-space(.), '娑撳﹣绱堕崶鐐瀮')]",
+            "xpath://button[contains(normalize-space(.), '濞戞挸锕ｇ槐鍫曞炊閻愵剚鐎?)]",
             "css:div[class*='phone-screen'] div[class*='container-']",
             "css:div[class*='phone-container'] div[class*='container-']",
             "css:div[class*='content-right'] button",
@@ -17346,7 +17519,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
                 return
         douyin_selectors = (
             "css:button[class*='container-drag-btn']",
-            "xpath://button[contains(normalize-space(.), '涓婁紶鍥炬枃')]",
+            "xpath://button[contains(normalize-space(.), '娑撳﹣绱堕崶鐐瀮')]",
             "css:div[class*='phone-screen'] div[class*='container-']",
             "css:div[class*='phone-container'] div[class*='container-']",
             "css:div[class*='drop-']",
@@ -17357,8 +17530,8 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
             "xpath://div[contains(@class,'drop-')]",
             "xpath://div[contains(@class,'content-right')]",
             "xpath://div[contains(@class,'content-upload')]",
-            "xpath://div[contains(normalize-space(.), '点击上传')]",
-            "xpath://div[contains(normalize-space(.), '直接将图片文件拖入此区域')]",
+            "xpath://div[contains(normalize-space(.), '鐐瑰嚮涓婁紶')]",
+            "xpath://div[contains(normalize-space(.), '鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙')]",
         )
         for owner in contexts:
             if not owner:
@@ -17375,7 +17548,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
                         marker = ele.run_js(
                             """
                             const text = String(this.innerText || this.textContent || '').replace(/\\s+/g, ' ').trim();
-                            return /封面|编辑封面|作为封面/.test(text) ? 'cover-upload' : '';
+                            return /灏侀潰|缂栬緫灏侀潰|浣滀负灏侀潰/.test(text) ? 'cover-upload' : '';
                             """
                         )
                     except Exception:
@@ -17409,11 +17582,275 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
             "css:div.upload-wrp div.upload-area",
             "css:div.bcc-upload.upload div.upload-area",
             "css:div.upload-area",
+            "xpath://div[contains(@class,'upload-area') and contains(normalize-space(.), '娑撳﹣绱剁憴鍡涱暥')]",
+            "xpath://button[normalize-space(.)='娑撳﹣绱剁憴鍡涱暥']",
+            "text:娑撳﹣绱剁憴鍡涱暥",
+        )
+        for owner in contexts:
+            if not owner:
+                continue
+            for selector in bilibili_selectors:
+                try:
+                    ele = owner.ele(selector, timeout=0.8)
+                except Exception:
+                    ele = None
+                if not ele or (not _is_visible_element(ele)):
+                    continue
+                try:
+                    ele.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+                except Exception:
+                    pass
+                try:
+                    ele.click()
+                except Exception:
+                    try:
+                        ele.click(by_js=True)
+                    except Exception:
+                        continue
+                _log(f"[Uploader:bilibili] Upload trigger clicked by selector: {selector}")
+                return
+
+        js_bili = """
+        function collectAllRoots(root) {
+          const roots = [root];
+          const queue = [root];
+          const seen = new Set([root]);
+          while (queue.length) {
+            const current = queue.shift();
+            let nodes = [];
+            try {
+              nodes = Array.from(current.querySelectorAll('*'));
+            } catch (e) {
+              nodes = [];
+            }
+            for (const el of nodes) {
+              const shadow = el && el.shadowRoot;
+              if (shadow && !seen.has(shadow)) {
+                seen.add(shadow);
+                roots.push(shadow);
+                queue.push(shadow);
+              }
+            }
+          }
+          return roots;
+        }
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 8 && r.height > 8;
+        }
+        function norm(s) {
+          return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+        }
+        const seenNodes = new Set();
+        const nodes = collectAllRoots(document)
+          .flatMap(root => {
+            try {
+              return Array.from(root.querySelectorAll('div, button, label, span, a'));
+            } catch (e) {
+              return [];
+            }
+          })
+          .filter(el => {
+            if (!el || seenNodes.has(el)) return false;
+            seenNodes.add(el);
+            return true;
+          })
+          .filter(isVisible)
+          .map(el => {
+            const text = norm(el.innerText || el.textContent || '');
+            const cls = String(el.className || '').toLowerCase();
+            let score = 0;
+            if (/upload-area|bcc-upload/.test(cls)) score += 12;
+            if (text === '娑撳﹣绱剁憴鍡涱暥') score += 10;
+            if (text.includes('娑撳﹣绱剁憴鍡涱暥')) score += 8;
+            if (/閻愮懓鍤稉濠佺炊|閹锋牗瀚块崚鐗堫劃閸栧搫鐓?.test(text)) score += 6;
+            if (el.tagName && el.tagName.toLowerCase() === 'button') score += 4;
+            return {el, score};
+          })
+          .filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score);
+        if (!nodes.length) return 'not_found';
+        nodes[0].el.click();
+        return 'clicked';
+        """
+        for owner in contexts:
+            if not owner:
+                continue
+            try:
+                state = owner.run_js(js_bili)
+            except Exception:
+                state = ""
+            if str(state or "") == "clicked":
+                _log("[Uploader:bilibili] Upload trigger clicked by bilibili JS fallback.")
+                return
+
+    trigger_pattern = (
+        "(娑撳﹣绱堕崶鐐瀮|娑撳﹣绱堕崶鍓у|闁瀚ㄩ崶鍓у|閹锋牗瀚块崶鍓у|濞ｈ濮為崶鍓у|閸ュ墽澧栨稉濠佺炊|閸ョ偓鏋億娑撳﹣绱秥闁瀚ㄧ憴鍡涱暥|閸欐垵绔风憴鍡涱暥|閹锋牗瀚縷閻愮懓鍤稉濠佺炊|濞ｈ濮炵憴鍡涱暥|閺堫剙婀存稉濠佺炊|閹舵洜顭坾upload|select|video|image|drop)"
+        if platform_name in {"xiaohongshu", "douyin", "kuaishou"}
+        else "(娑撳﹣绱秥闁瀚ㄧ憴鍡涱暥|閸欐垵绔风憴鍡涱暥|閹锋牗瀚縷閻愮懓鍤稉濠佺炊|濞ｈ濮炵憴鍡涱暥|閺堫剙婀存稉濠佺炊|閹舵洜顭坾upload|select|video|drop)"
+    )
+    js = """
+    function collectAllRoots(root) {
+      const roots = [root];
+      const queue = [root];
+      const seen = new Set([root]);
+      while (queue.length) {
+        const current = queue.shift();
+        let nodes = [];
+        try {
+          nodes = Array.from(current.querySelectorAll('*'));
+        } catch (e) {
+          nodes = [];
+        }
+        for (const el of nodes) {
+          const shadow = el && el.shadowRoot;
+          if (shadow && !seen.has(shadow)) {
+            seen.add(shadow);
+            roots.push(shadow);
+            queue.push(shadow);
+          }
+        }
+      }
+      return roots;
+    }
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function looksUploadText(text) {
+      const raw = norm(text || '');
+      const lower = raw.toLowerCase();
+      return (
+        /鐐瑰嚮涓婁紶|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩焲鍥剧墖鏂囦欢|涓婁紶鍖哄煙/.test(raw) ||
+        /upload|drop|drag|image|picture|file/.test(lower)
+      );
+    }
+    const patterns = new RegExp(__TRIGGER_PATTERN__, 'i');
+    const seenNodes = new Set();
+    const nodes = collectAllRoots(document)
+      .flatMap(root => {
+        try {
+          return Array.from(root.querySelectorAll('button, label, div, span, a, section'));
+        } catch (e) {
+          return [];
+        }
+      })
+      .filter(el => {
+        if (!el || seenNodes.has(el)) return false;
+        seenNodes.add(el);
+        return true;
+      })
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        const cls = String(el.className || '');
+        const aria = String(el.getAttribute('aria-label') || '');
+        const data = Array.from(el.attributes || [])
+          .filter(attr => /^data-|^aria-/.test(String(attr.name || '')))
+          .map(attr => `${String(attr.name || '')}=${String(attr.value || '')}`)
+          .join(' ');
+        if (!patterns.test([text, cls, aria, data].join(' ')) && !looksUploadText([text, cls, aria, data].join(' '))) return null;
+        const rect = el.getBoundingClientRect();
+        const area = Number(rect.width || 0) * Number(rect.height || 0);
+        let score = 0;
+        if (/閻愮懓鍤稉濠佺炊/.test(text)) score += 80;
+        if (/閻╁瓨甯寸亸鍡楁禈閻楀洦鏋冩禒鑸靛珛閸忋儲顒濋崠鍝勭厵|閹锋牕鍙嗗銈呭隘閸?.test(text)) score += 60;
+        if (/娑撳﹣绱堕崶鍓у|娑撳﹣绱堕崶鐐瀮|闁瀚ㄩ崶鍓у|濞ｈ濮為崶鍓у/.test(text)) score += 50;
+        if (/upload|drop/.test([text, cls, aria, data].join(' ').toLowerCase())) score += 24;
+        if (looksUploadText([text, cls, aria, data].join(' '))) score += 40;
+        if (el.tagName === 'LABEL' || String(el.getAttribute('role') || '').toLowerCase() === 'button') score += 12;
+        if (/upload|drop|drag|image/.test(cls.toLowerCase())) score += 12;
+        if (/x-storage|storage/.test(cls.toLowerCase())) score += 16;
+        if (area > 0 && area < 700000) score += 8;
+        if (area > 0 && area < 120000) score += 8;
+        if (area > 700000) score -= 24;
+        if (text.length > 0 && text.length <= 80) score += 6;
+        if (text.length > 200) score -= 20;
+        return { el, text, cls, area, score };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    const target = nodes[0];
+    if (!target) {
+      const uploadFrame = Array.from(document.querySelectorAll('iframe')).find(el => {
+        const src = String(el.getAttribute('src') || '').toLowerCase();
+        return isVisible(el) && /x-storage|upload|image/.test(src);
+      });
+      if (!uploadFrame) return 'not_found';
+      try {
+        uploadFrame.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (e) {}
+      try {
+        uploadFrame.click();
+      } catch (e) {
+        try {
+          uploadFrame.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+          uploadFrame.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+          uploadFrame.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        } catch (ee) {
+          return 'not_found';
+        }
+      }
+      return 'clicked:iframe-upload|x-storage|0';
+    }
+    try {
+      target.el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } catch (e) {}
+    try {
+      target.el.click();
+    } catch (e) {
+      try {
+        target.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        target.el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      } catch (ee) {
+        return 'click_failed';
+      }
+    }
+    return `clicked:${target.text.slice(0, 80)}|${target.cls.slice(0, 80)}|${Math.round(target.area)}`;
+    """
+    js = js.replace("__TRIGGER_PATTERN__", json.dumps(trigger_pattern))
+    for owner in contexts:
+        if not owner:
+            continue
+        before_snapshot = _read_click_effect_snapshot(owner) if platform_name == "douyin" else {}
+        try:
+            state = owner.run_js(js)
+        except Exception:
+            state = ""
+        if not str(state or "").startswith("clicked:"):
+            continue
+        _log(f"[Uploader:{platform_name}] Upload trigger clicked: {str(state or '')[8:]}")
+        if platform_name == "douyin":
+            _humanized_publish_retry_pause("douyin upload trigger effect check")
+            after_snapshot = _read_click_effect_snapshot(owner)
+            _log_click_effect_delta(before_snapshot, after_snapshot, platform_name)
+        return
+
+
+def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> None:
+    return _activate_upload_trigger_generic_v2(primary_ctx, fallback_ctx, platform_name)
+    contexts = _collect_upload_contexts(primary_ctx, fallback_ctx)
+    if platform_name == "bilibili":
+        # Prefer stable upload-area/button selectors for Bilibili page variants.
+        bilibili_selectors = (
+            "css:div.upload-wrp div.upload-area",
+            "css:div.bcc-upload.upload div.upload-area",
+            "css:div.upload-area",
             "xpath://div[contains(@class,'upload-area') and contains(normalize-space(.), '涓婁紶瑙嗛')]",
             "xpath://button[normalize-space(.)='涓婁紶瑙嗛']",
             "text:涓婁紶瑙嗛",
         )
-        for owner in contexts:
+        for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
             for selector in bilibili_selectors:
@@ -17503,7 +17940,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
         nodes[0].el.click();
         return 'clicked';
         """
-        for owner in contexts:
+        for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
             try:
@@ -17518,270 +17955,6 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
         "(涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|娣诲姞鍥剧墖|鍥剧墖涓婁紶|鍥炬枃|涓婁紶|閫夋嫨瑙嗛|鍙戝竷瑙嗛|鎷栨嫿|鐐瑰嚮涓婁紶|娣诲姞瑙嗛|鏈湴涓婁紶|鎶曠|upload|select|video|image|drop)"
         if platform_name in {"xiaohongshu", "douyin", "kuaishou"}
         else "(涓婁紶|閫夋嫨瑙嗛|鍙戝竷瑙嗛|鎷栨嫿|鐐瑰嚮涓婁紶|娣诲姞瑙嗛|鏈湴涓婁紶|鎶曠|upload|select|video|drop)"
-    )
-    js = """
-    function collectAllRoots(root) {
-      const roots = [root];
-      const queue = [root];
-      const seen = new Set([root]);
-      while (queue.length) {
-        const current = queue.shift();
-        let nodes = [];
-        try {
-          nodes = Array.from(current.querySelectorAll('*'));
-        } catch (e) {
-          nodes = [];
-        }
-        for (const el of nodes) {
-          const shadow = el && el.shadowRoot;
-          if (shadow && !seen.has(shadow)) {
-            seen.add(shadow);
-            roots.push(shadow);
-            queue.push(shadow);
-          }
-        }
-      }
-      return roots;
-    }
-    function isVisible(el) {
-      if (!el) return false;
-      const st = window.getComputedStyle(el);
-      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
-      const r = el.getBoundingClientRect();
-      return r.width > 8 && r.height > 8;
-    }
-    function norm(s) {
-      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
-    }
-    function looksUploadText(text) {
-      const raw = norm(text || '');
-      const lower = raw.toLowerCase();
-      return (
-        /点击上传|上传图文|上传图片|选择图片|添加图片|直接将图片文件拖入此区域|拖入此区域|图片文件|上传区域/.test(raw) ||
-        /upload|drop|drag|image|picture|file/.test(lower)
-      );
-    }
-    const patterns = new RegExp(__TRIGGER_PATTERN__, 'i');
-    const seenNodes = new Set();
-    const nodes = collectAllRoots(document)
-      .flatMap(root => {
-        try {
-          return Array.from(root.querySelectorAll('button, label, div, span, a, section'));
-        } catch (e) {
-          return [];
-        }
-      })
-      .filter(el => {
-        if (!el || seenNodes.has(el)) return false;
-        seenNodes.add(el);
-        return true;
-      })
-      .filter(el => isVisible(el))
-      .map(el => {
-        const text = norm(el.innerText || el.textContent || '');
-        const cls = String(el.className || '');
-        const aria = String(el.getAttribute('aria-label') || '');
-        const data = Array.from(el.attributes || [])
-          .filter(attr => /^data-|^aria-/.test(String(attr.name || '')))
-          .map(attr => `${String(attr.name || '')}=${String(attr.value || '')}`)
-          .join(' ');
-        if (!patterns.test([text, cls, aria, data].join(' ')) && !looksUploadText([text, cls, aria, data].join(' '))) return null;
-        const rect = el.getBoundingClientRect();
-        const area = Number(rect.width || 0) * Number(rect.height || 0);
-        let score = 0;
-        if (/鐐瑰嚮涓婁紶/.test(text)) score += 80;
-        if (/鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩?.test(text)) score += 60;
-        if (/涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖/.test(text)) score += 50;
-        if (/upload|drop/.test([text, cls, aria, data].join(' ').toLowerCase())) score += 24;
-        if (looksUploadText([text, cls, aria, data].join(' '))) score += 40;
-        if (el.tagName === 'LABEL' || String(el.getAttribute('role') || '').toLowerCase() === 'button') score += 12;
-        if (/upload|drop|drag|image/.test(cls.toLowerCase())) score += 12;
-        if (/x-storage|storage/.test(cls.toLowerCase())) score += 16;
-        if (area > 0 && area < 700000) score += 8;
-        if (area > 0 && area < 120000) score += 8;
-        if (area > 700000) score -= 24;
-        if (text.length > 0 && text.length <= 80) score += 6;
-        if (text.length > 200) score -= 20;
-        return { el, text, cls, area, score };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
-    const target = nodes[0];
-    if (!target) {
-      const uploadFrame = Array.from(document.querySelectorAll('iframe')).find(el => {
-        const src = String(el.getAttribute('src') || '').toLowerCase();
-        return isVisible(el) && /x-storage|upload|image/.test(src);
-      });
-      if (!uploadFrame) return 'not_found';
-      try {
-        uploadFrame.scrollIntoView({ block: 'center', inline: 'nearest' });
-      } catch (e) {}
-      try {
-        uploadFrame.click();
-      } catch (e) {
-        try {
-          uploadFrame.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-          uploadFrame.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-          uploadFrame.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        } catch (ee) {
-          return 'not_found';
-        }
-      }
-      return 'clicked:iframe-upload|x-storage|0';
-    }
-    try {
-      target.el.scrollIntoView({ block: 'center', inline: 'nearest' });
-    } catch (e) {}
-    try {
-      target.el.click();
-    } catch (e) {
-      try {
-        target.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-        target.el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-        target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      } catch (ee) {
-        return 'click_failed';
-      }
-    }
-    return `clicked:${target.text.slice(0, 80)}|${target.cls.slice(0, 80)}|${Math.round(target.area)}`;
-    """
-    js = js.replace("__TRIGGER_PATTERN__", json.dumps(trigger_pattern))
-    for owner in contexts:
-        if not owner:
-            continue
-        before_snapshot = _read_click_effect_snapshot(owner) if platform_name == "douyin" else {}
-        try:
-            state = owner.run_js(js)
-        except Exception:
-            state = ""
-        if not str(state or "").startswith("clicked:"):
-            continue
-        _log(f"[Uploader:{platform_name}] Upload trigger clicked: {str(state or '')[8:]}")
-        if platform_name == "douyin":
-            _humanized_publish_retry_pause("douyin upload trigger effect check")
-            after_snapshot = _read_click_effect_snapshot(owner)
-            _log_click_effect_delta(before_snapshot, after_snapshot, platform_name)
-        return
-
-
-def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> None:
-    return _activate_upload_trigger_generic_v2(primary_ctx, fallback_ctx, platform_name)
-    contexts = _collect_upload_contexts(primary_ctx, fallback_ctx)
-    if platform_name == "bilibili":
-        # Prefer stable upload-area/button selectors to match B站页面结构。
-        bilibili_selectors = (
-            "css:div.upload-wrp div.upload-area",
-            "css:div.bcc-upload.upload div.upload-area",
-            "css:div.upload-area",
-            "xpath://div[contains(@class,'upload-area') and contains(normalize-space(.), '上传视频')]",
-            "xpath://button[normalize-space(.)='上传视频']",
-            "text:上传视频",
-        )
-        for owner in (primary_ctx, fallback_ctx):
-            if not owner:
-                continue
-            for selector in bilibili_selectors:
-                try:
-                    ele = owner.ele(selector, timeout=0.8)
-                except Exception:
-                    ele = None
-                if not ele or (not _is_visible_element(ele)):
-                    continue
-                try:
-                    ele.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
-                except Exception:
-                    pass
-                try:
-                    ele.click()
-                except Exception:
-                    try:
-                        ele.click(by_js=True)
-                    except Exception:
-                        continue
-                _log(f"[Uploader:bilibili] Upload trigger clicked by selector: {selector}")
-                return
-
-        js_bili = """
-        function collectAllRoots(root) {
-          const roots = [root];
-          const queue = [root];
-          const seen = new Set([root]);
-          while (queue.length) {
-            const current = queue.shift();
-            let nodes = [];
-            try {
-              nodes = Array.from(current.querySelectorAll('*'));
-            } catch (e) {
-              nodes = [];
-            }
-            for (const el of nodes) {
-              const shadow = el && el.shadowRoot;
-              if (shadow && !seen.has(shadow)) {
-                seen.add(shadow);
-                roots.push(shadow);
-                queue.push(shadow);
-              }
-            }
-          }
-          return roots;
-        }
-        function isVisible(el) {
-          if (!el) return false;
-          const st = window.getComputedStyle(el);
-          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
-          const r = el.getBoundingClientRect();
-          return r.width > 8 && r.height > 8;
-        }
-        function norm(s) {
-          return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
-        }
-        const seenNodes = new Set();
-        const nodes = collectAllRoots(document)
-          .flatMap(root => {
-            try {
-              return Array.from(root.querySelectorAll('div, button, label, span, a'));
-            } catch (e) {
-              return [];
-            }
-          })
-          .filter(el => {
-            if (!el || seenNodes.has(el)) return false;
-            seenNodes.add(el);
-            return true;
-          })
-          .filter(isVisible)
-          .map(el => {
-            const text = norm(el.innerText || el.textContent || '');
-            const cls = String(el.className || '').toLowerCase();
-            let score = 0;
-            if (/upload-area|bcc-upload/.test(cls)) score += 12;
-            if (text === '上传视频') score += 10;
-            if (text.includes('上传视频')) score += 8;
-            if (/点击上传|拖拽到此区域/.test(text)) score += 6;
-            if (el.tagName && el.tagName.toLowerCase() === 'button') score += 4;
-            return {el, score};
-          })
-          .filter(item => item.score > 0)
-          .sort((a, b) => b.score - a.score);
-        if (!nodes.length) return 'not_found';
-        nodes[0].el.click();
-        return 'clicked';
-        """
-        for owner in (primary_ctx, fallback_ctx):
-            if not owner:
-                continue
-            try:
-                state = owner.run_js(js_bili)
-            except Exception:
-                state = ""
-            if str(state or "") == "clicked":
-                _log("[Uploader:bilibili] Upload trigger clicked by bilibili JS fallback.")
-                return
-
-    trigger_pattern = (
-        "(上传图文|上传图片|选择图片|拖拽图片|添加图片|图片上传|图文|上传|选择视频|发布视频|拖拽|点击上传|添加视频|本地上传|投稿|upload|select|video|image|drop)"
-        if platform_name in {"xiaohongshu", "douyin", "kuaishou"}
-        else "(上传|选择视频|发布视频|拖拽|点击上传|添加视频|本地上传|投稿|upload|select|video|drop)"
     )
     js = """
     function isVisible(el) {
@@ -17822,9 +17995,9 @@ def _activate_upload_trigger_generic(primary_ctx: Any, fallback_ctx: Any, platfo
         const rect = el.getBoundingClientRect();
         const area = Number(rect.width || 0) * Number(rect.height || 0);
         let score = 0;
-        if (/点击上传/.test(text)) score += 80;
-        if (/直接将图片文件拖入此区域|拖入此区域/.test(text)) score += 60;
-        if (/上传图片|上传图文|选择图片|添加图片/.test(text)) score += 50;
+        if (/鐐瑰嚮涓婁紶/.test(text)) score += 80;
+        if (/鐩存帴灏嗗浘鐗囨枃浠舵嫋鍏ユ鍖哄煙|鎷栧叆姝ゅ尯鍩?.test(text)) score += 60;
+        if (/涓婁紶鍥剧墖|涓婁紶鍥炬枃|閫夋嫨鍥剧墖|娣诲姞鍥剧墖/.test(text)) score += 50;
         if (/upload|drop/.test([text, cls, aria, data].join(' ').toLowerCase())) score += 24;
         if (el.tagName === 'LABEL' || String(el.getAttribute('role') || '').toLowerCase() === 'button') score += 12;
         if (/upload|drop|drag|image/.test(cls.toLowerCase())) score += 12;
@@ -17900,7 +18073,7 @@ def _caption_verification_marker(caption: str) -> str:
     }
     stop_cn = {"赛博皮卡", "特斯拉", "视频", "作品", "发布"}
 
-    # 优先从非 hashtag 正文中抽取验证锚点，避免命中文件名/页面固定文本导致误判。
+    # Prefer non-hashtag body text as verification anchors.
     no_hashtag = re.sub(r"#[^\s#]+", " ", normalized)
     no_hashtag = re.sub(r"\s+", " ", no_hashtag).strip()
 
@@ -17946,7 +18119,7 @@ def _read_caption_snapshot_generic(owner: Any) -> str:
         el.getAttribute('aria-label') || '',
         String(el.className || ''),
       ].join(' ').toLowerCase();
-      return /search|product|goods|location|link|topic|tag|商品|链接|位置|搜索/.test(attrs);
+      return /search|product|goods|location|link|topic|tag|鍟嗗搧|閾炬帴|浣嶇疆|鎼滅储/.test(attrs);
     }
     const nodes = Array.from(document.querySelectorAll('textarea, [contenteditable=\"true\"], input[type=\"text\"]'));
     const values = [];
@@ -17991,9 +18164,9 @@ def _read_kuaishou_caption_snapshot(owner: Any) -> str:
         const wrap = el.closest('form, section, .publish, .video, .editor, div') || el.parentElement || el;
         const wrapText = String((wrap && wrap.innerText) || '').slice(0, 260);
         let score = 0;
-        if (/作品描述|描述|文案/.test(attrs)) score += 10;
-        if (/作品描述|描述|文案/.test(wrapText)) score += 7;
-        if (/search|keyword|location|topic|tag|商品|链接|位置|搜索/.test(attrs.toLowerCase())) score -= 10;
+        if (/浣滃搧鎻忚堪|鎻忚堪|鏂囨/.test(attrs)) score += 10;
+        if (/浣滃搧鎻忚堪|鎻忚堪|鏂囨/.test(wrapText)) score += 7;
+        if (/search|keyword|location|topic|tag|鍟嗗搧|閾炬帴|浣嶇疆|鎼滅储/.test(attrs.toLowerCase())) score -= 10;
         if (/textarea/i.test(el.tagName)) score += 3;
         return {el, score};
       })
@@ -18033,34 +18206,34 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
     )
     if platform_name == "douyin":
         selectors = (
-            "xpath://textarea[contains(@placeholder,'描述') or contains(@placeholder,'作品')]",
-            "xpath://div[contains(normalize-space(.), '作品描述')]/following::textarea[1]",
-            "xpath://div[contains(normalize-space(.), '作品描述')]/following::*[@contenteditable='true'][1]",
+            "xpath://textarea[contains(@placeholder,'鎻忚堪') or contains(@placeholder,'浣滃搧')]",
+            "xpath://div[contains(normalize-space(.), '浣滃搧鎻忚堪')]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '浣滃搧鎻忚堪')]/following::*[@contenteditable='true'][1]",
             *selectors,
         )
     elif platform_name == "xiaohongshu":
         selectors = (
-            "xpath://textarea[contains(@placeholder,'描述') or contains(@placeholder,'文案')]",
-            "xpath://div[contains(normalize-space(.), '正文')]/following::textarea[1]",
-            "xpath://div[contains(normalize-space(.), '正文')]/following::*[@contenteditable='true'][1]",
-            "xpath://*[@contenteditable='true' and (contains(@data-placeholder,'正文') or contains(@placeholder,'正文'))]",
+            "xpath://textarea[contains(@placeholder,'鎻忚堪') or contains(@placeholder,'鏂囨')]",
+            "xpath://div[contains(normalize-space(.), '姝ｆ枃')]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '姝ｆ枃')]/following::*[@contenteditable='true'][1]",
+            "xpath://*[@contenteditable='true' and (contains(@data-placeholder,'姝ｆ枃') or contains(@placeholder,'姝ｆ枃'))]",
             "css:.ql-editor[contenteditable='true']",
-            "css:div[contenteditable='true'][data-placeholder*='正文']",
-            "css:div[contenteditable='true'][placeholder*='正文']",
+            "css:div[contenteditable='true'][data-placeholder*='姝ｆ枃']",
+            "css:div[contenteditable='true'][placeholder*='姝ｆ枃']",
             *selectors,
         )
     elif platform_name == "kuaishou":
         selectors = (
-            "xpath://textarea[contains(@placeholder,'作品描述') or contains(@placeholder,'描述')]",
-            "xpath://div[contains(normalize-space(.), '作品描述')]/following::textarea[1]",
-            "xpath://div[contains(normalize-space(.), '作品描述')]/following::*[@contenteditable='true'][1]",
+            "xpath://textarea[contains(@placeholder,'浣滃搧鎻忚堪') or contains(@placeholder,'鎻忚堪')]",
+            "xpath://div[contains(normalize-space(.), '浣滃搧鎻忚堪')]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '浣滃搧鎻忚堪')]/following::*[@contenteditable='true'][1]",
             *selectors,
         )
     elif platform_name == "bilibili":
         selectors = (
-            "xpath://textarea[contains(@placeholder,'简介') or contains(@placeholder,'描述')]",
-            "xpath://div[contains(normalize-space(.), '简介')]/following::textarea[1]",
-            "xpath://div[contains(normalize-space(.), '简介')]/following::*[@contenteditable='true'][1]",
+            "xpath://textarea[contains(@placeholder,'绠€浠?) or contains(@placeholder,'鎻忚堪')]",
+            "xpath://div[contains(normalize-space(.), '绠€浠?)]/following::textarea[1]",
+            "xpath://div[contains(normalize-space(.), '绠€浠?)]/following::*[@contenteditable='true'][1]",
             *selectors,
         )
 
@@ -18146,12 +18319,12 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
             const wrap = el.closest('form, section, .publish, .content, .editor, div') || el.parentElement || el;
             const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 420);
             let score = 0;
-            if (/作品描述|描述|文案/.test(attrs)) score += 18;
-            if (/作品描述|描述|文案/.test(wrapText)) score += 14;
+            if (/浣滃搧鎻忚堪|鎻忚堪|鏂囨/.test(attrs)) score += 18;
+            if (/浣滃搧鎻忚堪|鎻忚堪|鏂囨/.test(wrapText)) score += 14;
             if (/textarea/i.test(String(el.tagName || ''))) score += 4;
             if (String(el.getAttribute('contenteditable') || '').toLowerCase() === 'true') score += 3;
             if (/500|700/.test(wrapText)) score += 2;
-            if (/search|keyword|location|topic|tag|商品|链接|位置|地点|作者服务/.test((attrs + ' ' + wrapText).toLowerCase())) score -= 16;
+            if (/search|keyword|location|topic|tag|鍟嗗搧|閾炬帴|浣嶇疆|鍦扮偣|浣滆€呮湇鍔?.test((attrs + ' ' + wrapText).toLowerCase())) score -= 16;
             return {el, score};
           })
           .filter(item => item.score > 0)
@@ -18217,23 +18390,23 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
 
 def _pick_kuaishou_publish_wrap_text(texts: Sequence[str]) -> str:
     allow_wrap_tokens = (
-        "发布时间",
-        "立即发布",
-        "定时发布",
-        "发布设置",
-        "发布 取消",
-        "取消 发布",
-        "确认发布",
-        "查看权限",
-        "添加地点",
-        "所有人可见",
-        "好友可见",
+        "鍙戝竷鏃堕棿",
+        "绔嬪嵆鍙戝竷",
+        "瀹氭椂鍙戝竷",
+        "鍙戝竷璁剧疆",
+        "鍙戝竷 鍙栨秷",
+        "鍙栨秷 鍙戝竷",
+        "纭鍙戝竷",
+        "鏌ョ湅鏉冮檺",
+        "娣诲姞鍦扮偣",
+        "鎵€鏈変汉鍙",
+        "濂藉弸鍙",
         "仅自己可见",
     )
     strong_wrap_tokens = (
-        "发布 取消",
-        "取消 发布",
-        "确认发布",
+        "鍙戝竷 鍙栨秷",
+        "鍙栨秷 鍙戝竷",
+        "纭鍙戝竷",
     )
 
     normalized: list[str] = []
@@ -18266,7 +18439,7 @@ def _scroll_kuaishou_publish_controls_into_view(primary_ctx: Any, fallback_ctx: 
     function norm(s) {
       return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
     }
-    const keywords = ['发布时间', '查看权限', '添加地点', '立即发布', '定时发布', '发布', '取消'];
+    const keywords = ['鍙戝竷鏃堕棿', '鏌ョ湅鏉冮檺', '娣诲姞鍦扮偣', '绔嬪嵆鍙戝竷', '瀹氭椂鍙戝竷', '鍙戝竷', '鍙栨秷'];
     const nodes = Array.from(document.querySelectorAll('button, [role="button"], div, span, label, input'))
       .filter(isVisible)
       .map(el => {
@@ -18275,9 +18448,9 @@ def _scroll_kuaishou_publish_controls_into_view(primary_ctx: Any, fallback_ctx: 
         const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 320);
         let score = 0;
         if (keywords.some(keyword => text.includes(keyword))) score += 6;
-        if (/发布时间|查看权限|添加地点/.test(wrapText)) score += 12;
-        if (/发布 取消|取消 发布/.test(wrapText)) score += 10;
-        if (text === '发布' || text === '取消') score += 4;
+        if (/鍙戝竷鏃堕棿|鏌ョ湅鏉冮檺|娣诲姞鍦扮偣/.test(wrapText)) score += 12;
+        if (/鍙戝竷 鍙栨秷|鍙栨秷 鍙戝竷/.test(wrapText)) score += 10;
+        if (text === '鍙戝竷' || text === '鍙栨秷') score += 4;
         return {el, score};
       })
       .filter(item => item.score > 0)
@@ -18312,12 +18485,12 @@ def _trim_bilibili_title_candidate(text: str, limit: int = 80) -> str:
     cleaned = re.sub(r"https?://\S+", " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"#[^\s#]+", " ", cleaned)
     cleaned = re.sub(r"[\u200B-\u200D\uFEFF]+", "", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n-_|,，。!！?？;；:：")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n-_|,，。!?！？")
     if not cleaned:
         return ""
     max_len = max(8, int(limit))
     if len(cleaned) > max_len:
-        cleaned = cleaned[:max_len].rstrip(" \t\r\n-_|,，。!！?？;；:：")
+        cleaned = cleaned[:max_len].rstrip(" \t\r\n-_|,，。!?！？")
     return cleaned
 
 
@@ -18331,7 +18504,7 @@ def _build_bilibili_title_from_caption(caption: str, limit: int = 80) -> str:
         line = _trim_bilibili_title_candidate(line, limit=max(limit * 2, 120))
         if not line:
             continue
-        first_sentence = re.split(r"[。！？!?；;]+", line, maxsplit=1)[0].strip()
+        first_sentence = re.split(r"[銆傦紒锛??锛?]+", line, maxsplit=1)[0].strip()
         first_sentence = _trim_bilibili_title_candidate(first_sentence or line, limit=limit)
         if first_sentence:
             candidates.append(first_sentence)
@@ -18339,7 +18512,7 @@ def _build_bilibili_title_from_caption(caption: str, limit: int = 80) -> str:
     if not candidates:
         fallback = _trim_bilibili_title_candidate(raw, limit=max(limit * 2, 120))
         if fallback:
-            first_sentence = re.split(r"[。！？!?；;]+", fallback, maxsplit=1)[0].strip()
+            first_sentence = re.split(r"[銆傦紒锛??锛?]+", fallback, maxsplit=1)[0].strip()
             candidates.append(_trim_bilibili_title_candidate(first_sentence or fallback, limit=limit))
 
     for candidate in candidates:
@@ -18380,7 +18553,7 @@ def _build_xiaohongshu_title_from_caption(caption: str, limit: int = 20) -> str:
         cleaned = _trim_bilibili_title_candidate(line, limit=max(limit * 3, 60))
         if not cleaned:
             continue
-        first_sentence = re.split(r"[。！？!?；;]+", cleaned, maxsplit=1)[0].strip()
+        first_sentence = re.split(r"[銆傦紒锛??锛?]+", cleaned, maxsplit=1)[0].strip()
         title = _trim_bilibili_title_candidate(first_sentence or cleaned, limit=limit)
         if title:
             candidates.append(title)
@@ -18391,7 +18564,7 @@ def _build_xiaohongshu_title_from_caption(caption: str, limit: int = 20) -> str:
     for candidate in candidates:
         title = str(candidate or "").strip().strip("#")
         if title:
-            return _trim_text_by_utf16_units(title, max(8, int(limit))).rstrip(" \t\r\n-_|,，。！？!?.#")
+            return _trim_text_by_utf16_units(title, max(8, int(limit))).rstrip(" \t\r\n-_|,锛屻€傦紒锛??.#")
     return ""
 
 
@@ -18439,27 +18612,27 @@ def _fill_optional_platform_title_field(
     selectors: tuple[str, ...] = ()
     if platform_name == "xiaohongshu":
         selectors = (
-            "xpath://input[contains(@placeholder,'标题')]",
-            "css:input[placeholder*='标题']",
-            "xpath://textarea[contains(@placeholder,'标题')]",
-            "css:textarea[placeholder*='标题']",
-            "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
-            "xpath://div[contains(normalize-space(.), '标题')]/following::textarea[1]",
+            "xpath://input[contains(@placeholder,'鏍囬')]",
+            "css:input[placeholder*='鏍囬']",
+            "xpath://textarea[contains(@placeholder,'鏍囬')]",
+            "css:textarea[placeholder*='鏍囬']",
+            "xpath://div[contains(normalize-space(.), '鏍囬')]/following::input[1]",
+            "xpath://div[contains(normalize-space(.), '鏍囬')]/following::textarea[1]",
         )
     elif platform_name == "douyin":
         selectors = (
-            "xpath://input[contains(@placeholder,'标题')]",
-            "css:input[placeholder*='标题']",
-            "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
-            "xpath://div[contains(normalize-space(.), '封面标题')]/following::input[1]",
+            "xpath://input[contains(@placeholder,'鏍囬')]",
+            "css:input[placeholder*='鏍囬']",
+            "xpath://div[contains(normalize-space(.), '鏍囬')]/following::input[1]",
+            "xpath://div[contains(normalize-space(.), '灏侀潰鏍囬')]/following::input[1]",
             "xpath://input[@maxlength='30' or @maxlength='40' or @maxlength='50']",
         )
     elif platform_name == "kuaishou":
         selectors = (
-            "xpath://input[contains(@placeholder,'标题')]",
-            "css:input[placeholder*='标题']",
-            "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
-            "xpath://div[contains(normalize-space(.), '作品标题')]/following::input[1]",
+            "xpath://input[contains(@placeholder,'鏍囬')]",
+            "css:input[placeholder*='鏍囬']",
+            "xpath://div[contains(normalize-space(.), '鏍囬')]/following::input[1]",
+            "xpath://div[contains(normalize-space(.), '浣滃搧鏍囬')]/following::input[1]",
             "xpath://input[@maxlength='30' or @maxlength='40' or @maxlength='50']",
         )
     else:
@@ -18571,12 +18744,12 @@ def _fill_xiaohongshu_title_from_caption(
 
     expect = re.sub(r"\s+", "", title).lower()
     selectors = (
-        "xpath://input[contains(@placeholder,'标题')]",
-        "css:input[placeholder*='标题']",
-        "xpath://textarea[contains(@placeholder,'标题')]",
-        "css:textarea[placeholder*='标题']",
-        "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
-        "xpath://div[contains(normalize-space(.), '标题')]/following::textarea[1]",
+        "xpath://input[contains(@placeholder,'鏍囬')]",
+        "css:input[placeholder*='鏍囬']",
+        "xpath://textarea[contains(@placeholder,'鏍囬')]",
+        "css:textarea[placeholder*='鏍囬']",
+        "xpath://div[contains(normalize-space(.), '鏍囬')]/following::input[1]",
+        "xpath://div[contains(normalize-space(.), '鏍囬')]/following::textarea[1]",
         "css:input[type='text']",
     )
     deadline = time.time() + max(6, int(timeout_seconds))
@@ -18703,12 +18876,12 @@ def _fill_bilibili_title_from_caption(
         return prefix_len >= 8 and token[:prefix_len] == expect[:prefix_len]
 
     selectors = (
-        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and contains(normalize-space(.), '标题')]]//input[not(@type='hidden')][1]",
-        "xpath://div[contains(normalize-space(.), '标题')]/following::input[1]",
-        "xpath://input[contains(@placeholder,'标题')]",
+        "xpath://div[contains(@class,'form-item')][.//div[contains(@class,'label') and contains(normalize-space(.), '鏍囬')]]//input[not(@type='hidden')][1]",
+        "xpath://div[contains(normalize-space(.), '鏍囬')]/following::input[1]",
+        "xpath://input[contains(@placeholder,'鏍囬')]",
         "xpath://input[@maxlength='80']",
         "xpath://input[@maxlength='100']",
-        "css:input[placeholder*='标题']",
+        "css:input[placeholder*='鏍囬']",
         "css:input[maxlength='80']",
         "css:input[maxlength='100']",
         "css:.bcc-form-item input[type='text']",
@@ -18742,10 +18915,10 @@ def _fill_bilibili_title_from_caption(
         const wrap = el.closest('.form-item, form, section, .publish, .video, .editor, div') || el.parentElement || el;
         const wrapText = norm((wrap && wrap.innerText) || '');
         let score = 0;
-        if (/标题/.test(wrapText)) score += 14;
-        if (/标题|title/.test(attrs)) score += 12;
+        if (/鏍囬/.test(wrapText)) score += 14;
+        if (/鏍囬|title/.test(attrs)) score += 12;
         if (/80/.test(attrs)) score += 4;
-        if (/标签|简介|描述|合集|分区|search|keyword|tag|topic/.test(wrapText.toLowerCase())) score -= 10;
+        if (/鏍囩|绠€浠媩鎻忚堪|鍚堥泦|鍒嗗尯|search|keyword|tag|topic/.test(wrapText.toLowerCase())) score -= 10;
         if (/tag|topic|search|keyword/.test(attrs)) score -= 10;
         return {el, score};
       })
@@ -18866,10 +19039,10 @@ def _read_bilibili_collection_state(owner: Any) -> dict[str, Any]:
     }
     function norm(s) { return String(s || '').replace(/\\s+/g, ' ').trim(); }
     function clean(s) {
-      return norm(s).replace(/^(加入合集|添加到合集)/, '').replace(/请选择合集|选择合集/g, '').trim();
+      return norm(s).replace(/^(鍔犲叆鍚堥泦|娣诲姞鍒板悎闆?/, '').replace(/璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦/g, '').trim();
     }
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && /^(加入合集|添加到合集)$/.test(norm(el.textContent)));
+      .find(el => isVisible(el) && /^(鍔犲叆鍚堥泦|娣诲姞鍒板悎闆?$/.test(norm(el.textContent)));
     if (!label) return {hasField: false, current: '', source: 'missing_label'};
     const item = label.closest('.form-item') || label.parentElement || label;
     const cloned = item.cloneNode(true);
@@ -18918,11 +19091,11 @@ def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_
     const target = norm(arguments[0] || '');
     if (!target) return {state: 'skip'};
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && /^(加入合集|添加到合集)$/.test(norm(el.textContent)));
+      .find(el => isVisible(el) && /^(鍔犲叆鍚堥泦|娣诲姞鍒板悎闆?$/.test(norm(el.textContent)));
     if (!label) return {state: 'missing_label'};
     const item = label.closest('.form-item') || label.parentElement || label;
     const trigger = (
-      item.querySelector('input[placeholder*=\"合集\"]') ||
+      item.querySelector('input[placeholder*=\"鍚堥泦\"]') ||
       item.querySelector('.post-album-wrap .post-album-display-wrap, .post-album-wrap .post-album-display') ||
       item.querySelector('.weui-desktop-form__dropdown, .selector, .select, .dropdown') ||
       item.querySelector('[class*=\"album\"], [class*=\"select\"], [class*=\"dropdown\"]') ||
@@ -18957,7 +19130,7 @@ def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_
       for (const node of nodes) {
         const txt = norm(node.innerText || node.textContent || '');
         if (!txt || txt.length > 40) continue;
-        if (/加入合集|添加到合集|请选择合集|选择合集/.test(txt)) continue;
+        if (/鍔犲叆鍚堥泦|娣诲姞鍒板悎闆唡璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦/.test(txt)) continue;
         const s = score(txt);
         if (s > bestScore) {
           bestScore = s;
@@ -19038,7 +19211,7 @@ def _douyin_collection_state_js() -> str:
     }
     function clean(txt) {
       return norm(txt)
-        .replace(/^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6|\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)[:：-]*/g, '')
+        .replace(/^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6|\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)[:锛?]*/g, '')
         .replace(/\u5171\s*\d+\s*[\u4e2a\u6761](?:\u4f5c\u54c1|\u5185\u5bb9)/g, '')
         .trim();
     }
@@ -19110,7 +19283,7 @@ def _douyin_collection_select_js() -> str:
     }
     function clean(txt) {
       return norm(txt)
-        .replace(/^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6|\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)[:：-]*/g, '')
+        .replace(/^(?:\u6dfb\u52a0\u5408\u96c6|\u6dfb\u52a0\u5230\u5408\u96c6|\u52a0\u5165\u5408\u96c6|\u8bf7\u9009\u62e9\u5408\u96c6|\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u62e9\u5408\u96c6|\u4e0d\u9009\u5408\u96c6)[:锛?]*/g, '')
         .replace(/\u5171\s*\d+\s*[\u4e2a\u6761](?:\u4f5c\u54c1|\u5185\u5bb9)/g, '')
         .trim();
     }
@@ -19172,7 +19345,7 @@ def _douyin_collection_select_js() -> str:
     function normalizeCollectionValue(txt) {
       let value = clean(txt || '').replace(/\s+/g, '');
       if (!value) return '';
-      value = value.split(/[:：]/, 1)[0] || value;
+      value = value.split(/[:锛歖/, 1)[0] || value;
       return value.trim();
     }
     function sharedEdgeLength(left, right, suffix) {
@@ -19271,15 +19444,15 @@ def _normalize_douyin_collection_value(text: str) -> str:
     value = re.sub(r"\s+", "", str(text or ""))
     if not value:
         return ""
-    value = re.sub(r"^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：-]*", "", value)
-    value = re.sub(r"(共\d+[个条]作品|共\d+[个条]内容)$", "", value)
-    return value.strip(":-：/ ")
+    value = re.sub(r"^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛?]*", "", value)
+    value = re.sub(r"(鍏盶d+[涓潯]浣滃搧|鍏盶d+[涓潯]鍐呭)$", "", value)
+    return value.strip(":-锛? ")
     value = re.sub(r"\s+", "", str(text or ""))
     if not value:
         return ""
-    value = re.sub(r"^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：\-]*", "", value)
-    value = re.sub(r"(共\d+[个条]作品|共\d+[个条]内容)$", "", value)
-    return value.strip(":-：|/ ")
+    value = re.sub(r"^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛歕-]*", "", value)
+    value = re.sub(r"(鍏盶d+[涓潯]浣滃搧|鍏盶d+[涓潯]鍐呭)$", "", value)
+    return value.strip(":-锛殀/ ")
 
 
 def _is_douyin_collection_match(current: str, target: str) -> bool:
@@ -19298,10 +19471,10 @@ def _normalize_douyin_collection_value(text: str) -> str:
     value = re.sub(r"\s+", "", str(text or ""))
     if not value:
         return ""
-    value = re.sub(r"^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：-]*", "", value)
-    value = re.sub(r"(共\d+[个条]作品|共\d+[个条]内容)$", "", value)
-    value = re.split(r"[:：]", value, maxsplit=1)[0]
-    return value.strip(":-：/ ")
+    value = re.sub(r"^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛?]*", "", value)
+    value = re.sub(r"(鍏盶d+[涓潯]浣滃搧|鍏盶d+[涓潯]鍐呭)$", "", value)
+    value = re.split(r"[:锛歖", value, maxsplit=1)[0]
+    return value.strip(":-锛? ")
 
 
 def _shared_edge_length(left: str, right: str, *, suffix: bool = False) -> int:
@@ -19367,9 +19540,9 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
     }
     function clean(txt) {
       return norm(txt)
-        .replace(/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：\\-]*/g, '')
-        .replace(/共\\d+[个条]作品/g, '')
-        .replace(/共\\d+[个条]内容/g, '')
+        .replace(/^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛歕\-]*/g, '')
+        .replace(/鍏盶\d+[涓潯]浣滃搧/g, '')
+        .replace(/鍏盶\d+[涓潯]鍐呭/g, '')
         .trim();
     }
     window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__ = function(root) {
@@ -19391,9 +19564,9 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
         const controls = window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__(candidate);
         const txt = norm(candidate.innerText || candidate.textContent || '');
         let score = controls.length * 20;
-        if (/娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦/.test(txt)) score += 10;
-        if (/鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?/.test(txt)) score += 10;
-        if (/绗琝\d+闆?/.test(txt)) score += 6;
+        if (/濞ｈ濮為崥鍫ユ肠|濞ｈ濮為崚鏉挎値闂嗗敗閸旂姴鍙嗛崥鍫ユ肠/.test(txt)) score += 10;
+        if (/閸氬牓娉鐠囩兘鈧瀚ㄩ崥鍫ユ肠|闁瀚ㄩ崥鍫ユ肠|娑撳秹鈧瀚ㄩ崥鍫ユ肠|娑撳秹鈧鎮庨梿?/.test(txt)) score += 10;
+        if (/缁楃悵\d+闂?/.test(txt)) score += 6;
         if (score > bestScore) {
           best = candidate;
           bestScore = score;
@@ -19420,9 +19593,9 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
         const controls = window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__(candidate);
         const txt = norm(candidate.innerText || candidate.textContent || '');
         let score = controls.length * 20;
-        if (/娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦/.test(txt)) score += 10;
-        if (/鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?/.test(txt)) score += 10;
-        if (/绗琝\d+闆?/.test(txt)) score += 6;
+        if (/濞ｈ濮為崥鍫ユ肠|濞ｈ濮為崚鏉挎値闂嗗敗閸旂姴鍙嗛崥鍫ユ肠/.test(txt)) score += 10;
+        if (/閸氬牓娉鐠囩兘鈧瀚ㄩ崥鍫ユ肠|闁瀚ㄩ崥鍫ユ肠|娑撳秹鈧瀚ㄩ崥鍫ユ肠|娑撳秹鈧鎮庨梿?/.test(txt)) score += 10;
+        if (/缁楃悵\d+闂?/.test(txt)) score += 6;
         if (score > bestScore) {
           best = candidate;
           bestScore = score;
@@ -19431,7 +19604,7 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
       return best || label.parentElement || label;
     };
     const label = Array.from(document.querySelectorAll('label, span, div'))
-      .find(el => isVisible(el) && /^(添加合集|添加到合集|加入合集)$/.test(norm(el.textContent)));
+      .find(el => isVisible(el) && /^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦)$/.test(norm(el.textContent)));
     if (!label) return {hasField: false, current: '', episode: '', source: 'missing_label'};
 
     const row = (window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__ && window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__(label)) || label.parentElement || label;
@@ -19452,12 +19625,12 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
         : (el.innerText || el.textContent || '');
       const txt = clean(raw);
       if (!txt) continue;
-      if (/^第\\d+集$/.test(txt)) {
+      if (/^绗琝\d+闆?/.test(txt)) {
         if (!episode) episode = txt;
         continue;
       }
-      if (txt === '合集') continue;
-      if (/^(请选择合集|选择合集|不选择合集|不选合集)$/.test(txt)) continue;
+      if (txt === '鍚堥泦') continue;
+      if (/^(璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?$/.test(txt)) continue;
       values.push(txt);
     }
 
@@ -19467,9 +19640,9 @@ def _get_douyin_collection_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
       const parts = text.split(/\\s+/).map(clean).filter(Boolean);
       current = parts.find(part => {
         if (!part) return false;
-        if (part === '合集') return false;
-        if (/^第\\d+集$/.test(part)) return false;
-        return !/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)$/.test(part);
+        if (part === '鍚堥泦') return false;
+        if (/^绗琝\d+闆?/.test(part)) return false;
+        return !/^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?$/.test(part);
       }) || '';
     }
 
@@ -19587,9 +19760,9 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
     }
     function clean(txt) {
       return norm(txt)
-        .replace(/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)[:：\\-]*/g, '')
-        .replace(/共\\d+[个条]作品/g, '')
-        .replace(/共\\d+[个条]内容/g, '')
+        .replace(/^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛歕\-]*/g, '')
+        .replace(/鍏盶\d+[涓潯]浣滃搧/g, '')
+        .replace(/鍏盶\d+[涓潯]鍐呭/g, '')
         .trim();
     }
     function clickNode(node) {
@@ -19616,7 +19789,7 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
     if (!target) return {state: 'skip'};
 
     const label = Array.from(document.querySelectorAll('label, span, div'))
-      .find(el => isVisible(el) && /^(添加合集|添加到合集|加入合集)$/.test(norm(el.textContent)));
+      .find(el => isVisible(el) && /^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦)$/.test(norm(el.textContent)));
     if (!label) return {state: 'missing_field'};
     const row = (window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__ && window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__(label)) || label.parentElement || label;
 
@@ -19626,12 +19799,12 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
     const collectionTrigger = triggers.find(el => {
       const txt = clean(('value' in el && typeof el.value === 'string' && el.value) ? el.value : (el.innerText || el.textContent || ''));
       if (!txt) return true;
-      if (txt === '合集') return false;
-      if (/^第\\d+集$/.test(txt)) return false;
+      if (txt === '鍚堥泦') return false;
+      if (/^绗琝\d+闆?/.test(txt)) return false;
       return true;
     }) || triggers.find(el => {
       const raw = norm(('value' in el && typeof el.value === 'string' && el.value) ? el.value : (el.innerText || el.textContent || ''));
-      return /合集/.test(raw) || /请选择合集|选择合集|不选择合集|不选合集/.test(raw);
+      return /鍚堥泦/.test(raw) || /璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?.test(raw);
     });
 
     if (!collectionTrigger) return {state: 'missing_trigger'};
@@ -19662,9 +19835,9 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
       for (const node of nodes) {
         const txt = clean(node.innerText || node.textContent || '');
         if (!txt || txt.length > 80) continue;
-        if (txt === '合集') continue;
-        if (/^第\\d+集$/.test(txt)) continue;
-        if (/^(添加合集|添加到合集|加入合集|请选择合集|选择合集|不选择合集|不选合集)$/.test(txt)) continue;
+        if (txt === '鍚堥泦') continue;
+        if (/^绗琝\d+闆?/.test(txt)) continue;
+        if (/^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?$/.test(txt)) continue;
         if (!optionTexts.includes(txt)) optionTexts.push(txt);
         const score = optionScore(txt);
         if (score > bestScore) {
@@ -19755,10 +19928,10 @@ def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tup
           .filter(el => (el.innerText || el.textContent || '').includes(kw))
           .slice(0, 120);
         if (!nodes.length) return false;
-        const isDraftKw = /草稿|暂存|保存/.test(kw);
+        const isDraftKw = /鑽夌|鏆傚瓨|淇濆瓨/.test(kw);
         let preferred = null;
         if (isDraftKw) {
-          preferred = nodes.find(el => /草稿|暂存|保存/.test(el.innerText || el.textContent || '')) || null;
+          preferred = nodes.find(el => /鑽夌|鏆傚瓨|淇濆瓨/.test(el.innerText || el.textContent || '')) || null;
         }
         if (!preferred) {
           preferred = nodes.find(el => norm(el.innerText || el.textContent || '') === kw) || null;
@@ -19807,12 +19980,12 @@ def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tup
 def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
         "css:button.button-dhlUZE.primary-cECiOJ.fixed-J9O8Yw",
-        "xpath://button[normalize-space(.)='发布']",
-        "xpath://button[contains(@class,'semi-button') and normalize-space(.)='发布']",
-        "xpath://button[contains(@class,'semi-button') and contains(normalize-space(.), '发布')]",
-        "xpath://div[contains(@class,'container-')]//button[normalize-space(.)='发布']",
-        "xpath://button[contains(@class,'primary-cECiOJ') and contains(normalize-space(.), '发布')]",
-        "xpath://button[contains(@class,'primary') and contains(normalize-space(.), '发布')]",
+        "xpath://button[normalize-space(.)='鍙戝竷']",
+        "xpath://button[contains(@class,'semi-button') and normalize-space(.)='鍙戝竷']",
+        "xpath://button[contains(@class,'semi-button') and contains(normalize-space(.), '鍙戝竷')]",
+        "xpath://div[contains(@class,'container-')]//button[normalize-space(.)='鍙戝竷']",
+        "xpath://button[contains(@class,'primary-cECiOJ') and contains(normalize-space(.), '鍙戝竷')]",
+        "xpath://button[contains(@class,'primary') and contains(normalize-space(.), '鍙戝竷')]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -19870,21 +20043,21 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
         const wrap = el.closest('form, section, footer, .container, .publish, .setting, div') || el.parentElement || el;
         const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 260);
         let score = 0;
-        if (text === '发布') score += 20;
-        if (text === '立即发布' || text === '发布作品') score += 12;
+        if (text === '鍙戝竷') score += 20;
+        if (text === '绔嬪嵆鍙戝竷' || text === '鍙戝竷浣滃搧') score += 12;
         if (/button/i.test(el.tagName || '')) score += 8;
         if (/primary|publish|semi-button/.test(attrs.toLowerCase())) score += 6;
-        if (/暂存离开|发布时间|谁可以看|同步至头条/.test(wrapText)) score += 8;
-        if (text === '鍙戝竷浣滃搧' && !/发布时间|立即发布|定时发布|取消/.test(wrapText)) score -= 12;
+        if (/鏆傚瓨绂诲紑|鍙戝竷鏃堕棿|璋佸彲浠ョ湅|鍚屾鑷冲ご鏉?.test(wrapText)) score += 8;
+        if (text === '閸欐垵绔锋担婊冩惂' && !/鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|鍙栨秷/.test(wrapText)) score -= 12;
         return {el, text, score};
       })
       .filter(item => item.text)
-      .filter(item => /发布|立即发布|发布作品/.test(item.text))
-      .filter(item => !/高清发布|发布设置|同时发布|暂存|草稿|保存/.test(item.text))
+      .filter(item => /鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧/.test(item.text))
+      .filter(item => !/楂樻竻鍙戝竷|鍙戝竷璁剧疆|鍚屾椂鍙戝竷|鏆傚瓨|鑽夌|淇濆瓨/.test(item.text))
       .filter(item => !disabled(item.el));
     if (!candidates.length) return false;
     candidates.sort((a, b) => b.score - a.score);
-    const preferred = candidates.find(item => /^(发布|立即发布|发布作品)$/.test(item.text))
+    const preferred = candidates.find(item => /^(鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧)$/.test(item.text))
       || candidates[0];
     preferred.el.click();
     return true;
@@ -19950,9 +20123,9 @@ def _pick_xiaohongshu_publish_wrap_text(candidates: Sequence[str]) -> str:
 
 def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[normalize-space(.)='发布']",
-        "xpath://button[normalize-space(.)='发布' and ancestor::div[contains(@class,'publish-page-publish-btn')]]",
-        "xpath://button[normalize-space(.)='发布' and contains(@class,'custom-button') and contains(@class,'bg-red')]",
+        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[normalize-space(.)='鍙戝竷']",
+        "xpath://button[normalize-space(.)='鍙戝竷' and ancestor::div[contains(@class,'publish-page-publish-btn')]]",
+        "xpath://button[normalize-space(.)='鍙戝竷' and contains(@class,'custom-button') and contains(@class,'bg-red')]",
         "xpath://div[contains(@class,'publish-page-publish-btn')]//button[last()]",
         "css:button.custom-button.bg-red",
         "xpath://button[contains(@class,'custom-button') and contains(@class,'bg-red')]",
@@ -19995,7 +20168,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                     const texts = nodes
                       .map(node => norm((node && node.innerText) || '').slice(0, 320))
                       .filter(Boolean);
-                    const strongTokens = ['暂存离开 发布', '发布 暂存离开', '更多设置', '定时发布'];
+                    const strongTokens = ['鏆傚瓨绂诲紑 鍙戝竷', '鍙戝竷 鏆傚瓨绂诲紑', '鏇村璁剧疆', '瀹氭椂鍙戝竷'];
                     const strong = texts.find(text => strongTokens.some(token => text.includes(token))) || '';
                     const chosen = strong || texts[0] || '';
                     const rect = this.getBoundingClientRect();
@@ -20074,9 +20247,9 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
       return false;
     }
     function pickWrap(wrapTexts) {
-      const strongTokens = ['暂存离开 发布', '发布 暂存离开', '更多设置', '定时发布'];
-      const allowTokens = ['暂存离开', '更多设置', '定时发布', '公开可见', '仅自己可见', '允许合拍', '允许正文复制', '谁可以看'];
-      const skipTokens = ['首页', '笔记管理', '数据看板', '活动中心', '创作学院', '创作百科', '发布笔记'];
+      const strongTokens = ['鏆傚瓨绂诲紑 鍙戝竷', '鍙戝竷 鏆傚瓨绂诲紑', '鏇村璁剧疆', '瀹氭椂鍙戝竷'];
+      const allowTokens = ['鏆傚瓨绂诲紑', '鏇村璁剧疆', '瀹氭椂鍙戝竷', '鍏紑鍙', '浠呰嚜宸卞彲瑙?, '鍏佽鍚堟媿', '鍏佽姝ｆ枃澶嶅埗', '璋佸彲浠ョ湅'];
+      const skipTokens = ['棣栭〉', '绗旇绠＄悊', '鏁版嵁鐪嬫澘', '娲诲姩涓績', '鍒涗綔瀛﹂櫌', '鍒涗綔鐧剧', '鍙戝竷绗旇'];
       const texts = Array.from(wrapTexts || []).filter(Boolean);
       for (const token of strongTokens) {
         const strong = texts.find(text => text.includes(token)) || '';
@@ -20093,7 +20266,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
       .filter(el => !disabled(el))
       .map(el => {
         const text = String(el.innerText || el.textContent || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
-        if (!/^(发布|发布笔记|继续发布|确认发布)$/.test(text)) return null;
+        if (!/^(鍙戝竷|鍙戝竷绗旇|缁х画鍙戝竷|纭鍙戝竷)$/.test(text)) return null;
         const cls = String(el.className || '');
         const parentCls = String((el.parentElement && el.parentElement.className) || '');
         const attrs = [
@@ -20117,23 +20290,23 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
         }
         const wrapText = pickWrap(wrapTexts);
         const rect = el.getBoundingClientRect();
-        const siblingDraft = wrapTexts.some(candidate => candidate.includes('暂存离开'));
+        const siblingDraft = wrapTexts.some(candidate => candidate.includes('鏆傚瓨绂诲紑'));
         const nearBottom = Number(rect && rect.top || 0) >= (Number(window.innerHeight || document.documentElement.clientHeight || 0) * 0.55);
-        const skipShell = wrapTexts.some(candidate => ['首页', '笔记管理', '数据看板', '活动中心', '创作学院', '创作百科', '发布笔记'].some(token => candidate.includes(token)));
+        const skipShell = wrapTexts.some(candidate => ['棣栭〉', '绗旇绠＄悊', '鏁版嵁鐪嬫澘', '娲诲姩涓績', '鍒涗綔瀛﹂櫌', '鍒涗綔鐧剧', '鍙戝竷绗旇'].some(token => candidate.includes(token)));
         if (!wrapText && skipShell) return null;
-        if (!wrapText && !(text === '发布' && (siblingDraft || nearBottom))) return null;
+        if (!wrapText && !(text === '鍙戝竷' && (siblingDraft || nearBottom))) return null;
         let score = 0;
-        if (text === '发布') score += 18;
-        if (text === '确认发布') score += 14;
-        if (text === '继续发布') score += 10;
-        if (text === '发布笔记') score -= 18;
+        if (text === '鍙戝竷') score += 18;
+        if (text === '纭鍙戝竷') score += 14;
+        if (text === '缁х画鍙戝竷') score += 10;
+        if (text === '鍙戝竷绗旇') score -= 18;
         if (cls.includes('bg-red')) score += 16;
         if (cls.includes('custom-button')) score += 8;
         if (parentCls.includes('publish-page-publish-btn')) score += 12;
         if (/button/i.test(el.tagName || '')) score += 8;
         if (/publish|button|custom-button/.test(attrs.toLowerCase())) score += 6;
-        if (wrapText && wrapText.includes('暂存离开')) score += 10;
-        if (wrapText && (wrapText.includes('更多设置') || wrapText.includes('定时发布'))) score += 5;
+        if (wrapText && wrapText.includes('鏆傚瓨绂诲紑')) score += 10;
+        if (wrapText && (wrapText.includes('鏇村璁剧疆') || wrapText.includes('瀹氭椂鍙戝竷'))) score += 5;
         if (nearBottom) score += 8;
         if (siblingDraft) score += 10;
         return {el, score};
@@ -20161,26 +20334,26 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
 
 def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
-        "xpath://span[normalize-space(.)='发布']/ancestor::button[../button[normalize-space(.)='取消']][1]",
-        "xpath://button[normalize-space(.)='发布作品' and ../button[normalize-space(.)='取消']]",
-        "xpath://span[normalize-space(.)='发布作品']/ancestor::button[../button[normalize-space(.)='取消']][1]",
-        "xpath://button[normalize-space(.)='发布']",
-        "xpath://button[contains(@class,'primary') and normalize-space(.)='发布']",
-        "xpath://button[contains(@class,'btn') and normalize-space(.)='发布']",
-        "xpath://button[normalize-space(.)='发布作品']",
-        "xpath://button[normalize-space(.)='确认发布']",
+        "xpath://button[normalize-space(.)='鍙戝竷' and ../button[normalize-space(.)='鍙栨秷']]",
+        "xpath://span[normalize-space(.)='鍙戝竷']/ancestor::button[../button[normalize-space(.)='鍙栨秷']][1]",
+        "xpath://button[normalize-space(.)='鍙戝竷浣滃搧' and ../button[normalize-space(.)='鍙栨秷']]",
+        "xpath://span[normalize-space(.)='鍙戝竷浣滃搧']/ancestor::button[../button[normalize-space(.)='鍙栨秷']][1]",
+        "xpath://button[normalize-space(.)='鍙戝竷']",
+        "xpath://button[contains(@class,'primary') and normalize-space(.)='鍙戝竷']",
+        "xpath://button[contains(@class,'btn') and normalize-space(.)='鍙戝竷']",
+        "xpath://button[normalize-space(.)='鍙戝竷浣滃搧']",
+        "xpath://button[normalize-space(.)='纭鍙戝竷']",
     )
     skip_wrap_tokens = (
-        "上传视频",
-        "上传图文",
-        "上传全景视频",
-        "首页",
-        "内容管理",
-        "互动管理",
-        "数据中心",
-        "成长中心",
-        "创作服务",
+        "涓婁紶瑙嗛",
+        "涓婁紶鍥炬枃",
+        "涓婁紶鍏ㄦ櫙瑙嗛",
+        "棣栭〉",
+        "鍐呭绠＄悊",
+        "浜掑姩绠＄悊",
+        "鏁版嵁涓績",
+        "鎴愰暱涓績",
+        "鍒涗綔鏈嶅姟",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -20195,7 +20368,7 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
             try:
                 wrap_state = btn.run_js(
                     r"""
-                    const norm = (s) => String(s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
+                    const norm = (s) => String(s || '').replace(/[鈥?鈥嶏豢]/g, '').replace(/\s+/g, ' ').trim();
                     const nodes = [];
                     let cur = this;
                     for (let i = 0; cur && i < 6; i += 1) {
@@ -20211,7 +20384,7 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
                     const texts = nodes
                       .map(node => norm((node && node.innerText) || '').slice(0, 320))
                       .filter(Boolean);
-                    const strongTokens = ['发布 取消', '取消 发布', '确认发布'];
+                    const strongTokens = ['鍙戝竷 鍙栨秷', '鍙栨秷 鍙戝竷', '纭鍙戝竷'];
                     const strong = texts.find(text => strongTokens.some(token => text.includes(token))) || '';
                     const chosen = strong || texts[0] || '';
                     const rect = this.getBoundingClientRect();
@@ -20244,9 +20417,9 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
                 button_text = ""
             wrap_candidates = (wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,)
             chosen_wrap = _pick_kuaishou_publish_wrap_text(wrap_candidates)
-            sibling_cancel = any("取消" in text for text in wrap_candidates)
+            sibling_cancel = any("鍙栨秷" in text for text in wrap_candidates)
             near_bottom = bool(viewport_height > 0 and rect_top >= (viewport_height * 0.55))
-            if not chosen_wrap and button_text == "发布作品" and (sibling_cancel or near_bottom):
+            if not chosen_wrap and button_text == "鍙戝竷浣滃搧" and (sibling_cancel or near_bottom):
                 chosen_wrap = "bottom_publish_area"
             if not chosen_wrap and any(
                 any(token in text for token in skip_wrap_tokens)
@@ -20279,7 +20452,7 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
         return r.width > 8 && r.height > 8;
       }
     function norm(s) {
-      return String(s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
+      return String(s || '').replace(/[鈥?鈥嶏豢]/g, '').replace(/\s+/g, ' ').trim();
     }
     function disabled(el) {
       if (!el) return true;
@@ -20289,9 +20462,9 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
       if (st.pointerEvents === 'none') return true;
       return false;
       }
-    const allowWrapTokens = ['发布时间', '立即发布', '定时发布', '发布设置', '发布 取消', '取消 发布', '确认发布', '查看权限', '添加地点', '所有人可见', '好友可见', '仅自己可见'];
-    const strongWrapTokens = ['发布 取消', '取消 发布', '确认发布'];
-    const skipWrapTokens = ['上传视频', '上传图文', '上传全景视频', '首页', '内容管理', '互动管理', '数据中心', '成长中心', '创作服务'];
+    const allowWrapTokens = ['鍙戝竷鏃堕棿', '绔嬪嵆鍙戝竷', '瀹氭椂鍙戝竷', '鍙戝竷璁剧疆', '鍙戝竷 鍙栨秷', '鍙栨秷 鍙戝竷', '纭鍙戝竷', '鏌ョ湅鏉冮檺', '娣诲姞鍦扮偣', '鎵€鏈変汉鍙', '濂藉弸鍙', '浠呰嚜宸卞彲瑙?];
+    const strongWrapTokens = ['鍙戝竷 鍙栨秷', '鍙栨秷 鍙戝竷', '纭鍙戝竷'];
+    const skipWrapTokens = ['涓婁紶瑙嗛', '涓婁紶鍥炬枃', '涓婁紶鍏ㄦ櫙瑙嗛', '棣栭〉', '鍐呭绠＄悊', '浜掑姩绠＄悊', '鏁版嵁涓績', '鎴愰暱涓績', '鍒涗綔鏈嶅姟'];
     function pickWrap(wrapTexts) {
       const texts = Array.from(wrapTexts || []).filter(Boolean);
       const strong = texts.find(text => strongWrapTokens.some(token => text.includes(token))) || '';
@@ -20302,7 +20475,7 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
       .filter(el => isVisible(el))
       .map(el => {
         const text = norm(el.innerText || el.textContent || '');
-        if (!/^(发布|发布作品|确认发布)$/.test(text)) return null;
+        if (!/^(鍙戝竷|鍙戝竷浣滃搧|纭鍙戝竷)$/.test(text)) return null;
         if (disabled(el)) return null;
         const attrs = [
           String(el.className || ''),
@@ -20324,18 +20497,18 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
         }
         const wrapText = pickWrap(wrapTexts);
         const rect = el.getBoundingClientRect();
-        const siblingCancel = wrapTexts.some(candidate => candidate.includes('取消'));
+        const siblingCancel = wrapTexts.some(candidate => candidate.includes('鍙栨秷'));
         const nearBottom = Number(rect && rect.top || 0) >= (Number(window.innerHeight || document.documentElement.clientHeight || 0) * 0.55);
         if (!wrapText && wrapTexts.some(candidate => skipWrapTokens.some(token => candidate.includes(token)))) return null;
-        if (!wrapText && !(text === '发布作品' && (siblingCancel || nearBottom))) return null;
+        if (!wrapText && !(text === '鍙戝竷浣滃搧' && (siblingCancel || nearBottom))) return null;
         let score = 0;
-        if (text === '发布') score += 14;
-        if (text === '确认发布') score += 12;
-        if (text === '发布作品') score += 8;
+        if (text === '鍙戝竷') score += 14;
+        if (text === '纭鍙戝竷') score += 12;
+        if (text === '鍙戝竷浣滃搧') score += 8;
         if (/button/i.test(el.tagName || '')) score += 10;
         if (/primary|btn|publish/.test(attrs.toLowerCase())) score += 6;
-        if (wrapText && (wrapText.includes('发布 取消') || wrapText.includes('取消 发布'))) score += 8;
-        if (wrapText && (wrapText.includes('发布时间') || wrapText.includes('立即发布') || wrapText.includes('定时发布'))) score += 4;
+        if (wrapText && (wrapText.includes('鍙戝竷 鍙栨秷') || wrapText.includes('鍙栨秷 鍙戝竷'))) score += 8;
+        if (wrapText && (wrapText.includes('鍙戝竷鏃堕棿') || wrapText.includes('绔嬪嵆鍙戝竷') || wrapText.includes('瀹氭椂鍙戝竷'))) score += 4;
         if (siblingCancel) score += 10;
         if (nearBottom) score += 8;
         return {el, text, score, wrapText: (wrapText || (siblingCancel ? 'sibling_cancel' : '')).slice(0, 160)};
@@ -20371,25 +20544,25 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
 
 def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://button[normalize-space(.)='立即投稿']",
-        "xpath://span[normalize-space(.)='立即投稿']/ancestor::button[1]",
-        "xpath://span[normalize-space(.)='立即投稿']/ancestor::*[@role='button'][1]",
-        "xpath://div[contains(@class,'button') and normalize-space(.)='立即投稿']",
-        "xpath://span[normalize-space(.)='立即投稿']/ancestor::*[self::button or self::div][1]",
-        "xpath://button[contains(@class,'bcc-button') and contains(normalize-space(.), '立即投稿')]",
-        "text:确认定时发布",
-        "text:确认定时投稿",
-        "text:定时投稿",
-        "xpath://button[normalize-space(.)='投稿']",
-        "xpath://button[contains(normalize-space(.), '立即投稿')]",
-        "xpath://button[contains(normalize-space(.), '确认定时发布')]",
-        "xpath://button[contains(normalize-space(.), '确认定时投稿')]",
-        "xpath://button[contains(normalize-space(.), '定时投稿')]",
-        "xpath://span[contains(normalize-space(.), '立即投稿')]/ancestor::button[1]",
-        "xpath://span[normalize-space(.)='投稿']/ancestor::button[1]",
-        "xpath://span[contains(normalize-space(.), '确认定时发布')]/ancestor::button[1]",
-        "xpath://span[contains(normalize-space(.), '确认定时投稿')]/ancestor::button[1]",
-        "xpath://span[contains(normalize-space(.), '定时投稿')]/ancestor::button[1]",
+        "xpath://button[normalize-space(.)='绔嬪嵆鎶曠']",
+        "xpath://span[normalize-space(.)='绔嬪嵆鎶曠']/ancestor::button[1]",
+        "xpath://span[normalize-space(.)='绔嬪嵆鎶曠']/ancestor::*[@role='button'][1]",
+        "xpath://div[contains(@class,'button') and normalize-space(.)='绔嬪嵆鎶曠']",
+        "xpath://span[normalize-space(.)='绔嬪嵆鎶曠']/ancestor::*[self::button or self::div][1]",
+        "xpath://button[contains(@class,'bcc-button') and contains(normalize-space(.), '绔嬪嵆鎶曠')]",
+        "text:纭瀹氭椂鍙戝竷",
+        "text:纭瀹氭椂鎶曠",
+        "text:瀹氭椂鎶曠",
+        "xpath://button[normalize-space(.)='鎶曠']",
+        "xpath://button[contains(normalize-space(.), '绔嬪嵆鎶曠')]",
+        "xpath://button[contains(normalize-space(.), '纭瀹氭椂鍙戝竷')]",
+        "xpath://button[contains(normalize-space(.), '纭瀹氭椂鎶曠')]",
+        "xpath://button[contains(normalize-space(.), '瀹氭椂鎶曠')]",
+        "xpath://span[contains(normalize-space(.), '绔嬪嵆鎶曠')]/ancestor::button[1]",
+        "xpath://span[normalize-space(.)='鎶曠']/ancestor::button[1]",
+        "xpath://span[contains(normalize-space(.), '纭瀹氭椂鍙戝竷')]/ancestor::button[1]",
+        "xpath://span[contains(normalize-space(.), '纭瀹氭椂鎶曠')]/ancestor::button[1]",
+        "xpath://span[contains(normalize-space(.), '瀹氭椂鎶曠')]/ancestor::button[1]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -20409,7 +20582,7 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
                 txt = str(btn.text or "").strip()
             except Exception:
                 txt = ""
-            if txt in {"投稿", "视频投稿"}:
+            if txt in {"鎶曠", "瑙嗛鎶曠"}:
                 continue
             try:
                 tag_name = str(btn.run_js("return String((this.tagName || '')).toLowerCase();") or "").strip().lower()
@@ -20423,7 +20596,7 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
                 cls_name = str(btn.run_js("return String(this.className || '');") or "").strip().lower()
             except Exception:
                 cls_name = ""
-            if txt == "立即投稿" and tag_name not in {"button", "a"} and role_name != "button":
+            if txt == "绔嬪嵆鎶曠" and tag_name not in {"button", "a"} and role_name != "button":
                 if not any(token in cls_name for token in ("button", "btn", "submit", "publish")):
                     continue
             _humanized_publish_reaction_pause("bilibili primary publish click")
@@ -20468,10 +20641,10 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
       .map(el => {
         const text = norm(el.innerText || el.textContent || '');
         if (!text) return null;
-        if (/视频投稿|短剧投稿|专栏投稿|互动视频投稿|音频投稿|贴纸投稿|视频素材投稿/.test(text)) return null;
-        if (text === '定时发布') return null;
-        if (/草稿|取消|预览|上传封面|转载|编辑稿件/.test(text)) return null;
-        if (!/(立即投稿|投稿|发布|定时投稿)/.test(text)) return null;
+        if (/瑙嗛鎶曠|鐭墽鎶曠|涓撴爮鎶曠|浜掑姩瑙嗛鎶曠|闊抽鎶曠|璐寸焊鎶曠|瑙嗛绱犳潗鎶曠/.test(text)) return null;
+        if (text === '瀹氭椂鍙戝竷') return null;
+        if (/鑽夌|鍙栨秷|棰勮|涓婁紶灏侀潰|杞浇|缂栬緫绋夸欢/.test(text)) return null;
+        if (!/(绔嬪嵆鎶曠|鎶曠|鍙戝竷|瀹氭椂鎶曠)/.test(text)) return null;
         if (disabled(el)) return null;
         const rect = el.getBoundingClientRect();
         if (rect.top < 120) return null;
@@ -20481,7 +20654,7 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
           String(el.getAttribute('aria-label') || ''),
           String(el.getAttribute('role') || ''),
         ].join(' ');
-        if (text === '立即投稿') {
+        if (text === '绔嬪嵆鎶曠') {
           const tag = String(el.tagName || '').toLowerCase();
           const role = String(el.getAttribute('role') || '').toLowerCase();
           if (!['button', 'a'].includes(tag) && role !== 'button' && !/button|btn|submit|publish/.test(attrs.toLowerCase())) {
@@ -20491,19 +20664,19 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
         const wrap = el.closest('form, section, .publish, .submit, .footer, div') || el.parentElement || el;
         const wrapText = String((wrap && wrap.innerText) || '').slice(0, 260);
         let score = 0;
-        if (/定时发布|加入合集|更多设置|存草稿|立即投稿|二创设置/.test(wrapText)) score += 8;
-        if (text === '确认定时发布') score += 18;
-        if (text === '确认定时投稿' || text === '定时投稿') score += 16;
-        if (text === '立即投稿') score += 14;
-        if (text === '投稿') score += 2;
-        if (text.includes('确认定时发布')) score += 16;
-        if (text.includes('确认定时投稿') || text.includes('定时投稿')) score += 14;
-        if (text.includes('立即投稿')) score += 12;
-        if (text.includes('投稿')) score += 4;
+        if (/瀹氭椂鍙戝竷|鍔犲叆鍚堥泦|鏇村璁剧疆|瀛樿崏绋縷绔嬪嵆鎶曠|浜屽垱璁剧疆/.test(wrapText)) score += 8;
+        if (text === '纭瀹氭椂鍙戝竷') score += 18;
+        if (text === '纭瀹氭椂鎶曠' || text === '瀹氭椂鎶曠') score += 16;
+        if (text === '绔嬪嵆鎶曠') score += 14;
+        if (text === '鎶曠') score += 2;
+        if (text.includes('纭瀹氭椂鍙戝竷')) score += 16;
+        if (text.includes('纭瀹氭椂鎶曠') || text.includes('瀹氭椂鎶曠')) score += 14;
+        if (text.includes('绔嬪嵆鎶曠')) score += 12;
+        if (text.includes('鎶曠')) score += 4;
         if (/button/i.test(el.tagName || '')) score += 10;
         if (/bcc-button|submit|footer|publish/.test(attrs.toLowerCase())) score += 8;
         if (/primary|submit|publish|btn/.test(attrs.toLowerCase())) score += 6;
-        if (/稿件|发布|投稿/.test(wrapText)) score += 4;
+        if (/绋夸欢|鍙戝竷|鎶曠/.test(wrapText)) score += 4;
         return {el, text, score};
       })
       .filter(Boolean)
@@ -20529,19 +20702,19 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
 
 def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
-        "xpath://button[normalize-space(.)='确认发布']",
-        "xpath://button[normalize-space(.)='确认定时发布']",
-        "xpath://button[normalize-space(.)='继续发布']",
-        "xpath://button[normalize-space(.)='确定发布']",
-        "xpath://button[normalize-space(.)='仍要发布']",
-        "xpath://button[normalize-space(.)='去发布']",
-        "xpath://span[normalize-space(.)='发布']/ancestor::button[1]",
-        "text:确认发布",
-        "text:确认定时发布",
-        "text:继续发布",
-        "text:确定发布",
-        "text:仍要发布",
+        "xpath://button[normalize-space(.)='鍙戝竷' and ../button[normalize-space(.)='鍙栨秷']]",
+        "xpath://button[normalize-space(.)='纭鍙戝竷']",
+        "xpath://button[normalize-space(.)='纭瀹氭椂鍙戝竷']",
+        "xpath://button[normalize-space(.)='缁х画鍙戝竷']",
+        "xpath://button[normalize-space(.)='纭畾鍙戝竷']",
+        "xpath://button[normalize-space(.)='浠嶈鍙戝竷']",
+        "xpath://button[normalize-space(.)='鍘诲彂甯?]",
+        "xpath://span[normalize-space(.)='鍙戝竷']/ancestor::button[1]",
+        "text:纭鍙戝竷",
+        "text:纭瀹氭椂鍙戝竷",
+        "text:缁х画鍙戝竷",
+        "text:纭畾鍙戝竷",
+        "text:浠嶈鍙戝竷",
         "text:去发布",
     )
     for owner in (primary_ctx, fallback_ctx):
@@ -20568,7 +20741,7 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
                 )
             except Exception:
                 wrap_text = ""
-            if wrap_text and "取消" not in wrap_text and "确认发布" not in wrap_text:
+            if wrap_text and "鍙栨秷" not in wrap_text and "纭鍙戝竷" not in wrap_text:
                 continue
             _humanized_publish_reaction_pause("kuaishou publish confirm click")
             try:
@@ -20607,18 +20780,18 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
       .map(el => {
         const text = norm(el.innerText || el.textContent || '');
         if (!text) return null;
-        if (!/^(发布|确认发布|确认定时发布|继续发布|确定发布|仍要发布|去发布)$/.test(text)) return null;
+        if (!/^(鍙戝竷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷|纭畾鍙戝竷|浠嶈鍙戝竷|鍘诲彂甯?$/.test(text)) return null;
         const target = clickable(el);
         const wrap = target.closest('form, section, .modal, .dialog, .popup, .publish, div') || target.parentElement || target;
         const wrapText = norm((wrap && wrap.innerText) || '');
-        if (!/取消|确认发布|确认定时发布|继续发布/.test(wrapText)) return null;
+        if (!/鍙栨秷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷/.test(wrapText)) return null;
         let score = 0;
-        if (text === '发布') score += 18;
-        if (text === '确认发布') score += 16;
-        if (text === '继续发布' || text === '确定发布') score += 14;
+        if (text === '鍙戝竷') score += 18;
+        if (text === '纭鍙戝竷') score += 16;
+        if (text === '缁х画鍙戝竷' || text === '纭畾鍙戝竷') score += 14;
         if ((target.tagName || '').toLowerCase() === 'button') score += 8;
-        if (/取消/.test(wrapText)) score += 10;
-        if (/立即发布|定时发布/.test(wrapText)) score += 4;
+        if (/鍙栨秷/.test(wrapText)) score += 10;
+        if (/绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷/.test(wrapText)) score += 4;
         return {target, text, score};
       })
       .filter(Boolean)
@@ -20626,7 +20799,7 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
     if (!candidates.length) return false;
     const chosen = candidates[0];
     chosen.target.click();
-    return chosen.text || '发布';
+    return chosen.text || '鍙戝竷';
     """
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -20647,19 +20820,19 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
 
 def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://div[@role='dialog']//button[normalize-space(.)='纭鍙戝竷']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='纭瀹氭椂鍙戝竷']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='缁х画鍙戝竷']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='纭畾鍙戝竷']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='浠嶈鍙戝竷']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='鍘诲彂甯?]",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='鍙戝竷']",
-        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='纭鍙戝竷']",
-        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='缁х画鍙戝竷']",
-        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='鍙戝竷']",
-        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='纭鍙戝竷']",
-        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='缁х画鍙戝竷']",
-        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='鍙戝竷']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='绾喛顓婚崣鎴濈']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='绾喛顓荤€规碍妞傞崣鎴濈']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='缂佈呯敾閸欐垵绔?]",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='绾喖鐣鹃崣鎴濈']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='娴犲秷顩﹂崣鎴濈']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='閸樿褰傜敮?]",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='閸欐垵绔?]",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='绾喛顓婚崣鎴濈']",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='缂佈呯敾閸欐垵绔?]",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='閸欐垵绔?]",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='绾喛顓婚崣鎴濈']",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='缂佈呯敾閸欐垵绔?]",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='閸欐垵绔?]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -20709,22 +20882,22 @@ def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: 
         if (!isVisible(node)) continue;
         const text = norm(node.innerText || node.textContent || '');
         if (!text) continue;
-        if (!/^(鍙戝竷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷|纭畾鍙戝竷|浠嶈鍙戝竷|鍘诲彂甯?$/.test(text)) continue;
+        if (!/^(閸欐垵绔穦绾喛顓婚崣鎴濈|绾喛顓荤€规碍妞傞崣鎴濈|缂佈呯敾閸欐垵绔穦绾喖鐣鹃崣鎴濈|娴犲秷顩﹂崣鎴濈|閸樿褰傜敮?$/.test(text)) continue;
         let score = 0;
-        if (text === '纭鍙戝竷') score += 20;
-        if (text === '纭瀹氭椂鍙戝竷') score += 18;
-        if (text === '缁х画鍙戝竷' || text === '纭畾鍙戝竷') score += 16;
-        if (text === '浠嶈鍙戝竷' || text === '鍘诲彂甯?') score += 14;
-        if (text === '鍙戝竷') score += 10;
-        if (/鍙栨秷/.test(wrapText)) score += 6;
-        if (/纭|缁х画|瀹氭椂/.test(wrapText)) score += 8;
+        if (text === '绾喛顓婚崣鎴濈') score += 20;
+        if (text === '绾喛顓荤€规碍妞傞崣鎴濈') score += 18;
+        if (text === '缂佈呯敾閸欐垵绔? || text === '绾喖鐣鹃崣鎴濈') score += 16;
+        if (text === '娴犲秷顩﹂崣鎴濈' || text === '閸樿褰傜敮?') score += 14;
+        if (text === '閸欐垵绔?) score += 10;
+        if (/閸欐牗绉?.test(wrapText)) score += 6;
+        if (/绾喛顓粅缂佈呯敾|鐎规碍妞?.test(wrapText)) score += 8;
         candidates.push({node, text, score});
       }
     }
     candidates.sort((a, b) => b.score - a.score);
     if (!candidates.length) return false;
     candidates[0].node.click();
-    return candidates[0].text || '鍙戝竷';
+    return candidates[0].text || '閸欐垵绔?;
     """
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -20747,12 +20920,12 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
     lowered = (text or "").lower()
     success_markers = (
-        "投稿成功",
+        "鎶曠鎴愬姛",
         "投稿中",
         "已投稿",
         "已提交",
         "审核中",
-        "提交成功",
+        "鎻愪氦鎴愬姛",
     )
     if any(marker in text for marker in success_markers):
         return False
@@ -20761,9 +20934,9 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
     if not actions:
         return False
-    has_publish_action = any("立即投稿" in item or item == "投稿" for item in actions)
-    has_draft_action = any("草稿" in item for item in actions)
-    has_upload_done_hint = any("上传完成" in item for item in actions)
+    has_publish_action = any("绔嬪嵆鎶曠" in item or item == "鎶曠" for item in actions)
+    has_draft_action = any("鑽夌" in item for item in actions)
+    has_upload_done_hint = any("涓婁紶瀹屾垚" in item for item in actions)
     if not has_publish_action or not has_draft_action or not has_upload_done_hint:
         return False
     _log(
@@ -20775,7 +20948,7 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     _click_first_matching_button(
         primary_ctx,
         fallback_ctx,
-        ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+        ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
         platform_name="bilibili",
     )
     return True
@@ -20785,15 +20958,15 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
 def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     # Keep this lightweight: this function is called repeatedly during feedback polling.
     selectors = (
-        "text:确认发布",
-        "text:继续发布",
-        "text:仍要发布",
+        "text:纭鍙戝竷",
+        "text:缁х画鍙戝竷",
+        "text:浠嶈鍙戝竷",
         "text:去发布",
-        "text:确认定时发布",
-        "text:确定发布",
-        "xpath://button[contains(normalize-space(.), '确认发布')]",
-        "xpath://button[contains(normalize-space(.), '继续发布')]",
-        "xpath://button[contains(normalize-space(.), '确认定时发布')]",
+        "text:纭瀹氭椂鍙戝竷",
+        "text:纭畾鍙戝竷",
+        "xpath://button[contains(normalize-space(.), '纭鍙戝竷')]",
+        "xpath://button[contains(normalize-space(.), '缁х画鍙戝竷')]",
+        "xpath://button[contains(normalize-space(.), '纭瀹氭椂鍙戝竷')]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -20830,7 +21003,7 @@ def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) ->
         .replace(/\\s+/g, ' ')
         .trim();
     }
-    const keywords = ['确认发布', '继续发布', '仍要发布', '去发布', '确认定时发布', '确定发布'];
+    const keywords = ['纭鍙戝竷', '缁х画鍙戝竷', '浠嶈鍙戝竷', '鍘诲彂甯?, '纭瀹氭椂鍙戝竷', '纭畾鍙戝竷'];
     const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], a, div, span'))
       .filter(el => isVisible(el));
     for (const node of nodes) {
@@ -20858,14 +21031,14 @@ def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) ->
 
 def _click_xiaohongshu_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '确认发布')]",
-        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '继续发布')]",
-        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '确认发布')]",
-        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '继续发布')]",
-        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '确认发布')]",
-        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '继续发布')]",
-        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '发布')]",
-        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '发布')]",
+        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '纭鍙戝竷')]",
+        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '缁х画鍙戝竷')]",
+        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '纭鍙戝竷')]",
+        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '缁х画鍙戝竷')]",
+        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '纭鍙戝竷')]",
+        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '缁х画鍙戝竷')]",
+        "xpath://div[contains(@class,'dialog')]//button[contains(normalize-space(.), '鍙戝竷')]",
+        "xpath://div[contains(@class,'modal')]//button[contains(normalize-space(.), '鍙戝竷')]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -20904,7 +21077,7 @@ def _click_xiaohongshu_publish_confirm_button(primary_ctx: Any, fallback_ctx: An
     }
     const modalRoots = Array.from(document.querySelectorAll('[role="dialog"], .dialog, .modal, [class*="dialog"], [class*="modal"]'))
       .filter(el => isVisible(el));
-    const keywords = ['确认发布', '继续发布', '立即发布', '仍要发布', '去发布', '确认定时发布', '确定发布'];
+    const keywords = ['纭鍙戝竷', '缁х画鍙戝竷', '绔嬪嵆鍙戝竷', '浠嶈鍙戝竷', '鍘诲彂甯?, '纭瀹氭椂鍙戝竷', '纭畾鍙戝竷'];
     for (const root of modalRoots) {
       const nodes = Array.from(root.querySelectorAll('button, [role="button"], a, div, span'))
         .filter(el => isVisible(el));
@@ -20941,7 +21114,7 @@ def _collect_visible_action_texts(primary_ctx: Any, fallback_ctx: Any) -> list[s
       const r = el.getBoundingClientRect();
       return r.width > 8 && r.height > 8;
     }
-    const pattern = /(草稿|暂存|保存|发布|下一步|完成|继续)/;
+    const pattern = /(鑽夌|鏆傚瓨|淇濆瓨|鍙戝竷|涓嬩竴姝瀹屾垚|缁х画)/;
     const seen = new Set();
     const out = [];
     const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], div, span, a'));
@@ -21097,17 +21270,17 @@ def _read_xiaohongshu_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict
       actions.push(val);
       if (actions.length >= 24) break;
     }
-    const hasPublishAction = actions.some(t => /^(发布|发布笔记|立即发布|继续发布|确认发布|定时发布)$/.test(t) || /发布笔记|立即发布|确认发布/.test(t));
-    const hasDraftAction = actions.some(t => /草稿|暂存|保存为草稿|暂存离开/.test(t));
-    const hasRetryAction = actions.some(t => /重试|重新发布|继续/.test(t));
-    const successHint = /(发布成功|提交成功|审核中|发布完成|查看笔记|笔记已发布|发布后可在创作中心查看)/.test(text);
-    const progressHint = /(上传中|处理中|发布中|正在发布|保存中|提交中)/.test(text);
-    const failureHint = /(发布失败|发布出错|网络异常|请完善|不能为空|违规|未通过|驳回)/.test(text);
-    const publishEntry = /(发布笔记|上传图文|上传视频|添加话题|作品描述|标题|定时发布|发布)/.test(text) || hasPublishAction;
-    const draftEntry = /草稿箱|草稿|暂存|保存为草稿/.test(text) || hasDraftAction;
+    const hasPublishAction = actions.some(t => /^(鍙戝竷|鍙戝竷绗旇|绔嬪嵆鍙戝竷|缁х画鍙戝竷|纭鍙戝竷|瀹氭椂鍙戝竷)$/.test(t) || /鍙戝竷绗旇|绔嬪嵆鍙戝竷|纭鍙戝竷/.test(t));
+    const hasDraftAction = actions.some(t => /鑽夌|鏆傚瓨|淇濆瓨涓鸿崏绋縷鏆傚瓨绂诲紑/.test(t));
+    const hasRetryAction = actions.some(t => /閲嶈瘯|閲嶆柊鍙戝竷|缁х画/.test(t));
+    const successHint = /(鍙戝竷鎴愬姛|鎻愪氦鎴愬姛|瀹℃牳涓瓅鍙戝竷瀹屾垚|鏌ョ湅绗旇|绗旇宸插彂甯億鍙戝竷鍚庡彲鍦ㄥ垱浣滀腑蹇冩煡鐪?/.test(text);
+    const progressHint = /(涓婁紶涓瓅澶勭悊涓瓅鍙戝竷涓瓅姝ｅ湪鍙戝竷|淇濆瓨涓瓅鎻愪氦涓?/.test(text);
+    const failureHint = /(鍙戝竷澶辫触|鍙戝竷鍑洪敊|缃戠粶寮傚父|璇峰畬鍠剕涓嶈兘涓虹┖|杩濊|鏈€氳繃|椹冲洖)/.test(text);
+    const publishEntry = /(鍙戝竷绗旇|涓婁紶鍥炬枃|涓婁紶瑙嗛|娣诲姞璇濋|浣滃搧鎻忚堪|鏍囬|瀹氭椂鍙戝竷|鍙戝竷)/.test(text) || hasPublishAction;
+    const draftEntry = /鑽夌绠眧鑽夌|鏆傚瓨|淇濆瓨涓鸿崏绋?.test(text) || hasDraftAction;
     const manageUrlHint = /\/publish\/(success|result)/.test(url)
       || /\/(note|works|publish|content)\/manage/.test(url);
-    const manageTextHint = /(创作中心|笔记管理|内容管理|作品管理|全部笔记|全部作品|查看笔记)/.test(text);
+    const manageTextHint = /(鍒涗綔涓績|绗旇绠＄悊|鍐呭绠＄悊|浣滃搧绠＄悊|鍏ㄩ儴绗旇|鍏ㄩ儴浣滃搧|鏌ョ湅绗旇)/.test(text);
     return {
       url,
       media_count: mediaCount,
@@ -21238,11 +21411,11 @@ def _looks_like_douyin_image_upload_ready(snapshot_text: str, actions: Sequence[
     merged = f"{text} {normalized_actions}".strip()
     if not merged:
         return False
-    if not any(token in merged for token in ("作品描述", "发布设置", "发布时间", "立即发布")):
+    if not any(token in merged for token in ("浣滃搧鎻忚堪", "鍙戝竷璁剧疆", "鍙戝竷鏃堕棿", "绔嬪嵆鍙戝竷")):
         return False
     if re.search(r"已添加\s*\d+\s*张图片", merged):
         return True
-    if any(token in merged for token in ("编辑图片", "继续添加", "预览图文")):
+    if any(token in merged for token in ("缂栬緫鍥剧墖", "缁х画娣诲姞", "棰勮鍥炬枃")):
         return True
     return False
 
@@ -21310,10 +21483,10 @@ def _read_kuaishou_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
       const wrapText = norm((wrap && wrap.innerText) || '');
       const clickable = tag === 'button' || role === 'button' || /btn|button|submit|primary|publish/i.test(cls);
       if (
-        /^(发布|立即发布|确认发布|确认定时发布|继续发布|确定发布)$/.test(t)
+        /^(鍙戝竷|绔嬪嵆鍙戝竷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷|纭畾鍙戝竷)$/.test(t)
         || (
-          t === '发布作品'
-          && (clickable || /发布时间|立即发布|定时发布|保存草稿|添加话题|选择封面/.test(wrapText))
+          t === '鍙戝竷浣滃搧'
+          && (clickable || /鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|淇濆瓨鑽夌|娣诲姞璇濋|閫夋嫨灏侀潰/.test(wrapText))
         )
       ) {
         publishActionCandidate = true;
@@ -21323,15 +21496,15 @@ def _read_kuaishou_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
       actions.push(t);
       if (actions.length >= 40) break;
     }
-    const successHint = /(发布成功|发布完成|已提交审核|提交成功|作品已提交|作品提交成功|发布任务已创建|已创建发布任务|已预约发布|预约成功|定时发布成功|定时任务已创建|审核中|去作品管理查看)/.test(text);
-    const progressHint = /(发布中|提交中|上传中|处理中|正在发布|正在审核|审核中|排队中)/.test(text);
-    const failureHint = /(发布失败|发布出错|网络异常|请完善|不能为空|违规|未通过|驳回)/.test(text);
-    const hasPublishAction = actions.some(t => /^(发布|发布作品|立即发布|确认发布|确认定时发布|继续发布|确定发布)$/.test(t));
-    const manageHint = /(作品管理|内容管理|发布记录|创作中心|全部作品|我的作品)/.test(text)
+    const successHint = /(鍙戝竷鎴愬姛|鍙戝竷瀹屾垚|宸叉彁浜ゅ鏍竱鎻愪氦鎴愬姛|浣滃搧宸叉彁浜浣滃搧鎻愪氦鎴愬姛|鍙戝竷浠诲姟宸插垱寤簗宸插垱寤哄彂甯冧换鍔宸查绾﹀彂甯億棰勭害鎴愬姛|瀹氭椂鍙戝竷鎴愬姛|瀹氭椂浠诲姟宸插垱寤簗瀹℃牳涓瓅鍘讳綔鍝佺鐞嗘煡鐪?/.test(text);
+    const progressHint = /(鍙戝竷涓瓅鎻愪氦涓瓅涓婁紶涓瓅澶勭悊涓瓅姝ｅ湪鍙戝竷|姝ｅ湪瀹℃牳|瀹℃牳涓瓅鎺掗槦涓?/.test(text);
+    const failureHint = /(鍙戝竷澶辫触|鍙戝竷鍑洪敊|缃戠粶寮傚父|璇峰畬鍠剕涓嶈兘涓虹┖|杩濊|鏈€氳繃|椹冲洖)/.test(text);
+    const hasPublishAction = actions.some(t => /^(鍙戝竷|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷|纭畾鍙戝竷)$/.test(t));
+    const manageHint = /(浣滃搧绠＄悊|鍐呭绠＄悊|鍙戝竷璁板綍|鍒涗綔涓績|鍏ㄩ儴浣滃搧|鎴戠殑浣滃搧)/.test(text)
       || /\\/article\\/(manage|list)/.test(url)
       || /\\/video\\/(manage|list)/.test(url)
       || /\\/content\\/manage/.test(url);
-    const composeHint = /(作品描述|发布作品|立即发布|定时发布|保存草稿|添加话题)/.test(text);
+    const composeHint = /(浣滃搧鎻忚堪|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|淇濆瓨鑽夌|娣诲姞璇濋)/.test(text);
     return {
       url,
       action_texts: actions.slice(0, 18),
@@ -21340,7 +21513,7 @@ def _read_kuaishou_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict[st
       failure_hint: failureHint,
       has_publish_action: publishActionCandidate,
       manage_hint: manageHint,
-      compose_hint: composeHint || actions.some(t => /^(绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|淇濆瓨鑽夌|纭鍙戝竷|纭瀹氭椂鍙戝竷)$/.test(t)),
+      compose_hint: composeHint || actions.some(t => /^(缁斿宓嗛崣鎴濈|鐎规碍妞傞崣鎴濈|娣囨繂鐡ㄩ懡澶岊焾|绾喛顓婚崣鎴濈|绾喛顓荤€规碍妞傞崣鎴濈)$/.test(t)),
     };
     """
     merged: dict[str, Any] = {
@@ -21392,7 +21565,7 @@ def _is_kuaishou_publish_confirmed_by_heuristic(primary_ctx: Any, fallback_ctx: 
     url = str(state.get("url", "") or "").lower()
     actions_raw = state.get("action_texts")
     actions = [str(item or "").strip() for item in actions_raw] if isinstance(actions_raw, list) else []
-    shell_tokens = ("发布作品", "发布视频", "发布图文", "发布全景视频")
+    shell_tokens = ("鍙戝竷浣滃搧", "鍙戝竷瑙嗛", "鍙戝竷鍥炬枃", "鍙戝竷鍏ㄦ櫙瑙嗛")
     shell_like_actions = [item for item in actions if item and any(token in item for token in shell_tokens)]
     if (
         "cp.kuaishou.com/article/publish/video" in url
@@ -21438,88 +21611,16 @@ def _wait_publish_feedback(
     timeout_seconds: int = 25,
 ) -> None:
     success_text_markers: dict[str, tuple[str, ...]] = {
-        "douyin": (
-            "发布成功",
-            "发布中",
-            "发布完成",
-            "提交成功",
-            "已提交",
-            "审核中",
-            "投稿成功",
-            "定时发布成功",
-            "预约成功",
-            "已预约发布",
-            "已设置定时发布",
-        ),
-        "xiaohongshu": (
-            "发布成功",
-            "发布中",
-            "已发布",
-            "审核中",
-            "提交成功",
-            "发布完成",
-            "已提交",
-            "笔记已发布",
-            "发布后可在创作中心查看",
-        ),
-        "kuaishou": (
-            "发布成功",
-            "发布中",
-            "已发布",
-            "审核中",
-            "提交成功",
-            "已提交审核",
-            "作品已提交",
-            "作品提交成功",
-            "已创建发布任务",
-            "预约成功",
-            "已预约发布",
-            "定时发布成功",
-            "定时任务已创建",
-            "发布任务已创建",
-        ),
-        "bilibili": (
-            "投稿成功",
-            "投稿中",
-            "已投稿",
-            "已提交",
-            "审核中",
-            "提交成功",
-            "稿件已创建",
-            "稿件投递成功",
-            "定时投稿成功",
-            "定时发布成功",
-            "已设置定时发布",
-            "已设置定时投稿",
-            "预约投稿成功",
-            "已预约投稿",
-        ),
+        "douyin": ("发布成功", "发布中", "发布完成", "提交成功", "已提交", "审核中"),
+        "xiaohongshu": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "发布完成", "已提交"),
+        "kuaishou": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "已提交"),
+        "bilibili": ("投稿成功", "投稿中", "已投稿", "已提交", "审核中", "提交成功"),
     }
     failure_text_markers: dict[str, tuple[str, ...]] = {
-        "douyin": (
-            "发布失败",
-            "发布出错",
-            "网络异常",
-            "请完善",
-            "不能为空",
-            "违规",
-            "请选择发布时间",
-            "发布时间必须",
-            "发布时间需在",
-        ),
+        "douyin": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "发布时间"),
         "xiaohongshu": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
         "kuaishou": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
-        "bilibili": (
-            "投稿失败",
-            "发布失败",
-            "提交失败",
-            "网络异常",
-            "请完善",
-            "不能为空",
-            "违规",
-            "未通过",
-            "驳回",
-        ),
+        "bilibili": ("投稿失败", "发布失败", "提交失败", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
     }
     success_url_markers: dict[str, tuple[str, ...]] = {
         "douyin": ("creator-micro/content/manage", "/content/manage"),
@@ -21548,7 +21649,7 @@ def _wait_publish_feedback(
             # Best effort: some accounts show a delayed confirm dialog.
             _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
 
-            if "未发布的视频" in text and "继续编辑" in text:
+            if "鏈彂甯冪殑瑙嗛" in text and "缁х画缂栬緫" in text:
                 if republish_attempts >= 2:
                     raise RuntimeError("douyin blocked by unfinished-video dialog repeatedly.")
                 if _dismiss_unfinished_dialog(primary_ctx, fallback_ctx, platform_name=platform_name):
@@ -21568,7 +21669,7 @@ def _wait_publish_feedback(
             _click_first_matching_button(
                 primary_ctx,
                 fallback_ctx,
-                ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+                ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
                 platform_name=platform_name,
             )
             if bilibili_reclick_attempts < 3 and (time.time() - loop_started) >= (12 * (bilibili_reclick_attempts + 1)):
@@ -21707,10 +21808,10 @@ def _set_douyin_schedule_default_time(
       const wrap = inp.closest('form, section, .publish, .setting, .schedule, div') || inp.parentElement || inp;
       const wrapText = (wrap.innerText || '').slice(0, 260);
       let score = 0;
-      if (/时间|日期|定时|发布时间/.test(attrs)) score += 8;
-      if (/时间|日期|定时|发布时间/.test(wrapText)) score += 6;
+      if (/鏃堕棿|鏃ユ湡|瀹氭椂|鍙戝竷鏃堕棿/.test(attrs)) score += 8;
+      if (/鏃堕棿|鏃ユ湡|瀹氭椂|鍙戝竷鏃堕棿/.test(wrapText)) score += 6;
       if ((inp.type || '').toLowerCase() === 'datetime-local') score += 7;
-      if (/search|keyword|查询/.test(attrs.toLowerCase())) score -= 9;
+      if (/search|keyword|鏌ヨ/.test(attrs.toLowerCase())) score -= 9;
       if (score > bestScore) {
         bestScore = score;
         best = inp;
@@ -21749,13 +21850,12 @@ def _set_douyin_schedule_default_time(
 
 
 def _configure_douyin_random_publish_mode(primary_ctx: Any, fallback_ctx: Any) -> str:
-    # 立即发布/定时发布二选一，尽量模拟人工操作随机性。
-    want_scheduled = bool(random.randint(0, 1))
+    # 绔嬪嵆鍙戝竷/瀹氭椂鍙戝竷浜岄€変竴锛屽敖閲忔ā鎷熶汉宸ユ搷浣滈殢鏈烘€с€?    want_scheduled = bool(random.randint(0, 1))
     if not want_scheduled:
         _log("[Uploader:douyin] Publish mode(random): immediate")
         return "immediate"
 
-    if not _click_first_matching_button(primary_ctx, fallback_ctx, ("定时发布",), platform_name="douyin"):
+    if not _click_first_matching_button(primary_ctx, fallback_ctx, ("瀹氭椂鍙戝竷",), platform_name="douyin"):
         _log("[Uploader:douyin] Publish mode(random): scheduled requested but toggle not found, fallback immediate.")
         return "immediate"
 
@@ -21789,7 +21889,7 @@ def _finalize_douyin_publish(
         if current_mode != "scheduled":
             raise
         _log(f"[Uploader:douyin] Scheduled publish not confirmed, fallback to immediate: {exc}")
-        _click_first_matching_button(primary_ctx, fallback_ctx, ("立即发布",), platform_name="douyin")
+        _click_first_matching_button(primary_ctx, fallback_ctx, ("绔嬪嵆鍙戝竷",), platform_name="douyin")
         _humanized_publish_retry_pause("douyin immediate fallback settle")
         if not _click_douyin_primary_publish_button(primary_ctx, fallback_ctx):
             raise RuntimeError("douyin immediate fallback failed: publish button not clickable.") from exc
@@ -21808,22 +21908,22 @@ def _dismiss_unfinished_dialog(primary_ctx: Any, fallback_ctx: Any, platform_nam
     selectors: tuple[str, ...]
     if platform_name == "douyin":
         selectors = (
-            "text:继续编辑",
-            "xpath://button[contains(normalize-space(.), '继续编辑')]",
-            "text:放弃",
-            "xpath://button[contains(normalize-space(.), '放弃')]",
+            "text:缁х画缂栬緫",
+            "xpath://button[contains(normalize-space(.), '缁х画缂栬緫')]",
+            "text:鏀惧純",
+            "xpath://button[contains(normalize-space(.), '鏀惧純')]",
         )
     elif platform_name == "bilibili":
         selectors = (
             "text:不用了",
             "xpath://button[contains(normalize-space(.), '不用了')]",
-            "text:继续编辑",
-            "xpath://button[contains(normalize-space(.), '继续编辑')]",
+            "text:缁х画缂栬緫",
+            "xpath://button[contains(normalize-space(.), '缁х画缂栬緫')]",
         )
     else:
         selectors = (
-            "text:继续编辑",
-            "xpath://button[contains(normalize-space(.), '继续编辑')]",
+            "text:缁х画缂栬緫",
+            "xpath://button[contains(normalize-space(.), '缁х画缂栬緫')]",
         )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -21856,8 +21956,7 @@ def _set_kuaishou_random_publish_time(primary_ctx: Any, fallback_ctx: Any, max_m
     schedule_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(scheduled_ts))
     schedule_iso = time.strftime("%Y-%m-%dT%H:%M", time.localtime(scheduled_ts))
 
-    # 先切到“定时发布”，再写入时间输入框。
-    _click_first_matching_button(primary_ctx, fallback_ctx, ("定时发布",), platform_name="kuaishou")
+    # 鍏堝垏鍒扳€滃畾鏃跺彂甯冣€濓紝鍐嶅啓鍏ユ椂闂磋緭鍏ユ銆?    _click_first_matching_button(primary_ctx, fallback_ctx, ("瀹氭椂鍙戝竷",), platform_name="kuaishou")
 
     js_set = """
     function isVisible(el) {
@@ -21882,10 +21981,10 @@ def _set_kuaishou_random_publish_time(primary_ctx: Any, fallback_ctx: Any, max_m
       const wrap = inp.closest('form, section, .publish, .setting, div') || inp.parentElement || inp;
       const wrapText = (wrap.innerText || '').slice(0, 220);
       let score = 0;
-      if (/时间|日期|定时|发布时间/.test(attrs)) score += 6;
-      if (/时间|日期|定时|发布时间/.test(wrapText)) score += 5;
+      if (/鏃堕棿|鏃ユ湡|瀹氭椂|鍙戝竷鏃堕棿/.test(attrs)) score += 6;
+      if (/鏃堕棿|鏃ユ湡|瀹氭椂|鍙戝竷鏃堕棿/.test(wrapText)) score += 5;
       if ((inp.type || '').toLowerCase() === 'datetime-local') score += 7;
-      if (/search|keyword|查询/.test(attrs.toLowerCase())) score -= 8;
+      if (/search|keyword|鏌ヨ/.test(attrs.toLowerCase())) score -= 8;
       if (score > bestScore) {
         bestScore = score;
         best = inp;
@@ -21934,7 +22033,7 @@ def _set_bilibili_random_publish_time(
     schedule_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(scheduled_ts))
     schedule_iso = time.strftime("%Y-%m-%dT%H:%M", time.localtime(scheduled_ts))
 
-    # B站定时发布要求时间至少在当前2小时后，这里先切换“定时发布”再写入随机时间。
+    # Bilibili scheduled publish requires enough lead time; toggle then fill random time.
     js_toggle = """
     function norm(s) {
       return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
@@ -21952,13 +22051,13 @@ def _set_bilibili_random_publish_time(
     let bestScore = -999;
     for (const node of nodes) {
       const text = norm(node.innerText || node.textContent || '');
-      if (!text || !text.includes('定时发布')) continue;
+      if (!text || !text.includes('瀹氭椂鍙戝竷')) continue;
       const wrap = node.closest('form, section, .publish, .submit, .setting, div') || node.parentElement || node;
       const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 360);
       let score = 0;
-      if (text === '定时发布') score += 10;
-      if (text.includes('定时发布')) score += 6;
-      if (/2小时|15天|发布时间/.test(wrapText)) score += 8;
+      if (text === '瀹氭椂鍙戝竷') score += 10;
+      if (text.includes('瀹氭椂鍙戝竷')) score += 6;
+      if (/2灏忔椂|15澶﹟鍙戝竷鏃堕棿/.test(wrapText)) score += 8;
       if (node.tagName === 'INPUT') score += 4;
       if (String(node.getAttribute('role') || '') === 'switch') score += 6;
       if (visible(node)) score += 3;
@@ -21980,7 +22079,7 @@ def _set_bilibili_random_publish_time(
     return {ok:true, score:bestScore};
     """
 
-    _click_first_matching_button(primary_ctx, fallback_ctx, ("定时发布",), platform_name="bilibili")
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("瀹氭椂鍙戝竷",), platform_name="bilibili")
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
@@ -22008,11 +22107,11 @@ def _set_bilibili_random_publish_time(
       const wrap = inp.closest('form, section, .publish, .submit, .setting, div') || inp.parentElement || inp;
       const wrapText = (wrap.innerText || '').slice(0, 320);
       let score = 0;
-      if (/时间|日期|定时|发布时间|投稿时间/.test(attrs)) score += 8;
-      if (/时间|日期|定时|发布时间|投稿时间/.test(wrapText)) score += 8;
-      if (/2小时|15天/.test(wrapText)) score += 8;
+      if (/鏃堕棿|鏃ユ湡|瀹氭椂|鍙戝竷鏃堕棿|鎶曠鏃堕棿/.test(attrs)) score += 8;
+      if (/鏃堕棿|鏃ユ湡|瀹氭椂|鍙戝竷鏃堕棿|鎶曠鏃堕棿/.test(wrapText)) score += 8;
+      if (/2灏忔椂|15澶?.test(wrapText)) score += 8;
       if ((inp.type || '').toLowerCase() === 'datetime-local') score += 8;
-      if (/标题|标签|简介|合集/.test(wrapText)) score -= 10;
+      if (/鏍囬|鏍囩|绠€浠媩鍚堥泦/.test(wrapText)) score -= 10;
       if (/title|tag|search|keyword/.test(attrs.toLowerCase())) score -= 8;
       if (score > bestScore) {
         bestScore = score;
@@ -22066,7 +22165,7 @@ def _set_bilibili_random_publish_time(
       .filter(isVisible)
       .map(el => clip(el.innerText || el.textContent || '', 80))
       .filter(Boolean)
-      .filter(text => /定时|投稿|发布|时间|日期|立即/.test(text))
+      .filter(text => /瀹氭椂|鎶曠|鍙戝竷|鏃堕棿|鏃ユ湡|绔嬪嵆/.test(text))
       .slice(0, 30);
     const inputs = Array.from(document.querySelectorAll('input,textarea'))
       .map(el => {
@@ -22078,7 +22177,7 @@ def _set_bilibili_random_publish_time(
           wrap: clip((wrap && wrap.innerText) || '', 120),
         };
       })
-      .filter(item => /定时|投稿|发布|时间|日期/.test(item.placeholder + ' ' + item.wrap))
+      .filter(item => /瀹氭椂|鎶曠|鍙戝竷|鏃堕棿|鏃ユ湡/.test(item.placeholder + ' ' + item.wrap))
       .slice(0, 20);
     return {url: location.href, body, buttons, inputs};
     """
@@ -22104,8 +22203,7 @@ def _configure_bilibili_random_publish_mode(
     fallback_ctx: Any,
     max_minutes: int = BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
 ) -> str:
-    # 与抖音/快手保持一致：随机二选一（立即发布 / 定时发布）。
-    choose_scheduled = bool(random.getrandbits(1))
+    # 涓庢姈闊?蹇墜淇濇寔涓€鑷达細闅忔満浜岄€変竴锛堢珛鍗冲彂甯?/ 瀹氭椂鍙戝竷锛夈€?    choose_scheduled = bool(random.getrandbits(1))
     if not choose_scheduled:
         _log("[Uploader:bilibili] Publish mode(random): immediate")
         return "immediate"
@@ -22120,7 +22218,7 @@ def _configure_bilibili_random_publish_mode(
         _log(f"[Uploader:bilibili] Publish mode(random): scheduled failed, fallback immediate: {exc}")
         return "immediate_fallback"
 
-    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="bilibili")
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("纭畾", "瀹屾垚"), platform_name="bilibili")
     _log(f"[Uploader:bilibili] Publish mode(random): scheduled ({scheduled})")
     return "scheduled"
 
@@ -22130,10 +22228,9 @@ def _configure_kuaishou_random_publish_mode(
     fallback_ctx: Any,
     max_minutes: int = 45,
 ) -> str:
-    # 与抖音一致：随机二选一（立即发布 / 定时发布）。
-    choose_scheduled = bool(random.getrandbits(1))
+    # 涓庢姈闊充竴鑷达細闅忔満浜岄€変竴锛堢珛鍗冲彂甯?/ 瀹氭椂鍙戝竷锛夈€?    choose_scheduled = bool(random.getrandbits(1))
     if not choose_scheduled:
-        _click_first_matching_button(primary_ctx, fallback_ctx, ("立即发布",), platform_name="kuaishou")
+        _click_first_matching_button(primary_ctx, fallback_ctx, ("绔嬪嵆鍙戝竷",), platform_name="kuaishou")
         _log("[Uploader:kuaishou] Publish mode(random): immediate")
         return "immediate"
 
@@ -22142,7 +22239,7 @@ def _configure_kuaishou_random_publish_mode(
         fallback_ctx,
         max_minutes=max(1, int(max_minutes)),
     )
-    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="kuaishou")
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("纭畾", "瀹屾垚"), platform_name="kuaishou")
     _log(f"[Uploader:kuaishou] Publish mode(random): scheduled ({scheduled})")
     return "scheduled"
 
@@ -22154,14 +22251,14 @@ def _publish_kuaishou_with_random_schedule(
     expected_tokens: Optional[Sequence[str]] = None,
 ) -> str:
     scheduled = _set_kuaishou_random_publish_time(primary_ctx, fallback_ctx, max_minutes=max_minutes)
-    # 有些时间选择器需要先确认，再点击发布
-    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="kuaishou")
+    # 鏈変簺鏃堕棿閫夋嫨鍣ㄩ渶瑕佸厛纭锛屽啀鐐瑰嚮鍙戝竷
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("纭畾", "瀹屾垚"), platform_name="kuaishou")
     clicked_publish = _click_kuaishou_primary_publish_button(primary_ctx, fallback_ctx)
     if not clicked_publish:
         clicked_publish = _click_first_matching_button(
             primary_ctx,
             fallback_ctx,
-            ("发布", "发布作品"),
+            ("鍙戝竷", "鍙戝竷浣滃搧"),
             platform_name="kuaishou",
         )
     if not clicked_publish:
@@ -22174,7 +22271,7 @@ def _publish_kuaishou_with_random_schedule(
     _click_first_matching_button(
         primary_ctx,
         fallback_ctx,
-        ("确认发布", "确认定时发布", "继续发布", "确定发布"),
+        ("纭鍙戝竷", "纭瀹氭椂鍙戝竷", "缁х画鍙戝竷", "纭畾鍙戝竷"),
         platform_name="kuaishou",
     )
     _wait_publish_feedback(
@@ -22184,7 +22281,7 @@ def _publish_kuaishou_with_random_schedule(
         expected_tokens=expected_tokens,
         timeout_seconds=KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS,
     )
-    _log(f"[Success:kuaishou] 已设置随机定时并确认发布：{scheduled}")
+    _log(f"[Success:kuaishou] 已设置随机定时并确认发布（scheduled={scheduled}）")
     return scheduled
 
 
@@ -22199,13 +22296,13 @@ def _publish_bilibili_with_random_schedule(
         fallback_ctx,
         max_minutes=max(BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES, int(max_minutes)),
     )
-    _click_first_matching_button(primary_ctx, fallback_ctx, ("确定", "完成"), platform_name="bilibili")
+    _click_first_matching_button(primary_ctx, fallback_ctx, ("纭畾", "瀹屾垚"), platform_name="bilibili")
     clicked_publish = _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx)
     if not clicked_publish:
         clicked_publish = _click_first_matching_button(
             primary_ctx,
             fallback_ctx,
-            ("确认定时发布", "确认定时投稿", "定时投稿", "立即投稿", "投稿", "发布"),
+            ("纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠", "瀹氭椂鎶曠", "绔嬪嵆鎶曠", "鎶曠", "鍙戝竷"),
             platform_name="bilibili",
         )
     if not clicked_publish:
@@ -22216,7 +22313,7 @@ def _publish_bilibili_with_random_schedule(
     _click_first_matching_button(
         primary_ctx,
         fallback_ctx,
-        ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+        ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
         platform_name="bilibili",
     )
     _wait_publish_feedback(
@@ -22226,7 +22323,7 @@ def _publish_bilibili_with_random_schedule(
         expected_tokens=expected_tokens,
         timeout_seconds=180,
     )
-    _log(f"[Success:bilibili] 已设置随机定时并确认发布：{scheduled}")
+    _log(f"[Success:bilibili] 已设置随机定时并确认发布（scheduled={scheduled}）")
     return scheduled
 
 
@@ -22601,11 +22698,10 @@ def _fill_draft_once_generic(
                 _click_first_matching_button(
                     ctx,
                     page,
-                    ("确认投稿", "继续投稿", "确定投稿", "确认发布", "确认定时发布", "确认定时投稿"),
+                    ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
                     platform_name=platform_name,
                 )
-            # 非抖音平台同样要等待页面回执，避免“点击发布即成功”的误判。
-            if platform_name == "bilibili":
+            # 闈炴姈闊冲钩鍙板悓鏍疯绛夊緟椤甸潰鍥炴墽锛岄伩鍏嶁€滅偣鍑诲彂甯冨嵆鎴愬姛鈥濈殑璇垽銆?            if platform_name == "bilibili":
                 wait_seconds = 180
             elif platform_name == "kuaishou":
                 wait_seconds = KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS
@@ -22816,7 +22912,7 @@ def fill_draft_douyin(
                     upload_timeout=upload_timeout,
                     collection_name=collection_name,
                     draft_button_texts=("保存草稿", "草稿箱", "草稿"),
-                    publish_button_texts=("发布", "立即发布", "确认发布"),
+                    publish_button_texts=("鍙戝竷", "绔嬪嵆鍙戝竷", "纭鍙戝竷"),
                     debug_port=debug_port,
                     chrome_path=chrome_path,
                     chrome_user_data_dir=chrome_user_data_dir,
@@ -22893,7 +22989,7 @@ def fill_draft_xiaohongshu(
             publish_now=publish_now,
             upload_timeout=upload_timeout,
             draft_button_texts=("暂存离开", "保存为草稿", "存草稿", "草稿"),
-            publish_button_texts=("发布", "发布笔记", "立即发布"),
+            publish_button_texts=("鍙戝竷", "鍙戝竷绗旇", "绔嬪嵆鍙戝竷"),
             debug_port=debug_port,
             chrome_path=chrome_path,
             chrome_user_data_dir=chrome_user_data_dir,
@@ -22957,7 +23053,7 @@ def fill_draft_bilibili(
             publish_now=(publish_now and not auto_publish_random_schedule),
             upload_timeout=upload_timeout,
             draft_button_texts=("存草稿", "保存草稿", "草稿"),
-            publish_button_texts=("立即投稿", "投稿", "发布", "立即发布"),
+            publish_button_texts=("绔嬪嵆鎶曠", "鎶曠", "鍙戝竷", "绔嬪嵆鍙戝竷"),
             bilibili_random_schedule_max_minutes=max(
                 BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
                 int(random_schedule_max_minutes),
@@ -22986,6 +23082,137 @@ def fill_draft_bilibili(
         return target
     finally:
         _close_work_tab(work_page, page, reason="bilibili-finish")
+
+
+def fill_draft_tiktok(
+    workspace: Workspace,
+    caption: Optional[str] = None,
+    target_video: Optional[Path] = None,
+    debug_port: int = DEFAULT_PORT,
+    save_draft: bool = False,
+    publish_now: bool = True,
+    upload_timeout: int = UPLOAD_TIMEOUT_SECONDS,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Path:
+    _log("[Uploader:tiktok] Connecting Chrome")
+    target = target_video or _find_latest_processed(workspace)
+    if not target:
+        raise RuntimeError("No processed video found in 2_Processed.")
+    if _is_image_file(target):
+        raise RuntimeError("TikTok publish currently supports video files only.")
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=TIKTOK_CREATE_POST_URL,
+    )
+    final_caption = _prepare_caption_for_platform(
+        (caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION,
+        platform_name="tiktok",
+    )
+    work_page = _prepare_upload_tab(page)
+    try:
+        _fill_draft_once_generic(
+            work_page,
+            target,
+            final_caption,
+            open_url=TIKTOK_CREATE_POST_URL,
+            platform_name="tiktok",
+            save_draft=bool(save_draft),
+            publish_now=bool(publish_now),
+            upload_timeout=upload_timeout,
+            draft_button_texts=("Save", "Save draft", "Draft"),
+            publish_button_texts=("Post", "Publish"),
+            debug_port=debug_port,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=chrome_user_data_dir,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        return target
+    finally:
+        _close_work_tab(work_page, page, reason="tiktok-finish")
+
+
+def fill_draft_x(
+    workspace: Workspace,
+    caption: Optional[str] = None,
+    target_video: Optional[Path] = None,
+    debug_port: int = DEFAULT_PORT,
+    save_draft: bool = False,
+    publish_now: bool = True,
+    upload_timeout: int = UPLOAD_TIMEOUT_SECONDS,
+    auto_open_chrome: bool = True,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_bot_identifier: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> Path:
+    _log("[Uploader:x] Connecting Chrome")
+    target = target_video or _find_latest_processed(workspace)
+    if not target:
+        raise RuntimeError("No processed video found in 2_Processed.")
+    if _is_image_file(target):
+        raise RuntimeError("X publish currently supports video files only.")
+    if bool(save_draft) and not bool(publish_now):
+        _log("[Uploader:x] Save draft is not available on X; continue without auto-post.")
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=X_CREATE_POST_URL,
+    )
+    final_caption = _prepare_caption_for_platform(
+        (caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION,
+        platform_name="x",
+    )
+    work_page = _prepare_upload_tab(page)
+    try:
+        _fill_draft_once_generic(
+            work_page,
+            target,
+            final_caption,
+            open_url=X_CREATE_POST_URL,
+            platform_name="x",
+            save_draft=False,
+            publish_now=bool(publish_now),
+            upload_timeout=upload_timeout,
+            publish_button_texts=("Post", "Publish", "鍙戝竷", "鍙戝笘"),
+            debug_port=debug_port,
+            chrome_path=chrome_path,
+            chrome_user_data_dir=chrome_user_data_dir,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            telegram_bot_identifier=telegram_bot_identifier,
+            telegram_registry_file=telegram_registry_file,
+            telegram_timeout_seconds=telegram_timeout_seconds,
+            telegram_api_base=telegram_api_base,
+            notify_env_prefix=notify_env_prefix,
+        )
+        return target
+    finally:
+        _close_work_tab(work_page, page, reason="x-finish")
 
 
 def fill_draft_kuaishou(
@@ -23038,7 +23265,7 @@ def fill_draft_kuaishou(
             upload_timeout=upload_timeout,
             before_upload_hook=_guard_kuaishou_unfinished_dialog,
             draft_button_texts=("保存草稿", "暂存离开", "存草稿", "草稿"),
-            publish_button_texts=("发布", "发布作品", "立即发布"),
+            publish_button_texts=("鍙戝竷", "鍙戝竷浣滃搧", "绔嬪嵆鍙戝竷"),
             kuaishou_random_schedule_max_minutes=max(1, int(random_schedule_max_minutes)),
             debug_port=debug_port,
             chrome_path=chrome_path,
@@ -23064,126 +23291,126 @@ def fill_draft_kuaishou(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="X 短视频采集与多平台草稿上传助手（人工发布）")
+    parser = argparse.ArgumentParser(description="X collect + multi-platform draft uploader (manual publish flow).")
     parser.add_argument(
         "--config",
         default=DEFAULT_CONFIG_PATH,
-        help=f"配置文件路径（JSON），默认 {DEFAULT_CONFIG_PATH}",
+        help=f"閰嶇疆鏂囦欢璺緞锛圝SON锛夛紝榛樿 {DEFAULT_CONFIG_PATH}",
     )
     parser.add_argument("--workspace", default=DEFAULT_WORKSPACE)
     parser.add_argument("--keyword", default=DEFAULT_KEYWORD)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
-    parser.add_argument("--tweet-url", action="append", default=[], help="指定 X 帖子链接，可重复传入")
-    parser.add_argument("--tweet-url-file", help="包含 X 帖子链接的文本文件（每行一个）")
+    parser.add_argument("--tweet-url", action="append", default=[], help="鎸囧畾 X 甯栧瓙閾炬帴锛屽彲閲嶅浼犲叆")
+    parser.add_argument("--tweet-url-file", help="鍖呭惈 X 甯栧瓙閾炬帴鐨勬枃鏈枃浠讹紙姣忚涓€涓級")
     parser.add_argument("--no-x-auto-discover", action="store_true", help="Disable X keyword-search auto discovery")
     parser.add_argument(
         "--x-discovery-url-limit",
         type=int,
         default=X_DISCOVERY_URL_LIMIT,
-        help=f"X 自动发现 URL 数量上限，默认 {X_DISCOVERY_URL_LIMIT}",
+        help=f"X 鑷姩鍙戠幇 URL 鏁伴噺涓婇檺锛岄粯璁?{X_DISCOVERY_URL_LIMIT}",
     )
     parser.add_argument(
         "--x-discovery-scroll-rounds",
         type=int,
         default=X_DISCOVERY_SCROLL_ROUNDS,
-        help=f"X 自动发现滚动轮数，默认 {X_DISCOVERY_SCROLL_ROUNDS}",
+        help=f"X 鑷姩鍙戠幇婊氬姩杞暟锛岄粯璁?{X_DISCOVERY_SCROLL_ROUNDS}",
     )
     parser.add_argument(
         "--x-discovery-scroll-wait",
         type=float,
         default=X_DISCOVERY_SCROLL_WAIT_SECONDS,
         help=(
-            "X 自动发现每轮滚动随机等待上限秒数，"
-            f"下限固定 {X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS:g}，默认 {X_DISCOVERY_SCROLL_WAIT_SECONDS:g}"
+            "Upper bound of random wait seconds for each X discovery scroll round; "
+            f"lower bound fixed at {X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS:g}, default {X_DISCOVERY_SCROLL_WAIT_SECONDS:g}"
         ),
     )
-    parser.add_argument("--caption", default="", help="手动文案；不传则自动从采集视频元数据生成")
-    parser.add_argument("--proxy", default="", help="代理地址，例如 http://127.0.0.1:PORT")
+    parser.add_argument("--caption", default="", help="鎵嬪姩鏂囨锛涗笉浼犲垯鑷姩浠庨噰闆嗚棰戝厓鏁版嵁鐢熸垚")
+    parser.add_argument("--proxy", default="", help="浠ｇ悊鍦板潃锛屼緥濡?http://127.0.0.1:PORT")
     parser.add_argument(
         "--use-system-proxy",
         action="store_true",
         default=_env_bool_first(["CYBERCAR_USE_SYSTEM_PROXY"], default=False),
-        help="当 --proxy 为空时启用系统/环境代理；默认关闭（TUN/直连模式）。",
+        help="Enable system/environment proxy when --proxy is empty. Default disabled (direct/TUN mode).",
     )
     parser.add_argument("--debug-port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--wechat-debug-port", type=int, default=DEFAULT_WECHAT_DEBUG_PORT)
-    parser.add_argument("--chrome-path", default="", help="Chrome 可执行文件路径（可选）")
+    parser.add_argument("--chrome-path", default="", help="Chrome 鍙墽琛屾枃浠惰矾寰勶紙鍙€夛級")
     parser.add_argument(
         "--chrome-user-data-dir",
         default=DEFAULT_CHROME_USER_DATA_DIR,
-        help=f"Chrome 调试用户目录，默认 {DEFAULT_CHROME_USER_DATA_DIR}",
+        help=f"Chrome 璋冭瘯鐢ㄦ埛鐩綍锛岄粯璁?{DEFAULT_CHROME_USER_DATA_DIR}",
     )
     parser.add_argument("--x-debug-port", type=int, default=DEFAULT_X_DEBUG_PORT)
     parser.add_argument(
         "--x-chrome-user-data-dir",
         default=DEFAULT_X_CHROME_USER_DATA_DIR,
-        help=f"X 采集专用 Chrome 调试用户目录，默认 {DEFAULT_X_CHROME_USER_DATA_DIR}",
+        help=f"X 閲囬泦涓撶敤 Chrome 璋冭瘯鐢ㄦ埛鐩綍锛岄粯璁?{DEFAULT_X_CHROME_USER_DATA_DIR}",
     )
     parser.add_argument(
         "--x-cookie-file",
         default=DEFAULT_X_COOKIE_FILE,
-        help=f"X 手动 Cookie JSON 文件，默认 {DEFAULT_X_COOKIE_FILE}",
+        help=f"X 鎵嬪姩 Cookie JSON 鏂囦欢锛岄粯璁?{DEFAULT_X_COOKIE_FILE}",
     )
-    parser.add_argument("--no-auto-open-chrome", action="store_true", help="不自动启动 Chrome")
+    parser.add_argument("--no-auto-open-chrome", action="store_true", help="涓嶈嚜鍔ㄥ惎鍔?Chrome")
     parser.add_argument(
         "--upload-platforms",
         default=DEFAULT_UPLOAD_PLATFORMS,
-        help="上传平台，逗号分隔：wechat,douyin,xiaohongshu,kuaishou,bilibili；默认 wechat",
+        help="涓婁紶骞冲彴锛岄€楀彿鍒嗛殧锛歸echat,douyin,xiaohongshu,kuaishou,bilibili锛涢粯璁?wechat",
     )
     parser.add_argument(
         "--kuaishou-auto-publish-random-schedule",
         action="store_true",
-        help="快手上传后自动设置随机定时并点击发布（非草稿）",
+        help="After Kuaishou upload, auto set random schedule and click publish (non-draft).",
     )
     parser.add_argument(
         "--kuaishou-random-schedule-max-minutes",
         type=int,
         default=45,
-        help="快手随机定时发布窗口（分钟），默认 45",
+        help="蹇墜闅忔満瀹氭椂鍙戝竷绐楀彛锛堝垎閽燂級锛岄粯璁?45",
     )
     parser.add_argument(
         "--bilibili-auto-publish-random-schedule",
         action="store_true",
-        help="哔哩哔哩上传后自动设置随机定时并点击发布（非草稿）",
+        help="After Bilibili upload, auto set random schedule and click publish (non-draft).",
     )
     parser.add_argument(
         "--bilibili-random-schedule-max-minutes",
         type=int,
         default=BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
         help=(
-            f"哔哩哔哩随机定时发布时间窗口上限（分钟），"
-            f"会自动保证至少 {BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES} 分钟后，"
-            f"默认 {BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT}"
+            f"Upper bound (minutes) of Bilibili random scheduled publish window; "
+            f"auto keeps at least {BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES} minutes lead, "
+            f"default {BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT}"
         ),
     )
     parser.add_argument(
         "--upload-timeout",
         type=int,
         default=UPLOAD_TIMEOUT_SECONDS,
-        help=f"上传完成等待秒数，默认 {UPLOAD_TIMEOUT_SECONDS}",
+        help=f"涓婁紶瀹屾垚绛夊緟绉掓暟锛岄粯璁?{UPLOAD_TIMEOUT_SECONDS}",
     )
     parser.add_argument(
         "--drafts-per-run",
         type=int,
         default=DRAFTS_PER_RUN_DEFAULT,
-        help=f"单次运行写入草稿条数；0 表示全部可用视频都上传，默认 {DRAFTS_PER_RUN_DEFAULT}",
+        help=f"鍗曟杩愯鍐欏叆鑽夌鏉℃暟锛? 琛ㄧず鍏ㄩ儴鍙敤瑙嗛閮戒笂浼狅紝榛樿 {DRAFTS_PER_RUN_DEFAULT}",
     )
     parser.add_argument(
         "--upload-interval-min",
         type=int,
         default=UPLOAD_INTERVAL_MIN_SECONDS,
-        help=f"多条草稿时最小间隔秒数，默认 {UPLOAD_INTERVAL_MIN_SECONDS}",
+        help=f"澶氭潯鑽夌鏃舵渶灏忛棿闅旂鏁帮紝榛樿 {UPLOAD_INTERVAL_MIN_SECONDS}",
     )
     parser.add_argument(
         "--upload-interval-max",
         type=int,
         default=UPLOAD_INTERVAL_MAX_SECONDS,
-        help=f"多条草稿时最大间隔秒数，默认 {UPLOAD_INTERVAL_MAX_SECONDS}",
+        help=f"澶氭潯鑽夌鏃舵渶澶ч棿闅旂鏁帮紝榛樿 {UPLOAD_INTERVAL_MAX_SECONDS}",
     )
     parser.add_argument(
         "--collection-name",
         default="",
-        help="发布页“添加到合集”的目标合集名；不传时读取配置文件 collection_name",
+        help="鍙戝竷椤碘€滄坊鍔犲埌鍚堥泦鈥濈殑鐩爣鍚堥泦鍚嶏紱涓嶄紶鏃惰鍙栭厤缃枃浠?collection_name",
     )
     parser.add_argument(
         "--wechat-declare-original",
@@ -23194,12 +23421,12 @@ def parse_args() -> argparse.Namespace:
     source_cleanup_group.add_argument(
         "--auto-delete-source-files",
         action="store_true",
-        help="处理完成后删除 1_Downloads 源文件和 info.json（不归档到 3_Archive）",
+        help="Delete source files/info.json from 1_Downloads after processing (do not archive to 3_Archive).",
     )
     source_cleanup_group.add_argument(
         "--keep-source-files",
         action="store_true",
-        help="强制保留源文件到 3_Archive（覆盖配置中的 auto_delete_source_files）",
+        help="Force keep source files in 3_Archive (override auto_delete_source_files).",
     )
     parser.add_argument(
         "--upload-only-approved",
@@ -23283,15 +23510,15 @@ def parse_args() -> argparse.Namespace:
         default=_env_first("CYBERCAR_NOTIFY_TELEGRAM_API_BASE", "NOTIFY_TELEGRAM_API_BASE", default=""),
         help="Telegram Bot API base URL. Default https://api.telegram.org.",
     )
-    parser.add_argument("--no-save-draft", action="store_true", help="上传后不点击保存草稿")
+    parser.add_argument("--no-save-draft", action="store_true", help="Do not click save draft after upload.")
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-process", action="store_true")
     parser.add_argument("--skip-upload", action="store_true")
-    parser.add_argument("--wechat-comment-reply", action="store_true", help="仅执行视频号评论点赞与回复。")
-    parser.add_argument("--comment-max-posts", type=int, default=0, help="最近处理的有评论视频数量上限。")
-    parser.add_argument("--comment-max-replies", type=int, default=0, help="单次自动回复评论数量上限。")
-    parser.add_argument("--comment-test-latest", action="store_true", help="仅测试回复最新一条评论。")
-    parser.add_argument("--comment-debug", action="store_true", help="输出评论回复调试日志。")
+    parser.add_argument("--wechat-comment-reply", action="store_true", help="Run WeChat like/reply automation only.")
+    parser.add_argument("--comment-max-posts", type=int, default=0, help="Max recent posts to scan for comments.")
+    parser.add_argument("--comment-max-replies", type=int, default=0, help="Max auto replies per run.")
+    parser.add_argument("--comment-test-latest", action="store_true", help="Only test replying to latest comment.")
+    parser.add_argument("--comment-debug", action="store_true", help="Enable verbose comment-reply debug logs.")
     args = parser.parse_args()
     if not str(getattr(args, "proxy", "") or "").strip():
         args.proxy = _default_network_proxy()
@@ -23632,6 +23859,42 @@ def main() -> int:
                             auto_open_chrome=not args.no_auto_open_chrome,
                             chrome_path=chrome_path,
                             chrome_user_data_dir=chrome_user_data_dir,
+                            telegram_bot_token=notify_settings.telegram_bot_token,
+                            telegram_chat_id=notify_settings.telegram_chat_id,
+                            telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
+                            telegram_api_base=notify_settings.telegram_api_base,
+                            notify_env_prefix=notify_settings.env_prefix,
+                        )
+                    elif platform == "tiktok":
+                        used_target = fill_draft_tiktok(
+                            workspace,
+                            caption=(args.caption or "").strip() or None,
+                            target_video=target,
+                            debug_port=args.debug_port,
+                            save_draft=platform_save_draft,
+                            publish_now=platform_publish_now,
+                            upload_timeout=platform_upload_timeout,
+                            auto_open_chrome=not args.no_auto_open_chrome,
+                            chrome_path=chrome_path,
+                            chrome_user_data_dir=chrome_user_data_dir,
+                            telegram_bot_token=notify_settings.telegram_bot_token,
+                            telegram_chat_id=notify_settings.telegram_chat_id,
+                            telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
+                            telegram_api_base=notify_settings.telegram_api_base,
+                            notify_env_prefix=notify_settings.env_prefix,
+                        )
+                    elif platform == "x":
+                        used_target = fill_draft_x(
+                            workspace,
+                            caption=(args.caption or "").strip() or None,
+                            target_video=target,
+                            debug_port=x_debug_port,
+                            save_draft=platform_save_draft,
+                            publish_now=platform_publish_now,
+                            upload_timeout=platform_upload_timeout,
+                            auto_open_chrome=not args.no_auto_open_chrome,
+                            chrome_path=chrome_path,
+                            chrome_user_data_dir=x_chrome_user_data_dir,
                             telegram_bot_token=notify_settings.telegram_bot_token,
                             telegram_chat_id=notify_settings.telegram_chat_id,
                             telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
