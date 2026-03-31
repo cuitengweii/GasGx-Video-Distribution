@@ -69,6 +69,39 @@
       },
       "collect_limit": 10,
       "publish_limit": 3
+    },
+    "x_to_cn": {
+      "keyword": "Cybertruck",
+      "upload_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+      "source_platforms": "x",
+      "source_keywords": [
+        "cybertruck",
+        "赛博皮卡"
+      ],
+      "source_watch_accounts": {
+        "x": []
+      },
+      "source_latest_keywords_state_file": "runtime/source_keywords_latest_x_to_cn.json",
+      "prefer_latest_keywords": true,
+      "collect_limit": 10,
+      "publish_limit": 3
+    },
+    "cn_to_global": {
+      "keyword": "Cybertruck",
+      "upload_platforms": "tiktok,x",
+      "source_platforms": "douyin,xiaohongshu",
+      "source_keywords": [
+        "cybertruck",
+        "赛博皮卡"
+      ],
+      "source_watch_accounts": {
+        "douyin": [],
+        "xiaohongshu": []
+      },
+      "source_latest_keywords_state_file": "runtime/source_keywords_latest_cn_to_global.json",
+      "prefer_latest_keywords": true,
+      "collect_limit": 10,
+      "publish_limit": 3
     }
   }
 }

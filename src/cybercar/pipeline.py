@@ -2520,12 +2520,29 @@ def _resolve_source_keywords(args: argparse.Namespace, runtime_config: dict[str,
     return [default_keyword] if default_keyword else []
 
 
-def _latest_source_keyword_state_path(workspace: core.Workspace) -> Path:
-    return workspace.root / DEFAULT_LATEST_SOURCE_KEYWORD_STATE_FILE
+def _resolve_source_keyword_state_file(
+    args: argparse.Namespace,
+    runtime_config: dict[str, Any],
+) -> str:
+    raw_cli = str(getattr(args, "source_keyword_state_file", "") or "").strip()
+    if raw_cli:
+        return raw_cli
+    source_cfg = runtime_config.get("sources") if isinstance(runtime_config.get("sources"), dict) else {}
+    return str(source_cfg.get("latest_keywords_state_file", "") or "").strip()
 
 
-def _load_latest_source_keywords(workspace: core.Workspace) -> list[str]:
-    path = _latest_source_keyword_state_path(workspace)
+def _latest_source_keyword_state_path(workspace: core.Workspace, *, state_file: str = "") -> Path:
+    raw = str(state_file or "").strip()
+    if not raw:
+        return workspace.root / DEFAULT_LATEST_SOURCE_KEYWORD_STATE_FILE
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    return workspace.root / candidate
+
+
+def _load_latest_source_keywords(workspace: core.Workspace, *, state_file: str = "") -> list[str]:
+    path = _latest_source_keyword_state_path(workspace, state_file=state_file)
     if not path.exists():
         return []
     try:
@@ -2543,11 +2560,12 @@ def _save_latest_source_keywords(
     *,
     mode: str,
     source_platforms: list[str],
+    state_file: str = "",
 ) -> None:
     normalized = core._normalize_keyword_list(keywords, [])[:MAX_LATEST_SOURCE_KEYWORDS]
     if not normalized:
         return
-    path = _latest_source_keyword_state_path(workspace)
+    path = _latest_source_keyword_state_path(workspace, state_file=state_file)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2584,7 +2602,8 @@ def _resolve_effective_source_keywords(
 
     source_cfg = runtime_config.get("sources") if isinstance(runtime_config.get("sources"), dict) else {}
     configured = core._normalize_keyword_list(source_cfg.get("keywords"), [])
-    latest = _load_latest_source_keywords(workspace)
+    latest_state_file = _resolve_source_keyword_state_file(args, runtime_config)
+    latest = _load_latest_source_keywords(workspace, state_file=latest_state_file)
     prefer_latest = True
     if isinstance(source_cfg, dict) and "prefer_latest_keywords" in source_cfg:
         prefer_latest = bool(source_cfg.get("prefer_latest_keywords"))
@@ -2827,6 +2846,7 @@ def _run_collect_once(
     domestic_debug_port = max(1, int(getattr(args, "debug_port", getattr(core, "DEFAULT_PORT", 9333)) or 9333))
     x_debug_port = max(1, int(getattr(args, "x_debug_port", getattr(core, "DEFAULT_X_DEBUG_PORT", args.debug_port)) or args.debug_port))
     source_platforms = _resolve_source_platforms(args, runtime_config)
+    source_keyword_state_file = _resolve_source_keyword_state_file(args, runtime_config)
     source_keywords, source_keyword_mode = _resolve_effective_source_keywords(args, runtime_config, workspace)
     source_watch_urls = _resolve_source_watch_urls(source_platforms, runtime_config)
     source_urls = _load_source_urls(args)
@@ -2885,6 +2905,7 @@ def _run_collect_once(
             latest_source_keywords,
             mode=keyword_mode,
             source_platforms=domestic_keyword_platforms,
+            state_file=source_keyword_state_file,
         )
     x_collect_enabled = "x" in source_platforms
 

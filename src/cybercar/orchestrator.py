@@ -18,7 +18,7 @@ class ProfileMapping:
         self.keyword = str(payload.get("keyword") or "").strip()
         self.exclude_keywords = _normalize_list(payload.get("exclude_keywords"))
         self.require_any_keywords = _normalize_list(payload.get("require_any_keywords"))
-        upload_platforms = payload.get("target_platforms") or payload.get("upload_platforms")
+        upload_platforms = payload.get("upload_platforms") or payload.get("target_platforms")
         if isinstance(upload_platforms, list):
             self.upload_platforms = ",".join(_normalize_list(upload_platforms))
         else:
@@ -30,6 +30,8 @@ class ProfileMapping:
             self.source_platforms = str(source_platforms or "").strip()
         self.source_keywords = _normalize_list(payload.get("source_keywords"))
         self.source_watch_accounts = _normalize_watch_accounts(payload.get("source_watch_accounts"))
+        self.source_latest_keywords_state_file = str(payload.get("source_latest_keywords_state_file") or "").strip()
+        self.prefer_latest_keywords = _to_optional_bool(payload.get("prefer_latest_keywords"))
         self.collect_limit = _to_int(payload.get("collect_limit"), 0)
         self.publish_limit = _to_int(payload.get("publish_limit"), 0)
 
@@ -60,6 +62,17 @@ def _to_int(raw: Any, default: int) -> int:
     except Exception:
         return default
     return value if value > 0 else default
+
+
+def _to_optional_bool(raw: Any) -> bool | None:
+    if isinstance(raw, bool):
+        return raw
+    token = str(raw or "").strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return None
 
 
 def _normalize_watch_accounts(raw: Any) -> dict[str, list[str]]:
@@ -93,7 +106,13 @@ def _merge_runtime_config(base: dict[str, Any], profile: ProfileMapping) -> dict
         merged["exclude_keywords"] = profile.exclude_keywords
     if profile.require_any_keywords:
         merged["require_any_keywords"] = profile.require_any_keywords
-    if profile.source_platforms or profile.source_keywords or profile.source_watch_accounts:
+    if (
+        profile.source_platforms
+        or profile.source_keywords
+        or profile.source_watch_accounts
+        or profile.source_latest_keywords_state_file
+        or profile.prefer_latest_keywords is not None
+    ):
         sources = merged.get("sources") if isinstance(merged.get("sources"), dict) else {}
         merged_sources = dict(sources)
         if profile.source_platforms:
@@ -102,6 +121,10 @@ def _merge_runtime_config(base: dict[str, Any], profile: ProfileMapping) -> dict
             merged_sources["keywords"] = list(profile.source_keywords)
         if profile.source_watch_accounts:
             merged_sources["watch_accounts"] = dict(profile.source_watch_accounts)
+        if profile.source_latest_keywords_state_file:
+            merged_sources["latest_keywords_state_file"] = profile.source_latest_keywords_state_file
+        if profile.prefer_latest_keywords is not None:
+            merged_sources["prefer_latest_keywords"] = bool(profile.prefer_latest_keywords)
         merged["sources"] = merged_sources
     return merged
 

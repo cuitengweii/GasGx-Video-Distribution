@@ -398,6 +398,29 @@ def test_resolve_effective_source_keywords_can_disable_latest_preference(tmp_pat
     assert mode == "config"
 
 
+def test_resolve_effective_source_keywords_reads_custom_latest_state_file(tmp_path: Path) -> None:
+    workspace = SimpleNamespace(root=tmp_path)
+    latest_path = tmp_path / "runtime" / "source_keywords_latest_cn_to_global.json"
+    latest_path.parent.mkdir(parents=True, exist_ok=True)
+    latest_path.write_text(
+        json.dumps({"keywords": ["赛博皮卡", "cybertruck"]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(source_keywords="", keyword="Cybertruck")
+    runtime_config = {
+        "sources": {
+            "keywords": ["old-keyword"],
+            "prefer_latest_keywords": True,
+            "latest_keywords_state_file": "runtime/source_keywords_latest_cn_to_global.json",
+        }
+    }
+
+    resolved, mode = pipeline._resolve_effective_source_keywords(args, runtime_config, workspace)
+
+    assert resolved == ["赛博皮卡", "cybertruck"]
+    assert mode == "latest_state"
+
+
 def test_run_collect_once_persists_latest_keywords_from_domestic_search_urls(tmp_path: Path, monkeypatch) -> None:
     runtime_config = {
         "sources": {
@@ -431,6 +454,47 @@ def test_run_collect_once_persists_latest_keywords_from_domestic_search_urls(tmp
     latest_state_path = tmp_path / "runtime" / "source_keywords_latest.json"
     assert latest_state_path.exists()
     payload = json.loads(latest_state_path.read_text(encoding="utf-8"))
+    assert payload.get("mode") == "search_url"
+    assert payload.get("source_platforms") == ["douyin"]
+    assert payload.get("keywords") == ["cybertruck"]
+
+
+def test_run_collect_once_persists_latest_keywords_to_custom_state_file(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin",
+            "keywords": [],
+            "watch_accounts": {"douyin": []},
+            "prefer_latest_keywords": True,
+            "latest_keywords_state_file": "runtime/source_keywords_latest_cn_to_global.json",
+        },
+        "x_download": {},
+    }
+    _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    monkeypatch.setattr(pipeline.core, "_normalize_keyword_list", engine._normalize_keyword_list)
+    monkeypatch.setattr(pipeline.core, "discover_domestic_keyword_urls", lambda **kwargs: [])
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin",
+            "--source-url",
+            "https://www.douyin.com/search/cybertruck?type=video",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    custom_state_path = tmp_path / "runtime" / "source_keywords_latest_cn_to_global.json"
+    default_state_path = tmp_path / "runtime" / "source_keywords_latest.json"
+    assert custom_state_path.exists()
+    assert not default_state_path.exists()
+    payload = json.loads(custom_state_path.read_text(encoding="utf-8"))
     assert payload.get("mode") == "search_url"
     assert payload.get("source_platforms") == ["douyin"]
     assert payload.get("keywords") == ["cybertruck"]
