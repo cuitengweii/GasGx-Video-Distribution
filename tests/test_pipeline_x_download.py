@@ -193,6 +193,8 @@ def test_run_collect_once_collects_domestic_source_urls_when_configured(tmp_path
             str(tmp_path / "workspace"),
             "--limit",
             "1",
+            "--debug-port",
+            "9444",
             "--source-platforms",
             "douyin,xiaohongshu",
             "--source-url",
@@ -207,6 +209,9 @@ def test_run_collect_once_collects_domestic_source_urls_when_configured(tmp_path
     assert captured_x == []
     assert len(captured_domestic) == 2
     assert {item["source_platform"] for item in captured_domestic} == {"douyin", "xiaohongshu"}
+    assert all(item["debug_port"] == 9444 for item in captured_domestic)
+    include_images_by_platform = {str(item["source_platform"]): bool(item["include_images"]) for item in captured_domestic}
+    assert include_images_by_platform == {"douyin": False, "xiaohongshu": True}
 
 
 def test_run_collect_once_continues_when_one_domestic_source_platform_fails(tmp_path: Path, monkeypatch) -> None:
@@ -251,6 +256,241 @@ def test_run_collect_once_continues_when_one_domestic_source_platform_fails(tmp_
     assert captured_x == []
     assert len(captured_domestic) == 1
     assert captured_domestic[0]["source_platform"] == "xiaohongshu"
+
+
+def test_run_collect_once_discovers_domestic_post_urls_from_keywords(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin,xiaohongshu",
+            "keywords": ["cybertruck"],
+            "watch_accounts": {"douyin": [], "xiaohongshu": []},
+        },
+        "x_download": {},
+    }
+    captured_x = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    captured_domestic: list[dict[str, object]] = []
+
+    def fake_download_from_source_urls(*args, **kwargs):
+        captured_domestic.append(dict(kwargs))
+        return []
+
+    def fake_discover_domestic_keyword_urls(**kwargs):
+        platform = str(kwargs.get("platform") or "")
+        if platform == "douyin":
+            return ["https://www.douyin.com/video/1234567890"]
+        if platform == "xiaohongshu":
+            return ["https://www.xiaohongshu.com/explore/66aa77bb88cc99dd00ee11ff"]
+        return []
+
+    monkeypatch.setattr(pipeline.core, "download_from_source_urls", fake_download_from_source_urls)
+    monkeypatch.setattr(pipeline.core, "discover_domestic_keyword_urls", fake_discover_domestic_keyword_urls)
+    monkeypatch.setattr(
+        pipeline.core,
+        "_normalize_keyword_list",
+        lambda values, defaults: [token.strip() for token in str(values or "").split(",") if token.strip()],
+    )
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin,xiaohongshu",
+            "--source-keywords",
+            "cybertruck",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    assert captured_x == []
+    assert len(captured_domestic) == 2
+    mapped = {str(item.get("source_platform")): list(item.get("source_urls") or []) for item in captured_domestic}
+    assert mapped["douyin"] == ["https://www.douyin.com/video/1234567890"]
+    assert mapped["xiaohongshu"] == ["https://www.xiaohongshu.com/explore/66aa77bb88cc99dd00ee11ff"]
+
+
+def test_run_collect_once_extracts_keyword_from_douyin_search_url(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin",
+            "keywords": [],
+            "watch_accounts": {"douyin": []},
+        },
+        "x_download": {},
+    }
+    captured_x = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    captured_domestic: list[dict[str, object]] = []
+    discovered_keywords: list[str] = []
+
+    def fake_download_from_source_urls(*args, **kwargs):
+        captured_domestic.append(dict(kwargs))
+        return []
+
+    def fake_discover_domestic_keyword_urls(**kwargs):
+        discovered_keywords.append(str(kwargs.get("keyword") or ""))
+        return ["https://www.douyin.com/video/2222333344445555"]
+
+    monkeypatch.setattr(pipeline.core, "download_from_source_urls", fake_download_from_source_urls)
+    monkeypatch.setattr(pipeline.core, "discover_domestic_keyword_urls", fake_discover_domestic_keyword_urls)
+    monkeypatch.setattr(
+        pipeline.core,
+        "_normalize_keyword_list",
+        lambda values, defaults: [token.strip() for token in str(values or "").split(",") if token.strip()],
+    )
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin",
+            "--source-url",
+            "https://www.douyin.com/search/cybertruck?type=video",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    assert captured_x == []
+    assert discovered_keywords == ["cybertruck"]
+    assert len(captured_domestic) == 1
+    assert captured_domestic[0]["source_urls"] == ["https://www.douyin.com/video/2222333344445555"]
+
+
+def test_resolve_effective_source_keywords_prefers_latest_state(tmp_path: Path) -> None:
+    workspace = SimpleNamespace(root=tmp_path)
+    latest_path = tmp_path / "runtime" / "source_keywords_latest.json"
+    latest_path.parent.mkdir(parents=True, exist_ok=True)
+    latest_path.write_text(
+        json.dumps({"keywords": ["赛博皮卡", "Cybertruck"]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(source_keywords="", keyword="Cybertruck")
+    runtime_config = {"sources": {"keywords": ["old-keyword"], "prefer_latest_keywords": True}}
+
+    resolved, mode = pipeline._resolve_effective_source_keywords(args, runtime_config, workspace)
+
+    assert resolved == ["赛博皮卡", "Cybertruck"]
+    assert mode == "latest_state"
+
+
+def test_resolve_effective_source_keywords_can_disable_latest_preference(tmp_path: Path) -> None:
+    workspace = SimpleNamespace(root=tmp_path)
+    latest_path = tmp_path / "runtime" / "source_keywords_latest.json"
+    latest_path.parent.mkdir(parents=True, exist_ok=True)
+    latest_path.write_text(
+        json.dumps({"keywords": ["赛博皮卡", "Cybertruck"]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(source_keywords="", keyword="Cybertruck")
+    runtime_config = {"sources": {"keywords": ["china cybertruck"], "prefer_latest_keywords": False}}
+
+    resolved, mode = pipeline._resolve_effective_source_keywords(args, runtime_config, workspace)
+
+    assert resolved == ["china cybertruck"]
+    assert mode == "config"
+
+
+def test_run_collect_once_persists_latest_keywords_from_domestic_search_urls(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin",
+            "keywords": [],
+            "watch_accounts": {"douyin": []},
+            "prefer_latest_keywords": True,
+        },
+        "x_download": {},
+    }
+    _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    monkeypatch.setattr(pipeline.core, "_normalize_keyword_list", engine._normalize_keyword_list)
+    monkeypatch.setattr(pipeline.core, "discover_domestic_keyword_urls", lambda **kwargs: [])
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin",
+            "--source-url",
+            "https://www.douyin.com/search/cybertruck?type=video",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    latest_state_path = tmp_path / "runtime" / "source_keywords_latest.json"
+    assert latest_state_path.exists()
+    payload = json.loads(latest_state_path.read_text(encoding="utf-8"))
+    assert payload.get("mode") == "search_url"
+    assert payload.get("source_platforms") == ["douyin"]
+    assert payload.get("keywords") == ["cybertruck"]
+
+
+def test_run_collect_once_reuses_latest_keywords_in_followup_run(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin",
+            "keywords": [],
+            "watch_accounts": {"douyin": []},
+            "prefer_latest_keywords": True,
+        },
+        "x_download": {},
+    }
+    captured_x = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    discovered_keywords: list[str] = []
+    monkeypatch.setattr(pipeline.core, "_normalize_keyword_list", engine._normalize_keyword_list)
+    monkeypatch.setattr(pipeline.core, "download_from_source_urls", lambda *args, **kwargs: [])
+
+    def fake_discover_domestic_keyword_urls(**kwargs):
+        discovered_keywords.append(str(kwargs.get("keyword") or ""))
+        return []
+
+    monkeypatch.setattr(pipeline.core, "discover_domestic_keyword_urls", fake_discover_domestic_keyword_urls)
+    parser = pipeline._build_parser()
+
+    first_args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin",
+            "--source-url",
+            "https://www.douyin.com/search/cybertruck?type=video",
+        ]
+    )
+    pipeline._run_collect_once(first_args)
+
+    second_args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin",
+        ]
+    )
+    pipeline._run_collect_once(second_args)
+
+    assert captured_x == []
+    assert discovered_keywords == ["cybertruck", "cybertruck"]
+    assert discovered_keywords[-1] == "cybertruck"
+    latest_state_path = tmp_path / "runtime" / "source_keywords_latest.json"
+    payload = json.loads(latest_state_path.read_text(encoding="utf-8"))
+    assert payload.get("mode") == "search_url"
+    assert payload.get("keywords") == ["cybertruck"]
 
 
 def test_build_parser_uses_configured_proxy_defaults(monkeypatch) -> None:
@@ -608,3 +848,76 @@ def test_refresh_collect_candidate_ledger_normalizes_video_status_id_from_status
     assert "x:2034238391055949824:2034238391055949824" not in items
     assert items["x:2034238454293528593:2034238454293528593"]["processed_name"] == "DRAFT_2034238391055949824__Giggly_Georgy_in__Self_Driving.mp4"
     assert items["x:2034238454293528593:2034238454293528593"]["state"] == "processed"
+
+
+def test_decode_escaped_media_url_normalizes_backslash_escapes() -> None:
+    raw = r"https:\/\/sns-video-hw.xhscdn.com\/stream\/abc.mp4?token=1\u0026vid=2"
+    normalized = engine._decode_escaped_media_url(raw)
+    assert normalized == "https://sns-video-hw.xhscdn.com/stream/abc.mp4?token=1&vid=2"
+
+
+def test_extract_domestic_video_candidate_urls_accepts_escaped_payload_urls() -> None:
+    class FakePage:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def run_js(self, *_args, **_kwargs):
+            return list(self._payload)
+
+    douyin_page = FakePage(
+        [
+            r"https:\/\/v3-dy-o.zjcdn.com\/video\/tos\/cn\/sample.mp4?a=1",
+            r"https:\/\/www.douyin.com\/video\/1234567890123456789",
+        ]
+    )
+    xiaohongshu_page = FakePage(
+        [
+            r"https:\/\/sns-video-hw.xhscdn.com\/stream\/test.m3u8?auth=1",
+            r"https:\/\/www.xiaohongshu.com\/explore\/69c3ca0d0000000021039c46",
+        ]
+    )
+
+    douyin_urls = engine._extract_domestic_video_candidate_urls(douyin_page, "douyin")
+    xiaohongshu_urls = engine._extract_domestic_video_candidate_urls(xiaohongshu_page, "xiaohongshu")
+
+    assert douyin_urls == ["https://v3-dy-o.zjcdn.com/video/tos/cn/sample.mp4?a=1"]
+    assert xiaohongshu_urls == ["https://sns-video-hw.xhscdn.com/stream/test.m3u8?auth=1"]
+
+
+def test_download_domestic_browser_fallback_loads_profile_cookies_with_platform_keyword(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = _workspace(tmp_path)
+    cookie_calls: list[tuple[str, str]] = []
+
+    class FakePage:
+        def get(self, _url: str) -> None:
+            return None
+
+        def run_js(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(
+        engine,
+        "_load_source_platform_profile_cookie_jar",
+        lambda chrome_user_data_dir, *, platform: cookie_calls.append((str(chrome_user_data_dir), str(platform))) or (None, "skipped"),
+    )
+    monkeypatch.setattr(engine, "_build_network_opener", lambda **kwargs: SimpleNamespace(open=lambda *a, **k: None))
+    monkeypatch.setattr(engine, "_connect_chrome", lambda **kwargs: FakePage())
+    monkeypatch.setattr(engine, "_prepare_upload_tab", lambda page: page)
+    monkeypatch.setattr(engine, "_run_page_action", lambda page, desc, fn: fn())
+    monkeypatch.setattr(engine, "_extract_domestic_video_candidate_urls", lambda page, platform: [])
+    monkeypatch.setattr(engine, "_close_work_tab", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda message: None)
+
+    files = engine._download_domestic_videos_via_browser(
+        workspace,
+        source_urls=["https://www.douyin.com/video/1234567890123456789"],
+        source_platform="douyin",
+        limit=1,
+        chrome_user_data_dir=str(tmp_path / "profile_douyin"),
+    )
+
+    assert files == []
+    assert cookie_calls == [(str(tmp_path / "profile_douyin"), "douyin")]

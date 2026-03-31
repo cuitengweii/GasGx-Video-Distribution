@@ -403,6 +403,7 @@ DEFAULT_EXCLUDE_KEYWORDS = [
     "游戏广告",
 ]
 DEFAULT_REQUIRE_ANY_KEYWORDS = ["cybertruck", "tesla", "赛博皮卡", "特斯拉"]
+X_NON_PREMIUM_POST_CHAR_LIMIT = 280
 
 
 PROXY_ENV_KEYS = (
@@ -8241,6 +8242,166 @@ def _next_x_discovery_scroll_wait_seconds(scroll_wait_seconds: float) -> float:
     return random.uniform(X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS, upper_bound)
 
 
+def _normalize_douyin_video_url(raw_url: str) -> str:
+    value = html.unescape(str(raw_url or "").strip())
+    if not value:
+        return ""
+    if value.startswith("//"):
+        value = f"https:{value}"
+    elif value.startswith("/"):
+        value = f"https://www.douyin.com{value}"
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    host = str(parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if "douyin.com" not in host:
+        return ""
+    match = re.search(r"/video/(\d{8,24})", str(parsed.path or ""))
+    if not match:
+        return ""
+    video_id = match.group(1)
+    return f"https://www.douyin.com/video/{video_id}"
+
+
+def _normalize_xiaohongshu_note_url(raw_url: str) -> str:
+    value = html.unescape(str(raw_url or "").strip())
+    if not value:
+        return ""
+    if value.startswith("//"):
+        value = f"https:{value}"
+    elif value.startswith("/"):
+        value = f"https://www.xiaohongshu.com{value}"
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    host = str(parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if ("xiaohongshu.com" not in host) and ("rednote.com" not in host):
+        return ""
+    path = str(parsed.path or "")
+    explore = re.search(r"/explore/([0-9a-zA-Z]{8,40})", path)
+    if explore:
+        return f"https://www.xiaohongshu.com/explore/{explore.group(1)}"
+    discovery = re.search(r"/discovery/item/([0-9a-zA-Z]{8,40})", path)
+    if discovery:
+        return f"https://www.xiaohongshu.com/discovery/item/{discovery.group(1)}"
+    return ""
+
+
+def _extract_raw_domestic_search_urls(page: ChromiumPage, platform: str) -> list[str]:
+    js = r"""
+    const platform = String(arguments[0] || '').toLowerCase();
+    const out = [];
+    const push = (value) => {
+      const text = String(value || '').trim();
+      if (!text) return;
+      out.push(text);
+    };
+    for (const anchor of Array.from(document.querySelectorAll('a[href]'))) {
+      push(anchor.href || anchor.getAttribute('href') || '');
+    }
+    const htmlText = String(document.documentElement?.innerHTML || '');
+    if (platform === 'douyin') {
+      const reg = /\/video\/(\d{8,24})/g;
+      let m;
+      while ((m = reg.exec(htmlText)) !== null) {
+        push('/video/' + String(m[1] || ''));
+      }
+    } else if (platform === 'xiaohongshu') {
+      const regExplore = /\/explore\/([0-9a-zA-Z]{8,40})/g;
+      const regDiscovery = /\/discovery\/item\/([0-9a-zA-Z]{8,40})/g;
+      let m1;
+      while ((m1 = regExplore.exec(htmlText)) !== null) {
+        push('/explore/' + String(m1[1] || ''));
+      }
+      let m2;
+      while ((m2 = regDiscovery.exec(htmlText)) !== null) {
+        push('/discovery/item/' + String(m2[1] || ''));
+      }
+    }
+    return Array.from(new Set(out));
+    """
+    try:
+        payload = page.run_js(js, platform)
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item or "").strip() for item in payload if str(item or "").strip()]
+
+
+def discover_domestic_keyword_urls(
+    platform: str,
+    keyword: str,
+    *,
+    url_limit: int,
+    scroll_rounds: int,
+    scroll_wait_seconds: float,
+    debug_port: int,
+    auto_open_chrome: bool,
+    chrome_path: Optional[str],
+    chrome_user_data_dir: str,
+) -> list[str]:
+    token = str(platform or "").strip().lower()
+    keyword_text = str(keyword or "").strip()
+    if token not in {"douyin", "xiaohongshu"} or not keyword_text:
+        return []
+    if token == "douyin":
+        search_url = f"https://www.douyin.com/search/{quote_plus(keyword_text)}?type=video"
+        normalizer = _normalize_douyin_video_url
+    else:
+        search_url = f"https://www.xiaohongshu.com/search_result?keyword={quote_plus(keyword_text)}"
+        normalizer = _normalize_xiaohongshu_note_url
+
+    page = _connect_chrome(
+        debug_port=debug_port,
+        auto_open_chrome=auto_open_chrome,
+        chrome_path=chrome_path,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=search_url,
+    )
+    work_page = _prepare_upload_tab(page)
+    try:
+        _run_page_action(work_page, f"open {token} search", lambda: work_page.get(search_url))
+        time.sleep(1.2)
+        collected: list[str] = []
+        seen: set[str] = set()
+        max_rounds = max(2, int(scroll_rounds))
+        wait_seconds = max(0.3, float(scroll_wait_seconds))
+        limit = max(1, int(url_limit))
+        for _ in range(max_rounds):
+            raw_urls = _extract_raw_domestic_search_urls(work_page, token)
+            for raw_url in raw_urls:
+                normalized = normalizer(raw_url)
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                collected.append(normalized)
+                if len(collected) >= limit:
+                    _log(
+                        f"[Downloader:{token}] Keyword discovery done: keyword={keyword_text}, "
+                        f"search_url={search_url}, discovered={len(collected)}"
+                    )
+                    return collected[:limit]
+            try:
+                work_page.run_js("window.scrollBy(0, Math.max(window.innerHeight, 1100));")
+            except Exception:
+                pass
+            time.sleep(_next_x_discovery_scroll_wait_seconds(wait_seconds))
+        _log(
+            f"[Downloader:{token}] Keyword discovery done: keyword={keyword_text}, "
+            f"search_url={search_url}, discovered={len(collected)}"
+        )
+        return collected[:limit]
+    finally:
+        _close_work_tab(work_page, page, reason=f"{token}-keyword-discovery")
+
+
 def discover_x_media_candidates(
     keyword: str,
     url_limit: int,
@@ -8788,6 +8949,108 @@ def _export_x_cookies_for_ytdlp(
     finally:
         tmp.close()
     _log(f"[Downloader] Exported X cookies for yt-dlp: {tmp.name}")
+    return Path(tmp.name), "exported"
+
+
+def _resolve_source_platform_cookie_domains(platform: str) -> tuple[str, ...]:
+    token = str(platform or "").strip().lower()
+    if token == "douyin":
+        return ("douyin.com", "iesdouyin.com")
+    if token == "xiaohongshu":
+        return ("xiaohongshu.com", "rednote.com")
+    return ()
+
+
+def _load_source_platform_profile_cookie_jar(
+    chrome_user_data_dir: str,
+    *,
+    platform: str,
+) -> tuple[Optional[requests.cookies.RequestsCookieJar], str]:
+    domains = _resolve_source_platform_cookie_domains(platform)
+    if not domains:
+        return None, "skipped-unsupported-platform"
+    if browser_cookie3 is None:
+        _log(f"[Downloader:{platform}] Cookie profile load skipped: browser_cookie3 is not available.")
+        return None, "skipped-no-lib"
+
+    profile_dir = Path(chrome_user_data_dir).expanduser()
+    cookie_file = profile_dir / "Default" / "Network" / "Cookies"
+    key_file = profile_dir / "Local State"
+    if not cookie_file.exists() or not key_file.exists():
+        _log(
+            f"[Downloader:{platform}] Cookie profile load skipped: cookie files not found "
+            f"(cookie={cookie_file}, key={key_file})."
+        )
+        return None, "skipped-no-files"
+
+    merged = requests.cookies.RequestsCookieJar()
+    loaded_any = False
+    for domain in domains:
+        try:
+            cookie_jar = browser_cookie3.chrome(
+                cookie_file=str(cookie_file),
+                key_file=str(key_file),
+                domain_name=domain,
+            )
+        except Exception as exc:
+            _log(f"[Downloader:{platform}] Cookie load failed for domain={domain}: {exc}")
+            continue
+        for cookie in cookie_jar:
+            merged.set_cookie(cookie)
+            loaded_any = True
+    if not loaded_any:
+        return None, "skipped-empty"
+    return merged, "loaded-profile"
+
+
+def _export_source_platform_cookies_for_ytdlp(
+    platform: str,
+    chrome_user_data_dir: str,
+) -> tuple[Optional[Path], str]:
+    domains = _resolve_source_platform_cookie_domains(platform)
+    if not domains:
+        return None, "skipped-unsupported-platform"
+    cookie_jar, cookie_source_status = _load_source_platform_profile_cookie_jar(
+        chrome_user_data_dir,
+        platform=platform,
+    )
+    if cookie_jar is None:
+        return None, cookie_source_status
+
+    cookies = [
+        cookie
+        for cookie in cookie_jar
+        if str(getattr(cookie, "value", "") or "").strip()
+        and str(getattr(cookie, "domain", "") or "").strip()
+    ]
+    if not cookies:
+        return None, "skipped-empty"
+
+    token = re.sub(r"[^a-z0-9_]+", "_", str(platform or "").strip().lower()) or "source"
+    tmp = tempfile.NamedTemporaryFile(
+        prefix=f"cybercar-{token}-cookies-",
+        suffix=".txt",
+        delete=False,
+        mode="w",
+        encoding="utf-8",
+    )
+    try:
+        tmp.write("# Netscape HTTP Cookie File\n")
+        for cookie in cookies:
+            domain = str(cookie.domain or "").strip()
+            include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
+            path = str(cookie.path or "/").strip() or "/"
+            secure = "TRUE" if bool(getattr(cookie, "secure", False)) else "FALSE"
+            expires = str(int(getattr(cookie, "expires", 0) or 0))
+            name = str(cookie.name or "").strip()
+            value = str(cookie.value or "")
+            tmp.write("\t".join([domain, include_subdomains, path, secure, expires, name, value]) + "\n")
+    finally:
+        tmp.close()
+    _log(
+        f"[Downloader:{platform}] Exported cookies for yt-dlp: {tmp.name} "
+        f"(status={cookie_source_status})"
+    )
     return Path(tmp.name), "exported"
 
 
@@ -10315,6 +10578,12 @@ def _rebuild_caption_with_hashtags(text: str, hashtags: list[str]) -> str:
 
 def _prepare_caption_for_platform(caption: str, platform_name: str) -> str:
     text = _ensure_required_hashtags(caption)
+    if platform_name == "x":
+        # X basic accounts use the standard 280-char limit.
+        safe_limit = X_NON_PREMIUM_POST_CHAR_LIMIT
+        if len(text) > safe_limit:
+            return text[:safe_limit].rstrip()
+        return text
     if platform_name != "kuaishou":
         return text
 
@@ -10350,6 +10619,248 @@ def _archive_with_sidecar(src: Path, workspace: Workspace, auto_delete_source_fi
         shutil.move(str(file_path), str(dst))
 
 
+def _decode_escaped_media_url(raw_url: str) -> str:
+    value = html.unescape(str(raw_url or "").strip().strip("\"'"))
+    if not value:
+        return ""
+    value = value.replace("\\/", "/")
+    value = re.sub(r"\\u002[fF]", "/", value)
+    value = re.sub(r"\\u003[dD]", "=", value)
+    value = re.sub(r"\\u0026", "&", value, flags=re.IGNORECASE)
+    value = re.sub(r"\\x2[fF]", "/", value)
+    value = re.sub(r"\\x3[dD]", "=", value)
+    value = re.sub(r"\\x26", "&", value, flags=re.IGNORECASE)
+    if value.startswith("//"):
+        value = f"https:{value}"
+    if not value.startswith(("http://", "https://")):
+        return ""
+    return value
+
+
+def _extract_domestic_video_candidate_urls(page: ChromiumPage, platform: str) -> list[str]:
+    token = str(platform or "").strip().lower()
+    if token not in {"douyin", "xiaohongshu"}:
+        return []
+    js = r"""
+    const platform = String(arguments[0] || '').toLowerCase();
+    const out = [];
+    const push = (value) => {
+      const text = String(value || '').trim();
+      if (!text) return;
+      out.push(text);
+    };
+    for (const node of Array.from(document.querySelectorAll('video, video source'))) {
+      push(node.currentSrc || node.src || '');
+    }
+    const htmlText = String(document.documentElement?.innerHTML || '');
+    const reg = /https?:[^"'\\\s]+/g;
+    let m;
+    while ((m = reg.exec(htmlText)) !== null) {
+      const url = String(m[0] || '');
+      if (platform === 'douyin') {
+        if (/douyinvod\.com|tos-cn-ve-|video\/tos|aweme\/v\d+/i.test(url)) push(url);
+      } else if (platform === 'xiaohongshu') {
+        if (/(xhscdn\.com|xiaohongshu\.com|rednote\.com|sns-video)/i.test(url) && /(mp4|m3u8|video|stream)/i.test(url)) {
+          push(url);
+        }
+      }
+    }
+    return Array.from(new Set(out));
+    """
+    try:
+        payload = page.run_js(js, token)
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    urls: list[str] = []
+    for item in payload:
+        value = _decode_escaped_media_url(str(item or ""))
+        if not value:
+            continue
+        try:
+            parsed = urlparse(value)
+            host = str(parsed.netloc or "").lower()
+        except Exception:
+            continue
+        if token == "douyin":
+            if not ("douyinvod.com" in host or "tos-cn-ve" in host or "/video/tos" in value):
+                continue
+        else:
+            if not any(domain in host for domain in ("xhscdn.com", "xiaohongshu.com", "rednote.com", "sns-video")):
+                continue
+            if not re.search(r"(mp4|m3u8|/video/|/stream)", value, flags=re.IGNORECASE):
+                continue
+        urls.append(value)
+    return _dedupe_urls(urls)
+
+
+def _build_cookie_header_for_media_url(
+    cookie_jar: Optional[requests.cookies.RequestsCookieJar],
+    media_url: str,
+) -> str:
+    if cookie_jar is None:
+        return ""
+    try:
+        parsed = urlparse(str(media_url or "").strip())
+    except Exception:
+        return ""
+    host = str(parsed.hostname or "").strip().lower()
+    path = str(parsed.path or "/").strip() or "/"
+    if not host:
+        return ""
+    cookie_pairs: list[str] = []
+    seen_names: set[str] = set()
+    for cookie in cookie_jar:
+        name = str(getattr(cookie, "name", "") or "").strip()
+        value = str(getattr(cookie, "value", "") or "")
+        domain = str(getattr(cookie, "domain", "") or "").strip().lower().lstrip(".")
+        cookie_path = str(getattr(cookie, "path", "") or "/").strip() or "/"
+        if not name or not value or not domain:
+            continue
+        if host != domain and not host.endswith(f".{domain}"):
+            continue
+        if cookie_path != "/" and not path.startswith(cookie_path):
+            continue
+        lowered_name = name.lower()
+        if lowered_name in seen_names:
+            continue
+        seen_names.add(lowered_name)
+        cookie_pairs.append(f"{name}={value}")
+    return "; ".join(cookie_pairs)
+
+
+def _download_domestic_videos_via_browser(
+    workspace: Workspace,
+    *,
+    source_urls: list[str],
+    source_platform: str,
+    limit: int,
+    proxy: Optional[str] = None,
+    use_system_proxy: bool = False,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    debug_port: int = DEFAULT_PORT,
+) -> list[Path]:
+    token = str(source_platform or "").strip().lower()
+    if token not in {"douyin", "xiaohongshu"}:
+        return []
+    target = max(0, int(limit))
+    if target <= 0:
+        return []
+    normalized_urls = _dedupe_urls(source_urls)
+    if not normalized_urls:
+        return []
+
+    history_path = _workspace_history_file(workspace, "video")
+    history_keys = _load_line_history(history_path)
+    history_appends: list[str] = []
+    downloaded: list[Path] = []
+    opener = _build_network_opener(proxy=proxy, use_system_proxy=use_system_proxy)
+    profile_cookie_jar, _ = _load_source_platform_profile_cookie_jar(
+        chrome_user_data_dir,
+        platform=token,
+    )
+
+    page = _connect_chrome(
+        debug_port=max(1, int(debug_port)),
+        auto_open_chrome=True,
+        chrome_path=None,
+        chrome_user_data_dir=chrome_user_data_dir,
+        startup_url=normalized_urls[0],
+    )
+    work_page = _prepare_upload_tab(page)
+    try:
+        for source_url in normalized_urls:
+            if len(downloaded) >= target:
+                break
+            try:
+                _run_page_action(work_page, f"open {token} post", lambda: work_page.get(source_url))
+            except Exception:
+                continue
+            time.sleep(1.8)
+            try:
+                work_page.run_js("window.scrollBy(0, Math.max(window.innerHeight, 900));")
+            except Exception:
+                pass
+            time.sleep(0.9)
+
+            candidate_urls = _extract_domestic_video_candidate_urls(work_page, token)
+            if not candidate_urls:
+                _log(f"[Downloader:{token}] Browser fallback found no playable media: {source_url}")
+                continue
+            _log(f"[Downloader:{token}] Browser fallback candidates: source={source_url}, urls={len(candidate_urls)}")
+
+            try:
+                title_text = str(work_page.run_js("return String(document.title || '')")).strip()
+            except Exception:
+                title_text = ""
+            if not title_text:
+                title_text = f"{token}_video"
+
+            for media_url in candidate_urls:
+                if len(downloaded) >= target:
+                    break
+                key_seed = media_url.split("?", 1)[0].strip() or media_url
+                key = f"{token}:{hashlib.sha1(key_seed.encode('utf-8', errors='ignore')).hexdigest()[:20]}"
+                if key in history_keys:
+                    continue
+                file_token = _safe_filename_token(title_text, limit=70) or "video"
+                stem = f"{token}_{hashlib.sha1(source_url.encode('utf-8', errors='ignore')).hexdigest()[:12]}__{file_token}"
+                dst = _workspace_download_dir(workspace, "video") / f"{stem}.mp4"
+                seq = 2
+                while dst.exists():
+                    dst = _workspace_download_dir(workspace, "video") / f"{stem}_{seq}.mp4"
+                    seq += 1
+
+                headers = {
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "*/*",
+                    "Referer": source_url,
+                }
+                cookie_header = _build_cookie_header_for_media_url(profile_cookie_jar, media_url)
+                if cookie_header:
+                    headers["Cookie"] = cookie_header
+                req = Request(media_url, headers=headers)
+                try:
+                    with opener.open(req, timeout=30) as resp:
+                        payload_bytes = resp.read()
+                except Exception:
+                    continue
+                if len(payload_bytes) < 1024:
+                    continue
+
+                dst.write_bytes(payload_bytes)
+                info_payload = {
+                    "id": hashlib.sha1(source_url.encode("utf-8", errors="ignore")).hexdigest()[:16],
+                    "title": title_text[:240],
+                    "fulltitle": title_text[:280],
+                    "description": title_text[:1200],
+                    "uploader": token,
+                    "uploader_id": token,
+                    "webpage_url": source_url,
+                    "original_url": source_url,
+                    "extractor": f"{token}-browser-fallback",
+                    "duration": 0,
+                }
+                _sidecar_info_path(dst).write_text(
+                    json.dumps(info_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                history_keys.add(key)
+                history_appends.append(key)
+                downloaded.append(dst)
+
+        if history_appends:
+            _append_line_history(history_path, history_appends)
+        if downloaded:
+            _log(f"[Downloader:{token}] Browser fallback downloaded: {len(downloaded)}")
+            for item in downloaded:
+                _log(f"  - {item.name}")
+        return downloaded
+    finally:
+        _close_work_tab(work_page, page, reason=f"{token}-browser-download-fallback")
+
+
 def download_from_source_urls(
     workspace: Workspace,
     source_urls: Optional[list[str]] = None,
@@ -10359,6 +10870,8 @@ def download_from_source_urls(
     include_images: bool = False,
     proxy: Optional[str] = None,
     use_system_proxy: bool = False,
+    chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
+    debug_port: int = DEFAULT_PORT,
 ) -> list[Path]:
     platform = str(source_platform or "").strip().lower() or "generic"
     urls = _dedupe_urls(source_urls or [])
@@ -10396,21 +10909,50 @@ def download_from_source_urls(
     ]
     if not include_images:
         cmd += ["--match-filter", "duration > 5"]
-    if effective_proxy:
-        cmd += ["--proxy", effective_proxy]
-    cmd += urls
+    cookie_export_path: Optional[Path] = None
+    cookie_export_status = "skipped"
+    try:
+        if platform in {"douyin", "xiaohongshu"}:
+            cookie_export_path, cookie_export_status = _export_source_platform_cookies_for_ytdlp(
+                platform=platform,
+                chrome_user_data_dir=chrome_user_data_dir,
+            )
+            if cookie_export_path is not None:
+                cmd += ["--cookies", str(cookie_export_path)]
+        _log(f"[Downloader:{platform}] cookie_export_status={cookie_export_status}")
 
-    command_env = _build_subprocess_network_env(
-        proxy=effective_proxy,
-        use_system_proxy=effective_use_system_proxy,
-    )
-    result = _run_command_result(cmd, step_name=f"Downloader:{platform}", env=command_env)
-    if result.returncode != 0 and str(result.stderr or "").strip():
-        _console_print(str(result.stderr).strip())
+        if effective_proxy:
+            cmd += ["--proxy", effective_proxy]
+        cmd += urls
+
+        command_env = _build_subprocess_network_env(
+            proxy=effective_proxy,
+            use_system_proxy=effective_use_system_proxy,
+        )
+        result = _run_command_result(cmd, step_name=f"Downloader:{platform}", env=command_env)
+        if result.returncode != 0 and str(result.stderr or "").strip():
+            _console_print(str(result.stderr).strip())
+    finally:
+        if cookie_export_path is not None:
+            with contextlib.suppress(Exception):
+                cookie_export_path.unlink()
 
     after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
     new_files = sorted(Path(p) for p in (after - before))
     media_files = [p for p in new_files if (_is_image_file(p) if include_images else _is_video_file(p))]
+    if platform in {"douyin", "xiaohongshu"} and not media_files:
+        fallback_files = _download_domestic_videos_via_browser(
+            workspace,
+            source_urls=urls,
+            source_platform=platform,
+            limit=max(1, int(limit)),
+            proxy=effective_proxy,
+            use_system_proxy=effective_use_system_proxy,
+            chrome_user_data_dir=chrome_user_data_dir,
+            debug_port=debug_port,
+        )
+        if fallback_files:
+            media_files.extend(fallback_files)
     if result.returncode != 0 and not media_files:
         raise RuntimeError(f"{platform} source URL batch download failed with exit code {result.returncode}")
 
@@ -12707,7 +13249,8 @@ def _is_visible_element(ele: Any) -> bool:
 
 
 def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) -> Any:
-    # 瑙嗛鍙峰彂甯冮〉鍐呭鍦?iframe 涓紝杩欓噷甯﹂噸璇曢攣瀹氬彲鐢?iframe锛岄伩鍏嶅懡涓《灞傞殣钘忔帶浠躲€?    end_at = time.time() + max(1, timeout_seconds)
+    # 视频号发布页内容在 iframe 中，重试锁定可用 iframe，避免命中顶层隐藏控件。
+    end_at = time.time() + max(1, timeout_seconds)
     last_frames: list[Any] = []
 
     while time.time() < end_at:
@@ -13597,6 +14140,139 @@ def _detect_bilibili_publish_via_network(ctx: Any) -> tuple[bool, str]:
             return True, f"network success marker: status={status}, url={url}"
         if status >= 200 and status < 300 and "archive" in signal:
             return True, f"archive publish request succeeded: status={status}, url={url}"
+    return False, ""
+
+
+def _reset_x_publish_probe(ctx: Any) -> None:
+    js = """
+    (() => {
+      const key = '__cybercarXPublishProbe';
+      const state = window[key] || (window[key] = {events: []});
+      function record(evt) {
+        try {
+          state.events.push(Object.assign({ts: Date.now()}, evt || {}));
+          if (state.events.length > 120) state.events = state.events.slice(-120);
+        } catch (e) {}
+      }
+      if (!state.fetchPatched && typeof window.fetch === 'function') {
+        const origFetch = window.fetch.bind(window);
+        window.fetch = async function(input, init) {
+          const method = String((init && init.method) || (input && input.method) || 'GET');
+          const url = String(typeof input === 'string' ? input : ((input && input.url) || ''));
+          try {
+            const resp = await origFetch(input, init);
+            let body = '';
+            try { body = await resp.clone().text(); } catch (e) {}
+            record({api: 'fetch', method, url, status: Number(resp.status) || 0, ok: !!resp.ok, body: String(body || '').slice(0, 1800)});
+            return resp;
+          } catch (err) {
+            record({api: 'fetch', method, url, status: 0, ok: false, error: String(err || '')});
+            throw err;
+          }
+        };
+        state.fetchPatched = true;
+      }
+      if (!state.xhrPatched && window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+        const proto = window.XMLHttpRequest.prototype;
+        const origOpen = proto.open;
+        const origSend = proto.send;
+        proto.open = function(method, url) {
+          this.__cybercarMethod = String(method || 'GET');
+          this.__cybercarUrl = String(url || '');
+          return origOpen.apply(this, arguments);
+        };
+        proto.send = function() {
+          const xhr = this;
+          const onDone = function() {
+            let body = '';
+            try { body = xhr.responseText || ''; } catch (e) {}
+            record({
+              api: 'xhr',
+              method: String(xhr.__cybercarMethod || 'GET'),
+              url: String(xhr.__cybercarUrl || ''),
+              status: Number(xhr.status) || 0,
+              ok: xhr.status >= 200 && xhr.status < 300,
+              body: String(body || '').slice(0, 1800),
+            });
+          };
+          try { xhr.addEventListener('loadend', onDone, {once: true}); } catch (e) { xhr.addEventListener('loadend', onDone); }
+          return origSend.apply(this, arguments);
+        };
+        state.xhrPatched = true;
+      }
+      state.events = [];
+      state.lastResetAt = Date.now();
+      return true;
+    })();
+    """
+    try:
+        ctx.run_js(js)
+    except Exception:
+        pass
+
+
+def _read_x_publish_probe(ctx: Any) -> list[dict[str, Any]]:
+    js = """
+    (() => {
+      const state = window.__cybercarXPublishProbe;
+      if (!state) return [];
+      const events = Array.isArray(state.events) ? state.events.slice(-60) : [];
+      return events.map(evt => ({
+        api: String((evt && evt.api) || ''),
+        method: String((evt && evt.method) || ''),
+        url: String((evt && evt.url) || ''),
+        status: Number((evt && evt.status) || 0),
+        ok: !!(evt && evt.ok),
+        body: String((evt && evt.body) || ''),
+        error: String((evt && evt.error) || ''),
+        ts: Number((evt && evt.ts) || 0),
+      }));
+    })();
+    """
+    try:
+        payload = ctx.run_js(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            out.append(item)
+    return out
+
+
+def _detect_x_publish_via_network(ctx: Any) -> tuple[bool, str]:
+    events = _read_x_publish_probe(ctx)
+    if not events:
+        return False, ""
+    failure_body_markers = (
+        '"errors":',
+        '"error":',
+        '"failed"',
+        '"forbidden"',
+        '"unauthorized"',
+        '"rate limit"',
+    )
+    success_body_markers = (
+        '"create_tweet"',
+        '"rest_id"',
+        '"tweet_results"',
+    )
+    for item in reversed(events):
+        method = str(item.get("method", "") or "").upper()
+        url = str(item.get("url", "") or "")
+        body = str(item.get("body", "") or "")
+        status = int(item.get("status", 0) or 0)
+        signal = f"{url}\n{body}".lower()
+        if method not in {"POST", "PUT"}:
+            continue
+        if not any(token in signal for token in ("createtweet", "tweetcreate", "create_tweet")):
+            continue
+        if any(marker in signal for marker in failure_body_markers):
+            return False, f"network failure marker: status={status}, url={url}"
+        if status >= 200 and status < 300 and any(marker in signal for marker in success_body_markers):
+            return True, f"network success marker: status={status}, url={url}"
     return False, ""
 
 
@@ -15021,6 +15697,10 @@ def _is_same_tab(a: Any, b: Any) -> bool:
 def _close_work_tab(work_page: Any, root_page: ChromiumPage, reason: str) -> None:
     if not work_page or _is_same_tab(work_page, root_page):
         return
+    keep_tabs = str(os.getenv("CYBERCAR_KEEP_WORK_TABS", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if keep_tabs:
+        _log(f"[Uploader] Keep work tab open by CYBERCAR_KEEP_WORK_TABS ({reason}).")
+        return
     try:
         work_page.set.auto_handle_alert(on_off=True, accept=True)
     except Exception:
@@ -15053,6 +15733,29 @@ def _prepare_upload_tab(page: ChromiumPage, auto_accept_alert: bool = True) -> C
         except Exception:
             pass
         return page
+
+
+def _prepare_x_upload_tab(page: ChromiumPage) -> ChromiumPage:
+    compose_tabs: list[Any] = []
+    for tab in _browser_tabs(page):
+        if not tab:
+            continue
+        try:
+            url = _platform_tab_url(tab)
+        except Exception:
+            url = ""
+        if "x.com/compose/post" not in str(url or "").lower():
+            continue
+        compose_tabs.append(tab)
+    for tab in compose_tabs:
+        state = _read_x_publish_composer_state(tab, page)
+        if bool(state.get("button_found")) and (not bool(state.get("button_disabled"))):
+            _log("[Uploader:x] Reusing existing compose tab with ready publish button.")
+            return tab
+    if compose_tabs:
+        _log("[Uploader:x] Reusing existing compose tab.")
+        return compose_tabs[0]
+    return _prepare_upload_tab(page)
 
 
 def _find_upload_file_input(primary_ctx: Any, fallback_ctx: Any) -> Any:
@@ -18194,6 +18897,166 @@ def _caption_marker_exists(text: str, marker: str) -> bool:
     return len(normalized) >= 8
 
 
+def _collapse_repeated_caption_blocks(text: str) -> str:
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    blocks = [part.strip() for part in re.split(r"\n{2,}", raw) if str(part or "").strip()]
+    if len(blocks) >= 2 and len(set(blocks)) == 1:
+        return blocks[0]
+    lines = [line.strip() for line in raw.split("\n") if line.strip()]
+    if len(lines) >= 2 and len(set(lines)) == 1:
+        return lines[0]
+    merged = re.sub(r"\s+", " ", raw).strip()
+    for repeat in range(2, 6):
+        token_count = len(merged.split(" "))
+        if token_count % repeat != 0:
+            continue
+        seg_len = token_count // repeat
+        if seg_len <= 0:
+            continue
+        words = merged.split(" ")
+        segment = " ".join(words[:seg_len]).strip()
+        if not segment:
+            continue
+        if " ".join([segment] * repeat) == merged:
+            return segment
+    return raw
+
+
+def _force_tiktok_caption(primary_ctx: Any, fallback_ctx: Any, caption: str) -> bool:
+    prepared = _collapse_repeated_caption_blocks(str(caption or "").strip())
+    target = _prepare_caption_for_platform(prepared, platform_name="tiktok").strip() or "Cybertruck"
+    verify_marker = _caption_verification_marker(target)
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function readText(node) {
+      if (!node) return '';
+      return node.isContentEditable
+        ? norm(node.innerText || node.textContent || '')
+        : norm(node.value || node.textContent || '');
+    }
+    function scoreNode(node) {
+      const attrs = [
+        node.getAttribute('placeholder') || '',
+        node.getAttribute('data-placeholder') || '',
+        node.getAttribute('aria-label') || '',
+        node.getAttribute('data-e2e') || '',
+        String(node.className || ''),
+      ].join(' ').toLowerCase();
+      let score = 0;
+      if (/caption|description|describe/.test(attrs)) score += 20;
+      if (/post text|describe your post/.test(attrs)) score += 15;
+      if (/reply|comment|search|location|topic|tag/.test(attrs)) score -= 24;
+      if (String(node.tagName || '').toLowerCase() === 'textarea') score += 5;
+      if (node.isContentEditable) score += 3;
+      return score;
+    }
+    function fireInput(node, value) {
+      try {
+        node.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: value }));
+      } catch (e) {
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+      node.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ' ' }));
+      node.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+    function setText(node, value) {
+      if (!node) return '';
+      try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+      try { node.focus(); } catch (e) {}
+      if (node.isContentEditable) {
+        try {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          document.execCommand('delete', false, null);
+        } catch (e) {}
+        let inserted = false;
+        try { inserted = document.execCommand('insertText', false, value); } catch (e) {}
+        if (!inserted) {
+          node.innerHTML = '';
+          node.textContent = value;
+        }
+      } else if (typeof node.value === 'string') {
+        const proto = node.tagName && node.tagName.toLowerCase() === 'textarea'
+          ? window.HTMLTextAreaElement.prototype
+          : window.HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (setter && setter.set) setter.set.call(node, value);
+        else node.value = value;
+      }
+      fireInput(node, value);
+      return readText(node);
+    }
+    function hasRepeat(text, target) {
+      const cur = norm(text);
+      const tar = norm(target);
+      if (!cur || !tar) return false;
+      if (cur.length < tar.length * 2) return false;
+      const count = cur.split(tar).length - 1;
+      return count >= 2;
+    }
+    const desired = String(arguments[0] || '').trim();
+    if (!desired) return { state: 'skip', value: '', repeated: false };
+    const candidates = Array.from(document.querySelectorAll(
+      "div[contenteditable='true'][data-e2e*='caption'], " +
+      "div[contenteditable='true'][data-e2e*='description'], " +
+      "div[contenteditable='true'][aria-label*='description' i], " +
+      "textarea[placeholder*='description' i], " +
+      "div[contenteditable='true'], textarea, input[type='text']"
+    ))
+      .filter(isVisible)
+      .map((el) => ({ el, score: scoreNode(el) }))
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return { state: 'not_found', value: '', repeated: false };
+    const chosen = candidates[0].el;
+    let current = setText(chosen, desired);
+    let repeated = hasRepeat(current, desired);
+    if (repeated) {
+      current = setText(chosen, desired);
+      repeated = hasRepeat(current, desired);
+    }
+    return {
+      state: 'set',
+      value: current,
+      repeated,
+      score: candidates[0].score,
+    };
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js, target)
+        except Exception:
+            result = None
+        if not isinstance(result, dict):
+            continue
+        if str(result.get("state") or "").strip().lower() != "set":
+            continue
+        current = _normalize_text(str(result.get("value") or ""), limit=1200)
+        repeated = bool(result.get("repeated"))
+        if _caption_marker_exists(current, verify_marker) and not repeated:
+            _log(f"[Uploader:tiktok] Forced caption set and verified: len={len(current)}")
+            return True
+    _log("[Uploader:tiktok] Failed to force-set caption reliably.")
+    return False
+
+
 def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, platform_name: str) -> None:
     caption = _prepare_caption_for_platform(caption, platform_name=platform_name)
     verify_marker = _caption_verification_marker(caption)
@@ -18381,11 +19244,437 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
             f"(candidates={tried_candidates}, preview={_normalize_text(snapshot, limit=120) or '-'})"
         )
 
-    if platform_name in {"bilibili", "kuaishou"}:
-        _log(f"[Uploader:{platform_name}] Caption field not found or not verifiable, skip caption fill and continue.")
+    if platform_name in {"bilibili", "kuaishou", "tiktok", "x"}:
+        if platform_name in {"x", "tiktok"}:
+            js_clear = (
+                r"""
+                function norm(s) {
+                  return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+                }
+                function clearNode(node) {
+                  if (!node) return false;
+                  try { node.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+                  try { node.focus(); } catch (e) {}
+                  try {
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('delete', false, null);
+                  } catch (e) {}
+                  if (node.isContentEditable) {
+                    node.innerHTML = '';
+                    node.textContent = '';
+                  } else if (typeof node.value === 'string') {
+                    node.value = '';
+                  }
+                  node.dispatchEvent(new Event('input', {bubbles: true}));
+                  node.dispatchEvent(new Event('change', {bubbles: true}));
+                  node.dispatchEvent(new Event('blur', {bubbles: true}));
+                  const current = node.isContentEditable
+                    ? norm(node.innerText || node.textContent || '')
+                    : norm(node.value || node.textContent || '');
+                  return current.length === 0;
+                }
+                const xTargets = [
+                  document.querySelector("div[data-testid='tweetTextarea_0'][contenteditable='true']"),
+                  document.querySelector("div[data-testid='tweetTextarea_0'] [contenteditable='true']"),
+                  document.querySelector("div[aria-label='Post text'][contenteditable='true']"),
+                  document.querySelector("div[role='textbox'][contenteditable='true']"),
+                ];
+                for (const node of xTargets) {
+                  if (clearNode(node)) return {state:'cleared', mode:'x'};
+                }
+                return {state:'not_found', mode:'x'};
+                """
+                if platform_name == "x"
+                else r"""
+                function norm(s) {
+                  return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+                }
+                function clearNode(node) {
+                  if (!node) return false;
+                  try { node.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+                  try { node.focus(); } catch (e) {}
+                  if (node.isContentEditable) {
+                    node.innerHTML = '';
+                    node.textContent = '';
+                  } else if (typeof node.value === 'string') {
+                    node.value = '';
+                  }
+                  node.dispatchEvent(new Event('input', {bubbles: true}));
+                  node.dispatchEvent(new Event('change', {bubbles: true}));
+                  node.dispatchEvent(new Event('blur', {bubbles: true}));
+                  const current = node.isContentEditable
+                    ? norm(node.innerText || node.textContent || '')
+                    : norm(node.value || node.textContent || '');
+                  return current.length === 0;
+                }
+                const tiktokTargets = [
+                  document.querySelector("div[contenteditable='true'][data-e2e*='caption']"),
+                  document.querySelector("div[contenteditable='true'][data-e2e*='description']"),
+                  document.querySelector("div[contenteditable='true'][aria-label*='description' i]"),
+                  document.querySelector("textarea[placeholder*='description' i]"),
+                  document.querySelector("div[role='textbox'][contenteditable='true']"),
+                ];
+                for (const node of tiktokTargets) {
+                  if (clearNode(node)) return {state:'cleared', mode:'tiktok'};
+                }
+                return {state:'not_found', mode:'tiktok'};
+                """
+            )
+            for owner in (primary_ctx, fallback_ctx):
+                if not owner:
+                    continue
+                try:
+                    state = owner.run_js(js_clear)
+                except Exception:
+                    state = None
+                if isinstance(state, dict) and str(state.get("state") or "").strip().lower() == "cleared":
+                    _log(f"[Uploader:{platform_name}] Cleared caption field by JS fallback.")
+                    break
+        _log(
+            f"[Uploader:{platform_name}] Caption field not found or not verifiable, "
+            "skip caption fill and continue."
+        )
         return
 
     raise RuntimeError(f"Failed to locate caption input on {platform_name}.")
+
+
+def _force_x_non_premium_caption(primary_ctx: Any, fallback_ctx: Any, caption: str) -> bool:
+    def _build_safe_caption() -> str:
+        stamp = time.strftime("%m%d-%H%M", time.localtime())
+        return f"Cybertruck clip {stamp}"
+
+    prepared = _collapse_repeated_caption_blocks(str(caption or "").strip())
+    target = _prepare_caption_for_platform(prepared, platform_name="x").strip() or "Cybertruck"
+    safe_fallback = _build_safe_caption()
+    x_selectors = (
+        "css:div[data-testid='tweetTextarea_0'][contenteditable='true']",
+        "css:div[data-testid='tweetTextarea_0'] [contenteditable='true']",
+        "css:div[aria-label='Post text'][contenteditable='true']",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        actions = getattr(owner, "actions", None)
+        if not actions:
+            continue
+        editor = None
+        for selector in x_selectors:
+            try:
+                cand = owner.ele(selector, timeout=1.0)
+            except Exception:
+                cand = None
+            if cand and _is_visible_element(cand):
+                editor = cand
+                break
+        if not editor:
+            continue
+        try:
+            editor.click(by_js=True)
+        except Exception:
+            pass
+        try:
+            actions.key_down("CTRL").type("a").key_up("CTRL").type("\ue003")
+            if target:
+                actions.type(target)
+        except Exception:
+            continue
+        try:
+            time.sleep(0.35)
+        except Exception:
+            pass
+        peer = fallback_ctx if owner is primary_ctx else primary_ctx
+        state = _read_x_publish_composer_state(owner, peer)
+        if int(state.get("caption_len", 0) or 0) <= 0:
+            continue
+        if bool(state.get("button_disabled")) and target != safe_fallback:
+            try:
+                editor.click(by_js=True)
+            except Exception:
+                pass
+            try:
+                actions.key_down("CTRL").type("a").key_up("CTRL").type("\ue003")
+                actions.type(safe_fallback)
+                time.sleep(0.35)
+                state = _read_x_publish_composer_state(owner, peer)
+                _log(
+                    "[Uploader:x] Keyboard caption fallback applied for compose readiness: "
+                    f"len={state.get('caption_len', 0)}, "
+                    f"button_disabled={bool(state.get('button_disabled'))}, "
+                    f"over_limit={bool(state.get('over_limit'))}"
+                )
+                return True
+            except Exception:
+                pass
+        _log(
+            "[Uploader:x] Forced caption set by keyboard actions: "
+            f"len={state.get('caption_len', 0)}, "
+            f"button_disabled={bool(state.get('button_disabled'))}, "
+            f"over_limit={bool(state.get('over_limit'))}"
+        )
+        return True
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function fireInput(node, value) {
+      try {
+        const evt = new InputEvent('input', {
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: value,
+        });
+        node.dispatchEvent(evt);
+      } catch (e) {
+        node.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+      node.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: ' '}));
+      node.dispatchEvent(new Event('change', {bubbles: true}));
+    }
+    function selectAll(node) {
+      if (!node) return;
+      try {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } catch (e) {}
+    }
+    function setText(node, value) {
+      if (!node) return '';
+      try { node.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+      try { node.focus(); } catch (e) {}
+      try { node.click(); } catch (e) {}
+
+      if (node.isContentEditable) {
+        selectAll(node);
+        try { document.execCommand('delete', false, null); } catch (e) {}
+        let inserted = false;
+        try { inserted = document.execCommand('insertText', false, value); } catch (e) {}
+        if (!inserted) {
+          node.innerHTML = '';
+          node.textContent = value;
+        }
+      } else if (typeof node.value === 'string') {
+        node.value = value;
+      }
+      fireInput(node, value);
+      node.dispatchEvent(new Event('blur', {bubbles: true}));
+      return node.isContentEditable
+        ? norm(node.innerText || node.textContent || '')
+        : norm(node.value || node.textContent || '');
+    }
+    const desired = String(arguments[0] || '');
+    const candidates = [
+      document.querySelector("div[data-testid='tweetTextarea_0'][contenteditable='true']"),
+      document.querySelector("div[data-testid='tweetTextarea_0'] [contenteditable='true']"),
+      document.querySelector("div[aria-label='Post text'][contenteditable='true']"),
+    ].filter(Boolean).filter(isVisible);
+    if (!candidates.length) return {state: 'not_found', value: '', over_limit: false};
+    const current = setText(candidates[0], desired);
+    const body = String((document.body && document.body.innerText) || '');
+    const overLimit = /超出了?\s*-?\d+\s*的字符数限制|character limit|over by\s*-?\d+/i.test(body);
+    return {state: 'set', value: current, over_limit: overLimit};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js, target)
+        except Exception:
+            result = None
+        if not isinstance(result, dict):
+            continue
+        state = str(result.get("state") or "").strip().lower()
+        if state != "set":
+            continue
+        value = str(result.get("value") or "").strip()
+        over_limit = bool(result.get("over_limit"))
+        _log(
+            f"[Uploader:x] Forced caption set for non-premium limit: "
+            f"len={len(value)}, over_limit={over_limit}"
+        )
+        return True
+    _log("[Uploader:x] Failed to force-set caption in composer; continue with current page state.")
+    return False
+
+
+def _read_x_publish_composer_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    const editors = [
+      document.querySelector("div[data-testid='tweetTextarea_0'][contenteditable='true']"),
+      document.querySelector("div[data-testid='tweetTextarea_0'] [contenteditable='true']"),
+      document.querySelector("div[aria-label='Post text'][contenteditable='true']"),
+    ].filter(Boolean).filter(isVisible);
+    function centerY(el) {
+      if (!el) return -1;
+      const r = el.getBoundingClientRect();
+      return Math.round(r.y + (r.height / 2));
+    }
+    const editorRows = editors.map((el, idx) => ({
+      idx,
+      el,
+      text: norm(el.innerText || el.textContent || ''),
+      y: centerY(el),
+    }));
+    editorRows.sort((a, b) => b.text.length - a.text.length);
+    const editor = editorRows.length ? editorRows[0].el : null;
+    const textValue = editorRows.length ? editorRows[0].text : '';
+
+    const inlineBtnRaw = document.querySelector("button[data-testid='tweetButtonInline']");
+    const mainBtnRaw = document.querySelector("button[data-testid='tweetButton']");
+    const inlineBtn = inlineBtnRaw && isVisible(inlineBtnRaw) ? inlineBtnRaw : null;
+    const mainBtn = mainBtnRaw && isVisible(mainBtnRaw) ? mainBtnRaw : null;
+    function isDisabled(btn) {
+      if (!btn) return true;
+      return !!(
+        btn.disabled ||
+        String(btn.getAttribute('aria-disabled') || '').toLowerCase() === 'true' ||
+        window.getComputedStyle(btn).pointerEvents === 'none'
+      );
+    }
+    const inlineDisabled = isDisabled(inlineBtn);
+    const mainDisabled = isDisabled(mainBtn);
+    function scoreButton(btn, testid) {
+      if (!btn) return -999;
+      let score = 0;
+      const text = norm(btn.innerText || btn.textContent || btn.getAttribute('aria-label') || '');
+      if (/发帖|post|publish/i.test(text)) score += 2;
+      if ((testid || '').toLowerCase().includes('inline')) score += 2;
+      const by = centerY(btn);
+      const ey = editor ? centerY(editor) : -1;
+      if (ey >= 0 && by >= 0) {
+        const dy = Math.abs(by - ey);
+        score += Math.max(0, 8 - Math.min(8, dy / 80));
+      }
+      if (editor) {
+        const wrap = btn.closest('form, section, article, div') || btn.parentElement || btn;
+        if (wrap && typeof wrap.contains === 'function' && wrap.contains(editor)) score += 6;
+      }
+      return score;
+    }
+    const buttonRows = [
+      {btn: inlineBtn, testid: 'tweetButtonInline', disabled: inlineDisabled},
+      {btn: mainBtn, testid: 'tweetButton', disabled: mainDisabled},
+    ].filter(item => !!item.btn).map(item => ({
+      btn: item.btn,
+      testid: item.testid,
+      disabled: item.disabled,
+      score: scoreButton(item.btn, item.testid),
+    }));
+    buttonRows.sort((a, b) => b.score - a.score);
+    const bestButton = buttonRows.length ? buttonRows[0] : null;
+    const btn = bestButton ? bestButton.btn : null;
+    const disabled = bestButton ? !!bestButton.disabled : true;
+    const enabledButtonCount = buttonRows.filter(item => !item.disabled).length;
+    const buttonText = btn ? norm(btn.innerText || btn.textContent || btn.getAttribute('aria-label') || '') : '';
+
+    const bodyText = String((document.body && document.body.innerText) || '');
+    const bodyLower = bodyText.toLowerCase();
+    const matchCn = bodyText.match(/超出了?\s*(-?\d+)\s*的字符数限制/i);
+    const matchEn = bodyText.match(/over by\s*(-?\d+)/i);
+    let overBy = 0;
+    if (matchCn && matchCn[1]) {
+      overBy = Number(matchCn[1]) || 0;
+    } else if (matchEn && matchEn[1]) {
+      overBy = Number(matchEn[1]) || 0;
+    }
+    const overLimit = /超出了?\s*-?\d+\s*的字符数限制|character limit|over by\s*-?\d+/i.test(bodyText);
+    return {
+      url: String(location.href || ''),
+      editor_found: !!editor,
+      caption_len: textValue.length,
+      caption_preview: textValue.slice(0, 120),
+      button_found: !!btn,
+      button_disabled: disabled,
+      enabled_button_count: enabledButtonCount,
+      inline_button_found: !!inlineBtn,
+      inline_button_disabled: inlineDisabled,
+      main_button_found: !!mainBtn,
+      main_button_disabled: mainDisabled,
+      button_text: buttonText,
+      over_limit: overLimit,
+      over_by: overBy,
+      limit_hint: overLimit
+        ? (matchCn ? String(matchCn[0] || '') : (matchEn ? String(matchEn[0] || '') : ''))
+        : '',
+      compose_url: String(location.href || '').toLowerCase().includes('/compose/post'),
+      has_post_success_toast:
+        bodyLower.includes('your post was sent') ||
+        bodyLower.includes('post sent') ||
+        bodyLower.includes('posted'),
+    };
+    """
+    default_state: dict[str, Any] = {
+        "url": "",
+        "editor_found": False,
+        "caption_len": 0,
+        "caption_preview": "",
+        "button_found": False,
+        "button_disabled": True,
+        "enabled_button_count": 0,
+        "inline_button_found": False,
+        "inline_button_disabled": True,
+        "main_button_found": False,
+        "main_button_disabled": True,
+        "button_text": "",
+        "over_limit": False,
+        "over_by": 0,
+        "limit_hint": "",
+        "compose_url": False,
+        "has_post_success_toast": False,
+    }
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            continue
+        state = dict(default_state)
+        state.update(payload)
+        state["url"] = str(state.get("url", "") or "")
+        state["caption_len"] = int(state.get("caption_len", 0) or 0)
+        state["enabled_button_count"] = int(state.get("enabled_button_count", 0) or 0)
+        state["caption_preview"] = _normalize_text(str(state.get("caption_preview", "") or ""), limit=120)
+        state["button_text"] = _normalize_text(str(state.get("button_text", "") or ""), limit=80)
+        state["over_by"] = int(state.get("over_by", 0) or 0)
+        for key in (
+            "editor_found",
+            "button_found",
+            "button_disabled",
+            "inline_button_found",
+            "inline_button_disabled",
+            "main_button_found",
+            "main_button_disabled",
+            "over_limit",
+            "compose_url",
+            "has_post_success_toast",
+        ):
+            state[key] = bool(state.get(key))
+        return state
+    return dict(default_state)
 
 
 def _pick_kuaishou_publish_wrap_text(texts: Sequence[str]) -> str:
@@ -19909,6 +21198,57 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
 
 
 def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tuple[str, ...], platform_name: str) -> bool:
+    platform_token = str(platform_name or "").strip().lower()
+    normalized_texts = [str(text or "").strip().lower() for text in texts if str(text or "").strip()]
+    wants_publish = any(("post" in text) or ("publish" in text) for text in normalized_texts)
+    wants_draft = any(("draft" in text) or ("save" in text) for text in normalized_texts)
+
+    def _click_platform_publish_selector(owner: Any) -> bool:
+        if not wants_publish or wants_draft:
+            return False
+        selector_map: dict[str, tuple[str, ...]] = {
+            "x": (
+                "css:button[data-testid='tweetButtonInline']",
+                "css:button[data-testid='tweetButton']",
+                "xpath://button[@data-testid='tweetButtonInline' or @data-testid='tweetButton']",
+            ),
+            "tiktok": (
+                "css:button[data-e2e='post_video_button']",
+                "css:button[data-e2e='publish-button']",
+                "css:button[data-e2e*='post']",
+                "css:button[data-e2e*='publish']",
+                "xpath://button[contains(@data-e2e,'post') or contains(@data-e2e,'publish')]",
+            ),
+        }
+        for selector in selector_map.get(platform_token, ()):
+            try:
+                btn = owner.ele(selector, timeout=0.8)
+            except Exception:
+                btn = None
+            if not btn or (not _is_visible_element(btn)):
+                continue
+            try:
+                disabled = bool(
+                    btn.run_js(
+                        "return !!(this.disabled || (String(this.getAttribute('aria-disabled')||'').toLowerCase()==='true'));"
+                    )
+                )
+            except Exception:
+                disabled = False
+            if disabled:
+                continue
+            _humanized_publish_pause(f"{platform_name} button click")
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:{platform_name}] Clicked publish button by dedicated selector: {selector}")
+            return True
+        return False
+
     def _js_click(owner: Any, keyword: str) -> bool:
         js = """
         function isVisible(el) {
@@ -19923,9 +21263,25 @@ def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tup
         }
         const kw = String(arguments[0] || '').trim();
         if (!kw) return false;
-        const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], div, span, a'))
+        const kwLower = kw.toLowerCase();
+        const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], div, span, a, input[type=\"button\"], input[type=\"submit\"]'))
           .filter(el => isVisible(el))
-          .filter(el => (el.innerText || el.textContent || '').includes(kw))
+          .filter(el => {
+            const text = String(el.innerText || el.textContent || '');
+            const attrs = [
+              String(el.getAttribute('aria-label') || ''),
+              String(el.getAttribute('title') || ''),
+              String(el.getAttribute('data-testid') || ''),
+              String(el.getAttribute('data-e2e') || ''),
+              String(el.getAttribute('name') || ''),
+              String(el.value || ''),
+            ].join(' ');
+            const full = `${text} ${attrs}`.toLowerCase();
+            if (full.includes(kwLower)) return true;
+            if (kwLower === 'post' && /tweetbutton/.test(full)) return true;
+            if ((kwLower === 'post' || kwLower === 'publish') && /(post|publish|tweetbutton)/.test(full)) return true;
+            return false;
+          })
           .slice(0, 120);
         if (!nodes.length) return false;
         const isDraftKw = /鑽夌|鏆傚瓨|淇濆瓨/.test(kw);
@@ -19935,6 +21291,12 @@ def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tup
         }
         if (!preferred) {
           preferred = nodes.find(el => norm(el.innerText || el.textContent || '') === kw) || null;
+        }
+        if (!preferred) {
+          preferred = nodes.find(el => norm(el.getAttribute('aria-label') || '') === kw) || null;
+        }
+        if (!preferred) {
+          preferred = nodes.find(el => norm(el.getAttribute('title') || '') === kw) || null;
         }
         if (!preferred) preferred = nodes[0];
         preferred.click();
@@ -19948,6 +21310,8 @@ def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tup
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
+        if _click_platform_publish_selector(owner):
+            return True
         for text in texts:
             text = str(text or "").strip()
             if not text:
@@ -19974,6 +21338,86 @@ def _click_first_matching_button(primary_ctx: Any, fallback_ctx: Any, texts: tup
             if _js_click(owner, text):
                 _log(f"[Uploader:{platform_name}] Clicked button by JS keyword: {text}")
                 return True
+    return False
+
+
+def _click_x_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        js_click = r"""
+        function isVisible(el) {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 6 && r.height > 6;
+        }
+        function isDisabled(el) {
+          if (!el) return true;
+          return !!(
+            el.disabled ||
+            String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true' ||
+            window.getComputedStyle(el).pointerEvents === 'none'
+          );
+        }
+        function centerY(el) {
+          if (!el) return -1;
+          const r = el.getBoundingClientRect();
+          return Math.round(r.y + (r.height / 2));
+        }
+        const editors = [
+          document.querySelector("div[data-testid='tweetTextarea_0'][contenteditable='true']"),
+          document.querySelector("div[data-testid='tweetTextarea_0'] [contenteditable='true']"),
+          document.querySelector("div[aria-label='Post text'][contenteditable='true']"),
+          ...Array.from(document.querySelectorAll("div[role='textbox'][contenteditable='true']")),
+        ].filter(Boolean).filter(isVisible);
+        const editor = editors.length ? editors[0] : null;
+        const ey = centerY(editor);
+        const rows = [
+          {btn: document.querySelector("button[data-testid='tweetButtonInline']"), testid: 'tweetButtonInline'},
+          {btn: document.querySelector("button[data-testid='tweetButton']"), testid: 'tweetButton'},
+        ].filter(item => !!item.btn && isVisible(item.btn)).map(item => {
+          const by = centerY(item.btn);
+          let score = 0;
+          if (item.testid === 'tweetButtonInline') score += 2;
+          if (ey >= 0 && by >= 0) score += Math.max(0, 8 - Math.min(8, Math.abs(by - ey) / 80));
+          if (editor) {
+            const wrap = item.btn.closest('form, section, article, div') || item.btn.parentElement || item.btn;
+            if (wrap && typeof wrap.contains === 'function' && wrap.contains(editor)) score += 6;
+          }
+          return {
+            btn: item.btn,
+            testid: item.testid,
+            disabled: isDisabled(item.btn),
+            score,
+          };
+        }).sort((a, b) => b.score - a.score);
+        for (const row of rows) {
+          if (row.disabled) continue;
+          try { row.btn.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+          try {
+            row.btn.click();
+            return {clicked: true, testid: row.testid, score: row.score};
+          } catch (e) {}
+          try {
+            row.btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, composed:true}));
+            return {clicked: true, testid: row.testid, score: row.score};
+          } catch (e) {}
+        }
+        return {clicked: false, rows: rows.map(r => ({testid:r.testid, disabled:r.disabled, score:r.score}))};
+        """
+        _humanized_publish_pause("x publish button click")
+        try:
+            result = owner.run_js(js_click)
+        except Exception:
+            result = None
+        if isinstance(result, dict) and bool(result.get("clicked")):
+            _log(
+                "[Uploader:x] Clicked publish button by scored selector: "
+                f"{result.get('testid') or '-'}"
+            )
+            return True
     return False
 
 
@@ -21603,6 +23047,41 @@ def _ensure_kuaishou_not_in_unfinished_edit_state(primary_ctx: Any, fallback_ctx
     raise RuntimeError("kuaishou page is blocked by unfinished-video dialog / continue editing state.")
 
 
+def _is_x_publish_landed_status_page(url: str, text: str = "", caption_len: int = 0, has_success_toast: bool = False) -> bool:
+    if bool(has_success_toast):
+        return True
+    url_raw = str(url or "").strip()
+    url_lower = url_raw.lower()
+    text_lower = str(text or "").strip().lower()
+    if ("x.com/home" in url_lower or "x.com/notifications" in url_lower) and int(caption_len or 0) <= 2:
+        return True
+    if (
+        ("x.com/home" in url_lower or "x.com/notifications" in url_lower)
+        and (
+            ("你的主页时间线" in text_lower)
+            or ("your home timeline" in text_lower)
+            or ("what's happening" in text_lower)
+            or ("有什么新鲜事" in text_lower)
+        )
+    ):
+        return True
+    normalized_status_url = _normalize_x_status_url(url_raw)
+    if not normalized_status_url:
+        return False
+    if int(caption_len or 0) > 8:
+        return False
+    if not text_lower:
+        return True
+    reply_markers = (
+        "发布你的回复",
+        "回复",
+        "post your reply",
+        "replying to",
+        "view post engagements",
+    )
+    return any(marker in text_lower for marker in reply_markers)
+
+
 def _wait_publish_feedback(
     primary_ctx: Any,
     fallback_ctx: Any,
@@ -21610,17 +23089,22 @@ def _wait_publish_feedback(
     expected_tokens: Optional[Sequence[str]] = None,
     timeout_seconds: int = 25,
 ) -> None:
+    x_safe_recovery_caption = f"Cybertruck clip {time.strftime('%m%d-%H%M', time.localtime())}"
     success_text_markers: dict[str, tuple[str, ...]] = {
         "douyin": ("发布成功", "发布中", "发布完成", "提交成功", "已提交", "审核中"),
         "xiaohongshu": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "发布完成", "已提交"),
         "kuaishou": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "已提交"),
         "bilibili": ("投稿成功", "投稿中", "已投稿", "已提交", "审核中", "提交成功"),
+        "x": ("Your post was sent", "Post sent", "Posted"),
+        "tiktok": ("uploaded", "your video is being uploaded", "post uploaded", "posted"),
     }
     failure_text_markers: dict[str, tuple[str, ...]] = {
         "douyin": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "发布时间"),
         "xiaohongshu": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
         "kuaishou": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
         "bilibili": ("投稿失败", "发布失败", "提交失败", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
+        "x": ("something went wrong", "failed to post", "could not post", "post failed"),
+        "tiktok": ("post failed", "couldn't post", "network error", "copyright", "try again"),
     }
     success_url_markers: dict[str, tuple[str, ...]] = {
         "douyin": ("creator-micro/content/manage", "/content/manage"),
@@ -21631,6 +23115,8 @@ def _wait_publish_feedback(
         ),
         "kuaishou": ("/article/manage", "/article/list", "/video/manage", "/video/list", "/content/manage"),
         "bilibili": ("member.bilibili.com/platform/upload-manager", "member.bilibili.com/platform/home"),
+        "x": ("x.com/home", "x.com/notifications", "/status/"),
+        "tiktok": ("tiktok.com/foryou", "tiktok.com/following", "tiktok.com/@", "tiktok.com/creator"),
     }
 
     success_markers = success_text_markers.get(platform_name, ("发布成功", "提交成功", "审核中"))
@@ -21641,9 +23127,13 @@ def _wait_publish_feedback(
     warned = False
     republish_attempts = 0
     bilibili_reclick_attempts = 0
+    x_char_recovery_attempted = False
+    x_disabled_logged = False
     loop_started = time.time()
     while time.time() < end_at:
         url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
+        text_lower = str(text or "").lower()
+        url_lower = str(url or "").lower()
 
         if platform_name == "douyin":
             # Best effort: some accounts show a delayed confirm dialog.
@@ -21662,6 +23152,65 @@ def _wait_publish_feedback(
         elif platform_name == "kuaishou":
             # Best effort: some accounts show delayed confirm dialogs after first publish click.
             _click_kuaishou_publish_confirm_dialog_only(primary_ctx, fallback_ctx)
+        elif platform_name == "x":
+            net_ok, net_reason = _detect_x_publish_via_network(primary_ctx)
+            if net_ok:
+                _log(f"[Uploader:x] Publish confirmed by network probe: {net_reason}")
+                return
+            x_state = _read_x_publish_composer_state(primary_ctx, fallback_ctx)
+            x_state_url = str(x_state.get("url", "") or "").strip()
+            x_caption_len = int(x_state.get("caption_len", 0) or 0)
+            x_success_toast = bool(x_state.get("has_post_success_toast"))
+            if _is_x_publish_landed_status_page(
+                url=url,
+                text=text,
+                caption_len=x_caption_len,
+                has_success_toast=x_success_toast,
+            ) or _is_x_publish_landed_status_page(
+                url=x_state_url,
+                text=text,
+                caption_len=x_caption_len,
+                has_success_toast=x_success_toast,
+            ):
+                _log(f"[Uploader:x] Publish feedback inferred by status detail page: {x_state_url or url}")
+                return
+            over_limit_hint = bool(x_state.get("over_limit")) or ("字符数限制" in text) or ("character limit" in text_lower)
+            if over_limit_hint and (not x_char_recovery_attempted):
+                x_char_recovery_attempted = True
+                _force_x_non_premium_caption(
+                    primary_ctx,
+                    fallback_ctx,
+                    x_safe_recovery_caption,
+                )
+                _log("[Uploader:x] Character-limit warning detected; executed one-time short-caption recovery.")
+                continue
+            if not bool(x_state.get("button_found")):
+                _click_x_primary_publish_button(primary_ctx, fallback_ctx)
+                continue
+            if bool(x_state.get("button_disabled")):
+                if not x_disabled_logged:
+                    _log(
+                        "[Uploader:x] Publish button disabled; waiting for composer readiness: "
+                        f"caption_len={x_state.get('caption_len', 0)}, "
+                        f"over_limit={bool(x_state.get('over_limit'))}, "
+                        f"over_by={x_state.get('over_by', 0)}, "
+                        f"button_text={x_state.get('button_text') or '-'}, "
+                        f"inline_found={bool(x_state.get('inline_button_found'))}, "
+                        f"inline_disabled={bool(x_state.get('inline_button_disabled'))}, "
+                        f"main_found={bool(x_state.get('main_button_found'))}, "
+                        f"main_disabled={bool(x_state.get('main_button_disabled'))}"
+                    )
+                    x_disabled_logged = True
+                continue
+            x_disabled_logged = False
+            _click_x_primary_publish_button(primary_ctx, fallback_ctx)
+        elif platform_name == "tiktok":
+            _click_first_matching_button(
+                primary_ctx,
+                fallback_ctx,
+                ("Post", "Publish", "Post now", "Publish now", "Confirm"),
+                platform_name=platform_name,
+            )
         elif platform_name == "xiaohongshu":
             # Best effort: some accounts show a delayed confirm dialog or secondary publish gate.
             _click_xiaohongshu_publish_confirm_button(primary_ctx, fallback_ctx)
@@ -21676,7 +23225,7 @@ def _wait_publish_feedback(
                 if _retry_bilibili_publish_if_still_editing(primary_ctx, fallback_ctx):
                     bilibili_reclick_attempts += 1
 
-        if any(marker in text for marker in success_markers):
+        if any(str(marker or "").lower() in text_lower for marker in success_markers):
             _log(f"[Uploader:{platform_name}] Publish feedback detected by text marker.")
             return
         if url and any(marker in url for marker in url_markers):
@@ -21686,6 +23235,12 @@ def _wait_publish_feedback(
             if "publish" not in url.lower() or "manage" in url.lower():
                 _log(f"[Uploader:{platform_name}] Publish feedback detected by URL marker: {url}")
                 return
+        if platform_name == "x" and url_lower and ("x.com" in url_lower) and ("/compose/post" not in url_lower):
+            _log(f"[Uploader:{platform_name}] Publish feedback inferred by leaving compose page: {url}")
+            return
+        if platform_name == "tiktok" and url_lower and ("tiktok.com" in url_lower) and ("/upload" not in url_lower):
+            _log(f"[Uploader:{platform_name}] Publish feedback inferred by leaving upload page: {url}")
+            return
         if platform_name == "xiaohongshu" and (time.time() - loop_started) >= 12:
             xiaohongshu_state = _read_xiaohongshu_publish_state(primary_ctx, fallback_ctx)
             if _is_xiaohongshu_publish_confirmed_from_state(xiaohongshu_state):
@@ -21712,7 +23267,7 @@ def _wait_publish_feedback(
                 _log("[Uploader:kuaishou] Publish feedback inferred by heuristic.")
                 return
             _ensure_kuaishou_not_in_unfinished_edit_state(primary_ctx, fallback_ctx)
-        failure_hit = next((marker for marker in failure_markers if marker in text), "")
+        failure_hit = next((marker for marker in failure_markers if str(marker or "").lower() in text_lower), "")
         if failure_hit:
             idx = text.find(failure_hit)
             if idx >= 0:
@@ -21732,6 +23287,47 @@ def _wait_publish_feedback(
     actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
     if actions:
         _log(f"[Uploader:{platform_name}] Visible action texts after publish click: {actions}")
+    timeout_url, timeout_text = _read_page_snapshot(primary_ctx, fallback_ctx)
+    _log(
+        f"[Uploader:{platform_name}] Publish timeout snapshot: "
+        f"url={timeout_url or '-'}, text={_normalize_text(timeout_text, limit=240) or '-'}"
+    )
+    if platform_name == "x":
+        net_ok, net_reason = _detect_x_publish_via_network(primary_ctx)
+        if net_ok:
+            _log(f"[Uploader:x] Publish confirmed by final network probe: {net_reason}")
+            return
+        x_state = _read_x_publish_composer_state(primary_ctx, fallback_ctx)
+        x_state_url = str(x_state.get("url", "") or "").strip()
+        x_caption_len = int(x_state.get("caption_len", 0) or 0)
+        x_success_toast = bool(x_state.get("has_post_success_toast"))
+        if _is_x_publish_landed_status_page(
+            url=timeout_url,
+            text=timeout_text,
+            caption_len=x_caption_len,
+            has_success_toast=x_success_toast,
+        ) or _is_x_publish_landed_status_page(
+            url=x_state_url,
+            text=timeout_text,
+            caption_len=x_caption_len,
+            has_success_toast=x_success_toast,
+        ):
+            _log(f"[Uploader:x] Publish confirmed by final status-page heuristic: {x_state_url or timeout_url}")
+            return
+        _log(
+            "[Uploader:x] Composer timeout state: "
+            f"url={x_state.get('url') or '-'}, "
+            f"button_found={bool(x_state.get('button_found'))}, "
+            f"button_disabled={bool(x_state.get('button_disabled'))}, "
+            f"inline_found={bool(x_state.get('inline_button_found'))}, "
+            f"inline_disabled={bool(x_state.get('inline_button_disabled'))}, "
+            f"main_found={bool(x_state.get('main_button_found'))}, "
+            f"main_disabled={bool(x_state.get('main_button_disabled'))}, "
+            f"caption_len={x_state.get('caption_len', 0)}, "
+            f"over_limit={bool(x_state.get('over_limit'))}, "
+            f"over_by={x_state.get('over_by', 0)}, "
+            f"limit_hint={x_state.get('limit_hint') or '-'}"
+        )
     if platform_name == "xiaohongshu":
         xiaohongshu_state = _read_xiaohongshu_publish_state(primary_ctx, fallback_ctx)
         if _is_xiaohongshu_publish_confirmed_from_state(xiaohongshu_state):
@@ -21850,7 +23446,8 @@ def _set_douyin_schedule_default_time(
 
 
 def _configure_douyin_random_publish_mode(primary_ctx: Any, fallback_ctx: Any) -> str:
-    # 绔嬪嵆鍙戝竷/瀹氭椂鍙戝竷浜岄€変竴锛屽敖閲忔ā鎷熶汉宸ユ搷浣滈殢鏈烘€с€?    want_scheduled = bool(random.randint(0, 1))
+    # 立即发布/定时发布二选一，尽量保持人工操作随机性。
+    want_scheduled = bool(random.randint(0, 1))
     if not want_scheduled:
         _log("[Uploader:douyin] Publish mode(random): immediate")
         return "immediate"
@@ -22203,7 +23800,8 @@ def _configure_bilibili_random_publish_mode(
     fallback_ctx: Any,
     max_minutes: int = BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT,
 ) -> str:
-    # 涓庢姈闊?蹇墜淇濇寔涓€鑷达細闅忔満浜岄€変竴锛堢珛鍗冲彂甯?/ 瀹氭椂鍙戝竷锛夈€?    choose_scheduled = bool(random.getrandbits(1))
+    # 与抖音/快手保持一致：立即发布或定时发布二选一。
+    choose_scheduled = bool(random.getrandbits(1))
     if not choose_scheduled:
         _log("[Uploader:bilibili] Publish mode(random): immediate")
         return "immediate"
@@ -22228,7 +23826,8 @@ def _configure_kuaishou_random_publish_mode(
     fallback_ctx: Any,
     max_minutes: int = 45,
 ) -> str:
-    # 涓庢姈闊充竴鑷达細闅忔満浜岄€変竴锛堢珛鍗冲彂甯?/ 瀹氭椂鍙戝竷锛夈€?    choose_scheduled = bool(random.getrandbits(1))
+    # 与抖音一致：立即发布或定时发布二选一。
+    choose_scheduled = bool(random.getrandbits(1))
     if not choose_scheduled:
         _click_first_matching_button(primary_ctx, fallback_ctx, ("绔嬪嵆鍙戝竷",), platform_name="kuaishou")
         _log("[Uploader:kuaishou] Publish mode(random): immediate")
@@ -22637,7 +24236,22 @@ def _fill_draft_once_generic(
             platform_name=platform_name,
             caption=final_caption,
         )
-    _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
+    if platform_name == "x":
+        x_caption_ok = _force_x_non_premium_caption(ctx, page, text_payload)
+        x_state = _read_x_publish_composer_state(ctx, page)
+        if (not x_caption_ok) or int(x_state.get("caption_len", 0) or 0) <= 0:
+            raise RuntimeError(
+                "x caption fill verification failed before publish: "
+                f"ok={x_caption_ok}, caption_len={int(x_state.get('caption_len', 0) or 0)}, "
+                f"button_disabled={bool(x_state.get('button_disabled'))}, "
+                f"url={x_state.get('url') or '-'}"
+            )
+    elif platform_name == "tiktok":
+        tiktok_caption_ok = _force_tiktok_caption(ctx, page, text_payload)
+        if not tiktok_caption_ok:
+            raise RuntimeError("tiktok caption fill verification failed before publish.")
+    else:
+        _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
     if platform_name == "xiaohongshu" and not _is_image_file(target):
         _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)
     if platform_name == "douyin":
@@ -22701,8 +24315,13 @@ def _fill_draft_once_generic(
                     ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
                     platform_name=platform_name,
                 )
-            # 闈炴姈闊冲钩鍙板悓鏍疯绛夊緟椤甸潰鍥炴墽锛岄伩鍏嶁€滅偣鍑诲彂甯冨嵆鎴愬姛鈥濈殑璇垽銆?            if platform_name == "bilibili":
+            # 闈炴姈闊冲钩鍙板悓鏍疯绛夊緟椤甸潰鍥炴墽锛岄伩鍏嶁€滅偣鍑诲彂甯冨嵆鎴愬姛鈥濈殑璇垽銆?
+            if platform_name == "bilibili":
                 wait_seconds = 180
+            elif platform_name == "tiktok":
+                wait_seconds = 180
+            elif platform_name == "x":
+                wait_seconds = 240
             elif platform_name == "kuaishou":
                 wait_seconds = KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS
             elif platform_name == "xiaohongshu":
@@ -22719,46 +24338,38 @@ def _fill_draft_once_generic(
 
         if platform_name == "bilibili":
             _reset_bilibili_publish_probe(ctx)
-        clicked_publish = (
-            _click_douyin_primary_publish_button(ctx, page)
-            if platform_name == "douyin"
-            else (
-                _click_kuaishou_primary_publish_button(ctx, page)
-                if platform_name == "kuaishou"
-                else (
-                    _click_bilibili_primary_publish_button(ctx, page)
-                    if platform_name == "bilibili"
-                    else (
-                        _click_xiaohongshu_primary_publish_button(ctx, page)
-                        if platform_name == "xiaohongshu"
-                        else _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
-                    )
-                )
-            )
-        )
+        if platform_name == "x":
+            _reset_x_publish_probe(ctx)
+        if platform_name == "douyin":
+            clicked_publish = _click_douyin_primary_publish_button(ctx, page)
+        elif platform_name == "kuaishou":
+            clicked_publish = _click_kuaishou_primary_publish_button(ctx, page)
+        elif platform_name == "bilibili":
+            clicked_publish = _click_bilibili_primary_publish_button(ctx, page)
+        elif platform_name == "xiaohongshu":
+            clicked_publish = _click_xiaohongshu_primary_publish_button(ctx, page)
+        elif platform_name == "x":
+            clicked_publish = _click_x_primary_publish_button(ctx, page)
+        else:
+            clicked_publish = _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
         if not clicked_publish:
             if platform_name in {"douyin", "kuaishou", "bilibili"} and _dismiss_unfinished_dialog(
                 ctx,
                 page,
                 platform_name=platform_name,
             ):
-                retry_clicked = (
-                    _click_douyin_primary_publish_button(ctx, page)
-                    if platform_name == "douyin"
-                    else (
-                        _click_kuaishou_primary_publish_button(ctx, page)
-                        if platform_name == "kuaishou"
-                        else (
-                            _click_bilibili_primary_publish_button(ctx, page)
-                            if platform_name == "bilibili"
-                            else (
-                                _click_xiaohongshu_primary_publish_button(ctx, page)
-                                if platform_name == "xiaohongshu"
-                                else _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
-                            )
-                        )
-                    )
-                )
+                if platform_name == "douyin":
+                    retry_clicked = _click_douyin_primary_publish_button(ctx, page)
+                elif platform_name == "kuaishou":
+                    retry_clicked = _click_kuaishou_primary_publish_button(ctx, page)
+                elif platform_name == "bilibili":
+                    retry_clicked = _click_bilibili_primary_publish_button(ctx, page)
+                elif platform_name == "xiaohongshu":
+                    retry_clicked = _click_xiaohongshu_primary_publish_button(ctx, page)
+                elif platform_name == "x":
+                    retry_clicked = _click_x_primary_publish_button(ctx, page)
+                else:
+                    retry_clicked = _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
                 if retry_clicked:
                     _confirm_publish()
                     if platform_name == "douyin":
@@ -22787,6 +24398,32 @@ def _fill_draft_once_generic(
                     return ctx
                 except Exception as feedback_exc:
                     _log(f"[Uploader:bilibili] Manual publish fallback not confirmed: {feedback_exc}")
+            if platform_name == "x":
+                _log(
+                    "[Uploader:x] Publish button not ready yet; "
+                    "entering feedback wait loop for auto-recovery and delayed publish."
+                )
+                try:
+                    _wait_publish_feedback(
+                        ctx,
+                        page,
+                        platform_name="x",
+                        expected_tokens=publish_verify_tokens,
+                        timeout_seconds=240,
+                    )
+                    _log("[Success:x] 发布已确认（delayed-ready auto flow）。")
+                    return ctx
+                except Exception as feedback_exc:
+                    x_state = _read_x_publish_composer_state(ctx, page)
+                    _log(
+                        "[Uploader:x] Delayed-ready publish fallback not confirmed: "
+                        f"{feedback_exc}; "
+                        f"button_found={bool(x_state.get('button_found'))}, "
+                        f"button_disabled={bool(x_state.get('button_disabled'))}, "
+                        f"caption_len={x_state.get('caption_len', 0)}, "
+                        f"over_limit={bool(x_state.get('over_limit'))}, "
+                        f"over_by={x_state.get('over_by', 0)}"
+                    )
             actions = _collect_visible_action_texts(ctx, page)
             if actions:
                 _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
@@ -23187,7 +24824,7 @@ def fill_draft_x(
         (caption or "").strip() or _load_caption_for_video(target) or DEFAULT_CAPTION,
         platform_name="x",
     )
-    work_page = _prepare_upload_tab(page)
+    work_page = _prepare_x_upload_tab(page)
     try:
         _fill_draft_once_generic(
             work_page,
@@ -23198,6 +24835,7 @@ def fill_draft_x(
             save_draft=False,
             publish_now=bool(publish_now),
             upload_timeout=upload_timeout,
+            draft_button_texts=("Save draft", "Draft", "保存草稿"),
             publish_button_texts=("Post", "Publish", "鍙戝竷", "鍙戝笘"),
             debug_port=debug_port,
             chrome_path=chrome_path,

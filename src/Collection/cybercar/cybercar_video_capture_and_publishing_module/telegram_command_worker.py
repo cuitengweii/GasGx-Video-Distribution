@@ -9737,12 +9737,16 @@ def _is_immediate_collect_lock_retry_reason(reason: str, result: Optional[Dict[s
 
 def _is_immediate_collect_transient_retry_reason(reason: str, result: Optional[Dict[str, Any]] = None) -> bool:
     normalized = str(reason or "").strip()
-    if "X 元数据下载失败" not in normalized:
+    is_x_metadata_failure = "X 元数据下载失败" in normalized
+    is_generic_download_failure = "下载失败，未拿到可用素材" in normalized
+    if not is_x_metadata_failure and not is_generic_download_failure:
         return False
     lower = normalized.lower()
     if "unexpected_eof_while_reading" in lower or "ssl 连接被对端中断" in normalized:
         return True
     if "连接被远端重置" in normalized or "请求超时" in normalized:
+        return True
+    if is_generic_download_failure:
         return True
     if not isinstance(result, dict):
         return False
@@ -9762,6 +9766,8 @@ def _is_immediate_collect_transient_retry_reason(reason: str, result: Optional[D
             "connectionreseterror(10054",
             "connection aborted.",
             "read timed out",
+            "unable to download",
+            "download failed",
         )
     )
 
@@ -11104,6 +11110,63 @@ def _run_immediate_collect_item_job(
                     "last_error": reason,
                 },
             )
+            fallback_item = _pick_next_immediate_collect_fallback_item(
+                workspace=workspace,
+                current_item_id=item_id,
+                media_kind=media_kind,
+                profile=profile,
+                chat_id=telegram_chat_id,
+                candidate_limit=int(item.get("candidate_limit") or 0),
+            )
+            fallback_item_id = str(fallback_item.get("id") or "").strip() if isinstance(fallback_item, dict) else ""
+            if fallback_item_id:
+                try:
+                    fallback_item = _update_prefilter_item(
+                        workspace,
+                        fallback_item_id,
+                        updates={
+                            "status": "publish_requested",
+                            "action": "auto_fallback_from_collect_failed",
+                            "last_error": "",
+                        },
+                    )
+                    _spawn_immediate_publish_item_job(
+                        repo_root=repo_root,
+                        workspace=workspace,
+                        timeout_seconds=timeout_seconds,
+                        profile=profile,
+                        telegram_bot_identifier=telegram_bot_identifier,
+                        telegram_bot_token=telegram_bot_token,
+                        telegram_chat_id=telegram_chat_id,
+                        item_id=fallback_item_id,
+                        immediate_test_mode=immediate_test_mode,
+                    )
+                    _send_background_feedback(
+                        runner=runner,
+                        email_settings=email_settings,
+                        workspace=workspace,
+                        title="即采即发候选已自动切换",
+                        subtitle="当前候选下载失败，已接力到下一条候选继续处理",
+                        sections=[
+                            _build_immediate_candidate_info_section(item),
+                            {
+                                "title": "切换原因",
+                                "emoji": "⚠️",
+                                "items": [
+                                    {"label": "当前候选失败", "value": reason},
+                                    {"label": "接力候选", "value": str(fallback_item.get("source_url") or "").strip() or fallback_item_id},
+                                ],
+                            },
+                        ],
+                        status="running",
+                        platforms=_resolve_item_target_platforms(item),
+                    )
+                    return 0
+                except Exception as fallback_exc:
+                    _append_log(
+                        workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
+                        f"[ImmediateCollect] fallback handoff failed current_item={item_id} next_item={fallback_item_id} error={fallback_exc}",
+                    )
             _send_background_feedback(
                 runner=runner,
                 email_settings=email_settings,
@@ -11454,6 +11517,75 @@ def _get_prefilter_item(workspace: Path, item_id: str) -> dict[str, Any]:
 
     row = _with_prefilter_queue_lock(workspace, _read)
     return dict(row) if isinstance(row, dict) else {}
+
+
+def _pick_next_immediate_collect_fallback_item(
+    *,
+    workspace: Path,
+    current_item_id: str,
+    media_kind: str,
+    profile: str,
+    chat_id: str,
+    candidate_limit: int,
+) -> dict[str, Any]:
+    normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind or "video")
+    normalized_profile = _normalize_profile_name(profile)
+    normalized_chat_id = str(chat_id or "").strip()
+    normalized_limit = max(0, int(candidate_limit or 0))
+
+    def _read(queue: Dict[str, Any]) -> dict[str, Any]:
+        items = queue.get("items", {})
+        if not isinstance(items, dict) or not items:
+            return {}
+        candidates: list[dict[str, Any]] = []
+        for raw_id, raw_row in items.items():
+            if not isinstance(raw_row, dict):
+                continue
+            row = dict(raw_row)
+            item_id = str(row.get("id") or raw_id or "").strip()
+            if not item_id or item_id == current_item_id:
+                continue
+            status = str(row.get("status") or "").strip().lower()
+            action = str(row.get("action") or "").strip().lower()
+            if status not in {"link_pending", "up_confirmed"}:
+                continue
+            if action == "skip":
+                continue
+            if _is_prefilter_filtered_terminal(row):
+                continue
+            if _normalize_immediate_collect_media_kind(str(row.get("media_kind") or "video")) != normalized_media_kind:
+                continue
+            row_profile = _normalize_profile_name(str(row.get("profile") or ""))
+            if normalized_profile and row_profile and row_profile != normalized_profile:
+                continue
+            row_chat = str(row.get("chat_id") or "").strip()
+            if normalized_chat_id and row_chat and row_chat != normalized_chat_id:
+                continue
+            try:
+                row_limit = int(row.get("candidate_limit") or 0)
+            except Exception:
+                row_limit = 0
+            if normalized_limit > 0 and row_limit > 0 and row_limit != normalized_limit:
+                continue
+            candidates.append(row)
+
+        if not candidates:
+            return {}
+
+        def _candidate_key(row: Dict[str, Any]) -> tuple[int, str, str]:
+            try:
+                index = int(row.get("candidate_index") or 0)
+            except Exception:
+                index = 0
+            updated = str(row.get("updated_at") or row.get("created_at") or "").strip()
+            item_id = str(row.get("id") or "").strip()
+            return (index if index > 0 else 999999, updated, item_id)
+
+        candidates.sort(key=_candidate_key)
+        return dict(candidates[0])
+
+    selected = _with_prefilter_queue_lock(workspace, _read)
+    return dict(selected) if isinstance(selected, dict) else {}
 
 
 def _wait_for_immediate_review(

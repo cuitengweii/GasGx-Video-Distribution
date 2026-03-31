@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from cybercar import pipeline
 
@@ -104,3 +107,250 @@ def test_resolve_platform_publish_mode_with_config_reads_x_platform_defaults() -
     assert mode.save_draft is False
     assert mode.publish_now is True
     assert pipeline._resolve_platform_upload_timeout(args, runtime_config, "x", minimum=30) == 30
+
+
+def test_run_publish_schedule_dispatches_tiktok_and_x_when_requested(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "DRAFT_test_video.mp4"
+    target.write_bytes(b"video")
+    workspace = SimpleNamespace(root=tmp_path)
+    ctx = pipeline.CycleContext(
+        workspace=workspace,
+        processed_outputs=[target],
+        collected_x_urls=[],
+        exclude_keywords=[],
+        require_any_keywords=[],
+        collection_name="cybertruck",
+        chrome_path=None,
+        chrome_user_data_dir=str(tmp_path / "profile"),
+        proxy=None,
+        use_system_proxy=False,
+        sorted_batch_dir=None,
+        collected_at="2026-03-30 22:30:00",
+        keyword="cybertruck",
+        requested_limit=1,
+        extra_url_count=0,
+        auto_discover_x=False,
+        collection_names={},
+    )
+    args = SimpleNamespace(
+        upload_platforms="tiktok,x",
+        collect_media_kind="video",
+        no_publish_skip_notify=True,
+        upload_only_approved=False,
+        non_wechat_max_videos=1,
+        xiaohongshu_allow_image=False,
+        xiaohongshu_extra_images_per_run=0,
+        non_wechat_random_window_minutes=0,
+        publish_only=True,
+        review_state_file="",
+        disable_publish_summary_notify=True,
+    )
+    email_settings = pipeline.EmailSettings(
+        enabled=False,
+        provider="",
+        env_prefix="",
+        resend_api_key="",
+        resend_from_email="",
+        resend_endpoint="",
+        resend_timeout_seconds=10,
+        recipients=[],
+        telegram_bot_token="",
+        telegram_chat_id="",
+        telegram_timeout_seconds=10,
+        telegram_api_base="",
+    )
+    dispatched: list[str] = []
+
+    monkeypatch.setattr(pipeline, "_all_summary_platforms", lambda: ["tiktok", "x"])
+    monkeypatch.setattr(pipeline, "_build_pending_counts", lambda ctx, platforms: {})
+    monkeypatch.setattr(pipeline, "_build_publish_summary", lambda **kwargs: ("", []))
+    monkeypatch.setattr(pipeline, "_send_publish_summary_notification", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, "_publish_once", lambda _ctx, _args, _email, platform, *_a, **_k: dispatched.append(str(platform)) or True)
+    monkeypatch.setattr(pipeline.core, "_log", lambda message: None)
+    monkeypatch.setattr(pipeline.core, "_backfill_uploaded_fingerprint_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline.core, "_build_shared_source_targets", lambda *args, **kwargs: [target])
+    monkeypatch.setattr(
+        pipeline.core,
+        "build_content_coordination_snapshot",
+        lambda *args, **kwargs: {
+            "review_status": "approved",
+            "unpublished_platforms": ["tiktok", "x"],
+            "platform_status": {},
+        },
+    )
+
+    pipeline._run_publish_schedule(ctx, args, email_settings)
+
+    assert set(dispatched) == {"tiktok", "x"}
+
+
+def _build_email_settings() -> pipeline.EmailSettings:
+    return pipeline.EmailSettings(
+        enabled=False,
+        provider="",
+        env_prefix="",
+        resend_api_key="",
+        resend_from_email="",
+        resend_endpoint="",
+        resend_timeout_seconds=10,
+        recipients=[],
+        telegram_bot_token="",
+        telegram_chat_id="",
+        telegram_timeout_seconds=10,
+        telegram_api_base="",
+    )
+
+
+def _build_cycle_context(tmp_path: Path, target: Path) -> pipeline.CycleContext:
+    return pipeline.CycleContext(
+        workspace=SimpleNamespace(root=tmp_path),
+        processed_outputs=[target],
+        collected_x_urls=[],
+        exclude_keywords=[],
+        require_any_keywords=[],
+        collection_name="cybertruck",
+        chrome_path=None,
+        chrome_user_data_dir=str(tmp_path / "profile"),
+        proxy=None,
+        use_system_proxy=False,
+        sorted_batch_dir=None,
+        collected_at="2026-03-30 23:00:00",
+        keyword="cybertruck",
+        requested_limit=1,
+        extra_url_count=0,
+        auto_discover_x=False,
+        collection_names={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("platform_config", "expected_result"),
+    [
+        ({"publish_now": False, "save_draft": False}, "uploaded_only"),
+        ({"publish_now": False, "save_draft": True}, "draft_saved"),
+        ({"publish_now": True, "save_draft": False}, "published"),
+    ],
+)
+def test_publish_once_sets_result_by_mode(
+    tmp_path: Path,
+    monkeypatch,
+    platform_config: dict[str, bool],
+    expected_result: str,
+) -> None:
+    target = tmp_path / "video.mp4"
+    target.write_bytes(b"video")
+    ctx = _build_cycle_context(tmp_path, target)
+    args = SimpleNamespace(
+        debug_port=9222,
+        caption="",
+        config=str(tmp_path / "runtime.json"),
+        no_auto_open_chrome=True,
+        notify_per_publish=False,
+        no_save_draft=False,
+        upload_timeout=30,
+    )
+    events: list[pipeline.PublishEvent] = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "_coordination_eligible_platforms",
+        lambda *_a, **_k: ({"review_status": "approved", "platform_status": {}}, ["tiktok"]),
+    )
+    monkeypatch.setattr(
+        pipeline.core,
+        "_load_runtime_config",
+        lambda _path: {"publish": {"platforms": {"tiktok": platform_config}}},
+    )
+    monkeypatch.setattr(pipeline.core, "fill_draft_tiktok", lambda *args, **kwargs: target)
+    monkeypatch.setattr(pipeline.core, "_should_record_publish_fingerprint", lambda *args, **kwargs: False)
+    monkeypatch.setattr(pipeline.core, "_append_draft_upload_history", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline.core, "_record_uploaded_content_fingerprint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, "_build_publish_notification_card", lambda **kwargs: ("", {}))
+    monkeypatch.setattr(pipeline.core, "_log", lambda *args, **kwargs: None)
+
+    ok = pipeline._publish_once(
+        ctx=ctx,
+        args=args,
+        email_settings=_build_email_settings(),
+        platform="tiktok",
+        target=target,
+        stage="immediate_1",
+        events=events,
+    )
+
+    assert ok is True
+    assert len(events) == 1
+    assert events[0].result == expected_result
+
+
+def _build_event(video_name: str, platform_name: str, result: str, success: bool = True) -> pipeline.PublishEvent:
+    return pipeline.PublishEvent(
+        platform=platform_name,
+        stage="immediate_1",
+        success=success,
+        result=result,
+        published_at="23:00:00",
+        video_name=video_name,
+        publish_id=f"CT-{platform_name.upper()}",
+        desc_prefix10="",
+        source_url="",
+        error="",
+    )
+
+
+def test_recycle_does_not_count_uploaded_only_as_success(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "video.mp4"
+    target.write_bytes(b"video")
+    ctx = _build_cycle_context(tmp_path, target)
+    args = SimpleNamespace(recycle_bin_subdir="5_Recycle_Bin")
+    moved: list[str] = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "_move_video_bundle_to_recycle",
+        lambda video, recycle_dir: moved.append(video.name) or 1,
+    )
+    monkeypatch.setattr(pipeline.core, "_log", lambda *args, **kwargs: None)
+
+    recycled = pipeline._recycle_fully_published_videos(
+        ctx=ctx,
+        args=args,
+        target_by_name={target.name: target},
+        planned_platforms_by_video={target.name: {"x", "tiktok"}},
+        publish_events=[
+            _build_event(target.name, "x", "uploaded_only"),
+            _build_event(target.name, "tiktok", "published"),
+        ],
+    )
+
+    assert recycled == 0
+    assert moved == []
+
+
+def test_recycle_allows_published_plus_skipped_duplicate(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "video.mp4"
+    target.write_bytes(b"video")
+    ctx = _build_cycle_context(tmp_path, target)
+    args = SimpleNamespace(recycle_bin_subdir="5_Recycle_Bin")
+    moved: list[str] = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "_move_video_bundle_to_recycle",
+        lambda video, recycle_dir: moved.append(video.name) or 1,
+    )
+    monkeypatch.setattr(pipeline.core, "_log", lambda *args, **kwargs: None)
+
+    recycled = pipeline._recycle_fully_published_videos(
+        ctx=ctx,
+        args=args,
+        target_by_name={target.name: target},
+        planned_platforms_by_video={target.name: {"x", "tiktok"}},
+        publish_events=[
+            _build_event(target.name, "x", "skipped_duplicate"),
+            _build_event(target.name, "tiktok", "published"),
+        ],
+    )
+
+    assert recycled == 1
+    assert moved == [target.name]

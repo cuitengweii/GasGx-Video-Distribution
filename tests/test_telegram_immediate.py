@@ -5050,6 +5050,131 @@ def test_run_immediate_collect_item_job_retries_transient_x_metadata_failure(tmp
     assert feedbacks[-1]["status"] == "running"
 
 
+def test_run_immediate_collect_item_job_retries_generic_download_failure(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    collect_calls: list[dict[str, object]] = []
+    approvals: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(worker_impl, "time", SimpleNamespace(sleep=lambda seconds: None, monotonic=worker_impl.time.monotonic, time=worker_impl.time.time))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
+
+    def run_unified_once(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        if len(collect_calls) == 1:
+            return {"stderr": "ERROR: download failed: unable to download media from x"}
+        processed = workspace / "2_Processed" / "retry-generic-ok.mp4"
+        processed.write_text("video", encoding="utf-8")
+        return {"status": "success"}
+
+    monkeypatch.setattr(worker_impl, "_run_unified_once", run_unified_once)
+    monkeypatch.setattr(
+        worker_impl,
+        "_queue_immediate_platform_jobs",
+        lambda **kwargs: {
+            "spawned": 1,
+            "failed": 0,
+            "skipped_duplicate": 0,
+            "item": worker_impl._update_prefilter_item(
+                workspace,
+                str(kwargs["item_id"]),
+                updates={
+                    "status": "publish_running",
+                    "platform_results": {"wechat": {"status": "queued"}},
+                    "action": "publish",
+                },
+            ),
+        },
+    )
+
+    item = _video_item(video_name="", processed_name="", status="publish_requested")
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 0
+    assert len(collect_calls) == 2
+    assert len(approvals) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_running"
+    assert updated["processed_name"] == "retry-generic-ok.mp4"
+
+
+def test_run_immediate_collect_item_job_auto_fallbacks_to_next_candidate_on_final_failure(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    spawned_jobs: list[dict[str, object]] = []
+    feedbacks: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_is_immediate_collect_transient_retry_reason", lambda *args, **kwargs: False)
+    monkeypatch.setattr(worker_impl, "_run_unified_once", lambda **kwargs: {"stderr": "ERROR: download failed: unable to download media from x"})
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_immediate_publish_item_job",
+        lambda **kwargs: spawned_jobs.append(dict(kwargs)) or {"ok": True, "pid": 12345, "log_path": str(workspace / "runtime" / "logs" / "fallback.log"), "item_id": str(kwargs.get("item_id") or "")},
+    )
+
+    failed_item = _video_item(
+        item_id="item-failed",
+        status="publish_requested",
+        source_url="https://x.com/current/status/111",
+        candidate_index=1,
+        candidate_limit=5,
+        profile=DEFAULT_PROFILE,
+        media_kind="video",
+    )
+    next_item = _video_item(
+        item_id="item-next",
+        status="link_pending",
+        action="sent",
+        source_url="https://x.com/next/status/222",
+        candidate_index=2,
+        candidate_limit=5,
+        profile=DEFAULT_PROFILE,
+        media_kind="video",
+        message_id=902,
+    )
+    _save_prefilter_items(workspace, {"item-failed": failed_item, "item-next": next_item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-failed",
+    )
+
+    assert exit_code == 0
+    assert len(spawned_jobs) == 1
+    assert str(spawned_jobs[0].get("item_id") or "") == "item-next"
+    queue = _prefilter_items(workspace)
+    assert queue["item-failed"]["status"] == "download_failed"
+    assert queue["item-next"]["status"] == "publish_requested"
+    assert queue["item-next"]["action"] == "auto_fallback_from_collect_failed"
+    assert feedbacks[-1]["status"] == "running"
+
+
 def test_run_immediate_collect_item_job_passes_fast_x_download_args(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     fake_core = FakeCore()

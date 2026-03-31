@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
 
@@ -62,6 +62,8 @@ DEFAULT_XIAOHONGSHU_EXTRA_IMAGES_PER_RUN = 3
 DEFAULT_TELEGRAM_PREFILTER_QUEUE_FILE = Path("runtime") / "telegram_prefilter_queue.json"
 TELEGRAM_PREFILTER_CALLBACK_PREFIX = "ctpf"
 TELEGRAM_PREFILTER_PRUNE_DAYS = 14
+DEFAULT_LATEST_SOURCE_KEYWORD_STATE_FILE = Path("runtime") / "source_keywords_latest.json"
+MAX_LATEST_SOURCE_KEYWORDS = 12
 BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES = max(
     121,
     int(getattr(core, "BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES", 121)),
@@ -1834,6 +1836,10 @@ def _build_publish_summary(
     for idx, item in enumerate(events, 1):
         if item.result == "skipped_duplicate":
             status_text = "\u5e73\u53f0\u5df2\u6709\u53d1\u5e03\u8bb0\u5f55\uff0c\u5df2\u81ea\u52a8\u8df3\u8fc7"
+        elif item.result == "draft_saved":
+            status_text = "\u6210\u529f\u4fdd\u5b58\u8349\u7a3f"
+        elif item.result == "uploaded_only":
+            status_text = "\u4ec5\u4e0a\u4f20\uff08\u672a\u53d1\u5e03/\u672a\u5b58\u8349\u7a3f\uff09"
         elif item.success:
             status_text = "\u6210\u529f\u653e\u5230\u8349\u7a3f\u7bb1" if item.platform == "wechat" else "\u6210\u529f\u53d1\u5e03"
         else:
@@ -1932,6 +1938,7 @@ def _build_publish_notification_card(
     manual_caption: Optional[str],
     save_draft: bool,
     kuaishou_auto_publish_random_schedule: bool,
+    publish_result: str = "published",
     error_text: str = "",
 ) -> tuple[str, dict[str, Any]]:
     _ = workspace_root, collection_name, publish_id, target_fp, kuaishou_auto_publish_random_schedule
@@ -1941,8 +1948,16 @@ def _build_publish_notification_card(
     is_login_required = (not success) and friendly_reason.startswith("\u672a\u767b\u5f55")
 
     if success:
-        status = "draft" if save_draft else "success"
-        status_text = "\u5df2\u4fdd\u5b58\u8349\u7a3f" if save_draft else "\u5df2\u6210\u529f\u53d1\u5e03"
+        normalized_result = str(publish_result or "").strip().lower()
+        if normalized_result == "draft_saved" or save_draft:
+            status = "draft"
+            status_text = "\u5df2\u4fdd\u5b58\u8349\u7a3f"
+        elif normalized_result == "uploaded_only":
+            status = "uploaded_only"
+            status_text = "\u4ec5\u5b8c\u6210\u4e0a\u4f20"
+        else:
+            status = "success"
+            status_text = "\u5df2\u6210\u529f\u53d1\u5e03"
     elif is_login_required:
         status = "login_required"
         status_text = "\u672a\u767b\u5f55"
@@ -2423,8 +2438,12 @@ def _recycle_fully_published_videos(
     if not planned_platforms_by_video:
         return 0
     success_platforms_by_video: dict[str, set[str]] = {}
+    recyclable_results = {"published", "skipped_duplicate"}
     for item in publish_events:
-        if not item.success and item.result != "skipped_duplicate":
+        result_token = str(item.result or "").strip().lower()
+        if result_token not in recyclable_results:
+            continue
+        if (not item.success) and result_token != "skipped_duplicate":
             continue
         success_platforms_by_video.setdefault(item.video_name, set()).add(item.platform)
 
@@ -2501,6 +2520,88 @@ def _resolve_source_keywords(args: argparse.Namespace, runtime_config: dict[str,
     return [default_keyword] if default_keyword else []
 
 
+def _latest_source_keyword_state_path(workspace: core.Workspace) -> Path:
+    return workspace.root / DEFAULT_LATEST_SOURCE_KEYWORD_STATE_FILE
+
+
+def _load_latest_source_keywords(workspace: core.Workspace) -> list[str]:
+    path = _latest_source_keyword_state_path(workspace)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    return core._normalize_keyword_list(payload.get("keywords"), [])
+
+
+def _save_latest_source_keywords(
+    workspace: core.Workspace,
+    keywords: list[str],
+    *,
+    mode: str,
+    source_platforms: list[str],
+) -> None:
+    normalized = core._normalize_keyword_list(keywords, [])[:MAX_LATEST_SOURCE_KEYWORDS]
+    if not normalized:
+        return
+    path = _latest_source_keyword_state_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "mode": str(mode or "").strip() or "unknown",
+        "source_platforms": [str(x or "").strip() for x in source_platforms if str(x or "").strip()],
+        "keywords": normalized,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _collect_keywords_from_domestic_search_urls(source_urls: list[str], source_platforms: list[str]) -> list[str]:
+    keywords: list[str] = []
+    for platform in source_platforms:
+        if platform not in {"douyin", "xiaohongshu"}:
+            continue
+        for raw_url in source_urls:
+            url = str(raw_url or "").strip()
+            if not url or not _is_domestic_search_url(url, platform):
+                continue
+            token = _extract_keyword_from_domestic_search_url(url, platform)
+            if token:
+                keywords.append(token)
+    return core._normalize_keyword_list(keywords, [])
+
+
+def _resolve_effective_source_keywords(
+    args: argparse.Namespace,
+    runtime_config: dict[str, Any],
+    workspace: core.Workspace,
+) -> tuple[list[str], str]:
+    raw_cli = str(getattr(args, "source_keywords", "") or "").strip()
+    if raw_cli:
+        return core._normalize_keyword_list(raw_cli, []), "cli"
+
+    source_cfg = runtime_config.get("sources") if isinstance(runtime_config.get("sources"), dict) else {}
+    configured = core._normalize_keyword_list(source_cfg.get("keywords"), [])
+    latest = _load_latest_source_keywords(workspace)
+    prefer_latest = True
+    if isinstance(source_cfg, dict) and "prefer_latest_keywords" in source_cfg:
+        prefer_latest = bool(source_cfg.get("prefer_latest_keywords"))
+
+    if prefer_latest and latest:
+        return latest, "latest_state"
+    if configured:
+        return configured, "config"
+    if latest:
+        return latest, "latest_state_fallback"
+
+    default_keyword = str(getattr(args, "keyword", "") or "").strip()
+    if default_keyword:
+        return [default_keyword], "default_keyword"
+    return [], "empty"
+
+
 def _build_source_search_urls(source_platforms: list[str], keywords: list[str]) -> list[str]:
     urls: list[str] = []
     if not keywords:
@@ -2521,6 +2622,110 @@ def _build_source_search_urls(source_platforms: list[str], keywords: list[str]) 
                 ]
             )
     return core._dedupe_urls(urls)
+
+
+def _is_domestic_search_url(url: str, platform: str) -> bool:
+    token = str(platform or "").strip().lower()
+    value = str(url or "").strip()
+    if not value:
+        return False
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+    host = str(parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = str(parsed.path or "")
+    if token == "douyin":
+        return ("douyin.com" in host) and ("/search/" in path)
+    if token == "xiaohongshu":
+        return (("xiaohongshu.com" in host) or ("rednote.com" in host)) and (path.startswith("/search_result"))
+    return False
+
+
+def _extract_keyword_from_domestic_search_url(url: str, platform: str) -> str:
+    token = str(platform or "").strip().lower()
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    if token == "douyin":
+        match = re.search(r"/search/([^/?#]+)", str(parsed.path or ""))
+        if not match:
+            return ""
+        return unquote(str(match.group(1) or "")).strip()
+    if token == "xiaohongshu":
+        params = parse_qs(str(parsed.query or ""))
+        keyword = str((params.get("keyword") or [""])[0] or "").strip()
+        return unquote(keyword).strip()
+    return ""
+
+
+def _discover_domestic_source_urls(
+    *,
+    platform: str,
+    source_keywords: list[str],
+    source_platform_urls: list[str],
+    collect_limit: int,
+    args: argparse.Namespace,
+    chrome_path: Optional[str],
+    chrome_user_data_dir: str,
+) -> list[str]:
+    if platform not in {"douyin", "xiaohongshu"}:
+        return []
+    keywords: list[str] = []
+    for keyword in source_keywords:
+        token = str(keyword or "").strip()
+        if token:
+            keywords.append(token.lower())
+    for url in source_platform_urls:
+        if not _is_domestic_search_url(url, platform):
+            continue
+        token = _extract_keyword_from_domestic_search_url(url, platform)
+        if token:
+            keywords.append(token.lower())
+    keywords = list(dict.fromkeys([k for k in keywords if k]))
+    if not keywords:
+        return []
+
+    target_limit = max(int(collect_limit), int(collect_limit) * 3)
+    per_keyword_limit = max(int(collect_limit), int(collect_limit) * 2)
+    debug_port = max(1, int(getattr(args, "debug_port", getattr(core, "DEFAULT_PORT", 9333)) or 9333))
+    auto_open_chrome = not bool(getattr(args, "no_auto_open_chrome", False))
+    scroll_rounds = max(2, int(getattr(args, "x_discovery_scroll_rounds", getattr(core, "X_DISCOVERY_SCROLL_ROUNDS", 8)) or 8))
+    scroll_wait_seconds = max(
+        0.3,
+        float(getattr(args, "x_discovery_scroll_wait", getattr(core, "X_DISCOVERY_SCROLL_WAIT_SECONDS", 3.0)) or 3.0),
+    )
+
+    discovered: list[str] = []
+    for keyword in keywords:
+        try:
+            found = core.discover_domestic_keyword_urls(
+                platform=platform,
+                keyword=keyword,
+                url_limit=per_keyword_limit,
+                scroll_rounds=scroll_rounds,
+                scroll_wait_seconds=scroll_wait_seconds,
+                debug_port=debug_port,
+                auto_open_chrome=auto_open_chrome,
+                chrome_path=chrome_path,
+                chrome_user_data_dir=chrome_user_data_dir,
+            )
+        except Exception as exc:
+            core._log(
+                f"[Collector] Domestic keyword discovery failed on {platform} keyword={keyword}: {exc}"
+            )
+            continue
+        discovered.extend(found)
+        discovered = core._dedupe_urls(discovered)
+        if len(discovered) >= target_limit:
+            break
+    return discovered[:target_limit]
 
 
 def _is_url_for_source_platform(url: str, platform: str) -> bool:
@@ -2619,9 +2824,10 @@ def _run_collect_once(
         str(getattr(args, "x_chrome_user_data_dir", "") or "").strip() or getattr(core, "DEFAULT_X_CHROME_USER_DATA_DIR", chrome_user_data_dir)
     )
     x_cookie_file = str(getattr(args, "x_cookie_file", "") or "").strip() or getattr(core, "DEFAULT_X_COOKIE_FILE", "")
+    domestic_debug_port = max(1, int(getattr(args, "debug_port", getattr(core, "DEFAULT_PORT", 9333)) or 9333))
     x_debug_port = max(1, int(getattr(args, "x_debug_port", getattr(core, "DEFAULT_X_DEBUG_PORT", args.debug_port)) or args.debug_port))
     source_platforms = _resolve_source_platforms(args, runtime_config)
-    source_keywords = _resolve_source_keywords(args, runtime_config)
+    source_keywords, source_keyword_mode = _resolve_effective_source_keywords(args, runtime_config, workspace)
     source_watch_urls = _resolve_source_watch_urls(source_platforms, runtime_config)
     source_urls = _load_source_urls(args)
     source_search_urls = _build_source_search_urls(source_platforms, source_keywords)
@@ -2637,6 +2843,7 @@ def _run_collect_once(
         f"require_text_keyword_match={require_text_keyword_match}, "
         f"collect_media_kind={collect_media_kind}, "
         f"xiaohongshu_allow_image={xiaohongshu_allow_image}, "
+        f"domestic_debug_port={domestic_debug_port}, "
         f"x_debug_port={x_debug_port}, "
         f"x_profile_dir={x_chrome_user_data_dir}, "
         f"x_cookie_file={'set' if x_cookie_file else 'none'}, "
@@ -2644,6 +2851,7 @@ def _run_collect_once(
         f"x_download_retries={x_download_policy.download_retries}, "
         f"x_download_fail_fast={x_download_policy.fail_fast}, "
         f"source_platforms={','.join(source_platforms)}, "
+        f"source_keyword_mode={source_keyword_mode}, "
         f"source_keywords={len(source_keywords)}, "
         f"source_watch_urls={len(source_watch_urls)}, "
         f"source_urls={len(source_urls)}, "
@@ -2667,6 +2875,17 @@ def _run_collect_once(
         + source_watch_urls
         + source_search_urls
     )
+    search_url_keywords = _collect_keywords_from_domestic_search_urls(domestic_source_urls, source_platforms)
+    domestic_keyword_platforms = [platform for platform in source_platforms if platform in {"douyin", "xiaohongshu"}]
+    latest_source_keywords = core._normalize_keyword_list(search_url_keywords + source_keywords, [])
+    if domestic_keyword_platforms and latest_source_keywords:
+        keyword_mode = "search_url" if search_url_keywords else source_keyword_mode
+        _save_latest_source_keywords(
+            workspace,
+            latest_source_keywords,
+            mode=keyword_mode,
+            source_platforms=domestic_keyword_platforms,
+        )
     x_collect_enabled = "x" in source_platforms
 
     if collect_media_kind == "image" and x_collect_enabled:
@@ -2799,29 +3018,51 @@ def _run_collect_once(
     else:
         core._log("[Collector] X source collect is disabled for this run (source_platforms excludes x).")
 
-    domestic_enabled_platforms = [platform for platform in source_platforms if platform in {"douyin", "xiaohongshu"}]
+    domestic_enabled_platforms = domestic_keyword_platforms
     if domestic_enabled_platforms:
-        if domestic_source_urls:
-            include_images_for_domestic = bool(collect_media_kind == "image" or xiaohongshu_allow_image)
-            for platform in domestic_enabled_platforms:
-                platform_urls = [url for url in domestic_source_urls if _is_url_for_source_platform(url, platform)]
-                if not platform_urls:
-                    continue
-                try:
-                    core.download_from_source_urls(
-                        workspace,
-                        source_urls=platform_urls,
-                        source_platform=platform,
-                        limit=collect_limit,
-                        include_images=include_images_for_domestic,
-                        proxy=proxy,
-                        use_system_proxy=use_system_proxy,
-                    )
-                except Exception as exc:
-                    core._log(
-                        f"[Collector] Domestic source download failed on {platform}, continue with next platform: {exc}"
-                    )
-        else:
+        any_candidate = False
+        for platform in domestic_enabled_platforms:
+            include_images_for_domestic = bool(
+                collect_media_kind == "image"
+                or (platform == "xiaohongshu" and xiaohongshu_allow_image)
+            )
+            platform_urls = [url for url in domestic_source_urls if _is_url_for_source_platform(url, platform)]
+            if not platform_urls and not source_keywords:
+                continue
+            direct_urls = [url for url in platform_urls if not _is_domestic_search_url(url, platform)]
+            discovered_urls = _discover_domestic_source_urls(
+                platform=platform,
+                source_keywords=source_keywords,
+                source_platform_urls=platform_urls,
+                collect_limit=collect_limit,
+                args=args,
+                chrome_path=chrome_path,
+                chrome_user_data_dir=chrome_user_data_dir,
+            )
+            candidate_urls = core._dedupe_urls(direct_urls + discovered_urls)
+            if not candidate_urls:
+                core._log(
+                    f"[Collector] Domestic source discovery yielded no candidate post URLs for {platform}."
+                )
+                continue
+            any_candidate = True
+            try:
+                core.download_from_source_urls(
+                    workspace,
+                    source_urls=candidate_urls,
+                    source_platform=platform,
+                    limit=collect_limit,
+                    include_images=include_images_for_domestic,
+                    proxy=proxy,
+                    use_system_proxy=use_system_proxy,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    debug_port=domestic_debug_port,
+                )
+            except Exception as exc:
+                core._log(
+                    f"[Collector] Domestic source download failed on {platform}, continue with next platform: {exc}"
+                )
+        if not any_candidate and not domestic_source_urls and not source_keywords:
             core._log(
                 "[Collector] Domestic source platforms configured but no usable source URLs were found. "
                 "Provide sources.watch_accounts URLs, --source-url/--source-url-file, or source keywords."
@@ -3202,11 +3443,20 @@ def _publish_once(
         success_meta = _resolve_video_index_item(ctx.workspace, used_target)
         success_fp = str(target_fp or success_meta.get("fingerprint", "") or "").strip()
         publish_id = _build_publish_identifier(used_target, success_fp, success_meta)
+        publish_result = "published"
+        if not bool(publish_mode.publish_now):
+            if bool(publish_mode.save_draft):
+                publish_result = "draft_saved"
+            elif not (
+                (platform == "kuaishou" and publish_mode.kuaishou_auto_publish_random_schedule)
+                or (platform == "bilibili" and publish_mode.bilibili_auto_publish_random_schedule)
+            ):
+                publish_result = "uploaded_only"
         event = PublishEvent(
             platform=platform,
             stage=stage,
             success=True,
-            result="published",
+            result=publish_result,
             published_at=time.strftime("%H:%M:%S"),
             video_name=used_target.name,
             publish_id=publish_id,
@@ -3231,6 +3481,7 @@ def _publish_once(
             manual_caption=caption,
             save_draft=publish_mode.save_draft,
             kuaishou_auto_publish_random_schedule=publish_mode.kuaishou_auto_publish_random_schedule,
+            publish_result=publish_result,
         )
         if bool(getattr(args, "notify_per_publish", False)):
             _send_publish_card_notification_fail_open(
@@ -3384,7 +3635,7 @@ def _run_publish_schedule(ctx: CycleContext, args: argparse.Namespace, email_set
                 )
             return
 
-    non_wechat_platforms = [p for p in platforms if p in {"douyin", "xiaohongshu", "kuaishou", "bilibili"}]
+    non_wechat_platforms = [p for p in platforms if p in {"douyin", "xiaohongshu", "kuaishou", "bilibili", "tiktok", "x"}]
     wechat_enabled = "wechat" in platforms
     planned_platforms_by_video: dict[str, set[str]] = {}
     target_by_name: dict[str, Path] = {}
