@@ -9850,7 +9850,8 @@ def _run_collect_publish_latest_once(
             extra_args=[
                 "--tweet-url",
                 candidate_url,
-                "--require-x-live-discovery",
+                "--source-platforms",
+                "x",
                 "--no-telegram-collect-notify",
                 "--no-telegram-prefilter",
                 *_build_immediate_fast_x_download_args(repo_root),
@@ -10911,7 +10912,8 @@ def _run_immediate_collect_item_job(
         collect_extra_args = [
             "--tweet-url",
             source_url,
-            "--require-x-live-discovery",
+            "--source-platforms",
+            "x",
             "--no-telegram-collect-notify",
             "--no-telegram-prefilter",
             "--no-publish-skip-notify",
@@ -10928,9 +10930,11 @@ def _run_immediate_collect_item_job(
         base_network_mode = "explicit_proxy" if base_proxy else ("system_proxy" if base_use_system_proxy else "direct_tun")
         system_proxy_available = _worker_system_proxy_available()
         forced_use_system_proxy = False
+        forced_direct_tun = False
         elevated_socket_timeout: Optional[int] = None
         elevated_timeout_retry_used = False
         proxy_retry_used = False
+        direct_tun_retry_used = False
         print(
             f"[ImmediateCollect] item_id={item_id} source_url={source_url} "
             f"media_kind={media_kind} network_mode={base_network_mode} system_proxy_available={system_proxy_available}"
@@ -10945,7 +10949,10 @@ def _run_immediate_collect_item_job(
         while target is None:
             attempt_proxy = base_proxy
             attempt_use_system_proxy = base_use_system_proxy
-            if forced_use_system_proxy:
+            if forced_direct_tun:
+                attempt_proxy = ""
+                attempt_use_system_proxy = False
+            elif forced_use_system_proxy:
                 attempt_proxy = ""
                 attempt_use_system_proxy = True
             attempt_extra_args = list(collect_extra_args)
@@ -11060,6 +11067,27 @@ def _run_immediate_collect_item_job(
                         "status": "download_running",
                         "action": "collect_retry_system_proxy",
                         "last_error": f"{reason}（已切换系统代理重试）",
+                        "updated_at": _now_text(),
+                    },
+                )
+                time.sleep(float(DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_SECONDS))
+                continue
+            if (
+                _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and not direct_tun_retry_used
+                and attempt_use_system_proxy
+            ):
+                direct_tun_retry_used = True
+                forced_direct_tun = True
+                forced_use_system_proxy = False
+                elevated_socket_timeout = max(40, int(elevated_socket_timeout or 0))
+                _update_prefilter_item(
+                    workspace,
+                    item_id,
+                    updates={
+                        "status": "download_running",
+                        "action": "collect_retry_direct_tun",
+                        "last_error": f"{reason}（系统代理重试失败，已切换直连重试）",
                         "updated_at": _now_text(),
                     },
                 )
