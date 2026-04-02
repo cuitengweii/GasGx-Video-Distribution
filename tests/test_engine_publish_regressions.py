@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from cybercar import engine
 
@@ -26,6 +29,255 @@ def test_random_publish_mode_helpers_have_defined_choice_flags(monkeypatch) -> N
     assert engine._configure_douyin_random_publish_mode(object(), object()) == "immediate"
     assert engine._configure_bilibili_random_publish_mode(object(), object()) == "immediate"
     assert engine._configure_kuaishou_random_publish_mode(object(), object()) == "immediate"
+
+
+def test_extract_upload_progress_skips_regex_errors_and_keeps_matching(monkeypatch) -> None:
+    calls = {"count": 0}
+    original_search = re.search
+
+    def fake_search(pattern: str, text: str, flags: int = 0):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise re.error("boom")
+        return original_search(pattern, text, flags)
+
+    monkeypatch.setattr(engine.re, "search", fake_search)
+
+    progress = engine._extract_upload_progress("processing 42%")
+    assert "processing 42%" in progress.lower()
+
+
+def test_fill_draft_once_generic_kuaishou_uses_generic_publish_fallback(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    button_calls: list[tuple[str, ...]] = []
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://cp.kuaishou.com/article/publish/video"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_click_first(_ctx, _page, texts, **_kwargs):
+        text_tuple = tuple(texts or ())
+        button_calls.append(text_tuple)
+        return text_tuple == ("发布作品",)
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_ensure_kuaishou_publish_mode", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_kuaishou_upload_file_input", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_scroll_kuaishou_publish_controls_into_view", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_kuaishou_primary_publish_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_kuaishou_publish_confirm_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_kuaishou_publish_confirm_dialog_only", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(engine, "_wait_publish_feedback", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    result = engine._fill_draft_once_generic(
+        page=page,
+        target=target,
+        final_caption="caption",
+        open_url=page.url,
+        platform_name="kuaishou",
+        save_draft=False,
+        publish_now=True,
+        upload_timeout=30,
+        draft_button_texts=("保存草稿",),
+        publish_button_texts=("发布作品",),
+    )
+
+    assert result is page
+    assert ("立即发布",) in button_calls
+    assert ("发布作品",) in button_calls
+
+
+def test_fill_draft_once_generic_bilibili_uses_generic_publish_fallback(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    button_calls: list[tuple[str, ...]] = []
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://member.bilibili.com/platform/upload/video/frame"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_click_first(_ctx, _page, texts, **_kwargs):
+        text_tuple = tuple(texts or ())
+        button_calls.append(text_tuple)
+        return text_tuple == ("立即投稿",)
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_bilibili_upload_file_input", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_reset_bilibili_publish_probe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_bilibili_primary_publish_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(engine, "_wait_publish_feedback", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    result = engine._fill_draft_once_generic(
+        page=page,
+        target=target,
+        final_caption="caption",
+        open_url=page.url,
+        platform_name="bilibili",
+        save_draft=False,
+        publish_now=True,
+        upload_timeout=30,
+        draft_button_texts=("保存草稿",),
+        publish_button_texts=("立即投稿",),
+    )
+
+    assert result is page
+    assert ("立即投稿",) in button_calls
+
+
+def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    clicked_button_texts: list[tuple[str, ...]] = []
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://creator.douyin.com/creator-micro/content/upload"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_click_first(_ctx, _page, texts, **_kwargs):
+        text_tuple = tuple(texts or ())
+        clicked_button_texts.append(text_tuple)
+        return text_tuple == ("SAVE_DRAFT",)
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_ensure_douyin_publish_mode", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_douyin_collection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_douyin_primary_publish_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "_finalize_douyin_publish",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("publish feedback timeout")),
+    )
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    with pytest.raises(RuntimeError, match="automatically saved as draft"):
+        engine._fill_draft_once_generic(
+            page=page,
+            target=target,
+            final_caption="caption",
+            open_url=page.url,
+            platform_name="douyin",
+            save_draft=False,
+            publish_now=True,
+            upload_timeout=30,
+            draft_button_texts=("SAVE_DRAFT",),
+            publish_button_texts=("PUBLISH_NOW",),
+            collection_name="CyberCar",
+        )
+
+    assert ("SAVE_DRAFT",) in clicked_button_texts
+
+
+def test_fill_draft_once_generic_tiktok_publish_button_missing_falls_back_to_draft(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    clicked_button_texts: list[tuple[str, ...]] = []
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://www.tiktok.com/upload"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_click_first(_ctx, _page, texts, **_kwargs):
+        text_tuple = tuple(texts or ())
+        clicked_button_texts.append(text_tuple)
+        return text_tuple == ("SAVE_DRAFT",)
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_force_tiktok_caption", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    with pytest.raises(RuntimeError, match="automatically saved as draft"):
+        engine._fill_draft_once_generic(
+            page=page,
+            target=target,
+            final_caption="caption",
+            open_url=page.url,
+            platform_name="tiktok",
+            save_draft=False,
+            publish_now=True,
+            upload_timeout=30,
+            draft_button_texts=("SAVE_DRAFT",),
+            publish_button_texts=("POST_NOW",),
+        )
+
+    assert ("SAVE_DRAFT",) in clicked_button_texts
 
 
 def test_fill_draft_x_passes_draft_button_texts_to_generic_uploader(tmp_path: Path, monkeypatch) -> None:
@@ -324,3 +576,95 @@ def test_wait_publish_feedback_x_accepts_home_page_with_cleared_caption(monkeypa
 
     engine._wait_publish_feedback(object(), object(), platform_name="x", timeout_seconds=8)
     assert calls["x_click"] == 0
+
+
+def test_wait_publish_feedback_kuaishou_extends_window_when_progress_active(monkeypatch) -> None:
+    timeline = {"now": 0.0, "calls": 0}
+
+    def fake_time() -> float:
+        return timeline["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        timeline["now"] += float(seconds)
+
+    def fake_snapshot(*_args, **_kwargs):
+        timeline["calls"] += 1
+        if timeline["calls"] < 10:
+            return ("https://cp.kuaishou.com/article/publish/video", "处理中 正在排队")
+        return ("https://cp.kuaishou.com/article/publish/video", "发布成功")
+
+    monkeypatch.setattr(engine.time, "time", fake_time)
+    monkeypatch.setattr(engine.time, "sleep", fake_sleep)
+    monkeypatch.setattr(engine, "_read_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(engine, "_click_kuaishou_publish_confirm_dialog_only", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_is_kuaishou_publish_confirmed_by_heuristic", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_ensure_kuaishou_not_in_unfinished_edit_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._wait_publish_feedback(object(), object(), platform_name="kuaishou", timeout_seconds=8)
+    assert timeline["calls"] >= 10
+
+
+def test_fill_draft_once_generic_kuaishou_publish_unconfirmed_falls_back_to_draft(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    clicked_button_texts: list[tuple[str, ...]] = []
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://cp.kuaishou.com/article/publish/video"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_click_first(_ctx, _page, texts, **_kwargs):
+        text_tuple = tuple(texts or ())
+        clicked_button_texts.append(text_tuple)
+        return text_tuple == ("保存草稿",)
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_ensure_kuaishou_publish_mode", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_kuaishou_upload_file_input", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_scroll_kuaishou_publish_controls_into_view", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_kuaishou_primary_publish_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_click_kuaishou_publish_confirm_dialog_only", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(
+        engine,
+        "_wait_publish_feedback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("publish feedback timeout")),
+    )
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    with pytest.raises(RuntimeError, match="automatically saved as draft"):
+        engine._fill_draft_once_generic(
+            page=page,
+            target=target,
+            final_caption="caption",
+            open_url=page.url,
+            platform_name="kuaishou",
+            save_draft=False,
+            publish_now=True,
+            upload_timeout=30,
+            draft_button_texts=("保存草稿",),
+            publish_button_texts=("发布作品",),
+        )
+
+    assert ("保存草稿",) in clicked_button_texts

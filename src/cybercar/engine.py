@@ -13219,13 +13219,16 @@ def _load_caption_for_video(target: Path) -> Optional[str]:
 
 
 def _extract_upload_progress(content: str) -> str:
+    text = content or ""
     for pattern in (
-        r"(涓婁紶涓璠^\n]{0,48}\d{1,3}%)",
-        r"(澶勭悊涓璠^\n]{0,48}\d{1,3}%)",
-        r"(杞爜涓璠^\n]{0,48}\d{1,3}%)",
-        r"((?:涓婁紶涓瓅澶勭悊涓瓅杞爜涓?[^\n]{0,80})",
+        r"((?:上传中|处理中|转码中)[^\n]{0,48}\d{1,3}%)",
+        r"((?:uploading|processing|transcoding)[^\n]{0,48}\d{1,3}%)",
+        r"((?:上传中|处理中|转码中)[^\n]{0,80})",
     ):
-        match = re.search(pattern, content or "")
+        try:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+        except re.error:
+            continue
         if match:
             return _normalize_text(match.group(1), limit=80)
     return ""
@@ -15905,7 +15908,20 @@ def _fill_draft_once(
         _save_draft(editor_ctx)
         _log("[Success] 草稿已保存，请到草稿箱检查后手动发布。")
     elif publish_now:
+        def _fallback_wechat_publish_to_draft(reason: str, error: Exception | None = None) -> None:
+            _log(f"[Uploader:wechat] {reason}, fallback to save draft.")
+            try:
+                _save_draft(editor_ctx)
+            except Exception as draft_exc:
+                _log(f"[Uploader:wechat] Fallback draft save failed: {draft_exc}")
+                return
+            message = f"wechat {reason}; automatically saved as draft / returned to draft-state."
+            if error is not None:
+                raise RuntimeError(message) from error
+            raise RuntimeError(message)
+
         if not _click_wechat_primary_publish_button(editor_ctx, page):
+            _fallback_wechat_publish_to_draft("publish button was not located")
             actions = _collect_visible_action_texts(editor_ctx, page)
             if actions:
                 _log(f"[Uploader:wechat] Visible action texts: {actions}")
@@ -15916,12 +15932,16 @@ def _fill_draft_once(
             ("纭鍙戣〃", "纭鍙戝竷", "缁х画鍙戣〃", "缁х画鍙戝竷"),
             platform_name="wechat",
         )
-        _wait_wechat_publish_feedback(
-            editor_ctx,
-            page,
-            expected_title=wechat_short_title,
-            publish_click_confirmed=True,
-        )
+        try:
+            _wait_wechat_publish_feedback(
+                editor_ctx,
+                page,
+                expected_title=wechat_short_title,
+                publish_click_confirmed=True,
+            )
+        except Exception as exc:
+            _fallback_wechat_publish_to_draft("publish was not confirmed", exc)
+            raise
         _log("[Success:wechat] 发布已确认。")
     else:
         _log("[Success] 视频已上传并填写文案（未保存草稿），请在当前页手动保存或发布。")
@@ -23122,8 +23142,38 @@ def _wait_publish_feedback(
     success_markers = success_text_markers.get(platform_name, ("发布成功", "提交成功", "审核中"))
     failure_markers = failure_text_markers.get(platform_name, ("发布失败", "网络异常", "请完善", "不能为空"))
     url_markers = success_url_markers.get(platform_name, ())
+    progress_activity_markers: dict[str, tuple[str, ...]] = {
+        "douyin": ("发布中", "审核中", "处理中", "上传中", "队列"),
+        "xiaohongshu": ("发布中", "审核中", "处理中", "上传中", "队列"),
+        "kuaishou": ("发布中", "审核中", "处理中", "上传中", "队列"),
+        "bilibili": ("投稿中", "审核中", "处理中", "上传中", "队列"),
+        "x": ("posting", "sending"),
+        "tiktok": ("uploading", "processing", "posting", "publishing"),
+    }
+    activity_markers = tuple(str(item or "").lower() for item in progress_activity_markers.get(platform_name, ()))
 
     end_at = time.time() + max(8, int(timeout_seconds))
+    dynamic_extension_budget = max(6.0, min(30.0, float(timeout_seconds) * 0.75))
+    dynamic_extension_used = 0.0
+    last_activity_marker = ""
+    last_extension_at = 0.0
+
+    def _extend_feedback_window(reason: str, bump_seconds: float = 6.0) -> None:
+        nonlocal end_at, dynamic_extension_used, last_extension_at
+        remaining = dynamic_extension_budget - dynamic_extension_used
+        if remaining <= 0:
+            return
+        grant = min(float(bump_seconds), remaining)
+        if grant <= 0:
+            return
+        end_at += grant
+        dynamic_extension_used += grant
+        last_extension_at = time.time()
+        _log(
+            f"[Uploader:{platform_name}] Publish feedback window extended by +{grant:.0f}s "
+            f"(reason={reason}, used={dynamic_extension_used:.0f}/{dynamic_extension_budget:.0f}s)."
+        )
+
     warned = False
     republish_attempts = 0
     bilibili_reclick_attempts = 0
@@ -23134,6 +23184,13 @@ def _wait_publish_feedback(
         url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
         text_lower = str(text or "").lower()
         url_lower = str(url or "").lower()
+        now = time.time()
+        marker_hit = next((marker for marker in activity_markers if marker and marker in text_lower), "")
+        if marker_hit:
+            should_extend = (marker_hit != last_activity_marker) or ((now - last_extension_at) >= 5.0)
+            if should_extend:
+                _extend_feedback_window(f"activity:{marker_hit}")
+                last_activity_marker = marker_hit
 
         if platform_name == "douyin":
             # Best effort: some accounts show a delayed confirm dialog.
@@ -24299,6 +24356,15 @@ def _fill_draft_once_generic(
             bilibili_mode = "immediate"
             _log("[Uploader:bilibili] Publish mode(fixed): immediate")
 
+        def _fallback_publish_to_draft(reason: str, error: Exception | None = None) -> None:
+            _log(f"[Uploader:{platform_name}] {reason}, fallback to save draft.")
+            if _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
+                _log(f"[Uploader:{platform_name}] Publish unconfirmed; draft save was used as failure fallback.")
+                message = f"{platform_name} {reason}; automatically saved as draft / returned to draft-state."
+                if error is not None:
+                    raise RuntimeError(message) from error
+                raise RuntimeError(message)
+
         def _confirm_publish() -> None:
             nonlocal douyin_mode
             if platform_name == "douyin":
@@ -24352,6 +24418,17 @@ def _fill_draft_once_generic(
             clicked_publish = _click_x_primary_publish_button(ctx, page)
         else:
             clicked_publish = _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
+        if not clicked_publish and platform_name in {"kuaishou", "bilibili"}:
+            clicked_publish = _click_first_matching_button(
+                ctx,
+                page,
+                publish_button_texts,
+                platform_name=platform_name,
+            )
+            if (not clicked_publish) and platform_name == "kuaishou":
+                clicked_publish = _click_kuaishou_publish_confirm_button(ctx, page)
+                if clicked_publish:
+                    _log("[Uploader:kuaishou] Accepted confirm-style publish button as primary publish trigger.")
         if not clicked_publish:
             if platform_name in {"douyin", "kuaishou", "bilibili"} and _dismiss_unfinished_dialog(
                 ctx,
@@ -24424,6 +24501,7 @@ def _fill_draft_once_generic(
                         f"over_limit={bool(x_state.get('over_limit'))}, "
                         f"over_by={x_state.get('over_by', 0)}"
                     )
+            _fallback_publish_to_draft("publish button was not located")
             actions = _collect_visible_action_texts(ctx, page)
             if actions:
                 _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
@@ -24466,12 +24544,7 @@ def _fill_draft_once_generic(
                     _log(f"[Uploader:bilibili] Publish probe summary: {probe_summary}")
                 if probe_diagnosis:
                     _log(f"[Uploader:bilibili] Publish probe diagnosis: {probe_diagnosis}")
-                _log(f"[Uploader:{platform_name}] Publish not confirmed, fallback to save draft: {exc}")
-                if _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
-                    _log(f"[Uploader:{platform_name}] Publish unconfirmed; draft save was used as failure fallback.")
-                    raise RuntimeError(
-                        f"{platform_name} publish was not confirmed; automatically saved as draft / returned to draft-state."
-                    ) from exc
+            _fallback_publish_to_draft("publish was not confirmed", exc)
             raise
         if platform_name == "douyin":
             _log(f"[Success:{platform_name}] 发布已确认（mode={douyin_mode}）。")
