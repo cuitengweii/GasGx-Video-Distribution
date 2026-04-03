@@ -489,15 +489,8 @@ DEFAULT_X_CHROME_USER_DATA_DIR = _default_x_chrome_user_data_dir()
 
 
 def _default_wechat_chrome_user_data_dir() -> str:
-    from_env = str(os.getenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", "") or "").strip()
-    if from_env:
-        return str(Path(from_env).expanduser())
-    if callable(get_paths):
-        try:
-            return str(get_paths().wechat_profile_dir)
-        except Exception:
-            pass
-    return DEFAULT_CHROME_USER_DATA_DIR + "_WeChat"
+    # Force shared Chrome profile with other publish platforms.
+    return DEFAULT_CHROME_USER_DATA_DIR
 
 
 DEFAULT_WECHAT_CHROME_USER_DATA_DIR = _default_wechat_chrome_user_data_dir()
@@ -522,18 +515,11 @@ DEFAULT_X_DEBUG_PORT = _default_x_debug_port()
 
 
 def _default_wechat_debug_port() -> int:
-    raw = str(os.getenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", "") or "").strip()
-    if raw:
-        try:
-            value = int(raw)
-        except Exception:
-            value = 0
-        if 1 <= value <= 65535:
-            return value
-    fallback = DEFAULT_PORT + 1
+    # Force shared debug port with other publish platforms.
+    fallback = DEFAULT_PORT
     if 1 <= fallback <= 65535:
         return fallback
-    return 9334
+    return 9333
 
 
 DEFAULT_WECHAT_DEBUG_PORT = _default_wechat_debug_port()

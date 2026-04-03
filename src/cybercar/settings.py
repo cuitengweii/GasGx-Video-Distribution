@@ -110,13 +110,11 @@ def apply_runtime_environment() -> AppPaths:
     paths.ensure()
     config = load_app_config()
     os.environ.setdefault("CYBERCAR_CHROME_USER_DATA_DIR", str(paths.default_profile_dir))
-    os.environ.setdefault("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", str(paths.wechat_profile_dir))
     os.environ.setdefault("CYBERCAR_X_CHROME_USER_DATA_DIR", str(paths.x_profile_dir))
     os.environ.setdefault("CYBERCAR_X_COOKIE_FILE", str(paths.x_cookie_file_path))
     chrome_cfg = config.get("chrome") if isinstance(config.get("chrome"), dict) else {}
     network_cfg = config.get("network") if isinstance(config.get("network"), dict) else {}
     default_port = str(chrome_cfg.get("default_debug_port") or "").strip()
-    wechat_port = str(chrome_cfg.get("wechat_debug_port") or "").strip()
     x_port = str(chrome_cfg.get("x_debug_port") or "").strip()
     default_proxy = str(network_cfg.get("proxy") or "").strip()
     if default_proxy:
@@ -128,8 +126,6 @@ def apply_runtime_environment() -> AppPaths:
         )
     if default_port:
         os.environ.setdefault("CYBERCAR_CHROME_DEBUG_PORT", default_port)
-    if wechat_port:
-        os.environ.setdefault("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", wechat_port)
     if x_port:
         os.environ.setdefault("CYBERCAR_X_CHROME_DEBUG_PORT", x_port)
     return paths

@@ -4371,13 +4371,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wechat-debug-port",
         type=int,
-        default=_env_int("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", core.DEFAULT_PORT + 1),
-        help="WeChat upload debug port; use independent port to keep login stable.",
+        default=_env_int("CYBERCAR_CHROME_DEBUG_PORT", core.DEFAULT_PORT),
+        help="WeChat upload debug port; forced to shared publish Chrome port.",
     )
     parser.add_argument(
         "--wechat-chrome-user-data-dir",
-        default=os.getenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", core.DEFAULT_CHROME_USER_DATA_DIR + "_WeChat"),
-        help="WeChat upload Chrome user data dir; use independent profile to reduce relogin.",
+        default=os.getenv("CYBERCAR_CHROME_USER_DATA_DIR", core.DEFAULT_CHROME_USER_DATA_DIR),
+        help="WeChat upload Chrome user data dir; forced to shared publish profile.",
     )
     parser.add_argument("--no-auto-open-chrome", action="store_true")
     parser.add_argument(

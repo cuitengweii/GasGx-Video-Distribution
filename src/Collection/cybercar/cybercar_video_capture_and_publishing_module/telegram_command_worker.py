@@ -86,6 +86,14 @@ _PREFERRED_WORKSPACE = _default_workspace_path()
 DEFAULT_WORKSPACE = str(_PREFERRED_WORKSPACE)
 DEFAULT_REPO_ROOT = str(_default_repo_root_path())
 DEFAULT_PROFILE = "cybertruck"
+DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE = "x_to_cn"
+DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE = "cn_to_global"
+COLLECT_PUBLISH_ACTION = "collect_publish_latest"
+COLLECT_PUBLISH_ACTION_DOMESTIC = "collect_publish_latest_domestic"
+COLLECT_PUBLISH_ACTION_GLOBAL = "collect_publish_latest_global"
+COLLECT_PUBLISH_MENU_ACTION = "collect_publish_latest_menu"
+COLLECT_PUBLISH_MENU_ACTION_DOMESTIC = "collect_publish_latest_menu_domestic"
+COLLECT_PUBLISH_MENU_ACTION_GLOBAL = "collect_publish_latest_menu_global"
 DEFAULT_UNIFIED_RUNNER_REL = Path("scripts") / "telegram_unified_runner.ps1"
 DEFAULT_PROFILE_CONFIG_REL = Path("config") / "profiles.json"
 DEFAULT_OFFSET_FILE = Path("runtime") / "telegram_command_worker_offset.txt"
@@ -107,7 +115,7 @@ DEFAULT_POLL_NETWORK_FAILURE_RESTART_THRESHOLD = 6
 DEFAULT_TELEGRAM_POST_RETRY_COUNT = 3
 DEFAULT_HOME_FORCE_NEW_DEBOUNCE_SECONDS = 6
 DEFAULT_HOME_SHORTCUT_DEBOUNCE_SECONDS = 3600
-DEFAULT_HOME_SHORTCUT_KEYBOARD_VERSION = 5
+DEFAULT_HOME_SHORTCUT_KEYBOARD_VERSION = 6
 DEFAULT_HOME_SURFACE_VERSION = 3
 DEFAULT_ACTION_QUEUE_STALE_SECONDS = 1800
 DEFAULT_ACTION_QUEUE_TERMINAL_RETENTION_SECONDS = 86400
@@ -249,6 +257,25 @@ IMMEDIATE_PUBLISH_APPROVED_STATUSES = {
 IMMEDIATE_COLLECT_MEDIA_KIND_PLATFORMS = {
     "video": PUBLISH_PLATFORM_ORDER.copy(),
     "image": ["douyin", "xiaohongshu", "kuaishou"],
+}
+COLLECT_SOURCE_PLATFORM_ORDER = ["x", "douyin", "xiaohongshu"]
+COLLECT_SOURCE_PLATFORM_DISPLAY = {
+    "x": "X",
+    "douyin": "抖音",
+    "xiaohongshu": "小红书",
+}
+COLLECT_SOURCE_PLATFORM_ALIAS_MAP = {
+    "x": "x",
+    "twitter": "x",
+    "推特": "x",
+    "douyin": "douyin",
+    "dy": "douyin",
+    "抖音": "douyin",
+    "xiaohongshu": "xiaohongshu",
+    "xhs": "xiaohongshu",
+    "hongshu": "xiaohongshu",
+    "xiaohongshu_note": "xiaohongshu",
+    "小红书": "xiaohongshu",
 }
 IMAGE_PUBLISH_CARD_PLATFORM_ORDER = ["douyin", "xiaohongshu", "kuaishou"]
 PUBLISH_PLATFORM_DISPLAY = {
@@ -1419,11 +1446,12 @@ def _build_home_reply_keyboard() -> Dict[str, Any]:
     return {
         "keyboard": [
             [{"text": "🔐 登录"}, {"text": "📍 进度"}],
-            [{"text": "⚡ 即采即发"}, {"text": "💬 点赞评论"}],
+            [{"text": "🇨🇳 国内即采即发"}, {"text": "🌐 海外即采即发"}],
+            [{"text": "💬 点赞评论"}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
-        "input_field_placeholder": "使用底部快捷键直达常用入口",
+        "input_field_placeholder": "使用底部快捷键直达国内/海外入口",
     }
 
 
@@ -1492,7 +1520,7 @@ def _ensure_home_shortcut_keyboard(
         message_id = _send_text_message(
             bot_token=bot_token,
             chat_id=clean_chat_id,
-            text="已启用底部快捷键：可直接使用即采即发、进度、登录、点赞评论。",
+            text="已启用底部快捷键：可直接使用国内即采即发、海外即采即发、进度、登录、点赞评论。",
             timeout_seconds=max(8, int(timeout_seconds)),
             reply_markup=_build_home_reply_keyboard(),
         )
@@ -1712,6 +1740,10 @@ def _normalize_shortcut_text(text: str) -> str:
     if not clean:
         return ""
     shortcut_map = {
+        "🇨🇳 国内即采即发": "国内即采即发",
+        "国内即采即发": "国内即采即发",
+        "🌐 海外即采即发": "海外即采即发",
+        "海外即采即发": "海外即采即发",
         "⚡ 即采即发": "即采即发",
         "✨ 即采即发": "即采即发",
         "即采即发": "即采即发",
@@ -1869,6 +1901,8 @@ def _menu_label_for_action(action: str) -> str:
     mapping = {
         "login_qr": "平台登录",
         "collect_publish_latest": "即采即发",
+        "collect_publish_latest_domestic": "国内即采即发",
+        "collect_publish_latest_global": "海外即采即发",
         "comment_reply_run": "点赞评论",
         "process_status": "进程查看",
     }
@@ -1932,7 +1966,7 @@ def _menu_breadcrumb_for_action(action: str, value: str = "") -> str:
     elif action_token == "login_qr":
         if value_token:
             parts.append(_menu_platform_label(value_token))
-    elif action_token == "collect_publish_latest":
+    elif _is_collect_publish_action(action_token):
         media_kind, count = _parse_collect_publish_request_value(value_token)
         parts.append(_menu_media_label(action_token, media_kind))
         parts.append(_menu_count_label(count))
@@ -2373,7 +2407,8 @@ def _build_home_sections(profile: str) -> list[dict[str, Any]]:
             "emoji": "🚀",
             "items": [
                 {"label": "默认 profile", "value": profile},
-                "即采即发：扫描最新候选，人工确认后再进入平台发布。",
+                "国内即采即发：X -> 视频号/抖音/小红书/快手/B站。",
+                "海外即采即发：抖音/小红书 -> TikTok/X。",
                 "平台登录：按平台返回登录二维码。",
                 "点赞评论：处理近期有评论的视频并回传结果。",
             ],
@@ -3240,6 +3275,56 @@ def _parse_collect_publish_request_value(raw: str) -> tuple[str, int]:
     return "video", _parse_collect_publish_candidate_limit(token)
 
 
+def _collect_publish_route_key(action: str) -> str:
+    token = str(action or "").strip().lower()
+    if token in {COLLECT_PUBLISH_ACTION_DOMESTIC, COLLECT_PUBLISH_MENU_ACTION_DOMESTIC}:
+        return "domestic"
+    if token in {COLLECT_PUBLISH_ACTION_GLOBAL, COLLECT_PUBLISH_MENU_ACTION_GLOBAL}:
+        return "global"
+    return "default"
+
+
+def _collect_publish_callback_action(route_key: str) -> str:
+    token = str(route_key or "").strip().lower()
+    if token == "domestic":
+        return COLLECT_PUBLISH_ACTION_DOMESTIC
+    if token == "global":
+        return COLLECT_PUBLISH_ACTION_GLOBAL
+    return COLLECT_PUBLISH_ACTION
+
+
+def _collect_publish_profile_for_route(route_key: str, default_profile: str) -> str:
+    token = str(route_key or "").strip().lower()
+    if token == "domestic":
+        return _normalize_profile_name(DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE)
+    if token == "global":
+        return _normalize_profile_name(DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE)
+    return _normalize_profile_name(default_profile)
+
+
+def _collect_publish_route_label(route_key: str) -> str:
+    token = str(route_key or "").strip().lower()
+    if token == "domestic":
+        return "国内链路（X→国内）"
+    if token == "global":
+        return "海外链路（国内→海外）"
+    return "标准链路"
+
+
+def _collect_publish_source_hint_for_route(route_key: str) -> str:
+    token = str(route_key or "").strip().lower()
+    if token == "global":
+        return "抖音/小红书关键词搜索"
+    if token == "domestic":
+        return "X 搜索结果时间倒序"
+    return "按当前配置源站搜索"
+
+
+def _is_collect_publish_action(action: str) -> bool:
+    token = str(action or "").strip().lower()
+    return token in {COLLECT_PUBLISH_ACTION, COLLECT_PUBLISH_ACTION_DOMESTIC, COLLECT_PUBLISH_ACTION_GLOBAL}
+
+
 def _parse_collect_request_value(raw: str) -> tuple[str, int]:
     token = str(raw or "").strip().lower()
     if not token:
@@ -3277,6 +3362,142 @@ def _parse_publish_request_value(raw: str) -> tuple[str, str]:
 def _collect_publish_target_platforms(media_kind: str) -> list[str]:
     normalized = _normalize_immediate_collect_media_kind(media_kind)
     return list(IMMEDIATE_COLLECT_MEDIA_KIND_PLATFORMS.get(normalized, PUBLISH_PLATFORM_ORDER))
+
+
+def _load_profile_config_payload(repo_root: Path) -> dict[str, Any]:
+    profile_config_path = (repo_root / DEFAULT_PROFILE_CONFIG_REL).resolve()
+    if not profile_config_path.exists():
+        return {}
+    try:
+        payload = json.loads(profile_config_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_profile_payload(
+    *,
+    repo_root: Path,
+    profile: str,
+    profile_config: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload = profile_config if isinstance(profile_config, dict) else _load_profile_config_payload(repo_root)
+    profiles = payload.get("profiles", {}) if isinstance(payload.get("profiles"), dict) else {}
+    active_profile = _normalize_profile_name(profile)
+    default_profile = str(payload.get("default_profile", "") or DEFAULT_PROFILE).strip() or DEFAULT_PROFILE
+    profile_payload = profiles.get(active_profile)
+    if not isinstance(profile_payload, dict):
+        profile_payload = profiles.get(default_profile)
+    return dict(profile_payload) if isinstance(profile_payload, dict) else {}
+
+
+def _normalize_collect_source_platform(raw: Any) -> str:
+    token = str(raw or "").strip().lower()
+    if not token:
+        return ""
+    return str(COLLECT_SOURCE_PLATFORM_ALIAS_MAP.get(token) or "")
+
+
+def _normalize_collect_source_platforms(raw: Any) -> list[str]:
+    raw_items: list[Any] = []
+    if isinstance(raw, str):
+        token = str(raw or "").strip()
+        if token:
+            raw_items = [part for part in re.split(r"[,\s/|]+", token) if str(part or "").strip()]
+    elif isinstance(raw, Iterable):
+        raw_items = [item for item in raw]
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        normalized = _normalize_collect_source_platform(item)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved.append(normalized)
+    return resolved
+
+
+def _resolve_collect_publish_source_platforms(
+    *,
+    repo_root: Path,
+    profile: str,
+    profile_payload: Optional[dict[str, Any]] = None,
+    profile_config: Optional[dict[str, Any]] = None,
+) -> list[str]:
+    resolved_profile = _normalize_profile_name(profile).lower()
+    payload = dict(profile_payload) if isinstance(profile_payload, dict) else _resolve_profile_payload(
+        repo_root=repo_root,
+        profile=profile,
+        profile_config=profile_config,
+    )
+    configured = _normalize_collect_source_platforms(payload.get("source_platforms"))
+    if configured:
+        return configured
+    if resolved_profile == DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE.lower():
+        return ["douyin", "xiaohongshu"]
+    if resolved_profile == DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE.lower():
+        return ["x"]
+    return ["x"]
+
+
+def _resolve_collect_source_platform_from_url(source_url: str) -> str:
+    host = str(urlparse(str(source_url or "").strip()).netloc or "").strip().lower()
+    if not host:
+        return ""
+    if any(token in host for token in ("x.com", "twitter.com", "t.co")):
+        return "x"
+    if any(token in host for token in ("douyin.com", "iesdouyin.com", "douyinv.com")):
+        return "douyin"
+    if any(token in host for token in ("xiaohongshu.com", "xhslink.com", "rednote.com")):
+        return "xiaohongshu"
+    return ""
+
+
+def _resolve_candidate_collect_source_platform(candidate: Mapping[str, Any]) -> str:
+    source_platform = _normalize_collect_source_platform(candidate.get("source_platform"))
+    if source_platform:
+        return source_platform
+    return _resolve_collect_source_platform_from_url(str(candidate.get("url") or ""))
+
+
+def _collect_publish_source_platforms_text(source_platforms: Sequence[str]) -> str:
+    normalized = _normalize_collect_source_platforms(source_platforms)
+    if not normalized:
+        normalized = ["x"]
+    labels = [COLLECT_SOURCE_PLATFORM_DISPLAY.get(item, item.upper()) for item in normalized]
+    return "/".join(labels)
+
+
+def _collect_publish_source_scan_label(source_platforms: Sequence[str]) -> str:
+    normalized = _normalize_collect_source_platforms(source_platforms)
+    if normalized == ["x"]:
+        return "X 搜索结果时间倒序"
+    return f"{_collect_publish_source_platforms_text(normalized)}关键词搜索"
+
+
+def _collect_publish_source_target_subtitle(source_platforms: Sequence[str], requested_limit: int) -> str:
+    return f"候选来源：{_collect_publish_source_scan_label(source_platforms)}｜目标 {max(1, int(requested_limit))} 条"
+
+
+def _collect_publish_source_recent_subtitle(source_platforms: Sequence[str], requested_limit: int) -> str:
+    return f"候选来源：{_collect_publish_source_scan_label(source_platforms)}最近 {max(1, int(requested_limit))} 条"
+
+
+def _collect_publish_scan_detail(source_platforms: Sequence[str], media_label: str) -> str:
+    normalized = _normalize_collect_source_platforms(source_platforms)
+    if normalized == ["x"]:
+        return f"浏览器正在按时间倒序扫描 X {media_label}搜索结果，并会直接返回候选预审卡片。"
+    return (
+        f"浏览器正在按关键词扫描{_collect_publish_source_platforms_text(normalized)} {media_label}内容，"
+        "并会直接返回候选预审卡片。"
+    )
+
+
+def _collect_publish_no_candidate_detail(source_platforms: Sequence[str], media_label: str) -> str:
+    normalized = _normalize_collect_source_platforms(source_platforms)
+    if normalized == ["x"]:
+        return f"按 X 搜索结果时间倒序扫描后，未发现可用 X {media_label}帖子。"
+    return f"按{_collect_publish_source_platforms_text(normalized)}关键词搜索扫描后，未发现可用{media_label}内容。"
 
 
 def _parse_comment_reply_post_limit(raw: str) -> int:
@@ -3503,22 +3724,36 @@ def _build_login_menu_card(*, default_profile: str) -> Dict[str, Any]:
     )
 
 
-def _build_collect_publish_latest_menu_card(*, default_profile: str) -> Dict[str, Any]:
+def _build_collect_publish_latest_menu_card(
+    *,
+    default_profile: str,
+    callback_action: str = COLLECT_PUBLISH_ACTION,
+    route_label: str = "",
+) -> Dict[str, Any]:
     profile = _normalize_profile_name(default_profile)
     actions = []
+    normalized_callback_action = (
+        callback_action
+        if callback_action in {COLLECT_PUBLISH_ACTION, COLLECT_PUBLISH_ACTION_DOMESTIC, COLLECT_PUBLISH_ACTION_GLOBAL}
+        else COLLECT_PUBLISH_ACTION
+    )
+    normalized_route_label = str(route_label or "").strip()
+    subtitle_prefix = f"{normalized_route_label}｜" if normalized_route_label else ""
+    route_key = _collect_publish_route_key(normalized_callback_action)
+    source_hint = _collect_publish_source_hint_for_route(route_key)
     for idx, count in enumerate(COLLECT_PUBLISH_CANDIDATE_OPTIONS):
         row = idx
         actions.append(
             {
                 "text": f"🎬 视频 {count} 条",
-                "callback_data": build_home_callback_data("cybercar", "collect_publish_latest", f"video:{count}"),
+                "callback_data": build_home_callback_data("cybercar", normalized_callback_action, f"video:{count}"),
                 "row": row,
             }
         )
         actions.append(
             {
                 "text": f"🖼 图片 {count} 条",
-                "callback_data": build_home_callback_data("cybercar", "collect_publish_latest", f"image:{count}"),
+                "callback_data": build_home_callback_data("cybercar", normalized_callback_action, f"image:{count}"),
                 "row": row,
             }
         )
@@ -3538,14 +3773,14 @@ def _build_collect_publish_latest_menu_card(*, default_profile: str) -> Dict[str
     )
     return _build_submenu_card(
         title="\u5373\u91c7\u5373\u53d1",
-        subtitle=f"\u5f53\u524d\u914d\u7f6e\uff1a{profile}\uff5c\u89c6\u9891/\u56fe\u7247\u53cc\u6d41\u7a0b",
+        subtitle=f"\u5f53\u524d\u914d\u7f6e\uff1a{profile}\uff5c{subtitle_prefix}\u89c6\u9891/\u56fe\u7247\u53cc\u6d41\u7a0b",
         sections=[
             {
                 "title": "\u6267\u884c\u8bf4\u660e",
                 "emoji": "\u26a1",
                 "items": [
-                    "\u89c6\u9891\u5373\u91c7\u5373\u53d1\uff1a\u53ea\u626b X \u89c6\u9891\u5e16\uff0c\u540e\u7eed\u8fdb\u5165\u89c6\u9891\u53d1\u5e03\u6d41\u7a0b\u3002",
-                    "\u56fe\u7247\u5373\u91c7\u5373\u53d1\uff1a\u53ea\u626b X \u56fe\u7247\u5e16\uff0c\u786e\u8ba4\u540e\u6309\u5b9e\u9645\u6d41\u7a0b\u8fdb\u5165\u6296\u97f3 / \u5c0f\u7ea2\u4e66 / \u5feb\u624b\u53d1\u5e03\u3002",
+                    f"\u89c6\u9891\u5373\u91c7\u5373\u53d1\uff1a\u4ece{source_hint}\u626b\u63cf\u5019\u9009\uff0c\u540e\u7eed\u8fdb\u5165\u89c6\u9891\u53d1\u5e03\u6d41\u7a0b\u3002",
+                    f"\u56fe\u7247\u5373\u91c7\u5373\u53d1\uff1a\u4ece{source_hint}\u626b\u63cf\u5019\u9009\uff0c\u786e\u8ba4\u540e\u6309\u5b9e\u9645\u6d41\u7a0b\u8fdb\u5165\u6296\u97f3 / \u5c0f\u7ea2\u4e66 / \u5feb\u624b\u53d1\u5e03\u3002",
                     "\u4e24\u6761\u6d41\u7a0b\u7684\u5019\u9009\u961f\u5217\u3001\u5904\u7406\u548c\u53d1\u5e03\u8bb0\u5f55\u76f8\u4e92\u72ec\u7acb\u3002",
                 ],
             }
@@ -3588,8 +3823,17 @@ def _build_home_actions() -> list[dict[str, Any]]:
     return [
         {"text": "🔐 登录", "callback_data": build_home_callback_data("cybercar", "login_menu"), "row": 0},
         {"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": 0},
-        {"text": "✨ 即采即发", "callback_data": build_home_callback_data("cybercar", "collect_publish_latest_menu"), "row": 1},
-        {"text": "💬 点赞评论", "callback_data": build_home_callback_data("cybercar", "comment_reply_menu"), "row": 1},
+        {
+            "text": "🇨🇳 国内即采即发",
+            "callback_data": build_home_callback_data("cybercar", COLLECT_PUBLISH_MENU_ACTION_DOMESTIC),
+            "row": 1,
+        },
+        {
+            "text": "🌐 海外即采即发",
+            "callback_data": build_home_callback_data("cybercar", COLLECT_PUBLISH_MENU_ACTION_GLOBAL),
+            "row": 1,
+        },
+        {"text": "💬 点赞评论", "callback_data": build_home_callback_data("cybercar", "comment_reply_menu"), "row": 2},
     ]
 
 
@@ -4049,6 +4293,10 @@ def _home_action_title(action: str) -> str:
         "worker_status": "系统状态",
         "wechat_login_qr": "获取二维码",
         "collect_publish_latest": "即采即发",
+        "collect_publish_latest_domestic": "国内即采即发",
+        "collect_publish_latest_global": "海外即采即发",
+        "collect_publish_latest_menu_domestic": "国内即采即发",
+        "collect_publish_latest_menu_global": "海外即采即发",
         "comment_reply_menu": "点赞评论",
         "comment_reply_run": "点赞评论",
         "home": "返回首页",
@@ -4077,7 +4325,7 @@ def _home_action_loading_text(action: str, value: str) -> str:
     if action_token == "login_qr":
         platform_label = PUBLISH_PLATFORM_DISPLAY.get(value_token, value_token or "目标平台")
         return f"⏳ 正在获取{platform_label}登录二维码..."
-    if action_token == "collect_publish_latest":
+    if _is_collect_publish_action(action_token):
         media_kind, count = _parse_collect_publish_request_value(value_token)
         media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
         return f"⏳ 正在整理{media_label}即采即发候选，目标 {count} 条..."
@@ -4276,8 +4524,11 @@ def _handle_home_callback(
         )
         return {"handled": True, "update_id": update_id}
 
-    if action == "collect_publish_latest_menu":
-        media_kind = _parse_media_kind_value(value)
+    if action in {COLLECT_PUBLISH_MENU_ACTION, COLLECT_PUBLISH_MENU_ACTION_DOMESTIC, COLLECT_PUBLISH_MENU_ACTION_GLOBAL}:
+        route_key = _collect_publish_route_key(action)
+        callback_action = _collect_publish_callback_action(route_key)
+        route_profile = _collect_publish_profile_for_route(route_key, resolved_default_profile)
+        route_label = _collect_publish_route_label(route_key) if route_key != "default" else ""
         if value:
             answer_interaction_toast(
                 bot_token=bot_token,
@@ -4286,11 +4537,36 @@ def _handle_home_callback(
                 status="success",
                 timeout_seconds=timeout_seconds,
             )
-            card = _build_collect_publish_latest_menu_card(default_profile=resolved_default_profile)
+            card = _build_collect_publish_latest_menu_card(
+                default_profile=route_profile,
+                callback_action=callback_action,
+                route_label=route_label,
+            )
             _send_interaction_result_async(
                 bot_token=bot_token,
                 chat_id=chat_id,
                 card=card,
+                timeout_seconds=timeout_seconds,
+                message_id=message_id,
+                inline_message_id=inline_message_id,
+            )
+            return {"handled": True, "update_id": update_id}
+        if action in {COLLECT_PUBLISH_MENU_ACTION_DOMESTIC, COLLECT_PUBLISH_MENU_ACTION_GLOBAL}:
+            answer_interaction_toast(
+                bot_token=bot_token,
+                query_id=query_id,
+                action=action,
+                status="success",
+                timeout_seconds=timeout_seconds,
+            )
+            _send_interaction_result_async(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                card=_build_collect_publish_latest_menu_card(
+                    default_profile=route_profile,
+                    callback_action=callback_action,
+                    route_label=route_label,
+                ),
                 timeout_seconds=timeout_seconds,
                 message_id=message_id,
                 inline_message_id=inline_message_id,
@@ -4317,6 +4593,13 @@ def _handle_home_callback(
             inline_message_id=inline_message_id,
         )
         return {"handled": True, "update_id": update_id}
+
+    action_profile = resolved_default_profile
+    execution_action = action
+    if _is_collect_publish_action(action):
+        route_key = _collect_publish_route_key(action)
+        action_profile = _collect_publish_profile_for_route(route_key, resolved_default_profile)
+        execution_action = COLLECT_PUBLISH_ACTION
 
     if action == "comment_reply_menu":
         answer_interaction_toast(
@@ -4368,8 +4651,8 @@ def _handle_home_callback(
         value = platform_value
 
     title = _home_action_title(action)
-    if action in HOME_ACTION_ASYNC_ACTIONS:
-        if _has_runtime_conflict_for_action(workspace, action=action, value=value):
+    if execution_action in HOME_ACTION_ASYNC_ACTIONS:
+        if _has_runtime_conflict_for_action(workspace, action=execution_action, value=value):
             _answer_callback_query(
                 bot_token=bot_token,
                 query_id=query_id,
@@ -4383,8 +4666,8 @@ def _handle_home_callback(
                     _home_feedback_response(
                         status="blocked",
                         title=_home_action_feedback_title(action, "blocked", value),
-                        subtitle=f"当前配置：{resolved_default_profile}",
-                        detail=_describe_runtime_conflict(workspace, action=action, value=value),
+                        subtitle=f"当前配置：{action_profile}",
+                        detail=_describe_runtime_conflict(workspace, action=execution_action, value=value),
                         menu_label=_menu_breadcrumb_for_action(action, value),
                         task_identifier=_build_task_identifier(action=action, value=value),
                     )
@@ -4408,9 +4691,9 @@ def _handle_home_callback(
         claim = _claim_home_action_task(
             workspace=workspace,
             chat_id=chat_id,
-            action=action,
+            action=execution_action,
             value=value,
-            profile=resolved_default_profile,
+            profile=action_profile,
             username=username,
         )
         task = claim.get("task") if isinstance(claim.get("task"), dict) else {}
@@ -4429,7 +4712,7 @@ def _handle_home_callback(
                     _home_feedback_response(
                         status="running",
                         title=_home_action_feedback_title(action, "running", value),
-                        subtitle=f"当前配置：{resolved_default_profile}",
+                        subtitle=f"当前配置：{action_profile}",
                         detail=_describe_home_action_task(task),
                         menu_label=_menu_breadcrumb_for_action(action, value),
                         task_identifier=_build_task_identifier(
@@ -4453,7 +4736,7 @@ def _handle_home_callback(
             text="任务已受理，正在排队执行。",
             timeout_seconds=timeout_seconds,
         )
-        if action in HOME_ACTION_LOADING_PLACEHOLDER_ACTIONS and chat_id:
+        if execution_action in HOME_ACTION_LOADING_PLACEHOLDER_ACTIONS and chat_id:
             loading_message_id = _send_loading_placeholder(
                 bot_token=bot_token,
                 chat_id=chat_id,
@@ -4473,7 +4756,7 @@ def _handle_home_callback(
                 _home_feedback_response(
                     status="running",
                     title=_home_action_feedback_title(action, "queued", value),
-                    subtitle=f"当前配置：{resolved_default_profile}",
+                    subtitle=f"当前配置：{action_profile}",
                     detail="请求已进入后台队列。你可以稍后刷新首页查看最近有效任务，系统也会继续回传最终结果。",
                     menu_label=_menu_breadcrumb_for_action(action, value),
                     task_identifier=_build_task_identifier(action=action, value=value),
@@ -4489,17 +4772,17 @@ def _handle_home_callback(
                 repo_root=repo_root,
                 workspace=workspace,
                 timeout_seconds=timeout_seconds,
-                profile=resolved_default_profile,
+                profile=action_profile,
                 telegram_bot_identifier=runtime_bot_identifier,
                 telegram_bot_token=bot_token,
                 telegram_chat_id=chat_id,
-                action=action,
+                action=execution_action,
                 value=queued_value,
                 task_key=task_key,
                 immediate_test_mode=immediate_test_mode,
             )
             detail = "后台任务已启动。"
-            if action == "collect_publish_latest":
+            if execution_action == COLLECT_PUBLISH_ACTION:
                 media_kind, _count = _parse_collect_publish_request_value(queued_value)
                 media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
                 target_platforms = _collect_publish_target_platforms(media_kind)
@@ -4508,19 +4791,19 @@ def _handle_home_callback(
                     "后续会先扫描候选，再逐条发送预审卡片；"
                     f"只有你明确点击“普通发布”或“原创发布”的候选，才会进入{_format_platform_text(target_platforms)}发布。"
                 )
-            elif action == "comment_reply_run":
+            elif execution_action == "comment_reply_run":
                 comment_platform, comment_limit = _parse_comment_reply_request_value(queued_value)
                 if comment_platform == "all":
                     detail = f"三平台点赞评论后台任务已启动，本轮会按相同数量检查最近 {max(1, int(comment_limit))} 个有评论视频。"
                 else:
                     detail = f"{_menu_platform_label(comment_platform)}点赞评论后台任务已启动，本轮会检查最近 {max(1, int(comment_limit))} 个有评论视频。"
-            elif action == "login_qr":
+            elif execution_action == "login_qr":
                 detail = "正在检查登录会话并准备二维码消息。"
-            elif action == "publish_run":
+            elif execution_action == "publish_run":
                 detail = "发布任务已进入后台队列，完成后会继续回传平台结果。"
-            elif action == "schedule_run":
+            elif execution_action == "schedule_run":
                 detail = "定时发布任务已进入后台队列，完成后会继续回传结果。"
-            elif action == "collect_now":
+            elif execution_action == "collect_now":
                 detail = "采集任务已进入后台队列，完成后会回传采集结果。"
             updated_task = _update_home_action_task(
                 workspace,
@@ -4537,7 +4820,7 @@ def _handle_home_callback(
                     _home_feedback_response(
                         status="running",
                         title=_home_action_feedback_title(action, "running", queued_value),
-                        subtitle=f"当前配置：{resolved_default_profile}",
+                        subtitle=f"当前配置：{action_profile}",
                         detail=_describe_home_action_task(updated_task),
                         menu_label=_menu_breadcrumb_for_action(action, queued_value),
                         task_identifier=_build_task_identifier(
@@ -4574,7 +4857,7 @@ def _handle_home_callback(
                     _home_feedback_response(
                         status="failed",
                         title=_home_action_feedback_title(action, "failed", value),
-                        subtitle=f"当前配置：{resolved_default_profile}",
+                        subtitle=f"当前配置：{action_profile}",
                         detail=_describe_home_action_task(failed_task),
                         menu_label=_menu_breadcrumb_for_action(action, value),
                         task_identifier=_build_task_identifier(
@@ -4654,7 +4937,7 @@ def _handle_home_callback(
         value,
         detail,
     )
-    if action in {"collect_publish_latest", "comment_reply_run"}:
+    if _is_collect_publish_action(action) or action == "comment_reply_run":
         result_title = f"{title}已启动"
     send_interaction_result(
         bot_token=bot_token,
@@ -5172,7 +5455,7 @@ def _normalize_home_action_value(action: str, value: str) -> str:
         valid_platforms = _collect_publish_target_platforms(media_kind)
         platform_value = platform if platform in valid_platforms else "all"
         return f"{media_kind}:{max(0, int(minutes))}:{platform_value}"
-    if action_token == "collect_publish_latest":
+    if _is_collect_publish_action(action_token):
         media_kind, count = _parse_collect_publish_request_value(raw)
         return f"{media_kind}:{count}"
     if action_token == "comment_reply_run":
@@ -6695,6 +6978,11 @@ def _upsert_immediate_candidate_item(
         row["created_at"] = str(row.get("created_at") or _now_text())
         row["updated_at"] = _now_text()
         row["source_url"] = str(candidate.get("url") or row.get("source_url") or "").strip()
+        row["source_platform"] = (
+            _normalize_collect_source_platform(candidate.get("source_platform"))
+            or _resolve_collect_source_platform_from_url(str(candidate.get("url") or ""))
+            or _normalize_collect_source_platform(row.get("source_platform"))
+        )
         row["published_at"] = str(candidate.get("published_at") or row.get("published_at") or "").strip()
         row["display_time"] = str(candidate.get("display_time") or row.get("display_time") or "").strip()
         row["tweet_text"] = str(candidate.get("tweet_text") or row.get("tweet_text") or "").strip()
@@ -7349,13 +7637,13 @@ def _resolve_platform_login_runtime_context(
 ) -> Dict[str, Any]:
     platform = str(platform_name or "wechat").strip().lower() or "wechat"
     if platform == "wechat":
-        debug_port = int(os.getenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", str(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", 9334))))
+        debug_port = int(os.getenv("CYBERCAR_CHROME_DEBUG_PORT", str(getattr(core, "DEFAULT_PORT", 9333))))
         chrome_user_data_dir = str(
             os.getenv(
-                "CYBERCAR_WECHAT_CHROME_USER_DATA_DIR",
-                str(getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", getattr(core, "DEFAULT_CHROME_USER_DATA_DIR", ""))),
+                "CYBERCAR_CHROME_USER_DATA_DIR",
+                str(getattr(core, "DEFAULT_CHROME_USER_DATA_DIR", "")),
             )
-        ).strip()
+        ).strip() or str(getattr(core, "DEFAULT_CHROME_USER_DATA_DIR", "")).strip()
     else:
         debug_port = int(os.getenv("CYBERCAR_CHROME_DEBUG_PORT", str(getattr(core, "DEFAULT_PORT", 9333))))
         chrome_user_data_dir = str(
@@ -8302,6 +8590,10 @@ def _normalize_command_key(text: str) -> str:
     lowered = token.lower().replace("\ufe0f", "")
     shortcut_map = {
         "首页": "首页",
+        "🇨🇳 国内即采即发": "国内即采即发",
+        "国内即采即发": "国内即采即发",
+        "🌐 海外即采即发": "海外即采即发",
+        "海外即采即发": "海外即采即发",
         "⚡ 即采即发": "即采即发",
         "✨ 即采即发": "即采即发",
         "📍 进度": "进程查看",
@@ -9480,6 +9772,7 @@ def _discover_latest_live_candidates(
     discovery_limit: Optional[int] = None,
     allow_search_inferred_match: bool = False,
     include_images: bool = False,
+    source_platforms: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     del timeout_seconds
     try:
@@ -9488,19 +9781,16 @@ def _discover_latest_live_candidates(
         import main as core  # type: ignore
 
     runtime_config = core._load_runtime_config(str(_default_runtime_config_path(repo_root)))
-    profile_config_path = (repo_root / DEFAULT_PROFILE_CONFIG_REL).resolve()
-    profile_config = {}
-    if profile_config_path.exists():
-        try:
-            profile_config = json.loads(profile_config_path.read_text(encoding="utf-8"))
-        except Exception:
-            profile_config = {}
-    active_profile = _normalize_profile_name(profile)
-    default_profile = str(profile_config.get("default_profile", "") or DEFAULT_PROFILE).strip() or DEFAULT_PROFILE
-    profiles = profile_config.get("profiles", {}) if isinstance(profile_config, dict) else {}
-    profile_payload = profiles.get(active_profile) if isinstance(profiles, dict) else None
-    if not isinstance(profile_payload, dict):
-        profile_payload = profiles.get(default_profile) if isinstance(profiles, dict) else None
+    profile_config = _load_profile_config_payload(repo_root)
+    profile_payload = _resolve_profile_payload(repo_root=repo_root, profile=profile, profile_config=profile_config)
+    resolved_source_platforms = _normalize_collect_source_platforms(source_platforms)
+    if not resolved_source_platforms:
+        resolved_source_platforms = _resolve_collect_publish_source_platforms(
+            repo_root=repo_root,
+            profile=profile,
+            profile_payload=profile_payload,
+            profile_config=profile_config,
+        )
     keyword = str((profile_payload or {}).get("keyword", "") or runtime_config.get("keyword", "") or getattr(core, "DEFAULT_KEYWORD", "Cybertruck")).strip()
     debug_port = int(os.getenv("CYBERCAR_CHROME_DEBUG_PORT", str(getattr(core, "DEFAULT_PORT", 9333))))
     requested_limit = max(1, int(candidate_limit))
@@ -9516,28 +9806,90 @@ def _discover_latest_live_candidates(
         )
         or ""
     ).strip()
-    candidates = core.discover_x_media_candidates(
-        keyword=keyword,
-        url_limit=max(3, resolved_discovery_limit),
-        debug_port=debug_port,
-        scroll_rounds=getattr(core, "X_DISCOVERY_SCROLL_ROUNDS", 8),
-        scroll_wait_seconds=getattr(core, "X_DISCOVERY_SCROLL_WAIT_SECONDS", 1.2),
-        auto_open_chrome=True,
-        chrome_path=chrome_path,
-        chrome_user_data_dir=chrome_user_data_dir,
-        include_images=include_images,
-        allow_search_inferred_match=bool(allow_search_inferred_match),
-        require_text_keyword_match=(not bool(allow_search_inferred_match)),
-    )
-    ordered_candidates = core._take_latest_x_candidates(
-        candidates if isinstance(candidates, list) else [],
-        resolved_discovery_limit,
-    )
+    per_source_candidates: list[list[dict[str, Any]]] = []
+    for source_platform in resolved_source_platforms:
+        if source_platform == "x":
+            candidates = core.discover_x_media_candidates(
+                keyword=keyword,
+                url_limit=max(3, resolved_discovery_limit),
+                debug_port=debug_port,
+                scroll_rounds=getattr(core, "X_DISCOVERY_SCROLL_ROUNDS", 8),
+                scroll_wait_seconds=getattr(core, "X_DISCOVERY_SCROLL_WAIT_SECONDS", 1.2),
+                auto_open_chrome=True,
+                chrome_path=chrome_path,
+                chrome_user_data_dir=chrome_user_data_dir,
+                include_images=include_images,
+                allow_search_inferred_match=bool(allow_search_inferred_match),
+                require_text_keyword_match=(not bool(allow_search_inferred_match)),
+            )
+            ordered_x_candidates = core._take_latest_x_candidates(
+                candidates if isinstance(candidates, list) else [],
+                resolved_discovery_limit,
+            )
+            normalized_x_candidates: list[dict[str, Any]] = []
+            for item in ordered_x_candidates:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                row["source_platform"] = "x"
+                normalized_x_candidates.append(row)
+            per_source_candidates.append(normalized_x_candidates)
+            continue
+        if source_platform in {"douyin", "xiaohongshu"}:
+            discovered_urls = core.discover_domestic_keyword_urls(
+                source_platform,
+                keyword,
+                url_limit=max(3, resolved_discovery_limit),
+                scroll_rounds=getattr(core, "X_DISCOVERY_SCROLL_ROUNDS", 8),
+                scroll_wait_seconds=getattr(core, "X_DISCOVERY_SCROLL_WAIT_SECONDS", 1.2),
+                debug_port=debug_port,
+                auto_open_chrome=True,
+                chrome_path=chrome_path,
+                chrome_user_data_dir=chrome_user_data_dir,
+            )
+            platform_candidates: list[dict[str, Any]] = []
+            for source_url in discovered_urls:
+                normalized_url = str(source_url or "").strip()
+                if not normalized_url:
+                    continue
+                platform_candidates.append(
+                    {
+                        "url": normalized_url,
+                        "published_at": "",
+                        "display_time": "",
+                        "tweet_text": "",
+                        "source_platform": source_platform,
+                        "media_kind": "image" if include_images else "video",
+                        "matched_keyword": keyword,
+                        "match_mode": "search_result_inferred",
+                        "discovery_source": f"{source_platform}_keyword_search",
+                    }
+                )
+            per_source_candidates.append(platform_candidates)
+    ordered_candidates: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    max_rows = max(len(rows) for rows in per_source_candidates) if per_source_candidates else 0
+    for row_index in range(max_rows):
+        for rows in per_source_candidates:
+            if row_index >= len(rows):
+                continue
+            row = rows[row_index]
+            source_url = str(row.get("url") or "").strip()
+            if not source_url or source_url in seen_urls:
+                continue
+            seen_urls.add(source_url)
+            ordered_candidates.append(row)
+            if len(ordered_candidates) >= resolved_discovery_limit:
+                break
+        if len(ordered_candidates) >= resolved_discovery_limit:
+            break
     return {
         "keyword": keyword,
         "candidates": ordered_candidates,
         "requested_limit": requested_limit,
         "discovery_limit": resolved_discovery_limit,
+        "source_platforms": resolved_source_platforms,
+        "source_scan_label": _collect_publish_source_scan_label(resolved_source_platforms),
     }
 
 
@@ -9808,13 +10160,18 @@ def _run_collect_publish_latest_once(
 ) -> Dict[str, Any]:
     normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind)
     target_platforms = _collect_publish_target_platforms(normalized_media_kind)
+    source_platforms = _resolve_collect_publish_source_platforms(repo_root=repo_root, profile=profile)
     discovered = _discover_latest_live_candidates(
         repo_root=repo_root,
         timeout_seconds=timeout_seconds,
         profile=profile,
         candidate_limit=candidate_limit,
         include_images=(normalized_media_kind == "image"),
+        source_platforms=source_platforms,
     )
+    discovered_source_platforms = _normalize_collect_source_platforms(discovered.get("source_platforms"))
+    if discovered_source_platforms:
+        source_platforms = discovered_source_platforms
     candidates = discovered.get("candidates") if isinstance(discovered, dict) else []
     recent_candidates = [item for item in candidates if isinstance(item, dict) and str(item.get("url", "") or "").strip()]
     if not recent_candidates:
@@ -9822,7 +10179,10 @@ def _run_collect_publish_latest_once(
             "ok": False,
             "code": 2,
             "stdout": "",
-            "stderr": f"\u672a\u53d1\u73b0\u53ef\u7528 X {IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(normalized_media_kind, '媒体')}\u5e16\u5b50\u3002\u5df2\u6309\u6700\u65b0\u65f6\u95f4\u5012\u5e8f\u626b\u63cf\u3002\u5173\u952e\u8bcd\uff1a{discovered.get('keyword') or profile}",
+            "stderr": (
+                f"{_collect_publish_no_candidate_detail(source_platforms, IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(normalized_media_kind, '媒体'))}"
+                f"\n关键词：{discovered.get('keyword') or profile}"
+            ),
             "elapsed": 0.0,
         }
     last_result: Dict[str, Any] = {
@@ -9838,6 +10198,9 @@ def _run_collect_publish_latest_once(
         candidate_url = str(candidate.get("url", "") or "").strip()
         if not candidate_url:
             continue
+        collect_source_platform = _resolve_candidate_collect_source_platform(candidate)
+        if not collect_source_platform:
+            collect_source_platform = source_platforms[0] if source_platforms else "x"
         result = _run_unified_once(
             repo_root=repo_root,
             workspace=workspace,
@@ -9851,7 +10214,7 @@ def _run_collect_publish_latest_once(
                 "--tweet-url",
                 candidate_url,
                 "--source-platforms",
-                "x",
+                collect_source_platform,
                 "--no-telegram-collect-notify",
                 "--no-telegram-prefilter",
                 *_build_immediate_fast_x_download_args(repo_root),
@@ -9881,7 +10244,7 @@ def _run_collect_publish_latest_once(
             return last_result
     summary = (
         "即采即发未找到可发布素材。\n"
-        f"候选来源：X 搜索结果最近 {max(1, int(candidate_limit))} 条\n"
+        f"{_collect_publish_source_recent_subtitle(source_platforms, candidate_limit)}\n"
         f"已尝试候选数：{len(attempt_notes)}\n\n"
         + "\n\n".join(attempt_notes[:8])
     )
@@ -10909,11 +11272,17 @@ def _run_immediate_collect_item_job(
             updates={"status": "download_running", "action": "collect", "last_error": ""},
         )
 
+        collect_source_platform = _normalize_collect_source_platform(item.get("source_platform"))
+        if not collect_source_platform:
+            collect_source_platform = _resolve_collect_source_platform_from_url(source_url)
+        if not collect_source_platform:
+            fallback_sources = _resolve_collect_publish_source_platforms(repo_root=repo_root, profile=profile)
+            collect_source_platform = fallback_sources[0] if fallback_sources else "x"
         collect_extra_args = [
             "--tweet-url",
             source_url,
             "--source-platforms",
-            "x",
+            collect_source_platform,
             "--no-telegram-collect-notify",
             "--no-telegram-prefilter",
             "--no-publish-skip-notify",
@@ -12421,12 +12790,13 @@ def _run_collect_publish_latest_job(
     requested_limit = max(1, int(candidate_limit))
     discovery_limit = _resolve_collect_publish_discovery_limit(requested_limit)
     round_limits = _resolve_collect_publish_round_limits(requested_limit, discovery_limit)
+    source_platforms = _resolve_collect_publish_source_platforms(repo_root=repo_root, profile=profile)
     _send_background_feedback(
         runner=runner,
         email_settings=email_settings,
         workspace=workspace,
         title=f"{media_label}即采即发候选扫描中",
-        subtitle=f"候选来源：X 搜索结果时间倒序｜目标 {requested_limit} 条",
+        subtitle=_collect_publish_source_target_subtitle(source_platforms, requested_limit),
         sections=[
             _build_immediate_task_overview_section(
                 requested_limit=requested_limit,
@@ -12437,7 +12807,7 @@ def _run_collect_publish_latest_job(
                 "title": "执行说明",
                 "emoji": "⏳",
                 "items": [
-                    f"浏览器正在按时间倒序扫描 X {media_label}搜索结果，并会直接返回候选预审卡片。",
+                    _collect_publish_scan_detail(source_platforms, media_label),
                     f"只有你明确点击“普通发布”或“原创发布”的候选，才会进入下载和{_format_platform_text(target_platforms)}发布。",
                 ],
             },
@@ -12485,7 +12855,11 @@ def _run_collect_publish_latest_job(
             discovery_limit=round_limit,
             allow_search_inferred_match=immediate_test_mode,
             include_images=(normalized_media_kind == "image"),
+            source_platforms=source_platforms,
         )
+        discovered_source_platforms = _normalize_collect_source_platforms(discovered.get("source_platforms"))
+        if discovered_source_platforms:
+            source_platforms = discovered_source_platforms
         raw_candidates = [
             dict(item)
             for item in (discovered.get("candidates") or [])
@@ -12544,7 +12918,7 @@ def _run_collect_publish_latest_job(
                 email_settings=email_settings,
                 workspace=workspace,
                 title=f"{media_label}即采即发候选已跳过",
-                subtitle=f"候选来源：X 搜索结果最近 {requested_limit} 条",
+                subtitle=_collect_publish_source_recent_subtitle(source_platforms, requested_limit),
                 sections=[
                     _build_immediate_task_overview_section(
                         requested_limit=requested_limit,
@@ -12580,7 +12954,7 @@ def _run_collect_publish_latest_job(
             email_settings=email_settings,
             workspace=workspace,
             title=f"{media_label}即采即发未发现候选",
-            subtitle=f"候选来源：X 搜索结果最近 {requested_limit} 条",
+            subtitle=_collect_publish_source_recent_subtitle(source_platforms, requested_limit),
             sections=[
                 _build_immediate_task_overview_section(
                     requested_limit=requested_limit,
@@ -12595,7 +12969,7 @@ def _run_collect_publish_latest_job(
                     "title": "结果说明",
                     "emoji": "⚠️",
                     "items": [
-                        f"按 X 搜索结果时间倒序扫描后，未发现可用 X {media_label}帖子。",
+                        _collect_publish_no_candidate_detail(source_platforms, media_label),
                         *([f"本轮已有 {filtered_seen_candidates} 条历史候选被采集账本直接过滤。"] if filtered_seen_candidates > 0 else []),
                     ],
                 }
@@ -12799,7 +13173,7 @@ def _run_collect_publish_latest_job(
             email_settings=email_settings,
             workspace=workspace,
             title=f"{media_label}即采即发候选已整理",
-            subtitle=f"候选来源：X 搜索结果最近 {requested_limit} 条",
+            subtitle=_collect_publish_source_recent_subtitle(source_platforms, requested_limit),
             sections=[
                 _build_immediate_task_overview_section(
                     requested_limit=requested_limit,
@@ -12836,7 +13210,7 @@ def _run_collect_publish_latest_job(
             email_settings=email_settings,
             workspace=workspace,
             title=f"{media_label}即采即发候选已跳过",
-            subtitle=f"候选来源：X 搜索结果最近 {requested_limit} 条",
+            subtitle=_collect_publish_source_recent_subtitle(source_platforms, requested_limit),
             sections=[
                 _build_immediate_task_overview_section(
                     requested_limit=requested_limit,
@@ -12868,7 +13242,7 @@ def _run_collect_publish_latest_job(
         email_settings=email_settings,
         workspace=workspace,
         title=f"{media_label}即采即发预审发送失败",
-        subtitle=f"候选来源：X 搜索结果最近 {requested_limit} 条",
+        subtitle=_collect_publish_source_recent_subtitle(source_platforms, requested_limit),
         sections=[
             _build_immediate_task_overview_section(
                 requested_limit=requested_limit,
@@ -12887,7 +13261,7 @@ def _run_collect_publish_latest_job(
                 "items": (
                     [
                         f"已尝试发送前 {max(1, attempted_new_candidates)} 条新候选，但 Telegram 预审卡未成功送达。",
-                        "当前更像 Telegram 网络抖动，而不是 X 候选扫描失败。",
+                        "当前更像 Telegram 网络抖动，而不是候选扫描失败。",
                         "失败候选已保留到待补发队列；worker 轮询恢复后会自动重试送达预审卡。",
                     ]
                     + ([f"最后错误：{last_send_error}"] if last_send_error else [])
@@ -12960,12 +13334,13 @@ def _help_text() -> str:
         f"{BOT_NAME} 入口说明\n"
         "手机端命令菜单已切到固定底部快捷入口。\n"
         "日常操作优先使用底部快捷键；下面这些 slash 命令仅作为兜底。\n\n"
-        "常用入口：/start、即采即发、登录、点赞评论。\n\n"
+        "常用入口：/start、国内即采即发、海外即采即发、登录、点赞评论。\n\n"
         f"{chr(10).join(command_lines)}\n\n"
         "示例：\n"
         "- /start\n"
         "- /menu\n"
-        "- 即采即发\n"
+        "- 国内即采即发\n"
+        "- 海外即采即发\n"
         "- 登录"
     )
 
@@ -13290,6 +13665,18 @@ def _handle_command(
         )
     if cmd_key in {"即采即发"}:
         return _build_collect_publish_latest_menu_card(default_profile=resolved_default_profile)
+    if cmd_key in {"国内即采即发"}:
+        return _build_collect_publish_latest_menu_card(
+            default_profile=_collect_publish_profile_for_route("domestic", resolved_default_profile),
+            callback_action=COLLECT_PUBLISH_ACTION_DOMESTIC,
+            route_label=_collect_publish_route_label("domestic"),
+        )
+    if cmd_key in {"海外即采即发"}:
+        return _build_collect_publish_latest_menu_card(
+            default_profile=_collect_publish_profile_for_route("global", resolved_default_profile),
+            callback_action=COLLECT_PUBLISH_ACTION_GLOBAL,
+            route_label=_collect_publish_route_label("global"),
+        )
     if cmd_key in {"进程查看", "查看进度", "进度查看", "流程进度"}:
         return _build_process_status_card(
             default_profile=resolved_default_profile,

@@ -69,6 +69,12 @@ def _make_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
+def _write_profiles_config(repo_root: Path, payload: dict[str, object]) -> None:
+    config_dir = repo_root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "profiles.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
 def _worker_kwargs(workspace: Path, **overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "bot_token": BOT_TOKEN,
@@ -225,6 +231,20 @@ def _reply_markup_texts(reply_markup: dict[str, object]) -> list[str]:
             if isinstance(button, dict):
                 texts.append(str(button.get("text") or ""))
     return texts
+
+
+def _reply_markup_callback_data(reply_markup: dict[str, object]) -> list[str]:
+    rows = reply_markup.get("inline_keyboard", [])
+    if not isinstance(rows, list):
+        return []
+    callback_data_values: list[str] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        for button in row:
+            if isinstance(button, dict):
+                callback_data_values.append(str(button.get("callback_data") or ""))
+    return callback_data_values
 
 
 def test_refresh_platform_login_qr_message_accepts_telegram_bot_identifier(tmp_path: Path) -> None:
@@ -564,7 +584,7 @@ def test_home_reply_keyboard_uses_same_short_labels_as_inline_actions() -> None:
     rows = keyboard["keyboard"]
     texts = [str(button.get("text") or "") for row in rows for button in row]
 
-    assert texts == ["🔐 登录", "📍 进度", "⚡ 即采即发", "💬 点赞评论"]
+    assert texts == ["🔐 登录", "📍 进度", "🇨🇳 国内即采即发", "🌐 海外即采即发", "💬 点赞评论"]
 
 
 def test_comment_reply_menu_card_merges_same_count_into_single_action() -> None:
@@ -664,13 +684,67 @@ def test_build_comment_reply_result_card_includes_post_link_field() -> None:
 def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
     assert worker_impl._normalize_shortcut_text("🔐 登录") == "平台登录"
     assert worker_impl._normalize_shortcut_text("📍 进度") == "进程查看"
+    assert worker_impl._normalize_shortcut_text("🇨🇳 国内即采即发") == "国内即采即发"
+    assert worker_impl._normalize_shortcut_text("🌐 海外即采即发") == "海外即采即发"
     assert worker_impl._normalize_shortcut_text("⚡ 即采即发") == "即采即发"
 
 
 def test_normalize_command_key_accepts_new_short_labels() -> None:
     assert worker_impl._normalize_command_key("🔐 登录") == "平台登录"
     assert worker_impl._normalize_command_key("📍 进度") == "进程查看"
+    assert worker_impl._normalize_command_key("🇨🇳 国内即采即发") == "国内即采即发"
+    assert worker_impl._normalize_command_key("🌐 海外即采即发") == "海外即采即发"
     assert worker_impl._normalize_command_key("⚡ 即采即发") == "即采即发"
+
+
+def test_handle_command_domestic_shortcut_returns_domestic_route_menu(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    result = worker_impl._handle_command(
+        text="国内即采即发",
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        allow_shell=False,
+        allow_prefixes=[],
+        command_password="",
+        started_at=0.0,
+        last_processed=0,
+        update_id=1,
+        chat_id=CHAT_ID,
+        username="tester",
+        audit_file=workspace / "runtime" / "telegram_command_worker_audit.jsonl",
+        default_profile=DEFAULT_PROFILE,
+    )
+
+    assert isinstance(result, dict)
+    assert worker_impl.DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE in str(result["text"])
+    callback_values = _reply_markup_callback_data(result["reply_markup"])
+    assert any("collect_publish_latest_domestic" in item for item in callback_values)
+
+
+def test_handle_command_global_shortcut_returns_global_route_menu(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    result = worker_impl._handle_command(
+        text="海外即采即发",
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        allow_shell=False,
+        allow_prefixes=[],
+        command_password="",
+        started_at=0.0,
+        last_processed=0,
+        update_id=1,
+        chat_id=CHAT_ID,
+        username="tester",
+        audit_file=workspace / "runtime" / "telegram_command_worker_audit.jsonl",
+        default_profile=DEFAULT_PROFILE,
+    )
+
+    assert isinstance(result, dict)
+    assert worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE in str(result["text"])
+    callback_values = _reply_markup_callback_data(result["reply_markup"])
+    assert any("collect_publish_latest_global" in item for item in callback_values)
 
 
 def test_refresh_home_surface_on_startup_force_refresh_updates_home_and_shortcut(tmp_path: Path, monkeypatch) -> None:
@@ -1177,6 +1251,136 @@ def test_handle_home_collect_publish_video_queues_task(tmp_path: Path, monkeypat
     assert "\u666e\u901a\u53d1\u5e03" in str(task["detail"])
 
 
+def test_handle_home_collect_publish_menu_domestic_returns_route_specific_card(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "collect_publish_latest_menu_domestic"),
+    )
+    result = commands.handle_callback_update(update=update, **_worker_kwargs(workspace))
+
+    assert result["handled"] is True
+    assert len(record.cards) == 1
+    card = record.cards[0]["card"]
+    assert worker_impl.DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE in str(card["text"])
+    callback_values = _reply_markup_callback_data(card["reply_markup"])
+    assert any("collect_publish_latest_domestic" in item for item in callback_values)
+
+
+def test_handle_home_collect_publish_global_routes_to_global_profile(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    _install_transport_mocks(monkeypatch)
+    spawned: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_spawn_home_action_job",
+        lambda **kwargs: spawned.append(dict(kwargs)) or {
+            "ok": True,
+            "pid": 388,
+            "log_path": str(workspace / "runtime" / "logs" / "home-global.log"),
+        },
+    )
+
+    update = _make_callback_update(
+        commands.build_home_callback_data("cybercar", "collect_publish_latest_global", "video:3"),
+    )
+    result = commands.handle_callback_update(update=update, **_worker_kwargs(workspace))
+
+    assert result["handled"] is True
+    assert len(spawned) == 1
+    assert spawned[0]["action"] == "collect_publish_latest"
+    assert spawned[0]["profile"] == worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE
+    tasks = _action_tasks(workspace)
+    task = next(iter(tasks.values()))
+    assert isinstance(task, dict)
+    assert task["action"] == "collect_publish_latest"
+    assert task["profile"] == worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE
+    assert task["value"] == "video:3"
+
+
+def test_resolve_collect_publish_source_platforms_uses_profile_config(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    _write_profiles_config(
+        repo_root,
+        {
+            "default_profile": "cybertruck",
+            "profiles": {
+                "x_to_cn": {"source_platforms": "x"},
+                "cn_to_global": {"source_platforms": "douyin,xiaohongshu"},
+            },
+        },
+    )
+
+    global_sources = worker_impl._resolve_collect_publish_source_platforms(
+        repo_root=repo_root,
+        profile="cn_to_global",
+    )
+    domestic_sources = worker_impl._resolve_collect_publish_source_platforms(
+        repo_root=repo_root,
+        profile="x_to_cn",
+    )
+
+    assert global_sources == ["douyin", "xiaohongshu"]
+    assert domestic_sources == ["x"]
+
+
+def test_discover_latest_live_candidates_global_uses_domestic_sources(tmp_path: Path, monkeypatch) -> None:
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    repo_root = tmp_path
+    _write_profiles_config(
+        repo_root,
+        {
+            "default_profile": "cn_to_global",
+            "profiles": {
+                "cn_to_global": {
+                    "keyword": "cybertruck",
+                    "source_platforms": "douyin,xiaohongshu",
+                }
+            },
+        },
+    )
+    domestic_calls: list[str] = []
+    x_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_core, "_load_runtime_config", lambda _path: {"keyword": "cybertruck"}, raising=False)
+    monkeypatch.setattr(worker_core, "DEFAULT_PORT", 9333, raising=False)
+    monkeypatch.setattr(worker_core, "DEFAULT_CHROME_USER_DATA_DIR", "", raising=False)
+    monkeypatch.setattr(worker_core, "X_DISCOVERY_SCROLL_ROUNDS", 2, raising=False)
+    monkeypatch.setattr(worker_core, "X_DISCOVERY_SCROLL_WAIT_SECONDS", 0.1, raising=False)
+    monkeypatch.setattr(
+        worker_core,
+        "discover_domestic_keyword_urls",
+        lambda platform, keyword, **kwargs: domestic_calls.append(str(platform)) or [f"https://{platform}.example/{keyword}/1"],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "discover_x_media_candidates",
+        lambda **kwargs: x_calls.append(dict(kwargs)) or [],
+        raising=False,
+    )
+    monkeypatch.setattr(worker_core, "_take_latest_x_candidates", lambda candidates, limit: list(candidates)[:limit], raising=False)
+
+    result = worker_impl._discover_latest_live_candidates(
+        repo_root=repo_root,
+        timeout_seconds=30,
+        profile="cn_to_global",
+        candidate_limit=2,
+        include_images=False,
+    )
+
+    assert result["source_platforms"] == ["douyin", "xiaohongshu"]
+    assert domestic_calls == ["douyin", "xiaohongshu"]
+    assert x_calls == []
+    candidates = result["candidates"]
+    assert isinstance(candidates, list)
+    assert len(candidates) == 2
+    assert {str(item.get("source_platform") or "") for item in candidates} == {"douyin", "xiaohongshu"}
+
+
 def test_handle_home_collect_publish_propagates_immediate_test_mode(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     _install_transport_mocks(monkeypatch)
@@ -1522,6 +1726,49 @@ def test_run_collect_publish_latest_job_video_records_prefilter_items(tmp_path: 
     assert runner.sent_candidates[0]["mode"] == "immediate_manual_publish"
     assert feedbacks[0]["status"] == "running"
     assert feedbacks[-1]["status"] == "done"
+
+
+def test_run_collect_publish_latest_job_global_route_passes_domestic_source_platforms(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    discovered_kwargs: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+
+    def discover_latest_live_candidates(**kwargs: object) -> dict[str, object]:
+        discovered_kwargs.append(dict(kwargs))
+        return {
+            "keyword": "cybertruck",
+            "source_platforms": ["douyin", "xiaohongshu"],
+            "candidates": [
+                {
+                    "url": "https://www.douyin.com/video/12345",
+                    "published_at": "2026-03-15 10:00:00",
+                    "display_time": "10m",
+                    "tweet_text": "douyin candidate",
+                    "source_platform": "douyin",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(worker_impl, "_discover_latest_live_candidates", discover_latest_live_candidates)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert discovered_kwargs
+    assert discovered_kwargs[0]["source_platforms"] == ["douyin", "xiaohongshu"]
 
 
 def test_run_collect_publish_latest_job_prefilter_keeps_candidate_and_marks_wechat_login_warning(tmp_path: Path, monkeypatch) -> None:
@@ -2511,7 +2758,7 @@ def test_run_collect_publish_latest_job_stops_after_requested_failed_new_candida
     assert isinstance(sections, list)
     failure_items = sections[-1]["items"]
     assert "已尝试发送前 2 条新候选，但 Telegram 预审卡未成功送达。" in failure_items
-    assert "当前更像 Telegram 网络抖动，而不是 X 候选扫描失败。" in failure_items
+    assert "当前更像 Telegram 网络抖动，而不是候选扫描失败。" in failure_items
     assert "失败候选已保留到待补发队列；worker 轮询恢复后会自动重试送达预审卡。" in failure_items
     assert any("telegram send failed 4" in str(item) for item in failure_items)
 
@@ -4141,6 +4388,46 @@ def test_resolve_platform_login_runtime_context_can_prefer_wechat_login_entry() 
     assert runtime_ctx["open_url"] == "https://channels.weixin.qq.com/login.html"
 
 
+def test_resolve_platform_login_runtime_context_wechat_defaults_to_shared_browser(monkeypatch) -> None:
+    fake_core = SimpleNamespace(
+        DEFAULT_PORT=9333,
+        DEFAULT_WECHAT_DEBUG_PORT=9334,
+        DEFAULT_CHROME_USER_DATA_DIR=r"D:\profiles\shared",
+        DEFAULT_WECHAT_CHROME_USER_DATA_DIR=r"D:\profiles\wechat",
+        PLATFORM_CREATE_POST_URLS={"wechat": "https://channels.weixin.qq.com/platform/post/create"},
+        PLATFORM_LOGIN_ENTRY_URLS={"wechat": "https://channels.weixin.qq.com/login.html"},
+    )
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", raising=False)
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", raising=False)
+    monkeypatch.setenv("CYBERCAR_CHROME_DEBUG_PORT", "9444")
+    monkeypatch.setenv("CYBERCAR_CHROME_USER_DATA_DIR", r"D:\profiles\shared_env")
+
+    runtime_ctx = worker_impl._resolve_platform_login_runtime_context(fake_core, "wechat")
+
+    assert runtime_ctx["debug_port"] == 9444
+    assert runtime_ctx["chrome_user_data_dir"] == r"D:\profiles\shared_env"
+
+
+def test_resolve_platform_login_runtime_context_wechat_explicit_override_ignored(monkeypatch) -> None:
+    fake_core = SimpleNamespace(
+        DEFAULT_PORT=9333,
+        DEFAULT_WECHAT_DEBUG_PORT=9334,
+        DEFAULT_CHROME_USER_DATA_DIR=r"D:\profiles\shared",
+        DEFAULT_WECHAT_CHROME_USER_DATA_DIR=r"D:\profiles\wechat",
+        PLATFORM_CREATE_POST_URLS={"wechat": "https://channels.weixin.qq.com/platform/post/create"},
+        PLATFORM_LOGIN_ENTRY_URLS={"wechat": "https://channels.weixin.qq.com/login.html"},
+    )
+    monkeypatch.setenv("CYBERCAR_CHROME_DEBUG_PORT", "9444")
+    monkeypatch.setenv("CYBERCAR_CHROME_USER_DATA_DIR", r"D:\profiles\shared_env")
+    monkeypatch.setenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", "9555")
+    monkeypatch.setenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", r"D:\profiles\wechat_env")
+
+    runtime_ctx = worker_impl._resolve_platform_login_runtime_context(fake_core, "wechat")
+
+    assert runtime_ctx["debug_port"] == 9444
+    assert runtime_ctx["chrome_user_data_dir"] == r"D:\profiles\shared_env"
+
+
 def test_probe_platform_login_after_publish_failure_keeps_original_error_when_session_ready(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
@@ -5331,6 +5618,70 @@ def test_run_immediate_collect_item_job_passes_fast_x_download_args(tmp_path: Pa
     assert extra_args[extra_args.index("--x-download-retries") + 1] == "2"
     assert extra_args[extra_args.index("--x-download-fragment-retries") + 1] == "2"
     assert extra_args[extra_args.index("--x-download-batch-retry-sleep") + 1] == "1"
+
+
+def test_run_immediate_collect_item_job_uses_item_source_platform_for_global_route(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    collect_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_queue_immediate_platform_jobs",
+        lambda **kwargs: {
+            "spawned": 1,
+            "failed": 0,
+            "skipped_duplicate": 0,
+            "item": worker_impl._update_prefilter_item(
+                workspace,
+                str(kwargs["item_id"]),
+                updates={
+                    "status": "publish_running",
+                    "platform_results": {"wechat": {"status": "queued"}},
+                    "action": "publish",
+                },
+            ),
+        },
+    )
+
+    def run_unified_once(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        processed = workspace / "2_Processed" / "global-video.mp4"
+        processed.parent.mkdir(parents=True, exist_ok=True)
+        processed.write_text("video", encoding="utf-8")
+        return {"status": "success"}
+
+    monkeypatch.setattr(worker_impl, "_run_unified_once", run_unified_once)
+
+    item = _video_item(
+        video_name="",
+        processed_name="",
+        status="publish_requested",
+        source_url="https://www.xiaohongshu.com/explore/abc123",
+        source_platform="xiaohongshu",
+    )
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 0
+    extra_args = list(collect_calls[0]["extra_args"])
+    assert "--source-platforms" in extra_args
+    assert extra_args[extra_args.index("--source-platforms") + 1] == "xiaohongshu"
 
 
 def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monkeypatch) -> None:
