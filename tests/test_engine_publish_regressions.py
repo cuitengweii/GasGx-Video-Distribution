@@ -632,6 +632,37 @@ def test_wait_publish_feedback_bilibili_accepts_delivery_success_marker(monkeypa
     assert timeline["calls"] >= 3
 
 
+def test_is_bilibili_publish_success_snapshot_accepts_view_and_republish_pair() -> None:
+    assert (
+        engine._is_bilibili_publish_success_snapshot(
+            "https://member.bilibili.com/platform/upload/video/frame",
+            "查看稿件",
+            actions=["再投一条"],
+        )
+        is True
+    )
+
+
+def test_retry_bilibili_publish_if_still_editing_skips_retry_when_delivery_success(monkeypatch) -> None:
+    monkeypatch.setattr(
+        engine,
+        "_read_page_snapshot",
+        lambda *_args, **_kwargs: (
+            "https://member.bilibili.com/platform/upload/video/frame",
+            "投递成功 查看稿件 再投一条",
+        ),
+    )
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: ["查看稿件", "再投一条"])
+    monkeypatch.setattr(
+        engine,
+        "_click_bilibili_primary_publish_button",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not retry click after success")),
+    )
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
+
+    assert engine._retry_bilibili_publish_if_still_editing(object(), object()) is False
+
+
 def test_fill_draft_once_generic_kuaishou_publish_unconfirmed_falls_back_to_draft(
     monkeypatch,
     tmp_path: Path,

@@ -31,6 +31,23 @@ def test_wait_kuaishou_reply_confirm_only_accepts_reply_near_current_comment(mon
     assert calls == [(2, "ok")]
 
 
+def test_wait_kuaishou_reply_confirm_script_includes_clean_text(monkeypatch) -> None:
+    scripts: list[str] = []
+
+    def fake_run_js_dict(_page, script, comment_index, reply_text):
+        scripts.append(str(script))
+        assert int(comment_index) == 2
+        assert str(reply_text) == "ok"
+        return {"ok": True}
+
+    monkeypatch.setattr(runtime, "_run_js_dict", fake_run_js_dict)
+    monkeypatch.setattr(runtime, "_wait_until", lambda predicate, **_kwargs: bool(predicate()))
+
+    assert runtime._wait_kuaishou_reply_confirm(object(), 2, "ok") is True
+    assert scripts
+    assert any("function cleanText" in script for script in scripts)
+
+
 def test_wait_douyin_reply_confirm_only_accepts_reply_near_current_comment(monkeypatch) -> None:
     calls: list[tuple[int, str]] = []
 
@@ -43,6 +60,48 @@ def test_wait_douyin_reply_confirm_only_accepts_reply_near_current_comment(monke
 
     assert runtime._wait_douyin_reply_confirm(object(), 3, "ok") is True
     assert calls == [(3, "ok")]
+
+
+def test_confirm_reply_from_post_submit_snapshot_accepts_has_reply_transition() -> None:
+    before_comment = {
+        "index": 1,
+        "author": "听她述说",
+        "content": "666",
+        "time_text": "1分钟前",
+        "has_reply": False,
+    }
+    after_comments = [
+        {"index": 0, "author": "其他用户", "content": "x", "time_text": "2分钟前", "has_reply": False},
+        {"index": 1, "author": "听她述说", "content": "666", "time_text": "1分钟前", "has_reply": True},
+    ]
+
+    assert runtime._confirm_reply_from_post_submit_snapshot(
+        before_comment=before_comment,
+        after_comments=after_comments,
+        reply_text="收到，感谢支持",
+        self_author_markers=("CyberCar", "作者"),
+    )
+
+
+def test_confirm_reply_from_post_submit_snapshot_accepts_self_author_text_match() -> None:
+    before_comment = {
+        "index": 0,
+        "author": "听她述说",
+        "content": "关注了",
+        "time_text": "刚刚",
+        "has_reply": False,
+    }
+    after_comments = [
+        {"index": 0, "author": "听她述说", "content": "关注了", "time_text": "刚刚", "has_reply": False},
+        {"index": 1, "author": "CyberCar回复听她述说:", "content": "感谢支持", "time_text": "刚刚", "has_reply": False},
+    ]
+
+    assert runtime._confirm_reply_from_post_submit_snapshot(
+        before_comment=before_comment,
+        after_comments=after_comments,
+        reply_text="感谢支持！",
+        self_author_markers=("CyberCar", "作者"),
+    )
 
 
 def test_submit_kuaishou_reply_v3_uses_comment_index_and_reply_text(monkeypatch) -> None:

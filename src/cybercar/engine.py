@@ -14404,11 +14404,13 @@ def _click_save_draft_button(ctx: Any) -> bool:
     selectors = (
         "css:.form-btns button.weui-desktop-btn_default",
         "xpath://button[contains(normalize-space(.), '保存草稿')]",
+        "xpath://button[contains(normalize-space(.), '保存为草稿')]",
         "xpath://button[contains(normalize-space(.), '存草稿')]",
         "xpath://button[contains(normalize-space(.), '暂存离开')]",
-        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '保存草稿') or contains(normalize-space(.), '存草稿') or contains(normalize-space(.), '暂存离开')]",
-        "xpath://div[contains(@class,'dialog') or contains(@class,'modal')]//button[contains(normalize-space(.), '保存草稿') or contains(normalize-space(.), '存草稿') or contains(normalize-space(.), '暂存离开')]",
+        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '保存草稿') or contains(normalize-space(.), '保存为草稿') or contains(normalize-space(.), '存草稿') or contains(normalize-space(.), '暂存离开')]",
+        "xpath://div[contains(@class,'dialog') or contains(@class,'modal')]//button[contains(normalize-space(.), '保存草稿') or contains(normalize-space(.), '保存为草稿') or contains(normalize-space(.), '存草稿') or contains(normalize-space(.), '暂存离开')]",
         "text:保存草稿",
+        "text:保存为草稿",
         "text:存草稿",
         "text:暂存离开",
     )
@@ -14469,7 +14471,7 @@ def _click_save_draft_button(ctx: Any) -> bool:
       const text = norm(node.innerText || node.textContent || '');
       if (!text || text.length > 24) continue;
       const lower = text.toLowerCase();
-      const draftHit = /保存草稿|存草稿|暂存离开|草稿箱/.test(text)
+      const draftHit = /保存草稿|保存为草稿|存草稿|暂存离开|草稿箱/.test(text)
         || lower.includes('save draft')
         || lower.includes('save as draft')
         || lower === 'draft';
@@ -14478,7 +14480,7 @@ def _click_save_draft_button(ctx: Any) -> bool:
         continue;
       }
       let score = 0;
-      if (text === '保存草稿') score += 20;
+      if (text === '保存草稿' || text === '保存为草稿') score += 20;
       else if (text === '存草稿' || text === '暂存离开') score += 18;
       else if (text.includes('草稿')) score += 12;
       if (/form-btns|dialog|modal|popup|footer|action/.test(String((node.closest('form, footer, [role="dialog"], .dialog, .modal, .popup, .form-btns') || {}).className || ''))) score += 6;
@@ -14652,7 +14654,7 @@ def _save_draft(ctx: Any, retry_count: int = DRAFT_SAVE_RETRY_COUNT) -> None:
     _reset_wechat_draft_save_probe(ctx)
     clicked = _click_save_draft_button(ctx)
     if not clicked:
-        raise RuntimeError("Failed to locate '淇濆瓨鑽夌' button. Please save draft manually on page.")
+        raise RuntimeError("Failed to locate a visible draft-save button. Please save draft manually on page.")
 
     if _wait_draft_saved(ctx):
         return
@@ -23040,6 +23042,7 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     lowered = (text or "").lower()
     success_markers = (
         "投稿成功",
+        "投递成功",
         "投稿中",
         "已投稿",
         "已提交",
@@ -23088,6 +23091,29 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     )
     return True
 
+
+
+def _is_bilibili_publish_success_snapshot(
+    url: str,
+    text: str,
+    actions: Optional[Sequence[str]] = None,
+) -> bool:
+    url_lower = str(url or "").lower()
+    merged_text = str(text or "")
+    if any(marker in merged_text for marker in ("投稿成功", "投递成功", "提交成功", "已投稿", "已提交", "审核中")):
+        return True
+    lowered = merged_text.lower()
+    if any(marker in lowered for marker in ("publish success", "submit success", "delivery success", "delivered")):
+        return True
+    action_text = " ".join(str(item or "").strip() for item in actions or () if str(item or "").strip())
+    merged = f"{merged_text} {action_text}".strip()
+    has_view = any(token in merged for token in ("查看稿件", "查看稿件列表", "查看稿件管理"))
+    has_republish = any(token in merged for token in ("再投一条", "再投一稿", "再投视频", "继续投稿"))
+    if has_view and has_republish:
+        return True
+    if any(marker in url_lower for marker in ("member.bilibili.com/platform/upload-manager", "member.bilibili.com/platform/home")):
+        return True
+    return False
 
 
 def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
@@ -23974,6 +24000,9 @@ def _wait_publish_feedback(
             if bilibili_reclick_attempts < 3 and (time.time() - loop_started) >= (12 * (bilibili_reclick_attempts + 1)):
                 if _retry_bilibili_publish_if_still_editing(primary_ctx, fallback_ctx):
                     bilibili_reclick_attempts += 1
+            if _is_bilibili_publish_success_snapshot(url, text):
+                _log("[Uploader:bilibili] Publish feedback inferred by success-state snapshot.")
+                return
 
         if any(str(marker or "").lower() in text_lower for marker in success_markers):
             _log(f"[Uploader:{platform_name}] Publish feedback detected by text marker.")
@@ -24042,6 +24071,10 @@ def _wait_publish_feedback(
         f"[Uploader:{platform_name}] Publish timeout snapshot: "
         f"url={timeout_url or '-'}, text={_normalize_text(timeout_text, limit=240) or '-'}"
     )
+    if platform_name == "bilibili":
+        if _is_bilibili_publish_success_snapshot(timeout_url, timeout_text, actions):
+            _log("[Uploader:bilibili] Publish confirmed by final success-state snapshot.")
+            return
     if platform_name == "x":
         net_ok, net_reason = _detect_x_publish_via_network(primary_ctx)
         if net_ok:

@@ -273,6 +273,74 @@ def _run_js_dict(page: Any, script: str, *args: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"ok": bool(payload)}
 
 
+def _compact_comment_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip().lower()
+
+
+def _is_self_author_name(author: Any, self_author_markers: Sequence[str]) -> bool:
+    name = _compact_comment_text(author)
+    if not name:
+        return False
+    for marker in self_author_markers or ():
+        token = _compact_comment_text(marker)
+        if token and token in name:
+            return True
+    return False
+
+
+def _comments_roughly_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_author = _compact_comment_text(left.get("author"))
+    right_author = _compact_comment_text(right.get("author"))
+    left_content = _compact_comment_text(left.get("content"))
+    right_content = _compact_comment_text(right.get("content"))
+    left_time = _compact_comment_text(left.get("time_text"))
+    right_time = _compact_comment_text(right.get("time_text"))
+
+    author_match = bool(
+        left_author
+        and right_author
+        and (left_author == right_author or left_author in right_author or right_author in left_author)
+    )
+    content_match = bool(
+        left_content
+        and right_content
+        and (left_content == right_content or left_content in right_content or right_content in left_content)
+    )
+    time_match = bool(left_time and right_time and (left_time == right_time or left_time in right_time or right_time in left_time))
+    return (author_match and content_match) or (content_match and time_match) or (author_match and time_match)
+
+
+def _confirm_reply_from_post_submit_snapshot(
+    before_comment: dict[str, Any],
+    after_comments: Sequence[dict[str, Any]],
+    reply_text: str,
+    self_author_markers: Sequence[str],
+) -> bool:
+    if not isinstance(before_comment, dict) or not after_comments:
+        return False
+
+    before_had_reply = bool(before_comment.get("has_reply"))
+    if before_had_reply:
+        return True
+
+    matched_after = next((item for item in after_comments if _comments_roughly_match(before_comment, item)), None)
+    if isinstance(matched_after, dict) and bool(matched_after.get("has_reply")):
+        return True
+
+    target = _compact_comment_text(reply_text)
+    if not target:
+        return False
+    for item in after_comments:
+        if not isinstance(item, dict):
+            continue
+        if not _is_self_author_name(item.get("author"), self_author_markers):
+            continue
+        content = _compact_comment_text(item.get("content"))
+        if content and (target in content or content in target):
+            return True
+    return False
+
+
 def _wait_until(predicate: Callable[[], bool], timeout_seconds: float = 8.0, poll_seconds: float = 0.35) -> bool:
     deadline = time.time() + max(1.0, float(timeout_seconds))
     while time.time() < deadline:
@@ -3149,6 +3217,16 @@ def _wait_kuaishou_reply_confirm(page: Any, comment_index: int, reply_text: str,
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, '').trim();
       }
+      function cleanText(node) {
+        if (!node) return '';
+        const clone = node.cloneNode(true);
+        Array.from(
+          clone.querySelectorAll(
+            '.comment-input__wrapper, .comment-input-wrapper, textarea, input, [contenteditable=\"true\"], button, .comment-content__btns, [class*=\"btn\"]'
+          )
+        ).forEach((child) => child.remove());
+        return norm(clone.innerText || clone.textContent || '');
+      }
       const target = norm(replyText);
       if (!target) return { ok: false };
       const roots = Array.from(document.querySelectorAll('.comment-content'));
@@ -5091,7 +5169,18 @@ def run_platform_comment_reply(
                 if not adapter.submit_reply(page, int(comment.get("index") or 0), reply_text):
                     engine._comment_reply_log(debug_enabled, f"[{platform}] Submit reply failed")
                     continue
-                if not adapter.wait_reply_confirm(page, int(comment.get("index") or 0), reply_text, 12.0):
+                confirmed = adapter.wait_reply_confirm(page, int(comment.get("index") or 0), reply_text, 12.0)
+                if not confirmed:
+                    post_submit_comments = adapter.extract_comments(page)
+                    confirmed = _confirm_reply_from_post_submit_snapshot(
+                        before_comment=comment,
+                        after_comments=post_submit_comments,
+                        reply_text=reply_text,
+                        self_author_markers=self_author_markers,
+                    )
+                    if confirmed:
+                        engine._comment_reply_log(debug_enabled, f"[{platform}] Reply confirm recovered by post-submit snapshot")
+                if not confirmed:
                     engine._comment_reply_log(debug_enabled, f"[{platform}] Reply confirm timeout")
                     continue
                 record = engine._remember_comment_reply(
