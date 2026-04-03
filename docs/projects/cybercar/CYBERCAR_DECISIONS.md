@@ -1,6 +1,6 @@
 # CyberCar Decisions
 
-Last updated: 2026-03-21
+Last updated: 2026-04-03
 
 ## 2026-03-15
 
@@ -39,6 +39,12 @@ Last updated: 2026-03-21
 - A generic WeChat publish failure is no longer sufficient evidence for `login_required`. The worker must run `check_platform_login_status()` first and only request a QR code after the session probe confirms a true login loss.
 - When success cards must compress `机器信息`, the renderer should prefer log and task/ID style clues over low-signal fields such as duration so machine-oriented debugging context survives the cut.
 - Douyin video upload readiness may not fall back to a generic "not busy anymore" completion rule. The publish flow must wait for explicit video-editor evidence such as caption/title inputs, publish controls, or other stable editor hints before caption verification begins.
+
+## 2026-04-03
+
+- Telegram prefilter callback handling now treats `answerCallbackQuery` as first-step behavior for publish actions. Callback acknowledgement must happen before prefilter-queue I/O to avoid Telegram callback expiry during lock contention.
+- Queue-read failures in callback hot paths now require deterministic operator feedback (`系统正忙，请稍后重试` / `处理失败，请稍后重试`) instead of silent failure. This is now part of the immediate-publish operator UX contract.
+- For callback-path regressions, tests must explicitly cover "ack-before-read" order under lock-timeout simulation to prevent future latency-related UX regressions.
 
 ## 2026-03-21
 

@@ -1,6 +1,6 @@
 # CyberCar State
 
-Last updated: 2026-03-21
+Last updated: 2026-04-03
 
 ## Scope
 
@@ -147,6 +147,19 @@ Last updated: 2026-03-21
 - After Douyin is green, open a separate thread for `kuaishou upload timeout (420s)` using the newest `immediate_publish_kuaishou_*.log`.
 - Re-run the failed Douyin video candidate from `collect_publish_latest|ctim-b1e08111a76a71f4` and confirm the next `immediate_publish_douyin_*.log` contains `Waiting for video editor form readiness...` before the first successful caption verification.
 - If the rerun still fails, capture the next Douyin log around upload completion and compare the page text snapshot with `_read_douyin_video_upload_state()` so the ready heuristic can be tightened around the current creator-center DOM.
+
+## 2026-04-03 Archive Update
+
+- Immediate publish callback feedback path was hardened in `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py`: callback queries are now acknowledged before prefilter-queue reads, so operators receive prompt feedback even when queue-lock contention exists.
+- Added callback error fallback for queue-read failures (`TimeoutError` and generic exceptions). The worker now returns deterministic callback text (`系统正忙，请稍后重试` / `处理失败，请稍后重试`) instead of presenting a silent click with no visible prompt.
+- Added focused regression coverage in `tests/test_telegram_immediate.py` to enforce "ack first, then queue read" behavior under simulated lock-timeout conditions.
+- Archive scan baseline at 2026-04-03: repository started in clean state (`git status`: nothing to commit); this archive sync records operational behavior and next-step verification requirements.
+
+## Next Step Update (2026-04-03)
+
+- Run one real Telegram immediate publish click (`普通发布` or `原创发布`) while load is non-trivial and verify callback prompt appears immediately.
+- If operators still report "点击无提示", capture the corresponding `telegram_command_worker_*.log` range and check for repeated lock contention on `telegram_prefilter_queue.json`.
+- If contention remains frequent, schedule a focused lock-duration reduction pass on prefilter callback hot paths.
 
 ## 2026-03-18 Archive Update
 

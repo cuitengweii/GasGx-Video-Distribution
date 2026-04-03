@@ -1,6 +1,6 @@
 # CyberCar Lessons
 
-Last updated: 2026-03-21
+Last updated: 2026-04-03
 
 ## 2026-03-15
 
@@ -69,6 +69,13 @@ Last updated: 2026-03-21
 - Root cause: this incident was traced to an account-side publish restriction / ban rather than a local automation breakage.
 - Earlier detection: if Xiaohongshu reaches the compose form, accepts media plus text, and then repeatedly fails only after the publish click, check account status first before debugging selectors or upload bindings.
 - Prevention: keep a standing operator reminder that this exact Xiaohongshu failure signature is a high-priority account-ban / account-limit indicator, and surface that diagnosis explicitly in future bot/log messaging.
+
+## 2026-04-03
+
+- Symptom: operators reported "点击发布没提示" in Telegram immediate publish flow.
+- Root cause: callback acknowledgement was delayed until after prefilter-queue read; under queue-lock contention, `answerCallbackQuery` could arrive too late and be rejected as expired.
+- Earlier detection: watch for lock-timeout signals (`Timed out waiting for lock: ... telegram_prefilter_queue.json`) and correlate them with `answerCallbackQuery ... query is too old` entries in the same worker window.
+- Prevention: treat callback acknowledgement as an immediate action before any queue I/O, and keep explicit timeout/error fallback replies so operator interaction never appears silent.
 
 ## 2026-03-21
 
