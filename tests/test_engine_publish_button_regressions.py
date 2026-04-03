@@ -46,3 +46,43 @@ def test_click_wechat_primary_publish_button_accepts_primary_class_selector(monk
     assert result is True
     assert clicked["value"] is True
     assert "css:.form-btns button.weui-desktop-btn_primary" in owner.selectors
+
+
+def test_click_save_draft_button_accepts_temp_save_selector(monkeypatch) -> None:
+    clicked = {"value": False}
+
+    class FakeButton:
+        def run_js(self, script: str):
+            if "innerText" in script:
+                return "暂存离开"
+            return None
+
+        def click(self, by_js: bool = False) -> None:
+            del by_js
+            clicked["value"] = True
+
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.button = FakeButton()
+            self.selectors: list[str] = []
+
+        def ele(self, selector: str, timeout: float = 0):
+            del timeout
+            self.selectors.append(selector)
+            if selector == "text:暂存离开":
+                return self.button
+            return None
+
+        def run_js(self, _script: str):
+            raise AssertionError("JS fallback should not run when selector click succeeds")
+
+    owner = FakeOwner()
+    monkeypatch.setattr(engine, "_is_visible_element", lambda _ele: True)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._click_save_draft_button(owner)
+
+    assert result is True
+    assert clicked["value"] is True
+    assert "text:暂存离开" in owner.selectors

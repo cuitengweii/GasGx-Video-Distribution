@@ -267,6 +267,20 @@ def test_looks_like_douyin_image_upload_ready_accepts_editor_state() -> None:
 
 
 def test_looks_like_douyin_image_upload_ready_rejects_upload_shell_only() -> None:
+    text = "鐐瑰嚮涓婁紶 鎴栫洿鎺ュ皢鍥剧墖鏂囦欢鎷栧叆姝ゅ尯鍩?鎺ㄨ崘涓婁紶 9:16 鐨勭珫鐗堝浘鐗?"
+    actions = ["鐐瑰嚮涓婁紶", "鍙戝竷"]
+
+    assert engine._looks_like_douyin_image_upload_ready(text, actions) is False
+
+
+def test_looks_like_douyin_image_upload_ready_accepts_normal_chinese_editor_state() -> None:
+    text = "作品描述 编辑图片 已添加1张图片 继续添加 发布设置 发布时间 立即发布 预览图文"
+    actions = ["编辑图片", "继续添加", "发布设置", "发布"]
+
+    assert engine._looks_like_douyin_image_upload_ready(text, actions) is True
+
+
+def test_looks_like_douyin_image_upload_ready_rejects_normal_chinese_upload_shell_only() -> None:
     text = "点击上传 或直接将图片文件拖入此区域 推荐上传 9:16 的竖版图片"
     actions = ["点击上传", "发布"]
 

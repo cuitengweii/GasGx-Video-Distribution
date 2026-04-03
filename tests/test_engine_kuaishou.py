@@ -255,6 +255,89 @@ def test_stage_kuaishou_image_upload_via_page_set_clicks_upload_button_first(
     assert events[:3] == ["ensure", "click:upload", "upload:sample.jpg"]
 
 
+def test_stage_kuaishou_image_upload_via_page_set_accepts_image_added_marker_without_file_count(
+    monkeypatch,
+) -> None:
+    class FakeSetter:
+        def upload_files(self, _target_path: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.set = FakeSetter()
+
+    monkeypatch.setattr(engine, "_ensure_kuaishou_publish_mode", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *args, **kwargs: True)
+    monkeypatch.setattr(engine, "_activate_upload_trigger_generic", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log_upload_surface_snapshot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_read_generic_file_inputs_snapshot", lambda *args, **kwargs: {"max_count": 0, "total": 2})
+    monkeypatch.setattr(
+        engine,
+        "_read_kuaishou_image_upload_state",
+        lambda *args, **kwargs: {"image_added": True, "ready": False, "publish_btn": False},
+    )
+
+    result = engine._stage_kuaishou_image_upload_via_page_set(
+        FakePage(),
+        object(),
+        object(),
+        Path("sample.jpg"),
+    )
+
+    assert result is True
+
+
+def test_wait_upload_ready_generic_kuaishou_image_uses_best_effort_when_entry_persists_after_binding(
+    monkeypatch,
+) -> None:
+    timeline = {"now": 0.0}
+
+    class FakeOwner:
+        def run_js(self, _script: str):
+            return "上传图文 上传图片"
+
+    def fake_time() -> float:
+        return float(timeline["now"])
+
+    def fake_sleep(seconds: float) -> None:
+        timeline["now"] += float(seconds)
+
+    monkeypatch.setattr(engine.time, "time", fake_time)
+    monkeypatch.setattr(engine.time, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        engine,
+        "_read_kuaishou_image_upload_state",
+        lambda *_args, **_kwargs: {
+            "ready": False,
+            "busy": False,
+            "upload_entry": True,
+            "desc_input": False,
+            "title_input": False,
+            "publish_btn": False,
+            "cancel_btn": False,
+            "editor_hints": False,
+            "image_added": False,
+            "sample_texts": ["上传图文"],
+        },
+    )
+    monkeypatch.setattr(engine, "_is_image_file", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    owner = FakeOwner()
+    result = engine._wait_upload_ready_generic(
+        owner,
+        owner,
+        platform_name="kuaishou",
+        timeout_seconds=20,
+        upload_target=Path("sample.jpg"),
+        upload_binding_confirmed=True,
+    )
+
+    assert result is owner
+    assert timeline["now"] >= 8.0
+
+
 def test_pick_kuaishou_file_input_candidate_prefers_add_image_input() -> None:
     dom_index, candidate, score = engine._pick_kuaishou_file_input_candidate(
         [

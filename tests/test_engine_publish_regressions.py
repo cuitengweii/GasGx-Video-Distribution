@@ -606,6 +606,32 @@ def test_wait_publish_feedback_kuaishou_extends_window_when_progress_active(monk
     assert timeline["calls"] >= 10
 
 
+def test_wait_publish_feedback_bilibili_accepts_delivery_success_marker(monkeypatch) -> None:
+    timeline = {"now": 0.0, "calls": 0}
+
+    def fake_time() -> float:
+        return timeline["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        timeline["now"] += float(seconds)
+
+    def fake_snapshot(*_args, **_kwargs):
+        timeline["calls"] += 1
+        if timeline["calls"] < 3:
+            return ("https://member.bilibili.com/platform/upload/video/frame", "上传中")
+        return ("https://member.bilibili.com/platform/upload/video/frame", "投递成功 查看稿件 再投一条")
+
+    monkeypatch.setattr(engine.time, "time", fake_time)
+    monkeypatch.setattr(engine.time, "sleep", fake_sleep)
+    monkeypatch.setattr(engine, "_read_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_retry_bilibili_publish_if_still_editing", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._wait_publish_feedback(object(), object(), platform_name="bilibili", timeout_seconds=8)
+    assert timeline["calls"] >= 3
+
+
 def test_fill_draft_once_generic_kuaishou_publish_unconfirmed_falls_back_to_draft(
     monkeypatch,
     tmp_path: Path,
@@ -830,3 +856,72 @@ def test_wait_upload_ready_generic_douyin_accepts_relaxed_editor_readiness(monke
     )
 
     assert result is ctx
+
+
+def test_find_upload_file_input_generic_prefers_hidden_image_input_over_visible_video_input() -> None:
+    class FakeInput:
+        def __init__(self, accept: str, visible: bool) -> None:
+            self._accept = accept
+            self._visible = visible
+
+        def attr(self, name: str):
+            if name == "accept":
+                return self._accept
+            return ""
+
+        def run_js(self, script: str):
+            if "getComputedStyle(this)" in script:
+                return self._visible
+            if "getAttribute('accept')" in script:
+                return self._accept
+            return ""
+
+    class FakeOwner:
+        def __init__(self, image_input: FakeInput, video_input: FakeInput) -> None:
+            self.image_input = image_input
+            self.video_input = video_input
+
+        def ele(self, selector: str, timeout: float = 0):
+            del timeout
+            if "contains(translate(@accept,'IMAGE','image'),'image')" in selector or "contains(@accept,'image')" in selector:
+                return self.image_input
+            if "contains(translate(@accept,'VIDEO','video'),'video')" in selector or "contains(@accept,'video')" in selector:
+                return self.video_input
+            return None
+
+        def get_frames(self, timeout: float = 0):
+            del timeout
+            return []
+
+    image_input = FakeInput("image/png,image/jpeg", visible=False)
+    video_input = FakeInput("video/*,.mp4", visible=True)
+    owner = FakeOwner(image_input, video_input)
+
+    selected = engine._find_upload_file_input_generic(owner, None, prefer_video=False)
+
+    assert selected is image_input
+
+
+def test_fill_caption_generic_xiaohongshu_allows_best_effort_when_editor_is_publish_ready(
+    monkeypatch,
+) -> None:
+    class EmptyCtx:
+        def ele(self, selector: str, timeout: float = 2.0):
+            del selector, timeout
+            return None
+
+    monkeypatch.setattr(engine, "_prepare_caption_for_platform", lambda caption, platform_name: caption)
+    monkeypatch.setattr(engine, "_caption_verification_marker", lambda caption: "cybertruck")
+    monkeypatch.setattr(engine, "_force_xiaohongshu_caption", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_read_xiaohongshu_publish_state",
+        lambda *_args, **_kwargs: {
+            "media_count": 1,
+            "publish_entry": True,
+            "has_publish_action": True,
+        },
+    )
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._fill_caption_generic(EmptyCtx(), EmptyCtx(), "cybertruck", "xiaohongshu")

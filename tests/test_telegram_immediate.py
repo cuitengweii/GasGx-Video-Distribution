@@ -247,6 +247,51 @@ def _reply_markup_callback_data(reply_markup: dict[str, object]) -> list[str]:
     return callback_data_values
 
 
+def test_poll_transport_backoff_grows_and_caps() -> None:
+    samples = [
+        worker_impl._compute_poll_transport_backoff_seconds(
+            consecutive_failures=failures,
+            base_interval_seconds=0,
+            max_backoff_seconds=30,
+        )
+        for failures in (1, 2, 3, 4, 5, 8)
+    ]
+    assert samples == [1, 2, 4, 8, 16, 30]
+    assert (
+        worker_impl._compute_poll_transport_backoff_seconds(
+            consecutive_failures=3,
+            base_interval_seconds=12,
+            max_backoff_seconds=30,
+        )
+        == 12
+    )
+
+
+def test_poll_network_restart_requires_sustained_failure_span() -> None:
+    exc = RuntimeError("HTTPSConnectionPool(host='api.telegram.org'): ConnectionResetError(10054)")
+    assert not worker_impl._should_restart_after_poll_error(
+        exc,
+        consecutive_failures=6,
+        threshold=6,
+        failure_span_seconds=120,
+        min_failure_span_seconds=600,
+    )
+    assert worker_impl._should_restart_after_poll_error(
+        exc,
+        consecutive_failures=6,
+        threshold=6,
+        failure_span_seconds=610,
+        min_failure_span_seconds=600,
+    )
+    assert worker_impl._should_restart_after_poll_error(
+        exc,
+        consecutive_failures=6,
+        threshold=6,
+        failure_span_seconds=0,
+        min_failure_span_seconds=0,
+    )
+
+
 def test_refresh_platform_login_qr_message_accepts_telegram_bot_identifier(tmp_path: Path) -> None:
     result = worker_impl._refresh_platform_login_qr_message(
         platform_name="wechat",

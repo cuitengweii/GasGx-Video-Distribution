@@ -112,6 +112,8 @@ DEFAULT_POLL_TIMEOUT_SECONDS = 10
 MAX_BLOCKING_WAIT_SECONDS = 30
 DEFAULT_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DEFAULT_POLL_NETWORK_FAILURE_RESTART_THRESHOLD = 6
+DEFAULT_POLL_NETWORK_FAILURE_RESTART_MIN_SPAN_SECONDS = 600
+DEFAULT_POLL_NETWORK_ERROR_BACKOFF_MAX_SECONDS = 30
 DEFAULT_TELEGRAM_POST_RETRY_COUNT = 3
 DEFAULT_HOME_FORCE_NEW_DEBOUNCE_SECONDS = 6
 DEFAULT_HOME_SHORTCUT_DEBOUNCE_SECONDS = 3600
@@ -857,12 +859,40 @@ def _is_telegram_poll_network_error(exc: Exception) -> bool:
     return _is_telegram_transport_error_text(str(exc or ""))
 
 
-def _should_restart_after_poll_error(exc: Exception, consecutive_failures: int, threshold: int) -> bool:
+def _compute_poll_transport_backoff_seconds(
+    *,
+    consecutive_failures: int,
+    base_interval_seconds: int,
+    max_backoff_seconds: int = DEFAULT_POLL_NETWORK_ERROR_BACKOFF_MAX_SECONDS,
+) -> int:
+    base_interval = max(0, int(base_interval_seconds))
+    failures = max(0, int(consecutive_failures))
+    capped_max_backoff = max(base_interval, int(max_backoff_seconds))
+    if failures <= 0:
+        return base_interval
+    # Use bounded exponential backoff for transport jitter to avoid rapid restart loops.
+    exponential = 2 ** min(failures - 1, 6)
+    return max(base_interval, min(capped_max_backoff, exponential))
+
+
+def _should_restart_after_poll_error(
+    exc: Exception,
+    consecutive_failures: int,
+    threshold: int,
+    *,
+    failure_span_seconds: float = 0.0,
+    min_failure_span_seconds: int = DEFAULT_POLL_NETWORK_FAILURE_RESTART_MIN_SPAN_SECONDS,
+) -> bool:
     if threshold <= 0:
         return False
     if consecutive_failures < threshold:
         return False
-    return _is_telegram_poll_network_error(exc)
+    if not _is_telegram_poll_network_error(exc):
+        return False
+    min_span_seconds = max(0, int(min_failure_span_seconds))
+    if min_span_seconds <= 0:
+        return True
+    return float(failure_span_seconds or 0.0) >= float(min_span_seconds)
 
 
 def _telegram_api(
@@ -14556,6 +14586,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_POLL_NETWORK_FAILURE_RESTART_THRESHOLD,
         help="Restart worker after this many consecutive Telegram poll network failures. Set 0 to disable.",
     )
+    parser.add_argument(
+        "--poll-network-failure-restart-min-span-seconds",
+        type=int,
+        default=DEFAULT_POLL_NETWORK_FAILURE_RESTART_MIN_SPAN_SECONDS,
+        help=(
+            "Minimum consecutive Telegram poll network failure span required before restart is allowed. "
+            "Set 0 to disable this guard."
+        ),
+    )
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--allow-shell", action="store_true")
     parser.add_argument("--once", action="store_true")
@@ -14638,10 +14677,14 @@ def main() -> int:
     poll_interval = max(0, int(args.poll_interval_seconds))
     poll_timeout = max(1, int(args.poll_timeout_seconds))
     poll_network_failure_restart_threshold = max(0, int(args.poll_network_failure_restart_threshold))
+    poll_network_failure_restart_min_span_seconds = max(
+        0, int(args.poll_network_failure_restart_min_span_seconds)
+    )
     timeout_seconds = int(_normalize_blocking_timeout(args.timeout_seconds, DEFAULT_TIMEOUT_SECONDS, minimum=1))
     allow_shell = bool(args.allow_shell)
     api_timeout_seconds = max(10, poll_timeout + 15)
     consecutive_poll_failures = 0
+    poll_failure_burst_started_at = 0.0
 
     env_prefixes_raw = _env_first(
         "CYBERCAR_TELEGRAM_SHELL_ALLOW_PREFIXES",
@@ -14870,6 +14913,7 @@ def main() -> int:
             )
 
         while True:
+            sleep_seconds = poll_interval
             try:
                 _update_worker_state(
                     state_file,
@@ -14938,6 +14982,7 @@ def main() -> int:
                 if not isinstance(updates, list):
                     updates = []
                 consecutive_poll_failures = 0
+                poll_failure_burst_started_at = 0.0
                 _update_worker_state(
                     state_file,
                     pid=os.getpid(),
@@ -15052,6 +15097,13 @@ def main() -> int:
                 else:
                     _append_log(log_file, f"[Worker] loop error: {exc}")
                 consecutive_poll_failures += 1
+                if poll_transport_error:
+                    if consecutive_poll_failures == 1 or poll_failure_burst_started_at <= 0:
+                        poll_failure_burst_started_at = time.time()
+                    sleep_seconds = _compute_poll_transport_backoff_seconds(
+                        consecutive_failures=consecutive_poll_failures,
+                        base_interval_seconds=poll_interval,
+                    )
                 _update_worker_state(
                     state_file,
                     pid=os.getpid(),
@@ -15067,17 +15119,24 @@ def main() -> int:
                 )
                 if args.once:
                     return 1
+                failure_span_seconds = (
+                    max(0.0, time.time() - poll_failure_burst_started_at)
+                    if poll_transport_error and poll_failure_burst_started_at > 0
+                    else 0.0
+                )
                 if _should_restart_after_poll_error(
                     exc,
                     consecutive_failures=consecutive_poll_failures,
                     threshold=poll_network_failure_restart_threshold,
+                    failure_span_seconds=failure_span_seconds,
+                    min_failure_span_seconds=poll_network_failure_restart_min_span_seconds,
                 ):
                     _append_log(
                         log_file,
                         (
                             "[Worker] consecutive Telegram poll network failures reached threshold "
                             f"({consecutive_poll_failures}/{poll_network_failure_restart_threshold}); "
-                            "exit for supervisor restart."
+                            f"failure_span={int(failure_span_seconds)}s; exit for supervisor restart."
                         ),
                     )
                     _update_worker_state(
@@ -15093,7 +15152,8 @@ def main() -> int:
                         consecutive_poll_failures=consecutive_poll_failures,
                     )
                     return 2
-            time.sleep(poll_interval)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
     finally:
         _release_poller_lock(poller_lock)
 

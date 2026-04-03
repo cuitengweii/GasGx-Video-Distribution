@@ -517,3 +517,28 @@ def test_fill_draft_once_generic_selects_douyin_collection_for_video(monkeypatch
 
     assert result is page
     assert calls == [("douyin", "赛博皮卡现车：aawbcc")]
+
+def test_ensure_douyin_publish_mode_image_body_pattern_uses_stable_tokens(monkeypatch) -> None:
+    scripts: list[str] = []
+
+    class FakeOwner:
+        url = ""
+
+        def run_js(self, script: str) -> dict[str, str]:
+            scripts.append(script)
+            return {"state": "not_found"}
+
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    ok = engine._ensure_douyin_publish_mode(FakeOwner(), None, prefer_video=False, max_rounds=1)
+
+    assert ok is False
+    assert scripts
+    joined = "\n".join(scripts)
+    assert "\\u5df2\\u6dfb\\u52a0\\\\s*\\\\d+\\\\s*\\u5f20\\u56fe\\u7247" in joined
+    assert "\\u7f16\\u8f91\\u56fe\\u7247" in joined
+    assert "\\u7ee7\\u7eed\\u6dfb\\u52a0" in joined
+    assert "\\u9884\\u89c8\\u56fe\\u6587" in joined
+    assert "\\u5bb8sx" not in joined
+

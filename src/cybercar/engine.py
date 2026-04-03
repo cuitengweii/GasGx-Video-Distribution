@@ -13467,6 +13467,9 @@ def _wait_upload_ready(page: ChromiumPage, ctx: Any, timeout_seconds: int = UPLO
     douyin_ambiguous_best_effort_wait = max(1.5, min(15.0, float(normalized_timeout) * 0.45))
     if douyin_ambiguous_best_effort_wait >= float(normalized_timeout):
         douyin_ambiguous_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
+    kuaishou_entry_best_effort_wait = max(8.0, min(35.0, float(normalized_timeout) * 0.65))
+    if kuaishou_entry_best_effort_wait >= float(normalized_timeout):
+        kuaishou_entry_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
     last_status = ""
     active_ctx = ctx
     dynamic_extension_budget = max(8.0, min(90.0, float(normalized_timeout)))
@@ -14400,8 +14403,14 @@ def _diagnose_bilibili_publish_attempt(
 def _click_save_draft_button(ctx: Any) -> bool:
     selectors = (
         "css:.form-btns button.weui-desktop-btn_default",
-        "xpath://button[contains(., '淇濆瓨鑽夌')]",
-        "text:淇濆瓨鑽夌",
+        "xpath://button[contains(normalize-space(.), '保存草稿')]",
+        "xpath://button[contains(normalize-space(.), '存草稿')]",
+        "xpath://button[contains(normalize-space(.), '暂存离开')]",
+        "xpath://div[@role='dialog']//button[contains(normalize-space(.), '保存草稿') or contains(normalize-space(.), '存草稿') or contains(normalize-space(.), '暂存离开')]",
+        "xpath://div[contains(@class,'dialog') or contains(@class,'modal')]//button[contains(normalize-space(.), '保存草稿') or contains(normalize-space(.), '存草稿') or contains(normalize-space(.), '暂存离开')]",
+        "text:保存草稿",
+        "text:存草稿",
+        "text:暂存离开",
     )
     for selector in selectors:
         try:
@@ -14409,6 +14418,18 @@ def _click_save_draft_button(ctx: Any) -> bool:
             if not btn:
                 continue
             if not _is_visible_element(btn):
+                continue
+            btn_text = ""
+            try:
+                btn_text = str(
+                    btn.run_js(
+                        "return String(this.innerText || this.textContent || '').replace(/\\s+/g, ' ').trim();"
+                    )
+                    or ""
+                ).strip()
+            except Exception:
+                btn_text = ""
+            if btn_text and ("发布" in btn_text) and ("草稿" not in btn_text) and ("暂存" not in btn_text):
                 continue
             try:
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
@@ -14419,10 +14440,70 @@ def _click_save_draft_button(ctx: Any) -> bool:
                 btn.click()
             except Exception:
                 btn.click(by_js=True)
-            _log(f"[Uploader] Clicked save draft by selector: {selector}")
+            _log(f"[Uploader] Clicked save draft by selector: {selector} ({btn_text or '-'})")
             return True
         except Exception:
             continue
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function disabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const cls = String(el.className || '');
+      return /\\bdisabled\\b/i.test(cls);
+    }
+    const candidates = [];
+    for (const node of Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))) {
+      if (!isVisible(node)) continue;
+      const text = norm(node.innerText || node.textContent || '');
+      if (!text || text.length > 24) continue;
+      const lower = text.toLowerCase();
+      const draftHit = /保存草稿|存草稿|暂存离开|草稿箱/.test(text)
+        || lower.includes('save draft')
+        || lower.includes('save as draft')
+        || lower === 'draft';
+      if (!draftHit) continue;
+      if ((/发布|投稿/.test(text) || lower.includes('publish') || lower.includes('submit')) && !(/草稿|暂存/.test(text) || lower.includes('draft'))) {
+        continue;
+      }
+      let score = 0;
+      if (text === '保存草稿') score += 20;
+      else if (text === '存草稿' || text === '暂存离开') score += 18;
+      else if (text.includes('草稿')) score += 12;
+      if (/form-btns|dialog|modal|popup|footer|action/.test(String((node.closest('form, footer, [role="dialog"], .dialog, .modal, .popup, .form-btns') || {}).className || ''))) score += 6;
+      if (disabled(node)) score -= 40;
+      if (score > 0) candidates.push({node, text, score});
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    const chosen = candidates[0].node.closest('button, [role="button"], a') || candidates[0].node;
+    if (disabled(chosen)) return {state: 'disabled', text: candidates[0].text || ''};
+    chosen.scrollIntoView({block: 'center', inline: 'nearest'});
+    chosen.click();
+    return {state: 'clicked', text: candidates[0].text || ''};
+    """
+    try:
+        result = ctx.run_js(js)
+    except Exception:
+        result = False
+    if isinstance(result, dict) and str(result.get("state", "")).lower() == "clicked":
+        text = str(result.get("text", "") or "").strip() or "-"
+        _log(f"[Uploader] Clicked save draft by JS fallback: {text}")
+        return True
+    if bool(result):
+        _log("[Uploader] Clicked save draft by JS fallback.")
+        return True
     return False
 
 
@@ -16232,6 +16313,9 @@ def _wait_upload_ready_generic(
     douyin_ambiguous_best_effort_wait = max(1.5, min(15.0, float(normalized_timeout) * 0.45))
     if douyin_ambiguous_best_effort_wait >= float(normalized_timeout):
         douyin_ambiguous_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
+    kuaishou_entry_best_effort_wait = max(8.0, min(35.0, float(normalized_timeout) * 0.65))
+    if kuaishou_entry_best_effort_wait >= float(normalized_timeout):
+        kuaishou_entry_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
     bilibili_entry_since = 0.0
     bilibili_busy_since = 0.0
     bilibili_reupload_attempted = False
@@ -16533,73 +16617,7 @@ def _wait_upload_ready_generic(
                 time.sleep(2.0)
                 continue
         elif platform_name == "kuaishou" and upload_target is not None and _is_image_file(upload_target):
-            js_state = r"""
-            function isVisible(el) {
-              if (!el) return false;
-              const st = window.getComputedStyle(el);
-              if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
-              const r = el.getBoundingClientRect();
-              return r.width > 8 && r.height > 8;
-            }
-            function norm(s) {
-              return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
-            }
-            function hasVisibleSelector(selectors) {
-              for (const selector of selectors) {
-                const nodes = Array.from(document.querySelectorAll(selector));
-                if (nodes.some(isVisible)) return true;
-              }
-              return false;
-            }
-            function visibleTexts() {
-              return Array.from(document.querySelectorAll('button, [role="button"], div, span, a, label, input, textarea'))
-                .filter(isVisible)
-                .map(node => norm(node.innerText || node.textContent || node.value || ''))
-                .filter(Boolean)
-                .slice(0, 80);
-            }
-            const bodyText = norm((document.body && document.body.innerText) || '');
-            const texts = visibleTexts();
-            const descInput = hasVisibleSelector([
-              "textarea[placeholder*='浣滃搧鎻忚堪']",
-              "textarea[placeholder*='鎻忚堪']",
-              "[contenteditable='true']",
-              "div[role='textbox']",
-            ]);
-            const titleInput = hasVisibleSelector([
-              "input[placeholder*='鏍囬']",
-              "input[placeholder*='浣滃搧鏍囬']",
-            ]);
-            const uploadEntry = /(涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|娣诲姞鍥剧墖|鐐瑰嚮涓婁紶)/.test(bodyText)
-              && !/(浣滃搧鎻忚堪|娣诲姞鍦扮偣|鏌ョ湅鏉冮檺|鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷)/.test(bodyText);
-            const busy = /\b\d{1,3}%\b/.test(bodyText) || /(涓婁紶涓瓅姝ｅ湪涓婁紶|澶勭悊涓瓅姝ｅ湪澶勭悊|鎺掗槦涓瓅鏍￠獙涓?/.test(bodyText);
-            const publishBtn = texts.some(text => /^(鍙戝竷|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|纭鍙戝竷)$/.test(text));
-            const cancelBtn = texts.some(text => text === '鍙栨秷');
-            const editorHints = /(浣滃搧鎻忚堪|娣诲姞鍦扮偣|鏌ョ湅鏉冮檺|鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|鎵€鏈変汉鍙|濂藉弸鍙|浠呰嚜宸卞彲瑙?/.test(bodyText);
-            const ready = !!((descInput || titleInput || editorHints) && (publishBtn || cancelBtn));
-            return {
-              ready,
-              busy,
-              upload_entry: uploadEntry,
-              desc_input: descInput,
-              title_input: titleInput,
-              publish_btn: publishBtn,
-              cancel_btn: cancelBtn,
-              editor_hints: editorHints,
-              sample_texts: texts.filter(text => /鍙戝竷|鍙栨秷|鎻忚堪|鍦扮偣|鏉冮檺|鏃堕棿/.test(text)).slice(0, 12),
-            };
-            """
-            state: dict[str, Any] = {}
-            for owner in (ctx, page):
-                if not owner:
-                    continue
-                try:
-                    payload = owner.run_js(js_state)
-                except Exception:
-                    payload = {}
-                if isinstance(payload, dict) and payload:
-                    state = payload
-                    break
+            state = _read_kuaishou_image_upload_state(ctx, page)
             ready_hit = bool(state.get("ready"))
             if ready_hit:
                 _log(
@@ -16608,7 +16626,8 @@ def _wait_upload_ready_generic(
                     f"title={bool(state.get('title_input'))}, "
                     f"publish={bool(state.get('publish_btn'))}, "
                     f"cancel={bool(state.get('cancel_btn'))}, "
-                    f"editor_hints={bool(state.get('editor_hints'))}"
+                    f"editor_hints={bool(state.get('editor_hints'))}, "
+                    f"image_added={bool(state.get('image_added'))}"
                 )
                 return ctx
             busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
@@ -16622,14 +16641,26 @@ def _wait_upload_ready_generic(
                     "[Uploader:kuaishou] Waiting for image editor form readiness..."
                     + (f" texts={preview}" if preview else "")
                 )
-                if (time.time() - kuaishou_entry_since) >= min(max(45, int(timeout_seconds) // 2), 120):
-                    _log("[Uploader:kuaishou] Image editor readiness missing for too long; keep waiting conservatively.")
+                waited = time.time() - kuaishou_entry_since
+                if upload_binding_confirmed and waited >= float(kuaishou_entry_best_effort_wait):
+                    _log(
+                        "[Uploader:kuaishou] Upload entry persisted after file staging; "
+                        "continue with best-effort fallback "
+                        f"(waited {kuaishou_entry_best_effort_wait:.1f}s)."
+                    )
+                    return ctx
                 time.sleep(2.0)
                 continue
             if busy_hit:
                 _log("[Uploader:kuaishou] Waiting for upload completion...")
                 time.sleep(2.0)
                 continue
+            if upload_binding_confirmed and bool(state.get("image_added")):
+                _log(
+                    "[Uploader:kuaishou] Continue with best-effort fallback after image-added marker "
+                    "without stable editor controls."
+                )
+                return ctx
             sample_texts = state.get("sample_texts") if isinstance(state.get("sample_texts"), list) else []
             if sample_texts:
                 _log(f"[Uploader:kuaishou] Editor not ready yet, continue waiting: {sample_texts}")
@@ -16669,19 +16700,22 @@ def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
     }
     const bodyText = norm((document.body && document.body.innerText) || '');
     const texts = visibleTexts();
-    const imageAdded = /(宸叉坊鍔燶d+寮犲浘鐗噟宸叉坊鍔犲浘鐗噟缂栬緫鍥剧墖|缁х画娣诲姞)/.test(bodyText);
-    const uploadEntry = /(鐐瑰嚮涓婁紶|涓婁紶鍥炬枃|涓婁紶鍥剧墖|鎷栧叆姝ゅ尯鍩焲鍥剧墖鏂囦欢)/.test(bodyText) && !imageAdded;
-    const busy = /\b\d{1,3}%\b/.test(bodyText) || /(涓婁紶涓瓅姝ｅ湪涓婁紶|澶勭悊涓瓅鎺掗槦涓瓅鏍￠獙涓?/.test(bodyText);
-    const editorHints = /(浣滃搧鎻忚堪|鍙戝竷璁剧疆|淇濆瓨鏉冮檺|鍙戝竷鏃堕棿|璋佸彲浠ョ湅|娣诲姞鍚堥泦)/.test(bodyText);
-    const publishBtn = texts.some(text => /^(鍙戝竷|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|纭鍙戝竷)$/.test(text));
+    const imageAdded = /(已添加\s*\d+\s*张图片|已添加图片|编辑图片|继续添加|预览图文|宸叉坊鍔燶\d+寮犲浘鐗噟宸叉坊鍔犲浘鐗噟缂栬緫鍥剧墖|缁х画娣诲姞|棰勮鍥炬枃)/.test(bodyText);
+    const uploadEntry = /(点击上传|上传图文|发布图文|上传图片|拖入此区域|图片文件|鐐瑰嚮涓婁紶|涓婁紶鍥炬枃|鍙戝竷鍥炬枃|涓婁紶鍥剧墖|鎷栧叆姝ゅ尯鍩焲鍥剧墖鏂囦欢)/.test(bodyText)
+      && !imageAdded;
+    const busy = /\b\d{1,3}%\b/.test(bodyText)
+      || /(上传中|处理中|正在上传|正在处理|排队中|校验中|涓婁紶涓瓅姝ｅ湪涓婁紶|澶勭悊涓瓅鎺掗槦涓瓅鏍￠獙涓?)/.test(bodyText);
+    const editorHints = /(作品描述|发布设置|保存权限|发布时间|谁可以看|添加合集|浣滃搧鎻忚堪|鍙戝竷璁剧疆|淇濆瓨鏉冮檺|鍙戝竷鏃堕棿|璋佸彲浠ョ湅|娣诲姞鍚堥泦)/.test(bodyText);
+    const publishBtn = texts.some(text => /^(发布|发布作品|立即发布|确认发布|鍙戝竷|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|纭鍙戝竷)$/.test(text));
+    const relaxedReady = !!(imageAdded && (editorHints || publishBtn));
     return {
-      ready: !!(imageAdded && editorHints && publishBtn && !busy),
+      ready: !!(relaxedReady && !busy),
       busy: !!busy,
       upload_entry: !!uploadEntry,
       image_added: !!imageAdded,
       editor_hints: !!editorHints,
       publish_btn: !!publishBtn,
-      sample_texts: texts.filter(text => /鍙戝竷|鎻忚堪|鍚堥泦|缁х画娣诲姞|缂栬緫鍥剧墖|宸叉坊鍔?.test(text)).slice(0, 16),
+      sample_texts: texts.filter(text => /发布|描述|合集|继续添加|编辑图片|已添加|预览图文|鍙戝竷|鎻忚堪|鍚堥泦|缁х画娣诲姞|缂栬緫鍥剧墖|宸叉坊鍔?|棰勮鍥炬枃/.test(text)).slice(0, 16),
     };
     """
     merged: dict[str, Any] = {
@@ -16833,6 +16867,150 @@ def _read_douyin_video_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
     return merged
 
 
+def _read_kuaishou_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function hasVisibleSelector(selectors) {
+      for (const selector of selectors) {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        if (nodes.some(isVisible)) return true;
+      }
+      return false;
+    }
+    function visibleTexts() {
+      return Array.from(document.querySelectorAll('button, [role="button"], div, span, a, label, input, textarea'))
+        .filter(isVisible)
+        .map(node => norm(node.innerText || node.textContent || node.value || ''))
+        .filter(Boolean)
+        .slice(0, 120);
+    }
+    const bodyText = norm((document.body && document.body.innerText) || '');
+    const texts = visibleTexts();
+    const descInput = hasVisibleSelector([
+      "textarea[placeholder*='作品描述']",
+      "textarea[placeholder*='描述']",
+      "textarea[placeholder*='文案']",
+      "[contenteditable='true']",
+      "div[role='textbox']",
+    ]);
+    const titleInput = hasVisibleSelector([
+      "input[placeholder*='标题']",
+      "input[placeholder*='作品标题']",
+    ]);
+    const imageAdded = /(已添加\s*\d+\s*张图片|编辑图片|继续添加|缂栬緫鍥剧墖|缁х画娣诲姞|宸叉坊鍔燶\d+寮犲浘鐗?)/.test(bodyText);
+    const uploadEntry = /(上传图文|发布图文|上传图片|选择图片|拖拽图片|点击上传|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|鐐瑰嚮涓婁紶)/.test(bodyText)
+      && !imageAdded;
+    const busy = /\b\d{1,3}%\b/.test(bodyText) || /(上传中|处理中|正在上传|正在处理|排队中|校验中|涓婁紶涓?|澶勭悊涓?|姝ｅ湪涓婁紶|姝ｅ湪澶勭悊|鎺掗槦涓?|鏍￠獙涓?)/.test(bodyText);
+    const publishBtn = texts.some(text => /^(发布|发布作品|立即发布|确认发布|确认定时发布|鍙戝竷|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|纭鍙戝竷|纭瀹氭椂鍙戝竷)$/.test(text));
+    const cancelBtn = texts.some(text => /^(取消|鍙栨秷)$/.test(text));
+    const editorHints = /(作品描述|添加地点|查看权限|发布时间|立即发布|定时发布|所有人可见|好友可见|仅自己可见|浣滃搧鎻忚堪|娣诲姞鍦扮偣|鏌ョ湅鏉冮檺|鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|鎵€鏈変汉鍙|濂藉弸鍙|浠呰嚜宸卞彲瑙?)/.test(bodyText);
+    const ready = !!((descInput || titleInput || editorHints || imageAdded) && (publishBtn || cancelBtn) && !busy);
+    return {
+      ready,
+      busy,
+      upload_entry: uploadEntry,
+      desc_input: descInput,
+      title_input: titleInput,
+      publish_btn: publishBtn,
+      cancel_btn: cancelBtn,
+      editor_hints: editorHints,
+      image_added: imageAdded,
+      sample_texts: texts.filter(text => /发布|取消|描述|地点|权限|时间|图片|编辑|添加|鍙戝竷|鍙栨秷|鎻忚堪|鍦扮偣|鏉冮檺|鏃堕棿|鍥剧墖|缂栬緫|娣诲姞/.test(text)).slice(0, 16),
+    };
+    """
+    merged: dict[str, Any] = {
+        "ready": False,
+        "busy": False,
+        "upload_entry": False,
+        "desc_input": False,
+        "title_input": False,
+        "publish_btn": False,
+        "cancel_btn": False,
+        "editor_hints": False,
+        "image_added": False,
+        "sample_texts": [],
+    }
+    seen_texts: set[str] = set()
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        for key in (
+            "ready",
+            "busy",
+            "upload_entry",
+            "desc_input",
+            "title_input",
+            "publish_btn",
+            "cancel_btn",
+            "editor_hints",
+            "image_added",
+        ):
+            merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+        payload_texts = payload.get("sample_texts")
+        if isinstance(payload_texts, list):
+            for raw in payload_texts:
+                text = str(raw or "").strip()
+                if not text or text in seen_texts:
+                    continue
+                seen_texts.add(text)
+                merged["sample_texts"].append(text)
+                if len(merged["sample_texts"]) >= 16:
+                    break
+    return merged
+
+
+def _read_file_input_accept_text(file_input: Any) -> str:
+    if not file_input:
+        return ""
+    accept = ""
+    with contextlib.suppress(Exception):
+        accept = str(file_input.attr("accept") or "")
+    if accept:
+        return accept
+    with contextlib.suppress(Exception):
+        accept = str(file_input.run_js("return String(this.getAttribute('accept') || '');") or "")
+    return accept
+
+
+def _accept_has_image(accept: str) -> bool:
+    normalized = str(accept or "").strip().lower()
+    if not normalized:
+        return False
+    return bool(re.search(r"(image/|\.png|\.jpe?g|\.webp|\.gif|\.bmp|\.heic|\.heif|\.avif)", normalized))
+
+
+def _accept_has_video(accept: str) -> bool:
+    normalized = str(accept or "").strip().lower()
+    if not normalized:
+        return False
+    return bool(re.search(r"(video/|\.mp4|\.mov|\.mkv|\.webm|\.avi|\.flv|\.m4v|\.mpeg|\.mpg|\.ts|\.3gp|\.rmvb?)", normalized))
+
+
+def _is_mismatched_file_input_accept(accept: str, prefer_video: Optional[bool]) -> bool:
+    if prefer_video is None:
+        return False
+    has_image = _accept_has_image(accept)
+    has_video = _accept_has_video(accept)
+    if prefer_video:
+        return has_image and (not has_video)
+    return has_video and (not has_image)
+
+
 def _find_upload_file_input_generic(
     primary_ctx: Any,
     fallback_ctx: Any,
@@ -16857,7 +17035,9 @@ def _find_upload_file_input_generic(
         selectors = (*image_selectors, *video_selectors, *common_selectors)
     else:
         selectors = (*video_selectors, *image_selectors, *common_selectors)
-    fallback_candidate = None
+    preferred_hidden = None
+    opposite_visible = None
+    opposite_hidden = None
     for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
         if not owner:
             continue
@@ -16866,13 +17046,21 @@ def _find_upload_file_input_generic(
                 ele = owner.ele(selector, timeout=3)
                 if not ele:
                     continue
-                if _is_visible_element(ele):
+                mismatched = _is_mismatched_file_input_accept(_read_file_input_accept_text(ele), prefer_video)
+                if _is_visible_element(ele) and not mismatched:
                     return ele
-                if fallback_candidate is None:
-                    fallback_candidate = ele
+                if _is_visible_element(ele):
+                    if opposite_visible is None:
+                        opposite_visible = ele
+                    continue
+                if not mismatched:
+                    if preferred_hidden is None:
+                        preferred_hidden = ele
+                elif opposite_hidden is None:
+                    opposite_hidden = ele
             except Exception:
                 continue
-    return fallback_candidate
+    return preferred_hidden or opposite_visible or opposite_hidden
 
 
 def _score_kuaishou_file_input_candidate(candidate: dict[str, Any], prefer_video: bool) -> int:
@@ -17052,13 +17240,54 @@ def _ensure_xiaohongshu_upload_mode(
     prefer_video: bool,
     max_rounds: int = 3,
 ) -> bool:
-    target_text = "涓婁紶瑙嗛" if prefer_video else "涓婁紶鍥炬枃"
-    other_text = "涓婁紶鍥炬枃" if prefer_video else "涓婁紶瑙嗛"
+    target_labels = ("上传视频", "涓婁紶瑙嗛") if prefer_video else (
+        "上传图文",
+        "发布图文",
+        "上传图片",
+        "涓婁紶鍥炬枃",
+        "鍙戝竷鍥炬枃",
+        "涓婁紶鍥剧墖",
+    )
+    other_labels = ("上传图文", "发布图文", "上传图片", "涓婁紶鍥炬枃", "鍙戝竷鍥炬枃", "涓婁紶鍥剧墖") if prefer_video else (
+        "上传视频",
+        "涓婁紶瑙嗛",
+    )
+    target_body_markers = (
+        "上传视频",
+        "拖拽视频",
+        "选择视频",
+        "涓婁紶瑙嗛",
+        "鎷栨嫿瑙嗛",
+        "閫夋嫨瑙嗛",
+    ) if prefer_video else (
+        "上传图文",
+        "发布图文",
+        "上传图片",
+        "选择图片",
+        "拖拽图片",
+        "涓婁紶鍥炬枃",
+        "鍙戝竷鍥炬枃",
+        "涓婁紶鍥剧墖",
+        "閫夋嫨鍥剧墖",
+        "鎷栨嫿鍥剧墖",
+    )
+    target_text = target_labels[0]
     js_switch = f"""
-    const target = {json.dumps(target_text)};
-    const other = {json.dumps(other_text)};
+    const targetList = {json.dumps(list(target_labels))};
+    const otherList = {json.dumps(list(other_labels))};
+    const targetSet = new Set(targetList);
+    const otherSet = new Set(otherList);
+    const targetBodyMarkers = {json.dumps(list(target_body_markers))};
     function norm(s) {{
       return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }}
+    function containsAnyToken(text, tokens) {{
+      if (!text || !Array.isArray(tokens)) return false;
+      for (const token of tokens) {{
+        if (!token) continue;
+        if (text.includes(String(token))) return true;
+      }}
+      return false;
     }}
     function isVisible(el) {{
       if (!el) return false;
@@ -17080,9 +17309,13 @@ def _ensure_xiaohongshu_upload_mode(
     const candidates = Array.from(document.querySelectorAll('a,button,div,span'))
       .filter(isVisible)
       .map(el => {{ return {{ el, text: norm(el.innerText || el.textContent || '') }}; }})
-      .filter(item => item.text === target || item.text === other);
+      .filter(item => targetSet.has(item.text) || otherSet.has(item.text));
     if (!candidates.length) {{
-      return {{ state: 'not_found', target, other, current: '', available: [] }};
+      const bodyText = norm((document.body && document.body.innerText) || '');
+      if (containsAnyToken(bodyText, targetBodyMarkers)) {{
+        return {{ state: 'already', target: targetList[0] || '', other: otherList[0] || '', current: targetList[0] || '', available: [] }};
+      }}
+      return {{ state: 'not_found', target: targetList[0] || '', other: otherList[0] || '', current: '', available: [] }};
     }}
     let current = '';
     for (const item of candidates) {{
@@ -17093,16 +17326,15 @@ def _ensure_xiaohongshu_upload_mode(
     }}
     if (!current) {{
       const bodyText = norm((document.body && document.body.innerText) || '');
-      if (target === '涓婁紶鍥炬枃' && /(涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖)/.test(bodyText)) current = target;
-      if (target === '涓婁紶瑙嗛' && /(涓婁紶瑙嗛|鎷栨嫿瑙嗛)/.test(bodyText)) current = target;
+      if (containsAnyToken(bodyText, targetBodyMarkers)) current = targetList[0] || '';
     }}
-    const targetItem = candidates.find(item => item.text === target);
+    const targetItem = candidates.find(item => targetSet.has(item.text));
     const available = candidates.map(item => item.text);
     if (!targetItem) {{
-      return {{ state: 'target_missing', target, other, current, available }};
+      return {{ state: 'target_missing', target: targetList[0] || '', other: otherList[0] || '', current, available }};
     }}
-    if (current === target) {{
-      return {{ state: 'already', target, other, current, available }};
+    if (targetSet.has(current)) {{
+      return {{ state: 'already', target: targetList[0] || '', other: otherList[0] || '', current, available }};
     }}
     let clicked = false;
     try {{
@@ -17117,7 +17349,7 @@ def _ensure_xiaohongshu_upload_mode(
         clicked = true;
       }} catch (ee) {{}}
     }}
-    return {{ state: clicked ? 'clicked' : 'click_fail', target, other, current, available }};
+    return {{ state: clicked ? 'clicked' : 'click_fail', target: targetList[0] || '', other: otherList[0] || '', current, available }};
     """
 
     rounds = max(1, int(max_rounds))
@@ -17161,9 +17393,9 @@ def _ensure_douyin_publish_mode(
         else ("creator.douyin.com/creator-micro/content/post/image",)
     )
     body_patterns = (
-        r"(涓婁紶瑙嗛|鍙戝竷瑙嗛|閫夋嫨瑙嗛|鎷栨嫿瑙嗛)"
+        r"(上传视频|发布视频|选择视频|拖拽视频|涓婁紶瑙嗛|鍙戝竷瑙嗛|閫夋嫨瑙嗛|鎷栨嫿瑙嗛)"
         if prefer_video
-        else r"(鍙戝竷鍥炬枃|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|宸叉坊鍔燶d+寮犲浘鐗?"
+        else r"(发布图文|上传图文|上传图片|选择图片|拖拽图片|已添加\s*\d+\s*张图片|编辑图片|继续添加|预览图文|鍙戝竷鍥炬枃|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|鎷栨嫿鍥剧墖|宸叉坊鍔燶\d+寮犲浘鐗?|缂栬緫鍥剧墖|缁х画娣诲姞|棰勮鍥炬枃)"
     )
     js_switch = f"""
     const target = {json.dumps(target_text)};
@@ -18173,13 +18405,21 @@ def _stage_kuaishou_image_upload_via_page_set(
         snapshot = _read_generic_file_inputs_snapshot(primary_ctx, fallback_ctx)
         max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
         total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
+        state = _read_kuaishou_image_upload_state(primary_ctx, fallback_ctx)
         _log(
             f"[Uploader:kuaishou] page.set image stage {stage_round + 1}/3: "
             f"max_count={max_count}, total_inputs={total}"
         )
         if max_count <= 0 and stage_round == 0:
             _log_upload_surface_snapshot(primary_ctx, fallback_ctx, "kuaishou", reason="page-set-image-stage-empty")
-        if max_count > 0:
+        if max_count > 0 or bool(state.get("image_added")) or bool(state.get("ready")):
+            if max_count <= 0:
+                _log(
+                    "[Uploader:kuaishou] page.set image stage accepted by editor-state markers: "
+                    f"image_added={bool(state.get('image_added'))}, "
+                    f"ready={bool(state.get('ready'))}, "
+                    f"publish={bool(state.get('publish_btn'))}"
+                )
             return True
     return False
 
@@ -19404,6 +19644,98 @@ def _force_tiktok_caption(primary_ctx: Any, fallback_ctx: Any, caption: str) -> 
     return False
 
 
+def _force_xiaohongshu_caption(primary_ctx: Any, fallback_ctx: Any, caption: str) -> bool:
+    target = str(caption or "").strip()
+    verify_marker = _caption_verification_marker(target)
+    if not target or not verify_marker:
+        return False
+    js = r"""
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function readText(node) {
+      if (!node) return '';
+      if (node.isContentEditable) return norm(node.innerText || node.textContent || '');
+      if (typeof node.value === 'string') return norm(node.value);
+      return norm(node.textContent || '');
+    }
+    function setText(node, value) {
+      if (!node) return '';
+      try { node.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+      try { node.focus(); } catch (e) {}
+      if (node.isContentEditable) {
+        node.innerHTML = '';
+        node.textContent = value;
+      } else if (String(node.tagName || '').toLowerCase() === 'textarea') {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+        if (setter && setter.set) setter.set.call(node, value);
+        else node.value = value;
+      } else {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        if (setter && setter.set) setter.set.call(node, value);
+        else node.value = value;
+      }
+      node.dispatchEvent(new Event('input', {bubbles: true}));
+      node.dispatchEvent(new Event('change', {bubbles: true}));
+      node.dispatchEvent(new Event('blur', {bubbles: true}));
+      return readText(node);
+    }
+    const desired = String(arguments[0] || '').trim();
+    if (!desired) return { state: 'skip', value: '' };
+    const candidates = Array.from(document.querySelectorAll(
+      "textarea, input[type='text'], [contenteditable='true'], .ql-editor, .notranslate, div[role='textbox']"
+    ))
+      .filter(isVisible)
+      .map((node) => {
+        const attrs = [
+          node.getAttribute('placeholder') || '',
+          node.getAttribute('data-placeholder') || '',
+          node.getAttribute('aria-label') || '',
+          String(node.className || ''),
+          String(node.getAttribute('role') || ''),
+          String(node.getAttribute('data-e2e') || ''),
+        ].join(' ');
+        const wrap = node.closest('form, section, .publish, .editor, .content, .note, div') || node.parentElement || node;
+        const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 420);
+        const joined = (attrs + ' ' + wrapText).toLowerCase();
+        let score = 0;
+        if (/(正文|描述|文案|caption|desc|note|text|content)/i.test(attrs + ' ' + wrapText)) score += 20;
+        if (/ql-editor|notranslate|editor|contenteditable/.test(joined)) score += 12;
+        if (String(node.tagName || '').toLowerCase() === 'textarea') score += 6;
+        if (/标题|title|topic|话题|合集|位置|地点|商品|搜索|search/.test(attrs + ' ' + wrapText)) score -= 28;
+        return { node, score };
+      })
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return { state: 'not_found', value: '' };
+    const current = setText(candidates[0].node, desired);
+    return { state: 'set', value: current, score: candidates[0].score };
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js, target)
+        except Exception:
+            result = None
+        if not isinstance(result, dict):
+            continue
+        if str(result.get("state") or "").strip().lower() != "set":
+            continue
+        current = _normalize_text(str(result.get("value") or ""), limit=1200)
+        if _caption_marker_exists(current, verify_marker):
+            _log(f"[Uploader:xiaohongshu] Caption filled and verified by JS fallback.")
+            return True
+    return False
+
+
 def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, platform_name: str) -> None:
     caption = _prepare_caption_for_platform(caption, platform_name=platform_name)
     verify_marker = _caption_verification_marker(caption)
@@ -19576,6 +19908,21 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
                 return
 
     if strict_verify:
+        if platform_name == "xiaohongshu":
+            if _force_xiaohongshu_caption(primary_ctx, fallback_ctx, caption):
+                return
+            state = _read_xiaohongshu_publish_state(primary_ctx, fallback_ctx)
+            if (
+                tried_candidates <= 0
+                and int(state.get("media_count", 0) or 0) > 0
+                and bool(state.get("publish_entry"))
+                and bool(state.get("has_publish_action"))
+            ):
+                _log(
+                    "[Uploader:xiaohongshu] Caption field not detectable after upload; "
+                    "continue with best-effort payload."
+                )
+                return
         snapshot = ""
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
@@ -23199,11 +23546,33 @@ def _looks_like_douyin_image_upload_ready(snapshot_text: str, actions: Sequence[
     merged = f"{text} {normalized_actions}".strip()
     if not merged:
         return False
-    if not any(token in merged for token in ("浣滃搧鎻忚堪", "鍙戝竷璁剧疆", "鍙戝竷鏃堕棿", "绔嬪嵆鍙戝竷")):
+    if not any(
+        token in merged
+        for token in (
+            "作品描述",
+            "发布设置",
+            "发布时间",
+            "立即发布",
+            "浣滃搧鎻忚堪",
+            "鍙戝竷璁剧疆",
+            "鍙戝竷鏃堕棿",
+            "绔嬪嵆鍙戝竷",
+        )
+    ):
         return False
     if re.search(r"已添加\s*\d+\s*张图片", merged):
         return True
-    if any(token in merged for token in ("缂栬緫鍥剧墖", "缁х画娣诲姞", "棰勮鍥炬枃")):
+    if any(
+        token in merged
+        for token in (
+            "编辑图片",
+            "继续添加",
+            "预览图文",
+            "缂栬緫鍥剧墖",
+            "缁х画娣诲姞",
+            "棰勮鍥炬枃",
+        )
+    ):
         return True
     return False
 
@@ -23438,7 +23807,7 @@ def _wait_publish_feedback(
         "douyin": ("发布成功", "发布中", "发布完成", "提交成功", "已提交", "审核中"),
         "xiaohongshu": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "发布完成", "已提交"),
         "kuaishou": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "已提交"),
-        "bilibili": ("投稿成功", "投稿中", "已投稿", "已提交", "审核中", "提交成功"),
+        "bilibili": ("投稿成功", "投递成功", "投稿中", "已投稿", "已提交", "审核中", "提交成功"),
         "x": ("Your post was sent", "Post sent", "Posted"),
         "tiktok": ("uploaded", "your video is being uploaded", "post uploaded", "posted"),
     }
