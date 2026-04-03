@@ -59,6 +59,7 @@
         "save_draft": true,
         "publish_now": false,
         "declare_original": false,
+        "publish_click_confirmed": false,
         "upload_timeout": 30
       },
       "douyin": {

@@ -235,6 +235,45 @@ def test_read_douyin_video_upload_state_detects_ready_editor() -> None:
     assert state["publish_btn"] is True
 
 
+def test_read_douyin_video_upload_state_merges_primary_and_fallback() -> None:
+    class PrimaryOwner:
+        def run_js(self, _script: str) -> dict[str, Any]:
+            return {
+                "ready": False,
+                "busy": False,
+                "upload_entry": True,
+                "caption_input": False,
+                "title_input": False,
+                "editor_hints": False,
+                "publish_btn": False,
+                "schedule_toggle": False,
+                "sample_texts": ["上传视频"],
+            }
+
+    class FallbackOwner:
+        def run_js(self, _script: str) -> dict[str, Any]:
+            return {
+                "ready": False,
+                "busy": False,
+                "upload_entry": False,
+                "caption_input": True,
+                "title_input": False,
+                "editor_hints": True,
+                "publish_btn": True,
+                "schedule_toggle": False,
+                "sample_texts": ["作品描述", "立即发布"],
+            }
+
+    state = engine._read_douyin_video_upload_state(PrimaryOwner(), FallbackOwner())
+
+    assert state["upload_entry"] is True
+    assert state["caption_input"] is True
+    assert state["editor_hints"] is True
+    assert state["publish_btn"] is True
+    assert "上传视频" in state["sample_texts"]
+    assert "作品描述" in state["sample_texts"]
+
+
 def test_wait_upload_ready_generic_accepts_douyin_image_editor_ready(monkeypatch, tmp_path) -> None:
     class FakeOwner:
         def __init__(self) -> None:
@@ -328,6 +367,56 @@ def test_wait_upload_ready_generic_waits_for_douyin_video_editor_ready(monkeypat
     assert result is owner
     assert sleep_calls == [2.0]
     assert owner.calls >= 2
+
+
+def test_wait_upload_ready_generic_douyin_best_effort_after_bound_upload_entry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class FakeOwner:
+        def run_js(self, _script: str) -> str:
+            return "上传视频"
+
+    owner = FakeOwner()
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"x")
+    timeline = {"now": 0.0}
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(
+        engine,
+        "_read_douyin_video_upload_state",
+        lambda *_args, **_kwargs: {
+            "ready": False,
+            "busy": False,
+            "upload_entry": True,
+            "caption_input": False,
+            "title_input": False,
+            "editor_hints": False,
+            "publish_btn": False,
+            "schedule_toggle": False,
+            "sample_texts": ["上传视频"],
+        },
+    )
+    monkeypatch.setattr(engine.time, "time", lambda: float(timeline["now"]))
+    def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(float(seconds))
+        timeline["now"] = float(timeline["now"]) + float(seconds)
+
+    monkeypatch.setattr(engine.time, "sleep", fake_sleep)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._wait_upload_ready_generic(
+        None,
+        owner,
+        "douyin",
+        timeout_seconds=120,
+        upload_target=target,
+        upload_binding_confirmed=True,
+    )
+
+    assert result is owner
+    assert sum(sleep_calls) >= 20.0
 
 
 def test_stage_generic_upload_via_page_set_accepts_douyin_editor_ready_without_file_inputs(

@@ -13680,10 +13680,23 @@ def handle_callback_update(
         return {"handled": False, "last_processed": int(last_processed), "update_id": update_id}
 
     action, item_id = parsed
+    _answer_callback_queued()
     actor = username if username.startswith("@") else f"@{username}"
-    item = _get_prefilter_item(workspace, item_id)
+    try:
+        item = _get_prefilter_item(workspace, item_id)
+    except TimeoutError as exc:
+        _append_log(log_file, f"[Worker] prefilter callback queue lock timeout: {exc}")
+        if not callback_answered:
+            _answer_callback_once("系统正忙，请稍后重试。")
+        return {"handled": True, "last_processed": max(int(last_processed), update_id), "update_id": update_id}
+    except Exception as exc:
+        _append_log(log_file, f"[Worker] prefilter callback load item failed: {exc}")
+        if not callback_answered:
+            _answer_callback_once("处理失败，请稍后重试。")
+        return {"handled": True, "last_processed": max(int(last_processed), update_id), "update_id": update_id}
     if not isinstance(item, dict) or not item:
-        _answer_callback_once("审核项不存在或已过期。")
+        if not callback_answered:
+            _answer_callback_once("审核项不存在或已过期。")
         return {"handled": True, "last_processed": max(int(last_processed), update_id), "update_id": update_id}
 
     now_text = _now_text()
@@ -13694,7 +13707,7 @@ def handle_callback_update(
     down_result_message = ""
     should_clear_buttons = True
     card_update: Optional[Dict[str, Any]] = None
-    callback_answered = False
+    # Keep previously-sent callback ack state to avoid duplicate answerCallbackQuery calls.
     card_updated_inline = False
     delete_terminal_card = False
 

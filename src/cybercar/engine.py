@@ -336,6 +336,7 @@ DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
         "save_draft": True,
         "publish_now": False,
         "declare_original": False,
+        "publish_click_confirmed": False,
         "upload_timeout": UPLOAD_TIMEOUT_SECONDS,
     },
     "douyin": {
@@ -385,6 +386,43 @@ WECHAT_PUBLISH_FEEDBACK_GRACE_SECONDS = 45
 WECHAT_PUBLISH_POST_LIST_PROBE_AFTER_SECONDS = 12
 WECHAT_PUBLISH_POST_LIST_FALLBACK_AFTER_SECONDS = 24
 WECHAT_PUBLISH_POST_LIST_PROBE_INTERVAL_SECONDS = 6
+DOUYIN_PUBLISH_BUTTON_TEXTS = (
+    "\u53d1\u5e03",
+    "\u7acb\u5373\u53d1\u5e03",
+    "\u7acb\u5373\u6295\u7a3f",
+    "\u786e\u8ba4\u53d1\u5e03",
+)
+KUAISHOU_PUBLISH_BUTTON_TEXTS = (
+    "\u53d1\u5e03",
+    "\u53d1\u5e03\u4f5c\u54c1",
+    "\u7acb\u5373\u53d1\u5e03",
+    "\u786e\u8ba4\u53d1\u5e03",
+)
+BILIBILI_PUBLISH_BUTTON_TEXTS = (
+    "\u7acb\u5373\u6295\u7a3f",
+    "\u6295\u7a3f",
+    "\u53d1\u5e03",
+    "\u7acb\u5373\u53d1\u5e03",
+)
+BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS = (
+    "\u786e\u8ba4\u6295\u7a3f",
+    "\u7ee7\u7eed\u6295\u7a3f",
+    "\u786e\u5b9a\u6295\u7a3f",
+    "\u786e\u8ba4\u53d1\u5e03",
+    "\u786e\u8ba4\u5b9a\u65f6\u53d1\u5e03",
+    "\u786e\u8ba4\u5b9a\u65f6\u6295\u7a3f",
+    "\u53bb\u53d1\u5e03",
+)
+WECHAT_NO_TIP_BUTTON_TEXTS = ("\u4e0d\u518d\u63d0\u9192",)
+WECHAT_PUBLISH_CONFIRM_BUTTON_TEXTS = (
+    "\u76f4\u63a5\u53d1\u8868",
+    "\u786e\u8ba4\u53d1\u8868",
+    "\u786e\u8ba4\u53d1\u5e03",
+    "\u7ee7\u7eed\u53d1\u8868",
+    "\u7ee7\u7eed\u53d1\u5e03",
+    "\u53bb\u53d1\u5e03",
+    "\u7acb\u5373\u53d1\u8868",
+)
 DEFAULT_AUTO_DELETE_SOURCE_FILES = False
 SPARK_CHAT_TIMEOUT_SECONDS = 20
 DUPLICATE_FINGERPRINT_MAX_HAMMING_DISTANCE = 12
@@ -4369,6 +4407,11 @@ def _merge_publish_platform_config(raw: Any) -> dict[str, Any]:
             merged["declare_original"] = _to_bool(
                 value.get("declare_original"),
                 default=bool(merged.get("declare_original", False)),
+            )
+        if "publish_click_confirmed" in value:
+            merged["publish_click_confirmed"] = _to_bool(
+                value.get("publish_click_confirmed"),
+                default=bool(merged.get("publish_click_confirmed", False)),
             )
         if "auto_publish_random_schedule" in value:
             merged["auto_publish_random_schedule"] = _to_bool(
@@ -13430,9 +13473,37 @@ def _read_editor_status(ctx: Any) -> dict[str, Any]:
 
 def _wait_upload_ready(page: ChromiumPage, ctx: Any, timeout_seconds: int = UPLOAD_TIMEOUT_SECONDS) -> Any:
     failure_markers = ("上传失败", "上传出错", "网络异常", "请重新上传", "上传异常", "处理失败")
-    end_at = time.time() + timeout_seconds
+    normalized_timeout = _normalize_blocking_timeout(timeout_seconds, UPLOAD_TIMEOUT_SECONDS, minimum=1)
+    end_at = time.time() + normalized_timeout
+    douyin_entry_best_effort_wait = max(2.0, min(25.0, float(normalized_timeout) * 0.75))
+    if douyin_entry_best_effort_wait >= float(normalized_timeout):
+        douyin_entry_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
+    douyin_ambiguous_best_effort_wait = max(1.5, min(15.0, float(normalized_timeout) * 0.45))
+    if douyin_ambiguous_best_effort_wait >= float(normalized_timeout):
+        douyin_ambiguous_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
     last_status = ""
     active_ctx = ctx
+    dynamic_extension_budget = max(8.0, min(90.0, float(normalized_timeout)))
+    dynamic_extension_used = 0.0
+    last_extension_at = 0.0
+    hidden_idle_since = 0.0
+
+    def _extend_upload_window(reason: str, bump_seconds: float = 6.0) -> None:
+        nonlocal end_at, dynamic_extension_used, last_extension_at
+        remaining = dynamic_extension_budget - dynamic_extension_used
+        if remaining <= 0:
+            return
+        grant = min(float(bump_seconds), remaining)
+        if grant <= 0:
+            return
+        end_at += grant
+        dynamic_extension_used += grant
+        last_extension_at = time.time()
+        _log(
+            "[Uploader] Upload wait window extended by "
+            f"+{grant:.0f}s (reason={reason}, used={dynamic_extension_used:.0f}/{dynamic_extension_budget:.0f}s)."
+        )
+
     while time.time() < end_at:
         status = _read_editor_status(active_ctx)
         if not status:
@@ -13448,10 +13519,32 @@ def _wait_upload_ready(page: ChromiumPage, ctx: Any, timeout_seconds: int = UPLO
             _log("[Uploader] Upload appears completed by editor state.")
             return active_ctx
 
+        busy_flag = bool(status.get("busy"))
+        hidden_flag = bool(status.get("uploadHidden"))
+        form_btn_ready = bool(status.get("formBtnsReady"))
+        desc_ready = bool(status.get("descEditorReady")) or bool(status.get("descLabelReady"))
+        media_ready = bool(status.get("mediaReady"))
+        # Relaxed completion for transient WeChat UI variations where "done" can stay false.
+        if hidden_flag and (not busy_flag) and form_btn_ready and desc_ready and media_ready:
+            _log("[Uploader] Upload appears completed by hidden+form+media heuristic.")
+            return active_ctx
+        if hidden_flag and (not busy_flag):
+            now = time.time()
+            if hidden_idle_since <= 0:
+                hidden_idle_since = now
+            elif media_ready and (now - hidden_idle_since) >= 10.0:
+                _log("[Uploader] Upload appears completed by hidden-idle heuristic.")
+                return active_ctx
+        else:
+            hidden_idle_since = 0.0
+
         progress = str(status.get("progress", "")) or _extract_upload_progress(text)
         if progress and progress != last_status:
             last_status = progress
             _log(f"[Uploader] Waiting upload: {progress}")
+            _extend_upload_window(f"progress:{progress[:24]}")
+        elif busy_flag and (time.time() - last_extension_at) >= 6.0:
+            _extend_upload_window("busy")
         else:
             _log(
                 "[Uploader] Waiting for upload completion... "
@@ -13459,7 +13552,7 @@ def _wait_upload_ready(page: ChromiumPage, ctx: Any, timeout_seconds: int = UPLO
             )
         time.sleep(2)
     raise TimeoutError(
-        f"Upload timeout ({timeout_seconds}s). "
+        f"E_UPLOAD_TIMEOUT: Upload timeout ({timeout_seconds}s). "
         "页面可能仍在上传/转码。请检查发布页当前状态。"
     )
 
@@ -14348,6 +14441,53 @@ def _click_save_draft_button(ctx: Any) -> bool:
 
 
 def _click_wechat_primary_publish_button(primary_ctx: Any, fallback_ctx: Any, timeout_seconds: int = 20) -> bool:
+    primary_selectors = (
+        "css:.form-btns button.weui-desktop-btn_primary",
+        "xpath://div[contains(@class,'form-btns')]//button[contains(@class,'weui-desktop-btn_primary')]",
+        "xpath://button[contains(@class,'weui-desktop-btn_primary') and not(contains(@class,'_disabled'))]",
+    )
+
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in primary_selectors:
+            try:
+                btn = owner.ele(selector, timeout=1.0)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                disabled = bool(
+                    btn.run_js(
+                        """
+                        return !!(
+                          this.disabled ||
+                          String(this.getAttribute('aria-disabled') || '').toLowerCase() === 'true' ||
+                          /(^|\\s)weui-desktop-btn_disabled(\\s|$)/.test(String(this.className || ''))
+                        );
+                        """
+                    )
+                )
+            except Exception:
+                disabled = False
+            if disabled:
+                continue
+            try:
+                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+            except Exception:
+                pass
+            _humanized_publish_reaction_pause("wechat primary publish click")
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:wechat] Clicked publish button by primary selector: {selector}")
+            return True
+
     js_click = """
     function isVisible(el) {
       if (!el) return false;
@@ -15160,13 +15300,13 @@ def _wait_wechat_publish_feedback(
             no_tip_clicked = _click_first_matching_button(
                 primary_ctx,
                 fallback_ctx,
-                ("涓嶅啀鎻愰啋",),
+                WECHAT_NO_TIP_BUTTON_TEXTS,
                 platform_name="wechat",
             )
         _click_first_matching_button(
             primary_ctx,
             fallback_ctx,
-            ("鐩存帴鍙戣〃", "纭鍙戣〃", "纭鍙戝竷", "缁х画鍙戣〃", "缁х画鍙戝竷"),
+            WECHAT_PUBLISH_CONFIRM_BUTTON_TEXTS,
             platform_name="wechat",
         )
         state = _read_wechat_publish_state(primary_ctx, fallback_ctx)
@@ -15450,7 +15590,8 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
 
     before = _get_collection_state(ctx)
     if not before.get("hasField"):
-        raise RuntimeError("发布页未找到“添加到合集”字段，无法选择目标合集。")
+        _log(f"[Uploader] Collection field not found, skip collection selection: {target}")
+        return
 
     current = str(before.get("current", "") or "")
     if _is_collection_match(current, target):
@@ -15801,6 +15942,7 @@ def _fill_draft_once(
     telegram_timeout_seconds: int = 20,
     telegram_api_base: str = "",
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+    wechat_publish_click_confirmed: bool = False,
 ) -> Any:
     if _current_page_matches_publish_entry(page, "wechat", CREATE_POST_URL):
         _log(f"[Uploader:wechat] Reusing current publish page: {getattr(page, 'url', '')}")
@@ -15910,26 +16052,32 @@ def _fill_draft_once(
     elif publish_now:
         def _fallback_wechat_publish_to_draft(reason: str, error: Exception | None = None) -> None:
             _log(f"[Uploader:wechat] {reason}, fallback to save draft.")
+            draft_saved = False
             try:
                 _save_draft(editor_ctx)
+                draft_saved = True
             except Exception as draft_exc:
                 _log(f"[Uploader:wechat] Fallback draft save failed: {draft_exc}")
-                return
-            message = f"wechat {reason}; automatically saved as draft / returned to draft-state."
+            failure_code = _classify_publish_failure_code(reason=reason, error=error)
+            detail = (
+                "automatically saved as draft / returned to draft-state."
+                if draft_saved
+                else "draft fallback attempt failed (draft save was not confirmed)."
+            )
+            message = f"wechat {failure_code}: {reason}; {detail}"
             if error is not None:
                 raise RuntimeError(message) from error
             raise RuntimeError(message)
 
         if not _click_wechat_primary_publish_button(editor_ctx, page):
-            _fallback_wechat_publish_to_draft("publish button was not located")
             actions = _collect_visible_action_texts(editor_ctx, page)
             if actions:
                 _log(f"[Uploader:wechat] Visible action texts: {actions}")
-            raise RuntimeError("Failed to locate publish button on wechat page.")
+            _fallback_wechat_publish_to_draft("publish button was not located")
         _click_first_matching_button(
             editor_ctx,
             page,
-            ("纭鍙戣〃", "纭鍙戝竷", "缁х画鍙戣〃", "缁х画鍙戝竷"),
+            WECHAT_PUBLISH_CONFIRM_BUTTON_TEXTS,
             platform_name="wechat",
         )
         try:
@@ -15937,7 +16085,7 @@ def _fill_draft_once(
                 editor_ctx,
                 page,
                 expected_title=wechat_short_title,
-                publish_click_confirmed=True,
+                publish_click_confirmed=bool(wechat_publish_click_confirmed),
             )
         except Exception as exc:
             _fallback_wechat_publish_to_draft("publish was not confirmed", exc)
@@ -15946,6 +16094,17 @@ def _fill_draft_once(
     else:
         _log("[Success] 视频已上传并填写文案（未保存草稿），请在当前页手动保存或发布。")
     return editor_ctx
+
+
+def _classify_publish_failure_code(*, reason: str = "", error: Exception | None = None) -> str:
+    payload = f"{reason or ''} {error or ''}".strip().lower()
+    if "upload timeout" in payload:
+        return "E_UPLOAD_TIMEOUT"
+    if "button was not located" in payload or "locate publish button" in payload:
+        return "E_PUBLISH_BUTTON_MISSING"
+    if "publish was not confirmed" in payload or "publish not confirmed" in payload or "not confirmed" in payload:
+        return "E_PUBLISH_UNCONFIRMED_DRAFT_SAVED"
+    return "E_PUBLISH_FAILED"
 
 
 def _should_retry_platform_publish_fill(exc: Exception, platform_name: str) -> bool:
@@ -15986,6 +16145,7 @@ def fill_draft_wechat(
     telegram_timeout_seconds: int = 20,
     telegram_api_base: str = "",
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+    wechat_publish_click_confirmed: bool = False,
 ) -> Path:
     _log("[Uploader] Connecting Chrome")
     page = _connect_chrome(
@@ -16028,6 +16188,7 @@ def fill_draft_wechat(
                     telegram_timeout_seconds=telegram_timeout_seconds,
                     telegram_api_base=telegram_api_base,
                     notify_env_prefix=notify_env_prefix,
+                    wechat_publish_click_confirmed=wechat_publish_click_confirmed,
                 )
                 return target
             except Exception as exc:
@@ -16052,6 +16213,7 @@ def _wait_upload_ready_generic(
     platform_name: str,
     timeout_seconds: int = UPLOAD_TIMEOUT_SECONDS,
     upload_target: Optional[Path] = None,
+    upload_binding_confirmed: bool = False,
 ) -> Any:
     busy_markers = ("上传中", "处理中", "转码中", "正在上传", "正在处理")
     failure_markers = ("上传失败", "上传出错", "网络异常", "请重新上传", "处理失败")
@@ -16076,11 +16238,40 @@ def _wait_upload_ready_generic(
         "视频大小16G以内",
         "拖拽到此区域",
     )
-    end_at = time.time() + _normalize_blocking_timeout(timeout_seconds, UPLOAD_TIMEOUT_SECONDS, minimum=1)
+    normalized_timeout = _normalize_blocking_timeout(timeout_seconds, UPLOAD_TIMEOUT_SECONDS, minimum=1)
+    end_at = time.time() + normalized_timeout
+    douyin_entry_best_effort_wait = max(2.0, min(25.0, float(normalized_timeout) * 0.75))
+    if douyin_entry_best_effort_wait >= float(normalized_timeout):
+        douyin_entry_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
+    douyin_ambiguous_best_effort_wait = max(1.5, min(15.0, float(normalized_timeout) * 0.45))
+    if douyin_ambiguous_best_effort_wait >= float(normalized_timeout):
+        douyin_ambiguous_best_effort_wait = max(1.0, float(normalized_timeout) - 0.5)
     bilibili_entry_since = 0.0
     bilibili_busy_since = 0.0
     bilibili_reupload_attempted = False
     kuaishou_entry_since = 0.0
+    douyin_upload_entry_since = 0.0
+    douyin_ambiguous_since = 0.0
+    dynamic_extension_budget = max(10.0, min(120.0, float(normalized_timeout)))
+    dynamic_extension_used = 0.0
+    last_extension_at = 0.0
+    last_progress_marker = ""
+
+    def _extend_upload_window(reason: str, bump_seconds: float = 8.0) -> None:
+        nonlocal end_at, dynamic_extension_used, last_extension_at
+        remaining = dynamic_extension_budget - dynamic_extension_used
+        if remaining <= 0:
+            return
+        grant = min(float(bump_seconds), remaining)
+        if grant <= 0:
+            return
+        end_at += grant
+        dynamic_extension_used += grant
+        last_extension_at = time.time()
+        _log(
+            f"[Uploader:{platform_name}] Upload wait window extended by +{grant:.0f}s "
+            f"(reason={reason}, used={dynamic_extension_used:.0f}/{dynamic_extension_budget:.0f}s)."
+        )
 
     def _retry_bilibili_upload_once(reason: str) -> bool:
         nonlocal ctx, bilibili_entry_since, bilibili_busy_since, bilibili_reupload_attempted
@@ -16113,6 +16304,12 @@ def _wait_upload_ready_generic(
         except Exception:
             ctx = _resolve_post_editor_context(page, timeout_seconds=6)
             text = str(ctx.run_js("return (document.body && document.body.innerText) || '';") or "")
+        progress_marker = _extract_upload_progress(text)
+        if progress_marker and progress_marker != last_progress_marker:
+            last_progress_marker = progress_marker
+            _extend_upload_window(f"progress:{progress_marker[:24]}", bump_seconds=6.0)
+        elif re.search(r"\b\d{1,3}%\b", text) and (time.time() - last_extension_at) >= 6.0:
+            _extend_upload_window("progress:percent", bump_seconds=4.0)
         if any(x in text for x in failure_markers):
             raise RuntimeError(f"{platform_name} page shows upload failure marker.")
         if platform_name == "bilibili":
@@ -16259,6 +16456,17 @@ def _wait_upload_ready_generic(
                 busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
                 upload_entry_hit = bool(state.get("upload_entry"))
                 if upload_entry_hit:
+                    if douyin_upload_entry_since <= 0:
+                        douyin_upload_entry_since = time.time()
+                    douyin_ambiguous_since = 0.0
+                elif busy_hit:
+                    douyin_upload_entry_since = 0.0
+                    douyin_ambiguous_since = 0.0
+                else:
+                    douyin_upload_entry_since = 0.0
+                    if douyin_ambiguous_since <= 0:
+                        douyin_ambiguous_since = time.time()
+                if upload_entry_hit:
                     _log("[Uploader:douyin] Waiting for image editor form readiness...")
                     time.sleep(2.0)
                     continue
@@ -16280,6 +16488,31 @@ def _wait_upload_ready_generic(
                     return ctx
                 busy_hit = bool(state.get("busy")) or any(x in text for x in busy_markers)
                 upload_entry_hit = bool(state.get("upload_entry"))
+                if upload_entry_hit:
+                    if douyin_upload_entry_since <= 0:
+                        douyin_upload_entry_since = time.time()
+                    douyin_ambiguous_since = 0.0
+                elif busy_hit:
+                    douyin_upload_entry_since = 0.0
+                    douyin_ambiguous_since = 0.0
+                else:
+                    douyin_upload_entry_since = 0.0
+                    if douyin_ambiguous_since <= 0:
+                        douyin_ambiguous_since = time.time()
+                relaxed_ready_hit = (
+                    (not busy_hit)
+                    and (not upload_entry_hit)
+                    and bool(
+                        state.get("editor_hints")
+                        or state.get("publish_btn")
+                        or state.get("schedule_toggle")
+                        or state.get("caption_input")
+                        or state.get("title_input")
+                    )
+                )
+                if relaxed_ready_hit:
+                    _log("[Uploader:douyin] Upload appears completed by relaxed video-editor readiness.")
+                    return ctx
                 sample_texts = state.get("sample_texts") if isinstance(state.get("sample_texts"), list) else []
                 preview = ",".join(str(item or "").strip() for item in sample_texts if str(item or "").strip())
                 if upload_entry_hit:
@@ -16287,12 +16520,28 @@ def _wait_upload_ready_generic(
                         "[Uploader:douyin] Waiting for video editor form readiness..."
                         + (f" texts={preview}" if preview else "")
                     )
+                    if upload_binding_confirmed:
+                        if (time.time() - douyin_upload_entry_since) >= float(douyin_entry_best_effort_wait):
+                            _log(
+                                "[Uploader:douyin] Upload entry persisted after file binding; "
+                                "continue with best-effort fallback "
+                                f"(waited {douyin_entry_best_effort_wait:.1f}s)."
+                            )
+                            return ctx
                     time.sleep(2.0)
                     continue
                 if busy_hit:
                     _log("[Uploader:douyin] Waiting for upload completion...")
                     time.sleep(2.0)
                     continue
+                if upload_binding_confirmed and douyin_ambiguous_since > 0:
+                    if (time.time() - douyin_ambiguous_since) >= float(douyin_ambiguous_best_effort_wait):
+                        _log(
+                            "[Uploader:douyin] Upload state ambiguous after file binding; "
+                            "continue with best-effort fallback "
+                            f"(waited {douyin_ambiguous_best_effort_wait:.1f}s)."
+                        )
+                        return ctx
                 if sample_texts:
                     _log(f"[Uploader:douyin] Video editor not ready yet, continue waiting: {sample_texts}")
                 time.sleep(2.0)
@@ -16403,12 +16652,14 @@ def _wait_upload_ready_generic(
         else:
             busy_hit = any(x in text for x in busy_markers)
         if busy_hit:
+            if (time.time() - last_extension_at) >= 6.0:
+                _extend_upload_window("busy", bump_seconds=4.0)
             _log(f"[Uploader:{platform_name}] Waiting for upload completion...")
             time.sleep(2)
             continue
         _log(f"[Uploader:{platform_name}] Upload appears completed.")
         return ctx
-    raise TimeoutError(f"{platform_name} upload timeout ({timeout_seconds}s).")
+    raise TimeoutError(f"E_UPLOAD_TIMEOUT: {platform_name} upload timeout ({timeout_seconds}s).")
 
 
 def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
@@ -16447,6 +16698,16 @@ def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
       sample_texts: texts.filter(text => /鍙戝竷|鎻忚堪|鍚堥泦|缁х画娣诲姞|缂栬緫鍥剧墖|宸叉坊鍔?.test(text)).slice(0, 16),
     };
     """
+    merged: dict[str, Any] = {
+        "ready": False,
+        "busy": False,
+        "upload_entry": False,
+        "image_added": False,
+        "editor_hints": False,
+        "publish_btn": False,
+        "sample_texts": [],
+    }
+    seen_texts: set[str] = set()
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
@@ -16454,9 +16715,28 @@ def _read_douyin_image_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
             payload = owner.run_js(js)
         except Exception:
             payload = {}
-        if isinstance(payload, dict) and payload:
-            return payload
-    return {}
+        if not isinstance(payload, dict):
+            continue
+        for key in (
+            "ready",
+            "busy",
+            "upload_entry",
+            "image_added",
+            "editor_hints",
+            "publish_btn",
+        ):
+            merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+        payload_texts = payload.get("sample_texts")
+        if isinstance(payload_texts, list):
+            for raw in payload_texts:
+                text = str(raw or "").strip()
+                if not text or text in seen_texts:
+                    continue
+                seen_texts.add(text)
+                merged["sample_texts"].append(text)
+                if len(merged["sample_texts"]) >= 16:
+                    break
+    return merged
 
 
 def _read_douyin_video_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
@@ -16522,6 +16802,18 @@ def _read_douyin_video_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
       sample_texts: texts.filter(text => /(\u53d1\u5e03|\u63cf\u8ff0|\u6807\u9898|\u5c01\u9762|\u8bdd\u9898|@\u597d\u53cb|\u65f6\u95f4)/.test(text)).slice(0, 16),
     };
     """
+    merged: dict[str, Any] = {
+        "ready": False,
+        "busy": False,
+        "upload_entry": False,
+        "caption_input": False,
+        "title_input": False,
+        "editor_hints": False,
+        "publish_btn": False,
+        "schedule_toggle": False,
+        "sample_texts": [],
+    }
+    seen_texts: set[str] = set()
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
@@ -16529,9 +16821,30 @@ def _read_douyin_video_upload_state(primary_ctx: Any, fallback_ctx: Any) -> dict
             payload = owner.run_js(js)
         except Exception:
             payload = {}
-        if isinstance(payload, dict) and payload:
-            return payload
-    return {}
+        if not isinstance(payload, dict):
+            continue
+        for key in (
+            "ready",
+            "busy",
+            "upload_entry",
+            "caption_input",
+            "title_input",
+            "editor_hints",
+            "publish_btn",
+            "schedule_toggle",
+        ):
+            merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+        payload_texts = payload.get("sample_texts")
+        if isinstance(payload_texts, list):
+            for raw in payload_texts:
+                text = str(raw or "").strip()
+                if not text or text in seen_texts:
+                    continue
+                seen_texts.add(text)
+                merged["sample_texts"].append(text)
+                if len(merged["sample_texts"]) >= 16:
+                    break
+    return merged
 
 
 def _find_upload_file_input_generic(
@@ -16588,34 +16901,62 @@ def _score_kuaishou_file_input_candidate(candidate: dict[str, Any], prefer_video
         ]
     )
     normalized = _normalize_metadata_text(meta, limit=480)
+    def _has_any_token(text: str, tokens: Sequence[str]) -> bool:
+        return any(token in text for token in tokens)
+
+    video_surface_tokens = (
+        "上传视频",
+        "发布视频",
+        "拖拽视频",
+        "选择视频",
+        "缁х画缂栬緫",
+        "涓婁紶瑙嗛",
+        "鍙戝竷瑙嗛",
+        "鎷栨嫿瑙嗛",
+        "閫夋嫨瑙嗛",
+    )
+    image_surface_tokens = (
+        "发布图文",
+        "添加图片",
+        "编辑图片",
+        "作品描述",
+        "发布设置",
+        "封面设置",
+        "鍙戝竷鍥炬枃",
+        "娣诲姞鍥剧墖",
+        "缂栬緫鍥剧墖",
+        "浣滃搧鎻忚堪",
+        "鍙戝竷璁剧疆",
+        "灏侀潰璁剧疆",
+    )
     score = 0
     if prefer_video:
         if "video" in accept or any(ext in accept for ext in (".mp4", ".mov", ".webm", ".avi", ".mkv")):
             score += 180
-        if any(token in wrap for token in ("涓婁紶瑙嗛", "鍙戝竷瑙嗛", "鎷栨嫿瑙嗛", "閫夋嫨瑙嗛")):
+        if _has_any_token(wrap, video_surface_tokens):
             score += 120
-        if "缁х画缂栬緫" in wrap:
+        if _has_any_token(wrap, ("继续编辑", "缁х画缂栬緫")):
             score += 24
         if "image" in accept or any(ext in accept for ext in (".png", ".jpg", ".jpeg", ".webp")):
             score -= 220
-        if any(token in wrap for token in ("鍙戝竷鍥炬枃", "娣诲姞鍥剧墖", "缂栬緫鍥剧墖", "浣滃搧鎻忚堪", "鍙戝竷璁剧疆")):
+        if _has_any_token(wrap, image_surface_tokens):
             score -= 160
     else:
         if "image" in accept or any(ext in accept for ext in (".png", ".jpg", ".jpeg", ".webp")):
             score += 120
         if "multiple" in normalized or bool(candidate.get("multiple")):
             score += 8
-        if "娣诲姞鍥剧墖" in wrap:
+        if _has_any_token(wrap, ("添加图片", "娣诲姞鍥剧墖")):
             score += 160
-        if "缂栬緫鍥剧墖" in wrap:
+        if _has_any_token(wrap, ("编辑图片", "缂栬緫鍥剧墖")):
             score += 120
-        if "鍙戝竷鍥炬枃" in wrap:
+        if _has_any_token(wrap, ("发布图文", "鍙戝竷鍥炬枃")):
             score += 80
-        if any(token in wrap for token in ("浣滃搧鎻忚堪", "鍙戝竷璁剧疆", "灏侀潰璁剧疆")):
+        if _has_any_token(wrap, ("作品描述", "发布设置", "封面设置", "浣滃搧鎻忚堪", "鍙戝竷璁剧疆", "灏侀潰璁剧疆")):
             score += 40
         if "video" in accept or any(ext in accept for ext in (".mp4", ".mov", ".webm", ".avi", ".mkv")):
             score -= 260
-        if any(token in wrap for token in ("涓婁紶瑙嗛", "缁х画缂栬緫", "鏀惧純", "鎷栨嫿瑙嗛")):
+        if _has_any_token(wrap, ("上传视频", "继续编辑", "放弃", "拖拽视频", "涓婁紶瑙嗛", "缁х画缂栬緫", "鏀惧純", "鎷栨嫿瑙嗛")):
             score -= 220
     if bool(candidate.get("visible")):
         score += 6
@@ -19699,6 +20040,18 @@ def _read_x_publish_composer_state(primary_ctx: Any, fallback_ctx: Any) -> dict[
 
 def _pick_kuaishou_publish_wrap_text(texts: Sequence[str]) -> str:
     allow_wrap_tokens = (
+        "发布时间",
+        "立即发布",
+        "定时发布",
+        "发布设置",
+        "发布 取消",
+        "取消 发布",
+        "确认发布",
+        "查看权限",
+        "添加地点",
+        "所有人可见",
+        "好友可见",
+        "仅自己可见",
         "鍙戝竷鏃堕棿",
         "绔嬪嵆鍙戝竷",
         "瀹氭椂鍙戝竷",
@@ -19710,9 +20063,11 @@ def _pick_kuaishou_publish_wrap_text(texts: Sequence[str]) -> str:
         "娣诲姞鍦扮偣",
         "鎵€鏈変汉鍙",
         "濂藉弸鍙",
-        "仅自己可见",
     )
     strong_wrap_tokens = (
+        "发布 取消",
+        "取消 发布",
+        "确认发布",
         "鍙戝竷 鍙栨秷",
         "鍙栨秷 鍙戝竷",
         "纭鍙戝竷",
@@ -20753,37 +21108,26 @@ def _normalize_douyin_collection_value(text: str) -> str:
     value = re.sub(r"\s+", "", str(text or ""))
     if not value:
         return ""
-    value = re.sub(r"^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛?]*", "", value)
-    value = re.sub(r"(鍏盶d+[涓潯]浣滃搧|鍏盶d+[涓潯]鍐呭)$", "", value)
-    return value.strip(":-锛? ")
-    value = re.sub(r"\s+", "", str(text or ""))
-    if not value:
-        return ""
-    value = re.sub(r"^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛歕-]*", "", value)
-    value = re.sub(r"(鍏盶d+[涓潯]浣滃搧|鍏盶d+[涓潯]鍐呭)$", "", value)
-    return value.strip(":-锛殀/ ")
-
-
-def _is_douyin_collection_match(current: str, target: str) -> bool:
-    norm_current = _normalize_douyin_collection_value(current)
-    norm_target = _normalize_douyin_collection_value(target)
-    if not norm_current or not norm_target:
-        return False
-    return (
-        norm_current == norm_target
-        or norm_current in norm_target
-        or norm_target in norm_current
-    )
-
-
-def _normalize_douyin_collection_value(text: str) -> str:
-    value = re.sub(r"\s+", "", str(text or ""))
-    if not value:
-        return ""
-    value = re.sub(r"^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛?]*", "", value)
-    value = re.sub(r"(鍏盶d+[涓潯]浣滃搧|鍏盶d+[涓潯]鍐呭)$", "", value)
-    value = re.split(r"[:锛歖", value, maxsplit=1)[0]
-    return value.strip(":-锛? ")
+    for prefix in (
+        "添加到合集",
+        "加入合集",
+        "请选择合集",
+        "选择合集",
+        "不选择合集",
+        "添加合集",
+        "合集:",
+        "合集：",
+    ):
+        if value.startswith(prefix):
+            value = value[len(prefix) :]
+            break
+    value = re.sub(r"共\d+[个条](?:作品|内容)?$", "", value)
+    value = re.sub(r"第\d+集$", "", value)
+    for separator in (":", "：", "|", "｜", "/", "／"):
+        if separator in value:
+            value = value.split(separator, 1)[0]
+            break
+    return value.strip(":-：|｜/／ ")
 
 
 def _shared_edge_length(left: str, right: str, *, suffix: bool = False) -> int:
@@ -20991,7 +21335,8 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
 
     before = _get_douyin_collection_state(primary_ctx, fallback_ctx)
     if not bool(before.get("hasField")):
-        raise RuntimeError("douyin image post missing collection field; cannot select target collection.")
+        _log("[Uploader:douyin] Collection field missing on current page; skip selection.")
+        return
 
     current = str(before.get("current", "") or "")
     if _is_douyin_collection_match(current, target):
@@ -21051,169 +21396,9 @@ def _select_douyin_collection(primary_ctx: Any, fallback_ctx: Any, collection_na
     final_state = _get_douyin_collection_state(primary_ctx, fallback_ctx)
     final_current = str(final_state.get("current", "") or "")
     final_episode = str(final_state.get("episode", "") or "")
-    raise RuntimeError(
-        f"douyin collection selection not confirmed: target={target}, "
-        f"current={final_current or '-'}, episode={final_episode or '-'}"
-    )
-
-    js_select = """
-    function isVisible(el) {
-      if (!el) return false;
-      const st = window.getComputedStyle(el);
-      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
-      const r = el.getBoundingClientRect();
-      return r.width > 6 && r.height > 6;
-    }
-    function norm(s) {
-      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
-    }
-    function clean(txt) {
-      return norm(txt)
-        .replace(/^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?[:锛歕\-]*/g, '')
-        .replace(/鍏盶\d+[涓潯]浣滃搧/g, '')
-        .replace(/鍏盶\d+[涓潯]鍐呭/g, '')
-        .trim();
-    }
-    function clickNode(node) {
-      if (!node) return false;
-      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
-      try {
-        node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
-        node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
-      } catch (e) {}
-      try {
-        node.click();
-        return true;
-      } catch (e) {
-        try {
-          node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
-          return true;
-        } catch (inner) {
-          return false;
-        }
-      }
-    }
-
-    const target = clean(arguments[0] || '');
-    if (!target) return {state: 'skip'};
-
-    const label = Array.from(document.querySelectorAll('label, span, div'))
-      .find(el => isVisible(el) && /^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦)$/.test(norm(el.textContent)));
-    if (!label) return {state: 'missing_field'};
-    const row = (window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__ && window.__CYBERCAR_FIND_DOUYIN_COLLECTION_ROW__(label)) || label.parentElement || label;
-
-    const triggers = (window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__ && window.__CYBERCAR_COLLECT_DOUYIN_COLLECTION_CONTROLS__(row)) || Array.from(row.querySelectorAll(
-      '[role="combobox"], [class*="semi-select"], [class*="select"], [class*="dropdown"], input, [contenteditable="true"]'
-    )).filter(isVisible);
-    const collectionTrigger = triggers.find(el => {
-      const txt = clean(('value' in el && typeof el.value === 'string' && el.value) ? el.value : (el.innerText || el.textContent || ''));
-      if (!txt) return true;
-      if (txt === '鍚堥泦') return false;
-      if (/^绗琝\d+闆?/.test(txt)) return false;
-      return true;
-    }) || triggers.find(el => {
-      const raw = norm(('value' in el && typeof el.value === 'string' && el.value) ? el.value : (el.innerText || el.textContent || ''));
-      return /鍚堥泦/.test(raw) || /璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?.test(raw);
-    });
-
-    if (!collectionTrigger) return {state: 'missing_trigger'};
-    if (!clickNode(collectionTrigger)) return {state: 'trigger_click_failed'};
-
-    const roots = [];
-    Array.from(document.querySelectorAll(
-      '.semi-select-dropdown, .semi-portal, .semi-popover, .semi-tooltip, [role="listbox"], [role="dialog"]'
-    )).filter(isVisible).forEach(el => roots.push(el));
-    roots.push(document);
-
-    function optionScore(txt) {
-      if (!txt) return 0;
-      if (txt === target) return 4;
-      if (txt.startsWith(target) || target.startsWith(txt)) return 3;
-      if (txt.includes(target) || target.includes(txt)) return 2;
-      return 0;
-    }
-
-    let bestNode = null;
-    let bestText = '';
-    let bestScore = 0;
-    const optionTexts = [];
-    for (const root of roots) {
-      const nodes = Array.from(root.querySelectorAll(
-        '.semi-select-option, [role="option"], li, button, div, span, a'
-      )).filter(isVisible);
-      for (const node of nodes) {
-        const txt = clean(node.innerText || node.textContent || '');
-        if (!txt || txt.length > 80) continue;
-        if (txt === '鍚堥泦') continue;
-        if (/^绗琝\d+闆?/.test(txt)) continue;
-        if (/^(娣诲姞鍚堥泦|娣诲姞鍒板悎闆唡鍔犲叆鍚堥泦|璇烽€夋嫨鍚堥泦|閫夋嫨鍚堥泦|涓嶉€夋嫨鍚堥泦|涓嶉€夊悎闆?$/.test(txt)) continue;
-        if (!optionTexts.includes(txt)) optionTexts.push(txt);
-        const score = optionScore(txt);
-        if (score > bestScore) {
-          bestScore = score;
-          bestNode = node;
-          bestText = txt;
-        }
-      }
-      if (bestScore >= 4) break;
-    }
-
-    if (!bestNode || bestScore <= 0) {
-      return {state: 'option_not_found', visible_options: optionTexts.slice(0, 8)};
-    }
-
-    const clickTarget = bestNode.closest('.semi-select-option, [role="option"], li, button, a, div, span') || bestNode;
-    if (!clickNode(clickTarget)) {
-      return {state: 'option_click_failed', option: bestText, visible_options: optionTexts.slice(0, 8)};
-    }
-
-    return {state: 'clicked', option: bestText, visible_options: optionTexts.slice(0, 8)};
-    """
-
-    for attempt in range(1, 7):
-        action_states: list[str] = []
-        visible_options: list[str] = []
-        for owner in (primary_ctx, fallback_ctx):
-            if not owner:
-                continue
-            try:
-                action = owner.run_js(js_select, target)
-            except Exception:
-                action = {}
-            if isinstance(action, dict):
-                action_states.append(str(action.get("state", "") or ""))
-                for raw in list(action.get("visible_options") or []):
-                    option = str(raw or "").strip()
-                    if option and option not in visible_options:
-                        visible_options.append(option)
-            else:
-                action_states.append("none")
-
-        time.sleep(0.6)
-        after = _get_douyin_collection_state(primary_ctx, fallback_ctx)
-        current = str(after.get("current", "") or "")
-        if _is_douyin_collection_match(current, target):
-            _log(
-                f"[Uploader:douyin] Collection selected: {target}"
-                + (f" (episode={after.get('episode')})" if after.get("episode") else "")
-            )
-            return
-
-        _log(
-            f"[Uploader:douyin] Collection select retry {attempt}/6: "
-            f"states={','.join(action_states) or '-'}, "
-            f"current={current or '-'}, "
-            f"visible={';'.join(visible_options[:4]) or '-'}"
-        )
-        if any(state in {"missing_field", "missing_trigger"} for state in action_states):
-            break
-
-    final_state = _get_douyin_collection_state(primary_ctx, fallback_ctx)
-    final_current = str(final_state.get("current", "") or "")
-    final_episode = str(final_state.get("episode", "") or "")
-    raise RuntimeError(
-        f"douyin collection selection not confirmed: target={target}, "
-        f"current={final_current or '-'}, episode={final_episode or '-'}"
+    _log(
+        "[Uploader:douyin] Collection selection not confirmed, continue without blocking publish: "
+        f"target={target}, current={final_current or '-'}, episode={final_episode or '-'}"
     )
 
 
@@ -21796,7 +21981,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
     return False
 
 
-def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+def _click_kuaishou_primary_publish_button_legacy(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
         "xpath://button[normalize-space(.)='鍙戝竷' and ../button[normalize-space(.)='鍙栨秷']]",
         "xpath://span[normalize-space(.)='鍙戝竷']/ancestor::button[../button[normalize-space(.)='鍙栨秷']][1]",
@@ -22005,64 +22190,218 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
     return False
 
 
+def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
+        "xpath://button[normalize-space(.)='发布作品' and ../button[normalize-space(.)='取消']]",
+        "xpath://button[normalize-space(.)='确认发布']",
+        "xpath://button[normalize-space(.)='发布']",
+        "xpath://button[normalize-space(.)='发布作品']",
+        "xpath://button[normalize-space(.)='鍙戝竷' and ../button[normalize-space(.)='鍙栨秷']]",
+        "xpath://button[normalize-space(.)='鍙戝竷浣滃搧' and ../button[normalize-space(.)='鍙栨秷']]",
+        "xpath://button[normalize-space(.)='纭鍙戝竷']",
+        "xpath://button[normalize-space(.)='鍙戝竷']",
+        "xpath://button[normalize-space(.)='鍙戝竷浣滃搧']",
+    )
+    skip_wrap_tokens = (
+        "上传视频",
+        "上传图文",
+        "上传全景视频",
+        "首页",
+        "内容管理",
+        "互动管理",
+        "数据中心",
+        "成长中心",
+        "创作服务",
+        "涓婁紶瑙嗛",
+        "涓婁紶鍥炬枃",
+        "涓婁紶鍏ㄦ櫙瑙嗛",
+        "棣栭〉",
+        "鍐呭绠＄悊",
+        "浜掑姩绠＄悊",
+        "鏁版嵁涓績",
+        "鎴愰暱涓績",
+        "鍒涗綔鏈嶅姟",
+    )
+    cancel_tokens = ("取消", "鍙栨秷")
+    publish_work_tokens = ("发布作品", "鍙戝竷浣滃搧")
+
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.8)
+            except Exception:
+                btn = None
+            if not btn or not _is_visible_element(btn):
+                continue
+            try:
+                wrap_state = btn.run_js(
+                    r"""
+                    const norm = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+                    const nodes = [];
+                    let cur = this;
+                    for (let i = 0; cur && i < 6; i += 1) {
+                      nodes.push(cur);
+                      cur = cur.parentElement;
+                    }
+                    const parent = this.parentElement || null;
+                    if (parent) {
+                      for (const sibling of Array.from(parent.children || [])) {
+                        if (sibling && !nodes.includes(sibling)) nodes.push(sibling);
+                      }
+                    }
+                    const texts = nodes
+                      .map(node => norm((node && node.innerText) || '').slice(0, 320))
+                      .filter(Boolean);
+                    const rect = this.getBoundingClientRect();
+                    return {
+                      wrap: (texts[0] || '').slice(0, 240),
+                      texts,
+                      rectTop: Number((rect && rect.top) || 0),
+                      viewportHeight: Number(window.innerHeight || document.documentElement.clientHeight || 0),
+                      buttonText: norm((this && this.innerText) || '')
+                    };
+                    """
+                )
+                if isinstance(wrap_state, dict):
+                    wrapper_text = str(wrap_state.get("wrap") or "").strip()
+                    wrapper_texts = tuple(wrap_state.get("texts") or ())
+                    rect_top = float(wrap_state.get("rectTop", 0) or 0)
+                    viewport_height = float(wrap_state.get("viewportHeight", 0) or 0)
+                    button_text = str(wrap_state.get("buttonText") or "").strip()
+                else:
+                    wrapper_text = str(wrap_state or "").strip()
+                    wrapper_texts = ()
+                    rect_top = 0.0
+                    viewport_height = 0.0
+                    button_text = ""
+            except Exception:
+                wrapper_text = ""
+                wrapper_texts = ()
+                rect_top = 0.0
+                viewport_height = 0.0
+                button_text = ""
+
+            wrap_candidates = (wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,)
+            chosen_wrap = _pick_kuaishou_publish_wrap_text(wrap_candidates)
+            sibling_cancel = any(any(token in text for token in cancel_tokens) for text in wrap_candidates)
+            near_bottom = bool(viewport_height > 0 and rect_top >= (viewport_height * 0.55))
+            if (not chosen_wrap) and (button_text in publish_work_tokens) and (sibling_cancel or near_bottom):
+                chosen_wrap = "bottom_publish_area"
+            if (not chosen_wrap) and any(any(token in text for token in skip_wrap_tokens) for text in wrap_candidates):
+                continue
+            if not chosen_wrap:
+                continue
+            try:
+                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+            except Exception:
+                pass
+            _humanized_publish_reaction_pause("kuaishou primary publish click")
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:kuaishou] Clicked publish button by dedicated selector: {selector}")
+            return True
+
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function disabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const st = window.getComputedStyle(el);
+      return st.pointerEvents === 'none';
+    }
+    const publishTexts = ['发布', '发布作品', '确认发布', '鍙戝竷', '鍙戝竷浣滃搧', '纭鍙戝竷'];
+    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+      .filter(el => isVisible(el))
+      .map(el => {
+        const text = norm(el.innerText || el.textContent || '');
+        if (!publishTexts.includes(text)) return null;
+        if (disabled(el)) return null;
+        const attrs = [String(el.className || ''), String(el.getAttribute('aria-label') || '')].join(' ').toLowerCase();
+        let score = 0;
+        if (text === '发布' || text === '鍙戝竷') score += 14;
+        if (text === '确认发布' || text === '纭鍙戝竷') score += 12;
+        if (text === '发布作品' || text === '鍙戝竷浣滃搧') score += 8;
+        if (/button/i.test(el.tagName || '')) score += 10;
+        if (/primary|btn|publish/.test(attrs)) score += 8;
+        return {el, text, score};
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    candidates[0].el.click();
+    return {clicked: true, text: candidates[0].text};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = False
+        if isinstance(result, dict) and result.get("clicked"):
+            text = str(result.get("text", "") or "").strip() or "?"
+            _log(f"[Uploader:kuaishou] Clicked publish button by JS fallback: text={text}")
+            return True
+        if bool(result):
+            _log("[Uploader:kuaishou] Clicked publish button by JS fallback.")
+            return True
+    return False
+
 
 def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://button[normalize-space(.)='绔嬪嵆鎶曠']",
-        "xpath://span[normalize-space(.)='绔嬪嵆鎶曠']/ancestor::button[1]",
-        "xpath://span[normalize-space(.)='绔嬪嵆鎶曠']/ancestor::*[@role='button'][1]",
-        "xpath://div[contains(@class,'button') and normalize-space(.)='绔嬪嵆鎶曠']",
-        "xpath://span[normalize-space(.)='绔嬪嵆鎶曠']/ancestor::*[self::button or self::div][1]",
-        "xpath://button[contains(@class,'bcc-button') and contains(normalize-space(.), '绔嬪嵆鎶曠')]",
-        "text:纭瀹氭椂鍙戝竷",
-        "text:纭瀹氭椂鎶曠",
-        "text:瀹氭椂鎶曠",
-        "xpath://button[normalize-space(.)='鎶曠']",
-        "xpath://button[contains(normalize-space(.), '绔嬪嵆鎶曠')]",
-        "xpath://button[contains(normalize-space(.), '纭瀹氭椂鍙戝竷')]",
-        "xpath://button[contains(normalize-space(.), '纭瀹氭椂鎶曠')]",
-        "xpath://button[contains(normalize-space(.), '瀹氭椂鎶曠')]",
-        "xpath://span[contains(normalize-space(.), '绔嬪嵆鎶曠')]/ancestor::button[1]",
-        "xpath://span[normalize-space(.)='鎶曠']/ancestor::button[1]",
-        "xpath://span[contains(normalize-space(.), '纭瀹氭椂鍙戝竷')]/ancestor::button[1]",
-        "xpath://span[contains(normalize-space(.), '纭瀹氭椂鎶曠')]/ancestor::button[1]",
-        "xpath://span[contains(normalize-space(.), '瀹氭椂鎶曠')]/ancestor::button[1]",
+        "xpath://button[contains(@class,'primary') and contains(@class,'submit')]",
+        "xpath://button[contains(@class,'publish') and not(@disabled)]",
+        "xpath://button[contains(normalize-space(.), '立即投稿')]",
+        "xpath://button[contains(normalize-space(.), '投稿')]",
+        "xpath://button[contains(normalize-space(.), '发布')]",
+        "text:立即投稿",
+        "text:投稿",
+        "text:发布",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
         for selector in selectors:
             try:
-                btn = owner.ele(selector, timeout=1.0)
+                btn = owner.ele(selector, timeout=0.45)
             except Exception:
                 btn = None
-            if not btn or not _is_visible_element(btn):
+            if not btn or (not _is_visible_element(btn)):
                 continue
             try:
-                btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+                disabled = bool(
+                    btn.run_js(
+                        """
+                        return !!(
+                          this.disabled ||
+                          String(this.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+                        );
+                        """
+                    )
+                )
             except Exception:
-                pass
-            try:
-                txt = str(btn.text or "").strip()
-            except Exception:
-                txt = ""
-            if txt in {"鎶曠", "瑙嗛鎶曠"}:
+                disabled = False
+            if disabled:
                 continue
-            try:
-                tag_name = str(btn.run_js("return String((this.tagName || '')).toLowerCase();") or "").strip().lower()
-            except Exception:
-                tag_name = ""
-            try:
-                role_name = str(btn.run_js("return String(this.getAttribute('role') || '');") or "").strip().lower()
-            except Exception:
-                role_name = ""
-            try:
-                cls_name = str(btn.run_js("return String(this.className || '');") or "").strip().lower()
-            except Exception:
-                cls_name = ""
-            if txt == "绔嬪嵆鎶曠" and tag_name not in {"button", "a"} and role_name != "button":
-                if not any(token in cls_name for token in ("button", "btn", "submit", "publish")):
-                    continue
             _humanized_publish_reaction_pause("bilibili primary publish click")
             try:
                 btn.run_js(
@@ -22077,7 +22416,7 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
                     btn.click(by_js=True)
                 except Exception:
                     continue
-            _log(f"[Uploader:bilibili] Clicked publish button by dedicated selector: {selector}")
+            _log(f"[Uploader:bilibili] Clicked publish button by selector: {selector}")
             return True
 
     js = """
@@ -22095,90 +22434,73 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
       if (!el) return true;
       if (el.disabled) return true;
       if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
-      const st = window.getComputedStyle(el);
-      if (st.pointerEvents === 'none') return true;
-      return false;
+      const cls = String(el.className || '');
+      return /\\bdisabled\\b/i.test(cls);
     }
-    window.scrollTo(0, document.body.scrollHeight);
-    const candidates = Array.from(document.querySelectorAll('button, [role=\"button\"], a, div, span'))
-      .filter(el => isVisible(el))
-      .map(el => {
-        const text = norm(el.innerText || el.textContent || '');
-        if (!text) return null;
-        if (/瑙嗛鎶曠|鐭墽鎶曠|涓撴爮鎶曠|浜掑姩瑙嗛鎶曠|闊抽鎶曠|璐寸焊鎶曠|瑙嗛绱犳潗鎶曠/.test(text)) return null;
-        if (text === '瀹氭椂鍙戝竷') return null;
-        if (/鑽夌|鍙栨秷|棰勮|涓婁紶灏侀潰|杞浇|缂栬緫绋夸欢/.test(text)) return null;
-        if (!/(绔嬪嵆鎶曠|鎶曠|鍙戝竷|瀹氭椂鎶曠)/.test(text)) return null;
-        if (disabled(el)) return null;
-        const rect = el.getBoundingClientRect();
-        if (rect.top < 120) return null;
-        if (rect.width < 60 || rect.height < 24) return null;
-        const attrs = [
-          String(el.className || ''),
-          String(el.getAttribute('aria-label') || ''),
-          String(el.getAttribute('role') || ''),
-        ].join(' ');
-        if (text === '绔嬪嵆鎶曠') {
-          const tag = String(el.tagName || '').toLowerCase();
-          const role = String(el.getAttribute('role') || '').toLowerCase();
-          if (!['button', 'a'].includes(tag) && role !== 'button' && !/button|btn|submit|publish/.test(attrs.toLowerCase())) {
-            return null;
-          }
-        }
-        const wrap = el.closest('form, section, .publish, .submit, .footer, div') || el.parentElement || el;
-        const wrapText = String((wrap && wrap.innerText) || '').slice(0, 260);
-        let score = 0;
-        if (/瀹氭椂鍙戝竷|鍔犲叆鍚堥泦|鏇村璁剧疆|瀛樿崏绋縷绔嬪嵆鎶曠|浜屽垱璁剧疆/.test(wrapText)) score += 8;
-        if (text === '纭瀹氭椂鍙戝竷') score += 18;
-        if (text === '纭瀹氭椂鎶曠' || text === '瀹氭椂鎶曠') score += 16;
-        if (text === '绔嬪嵆鎶曠') score += 14;
-        if (text === '鎶曠') score += 2;
-        if (text.includes('纭瀹氭椂鍙戝竷')) score += 16;
-        if (text.includes('纭瀹氭椂鎶曠') || text.includes('瀹氭椂鎶曠')) score += 14;
-        if (text.includes('绔嬪嵆鎶曠')) score += 12;
-        if (text.includes('鎶曠')) score += 4;
-        if (/button/i.test(el.tagName || '')) score += 10;
-        if (/bcc-button|submit|footer|publish/.test(attrs.toLowerCase())) score += 8;
-        if (/primary|submit|publish|btn/.test(attrs.toLowerCase())) score += 6;
-        if (/绋夸欢|鍙戝竷|鎶曠/.test(wrapText)) score += 4;
-        return {el, text, score};
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
+    const exactTexts = ['立即投稿', '投稿', '立即发布', '发布'];
+    const roots = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+      .filter(el => isVisible(el));
+    const candidates = [];
+    for (const node of roots) {
+      const text = norm(node.innerText || node.textContent || '');
+      if (!text || text.length > 22) continue;
+      const attrs = [
+        String(node.className || ''),
+        String(node.getAttribute('type') || ''),
+        String(node.getAttribute('data-testid') || ''),
+      ].join(' ').toLowerCase();
+      const wrap = node.closest('form, section, .publish, .submit, .footer, .bcc-upload, .video, div') || node.parentElement || node;
+      const wrapText = norm((wrap && wrap.innerText) || '');
+      let score = 0;
+      if (exactTexts.includes(text)) score += 30;
+      if (text.includes('投稿') || text.includes('发布')) score += 18;
+      if (/primary|submit|publish|bcc-button|btn/.test(attrs)) score += 10;
+      if (/保存草稿|存草稿|定时发布|稿件|上传完成|添加分p|添加视频/i.test(wrapText)) score += 8;
+      if (text.includes('草稿') || text.includes('暂存')) score -= 40;
+      if (disabled(node)) score -= 80;
+      if (score > 0) {
+        candidates.push({node, text, score});
+      }
+    }
+    candidates.sort((a, b) => b.score - a.score);
     if (!candidates.length) return false;
-    const chosen = candidates[0];
-    chosen.el.click();
-    return true;
+    const chosen = candidates[0].node.closest('button, [role="button"], a') || candidates[0].node;
+    chosen.scrollIntoView({block: 'center', inline: 'nearest'});
+    chosen.click();
+    return candidates[0].text || true;
     """
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
         _humanized_publish_reaction_pause("bilibili primary publish click")
         try:
-            ok = bool(owner.run_js(js))
+            result = owner.run_js(js)
         except Exception:
-            ok = False
-        if ok:
-            _log("[Uploader:bilibili] Clicked publish button by dedicated selector.")
+            result = False
+        if isinstance(result, str) and result.strip():
+            _log(f"[Uploader:bilibili] Clicked publish button by JS fallback: {result.strip()}")
+            return True
+        if bool(result):
+            _log("[Uploader:bilibili] Clicked publish button by JS fallback.")
             return True
     return False
 
 
 def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://button[normalize-space(.)='鍙戝竷' and ../button[normalize-space(.)='鍙栨秷']]",
-        "xpath://button[normalize-space(.)='纭鍙戝竷']",
-        "xpath://button[normalize-space(.)='纭瀹氭椂鍙戝竷']",
-        "xpath://button[normalize-space(.)='缁х画鍙戝竷']",
-        "xpath://button[normalize-space(.)='纭畾鍙戝竷']",
-        "xpath://button[normalize-space(.)='浠嶈鍙戝竷']",
-        "xpath://button[normalize-space(.)='鍘诲彂甯?]",
-        "xpath://span[normalize-space(.)='鍙戝竷']/ancestor::button[1]",
-        "text:纭鍙戝竷",
-        "text:纭瀹氭椂鍙戝竷",
-        "text:缁х画鍙戝竷",
-        "text:纭畾鍙戝竷",
-        "text:浠嶈鍙戝竷",
+        "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
+        "xpath://button[normalize-space(.)='确认发布']",
+        "xpath://button[normalize-space(.)='确认定时发布']",
+        "xpath://button[normalize-space(.)='继续发布']",
+        "xpath://button[normalize-space(.)='确定发布']",
+        "xpath://button[normalize-space(.)='仍要发布']",
+        "xpath://button[normalize-space(.)='去发布']",
+        "xpath://span[normalize-space(.)='发布']/ancestor::button[1]",
+        "text:确认发布",
+        "text:确认定时发布",
+        "text:继续发布",
+        "text:确定发布",
+        "text:仍要发布",
         "text:去发布",
     )
     for owner in (primary_ctx, fallback_ctx):
@@ -22205,7 +22527,7 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
                 )
             except Exception:
                 wrap_text = ""
-            if wrap_text and "鍙栨秷" not in wrap_text and "纭鍙戝竷" not in wrap_text:
+            if wrap_text and ("取消" not in wrap_text) and ("确认发布" not in wrap_text):
                 continue
             _humanized_publish_reaction_pause("kuaishou publish confirm click")
             try:
@@ -22244,18 +22566,18 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
       .map(el => {
         const text = norm(el.innerText || el.textContent || '');
         if (!text) return null;
-        if (!/^(鍙戝竷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷|纭畾鍙戝竷|浠嶈鍙戝竷|鍘诲彂甯?$/.test(text)) return null;
+        if (!/^(发布|确认发布|确认定时发布|继续发布|确定发布|仍要发布|去发布)$/.test(text)) return null;
         const target = clickable(el);
         const wrap = target.closest('form, section, .modal, .dialog, .popup, .publish, div') || target.parentElement || target;
         const wrapText = norm((wrap && wrap.innerText) || '');
-        if (!/鍙栨秷|纭鍙戝竷|纭瀹氭椂鍙戝竷|缁х画鍙戝竷/.test(wrapText)) return null;
+        if (!/取消|确认发布|确认定时发布|继续发布/.test(wrapText)) return null;
         let score = 0;
-        if (text === '鍙戝竷') score += 18;
-        if (text === '纭鍙戝竷') score += 16;
-        if (text === '缁х画鍙戝竷' || text === '纭畾鍙戝竷') score += 14;
+        if (text === '发布') score += 18;
+        if (text === '确认发布') score += 16;
+        if (text === '继续发布' || text === '确定发布') score += 14;
         if ((target.tagName || '').toLowerCase() === 'button') score += 8;
-        if (/鍙栨秷/.test(wrapText)) score += 10;
-        if (/绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷/.test(wrapText)) score += 4;
+        if (/取消/.test(wrapText)) score += 10;
+        if (/立即发布|定时发布/.test(wrapText)) score += 4;
         return {target, text, score};
       })
       .filter(Boolean)
@@ -22263,7 +22585,7 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
     if (!candidates.length) return false;
     const chosen = candidates[0];
     chosen.target.click();
-    return chosen.text || '鍙戝竷';
+    return chosen.text || '发布';
     """
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -22284,19 +22606,19 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
 
 def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "xpath://div[@role='dialog']//button[normalize-space(.)='绾喛顓婚崣鎴濈']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='绾喛顓荤€规碍妞傞崣鎴濈']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='缂佈呯敾閸欐垵绔?]",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='绾喖鐣鹃崣鎴濈']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='娴犲秷顩﹂崣鎴濈']",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='閸樿褰傜敮?]",
-        "xpath://div[@role='dialog']//button[normalize-space(.)='閸欐垵绔?]",
-        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='绾喛顓婚崣鎴濈']",
-        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='缂佈呯敾閸欐垵绔?]",
-        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='閸欐垵绔?]",
-        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='绾喛顓婚崣鎴濈']",
-        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='缂佈呯敾閸欐垵绔?]",
-        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='閸欐垵绔?]",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='确认发布']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='确认定时发布']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='继续发布']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='确定发布']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='仍要发布']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='去发布']",
+        "xpath://div[@role='dialog']//button[normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='确认发布']",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='继续发布']",
+        "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='确认发布']",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='继续发布']",
+        "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='发布']",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -22346,22 +22668,22 @@ def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: 
         if (!isVisible(node)) continue;
         const text = norm(node.innerText || node.textContent || '');
         if (!text) continue;
-        if (!/^(閸欐垵绔穦绾喛顓婚崣鎴濈|绾喛顓荤€规碍妞傞崣鎴濈|缂佈呯敾閸欐垵绔穦绾喖鐣鹃崣鎴濈|娴犲秷顩﹂崣鎴濈|閸樿褰傜敮?$/.test(text)) continue;
+        if (!/^(发布|确认发布|确认定时发布|继续发布|确定发布|仍要发布|去发布)$/.test(text)) continue;
         let score = 0;
-        if (text === '绾喛顓婚崣鎴濈') score += 20;
-        if (text === '绾喛顓荤€规碍妞傞崣鎴濈') score += 18;
-        if (text === '缂佈呯敾閸欐垵绔? || text === '绾喖鐣鹃崣鎴濈') score += 16;
-        if (text === '娴犲秷顩﹂崣鎴濈' || text === '閸樿褰傜敮?') score += 14;
-        if (text === '閸欐垵绔?) score += 10;
-        if (/閸欐牗绉?.test(wrapText)) score += 6;
-        if (/绾喛顓粅缂佈呯敾|鐎规碍妞?.test(wrapText)) score += 8;
+        if (text === '确认发布') score += 20;
+        if (text === '确认定时发布') score += 18;
+        if (text === '继续发布' || text === '确定发布') score += 16;
+        if (text === '仍要发布' || text === '去发布') score += 14;
+        if (text === '发布') score += 10;
+        if (/取消|确认发布|定时发布/.test(wrapText)) score += 8;
         candidates.push({node, text, score});
       }
     }
     candidates.sort((a, b) => b.score - a.score);
     if (!candidates.length) return false;
-    candidates[0].node.click();
-    return candidates[0].text || '閸欐垵绔?;
+    const target = candidates[0].node.closest('button, [role="button"], a') || candidates[0].node;
+    target.click();
+    return candidates[0].text || '发布';
     """
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -22384,35 +22706,51 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
     lowered = (text or "").lower()
     success_markers = (
-        "鎶曠鎴愬姛",
+        "投稿成功",
         "投稿中",
         "已投稿",
         "已提交",
         "审核中",
-        "鎻愪氦鎴愬姛",
+        "提交成功",
     )
     if any(marker in text for marker in success_markers):
         return False
     if any(marker in lowered for marker in ("publish success", "submit success")):
         return False
+
     actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
     if not actions:
         return False
-    has_publish_action = any("绔嬪嵆鎶曠" in item or item == "鎶曠" for item in actions)
-    has_draft_action = any("鑽夌" in item for item in actions)
-    has_upload_done_hint = any("涓婁紶瀹屾垚" in item for item in actions)
-    if not has_publish_action or not has_draft_action or not has_upload_done_hint:
+    has_publish_action = any(
+        ("立即投稿" in item) or ("投稿" == item) or ("立即发布" in item) or ("发布" == item)
+        for item in actions
+    )
+    has_draft_action = any(("草稿" in item) or ("暂存" in item) for item in actions)
+    has_upload_done_hint = any(
+        ("上传完成" in item) or ("添加分P" in item) or ("添加视频" in item)
+        for item in actions
+    )
+    if (not has_publish_action) or (not has_draft_action) or (not has_upload_done_hint):
         return False
+
     _log(
-        f"[Uploader:bilibili] Publish still looks unsubmitted, retrying click once: "
+        "[Uploader:bilibili] Publish still looks unsubmitted, retrying click once: "
         f"url={url or '-'}, actions={actions}"
     )
-    if not _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx):
+    clicked = _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx)
+    if not clicked:
+        clicked = _click_first_matching_button(
+            primary_ctx,
+            fallback_ctx,
+            BILIBILI_PUBLISH_BUTTON_TEXTS,
+            platform_name="bilibili",
+        )
+    if not clicked:
         return False
     _click_first_matching_button(
         primary_ctx,
         fallback_ctx,
-        ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
+        BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
         platform_name="bilibili",
     )
     return True
@@ -23275,7 +23613,7 @@ def _wait_publish_feedback(
             _click_first_matching_button(
                 primary_ctx,
                 fallback_ctx,
-                ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
+                BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
                 platform_name=platform_name,
             )
             if bilibili_reclick_attempts < 3 and (time.time() - loop_started) >= (12 * (bilibili_reclick_attempts + 1)):
@@ -23425,7 +23763,7 @@ def _wait_publish_feedback(
         )
         if matched:
             return
-    raise RuntimeError(f"{platform_name} publish not confirmed within {timeout_seconds}s.")
+    raise RuntimeError(f"E_PUBLISH_UNCONFIRMED: {platform_name} publish not confirmed within {timeout_seconds}s.")
 
 def _set_douyin_schedule_default_time(
     primary_ctx: Any,
@@ -23886,7 +24224,7 @@ def _configure_kuaishou_random_publish_mode(
     # 与抖音一致：立即发布或定时发布二选一。
     choose_scheduled = bool(random.getrandbits(1))
     if not choose_scheduled:
-        _click_first_matching_button(primary_ctx, fallback_ctx, ("绔嬪嵆鍙戝竷",), platform_name="kuaishou")
+        _click_first_matching_button(primary_ctx, fallback_ctx, ("\u7acb\u5373\u53d1\u5e03",), platform_name="kuaishou")
         _log("[Uploader:kuaishou] Publish mode(random): immediate")
         return "immediate"
 
@@ -23914,7 +24252,7 @@ def _publish_kuaishou_with_random_schedule(
         clicked_publish = _click_first_matching_button(
             primary_ctx,
             fallback_ctx,
-            ("鍙戝竷", "鍙戝竷浣滃搧"),
+            KUAISHOU_PUBLISH_BUTTON_TEXTS,
             platform_name="kuaishou",
         )
     if not clicked_publish:
@@ -23927,7 +24265,7 @@ def _publish_kuaishou_with_random_schedule(
     _click_first_matching_button(
         primary_ctx,
         fallback_ctx,
-        ("纭鍙戝竷", "纭瀹氭椂鍙戝竷", "缁х画鍙戝竷", "纭畾鍙戝竷"),
+        ("\u786e\u8ba4\u53d1\u5e03", "\u786e\u8ba4\u5b9a\u65f6\u53d1\u5e03", "\u7ee7\u7eed\u53d1\u5e03", "\u786e\u5b9a\u53d1\u5e03"),
         platform_name="kuaishou",
     )
     _wait_publish_feedback(
@@ -23958,7 +24296,7 @@ def _publish_bilibili_with_random_schedule(
         clicked_publish = _click_first_matching_button(
             primary_ctx,
             fallback_ctx,
-            ("纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠", "瀹氭椂鎶曠", "绔嬪嵆鎶曠", "鎶曠", "鍙戝竷"),
+            BILIBILI_PUBLISH_BUTTON_TEXTS + ("\u786e\u8ba4\u5b9a\u65f6\u53d1\u5e03", "\u786e\u8ba4\u5b9a\u65f6\u6295\u7a3f"),
             platform_name="bilibili",
         )
     if not clicked_publish:
@@ -23969,7 +24307,7 @@ def _publish_bilibili_with_random_schedule(
     _click_first_matching_button(
         primary_ctx,
         fallback_ctx,
-        ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
+        BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
         platform_name="bilibili",
     )
     _wait_publish_feedback(
@@ -24097,6 +24435,7 @@ def _fill_draft_once_generic(
                 break
     staged_with_page_set = False
     upload_already_ready = False
+    upload_binding_confirmed = False
     if not file_input:
         if before_upload_hook:
             before_upload_hook(ctx, page)
@@ -24147,6 +24486,7 @@ def _fill_draft_once_generic(
                 )
                 upload_already_ready = True
                 staged_with_page_set = True
+                upload_binding_confirmed = True
         if platform_name != "bilibili":
             if not staged_with_page_set:
                 _log_upload_surface_snapshot(ctx, page, platform_name, reason="missing-file-input-final")
@@ -24174,11 +24514,16 @@ def _fill_draft_once_generic(
                 if not file_input:
                     raise RuntimeError(f"Could not find file input on {platform_name} page.")
                 _run_page_action(page, f"upload file ({platform_name})", lambda: file_input.input(str(target)))
+                if platform_name != "bilibili":
+                    upload_binding_confirmed = True
     if platform_name != "bilibili" and staged_with_page_set:
+        upload_binding_confirmed = True
         snapshot = _read_generic_file_inputs_snapshot(ctx, page)
         max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
         total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
         sample = snapshot.get("sample") if isinstance(snapshot.get("sample"), list) else []
+        if max_count > 0:
+            upload_binding_confirmed = True
         _log(
             f"[Uploader:{platform_name}] Generic staged bind state: "
             f"max_count={max_count}, total_inputs={total}, sample={_single_line_preview(str(sample), limit=180) or '-'}"
@@ -24186,6 +24531,8 @@ def _fill_draft_once_generic(
     elif platform_name != "bilibili":
         bind_state = _read_file_input_binding_state(file_input) if file_input else {}
         if bind_state:
+            if int(bind_state.get("count", 0) or 0) > 0:
+                upload_binding_confirmed = True
             _log(
                 f"[Uploader:{platform_name}] File input bind state: "
                 f"count={bind_state.get('count', 0)}, "
@@ -24199,6 +24546,8 @@ def _fill_draft_once_generic(
         max_count = int(snapshot.get("max_count", 0) or 0) if isinstance(snapshot, dict) else 0
         total = int(snapshot.get("total", 0) or 0) if isinstance(snapshot, dict) else 0
         sample = snapshot.get("sample") if isinstance(snapshot.get("sample"), list) else []
+        if max_count > 0:
+            upload_binding_confirmed = True
         _log(
             f"[Uploader:{platform_name}] Generic file-input snapshot after upload: "
             f"max_count={max_count}, total_inputs={total}, sample={_single_line_preview(str(sample), limit=180) or '-'}"
@@ -24239,6 +24588,7 @@ def _fill_draft_once_generic(
                     if retry_count > 0:
                         file_input = retry_input
                         max_count = retry_count
+                        upload_binding_confirmed = True
                         break
             if max_count <= 0:
                 _log_upload_surface_snapshot(ctx, page, platform_name, reason="kuaishou-image-bind-still-empty")
@@ -24282,6 +24632,7 @@ def _fill_draft_once_generic(
         platform_name=platform_name,
         timeout_seconds=upload_timeout,
         upload_target=target,
+        upload_binding_confirmed=upload_binding_confirmed or upload_already_ready,
     )
     if platform_name in {"douyin", "kuaishou", "bilibili"}:
         _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name)
@@ -24358,12 +24709,21 @@ def _fill_draft_once_generic(
 
         def _fallback_publish_to_draft(reason: str, error: Exception | None = None) -> None:
             _log(f"[Uploader:{platform_name}] {reason}, fallback to save draft.")
-            if _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
+            draft_saved = _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name)
+            if draft_saved:
                 _log(f"[Uploader:{platform_name}] Publish unconfirmed; draft save was used as failure fallback.")
-                message = f"{platform_name} {reason}; automatically saved as draft / returned to draft-state."
-                if error is not None:
-                    raise RuntimeError(message) from error
-                raise RuntimeError(message)
+            else:
+                _log(f"[Uploader:{platform_name}] Draft fallback button not confirmed.")
+            failure_code = _classify_publish_failure_code(reason=reason, error=error)
+            detail = (
+                "automatically saved as draft / returned to draft-state."
+                if draft_saved
+                else "draft fallback attempt failed (draft button not confirmed)."
+            )
+            message = f"{platform_name} {failure_code}: {reason}; {detail}"
+            if error is not None:
+                raise RuntimeError(message) from error
+            raise RuntimeError(message)
 
         def _confirm_publish() -> None:
             nonlocal douyin_mode
@@ -24378,7 +24738,7 @@ def _fill_draft_once_generic(
                 _click_first_matching_button(
                     ctx,
                     page,
-                    ("纭鎶曠", "缁х画鎶曠", "纭畾鎶曠", "纭鍙戝竷", "纭瀹氭椂鍙戝竷", "纭瀹氭椂鎶曠"),
+                    BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
                     platform_name=platform_name,
                 )
             # 闈炴姈闊冲钩鍙板悓鏍疯绛夊緟椤甸潰鍥炴墽锛岄伩鍏嶁€滅偣鍑诲彂甯冨嵆鎴愬姛鈥濈殑璇垽銆?
@@ -24475,6 +24835,25 @@ def _fill_draft_once_generic(
                     return ctx
                 except Exception as feedback_exc:
                     _log(f"[Uploader:bilibili] Manual publish fallback not confirmed: {feedback_exc}")
+                    _fallback_publish_to_draft("publish was not confirmed", feedback_exc)
+            if platform_name == "kuaishou":
+                _log(
+                    "[Uploader:kuaishou] Publish button not located; "
+                    "entering delayed-submit feedback wait."
+                )
+                try:
+                    _wait_publish_feedback(
+                        ctx,
+                        page,
+                        platform_name="kuaishou",
+                        expected_tokens=publish_verify_tokens,
+                        timeout_seconds=max(90, KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS),
+                    )
+                    _log("[Success:kuaishou] 发布已确认（delayed-submit detected without publish button click）。")
+                    return ctx
+                except Exception as feedback_exc:
+                    _log(f"[Uploader:kuaishou] Delayed-submit fallback not confirmed: {feedback_exc}")
+                    _fallback_publish_to_draft("publish was not confirmed", feedback_exc)
             if platform_name == "x":
                 _log(
                     "[Uploader:x] Publish button not ready yet; "
@@ -24501,11 +24880,10 @@ def _fill_draft_once_generic(
                         f"over_limit={bool(x_state.get('over_limit'))}, "
                         f"over_by={x_state.get('over_by', 0)}"
                     )
-            _fallback_publish_to_draft("publish button was not located")
             actions = _collect_visible_action_texts(ctx, page)
             if actions:
                 _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
-            raise RuntimeError(f"Failed to locate publish button on {platform_name} page.")
+            _fallback_publish_to_draft("publish button was not located")
         try:
             _confirm_publish()
         except Exception as exc:
@@ -24622,7 +25000,7 @@ def fill_draft_douyin(
                     upload_timeout=upload_timeout,
                     collection_name=collection_name,
                     draft_button_texts=("保存草稿", "草稿箱", "草稿"),
-                    publish_button_texts=("鍙戝竷", "绔嬪嵆鍙戝竷", "纭鍙戝竷"),
+                    publish_button_texts=DOUYIN_PUBLISH_BUTTON_TEXTS,
                     debug_port=debug_port,
                     chrome_path=chrome_path,
                     chrome_user_data_dir=chrome_user_data_dir,
@@ -24763,7 +25141,7 @@ def fill_draft_bilibili(
             publish_now=(publish_now and not auto_publish_random_schedule),
             upload_timeout=upload_timeout,
             draft_button_texts=("存草稿", "保存草稿", "草稿"),
-            publish_button_texts=("绔嬪嵆鎶曠", "鎶曠", "鍙戝竷", "绔嬪嵆鍙戝竷"),
+            publish_button_texts=BILIBILI_PUBLISH_BUTTON_TEXTS,
             bilibili_random_schedule_max_minutes=max(
                 BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
                 int(random_schedule_max_minutes),
@@ -24976,7 +25354,7 @@ def fill_draft_kuaishou(
             upload_timeout=upload_timeout,
             before_upload_hook=_guard_kuaishou_unfinished_dialog,
             draft_button_texts=("保存草稿", "暂存离开", "存草稿", "草稿"),
-            publish_button_texts=("鍙戝竷", "鍙戝竷浣滃搧", "绔嬪嵆鍙戝竷"),
+            publish_button_texts=KUAISHOU_PUBLISH_BUTTON_TEXTS,
             kuaishou_random_schedule_max_minutes=max(1, int(random_schedule_max_minutes)),
             debug_port=debug_port,
             chrome_path=chrome_path,
@@ -25436,6 +25814,7 @@ def main() -> int:
                 wechat_declare_original = bool(
                     getattr(args, "wechat_declare_original", False) or platform_publish_cfg.get("declare_original", False)
                 )
+                wechat_publish_click_confirmed = bool(platform_publish_cfg.get("publish_click_confirmed", False))
                 kuaishou_auto_publish_random_schedule = bool(
                     getattr(args, "kuaishou_auto_publish_random_schedule", False)
                     or platform_publish_cfg.get("auto_publish_random_schedule", False)
@@ -25485,6 +25864,7 @@ def main() -> int:
                             telegram_timeout_seconds=notify_settings.telegram_timeout_seconds,
                             telegram_api_base=notify_settings.telegram_api_base,
                             notify_env_prefix=notify_settings.env_prefix,
+                            wechat_publish_click_confirmed=wechat_publish_click_confirmed,
                         )
                     elif platform == "douyin":
                         used_target = fill_draft_douyin(

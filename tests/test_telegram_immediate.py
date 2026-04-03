@@ -2890,6 +2890,26 @@ def test_handle_prefilter_publish_normal_queues_publish_job(tmp_path: Path, monk
     assert len(record.updated_cards) == 1
 
 
+def test_handle_prefilter_publish_callback_acks_before_queue_read(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+
+    def _raise_lock_timeout(_workspace: Path, _item_id: str) -> dict[str, object]:
+        raise TimeoutError(f"Timed out waiting for lock: {workspace / 'runtime' / 'telegram_prefilter_queue.json'}")
+
+    monkeypatch.setattr(worker_impl, "_get_prefilter_item", _raise_lock_timeout)
+
+    result = commands.handle_callback_update(
+        update=_make_callback_update("ctpf|publish_normal|item-video"),
+        **_worker_kwargs(workspace),
+    )
+
+    assert result["handled"] is True
+    assert len(record.answers) == 1
+    assert "已收到" in str(record.answers[0].get("text") or "")
+    assert len(record.updated_cards) == 0
+
+
 def test_handle_prefilter_publish_normal_queues_image_publish_job(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     record = _install_transport_mocks(monkeypatch)
