@@ -41,8 +41,25 @@ python -m cybercar telegram recover
 ## Logs And State
 
 - Worker logs: `runtime/logs/telegram_worker_latest.out.log`, `runtime/logs/telegram_worker_latest.err.log`
+- Worker structured errors: `runtime/logs/telegram_command_worker_errors.jsonl`
 - Watchdog logs: `runtime/logs/telegram_supervisor_YYYYMMDD.log`
 - Watchdog state: `runtime/telegram_worker_supervisor_state.json`
+
+## Error Summary (Stage Debug)
+
+Use this helper to aggregate recent worker error events by `category`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\error_summary.ps1 -Hours 24 -Top 10
+powershell -ExecutionPolicy Bypass -File .\scripts\error_summary.ps1 -Hours 6 -Category "polling.*" -ShowSamples
+```
+
+Tips:
+
+- `-Hours`: rolling window in hours.
+- `-Category`: exact match or wildcard (`*`, `?`).
+- `-ShowSamples`: show latest sample events for top categories.
+- `-ShowStack`: show first stack line in samples.
 
 ## Verification
 

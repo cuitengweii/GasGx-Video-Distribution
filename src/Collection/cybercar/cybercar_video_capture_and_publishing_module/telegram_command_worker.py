@@ -2317,6 +2317,48 @@ def _log_display_name(log_path: str) -> str:
         return token.split("\\")[-1].split("/")[-1].strip()
 
 
+_ERROR_CODE_PREFIX_PATTERN = re.compile(r"\b((?:E|ERR)_[A-Z0-9_]{3,})\b")
+_ERROR_CODE_INLINE_PATTERN = re.compile(
+    r"(?:error\s*code|err(?:or)?\s*code|code|错误码)\s*[:=：]\s*([A-Za-z0-9._-]{3,})",
+    flags=re.IGNORECASE,
+)
+_ERROR_CODE_INVALID_TOKENS = {"error", "failed", "login", "unknown", "none", "null", "code"}
+
+
+def _normalize_error_code_token(raw: str) -> str:
+    token = str(raw or "").strip().strip("`'\".,;:()[]{}<>")
+    if not token:
+        return ""
+    compact = token.replace(" ", "")
+    if not compact:
+        return ""
+    upper = compact.upper()
+    if upper.lower() in _ERROR_CODE_INVALID_TOKENS:
+        return ""
+    if not (any(ch.isdigit() for ch in upper) or "_" in upper or "-" in upper):
+        return ""
+    return upper
+
+
+def _extract_error_code(*values: str) -> str:
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        upper_text = text.upper()
+        prefixed = _ERROR_CODE_PREFIX_PATTERN.search(upper_text)
+        if prefixed:
+            token = _normalize_error_code_token(prefixed.group(1))
+            if token:
+                return token
+        inline = _ERROR_CODE_INLINE_PATTERN.search(text)
+        if inline:
+            token = _normalize_error_code_token(inline.group(1))
+            if token:
+                return token
+    return ""
+
+
 def _build_task_log_section(log_paths: Iterable[str]) -> Optional[Dict[str, Any]]:
     normalized = [_log_display_name(path) for path in log_paths if str(path or "").strip()]
     if not normalized:
@@ -6335,11 +6377,32 @@ def _flush_pending_platform_result_events(
             with contextlib.suppress(Exception):
                 path.unlink()
             continue
-        if not _get_prefilter_item(workspace, item_id):
+        current_item = _get_prefilter_item(workspace, item_id)
+        if not current_item:
             _append_log(log_file, f"[Worker] stale platform result event dropped: item={item_id} platform={platform}")
             with contextlib.suppress(Exception):
                 path.unlink()
             continue
+        status_token = str(updates.get("status") or "").strip().lower()
+        if status_token == "failed" and _should_promote_wechat_unconfirmed_publish_to_success(
+            workspace=workspace,
+            item=current_item,
+            platform=platform,
+            error_text=str(updates.get("error") or ""),
+        ):
+            updates = dict(updates)
+            updates.update(
+                {
+                    "status": "success",
+                    "published_at": str(updates.get("published_at") or _now_text()),
+                    "publish_id": str(updates.get("publish_id") or "").strip() or "wechat-unconfirmed-auto-confirm",
+                    "error": "",
+                    "failure_reason": "",
+                    "failure_category": "",
+                    "failure_suggestion": "",
+                }
+            )
+            _append_log(log_file, f"[Worker] promoted unconfirmed wechat publish to success item={item_id}")
         try:
             merged = _merge_platform_result(
                 workspace=workspace,
@@ -8230,17 +8293,23 @@ def _build_platform_launch_result_section(platform_results: Dict[str, Dict[str, 
                 )
             ):
                 details = _describe_platform_failure(platform, str(result.get("error") or "").strip())
-            reason = str(details.get("reason") or "").strip()
-            suggestion = str(details.get("suggestion") or "").strip() or "查看该平台日志后重试"
             status_text = _status_text_for_failure(status, details, pid)
+            error_code = _extract_error_code(
+                str(result.get("error") or "").strip(),
+                str(details.get("category") or "").strip(),
+                str(details.get("reason") or "").strip(),
+            )
+            log_name = _log_display_name(str(result.get("log_path") or "").strip())
+            reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
             parts = [status_text]
-            category = str(details.get("category") or "").strip()
-            if category:
-                parts.append(f"分类：{category}")
-            if reason:
-                parts.append(f"原因：{reason}")
-            if suggestion:
-                parts.append(f"建议：{suggestion}")
+            if error_code:
+                parts.append(f"错误码：{error_code}")
+            elif reason:
+                parts.append(f"原因：{_preview_text(reason, limit=80)}")
+            if log_name:
+                parts.append(f"日志：{log_name}")
+            if status == "failed":
+                parts.append("按错误码查日志修复")
             value = "；".join(parts) if parts else "后台任务启动失败"
         items.append({"label": label, "value": value})
     if not items:
@@ -8353,18 +8422,36 @@ def _build_immediate_platform_feedback_payload(
         reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
         if reason:
             status_items.append({"label": "原因", "value": reason})
-        suggestion = str(details.get("suggestion") or "").strip() or "请先完成登录后再重新触发发布。"
-        status_items.append({"label": "建议", "value": suggestion})
+        error_code = _extract_error_code(
+            str(result.get("error") or "").strip(),
+            str(details.get("category") or "").strip(),
+            reason,
+        )
+        if error_code:
+            status_items.append({"label": "错误码", "value": error_code})
+        log_name = _log_display_name(str(result.get("log_path") or "").strip())
+        if log_name:
+            status_items.append({"label": "日志", "value": log_name})
+        status_items.append("登录后如仍失败，按错误码检索日志继续修复。")
     else:
         title = f"{label}发布失败"
         subtitle = "平台处理失败，请查看原因后重试"
         feedback_status = "failed"
         status_items = ["平台处理失败，本次未确认发布成功。"]
         reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
-        if reason:
-            status_items.append({"label": "原因", "value": reason})
-        suggestion = str(details.get("suggestion") or "").strip() or "查看该平台日志后重新触发发布。"
-        status_items.append({"label": "建议", "value": suggestion})
+        error_code = _extract_error_code(
+            str(result.get("error") or "").strip(),
+            str(details.get("category") or "").strip(),
+            reason,
+        )
+        if error_code:
+            status_items.append({"label": "错误码", "value": error_code})
+        log_name = _log_display_name(str(result.get("log_path") or "").strip())
+        if log_name:
+            status_items.append({"label": "日志", "value": log_name})
+        if not error_code and reason:
+            status_items.append({"label": "原因", "value": _preview_text(reason, limit=120)})
+        status_items.append("按错误码检索对应日志并修复后重试。")
 
     return {
         "title": title,

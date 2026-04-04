@@ -5238,6 +5238,114 @@ def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_
     assert "即采即发发布失败" in str(feedbacks[1]["title"])
 
 
+def test_publish_platform_job_promotes_wechat_unconfirmed_when_publish_click_seen(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+    publish_log = workspace / "runtime" / "logs" / "immediate_publish_wechat_test.log"
+    publish_log.write_text(
+        "\n".join(
+            [
+                "[Uploader:wechat] Clicked publish button by primary selector: css:.form-btns button.weui-desktop-btn_primary",
+                "[Uploader:wechat] Waiting publish feedback...",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedbacks: list[dict[str, object]] = []
+    original_error = "wechat E_PUBLISH_UNCONFIRMED_DRAFT_SAVED: publish was not confirmed; draft fallback attempt failed (draft save was not confirmed)."
+
+    fake_runner._publish_once = lambda ctx, args, email_settings, platform, target, source, events: events.append(  # type: ignore[attr-defined]
+        SimpleNamespace(success=False, error=original_error)
+    )
+
+    monkeypatch.setattr(worker_impl, "_with_platform_lock", lambda workspace, platform, fn, timeout_seconds: fn())
+    monkeypatch.setattr(worker_impl, "_build_immediate_cycle_context", lambda **kwargs: object())
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_should_probe_platform_login_after_publish_failure", lambda platform, error_text: False)
+
+    item = _video_item(
+        target_platforms="wechat",
+        platform_results={"wechat": {"log_path": str(publish_log)}},
+    )
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = worker_impl._publish_immediate_candidate_platform(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+        platform="wechat",
+    )
+
+    assert exit_code == 0
+    assert _flush_platform_result_events(workspace, fake_runner) == 2
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_done"
+    wechat_result = updated["platform_results"]["wechat"]
+    assert wechat_result["status"] == "success"
+    assert str(wechat_result.get("publish_id") or "").startswith("wechat-unconfirmed-auto-confirm")
+    assert str(wechat_result.get("error") or "") == ""
+    assert len(feedbacks) == 2
+
+
+def test_flush_platform_result_events_promotes_wechat_unconfirmed_failure(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    video_path = workspace / "2_Processed" / "clip.mp4"
+    video_path.write_text("ok", encoding="utf-8")
+    publish_log = workspace / "runtime" / "logs" / "immediate_publish_wechat_test.log"
+    publish_log.write_text(
+        "\n".join(
+            [
+                "[Uploader:wechat] Clicked publish button by primary selector: css:.form-btns button.weui-desktop-btn_primary",
+                "[Uploader:wechat] Waiting publish feedback...",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    feedbacks: list[dict[str, object]] = []
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+
+    item = _video_item(
+        status="publish_running",
+        target_platforms="wechat",
+        platform_results={"wechat": {"status": "running", "log_path": str(publish_log)}},
+    )
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    worker_impl._enqueue_platform_result_event(
+        workspace=workspace,
+        item_id="item-video",
+        platform="wechat",
+        updates={
+            "status": "failed",
+            "error": "wechat E_PUBLISH_UNCONFIRMED_DRAFT_SAVED: publish was not confirmed; draft fallback attempt failed (draft save was not confirmed).",
+        },
+    )
+
+    assert _flush_platform_result_events(workspace, fake_runner) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_done"
+    wechat_result = updated["platform_results"]["wechat"]
+    assert wechat_result["status"] == "success"
+    assert str(wechat_result.get("publish_id") or "").startswith("wechat-unconfirmed-auto-confirm")
+    assert str(wechat_result.get("error") or "") == ""
+    assert len(feedbacks) == 2
+
+
 def test_publish_platform_job_wechat_lock_timeout_does_not_trigger_login_probe(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     video_path = workspace / "2_Processed" / "clip.mp4"
@@ -6355,6 +6463,63 @@ def test_immediate_publish_feedback_omits_duplicate_platform_in_candidate_sectio
     labels = [str(entry.get("label") or "") for entry in candidate_section.get("items", []) if isinstance(entry, dict)]
 
     assert "平台" not in labels
+
+
+def test_immediate_publish_failure_feedback_prefers_error_code_and_log_for_triage() -> None:
+    item = _video_item(
+        target_platforms="wechat",
+        platform_results={
+            "wechat": {
+                "status": "failed",
+                "log_path": "runtime/logs/immediate_publish_wechat_20260318_141833.log",
+            }
+        },
+    )
+
+    payload = worker_impl._build_immediate_platform_feedback_payload(
+        item=item,
+        platform="wechat",
+        result={
+            "status": "failed",
+            "error": "wechat E_PUBLISH_UNCONFIRMED_DRAFT_SAVED: publish was not confirmed.",
+            "log_path": "runtime/logs/immediate_publish_wechat_20260318_141833.log",
+        },
+    )
+
+    sections = list(payload.get("sections") or [])
+    status_section = next(section for section in sections if section.get("title") == "执行状态")
+    status_items = list(status_section.get("items") or [])
+    mapped = {
+        str(item.get("label") or "").strip(): str(item.get("value") or "").strip()
+        for item in status_items
+        if isinstance(item, dict)
+    }
+
+    assert mapped.get("错误码") == "E_PUBLISH_UNCONFIRMED_DRAFT_SAVED"
+    assert mapped.get("日志") == "immediate_publish_wechat_20260318_141833.log"
+    assert "建议" not in mapped
+    assert any("按错误码检索对应日志并修复后重试" in str(item) for item in status_items if isinstance(item, str))
+
+
+def test_build_platform_launch_result_section_compacts_failure_to_error_code_and_log() -> None:
+    section = worker_impl._build_platform_launch_result_section(
+        {
+            "wechat": {
+                "status": "failed",
+                "error": "wechat E_UPLOAD_TIMEOUT_1001: upload timed out",
+                "log_path": "D:/code/CyberCar/runtime/logs/immediate_publish_wechat_20260318_141833.log",
+            }
+        }
+    )
+
+    rows = list(section.get("items") or [])
+    row = next(item for item in rows if isinstance(item, dict))
+    value = str(row.get("value") or "")
+
+    assert "错误码：E_UPLOAD_TIMEOUT_1001" in value
+    assert "日志：immediate_publish_wechat_20260318_141833.log" in value
+    assert "建议：" not in value
+    assert "按错误码查日志修复" in value
 
 
 def test_build_failure_feedback_actions_prefers_login_and_progress_for_login_failures() -> None:
