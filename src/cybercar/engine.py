@@ -15742,8 +15742,8 @@ def _get_collection_state(ctx: Any) -> dict[str, Any]:
         .replace(/娣诲姞鍒板悎闆?g, '')
         .replace(/閫夋嫨鍚堥泦/g, '')
         .replace(/璇烽€夋嫨鍚堥泦/g, '')
-        .replace(/鍏盶\d+涓唴瀹?g, '')
-        .replace(/鍏盶\d+鏉″唴瀹?g, '')
+        .replace(/鍏盶\\d+涓唴瀹?g, '')
+        .replace(/鍏盶\\d+鏉″唴瀹?g, '')
         .replace(/灞曞紑|鏀惰捣|鏇村/g, '')
         .trim();
     }
@@ -15859,8 +15859,8 @@ def _select_collection(ctx: Any, collection_name: str) -> None:
         .replace(/鍔犲叆鍚堥泦/g, '')
         .replace(/閫夋嫨鍚堥泦/g, '')
         .replace(/璇烽€夋嫨鍚堥泦/g, '')
-        .replace(/鍏盶\d+涓唴瀹?g, '')
-        .replace(/鍏盶\d+鏉″唴瀹?g, '')
+        .replace(/鍏盶\\d+涓唴瀹?g, '')
+        .replace(/鍏盶\\d+鏉″唴瀹?g, '')
         .replace(/灞曞紑|鏀惰捣|鏇村/g, '')
         .trim();
     }
@@ -18886,7 +18886,7 @@ def _activate_upload_trigger_generic_v2(primary_ctx: Any, fallback_ctx: Any, pla
               if (cls.includes('drop-')) score += 220;
               if (cls.includes('content-upload')) score -= 40;
               if (/鐐瑰嚮涓婁紶|涓婁紶鍥炬枃|涓婁紶鍥剧墖|閫夋嫨鍥剧墖|娣诲姞鍥剧墖|鎷栧叆姝ゅ尯鍩焲鍥剧墖鏂囦欢|缁х画娣诲姞/.test(fullText)) score += 80;
-              if (/宸叉坊鍔燶\d+寮犲浘鐗噟宸叉坊鍔犲浘鐗噟缂栬緫鍥剧墖|缁х画娣诲姞/.test(pageText) && cls.includes('drop-')) score += 120;
+              if (/宸叉坊鍔燶\\d+寮犲浘鐗噟宸叉坊鍔犲浘鐗噟缂栬緫鍥剧墖|缁х画娣诲姞/.test(pageText) && cls.includes('drop-')) score += 120;
               if (/灏侀潰|缂栬緫灏侀潰|浣滀负灏侀潰/.test(fullText)) score -= 260;
               let rect = null;
               try {
