@@ -16,6 +16,11 @@ _VARIATION_SELECTOR = "\ufe0f"
 _CUSTOM_EMOJI_TAG_RE = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", flags=re.IGNORECASE | re.DOTALL)
 _CUSTOM_EMOJI_ENABLED = False
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_STALE_CALLBACK_QUERY_ERROR_MARKERS = (
+    "query is too old",
+    "response timeout expired",
+    "query id is invalid",
+)
 
 _BOT_META: dict[str, dict[str, str]] = {
     "cybercar": {"name": "CyberCar", "home_title": "控制台"},
@@ -217,6 +222,13 @@ def _call_telegram_api_with_emoji_fallback(
             timeout_seconds=timeout_seconds,
             use_post=use_post,
         )
+
+
+def _is_stale_callback_query_error(exc: BaseException) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    return any(marker in text for marker in _STALE_CALLBACK_QUERY_ERROR_MARKERS)
 
 
 def _bot_name(bot_kind: str, fallback: str = "CyberCar") -> str:
@@ -1446,13 +1458,18 @@ def answer_interaction_toast(
     if not str(query_id or "").strip():
         return
     api_timeout = max(8, min(int(timeout_seconds), 12))
-    call_telegram_api(
-        bot_token=bot_token,
-        method="answerCallbackQuery",
-        params={
-            "callback_query_id": str(query_id or "").strip(),
-            "text": build_callback_toast(action, status, context=context),
-        },
-        timeout_seconds=api_timeout,
-        use_post=True,
-    )
+    try:
+        call_telegram_api(
+            bot_token=bot_token,
+            method="answerCallbackQuery",
+            params={
+                "callback_query_id": str(query_id or "").strip(),
+                "text": build_callback_toast(action, status, context=context),
+            },
+            timeout_seconds=api_timeout,
+            use_post=True,
+        )
+    except Exception as exc:
+        if _is_stale_callback_query_error(exc):
+            return
+        raise

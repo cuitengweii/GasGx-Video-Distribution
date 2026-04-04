@@ -267,6 +267,96 @@ def test_poll_transport_backoff_grows_and_caps() -> None:
     )
 
 
+def test_exception_text_falls_back_to_exception_class_name() -> None:
+    assert worker_impl._exception_text(RuntimeError()) == "RuntimeError"
+    assert worker_impl._exception_text(RuntimeError("boom")) == "boom"
+
+
+def test_telegram_transport_error_text_detects_gateway_failures() -> None:
+    assert worker_impl._is_telegram_transport_error_text("telegram getUpdates failed: Bad Gateway")
+    assert worker_impl._is_telegram_transport_error_text("HTTP 504 Gateway Timeout")
+    assert not worker_impl._is_telegram_transport_error_text("telegram getUpdates failed: Forbidden")
+
+
+def test_telegram_rate_limit_error_text_and_retry_after_parsing() -> None:
+    error_text = "telegram getUpdates failed: Too Many Requests: retry after 5"
+    assert worker_impl._is_telegram_rate_limit_error_text(error_text)
+    assert worker_impl._extract_telegram_retry_after_seconds(error_text) == 5
+    assert worker_impl._extract_telegram_retry_after_seconds("telegram getUpdates failed: Too Many Requests") == 0
+
+
+def test_telegram_poll_conflict_error_text_detects_conflict() -> None:
+    assert worker_impl._is_telegram_poll_conflict_error_text(
+        "telegram getUpdates failed: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"
+    )
+    assert not worker_impl._is_telegram_poll_conflict_error_text("telegram getUpdates failed: Forbidden")
+
+
+def test_answer_callback_query_ignores_stale_query_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        worker_impl,
+        "_telegram_api",
+        lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "telegram answerCallbackQuery failed: Bad Request: query is too old and response timeout expired or query ID is invalid"
+            )
+        ),
+    )
+    worker_impl._answer_callback_query(
+        bot_token=BOT_TOKEN,
+        query_id="cb-1",
+        text="ok",
+        timeout_seconds=10,
+    )
+
+
+def test_answer_callback_query_keeps_non_stale_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        worker_impl,
+        "_telegram_api",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("telegram answerCallbackQuery failed: Forbidden")),
+    )
+    try:
+        worker_impl._answer_callback_query(
+            bot_token=BOT_TOKEN,
+            query_id="cb-1",
+            text="ok",
+            timeout_seconds=10,
+        )
+    except RuntimeError as exc:
+        assert "Forbidden" in str(exc)
+    else:
+        raise AssertionError("expected non-stale callback error to be raised")
+
+
+def test_should_log_poll_transport_warning_first_failures_then_interval() -> None:
+    now = 1000.0
+    assert worker_impl._should_log_poll_transport_warning(
+        consecutive_failures=1,
+        last_logged_epoch=999.0,
+        now_epoch=now,
+        min_interval_seconds=60,
+    )
+    assert worker_impl._should_log_poll_transport_warning(
+        consecutive_failures=3,
+        last_logged_epoch=999.0,
+        now_epoch=now,
+        min_interval_seconds=60,
+    )
+    assert not worker_impl._should_log_poll_transport_warning(
+        consecutive_failures=4,
+        last_logged_epoch=980.0,
+        now_epoch=now,
+        min_interval_seconds=60,
+    )
+    assert worker_impl._should_log_poll_transport_warning(
+        consecutive_failures=4,
+        last_logged_epoch=930.0,
+        now_epoch=now,
+        min_interval_seconds=60,
+    )
+
+
 def test_poll_network_restart_requires_sustained_failure_span() -> None:
     exc = RuntimeError("HTTPSConnectionPool(host='api.telegram.org'): ConnectionResetError(10054)")
     assert not worker_impl._should_restart_after_poll_error(
@@ -289,6 +379,30 @@ def test_poll_network_restart_requires_sustained_failure_span() -> None:
         threshold=6,
         failure_span_seconds=0,
         min_failure_span_seconds=0,
+    )
+
+
+def test_poll_network_restart_ignores_rate_limit_error() -> None:
+    exc = RuntimeError("telegram getUpdates failed: Too Many Requests: retry after 5")
+    assert not worker_impl._should_restart_after_poll_error(
+        exc,
+        consecutive_failures=10,
+        threshold=6,
+        failure_span_seconds=900,
+        min_failure_span_seconds=600,
+    )
+
+
+def test_poll_network_restart_ignores_conflict_error() -> None:
+    exc = RuntimeError(
+        "telegram getUpdates failed: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"
+    )
+    assert not worker_impl._should_restart_after_poll_error(
+        exc,
+        consecutive_failures=10,
+        threshold=6,
+        failure_span_seconds=900,
+        min_failure_span_seconds=600,
     )
 
 
@@ -5849,6 +5963,29 @@ def test_atomic_write_json_cleans_tmp_file_when_replace_fails(tmp_path: Path, mo
 
     assert tmp_paths, "temporary file path should be captured"
     assert not tmp_paths[0].exists()
+
+
+def test_atomic_write_json_retries_plain_permission_error_on_windows(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "payload.json"
+    original_replace = os.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(src: os.PathLike[str] | str, dst: os.PathLike[str] | str) -> None:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise PermissionError("replace blocked")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(worker_impl.os, "replace", flaky_replace)
+    monkeypatch.setattr(worker_impl, "os", worker_impl.os)
+    monkeypatch.setattr(worker_impl, "time", worker_impl.time)
+    monkeypatch.setattr(worker_impl.time, "sleep", lambda seconds: None)
+
+    worker_impl._atomic_write_json(path, {"ok": True})
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert attempts["count"] == 3
 
 
 def test_build_process_log_section_folds_repeated_init_lines(tmp_path: Path) -> None:

@@ -208,6 +208,45 @@ def test_call_telegram_api_keeps_get_and_post_sessions_isolated(monkeypatch) -> 
     assert post_session.calls
 
 
+def test_answer_interaction_toast_ignores_stale_query_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        telegram_ui,
+        "call_telegram_api",
+        lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "telegram answerCallbackQuery failed: Bad Request: query is too old and response timeout expired or query ID is invalid"
+            )
+        ),
+    )
+    telegram_ui.answer_interaction_toast(
+        bot_token="123456:token",
+        query_id="cb-1",
+        action="process_status",
+        status="success",
+        timeout_seconds=10,
+    )
+
+
+def test_answer_interaction_toast_keeps_non_stale_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        telegram_ui,
+        "call_telegram_api",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("telegram answerCallbackQuery failed: Forbidden")),
+    )
+    try:
+        telegram_ui.answer_interaction_toast(
+            bot_token="123456:token",
+            query_id="cb-1",
+            action="process_status",
+            status="success",
+            timeout_seconds=10,
+        )
+    except RuntimeError as exc:
+        assert "Forbidden" in str(exc)
+    else:
+        raise AssertionError("expected non-stale callback error to be raised")
+
+
 def test_build_telegram_card_uses_clean_section_layout() -> None:
     card = telegram_ui.build_telegram_card(
         "publish_result",

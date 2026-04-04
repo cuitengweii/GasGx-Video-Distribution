@@ -510,6 +510,10 @@ _TELEGRAM_TRANSPORT_ERROR_MARKERS = (
     "proxyerror",
     "sslerror",
     "connection refused",
+    "bad gateway",
+    "gateway timeout",
+    "service unavailable",
+    "upstream connect error",
 )
 
 
@@ -518,6 +522,45 @@ def _is_telegram_transport_error_text(value: str) -> bool:
     if not text:
         return False
     return any(marker in text for marker in _TELEGRAM_TRANSPORT_ERROR_MARKERS)
+
+
+def _is_telegram_rate_limit_error_text(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if "too many requests" in text:
+        return True
+    return "retry after" in text and "telegram" in text
+
+
+def _extract_telegram_retry_after_seconds(value: str, *, fallback_seconds: int = 0, cap_seconds: int = 120) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return max(0, int(fallback_seconds))
+    match = re.search(r"retry\s+after\s+(\d+)", text, flags=re.IGNORECASE)
+    if not match:
+        return max(0, int(fallback_seconds))
+    seconds = max(0, int(match.group(1) or 0))
+    capped = max(1, int(cap_seconds or 0))
+    return min(seconds, capped)
+
+
+def _is_telegram_poll_conflict_error_text(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return "terminated by other getupdates request" in text
+
+
+def _is_stale_callback_query_error_text(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return (
+        "query is too old" in text
+        or "response timeout expired" in text
+        or "query id is invalid" in text
+    )
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"]+")
@@ -855,8 +898,32 @@ def _post_telegram_multipart_with_retries(
     )
 
 
+def _exception_text(exc: BaseException) -> str:
+    text = str(exc or "").strip()
+    if text:
+        return text
+    name = str(getattr(type(exc), "__name__", "") or "").strip()
+    return name or "unknown error"
+
+
 def _is_telegram_poll_network_error(exc: Exception) -> bool:
-    return _is_telegram_transport_error_text(str(exc or ""))
+    return _is_telegram_transport_error_text(_exception_text(exc))
+
+
+def _should_log_poll_transport_warning(
+    *,
+    consecutive_failures: int,
+    last_logged_epoch: float,
+    now_epoch: float,
+    min_interval_seconds: int = 60,
+) -> bool:
+    failures = max(0, int(consecutive_failures))
+    if failures <= 3:
+        return True
+    if float(last_logged_epoch or 0.0) <= 0:
+        return True
+    interval = max(1, int(min_interval_seconds))
+    return (float(now_epoch) - float(last_logged_epoch)) >= float(interval)
 
 
 def _compute_poll_transport_backoff_seconds(
@@ -5180,7 +5247,12 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
                 break
             except OSError as exc:
                 last_error = exc
-                if os.name != "nt" or getattr(exc, "winerror", 0) not in {5, 32} or attempt >= 4:
+                winerror = int(getattr(exc, "winerror", 0) or 0)
+                retryable_windows_lock_error = os.name == "nt" and (
+                    winerror in {5, 32}
+                    or isinstance(exc, PermissionError)
+                )
+                if not retryable_windows_lock_error or attempt >= 4:
                     raise
                 time.sleep(0.05 * (attempt + 1))
         if last_error is not None:
@@ -7346,13 +7418,18 @@ def _answer_callback_query(
     params: Dict[str, Any] = {"callback_query_id": query_id}
     if text:
         params["text"] = text
-    _telegram_api(
-        bot_token=bot_token,
-        method="answerCallbackQuery",
-        params=params,
-        timeout_seconds=max(8, int(timeout_seconds)),
-        use_post=True,
-    )
+    try:
+        _telegram_api(
+            bot_token=bot_token,
+            method="answerCallbackQuery",
+            params=params,
+            timeout_seconds=max(8, int(timeout_seconds)),
+            use_post=True,
+        )
+    except Exception as exc:
+        if _is_stale_callback_query_error_text(_exception_text(exc)):
+            return
+        raise
 
 
 def _try_clear_callback_buttons(
@@ -8210,6 +8287,15 @@ def _probe_platform_login_after_publish_failure(
         prefer_login_entry=True,
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
+        return "failed", str(error_text or "").strip()
+    notice_chain_confirmed = bool(text_result.get("sent")) or bool(result.get("sent")) or bool(result.get("skipped")) or bool(result.get("transport_error"))
+    if not notice_chain_confirmed:
+        _append_log(
+            log_file,
+            f"[Worker] immediate publish login recheck kept original failure platform={platform_token} item={item_id} "
+            f"text_sent={bool(text_result.get('sent'))} qr_sent={bool(result.get('sent'))} "
+            f"qr_skipped={bool(result.get('skipped'))} qr_transport_error={bool(result.get('transport_error'))}",
+        )
         return "failed", str(error_text or "").strip()
     notices: list[str] = []
     if bool(text_result.get("sent")):
@@ -10845,7 +10931,11 @@ def _preflight_immediate_platform_login(
         )
     except Exception as exc:
         if isinstance(log_file, Path):
-            _append_log(log_file, f"[Worker] preflight login probe failed platform={normalized_platform} error={exc}")
+            _append_log(
+                log_file,
+                "[Worker] preflight login probe failed "
+                f"platform={normalized_platform} error={_exception_text(exc)}",
+            )
         fallback_status: Dict[str, Any] = {}
         try:
             fallback_status = core.check_platform_login_status(
@@ -10860,19 +10950,20 @@ def _preflight_immediate_platform_login(
             if isinstance(log_file, Path):
                 _append_log(
                     log_file,
-                    f"[Worker] preflight login fallback failed platform={normalized_platform} error={fallback_exc}",
+                    "[Worker] preflight login fallback failed "
+                    f"platform={normalized_platform} error={_exception_text(fallback_exc)}",
                 )
-            fallback_status = {"probe_error": str(fallback_exc)}
+            fallback_status = {"probe_error": _exception_text(fallback_exc)}
         if not isinstance(fallback_status, dict):
             fallback_status = {}
         if not bool(fallback_status.get("needs_login")):
-            return {"ready": True, "error": str(exc), "fallback_result": fallback_status}
+            return {"ready": True, "error": _exception_text(exc), "fallback_result": fallback_status}
         result = {
             "status": "login_required",
             "reason": str(fallback_status.get("reason") or "").strip(),
             "current_url": str(fallback_status.get("url") or "").strip(),
-            "root_cause_hint": str(fallback_status.get("reason") or "").strip() or str(exc),
-            "probe_error": str(exc),
+            "root_cause_hint": str(fallback_status.get("reason") or "").strip() or _exception_text(exc),
+            "probe_error": _exception_text(exc),
             "fallback_result": fallback_status,
         }
     if not isinstance(result, dict):
@@ -14685,6 +14776,8 @@ def main() -> int:
     api_timeout_seconds = max(10, poll_timeout + 15)
     consecutive_poll_failures = 0
     poll_failure_burst_started_at = 0.0
+    poll_transport_warning_last_logged_at = 0.0
+    suppressed_poll_transport_warnings = 0
 
     env_prefixes_raw = _env_first(
         "CYBERCAR_TELEGRAM_SHELL_ALLOW_PREFIXES",
@@ -14819,7 +14912,11 @@ def main() -> int:
                 log_file=log_file,
             )
         except Exception as exc:
-            _append_log(log_file, f"[Worker] setMyCommands failed; continue without blocking worker: {exc}")
+            _append_log(
+                log_file,
+                "[Worker] setMyCommands failed; continue without blocking worker: "
+                f"{_exception_text(exc)}",
+            )
 
         state = _safe_update_worker_state(
             state_file,
@@ -14981,6 +15078,16 @@ def main() -> int:
                 updates = updates_resp.get("result") if isinstance(updates_resp, dict) else []
                 if not isinstance(updates, list):
                     updates = []
+                if suppressed_poll_transport_warnings > 0:
+                    _append_log(
+                        log_file,
+                        (
+                            "[Worker] Telegram poll transport recovered; "
+                            f"suppressed_warnings={suppressed_poll_transport_warnings}."
+                        ),
+                    )
+                    suppressed_poll_transport_warnings = 0
+                    poll_transport_warning_last_logged_at = 0.0
                 consecutive_poll_failures = 0
                 poll_failure_burst_started_at = 0.0
                 _update_worker_state(
@@ -15091,29 +15198,79 @@ def main() -> int:
                 )
                 return 0
             except Exception as exc:
+                error_text = _exception_text(exc)
                 poll_transport_error = _is_telegram_poll_network_error(exc)
-                if poll_transport_error:
-                    _append_log(log_file, f"[Worker] Telegram poll transport warning: {exc}")
-                else:
-                    _append_log(log_file, f"[Worker] loop error: {exc}")
+                poll_rate_limit_error = _is_telegram_rate_limit_error_text(error_text)
+                poll_conflict_error = _is_telegram_poll_conflict_error_text(error_text)
+                poll_retryable_error = poll_transport_error or poll_rate_limit_error or poll_conflict_error
                 consecutive_poll_failures += 1
-                if poll_transport_error:
+                if poll_retryable_error:
                     if consecutive_poll_failures == 1 or poll_failure_burst_started_at <= 0:
                         poll_failure_burst_started_at = time.time()
                     sleep_seconds = _compute_poll_transport_backoff_seconds(
                         consecutive_failures=consecutive_poll_failures,
                         base_interval_seconds=poll_interval,
                     )
+                    retry_after_seconds = (
+                        _extract_telegram_retry_after_seconds(error_text)
+                        if poll_rate_limit_error
+                        else 0
+                    )
+                    if retry_after_seconds > 0:
+                        sleep_seconds = max(sleep_seconds, retry_after_seconds)
+                    now_epoch = time.time()
+                    if _should_log_poll_transport_warning(
+                        consecutive_failures=consecutive_poll_failures,
+                        last_logged_epoch=poll_transport_warning_last_logged_at,
+                        now_epoch=now_epoch,
+                    ):
+                        suppressed_suffix = (
+                            f", suppressed={suppressed_poll_transport_warnings}"
+                            if suppressed_poll_transport_warnings > 0
+                            else ""
+                        )
+                        warning_prefix = (
+                            "[Worker] Telegram poll rate limited: "
+                            if poll_rate_limit_error
+                            else (
+                                "[Worker] Telegram poll conflict warning: "
+                                if poll_conflict_error
+                                else "[Worker] Telegram poll transport warning: "
+                            )
+                        )
+                        _append_log(
+                            log_file,
+                            (
+                                f"{warning_prefix}{error_text}; failures={consecutive_poll_failures}; "
+                                f"backoff={sleep_seconds}s"
+                                f"{'; retry_after=' + str(retry_after_seconds) + 's' if retry_after_seconds > 0 else ''}"
+                                f"{suppressed_suffix}"
+                            ),
+                        )
+                        poll_transport_warning_last_logged_at = now_epoch
+                        suppressed_poll_transport_warnings = 0
+                    else:
+                        suppressed_poll_transport_warnings += 1
+                else:
+                    _append_log(log_file, f"[Worker] loop error: {error_text}")
                 _update_worker_state(
                     state_file,
                     pid=os.getpid(),
-                    status="polling" if poll_transport_error else "error",
-                    startup_stage="poll_transport_retry" if poll_transport_error else "",
+                    status="polling" if poll_retryable_error else "error",
+                    startup_stage="poll_transport_retry" if poll_retryable_error else "",
                     worker_heartbeat_at=_now_text(),
                     last_error=(
-                        "telegram poll transport jitter; send path remains retryable"
-                        if poll_transport_error
-                        else str(exc)
+                        "telegram poll rate limited; retrying with backoff"
+                        if poll_rate_limit_error
+                        else (
+                        "telegram poll conflict detected; another poller may be active"
+                            if poll_conflict_error
+                            else (
+                            "telegram poll transport jitter; send path remains retryable"
+                                if poll_transport_error
+                            else error_text
+                            )
+                        )
                     ),
                     consecutive_poll_failures=consecutive_poll_failures,
                 )
