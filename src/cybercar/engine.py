@@ -163,7 +163,7 @@ KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#�
 DEFAULT_CAPTION = f"Cybertruck 璧涘崥鐨崱鏈€鏂扮敾闈紒\n\n{DEFAULT_HASHTAGS}"
 DEFAULT_COLLECTION_NAME = "赛博皮卡天津港现车"
 DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
-    "douyin": "璧涘崥鐨崱鐜拌溅锛歛awbcc",
+    "douyin": "赛博皮卡现车：aawbcc",
 }
 DEFAULT_KUAISHOU_RANDOM_SCHEDULE_MAX_MINUTES = 45
 COMMENT_INTERACTION_WAIT_MIN_SECONDS = 3.0
@@ -321,6 +321,9 @@ WECHAT_LOGIN_QR_NOTICE_CACHE: dict[str, tuple[str, float]] = {}
 PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 PLATFORM_LOGIN_CONFIRM_POLL_SECONDS = 2.0
 PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS = MAX_BLOCKING_WAIT_SECONDS
+WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_DEFAULT = 1800
+WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_MIN = 300
+WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_MAX = 86400
 WECHAT_RECENT_READY_ROUTE_ERROR_RECHECKS = 4
 WECHAT_RECENT_READY_ROUTE_ERROR_RECHECK_SLEEP_SECONDS = 2.0
 X_DISCOVERY_SCROLL_WAIT_SECONDS = 3.0
@@ -2974,18 +2977,27 @@ def _mark_platform_session_state(
     url: str = "",
     reason: str = "",
     diagnostics: Optional[dict[str, Any]] = None,
+    keepalive_at: Optional[float] = None,
+    keepalive_open_url: str = "",
 ) -> None:
     now_ts = time.time()
-    payload = {
+    payload = _read_platform_session_state(platform_name, profile_dir)
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.update({
         "platform": str(platform_name or "wechat").strip().lower() or "wechat",
         "profile_dir": str(profile_dir or "").strip(),
         "status": str(status or "").strip().lower(),
         "url": str(url or "").strip(),
         "reason": str(reason or "").strip(),
         "updated_at": now_ts,
-    }
+    })
     if isinstance(diagnostics, dict) and diagnostics:
         payload["diagnostics"] = diagnostics
+    if keepalive_at is not None:
+        payload["keepalive_at"] = max(0.0, float(keepalive_at))
+    if str(keepalive_open_url or "").strip():
+        payload["keepalive_open_url"] = str(keepalive_open_url).strip()
     _write_platform_session_state(platform_name, profile_dir, payload)
 
 
@@ -2995,8 +3007,18 @@ def _mark_platform_session_ready(
     *,
     url: str = "",
     diagnostics: Optional[dict[str, Any]] = None,
+    keepalive_at: Optional[float] = None,
+    keepalive_open_url: str = "",
 ) -> None:
-    _mark_platform_session_state(platform_name, profile_dir, status="ready", url=url, diagnostics=diagnostics)
+    _mark_platform_session_state(
+        platform_name,
+        profile_dir,
+        status="ready",
+        url=url,
+        diagnostics=diagnostics,
+        keepalive_at=keepalive_at,
+        keepalive_open_url=keepalive_open_url,
+    )
 
 
 def _mark_platform_session_login_required(
@@ -3025,6 +3047,116 @@ def _has_recent_platform_session_ready(platform_name: str, profile_dir: str, *, 
     if updated_at <= 0:
         return False
     return (time.time() - updated_at) <= _normalize_blocking_timeout(max_age_seconds, 60, minimum=1)
+
+
+def _resolve_wechat_keepalive_interval_seconds(override_seconds: int = 0) -> int:
+    if int(override_seconds or 0) > 0:
+        candidate = int(override_seconds)
+    else:
+        raw = str(
+            os.getenv(
+                "CYBERCAR_WECHAT_LOGIN_KEEPALIVE_SECONDS",
+                str(WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_DEFAULT),
+            )
+            or ""
+        ).strip()
+        try:
+            candidate = int(raw)
+        except Exception:
+            candidate = WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_DEFAULT
+    return max(
+        WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_MIN,
+        min(WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_MAX, int(candidate)),
+    )
+
+
+def _maybe_touch_wechat_login_keepalive(
+    page: ChromiumPage,
+    *,
+    chrome_user_data_dir: str,
+    open_url: str,
+    min_interval_seconds: int = 0,
+) -> dict[str, Any]:
+    profile_dir = str(Path(chrome_user_data_dir or "").expanduser()).strip()
+    if not profile_dir:
+        return {
+            "ok": False,
+            "performed": False,
+            "skipped": True,
+            "reason": "missing_profile_dir",
+        }
+    interval_seconds = _resolve_wechat_keepalive_interval_seconds(min_interval_seconds)
+    state = _read_platform_session_state("wechat", profile_dir)
+    last_keepalive_at = float(state.get("keepalive_at") or 0.0) if isinstance(state, dict) else 0.0
+    now_ts = time.time()
+    if last_keepalive_at > 0 and (now_ts - last_keepalive_at) < float(interval_seconds):
+        return {
+            "ok": True,
+            "performed": False,
+            "skipped": True,
+            "reason": "interval_not_due",
+            "last_keepalive_at": last_keepalive_at,
+            "interval_seconds": interval_seconds,
+        }
+
+    target_url = str(open_url or CREATE_POST_URL).strip() or CREATE_POST_URL
+    try:
+        page.get(target_url)
+    except Exception:
+        try:
+            page.refresh()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "performed": False,
+                "reason": "keepalive_navigation_failed",
+                "error": str(exc),
+                "interval_seconds": interval_seconds,
+            }
+    time.sleep(0.8)
+    login_state = inspect_platform_login_gate(page, "wechat")
+    current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
+    diagnostics = _build_platform_login_diagnostics(
+        "wechat",
+        state=login_state,
+        open_url=target_url,
+        recent_session_ready=True,
+        profile_dir=profile_dir,
+    )
+    if bool(login_state.get("needs_login")):
+        _mark_platform_session_login_required(
+            "wechat",
+            profile_dir,
+            url=current_url or target_url,
+            reason=str(login_state.get("reason") or "keepalive_login_required"),
+            diagnostics=diagnostics,
+        )
+        return {
+            "ok": True,
+            "performed": True,
+            "login_required": True,
+            "reason": str(login_state.get("reason") or "keepalive_login_required"),
+            "current_url": current_url,
+            "interval_seconds": interval_seconds,
+        }
+    keepalive_at = time.time()
+    _mark_platform_session_ready(
+        "wechat",
+        profile_dir,
+        url=current_url or target_url,
+        diagnostics=diagnostics,
+        keepalive_at=keepalive_at,
+        keepalive_open_url=target_url,
+    )
+    return {
+        "ok": True,
+        "performed": True,
+        "login_required": False,
+        "reason": "",
+        "current_url": current_url,
+        "keepalive_at": keepalive_at,
+        "interval_seconds": interval_seconds,
+    }
 
 
 def _should_send_platform_login_monitor_notice(
@@ -3333,6 +3465,9 @@ def probe_platform_session_via_debug_port(
     telegram_timeout_seconds: int = 20,
     telegram_api_base: str = "",
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+    disconnect_after_probe: bool = True,
+    enable_wechat_keepalive: bool = False,
+    wechat_keepalive_min_interval_seconds: int = 0,
 ) -> dict[str, Any]:
     platform = str(platform_name or "wechat").strip().lower() or "wechat"
     profile_dir = str(Path(chrome_user_data_dir).expanduser()) if chrome_user_data_dir else ""
@@ -3354,6 +3489,12 @@ def probe_platform_session_via_debug_port(
             "open_url": resolved_open_url,
             "error": str(exc),
         }
+
+    def _finish(payload: dict[str, Any]) -> dict[str, Any]:
+        if bool(disconnect_after_probe):
+            _disconnect_chrome_page_quietly(page)
+        return payload
+
     page = _stabilize_platform_session_page(
         page,
         platform_name=platform,
@@ -3380,10 +3521,37 @@ def probe_platform_session_via_debug_port(
             "current_url": current_url,
             "reason": str(login_state.get("reason") or "").strip(),
         }
-        _disconnect_chrome_page_quietly(page)
-        return result
+        return _finish(result)
 
     recent_session_ready = bool(profile_dir) and _has_recent_platform_session_ready(platform, profile_dir)
+    keepalive_result: dict[str, Any] = {}
+    if (
+        platform == "wechat"
+        and bool(enable_wechat_keepalive)
+        and bool(profile_dir)
+        and not bool(login_state.get("needs_login"))
+    ):
+        keepalive_result = _maybe_touch_wechat_login_keepalive(
+            page,
+            chrome_user_data_dir=profile_dir,
+            open_url=resolved_open_url,
+            min_interval_seconds=int(wechat_keepalive_min_interval_seconds or 0),
+        )
+        if bool(keepalive_result.get("performed")):
+            current_url = str(keepalive_result.get("current_url") or _page_current_url(page) or current_url).strip()
+            login_state = {
+                **dict(login_state or {}),
+                "url": current_url,
+            }
+        if bool(keepalive_result.get("login_required")):
+            login_state = {
+                **dict(login_state or {}),
+                "needs_login": True,
+                "reason": str(keepalive_result.get("reason") or "keepalive_login_required").strip(),
+                "url": str(keepalive_result.get("current_url") or current_url or resolved_open_url).strip(),
+            }
+            current_url = str(login_state.get("url") or current_url).strip()
+
     diagnostics = _build_platform_login_diagnostics(
         platform,
         state=login_state,
@@ -3392,12 +3560,15 @@ def probe_platform_session_via_debug_port(
         profile_dir=profile_dir,
     )
     if not bool(login_state.get("needs_login")):
+        keepalive_at = float(keepalive_result.get("keepalive_at") or 0.0) if isinstance(keepalive_result, dict) else 0.0
         if profile_dir:
             _mark_platform_session_ready(
                 platform,
                 profile_dir,
                 url=current_url or resolved_open_url,
                 diagnostics=diagnostics,
+                keepalive_at=keepalive_at if keepalive_at > 0 else None,
+                keepalive_open_url=resolved_open_url if keepalive_at > 0 else "",
             )
         result = {
             "ok": True,
@@ -3407,8 +3578,17 @@ def probe_platform_session_via_debug_port(
             "current_url": current_url,
             "diagnostics": diagnostics,
         }
-        _disconnect_chrome_page_quietly(page)
-        return result
+        if isinstance(keepalive_result, dict) and keepalive_result:
+            result["keepalive"] = {
+                "enabled": bool(enable_wechat_keepalive and platform == "wechat"),
+                "performed": bool(keepalive_result.get("performed")),
+                "skipped": bool(keepalive_result.get("skipped")),
+                "reason": str(keepalive_result.get("reason") or "").strip(),
+                "last_keepalive_at": float(keepalive_result.get("last_keepalive_at") or 0.0),
+                "keepalive_at": float(keepalive_result.get("keepalive_at") or 0.0),
+                "interval_seconds": int(keepalive_result.get("interval_seconds") or 0),
+            }
+        return _finish(result)
 
     login_reason = str(login_state.get("reason") or "").strip()
     should_notify = bool(profile_dir) and _should_send_platform_login_monitor_notice(
@@ -3437,8 +3617,7 @@ def probe_platform_session_via_debug_port(
     }
     if not should_notify:
         result["notification_skipped"] = True
-        _disconnect_chrome_page_quietly(page)
-        return result
+        return _finish(result)
 
     qr_result = send_platform_login_qr_notification(
         platform_name=platform,
@@ -3462,8 +3641,7 @@ def probe_platform_session_via_debug_port(
     if bool(qr_result.get("sent")):
         result["notified"] = True
         result["notification_mode"] = "qr"
-        _disconnect_chrome_page_quietly(page)
-        return result
+        return _finish(result)
 
     text_result = _send_platform_login_text_notification(
         platform_name=platform,
@@ -3483,8 +3661,7 @@ def probe_platform_session_via_debug_port(
     if bool(text_result.get("sent")):
         result["notified"] = True
         result["notification_mode"] = "text"
-    _disconnect_chrome_page_quietly(page)
-    return result
+    return _finish(result)
 
 
 def _begin_platform_login_wait(platform_name: str, profile_dir: str, open_url: str) -> str:

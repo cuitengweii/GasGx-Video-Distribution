@@ -1,7 +1,7 @@
 import argparse
 import json
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -276,6 +276,31 @@ def test_telegram_transport_error_text_detects_gateway_failures() -> None:
     assert worker_impl._is_telegram_transport_error_text("telegram getUpdates failed: Bad Gateway")
     assert worker_impl._is_telegram_transport_error_text("HTTP 504 Gateway Timeout")
     assert not worker_impl._is_telegram_transport_error_text("telegram getUpdates failed: Forbidden")
+    assert worker_impl._is_telegram_transport_error_text("telegram getUpdates failed: timed out")
+    assert not worker_impl._is_telegram_transport_error_text(
+        "Timed out waiting for lock: D:\\code\\CyberCar\\runtime\\runtime\\telegram_prefilter_queue.json"
+    )
+
+
+def test_prefilter_queue_lock_timeout_error_text_detection() -> None:
+    assert worker_impl._is_prefilter_queue_lock_timeout_error_text(
+        "Timed out waiting for lock: D:\\code\\CyberCar\\runtime\\runtime\\telegram_prefilter_queue.json"
+    )
+    assert not worker_impl._is_prefilter_queue_lock_timeout_error_text(
+        "Timed out waiting for lock: D:\\code\\CyberCar\\runtime\\runtime\\platform_publish_locks\\wechat.lockdir"
+    )
+
+
+def test_prefilter_queue_io_contention_error_text_detection() -> None:
+    assert worker_impl._is_prefilter_queue_io_contention_error_text(
+        "[WinError 5] Access is denied: "
+        "'D:\\code\\CyberCar\\runtime\\runtime\\telegram_prefilter_queue.json.tmp-3160-1773784574334' "
+        "-> 'D:\\code\\CyberCar\\runtime\\runtime\\telegram_prefilter_queue.json'"
+    )
+    assert not worker_impl._is_prefilter_queue_io_contention_error_text(
+        "[WinError 5] Access is denied: "
+        "'D:\\code\\CyberCar\\runtime\\runtime\\platform_publish_locks\\wechat.lockdir'"
+    )
 
 
 def test_telegram_rate_limit_error_text_and_retry_after_parsing() -> None:
@@ -290,6 +315,111 @@ def test_telegram_poll_conflict_error_text_detects_conflict() -> None:
         "telegram getUpdates failed: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"
     )
     assert not worker_impl._is_telegram_poll_conflict_error_text("telegram getUpdates failed: Forbidden")
+
+
+def test_should_attempt_set_commands_respects_recent_success_window() -> None:
+    state = {"set_commands_updated_at": "2026-03-20 09:30:00"}
+    now_epoch = datetime(2026, 3, 20, 10, 0, 0).timestamp()
+    assert not worker_impl._should_attempt_set_commands(
+        state,
+        now_epoch=now_epoch,
+        refresh_seconds=3600,
+        failure_backoff_seconds=600,
+    )
+    assert worker_impl._should_attempt_set_commands(
+        state,
+        now_epoch=now_epoch,
+        refresh_seconds=1200,
+        failure_backoff_seconds=600,
+    )
+
+
+def test_should_attempt_set_commands_respects_failure_backoff() -> None:
+    now_epoch = datetime(2026, 3, 20, 10, 0, 0).timestamp()
+    state = {
+        "set_commands_last_error": "telegram setMyCommands failed: Connection aborted",
+        "set_commands_last_attempt_at": "2026-03-20 09:55:30",
+    }
+    assert not worker_impl._should_attempt_set_commands(
+        state,
+        now_epoch=now_epoch,
+        refresh_seconds=3600,
+        failure_backoff_seconds=600,
+    )
+    state["set_commands_last_attempt_at"] = "2026-03-20 09:45:00"
+    assert worker_impl._should_attempt_set_commands(
+        state,
+        now_epoch=now_epoch,
+        refresh_seconds=3600,
+        failure_backoff_seconds=600,
+    )
+
+
+def test_max_update_id_from_updates_ignores_invalid_rows() -> None:
+    updates = [
+        {"update_id": 101},
+        {"update_id": "205"},
+        {"foo": "bar"},
+        "invalid",
+        {"update_id": 99},
+    ]
+    assert worker_impl._max_update_id_from_updates(updates) == 205
+
+
+def test_bootstrap_latest_update_id_walks_multiple_pages(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_telegram_api(**kwargs):
+        params = dict(kwargs.get("params") or {})
+        calls.append(params)
+        offset = int(params.get("offset") or 0)
+        limit = int(params.get("limit") or 100)
+        if offset <= 0:
+            return {"ok": True, "result": [{"update_id": idx} for idx in range(1, limit + 1)]}
+        if offset == 101:
+            return {"ok": True, "result": [{"update_id": idx} for idx in range(101, 151)]}
+        return {"ok": True, "result": []}
+
+    monkeypatch.setattr(worker_impl, "_telegram_api", fake_telegram_api)
+    monkeypatch.setattr(worker_impl, "DEFAULT_BOOTSTRAP_GETUPDATES_LIMIT", 100)
+    monkeypatch.setattr(worker_impl, "DEFAULT_BOOTSTRAP_GETUPDATES_MAX_PAGES", 20)
+
+    latest = worker_impl._bootstrap_latest_update_id(
+        bot_token=BOT_TOKEN,
+        timeout_seconds=10,
+    )
+
+    assert latest == 150
+    assert len(calls) == 2
+    assert int(calls[0].get("limit") or 0) == 100
+    assert "offset" not in calls[0]
+    assert int(calls[1].get("offset") or 0) == 101
+
+
+def test_bootstrap_latest_update_id_continues_from_start_after_update_id(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_telegram_api(**kwargs):
+        params = dict(kwargs.get("params") or {})
+        calls.append(params)
+        offset = int(params.get("offset") or 0)
+        if offset == 206:
+            return {"ok": True, "result": [{"update_id": 206}, {"update_id": 220}]}
+        return {"ok": True, "result": []}
+
+    monkeypatch.setattr(worker_impl, "_telegram_api", fake_telegram_api)
+    monkeypatch.setattr(worker_impl, "DEFAULT_BOOTSTRAP_GETUPDATES_LIMIT", 100)
+    monkeypatch.setattr(worker_impl, "DEFAULT_BOOTSTRAP_GETUPDATES_MAX_PAGES", 20)
+
+    latest = worker_impl._bootstrap_latest_update_id(
+        bot_token=BOT_TOKEN,
+        timeout_seconds=10,
+        start_after_update_id=205,
+    )
+
+    assert latest == 220
+    assert len(calls) == 1
+    assert int(calls[0].get("offset") or 0) == 206
 
 
 def test_answer_callback_query_ignores_stale_query_error(monkeypatch) -> None:
@@ -5986,6 +6116,31 @@ def test_atomic_write_json_retries_plain_permission_error_on_windows(tmp_path: P
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["ok"] is True
     assert attempts["count"] == 3
+
+
+def test_atomic_write_json_exhausts_retry_budget_for_persistent_permission_error(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "payload.json"
+    attempts = {"count": 0}
+    original_attempts = worker_impl.DEFAULT_ATOMIC_WRITE_REPLACE_MAX_ATTEMPTS
+
+    def always_blocked(src: os.PathLike[str] | str, dst: os.PathLike[str] | str) -> None:
+        attempts["count"] += 1
+        raise PermissionError("replace blocked")
+
+    monkeypatch.setattr(worker_impl.os, "replace", always_blocked)
+    monkeypatch.setattr(worker_impl.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(worker_impl, "DEFAULT_ATOMIC_WRITE_REPLACE_MAX_ATTEMPTS", 4)
+
+    try:
+        worker_impl._atomic_write_json(path, {"ok": True})
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("expected PermissionError")
+    finally:
+        monkeypatch.setattr(worker_impl, "DEFAULT_ATOMIC_WRITE_REPLACE_MAX_ATTEMPTS", original_attempts)
+
+    assert attempts["count"] == 4
 
 
 def test_build_process_log_section_folds_repeated_init_lines(tmp_path: Path) -> None:

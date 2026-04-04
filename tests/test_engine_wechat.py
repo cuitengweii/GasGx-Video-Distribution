@@ -1052,3 +1052,126 @@ def test_append_comment_reply_markdown_writes_json_code_block(tmp_path) -> None:
     assert "```json" in body
     assert '"fingerprint": "abc123"' in body
     assert '"reply_text": "喜欢的就喜欢"' in body
+
+
+def test_probe_platform_session_ready_keeps_browser_connected_for_wechat_keepalive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disconnect_calls: list[int] = []
+    ready_marks: list[dict[str, Any]] = []
+
+    class FakePage:
+        url = "https://channels.weixin.qq.com/platform/post/create"
+
+    monkeypatch.setattr(engine, "_connect_chrome", lambda **_kwargs: FakePage())
+    monkeypatch.setattr(engine, "_stabilize_platform_session_page", lambda page, **_kwargs: page)
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {
+            "needs_login": False,
+            "reason": "",
+            "url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_page_current_url",
+        lambda *_args, **_kwargs: "https://channels.weixin.qq.com/platform/post/create",
+    )
+    monkeypatch.setattr(engine, "_is_platform_session_monitor_relevant_url", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_has_recent_platform_session_ready", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_maybe_touch_wechat_login_keepalive",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "performed": False,
+            "skipped": True,
+            "reason": "interval_not_due",
+            "last_keepalive_at": 100.0,
+            "interval_seconds": 1800,
+        },
+    )
+    monkeypatch.setattr(engine, "_disconnect_chrome_page_quietly", lambda *_args, **_kwargs: disconnect_calls.append(1))
+    monkeypatch.setattr(
+        engine,
+        "_mark_platform_session_ready",
+        lambda *args, **kwargs: ready_marks.append({"args": args, "kwargs": kwargs}),
+    )
+
+    result = engine.probe_platform_session_via_debug_port(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        debug_port=9334,
+        chrome_user_data_dir="D:/profiles/wechat",
+        disconnect_after_probe=False,
+        enable_wechat_keepalive=True,
+    )
+
+    assert result["status"] == "ready"
+    assert result["platform"] == "wechat"
+    assert result["keepalive"]["enabled"] is True
+    assert result["keepalive"]["performed"] is False
+    assert disconnect_calls == []
+    assert len(ready_marks) == 1
+
+
+def test_probe_platform_session_ready_records_wechat_keepalive_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready_marks: list[dict[str, Any]] = []
+
+    class FakePage:
+        url = "https://channels.weixin.qq.com/platform/post/create"
+
+    monkeypatch.setattr(engine, "_connect_chrome", lambda **_kwargs: FakePage())
+    monkeypatch.setattr(engine, "_stabilize_platform_session_page", lambda page, **_kwargs: page)
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {
+            "needs_login": False,
+            "reason": "",
+            "url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_page_current_url",
+        lambda *_args, **_kwargs: "https://channels.weixin.qq.com/platform/post/create",
+    )
+    monkeypatch.setattr(engine, "_is_platform_session_monitor_relevant_url", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_has_recent_platform_session_ready", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_maybe_touch_wechat_login_keepalive",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "performed": True,
+            "skipped": False,
+            "reason": "",
+            "keepalive_at": 123.0,
+            "current_url": "https://channels.weixin.qq.com/platform/post/create",
+            "interval_seconds": 1800,
+        },
+    )
+    monkeypatch.setattr(engine, "_disconnect_chrome_page_quietly", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_mark_platform_session_ready",
+        lambda *args, **kwargs: ready_marks.append({"args": args, "kwargs": kwargs}),
+    )
+
+    result = engine.probe_platform_session_via_debug_port(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        debug_port=9334,
+        chrome_user_data_dir="D:/profiles/wechat",
+        enable_wechat_keepalive=True,
+    )
+
+    assert result["status"] == "ready"
+    assert result["keepalive"]["performed"] is True
+    assert len(ready_marks) == 1
+    assert ready_marks[0]["kwargs"]["keepalive_at"] == 123.0

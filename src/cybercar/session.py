@@ -30,6 +30,8 @@ def _profile_dir(platform: str) -> Path:
 
 def _open_url(platform: str) -> str:
     token = str(platform or "").strip().lower()
+    if token == "wechat":
+        return str(engine.PLATFORM_CREATE_POST_URLS.get("wechat") or engine.CREATE_POST_URL)
     if token in {"x", "collect"}:
         return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.X_LOGIN_URL)
     return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.CREATE_POST_URL)
@@ -39,11 +41,14 @@ def login_status(platform: str) -> dict[str, Any]:
     default_port, wechat_port, x_port = _chrome_settings()
     token = str(platform or "").strip().lower()
     debug_port = wechat_port if token == "wechat" else (x_port if token in {"x", "collect"} else default_port)
+    enable_wechat_keepalive = token == "wechat"
     return engine.probe_platform_session_via_debug_port(
         platform_name=token,
         open_url=_open_url(token),
         debug_port=debug_port,
         chrome_user_data_dir=str(_profile_dir(token)),
+        disconnect_after_probe=not enable_wechat_keepalive,
+        enable_wechat_keepalive=enable_wechat_keepalive,
     )
 
 

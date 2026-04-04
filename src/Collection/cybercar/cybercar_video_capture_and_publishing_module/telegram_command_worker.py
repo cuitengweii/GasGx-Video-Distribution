@@ -115,6 +115,12 @@ DEFAULT_POLL_NETWORK_FAILURE_RESTART_THRESHOLD = 6
 DEFAULT_POLL_NETWORK_FAILURE_RESTART_MIN_SPAN_SECONDS = 600
 DEFAULT_POLL_NETWORK_ERROR_BACKOFF_MAX_SECONDS = 30
 DEFAULT_TELEGRAM_POST_RETRY_COUNT = 3
+DEFAULT_SET_COMMANDS_REFRESH_SECONDS = 6 * 3600
+DEFAULT_SET_COMMANDS_FAILURE_BACKOFF_SECONDS = 10 * 60
+DEFAULT_ATOMIC_WRITE_REPLACE_MAX_ATTEMPTS = 12
+DEFAULT_ATOMIC_WRITE_REPLACE_BACKOFF_BASE_SECONDS = 0.05
+DEFAULT_BOOTSTRAP_GETUPDATES_LIMIT = 100
+DEFAULT_BOOTSTRAP_GETUPDATES_MAX_PAGES = 20
 DEFAULT_HOME_FORCE_NEW_DEBOUNCE_SECONDS = 6
 DEFAULT_HOME_SHORTCUT_DEBOUNCE_SECONDS = 3600
 DEFAULT_HOME_SHORTCUT_KEYBOARD_VERSION = 6
@@ -500,7 +506,6 @@ _TELEGRAM_TRANSPORT_ERROR_MARKERS = (
     "connect time out",
     "read timeout",
     "readtimeout",
-    "timed out",
     "max retries exceeded",
     "temporary failure",
     "name or service not known",
@@ -516,12 +521,26 @@ _TELEGRAM_TRANSPORT_ERROR_MARKERS = (
     "upstream connect error",
 )
 
+_TELEGRAM_TIMEOUT_CONTEXT_MARKERS = (
+    "api.telegram.org",
+    "httpsconnectionpool",
+    "getupdates",
+    "answercallbackquery",
+    "setmycommands",
+    "sendmessage",
+    "editmessagetext",
+)
+
 
 def _is_telegram_transport_error_text(value: str) -> bool:
     text = str(value or "").strip().lower()
     if not text:
         return False
-    return any(marker in text for marker in _TELEGRAM_TRANSPORT_ERROR_MARKERS)
+    if any(marker in text for marker in _TELEGRAM_TRANSPORT_ERROR_MARKERS):
+        return True
+    if "timed out" in text:
+        return any(marker in text for marker in _TELEGRAM_TIMEOUT_CONTEXT_MARKERS)
+    return False
 
 
 def _is_telegram_rate_limit_error_text(value: str) -> bool:
@@ -550,6 +569,26 @@ def _is_telegram_poll_conflict_error_text(value: str) -> bool:
     if not text:
         return False
     return "terminated by other getupdates request" in text
+
+
+def _is_prefilter_queue_lock_timeout_error_text(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if "timed out waiting for lock" not in text:
+        return False
+    return "telegram_prefilter_queue.json" in text
+
+
+def _is_prefilter_queue_io_contention_error_text(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if "telegram_prefilter_queue.json" not in text:
+        return False
+    if "winerror 5" in text or "permissionerror" in text or "access is denied" in text:
+        return True
+    return ".tmp-" in text and "->" in text
 
 
 def _is_stale_callback_query_error_text(value: str) -> bool:
@@ -996,6 +1035,83 @@ def _set_clickable_commands(*, bot_token: str, timeout_seconds: int, log_file: P
     if not bool(payload.get("ok")):
         raise RuntimeError(str(payload.get("description") or "setMyCommands failed"))
     _append_log(log_file, "[Worker] setMyCommands updated: /start -> 打开首页")
+
+
+def _parse_worker_timestamp(text: str) -> Optional[float]:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").timestamp())
+    except Exception:
+        return None
+
+
+def _should_attempt_set_commands(
+    state: Mapping[str, Any],
+    *,
+    now_epoch: Optional[float] = None,
+    refresh_seconds: int = DEFAULT_SET_COMMANDS_REFRESH_SECONDS,
+    failure_backoff_seconds: int = DEFAULT_SET_COMMANDS_FAILURE_BACKOFF_SECONDS,
+) -> bool:
+    now_value = float(now_epoch if now_epoch is not None else time.time())
+    success_ts = _parse_worker_timestamp(str(state.get("set_commands_updated_at") or ""))
+    if success_ts is not None and (now_value - success_ts) < float(max(0, int(refresh_seconds or 0))):
+        return False
+    failure_text = str(state.get("set_commands_last_error") or "").strip()
+    if not failure_text:
+        return True
+    attempt_ts = _parse_worker_timestamp(str(state.get("set_commands_last_attempt_at") or ""))
+    if attempt_ts is None:
+        return True
+    return (now_value - attempt_ts) >= float(max(0, int(failure_backoff_seconds or 0)))
+
+
+def _max_update_id_from_updates(updates: Sequence[Any]) -> int:
+    max_update_id = 0
+    for row in updates:
+        if not isinstance(row, dict):
+            continue
+        max_update_id = max(max_update_id, int(row.get("update_id") or 0))
+    return max_update_id
+
+
+def _bootstrap_latest_update_id(
+    *,
+    bot_token: str,
+    timeout_seconds: int,
+    start_after_update_id: int = 0,
+) -> int:
+    cursor_update_id = max(0, int(start_after_update_id or 0))
+    max_update_id = cursor_update_id
+    page_limit = max(1, int(DEFAULT_BOOTSTRAP_GETUPDATES_LIMIT))
+    max_pages = max(1, int(DEFAULT_BOOTSTRAP_GETUPDATES_MAX_PAGES))
+    for _ in range(max_pages):
+        params: Dict[str, Any] = {
+            "timeout": 0,
+            "limit": page_limit,
+            "allowed_updates": json.dumps(TELEGRAM_ALLOWED_UPDATES, ensure_ascii=True),
+        }
+        if cursor_update_id > 0:
+            params["offset"] = cursor_update_id + 1
+        response = _telegram_api(
+            bot_token=bot_token,
+            method="getUpdates",
+            params=params,
+            timeout_seconds=max(5, int(timeout_seconds or 10)),
+            use_post=False,
+        )
+        rows = response.get("result") if isinstance(response, dict) else []
+        if not isinstance(rows, list) or not rows:
+            break
+        page_max_update_id = _max_update_id_from_updates(rows)
+        if page_max_update_id <= cursor_update_id:
+            break
+        cursor_update_id = page_max_update_id
+        max_update_id = max(max_update_id, page_max_update_id)
+        if len(rows) < page_limit:
+            break
+    return max_update_id
 
 
 def _extract_message(update: Dict[str, Any]) -> Optional[Dict[str, str]]:
@@ -5240,7 +5356,9 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         last_error: Optional[BaseException] = None
-        for attempt in range(5):
+        max_attempts = max(1, int(DEFAULT_ATOMIC_WRITE_REPLACE_MAX_ATTEMPTS))
+        base_backoff = max(0.01, float(DEFAULT_ATOMIC_WRITE_REPLACE_BACKOFF_BASE_SECONDS))
+        for attempt in range(max_attempts):
             try:
                 os.replace(tmp, path)
                 last_error = None
@@ -5252,9 +5370,9 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
                     winerror in {5, 32}
                     or isinstance(exc, PermissionError)
                 )
-                if not retryable_windows_lock_error or attempt >= 4:
+                if not retryable_windows_lock_error or attempt >= (max_attempts - 1):
                     raise
-                time.sleep(0.05 * (attempt + 1))
+                time.sleep(min(1.0, base_backoff * float(2 ** min(attempt, 5))))
         if last_error is not None:
             raise last_error
     finally:
@@ -8288,8 +8406,8 @@ def _probe_platform_login_after_publish_failure(
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
         return "failed", str(error_text or "").strip()
-    notice_chain_confirmed = bool(text_result.get("sent")) or bool(result.get("sent")) or bool(result.get("skipped")) or bool(result.get("transport_error"))
-    if not notice_chain_confirmed:
+    qr_chain_confirmed = bool(result.get("sent")) or bool(result.get("skipped")) or bool(result.get("transport_error"))
+    if not qr_chain_confirmed:
         _append_log(
             log_file,
             f"[Worker] immediate publish login recheck kept original failure platform={platform_token} item={item_id} "
@@ -14897,7 +15015,7 @@ def main() -> int:
 
     try:
         try:
-            _safe_update_worker_state(
+            set_commands_state = _safe_update_worker_state(
                 state_file,
                 log_file,
                 pid=os.getpid(),
@@ -14906,16 +15024,40 @@ def main() -> int:
                 startup_stage="set_commands",
                 last_error="",
             )
-            _set_clickable_commands(
-                bot_token=bot_token,
-                timeout_seconds=max(10, min(timeout_seconds, 60)),
-                log_file=log_file,
-            )
+            if _should_attempt_set_commands(set_commands_state):
+                attempt_at = _now_text()
+                _safe_update_worker_state(
+                    state_file,
+                    log_file,
+                    pid=os.getpid(),
+                    set_commands_last_attempt_at=attempt_at,
+                )
+                _set_clickable_commands(
+                    bot_token=bot_token,
+                    timeout_seconds=max(10, min(timeout_seconds, 60)),
+                    log_file=log_file,
+                )
+                _safe_update_worker_state(
+                    state_file,
+                    log_file,
+                    pid=os.getpid(),
+                    set_commands_updated_at=_now_text(),
+                    set_commands_last_error="",
+                )
+            else:
+                _append_log(log_file, "[Worker] setMyCommands skipped: recent success/failure backoff active.")
         except Exception as exc:
+            error_text = _exception_text(exc)
             _append_log(
                 log_file,
                 "[Worker] setMyCommands failed; continue without blocking worker: "
-                f"{_exception_text(exc)}",
+                f"{error_text}",
+            )
+            _safe_update_worker_state(
+                state_file,
+                log_file,
+                pid=os.getpid(),
+                set_commands_last_error=error_text,
             )
 
         state = _safe_update_worker_state(
@@ -14933,6 +15075,7 @@ def main() -> int:
             offset = last_processed
         if last_processed <= 0 and offset > 0:
             last_processed = offset
+        bootstrap_fast_forward_pending = False
 
         # On first run, move cursor to current latest update to avoid replaying historical messages.
         if offset <= 0 and last_processed <= 0:
@@ -14946,32 +15089,21 @@ def main() -> int:
                     startup_stage="bootstrap_updates",
                     last_error="",
                 )
-                bootstrap_resp = _telegram_api(
+                max_bootstrap_id = _bootstrap_latest_update_id(
                     bot_token=bot_token,
-                    method="getUpdates",
-                    params={
-                        "timeout": 0,
-                        "allowed_updates": json.dumps(TELEGRAM_ALLOWED_UPDATES, ensure_ascii=True),
-                    },
                     timeout_seconds=10,
-                    use_post=False,
                 )
-                bootstrap_updates = bootstrap_resp.get("result") if isinstance(bootstrap_resp, dict) else []
-                if isinstance(bootstrap_updates, list) and bootstrap_updates:
-                    max_bootstrap_id = 0
-                    for row in bootstrap_updates:
-                        if not isinstance(row, dict):
-                            continue
-                        max_bootstrap_id = max(max_bootstrap_id, int(row.get("update_id") or 0))
-                    if max_bootstrap_id > 0:
-                        offset = max_bootstrap_id
-                        last_processed = max_bootstrap_id
-                        _safe_save_offset(offset_file, offset, log_file)
-                        state["last_processed_update_id"] = last_processed
-                        state["updated_at"] = _now_text()
-                        _safe_save_state(state_file, state, log_file)
+                if max_bootstrap_id > 0:
+                    offset = max_bootstrap_id
+                    last_processed = max_bootstrap_id
+                    _safe_save_offset(offset_file, offset, log_file)
+                    state["last_processed_update_id"] = last_processed
+                    state["updated_at"] = _now_text()
+                    _safe_save_state(state_file, state, log_file)
             except Exception as exc:
                 _append_log(log_file, f"[Worker] bootstrap getUpdates failed: {exc}")
+                if offset <= 0 and last_processed <= 0:
+                    bootstrap_fast_forward_pending = True
 
         _append_log(
             log_file,
@@ -15069,6 +15201,7 @@ def main() -> int:
                     method="getUpdates",
                     params={
                         "offset": offset + 1,
+                        "limit": max(1, int(DEFAULT_BOOTSTRAP_GETUPDATES_LIMIT)),
                         "timeout": poll_timeout,
                         "allowed_updates": json.dumps(TELEGRAM_ALLOWED_UPDATES, ensure_ascii=True),
                     },
@@ -15078,6 +15211,48 @@ def main() -> int:
                 updates = updates_resp.get("result") if isinstance(updates_resp, dict) else []
                 if not isinstance(updates, list):
                     updates = []
+                if bootstrap_fast_forward_pending and offset <= 0 and last_processed <= 0:
+                    first_page_max_update_id = _max_update_id_from_updates(updates)
+                    if first_page_max_update_id > 0:
+                        max_update_id = first_page_max_update_id
+                        if len(updates) >= max(1, int(DEFAULT_BOOTSTRAP_GETUPDATES_LIMIT)):
+                            try:
+                                max_update_id = max(
+                                    max_update_id,
+                                    _bootstrap_latest_update_id(
+                                        bot_token=bot_token,
+                                        timeout_seconds=api_timeout_seconds,
+                                        start_after_update_id=first_page_max_update_id,
+                                    ),
+                                )
+                            except Exception as scan_exc:
+                                _append_log(
+                                    log_file,
+                                    (
+                                        "[Worker] bootstrap fallback paging scan failed; "
+                                        f"using first page cursor={first_page_max_update_id}: {_exception_text(scan_exc)}"
+                                    ),
+                                )
+                        offset = max_update_id
+                        last_processed = max_update_id
+                        _safe_save_offset(offset_file, offset, log_file)
+                        _safe_update_worker_state(
+                            state_file,
+                            log_file,
+                            pid=os.getpid(),
+                            last_processed_update_id=last_processed,
+                            offset=offset,
+                        )
+                        _append_log(
+                            log_file,
+                            (
+                                "[Worker] bootstrap fallback fast-forward applied: "
+                                f"last_processed={last_processed}, first_page_max={first_page_max_update_id}, "
+                                f"skipped_updates={len(updates)}"
+                            ),
+                        )
+                        bootstrap_fast_forward_pending = False
+                        continue
                 if suppressed_poll_transport_warnings > 0:
                     _append_log(
                         log_file,
@@ -15202,7 +15377,15 @@ def main() -> int:
                 poll_transport_error = _is_telegram_poll_network_error(exc)
                 poll_rate_limit_error = _is_telegram_rate_limit_error_text(error_text)
                 poll_conflict_error = _is_telegram_poll_conflict_error_text(error_text)
-                poll_retryable_error = poll_transport_error or poll_rate_limit_error or poll_conflict_error
+                poll_queue_lock_timeout_error = _is_prefilter_queue_lock_timeout_error_text(error_text)
+                poll_queue_io_contention_error = _is_prefilter_queue_io_contention_error_text(error_text)
+                poll_retryable_error = (
+                    poll_transport_error
+                    or poll_rate_limit_error
+                    or poll_conflict_error
+                    or poll_queue_lock_timeout_error
+                    or poll_queue_io_contention_error
+                )
                 consecutive_poll_failures += 1
                 if poll_retryable_error:
                     if consecutive_poll_failures == 1 or poll_failure_burst_started_at <= 0:
@@ -15235,7 +15418,15 @@ def main() -> int:
                             else (
                                 "[Worker] Telegram poll conflict warning: "
                                 if poll_conflict_error
-                                else "[Worker] Telegram poll transport warning: "
+                                else (
+                                    "[Worker] Telegram poll queue lock warning: "
+                                    if poll_queue_lock_timeout_error
+                                    else (
+                                        "[Worker] Telegram poll queue io warning: "
+                                        if poll_queue_io_contention_error
+                                        else "[Worker] Telegram poll transport warning: "
+                                    )
+                                )
                             )
                         )
                         _append_log(
@@ -15257,7 +15448,15 @@ def main() -> int:
                     state_file,
                     pid=os.getpid(),
                     status="polling" if poll_retryable_error else "error",
-                    startup_stage="poll_transport_retry" if poll_retryable_error else "",
+                    startup_stage=(
+                        "prefilter_queue_lock_retry"
+                        if poll_queue_lock_timeout_error
+                        else (
+                            "prefilter_queue_write_retry"
+                            if poll_queue_io_contention_error
+                            else ("poll_transport_retry" if poll_retryable_error else "")
+                        )
+                    ),
                     worker_heartbeat_at=_now_text(),
                     last_error=(
                         "telegram poll rate limited; retrying with backoff"
@@ -15266,9 +15465,17 @@ def main() -> int:
                         "telegram poll conflict detected; another poller may be active"
                             if poll_conflict_error
                             else (
-                            "telegram poll transport jitter; send path remains retryable"
-                                if poll_transport_error
-                            else error_text
+                            "prefilter queue lock contention; retrying with backoff"
+                                if poll_queue_lock_timeout_error
+                                else (
+                                    "prefilter queue io contention; retrying with backoff"
+                                    if poll_queue_io_contention_error
+                                    else (
+                                        "telegram poll transport jitter; send path remains retryable"
+                                        if poll_transport_error
+                                        else error_text
+                                    )
+                                )
                             )
                         )
                     ),

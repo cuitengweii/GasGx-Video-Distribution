@@ -990,7 +990,16 @@ def _hide_redundant_publish_success_sections(
     if token != "publish_result" or status_token not in {"success", "done"}:
         return normalized
     summary_title = "\u6267\u884c\u6458\u8981"
-    return [section for section in normalized if str(section.get("title") or "").strip() != summary_title]
+    if not normalized:
+        return normalized
+    summary_sections = [section for section in normalized if str(section.get("title") or "").strip() == summary_title]
+    if not summary_sections:
+        return normalized
+    non_summary_sections = [section for section in normalized if str(section.get("title") or "").strip() != summary_title]
+    has_focus_section = any(str(section.get("title") or "").strip() == "\u4eba\u5de5\u5173\u6ce8" for section in normalized)
+    if has_focus_section or not non_summary_sections:
+        return non_summary_sections
+    return normalized
 
 
 def build_reply_markup(actions: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any]:
