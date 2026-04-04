@@ -69,6 +69,20 @@ def _make_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
+def _read_jsonl(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, object]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = str(raw or "").strip()
+        if not line:
+            continue
+        payload = json.loads(line)
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
 def _write_profiles_config(repo_root: Path, payload: dict[str, object]) -> None:
     config_dir = repo_root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -4858,6 +4872,9 @@ def test_probe_platform_login_after_publish_failure_uses_explicit_login_error_wh
     assert len(text_notices) == 1
     assert "Telegram" in message
     assert len(qr_requests) == 1
+    error_events = _read_jsonl(workspace / worker_impl.DEFAULT_ERROR_EVENT_FILE)
+    assert any(str(event.get("category") or "") == "wechat_login_probe_status_check_failed" for event in error_events)
+    assert any(str(event.get("error_type") or "") == "RuntimeError" for event in error_events)
 
 
 def test_probe_platform_login_after_publish_failure_keeps_login_required_when_qr_transport_fails(tmp_path: Path, monkeypatch) -> None:
@@ -4981,6 +4998,9 @@ def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_p
     assert updated["platform_results"]["wechat"]["status"] == "login_required"
     assert "二维码已发送到 Telegram" in str(updated["platform_results"]["wechat"]["error"])
     assert len(feedbacks) == 2
+    error_events = _read_jsonl(workspace / worker_impl.DEFAULT_ERROR_EVENT_FILE)
+    categories = [str(event.get("category") or "") for event in error_events]
+    assert "immediate_publish_platform_failed" in categories
     assert "视频号需要重新登录" in str(feedbacks[0]["title"])
     assert "即采即发发布失败" in str(feedbacks[1]["title"])
 
@@ -5210,6 +5230,10 @@ def test_publish_platform_job_wechat_failure_keeps_original_error_when_qr_probe_
     assert updated["platform_results"]["wechat"]["status"] == "failed"
     assert updated["platform_results"]["wechat"]["error"] == original_error
     assert len(feedbacks) == 2
+    error_events = _read_jsonl(workspace / worker_impl.DEFAULT_ERROR_EVENT_FILE)
+    categories = [str(event.get("category") or "") for event in error_events]
+    assert "wechat_login_probe_qr_unconfirmed" in categories
+    assert "immediate_publish_platform_failed" in categories
     assert "视频号发布失败" in str(feedbacks[0]["title"])
     assert "即采即发发布失败" in str(feedbacks[1]["title"])
 

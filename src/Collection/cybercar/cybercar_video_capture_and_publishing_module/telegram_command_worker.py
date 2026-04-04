@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
@@ -102,6 +103,7 @@ DEFAULT_HOME_STATE_FILE = Path("runtime") / "telegram_command_worker_home.json"
 DEFAULT_HOME_SHORTCUT_STATE_FILE = Path("runtime") / "telegram_command_worker_home_shortcut.json"
 DEFAULT_ACTION_QUEUE_FILE = Path("runtime") / "telegram_command_worker_action_queue.json"
 DEFAULT_AUDIT_FILE = Path("runtime") / "telegram_command_worker_audit.jsonl"
+DEFAULT_ERROR_EVENT_FILE = Path("runtime") / "logs" / "telegram_command_worker_errors.jsonl"
 DEFAULT_LOG_SUBDIR = Path("runtime") / "logs"
 DEFAULT_POLLER_LOCK_DIR = Path("runtime") / "telegram_command_worker.poller.lock"
 DEFAULT_POLLER_LOCK_STARTUP_GRACE_SECONDS = 15
@@ -480,6 +482,89 @@ def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _error_event_file_path(workspace: Path) -> Path:
+    return (workspace / DEFAULT_ERROR_EVENT_FILE).resolve()
+
+
+def _sanitize_error_context_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 4:
+        return str(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        return text if len(text) <= 4000 else (text[:4000] + "...(truncated)")
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        normalized: dict[str, Any] = {}
+        for idx, (key, inner) in enumerate(value.items()):
+            if idx >= 64:
+                normalized["__truncated__"] = f"+{len(value) - idx} keys"
+                break
+            normalized[str(key)] = _sanitize_error_context_value(inner, depth=depth + 1)
+        return normalized
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        normalized_list: list[Any] = []
+        for idx, inner in enumerate(value):
+            if idx >= 64:
+                normalized_list.append(f"...(+{len(value) - idx} items)")
+                break
+            normalized_list.append(_sanitize_error_context_value(inner, depth=depth + 1))
+        return normalized_list
+    return str(value)
+
+
+def _record_error_event(
+    *,
+    workspace: Optional[Path],
+    log_file: Optional[Path],
+    category: str,
+    message: str,
+    error_text: str = "",
+    exc: Optional[BaseException] = None,
+    context: Optional[Mapping[str, Any]] = None,
+    retryable: Optional[bool] = None,
+    severity: str = "error",
+) -> None:
+    event_file: Optional[Path] = None
+    if isinstance(workspace, Path):
+        event_file = _error_event_file_path(workspace)
+    elif isinstance(log_file, Path):
+        event_file = (log_file.parent / "telegram_command_worker_errors.jsonl").resolve()
+    if event_file is None:
+        return
+    payload: dict[str, Any] = {
+        "ts": _now_text(),
+        "pid": int(os.getpid()),
+        "category": str(category or "").strip() or "unknown",
+        "severity": str(severity or "").strip().lower() or "error",
+        "message": str(message or "").strip(),
+    }
+    effective_error = str(error_text or "").strip()
+    if not effective_error and exc is not None:
+        effective_error = str(exc or "").strip()
+    if effective_error:
+        payload["error"] = effective_error
+    if exc is not None:
+        payload["error_type"] = type(exc).__name__
+        try:
+            stack_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
+        except Exception:
+            stack_text = ""
+        if stack_text:
+            payload["stack"] = stack_text[:12000] + ("...(truncated)" if len(stack_text) > 12000 else "")
+    if retryable is not None:
+        payload["retryable"] = bool(retryable)
+    if isinstance(context, Mapping) and context:
+        payload["context"] = _sanitize_error_context_value(context)
+    try:
+        _append_jsonl(event_file, payload)
+    except Exception as write_exc:
+        if isinstance(log_file, Path):
+            _append_log(log_file, f"[Worker] error event write failed category={payload.get('category')}: {write_exc}")
 
 
 def _load_offset(path: Path) -> int:
@@ -7165,6 +7250,67 @@ def _should_probe_platform_login_after_publish_failure(platform: str, error_text
     return True
 
 
+def _looks_like_wechat_unconfirmed_publish_failure(error_text: str) -> bool:
+    raw = str(error_text or "").strip().lower()
+    if not raw:
+        return False
+    if "e_publish_unconfirmed_draft_saved" in raw:
+        return True
+    return "wechat" in raw and "publish was not confirmed" in raw
+
+
+def _resolve_platform_result_log_path_from_item(
+    *,
+    workspace: Path,
+    item: Mapping[str, Any],
+    platform: str,
+) -> Optional[Path]:
+    results = _normalize_platform_results(item.get("platform_results"))
+    result = results.get(str(platform or "").strip().lower(), {})
+    if not isinstance(result, dict):
+        return None
+    log_path = _resolve_process_log_path(workspace, str(result.get("log_path") or "").strip())
+    if log_path is None or not log_path.exists():
+        return None
+    return log_path
+
+
+def _should_promote_wechat_unconfirmed_publish_to_success(
+    *,
+    workspace: Path,
+    item: Mapping[str, Any],
+    platform: str,
+    error_text: str,
+) -> bool:
+    platform_token = str(platform or "").strip().lower()
+    if platform_token != "wechat":
+        return False
+    if not _looks_like_wechat_unconfirmed_publish_failure(error_text):
+        return False
+    if _looks_like_explicit_login_gate_error(error_text):
+        return False
+    log_path = _resolve_platform_result_log_path_from_item(workspace=workspace, item=item, platform=platform_token)
+    if log_path is None:
+        return False
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="ignore")[-24000:].lower()
+    except Exception:
+        return False
+    submit_markers = (
+        "clicked publish button by primary selector",
+        "publish button click accepted",
+        "clicked publish button",
+    )
+    if not any(marker in tail for marker in submit_markers):
+        return False
+    hard_failure_markers = (
+        "publish button was not located",
+        "login required persisted",
+        "wechat page shows publish failure marker",
+    )
+    return not any(marker in tail for marker in hard_failure_markers)
+
+
 def _upsert_immediate_candidate_item(
     *,
     workspace: Path,
@@ -8370,6 +8516,20 @@ def _probe_platform_login_after_publish_failure(
         )
     except Exception as exc:
         _append_log(log_file, f"[Worker] immediate publish login recheck status probe failed platform={platform_token} item={item_id} error={exc}")
+        _record_error_event(
+            workspace=workspace,
+            log_file=log_file,
+            category="wechat_login_probe_status_check_failed",
+            message="immediate publish login recheck status probe failed",
+            exc=exc,
+            context={
+                "item_id": item_id,
+                "platform": platform_token,
+                "open_url": str(runtime_ctx.get("open_url") or "").strip(),
+            },
+            retryable=True,
+            severity="warning",
+        )
         login_status = {"needs_login": False, "probe_error": str(exc)}
     if not isinstance(login_status, dict):
         login_status = {"needs_login": False}
@@ -8405,6 +8565,16 @@ def _probe_platform_login_after_publish_failure(
         prefer_login_entry=True,
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
+        _record_error_event(
+            workspace=workspace,
+            log_file=log_file,
+            category="wechat_login_probe_qr_unavailable",
+            message="immediate publish login recheck qr result did not confirm needs_login",
+            error_text=str(result if result is not None else ""),
+            context={"item_id": item_id, "platform": platform_token},
+            retryable=True,
+            severity="warning",
+        )
         return "failed", str(error_text or "").strip()
     qr_chain_confirmed = bool(result.get("sent")) or bool(result.get("skipped")) or bool(result.get("transport_error"))
     if not qr_chain_confirmed:
@@ -8413,6 +8583,23 @@ def _probe_platform_login_after_publish_failure(
             f"[Worker] immediate publish login recheck kept original failure platform={platform_token} item={item_id} "
             f"text_sent={bool(text_result.get('sent'))} qr_sent={bool(result.get('sent'))} "
             f"qr_skipped={bool(result.get('skipped'))} qr_transport_error={bool(result.get('transport_error'))}",
+        )
+        _record_error_event(
+            workspace=workspace,
+            log_file=log_file,
+            category="wechat_login_probe_qr_unconfirmed",
+            message="immediate publish login recheck qr chain not confirmed; keep original failure",
+            error_text=str(error_text or "").strip(),
+            context={
+                "item_id": item_id,
+                "platform": platform_token,
+                "text_sent": bool(text_result.get("sent")),
+                "qr_sent": bool(result.get("sent")),
+                "qr_skipped": bool(result.get("skipped")),
+                "qr_transport_error": bool(result.get("transport_error")),
+            },
+            retryable=True,
+            severity="warning",
         )
         return "failed", str(error_text or "").strip()
     notices: list[str] = []
@@ -11865,6 +12052,15 @@ def _publish_immediate_candidate_platform(
     media_kind = _normalize_immediate_collect_media_kind(str(item.get("media_kind") or "video"))
     processed_name = str(item.get("processed_name") or item.get("video_name") or "").strip()
     if not processed_name:
+        _record_error_event(
+            workspace=workspace,
+            log_file=log_file,
+            category="immediate_publish_precheck_failed",
+            message="missing processed media name before immediate publish",
+            context={"item_id": item_id, "platform": str(platform or "").strip().lower()},
+            retryable=False,
+            severity="warning",
+        )
         _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
@@ -11887,6 +12083,20 @@ def _publish_immediate_candidate_platform(
         if resolved_target is not None:
             target = Path(resolved_target).resolve()
     if not target.exists():
+        _record_error_event(
+            workspace=workspace,
+            log_file=log_file,
+            category="immediate_publish_precheck_failed",
+            message="processed target file missing before immediate publish",
+            context={
+                "item_id": item_id,
+                "platform": str(platform or "").strip().lower(),
+                "processed_name": processed_name,
+                "target": str(target),
+            },
+            retryable=False,
+            severity="warning",
+        )
         _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
@@ -11901,6 +12111,21 @@ def _publish_immediate_candidate_platform(
         target=target,
         source_url=str(item.get("source_url") or "").strip(),
     ):
+        _record_error_event(
+            workspace=workspace,
+            log_file=log_file,
+            category="immediate_publish_precheck_failed",
+            message="processed target does not match candidate source url",
+            context={
+                "item_id": item_id,
+                "platform": str(platform or "").strip().lower(),
+                "processed_name": processed_name,
+                "target": str(target),
+                "source_url": str(item.get("source_url") or "").strip(),
+            },
+            retryable=False,
+            severity="warning",
+        )
         _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
@@ -11988,19 +12213,62 @@ def _publish_immediate_candidate_platform(
                 error_text=error_text,
             )
             failure = _describe_platform_failure(platform, error_text)
+        promoted_unconfirmed = False
+        if result_status == "failed" and _should_promote_wechat_unconfirmed_publish_to_success(
+            workspace=workspace,
+            item=item,
+            platform=platform,
+            error_text=error_text,
+        ):
+            promoted_unconfirmed = True
+            result_status = "success"
+            error_text = ""
+            failure = {"reason": "", "category": "", "suggestion": "", "raw_signal": ""}
+        if result_status in {"failed", "login_required"}:
+            _record_error_event(
+                workspace=workspace,
+                log_file=log_file,
+                category="immediate_publish_platform_failed",
+                message="immediate publish platform execution reported failure",
+                error_text=error_text or "发布失败",
+                context={
+                    "item_id": item_id,
+                    "platform": str(platform or "").strip().lower(),
+                    "status": result_status,
+                    "processed_name": processed_name,
+                    "target": str(target),
+                    "failure_category": str(failure.get("category") or "").strip(),
+                },
+                retryable=(result_status == "login_required"),
+                severity="warning",
+            )
+        updates = {
+            "status": result_status,
+            "error": error_text or "发布失败",
+            "failure_reason": str(failure.get("reason") or "").strip(),
+            "failure_category": str(failure.get("category") or "").strip(),
+            "failure_suggestion": str(failure.get("suggestion") or "").strip(),
+        }
+        if result_status == "success":
+            updates.update(
+                {
+                    "published_at": str(getattr(event, "published_at", "") or _now_text()),
+                    "publish_id": str(getattr(event, "publish_id", "") or "").strip(),
+                    "error": "",
+                    "failure_reason": "",
+                    "failure_category": "",
+                    "failure_suggestion": "",
+                }
+            )
+            if promoted_unconfirmed and not str(updates.get("publish_id") or "").strip():
+                updates["publish_id"] = "wechat-unconfirmed-auto-confirm"
         _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
-            updates={
-                "status": result_status,
-                "error": error_text or "发布失败",
-                "failure_reason": str(failure.get("reason") or "").strip(),
-                "failure_category": str(failure.get("category") or "").strip(),
-                "failure_suggestion": str(failure.get("suggestion") or "").strip(),
-            },
+            updates=updates,
         )
-        return 0 if duplicate_marker in error_text.lower() else 2
+        return 0 if result_status in {"success", "skipped_duplicate"} else 2
 
     try:
         return _with_platform_lock(
@@ -12030,19 +12298,62 @@ def _publish_immediate_candidate_platform(
                 error_text=error_text,
             )
             failure = _describe_platform_failure(platform, error_text)
+        promoted_unconfirmed = False
+        if result_status == "failed" and _should_promote_wechat_unconfirmed_publish_to_success(
+            workspace=workspace,
+            item=item,
+            platform=platform,
+            error_text=error_text,
+        ):
+            promoted_unconfirmed = True
+            result_status = "success"
+            error_text = ""
+            failure = {"reason": "", "category": "", "suggestion": "", "raw_signal": ""}
+        if result_status in {"failed", "login_required"}:
+            _record_error_event(
+                workspace=workspace,
+                log_file=log_file,
+                category="immediate_publish_platform_exception",
+                message="immediate publish platform execution raised exception",
+                error_text=error_text,
+                exc=exc,
+                context={
+                    "item_id": item_id,
+                    "platform": str(platform or "").strip().lower(),
+                    "status": result_status,
+                    "processed_name": processed_name,
+                    "target": str(target),
+                    "failure_category": str(failure.get("category") or "").strip(),
+                },
+                retryable=(result_status == "login_required"),
+            )
+        updates = {
+            "status": result_status,
+            "error": error_text,
+            "failure_reason": str(failure.get("reason") or "").strip(),
+            "failure_category": str(failure.get("category") or "").strip(),
+            "failure_suggestion": str(failure.get("suggestion") or "").strip(),
+        }
+        if result_status == "success":
+            updates.update(
+                {
+                    "published_at": _now_text(),
+                    "publish_id": "",
+                    "error": "",
+                    "failure_reason": "",
+                    "failure_category": "",
+                    "failure_suggestion": "",
+                }
+            )
+            if promoted_unconfirmed:
+                updates["publish_id"] = "wechat-unconfirmed-auto-confirm"
         _enqueue_platform_result_event(
             workspace=workspace,
             item_id=item_id,
             platform=platform,
-            updates={
-                "status": result_status,
-                "error": error_text,
-                "failure_reason": str(failure.get("reason") or "").strip(),
-                "failure_category": str(failure.get("category") or "").strip(),
-                "failure_suggestion": str(failure.get("suggestion") or "").strip(),
-            },
+            updates=updates,
         )
-        return 0 if duplicate_marker in error_text.lower() else 2
+        return 0 if result_status in {"success", "skipped_duplicate"} else 2
 
 
 def _run_immediate_publish_item_job(
@@ -15102,6 +15413,20 @@ def main() -> int:
                     _safe_save_state(state_file, state, log_file)
             except Exception as exc:
                 _append_log(log_file, f"[Worker] bootstrap getUpdates failed: {exc}")
+                _record_error_event(
+                    workspace=workspace,
+                    log_file=log_file,
+                    category="polling.bootstrap_getupdates_failed",
+                    message="bootstrap getUpdates failed",
+                    exc=exc,
+                    context={
+                        "offset": int(offset or 0),
+                        "last_processed": int(last_processed or 0),
+                        "bot_token_set": bool(bot_token),
+                    },
+                    retryable=True,
+                    severity="warning",
+                )
                 if offset <= 0 and last_processed <= 0:
                     bootstrap_fast_forward_pending = True
 
@@ -15444,6 +15769,27 @@ def main() -> int:
                         suppressed_poll_transport_warnings += 1
                 else:
                     _append_log(log_file, f"[Worker] loop error: {error_text}")
+                _record_error_event(
+                    workspace=workspace,
+                    log_file=log_file,
+                    category="polling.loop_exception",
+                    message="telegram worker polling loop raised exception",
+                    error_text=error_text,
+                    exc=exc,
+                    context={
+                        "offset": int(offset or 0),
+                        "last_processed": int(last_processed or 0),
+                        "consecutive_poll_failures": int(consecutive_poll_failures or 0),
+                        "poll_transport_error": bool(poll_transport_error),
+                        "poll_rate_limit_error": bool(poll_rate_limit_error),
+                        "poll_conflict_error": bool(poll_conflict_error),
+                        "poll_queue_lock_timeout_error": bool(poll_queue_lock_timeout_error),
+                        "poll_queue_io_contention_error": bool(poll_queue_io_contention_error),
+                        "backoff_seconds": float(sleep_seconds or 0),
+                    },
+                    retryable=bool(poll_retryable_error),
+                    severity="warning" if poll_retryable_error else "error",
+                )
                 _update_worker_state(
                     state_file,
                     pid=os.getpid(),
