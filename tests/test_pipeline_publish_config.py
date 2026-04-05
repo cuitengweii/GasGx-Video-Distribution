@@ -8,6 +8,19 @@ import pytest
 from cybercar import pipeline
 
 
+def test_build_parser_wechat_defaults_ignore_shared_browser_env(monkeypatch) -> None:
+    monkeypatch.setenv("CYBERCAR_CHROME_DEBUG_PORT", "9444")
+    monkeypatch.setenv("CYBERCAR_CHROME_USER_DATA_DIR", r"D:\profiles\shared_env")
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", raising=False)
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", raising=False)
+    monkeypatch.setattr(pipeline.core, "DEFAULT_WECHAT_DEBUG_PORT", 9334, raising=False)
+
+    args = pipeline._build_parser().parse_args([])
+
+    assert args.wechat_debug_port == 9334
+    assert str(args.wechat_chrome_user_data_dir).replace("\\", "/").endswith("profiles/wechat")
+
+
 def test_resolve_platform_publish_mode_with_config_prefers_wechat_structured_defaults() -> None:
     args = SimpleNamespace(
         wechat_publish_now=False,

@@ -41,7 +41,7 @@ from Collection.shared.common.bot_notify import (
     send_notification as _notify_send_notification,
 )
 from Collection.shared.common.telegram_api import call_telegram_api as _telegram_call_api
-from Collection.shared.common.telegram_ui import build_telegram_card
+from Collection.shared.common.telegram_ui import build_telegram_card, extract_x_preview_url as _extract_x_preview_url
 
 try:
     from . import main as core
@@ -665,15 +665,6 @@ def _add_card_header_spacing(card: dict[str, Any]) -> dict[str, Any]:
     return card
 
 
-def _build_card_preview_link_section(source_url: str) -> dict[str, Any]:
-    link = str(source_url or "").strip()
-    return {
-        "title": "卡片预览链接",
-        "emoji": "🔗",
-        "items": ([link] if link else ["未记录卡片预览链接"]),
-    }
-
-
 def _build_telegram_prefilter_video_card(
     *,
     workspace_root: Any,
@@ -710,7 +701,6 @@ def _build_telegram_prefilter_video_card(
                         {"label": "\u6807\u9898", "value": video_title},
                     ],
                 },
-                _build_card_preview_link_section(source_url),
             ],
         },
     )
@@ -754,7 +744,6 @@ def _build_telegram_prefilter_candidate_card(
                 {"label": "\u6807\u9898", "value": video_title},
             ],
         },
-        _build_card_preview_link_section(source_url),
     ]
     warning_text = str(prefilter_warning or "").strip()
     if warning_text:
@@ -1041,6 +1030,7 @@ def _send_telegram_prefilter_for_candidate(
     display_time: str = "",
     target_platforms: str = "",
     prefilter_warning: str = "",
+    media_kind: str = "",
     fast_send: bool = False,
 ) -> dict[str, Any]:
     card = _build_telegram_prefilter_candidate_card(
@@ -1063,6 +1053,8 @@ def _send_telegram_prefilter_for_candidate(
         mode=mode,
         target_platforms=target_platforms,
     )
+    if str(media_kind or "").strip().lower() == "image":
+        card["preview_url"] = str(source_url or "").strip()
     try:
         return _send_telegram_card_message(
             email_settings,
@@ -1207,6 +1199,28 @@ def _send_email(settings: EmailSettings, subject: str, body: str) -> None:
         core._log("[Notify] Telegram send skipped: missing bot_token/chat_id.")
 
 
+def _apply_x_link_preview_options(
+    params: dict[str, Any],
+    text: Any,
+    *,
+    preview_url: Any = "",
+) -> None:
+    explicit_preview = str(_extract_x_preview_url(preview_url) or "").strip()
+    preview_url = explicit_preview or str(_extract_x_preview_url(text) or "").strip()
+    if not preview_url:
+        return
+    params["disable_web_page_preview"] = "false"
+    params["link_preview_options"] = json.dumps(
+        {
+            "is_disabled": False,
+            "url": preview_url,
+            "show_above_text": True,
+            "prefer_large_media": True,
+        },
+        ensure_ascii=True,
+    )
+
+
 def _send_telegram_text(
     settings: EmailSettings,
     text: str,
@@ -1227,6 +1241,7 @@ def _send_telegram_text(
         "text": str(text or "").strip(),
         "disable_web_page_preview": "true" if disable_web_page_preview else "false",
     }
+    _apply_x_link_preview_options(params, params.get("text"))
     if str(parse_mode or "").strip():
         params["parse_mode"] = str(parse_mode or "").strip()
     if reply_markup:
@@ -1285,6 +1300,11 @@ def _send_telegram_card_message(
         "text": text,
         "disable_web_page_preview": "true" if disable_web_page_preview else "false",
     }
+    _apply_x_link_preview_options(
+        params,
+        text,
+        preview_url=card.get("preview_url"),
+    )
     if parse_mode:
         params["parse_mode"] = parse_mode
     if reply_markup:
@@ -3225,9 +3245,26 @@ def _publish_once(
     runtime_debug_port = int(args.debug_port)
     runtime_chrome_user_data_dir = ctx.chrome_user_data_dir
     if platform == "wechat":
-        runtime_debug_port = int(getattr(args, "wechat_debug_port", args.debug_port))
+        default_wechat_debug_port = int(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", getattr(core, "DEFAULT_PORT", runtime_debug_port)))
+        default_wechat_profile_dir = str(
+            getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", ctx.chrome_user_data_dir) or ""
+        ).strip() or ctx.chrome_user_data_dir
+        runtime_ctx_resolver = getattr(core, "resolve_platform_runtime_context", None)
+        if callable(runtime_ctx_resolver):
+            try:
+                wechat_runtime_ctx = runtime_ctx_resolver("wechat")
+                if isinstance(wechat_runtime_ctx, dict):
+                    default_wechat_debug_port = int(
+                        wechat_runtime_ctx.get("debug_port") or default_wechat_debug_port
+                    )
+                    default_wechat_profile_dir = str(
+                        wechat_runtime_ctx.get("chrome_user_data_dir") or default_wechat_profile_dir
+                    ).strip() or default_wechat_profile_dir
+            except Exception:
+                pass
+        runtime_debug_port = int(getattr(args, "wechat_debug_port", default_wechat_debug_port) or default_wechat_debug_port)
         runtime_chrome_user_data_dir = (
-            str(getattr(args, "wechat_chrome_user_data_dir", "") or "").strip() or ctx.chrome_user_data_dir
+            str(getattr(args, "wechat_chrome_user_data_dir", "") or "").strip() or default_wechat_profile_dir
         )
     elif platform == "x":
         runtime_debug_port = int(getattr(args, "x_debug_port", args.debug_port))
@@ -4263,6 +4300,29 @@ def _build_effective_runtime_snapshot(args: argparse.Namespace) -> dict[str, Any
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    wechat_runtime_ctx: dict[str, Any] = {}
+    runtime_ctx_resolver = getattr(core, "resolve_platform_runtime_context", None)
+    if callable(runtime_ctx_resolver):
+        try:
+            resolved_ctx = runtime_ctx_resolver("wechat")
+            if isinstance(resolved_ctx, dict):
+                wechat_runtime_ctx = dict(resolved_ctx)
+        except Exception:
+            wechat_runtime_ctx = {}
+    default_wechat_debug_port = int(
+        wechat_runtime_ctx.get(
+            "debug_port",
+            _env_int("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", core.DEFAULT_PORT + 1)),
+        )
+    )
+    default_wechat_profile_dir = str(
+        wechat_runtime_ctx.get(
+            "chrome_user_data_dir",
+            os.getenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", core.DEFAULT_CHROME_USER_DATA_DIR)),
+        )
+        or ""
+    ).strip() or str(getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", core.DEFAULT_CHROME_USER_DATA_DIR))
+
     parser = argparse.ArgumentParser(
         description=(
             "Hourly CyberCar pipeline: collect from X/domestic sources, process, export sorted outputs, "
@@ -4369,13 +4429,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wechat-debug-port",
         type=int,
-        default=_env_int("CYBERCAR_CHROME_DEBUG_PORT", core.DEFAULT_PORT),
-        help="WeChat upload debug port; forced to shared publish Chrome port.",
+        default=default_wechat_debug_port,
+        help="WeChat upload debug port; isolated from shared publish Chrome port.",
     )
     parser.add_argument(
         "--wechat-chrome-user-data-dir",
-        default=os.getenv("CYBERCAR_CHROME_USER_DATA_DIR", core.DEFAULT_CHROME_USER_DATA_DIR),
-        help="WeChat upload Chrome user data dir; forced to shared publish profile.",
+        default=default_wechat_profile_dir,
+        help="WeChat upload Chrome user data dir; isolated WeChat profile by default.",
     )
     parser.add_argument("--no-auto-open-chrome", action="store_true")
     parser.add_argument(

@@ -5,36 +5,29 @@ from pathlib import Path
 from typing import Any
 
 from . import engine
-from .settings import apply_runtime_environment, load_app_config
+from .settings import apply_runtime_environment
 
 
 def _chrome_settings() -> tuple[int, int, int]:
-    app_config = load_app_config()
-    chrome_cfg = app_config.get("chrome") if isinstance(app_config.get("chrome"), dict) else {}
+    default_ctx = engine.resolve_platform_runtime_context("default")
+    wechat_ctx = engine.resolve_platform_runtime_context("wechat")
+    x_ctx = engine.resolve_platform_runtime_context("x")
     return (
-        int(chrome_cfg.get("default_debug_port") or 9333),
-        int(chrome_cfg.get("wechat_debug_port") or 9334),
-        int(chrome_cfg.get("x_debug_port") or 9335),
+        int(default_ctx.get("debug_port") or 9333),
+        int(wechat_ctx.get("debug_port") or 9334),
+        int(x_ctx.get("debug_port") or 9335),
     )
 
 
 def _profile_dir(platform: str) -> Path:
-    paths = apply_runtime_environment()
-    token = str(platform or "").strip().lower()
-    if token == "wechat":
-        return paths.wechat_profile_dir
-    if token in {"x", "collect"}:
-        return paths.x_profile_dir
-    return paths.default_profile_dir
+    apply_runtime_environment()
+    runtime_ctx = engine.resolve_platform_runtime_context(platform)
+    return Path(str(runtime_ctx.get("chrome_user_data_dir") or "")).expanduser()
 
 
 def _open_url(platform: str) -> str:
-    token = str(platform or "").strip().lower()
-    if token == "wechat":
-        return str(engine._wechat_primary_create_url())
-    if token in {"x", "collect"}:
-        return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.X_LOGIN_URL)
-    return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.CREATE_POST_URL)
+    runtime_ctx = engine.resolve_platform_runtime_context(platform)
+    return str(runtime_ctx.get("open_url") or engine.CREATE_POST_URL)
 
 
 def login_status(platform: str) -> dict[str, Any]:

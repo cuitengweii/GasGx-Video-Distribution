@@ -117,3 +117,26 @@ def test_load_runtime_config_accepts_utf8_bom_json(tmp_path) -> None:
 
 def test_normalize_upload_platforms_accepts_tiktok_and_x_literals() -> None:
     assert engine._normalize_upload_platforms("wechat,tiktok,x") == ["wechat", "tiktok", "x"]
+
+
+def test_resolve_platform_runtime_context_wechat_prefers_wechat_env(monkeypatch) -> None:
+    monkeypatch.setenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", "9555")
+    monkeypatch.setenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", r"D:\profiles\wechat_env")
+    monkeypatch.setenv("CYBERCAR_CHROME_DEBUG_PORT", "9444")
+    monkeypatch.setenv("CYBERCAR_CHROME_USER_DATA_DIR", r"D:\profiles\shared_env")
+
+    runtime_ctx = engine.resolve_platform_runtime_context("wechat")
+
+    assert runtime_ctx["platform"] == "wechat"
+    assert runtime_ctx["debug_port"] == 9555
+    assert runtime_ctx["chrome_user_data_dir"] == r"D:\profiles\wechat_env"
+    assert runtime_ctx["open_url"] == str(engine.PLATFORM_CREATE_POST_URLS.get("wechat") or engine.CREATE_POST_URL)
+
+
+def test_resolve_platform_runtime_context_can_prefer_login_entry(monkeypatch) -> None:
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", raising=False)
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", raising=False)
+
+    runtime_ctx = engine.resolve_platform_runtime_context("wechat", prefer_login_entry=True)
+
+    assert runtime_ctx["open_url"] == str(engine.PLATFORM_LOGIN_ENTRY_URLS.get("wechat") or "")

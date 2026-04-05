@@ -95,12 +95,15 @@ except Exception:
 
 try:
     from Collection.shared.common.telegram_api import call_telegram_api as shared_call_telegram_api
-    from Collection.shared.common.telegram_ui import build_telegram_card
+    from Collection.shared.common.telegram_ui import build_telegram_card, extract_x_preview_url as _extract_x_preview_url
 except Exception:
     if str(_PYTHON_ROOT) not in sys.path:
         sys.path.insert(0, str(_PYTHON_ROOT))
     from Collection.shared.common.telegram_api import call_telegram_api as shared_call_telegram_api  # type: ignore
-    from Collection.shared.common.telegram_ui import build_telegram_card  # type: ignore
+    from Collection.shared.common.telegram_ui import (  # type: ignore
+        build_telegram_card,
+        extract_x_preview_url as _extract_x_preview_url,
+    )
 
 
 
@@ -496,8 +499,15 @@ DEFAULT_X_CHROME_USER_DATA_DIR = _default_x_chrome_user_data_dir()
 
 
 def _default_wechat_chrome_user_data_dir() -> str:
-    # Force shared Chrome profile with other publish platforms.
-    return DEFAULT_CHROME_USER_DATA_DIR
+    from_env = str(os.getenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", "") or "").strip()
+    if from_env:
+        return str(Path(from_env).expanduser())
+    if callable(get_paths):
+        try:
+            return str(get_paths().wechat_profile_dir)
+        except Exception:
+            pass
+    return DEFAULT_CHROME_USER_DATA_DIR + "_wechat"
 
 
 DEFAULT_WECHAT_CHROME_USER_DATA_DIR = _default_wechat_chrome_user_data_dir()
@@ -522,11 +532,21 @@ DEFAULT_X_DEBUG_PORT = _default_x_debug_port()
 
 
 def _default_wechat_debug_port() -> int:
-    # Force shared debug port with other publish platforms.
-    fallback = DEFAULT_PORT
-    if 1 <= fallback <= 65535:
+    raw = str(os.getenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", "") or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except Exception:
+            value = 0
+        if 1 <= value <= 65535:
+            return value
+    fallback = 9334
+    if fallback != DEFAULT_PORT and 1 <= fallback <= 65535:
         return fallback
-    return 9333
+    alt_fallback = DEFAULT_PORT + 1
+    if 1 <= alt_fallback <= 65535:
+        return alt_fallback
+    return 9334
 
 
 DEFAULT_WECHAT_DEBUG_PORT = _default_wechat_debug_port()
@@ -563,6 +583,55 @@ def _default_profile_dir_for_platform(platform_name: str) -> str:
     if platform in {"x", "collect"}:
         return DEFAULT_X_CHROME_USER_DATA_DIR
     return DEFAULT_CHROME_USER_DATA_DIR
+
+
+def _platform_debug_port_env_key(platform_name: str) -> str:
+    platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        return "CYBERCAR_WECHAT_CHROME_DEBUG_PORT"
+    if platform in {"x", "collect"}:
+        return "CYBERCAR_X_CHROME_DEBUG_PORT"
+    return "CYBERCAR_CHROME_DEBUG_PORT"
+
+
+def _platform_profile_dir_env_key(platform_name: str) -> str:
+    platform = str(platform_name or "").strip().lower()
+    if platform == "wechat":
+        return "CYBERCAR_WECHAT_CHROME_USER_DATA_DIR"
+    if platform in {"x", "collect"}:
+        return "CYBERCAR_X_CHROME_USER_DATA_DIR"
+    return "CYBERCAR_CHROME_USER_DATA_DIR"
+
+
+def resolve_platform_runtime_context(platform_name: str, *, prefer_login_entry: bool = False) -> dict[str, Any]:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    default_debug_port = int(_default_debug_port_for_platform(platform))
+    debug_port = default_debug_port
+    debug_port_raw = str(os.getenv(_platform_debug_port_env_key(platform), "") or "").strip()
+    if debug_port_raw:
+        try:
+            parsed = int(debug_port_raw)
+        except Exception:
+            parsed = 0
+        if 1 <= parsed <= 65535:
+            debug_port = parsed
+    default_profile_dir = str(_default_profile_dir_for_platform(platform) or "").strip()
+    chrome_user_data_dir = str(os.getenv(_platform_profile_dir_env_key(platform), default_profile_dir) or "").strip()
+    if not chrome_user_data_dir:
+        chrome_user_data_dir = default_profile_dir
+    login_entry_url = str((PLATFORM_LOGIN_ENTRY_URLS or {}).get(platform) or "").strip()
+    create_url = (
+        _wechat_primary_create_url()
+        if platform == "wechat"
+        else str((PLATFORM_CREATE_POST_URLS or {}).get(platform) or "").strip()
+    )
+    open_url = login_entry_url if prefer_login_entry and login_entry_url else (create_url or login_entry_url or CREATE_POST_URL)
+    return {
+        "platform": platform,
+        "debug_port": int(debug_port),
+        "chrome_user_data_dir": chrome_user_data_dir,
+        "open_url": open_url,
+    }
 
 
 def _default_config_path() -> str:
@@ -1810,12 +1879,10 @@ def _build_platform_login_qr_caption(
     generated_at: Optional[datetime] = None,
 ) -> str:
     platform_label = str(display_name or "\u5e73\u53f0").strip() or "\u5e73\u53f0"
-    profile_label = str(profile_dir or "").strip() or "\uff08\u672a\u63d0\u4f9b\uff09"
     ttl_label = _format_platform_login_qr_ttl(ttl_seconds)
     card = build_telegram_card(
         "login_qr",
         {
-            "subtitle": f"\u23f3 \u5269\u4f59 {ttl_label} \u8bf7\u5c3d\u5feb\u626b\u7801",
             "qr_image": True,
             "title": f"{platform_label}\u767b\u5f55",
             "sections": [
@@ -1824,28 +1891,6 @@ def _build_platform_login_qr_caption(
                     "emoji": "\u23f3",
                     "items": [
                         f"\u5269\u4f59 {ttl_label}",
-                    ],
-                },
-                {
-                    "title": "\u5904\u7406\u65b9\u5f0f",
-                    "emoji": "\U0001f510",
-                    "items": [
-                        "\u8bf7\u4f7f\u7528\u4e0b\u65b9\u4e8c\u7ef4\u7801\u626b\u7801\u767b\u5f55\u3002",
-                    ],
-                },
-                {
-                    "title": "\u4f1a\u8bdd\u4fe1\u606f",
-                    "emoji": "\U0001f9ed",
-                    "items": [
-                        {"label": "\u76ee\u5f55", "value": profile_label, "style": "code"},
-                    ],
-                },
-                {
-                    "title": "\u540e\u7eed\u8bf4\u660e",
-                    "emoji": "\U0001f504",
-                    "items": [
-                        "\u82e5\u4e8c\u7ef4\u7801\u5931\u6548\uff0c\u8bf7\u70b9\u51fb\u4e0b\u65b9\u201c\u5237\u65b0\u4e8c\u7ef4\u7801\u201d\u83b7\u53d6\u65b0\u56fe\u3002",
-                        "\u7cfb\u7edf\u4f1a\u81ea\u52a8\u68c0\u6d4b\u767b\u5f55\u6062\u590d\uff0c\u65e0\u9700\u624b\u52a8\u786e\u8ba4\u3002",
                     ],
                 },
             ],
@@ -1947,6 +1992,22 @@ def _build_platform_login_text_card(
     )
 
 
+def _apply_x_link_preview_options(params: dict[str, Any], text: Any) -> None:
+    preview_url = str(_extract_x_preview_url(text) or "").strip()
+    if not preview_url:
+        return
+    params["disable_web_page_preview"] = "false"
+    params["link_preview_options"] = json.dumps(
+        {
+            "is_disabled": False,
+            "url": preview_url,
+            "show_above_text": True,
+            "prefer_large_media": True,
+        },
+        ensure_ascii=True,
+    )
+
+
 def _send_platform_login_text_notification(
     *,
     platform_name: str,
@@ -1991,6 +2052,7 @@ def _send_platform_login_text_notification(
         "parse_mode": str(card.get("parse_mode") or "HTML"),
         "disable_web_page_preview": "false",
     }
+    _apply_x_link_preview_options(params, params.get("text"))
     reply_markup = card.get("reply_markup")
     if isinstance(reply_markup, dict) and reply_markup.get("inline_keyboard"):
         params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
@@ -4127,16 +4189,18 @@ def _send_publish_notification(settings: NotifySettings, subject: str, card: dic
     if not settings.enabled:
         return
     try:
+        params = {
+            "chat_id": settings.telegram_chat_id,
+            "text": str(card.get("text") or "").strip(),
+            "parse_mode": str(card.get("parse_mode") or "HTML"),
+            "disable_web_page_preview": "false",
+            "reply_markup": json.dumps(card.get("reply_markup") or {}, ensure_ascii=True),
+        }
+        _apply_x_link_preview_options(params, params.get("text"))
         shared_call_telegram_api(
             bot_token=settings.telegram_bot_token,
             method="sendMessage",
-            params={
-                "chat_id": settings.telegram_chat_id,
-                "text": str(card.get("text") or "").strip(),
-                "parse_mode": str(card.get("parse_mode") or "HTML"),
-                "disable_web_page_preview": "false",
-                "reply_markup": json.dumps(card.get("reply_markup") or {}, ensure_ascii=True),
-            },
+            params=params,
             timeout_seconds=settings.telegram_timeout_seconds,
             api_base=settings.telegram_api_base,
             use_post=True,
@@ -7784,6 +7848,14 @@ def _playwright_submit_reply_via_store(page: Any, comment: dict[str, Any], post:
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
       }
+      function getCookie(name) {
+        try {
+          const matched = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+          return matched ? decodeURIComponent(matched[1]) : '';
+        } catch (e) {
+          return '';
+        }
+      }
       function pickStore(scope) {
         if (!scope) return null;
         try {
@@ -7815,19 +7887,93 @@ def _playwright_submit_reply_via_store(page: Any, comment: dict[str, Any], post:
       const exportId = norm(args && args.export_id);
       const content = norm(args && args.reply_text);
       if (!commentId || !exportId || !content) return { ok: false, err_code: -2, err_msg: 'missing_required_fields' };
-      const payload = { commentId, replyCommentId, content, exportId, scene: 1 };
+
+      // Some sessions miss finder_uin in localStorage, which can affect comment APIs.
       try {
-        const result = await store.service.createComment(payload);
-        const code = Number(result && result.errCode || 0);
-        return {
-          ok: code === 0,
-          err_code: code,
-          err_msg: norm(result && result.errMsg),
-          payload,
-        };
-      } catch (e) {
-        return { ok: false, err_code: -999, err_msg: norm(e && e.message || e), payload };
+        const finderUin = norm(localStorage.getItem('finder_uin'));
+        if (!finderUin) {
+          const wxuin = norm(getCookie('wxuin'));
+          if (wxuin) localStorage.setItem('finder_uin', wxuin);
+        }
+      } catch (e) {}
+
+      const attempts = [];
+      async function callServiceCreate(payload) {
+        try {
+          const result = await store.service.createComment(payload);
+          const code = Number((result && result.errCode) || 0);
+          const state = {
+            ok: code === 0,
+            err_code: code,
+            err_msg: norm(result && result.errMsg),
+            payload,
+            strategy: 'service_createComment',
+          };
+          attempts.push(state);
+          return state;
+        } catch (e) {
+          const state = {
+            ok: false,
+            err_code: -999,
+            err_msg: norm(e && e.message || e),
+            payload,
+            strategy: 'service_createComment',
+          };
+          attempts.push(state);
+          return state;
+        }
       }
+
+      const payload = { commentId, replyCommentId, content, exportId, scene: 1 };
+      const primary = await callServiceCreate(payload);
+      if (primary.ok) {
+        return Object.assign({}, primary, { attempts });
+      }
+
+      // Fallback: mimic page UI call signature used by comment editor component.
+      if (Number(primary.err_code || 0) === 300800 && typeof store.createComment === 'function') {
+        let commentObj = null;
+        try {
+          const commentList = Array.isArray(store.commentList) ? store.commentList : [];
+          commentObj = commentList.find((item) => norm(item && (item.commentId || item.comment_id)) === commentId) || null;
+          if (!commentObj && typeof store.findCommentById === 'function') {
+            const found = await store.findCommentById(commentId);
+            if (found && typeof found === 'object') commentObj = found;
+          }
+        } catch (e) {}
+        const fallbackReq = {
+          replyCommentId: commentId || '',
+          rootCommentId: replyCommentId || commentId,
+          content,
+          clientId: `cid-${Date.now()}`,
+          comment: commentObj || { commentId, replyCommentId, exportId },
+        };
+        try {
+          const result = await store.createComment(fallbackReq);
+          const code = Number((result && result.errCode) || 0);
+          const fallbackState = {
+            ok: code === 0,
+            err_code: code,
+            err_msg: norm(result && result.errMsg),
+            payload: fallbackReq,
+            strategy: 'store_createComment',
+          };
+          attempts.push(fallbackState);
+          if (fallbackState.ok) {
+            return Object.assign({}, fallbackState, { attempts });
+          }
+        } catch (e) {
+          attempts.push({
+            ok: false,
+            err_code: -996,
+            err_msg: norm(e && e.message || e),
+            payload: fallbackReq,
+            strategy: 'store_createComment',
+          });
+        }
+      }
+      const latest = attempts[attempts.length - 1] || primary;
+      return Object.assign({}, latest, { attempts });
     }
     """
     try:

@@ -35,6 +35,7 @@ from Collection.shared.common.telegram_ui import (
     build_action_feedback,
     build_home_callback_data,
     build_telegram_home,
+    extract_x_preview_url,
     parse_home_callback_data,
     send_interaction_result,
     send_or_update_home_message,
@@ -1281,6 +1282,22 @@ def _outgoing_reply_markup(reply_markup: Optional[Dict[str, Any]], *, for_edit: 
     return reply_markup if reply_markup else None
 
 
+def _apply_x_link_preview_options(params: Dict[str, Any], text: Any) -> None:
+    preview_url = str(extract_x_preview_url(text) or "").strip()
+    if not preview_url:
+        return
+    params["disable_web_page_preview"] = "false"
+    params["link_preview_options"] = json.dumps(
+        {
+            "is_disabled": False,
+            "url": preview_url,
+            "show_above_text": True,
+            "prefer_large_media": True,
+        },
+        ensure_ascii=True,
+    )
+
+
 def _send_reply(
     *,
     bot_token: str,
@@ -1294,6 +1311,7 @@ def _send_reply(
     outgoing_reply_markup = _outgoing_reply_markup(reply_markup, for_edit=False)
     for idx, chunk in enumerate(chunks):
         params: Dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+        _apply_x_link_preview_options(params, chunk)
         if str(parse_mode or "").strip():
             params["parse_mode"] = str(parse_mode or "").strip()
         if idx == 0 and isinstance(outgoing_reply_markup, dict):
@@ -1326,6 +1344,7 @@ def _send_text_message(
     reply_markup: Optional[Dict[str, Any]] = None,
 ) -> int:
     params: Dict[str, Any] = {"chat_id": chat_id, "text": str(text or "").strip() or "(empty)"}
+    _apply_x_link_preview_options(params, params.get("text"))
     outgoing_reply_markup = _outgoing_reply_markup(reply_markup, for_edit=False)
     if isinstance(outgoing_reply_markup, dict):
         params["reply_markup"] = json.dumps(outgoing_reply_markup, ensure_ascii=True)
@@ -1418,6 +1437,7 @@ def _send_card_message(
         "text": str(card.get("text") or "").strip() or "(empty)",
         "disable_web_page_preview": "false",
     }
+    _apply_x_link_preview_options(params, params.get("text"))
     parse_mode = str(card.get("parse_mode") or "").strip()
     if parse_mode:
         params["parse_mode"] = parse_mode
@@ -5316,6 +5336,7 @@ def _edit_reply(
     reply_markup: Optional[Dict[str, Any]] = None,
 ) -> None:
     params: Dict[str, Any] = {"text": str(text or "").strip() or "(empty)"}
+    _apply_x_link_preview_options(params, params.get("text"))
     if inline_message_id:
         params["inline_message_id"] = inline_message_id
     else:
@@ -6485,6 +6506,7 @@ def _flush_pending_background_feedback(
             "text": str(card.get("text") or "").strip(),
             "disable_web_page_preview": "false",
         }
+        _apply_x_link_preview_options(params, params.get("text"))
         parse_mode = str(card.get("parse_mode") or "").strip()
         if parse_mode:
             params["parse_mode"] = parse_mode
@@ -7632,7 +7654,7 @@ def _build_immediate_publish_confirm_text(item: Dict[str, Any]) -> str:
     if tweet_text:
         summary_items: list[Any] = [tweet_text]
     else:
-        summary_items = ["本条未附带原帖摘要，请通过卡片预览链接确认。"]
+        summary_items = ["本条未附带原帖摘要，请直接确认后再发布。"]
     source_url = str(item.get('source_url') or "").strip()
     coordination_items: list[Any] = []
     coordination_summary = str(item.get("coordination_summary") or "").strip()
@@ -7662,7 +7684,6 @@ def _build_immediate_publish_confirm_text(item: Dict[str, Any]) -> str:
                 {"label": "标题", "value": title},
             ],
         },
-        _build_card_preview_link_section(source_url),
     ]
     if coordination_items:
         sections.append(
@@ -7712,7 +7733,6 @@ def _build_immediate_publish_confirm_card(item: Dict[str, Any], item_id: str) ->
                     {"label": "标题", "value": _resolve_immediate_item_title(item)},
                 ],
             },
-            _build_card_preview_link_section(source_url),
             {
                 "title": "发布选项",
                 "emoji": "✍️",
@@ -8080,14 +8100,44 @@ def _resolve_platform_login_runtime_context(
     prefer_login_entry: bool = False,
 ) -> Dict[str, Any]:
     platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    runtime_ctx_resolver = getattr(core, "resolve_platform_runtime_context", None)
+    if callable(runtime_ctx_resolver):
+        resolved_ctx: Dict[str, Any] = {}
+        try:
+            candidate = runtime_ctx_resolver(platform, prefer_login_entry=prefer_login_entry)
+            if isinstance(candidate, dict):
+                resolved_ctx = dict(candidate)
+        except TypeError:
+            try:
+                candidate = runtime_ctx_resolver(platform)
+                if isinstance(candidate, dict):
+                    resolved_ctx = dict(candidate)
+            except Exception:
+                resolved_ctx = {}
+        except Exception:
+            resolved_ctx = {}
+        if resolved_ctx:
+            create_url = str((getattr(core, "PLATFORM_CREATE_POST_URLS", {}) or {}).get(platform) or "").strip()
+            login_entry_url = str((getattr(core, "PLATFORM_LOGIN_ENTRY_URLS", {}) or {}).get(platform) or "").strip()
+            open_url = str(resolved_ctx.get("open_url") or "").strip()
+            if prefer_login_entry and login_entry_url:
+                open_url = login_entry_url
+            if not open_url:
+                open_url = create_url or login_entry_url
+            return {
+                "platform": str(resolved_ctx.get("platform") or platform).strip().lower() or platform,
+                "debug_port": int(
+                    resolved_ctx.get("debug_port")
+                    or getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", getattr(core, "DEFAULT_PORT", 9333))
+                ),
+                "chrome_user_data_dir": str(resolved_ctx.get("chrome_user_data_dir") or "").strip(),
+                "open_url": open_url,
+            }
     if platform == "wechat":
         debug_port = int(
             os.getenv(
                 "CYBERCAR_WECHAT_CHROME_DEBUG_PORT",
-                os.getenv(
-                    "CYBERCAR_CHROME_DEBUG_PORT",
-                    str(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", getattr(core, "DEFAULT_PORT", 9333))),
-                ),
+                str(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", 9334)),
             )
         )
         default_wechat_profile_dir = str(getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", "")).strip()
@@ -8099,10 +8149,7 @@ def _resolve_platform_login_runtime_context(
         chrome_user_data_dir = str(
             os.getenv(
                 "CYBERCAR_WECHAT_CHROME_USER_DATA_DIR",
-                os.getenv(
-                    "CYBERCAR_CHROME_USER_DATA_DIR",
-                    default_wechat_profile_dir,
-                ),
+                default_wechat_profile_dir,
             )
             or ""
         ).strip() or default_wechat_profile_dir
@@ -8244,7 +8291,6 @@ def _build_prefilter_status_card(
                 {"label": "标题", "value": _resolve_immediate_item_title(item)},
             ],
         },
-        _build_card_preview_link_section(source_url),
     ]
     actor = str(item.get("actor") or "").strip()
     updated_at = str(item.get("updated_at") or "").strip()
@@ -10468,15 +10514,6 @@ def _resolve_immediate_item_platform_text(item: Dict[str, Any], *, with_logo: bo
     return _platforms_to_text(platforms)
 
 
-def _build_card_preview_link_section(source_url: str) -> dict[str, Any]:
-    link = str(source_url or "").strip()
-    return {
-        "title": "卡片预览链接",
-        "emoji": "🔗",
-        "items": ([link] if link else ["未记录卡片预览链接"]),
-    }
-
-
 def _build_immediate_candidate_info_section(
     item: Dict[str, Any],
     *,
@@ -11075,6 +11112,7 @@ def _send_immediate_candidate_prefilter_card(
         display_time=str(item.get("display_time") or "").strip(),
         target_platforms=str(item.get("target_platforms") or "").strip(),
         prefilter_warning=str(item.get("prefilter_warning") or "").strip(),
+        media_kind=str(item.get("media_kind") or "").strip(),
         fast_send=bool(fast_send),
     )
 
@@ -12731,6 +12769,7 @@ def _send_background_feedback(
         "text": str(card.get("text") or "").strip(),
         "disable_web_page_preview": "false",
     }
+    _apply_x_link_preview_options(params, params.get("text"))
     parse_mode = str(card.get("parse_mode") or "").strip()
     if parse_mode:
         params["parse_mode"] = parse_mode
@@ -14669,7 +14708,25 @@ def handle_callback_update(
         if callback_data.startswith(f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|"):
             _answer_callback_once("无效的审核指令。")
             return {"handled": True, "last_processed": max(int(last_processed), update_id), "update_id": update_id}
-        return {"handled": False, "last_processed": int(last_processed), "update_id": update_id}
+        # Fallback for stale/unknown inline buttons: always recover to home menu.
+        _answer_callback_once("按钮已过期，已为你刷新首页菜单。")
+        try:
+            _send_interaction_result_async(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                card=_build_home_card(
+                    default_profile=_normalize_profile_name(default_profile),
+                    status_note="按钮已过期，已刷新首页菜单",
+                    workspace=workspace,
+                    chat_id=chat_id,
+                ),
+                timeout_seconds=timeout_seconds,
+                message_id=message_id,
+                inline_message_id=inline_message_id,
+            )
+        except Exception as exc:
+            _append_log(log_file, f"[Worker] unknown callback fallback failed: {exc}")
+        return {"handled": True, "last_processed": max(int(last_processed), update_id), "update_id": update_id}
 
     action, item_id = parsed
     _answer_callback_queued()

@@ -85,3 +85,27 @@ def test_run_comment_reply_job_uses_resolved_wechat_runtime_context(monkeypatch,
     assert len(calls) == 1
     assert int(calls[0]["debug_port"]) == 9334
     assert str(calls[0]["chrome_user_data_dir"]) == r"D:\profiles\wechat"
+
+
+def test_resolve_platform_login_runtime_context_prefers_core_runtime_resolver() -> None:
+    class FakeCore:
+        PLATFORM_CREATE_POST_URLS = {"wechat": "https://channels.weixin.qq.com/platform/post/create"}
+        PLATFORM_LOGIN_ENTRY_URLS = {"wechat": "https://channels.weixin.qq.com/login.html"}
+
+        @staticmethod
+        def resolve_platform_runtime_context(platform_name: str, *, prefer_login_entry: bool = False):
+            return {
+                "platform": str(platform_name),
+                "debug_port": 9666,
+                "chrome_user_data_dir": r"D:\profiles\wechat_core",
+                "open_url": "https://channels.weixin.qq.com/login.html"
+                if prefer_login_entry
+                else "https://channels.weixin.qq.com/platform/post/create",
+            }
+
+    ctx = worker_impl._resolve_platform_login_runtime_context(FakeCore(), "wechat", prefer_login_entry=True)
+
+    assert ctx["platform"] == "wechat"
+    assert int(ctx["debug_port"]) == 9666
+    assert str(ctx["chrome_user_data_dir"]) == r"D:\profiles\wechat_core"
+    assert str(ctx["open_url"]) == "https://channels.weixin.qq.com/login.html"

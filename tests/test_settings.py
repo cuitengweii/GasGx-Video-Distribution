@@ -22,8 +22,12 @@ def test_paths_point_inside_repo() -> None:
 def test_apply_runtime_environment_sets_default_proxy_env(monkeypatch) -> None:
     monkeypatch.delenv("CYBERCAR_PROXY", raising=False)
     monkeypatch.delenv("CYBERCAR_USE_SYSTEM_PROXY", raising=False)
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_DEBUG_PORT", raising=False)
+    monkeypatch.delenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", raising=False)
 
     apply_runtime_environment()
 
     assert os.environ["CYBERCAR_PROXY"] == "http://127.0.0.1:33210"
     assert os.environ["CYBERCAR_USE_SYSTEM_PROXY"] == "0"
+    assert os.environ["CYBERCAR_WECHAT_CHROME_DEBUG_PORT"] == "9334"
+    assert os.environ["CYBERCAR_WECHAT_CHROME_USER_DATA_DIR"].replace("\\", "/").endswith("profiles/wechat")

@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping
 
 from .telegram_api import call_telegram_api
+from .telegram_ui import extract_x_preview_url
 
 
 DEFAULT_TELEGRAM_TIMEOUT_SECONDS = 20
@@ -199,6 +200,18 @@ def send_notification(
         "text": text,
         "disable_web_page_preview": "true" if bool(settings.get("disable_web_page_preview")) else "false",
     }
+    preview_url = str(extract_x_preview_url(text) or "").strip()
+    if preview_url:
+        params["disable_web_page_preview"] = "false"
+        params["link_preview_options"] = json.dumps(
+            {
+                "is_disabled": False,
+                "url": preview_url,
+                "show_above_text": True,
+                "prefer_large_media": True,
+            },
+            ensure_ascii=True,
+        )
     if isinstance(card_payload, Mapping):
         parse_mode = str(card_payload.get("parse_mode") or "").strip()
         reply_markup = card_payload.get("reply_markup")

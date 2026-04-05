@@ -16,6 +16,11 @@ _VARIATION_SELECTOR = "\ufe0f"
 _CUSTOM_EMOJI_TAG_RE = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", flags=re.IGNORECASE | re.DOTALL)
 _CUSTOM_EMOJI_ENABLED = False
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_X_LINK_RE = re.compile(r"https?://(?:www\.)?(?:x\.com|twitter\.com|t\.co)/[^\s<>\"]+", flags=re.IGNORECASE)
+_X_LINK_HREF_RE = re.compile(
+    r"<a\b[^>]*\bhref=[\"'](https?://(?:www\.)?(?:x\.com|twitter\.com|t\.co)/[^\"']+)[\"']",
+    flags=re.IGNORECASE,
+)
 _STALE_CALLBACK_QUERY_ERROR_MARKERS = (
     "query is too old",
     "response timeout expired",
@@ -406,9 +411,6 @@ def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     for phrase, replacement in _ENGLISH_PHRASE_ALIASES:
         text = re.sub(re.escape(phrase), replacement, text, flags=re.IGNORECASE)
     if re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE):
-        lower_url = text.lower()
-        if "x.com/" in lower_url or "twitter.com/" in lower_url or "t.co/" in lower_url:
-            return text
         return "点击查看"
 
     def _replace_token(match: re.Match[str]) -> str:
@@ -484,6 +486,35 @@ def _render_inline_text(value: Any) -> str:
     for marker, replacement in placeholders.items():
         rendered = rendered.replace(html.escape(marker), replacement)
     return rendered
+
+
+def extract_x_preview_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    href_match = _X_LINK_HREF_RE.search(raw)
+    if href_match:
+        return html.unescape(str(href_match.group(1) or "")).strip()
+    plain_match = _X_LINK_RE.search(html.unescape(raw))
+    if plain_match:
+        return str(plain_match.group(0) or "").strip()
+    return ""
+
+
+def _apply_x_link_preview_options(params: dict[str, Any], text: Any) -> None:
+    preview_url = extract_x_preview_url(text)
+    if not preview_url:
+        return
+    params["disable_web_page_preview"] = False
+    params["link_preview_options"] = json.dumps(
+        {
+            "is_disabled": False,
+            "url": preview_url,
+            "show_above_text": True,
+            "prefer_large_media": True,
+        },
+        ensure_ascii=True,
+    )
 
 
 def _call_telegram_api_with_emoji_fallback(
@@ -1751,6 +1782,7 @@ def _message_params(chat_id: str, card: Mapping[str, Any]) -> dict[str, Any]:
         "parse_mode": str(card.get("parse_mode") or "HTML"),
         "disable_web_page_preview": True,
     }
+    _apply_x_link_preview_options(params, params.get("text"))
     reply_markup = _outgoing_reply_markup(card.get("reply_markup"), for_edit=False)
     if isinstance(reply_markup, Mapping):
         params["reply_markup"] = json.dumps(dict(reply_markup), ensure_ascii=True)
