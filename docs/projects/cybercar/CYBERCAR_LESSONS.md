@@ -1,6 +1,6 @@
 # CyberCar Lessons
 
-Last updated: 2026-04-03
+Last updated: 2026-04-05
 
 ## 2026-03-15
 
@@ -83,3 +83,15 @@ Last updated: 2026-04-03
 - Root cause: `link_pending` was added to the reusable-state set, but `_should_reissue_immediate_candidate_card(...)` still blocked `link_pending` from the reissue path, creating a reuse/reissue state-machine mismatch.
 - Earlier detection: every time a status is promoted into the reusable set, add a paired regression test that proves the default rerun path either reissues that state or intentionally recreates it.
 - Prevention: keep reuse and reissue semantics aligned for all active prefilter states, and explicitly regression-test "pending card disappeared, rerun should recover it" before landing Telegram workflow changes.
+
+## 2026-04-05
+
+- Symptom: WeChat comment manager occasionally extracted blank or low-quality post titles, then post selection/matching became unstable.
+- Root cause: store payload fields desc and objectDesc are not always plain strings; on some pages they are nested objects (description / desc / content). Existing normalization only handled flat strings.
+- Earlier detection: whenever extracted post titles drop sharply or mismatch while feed count is non-zero, inspect raw store payload shape first before changing selectors.
+- Prevention: keep polymorphic field parsing in _normalize_wechat_store_post and avoid first-hit store selection when multiple store objects exist across frame scopes.
+- Symptom: Telegram API requests could fail hard when a configured local proxy had a transient connectivity outage.
+- Root cause: session construction always pinned to proxy when present, and retry logic treated proxy-connection errors as generic request failures without a short direct-path failover window.
+- Earlier detection: when logs show `ProxyError` or `Unable to connect to proxy`, validate direct connectivity before escalating as Telegram endpoint instability.
+- Prevention: keep proxy bypass window + session reset in the request path, and test both proxy and bypass paths when modifying telegram transport code.
+

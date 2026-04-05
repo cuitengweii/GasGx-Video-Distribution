@@ -5388,22 +5388,41 @@ def _coerce_positive_int(value: Any) -> int:
 def _normalize_wechat_store_post(feed: Any) -> Optional[dict[str, Any]]:
     if not isinstance(feed, dict):
         return None
+    def _scalar_text(value: Any) -> str:
+        if isinstance(value, (str, int, float, bool)):
+            return str(value).strip()
+        return ""
+    desc_value = feed.get("desc")
+    if isinstance(desc_value, dict):
+        desc_text = _scalar_text(desc_value.get("description") or desc_value.get("desc") or desc_value.get("content") or "")
+    else:
+        desc_text = _scalar_text(desc_value)
+    object_desc_value = feed.get("objectDesc")
+    if isinstance(object_desc_value, dict):
+        object_desc_text = _scalar_text(
+            object_desc_value.get("description")
+            or object_desc_value.get("desc")
+            or object_desc_value.get("content")
+            or ""
+        )
+    else:
+        object_desc_text = _scalar_text(object_desc_value)
     title = str(
-        feed.get("title")
-        or feed.get("feed_title")
-        or feed.get("feedDesc")
-        or feed.get("desc")
-        or feed.get("objectDesc")
-        or feed.get("content")
+        _scalar_text(feed.get("title"))
+        or _scalar_text(feed.get("feed_title"))
+        or _scalar_text(feed.get("feedDesc"))
+        or desc_text
+        or object_desc_text
+        or _scalar_text(feed.get("content"))
         or ""
     ).strip()
     published_text = str(
-        feed.get("published_text")
-        or feed.get("publishTimeDesc")
-        or feed.get("createTimeDesc")
-        or feed.get("publishTime")
-        or feed.get("createTimeText")
-        or feed.get("createTime")
+        _scalar_text(feed.get("published_text"))
+        or _scalar_text(feed.get("publishTimeDesc"))
+        or _scalar_text(feed.get("createTimeDesc"))
+        or _scalar_text(feed.get("publishTime"))
+        or _scalar_text(feed.get("createTimeText"))
+        or _scalar_text(feed.get("createTime"))
         or ""
     ).strip()
     object_id = str(feed.get("object_id") or feed.get("objectId") or feed.get("objectID") or "").strip()
@@ -5451,6 +5470,12 @@ def _extract_wechat_post_cards_from_store(page: ChromiumPage, refresh: bool = Fa
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
       }
+      function asText(value) {
+        if (value === null || value === undefined) return '';
+        const kind = typeof value;
+        if (kind === 'string' || kind === 'number' || kind === 'boolean') return String(value);
+        return '';
+      }
       function toInt(value) {
         const raw = String(value || '').replace(/[^\\d]/g, '');
         return raw ? parseInt(raw, 10) : 0;
@@ -5463,21 +5488,50 @@ def _extract_wechat_post_cards_from_store(page: ChromiumPage, refresh: bool = Fa
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       const store = resolveStore();
       if (!store) {
@@ -5493,7 +5547,21 @@ def _extract_wechat_post_cards_from_store(page: ChromiumPage, refresh: bool = Fa
       }
       const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
       const mapped = feeds.slice(0, 120).map((feed) => ({
-        title: norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || '')),
+        title: (() => {
+          const desc = feed && feed.desc;
+          const objectDesc = feed && feed.objectDesc;
+          return norm(
+            feed && (
+              asText(feed.title)
+              || asText(feed.feed_title)
+              || asText(feed.feedDesc)
+              || asText(desc && (desc.description || desc.desc || desc.content))
+              || asText(objectDesc && (objectDesc.description || objectDesc.desc || objectDesc.content))
+              || asText(feed.content)
+              || ''
+            )
+          );
+        })(),
         published_text: norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || '')),
         comment_count: toInt(feed && (feed.comment_count || feed.commentCount || feed.commentsCount || feed.commentNum || feed.totalCommentCount || 0)),
         has_comments: !!(feed && (feed.has_comments || feed.hasComments || feed.hasComment)),
@@ -5694,6 +5762,12 @@ def _open_comment_manager_via_store(page: ChromiumPage, post: dict[str, Any], ti
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
       }
+      function asText(value) {
+        if (value === null || value === undefined) return '';
+        const kind = typeof value;
+        if (kind === 'string' || kind === 'number' || kind === 'boolean') return String(value);
+        return '';
+      }
       function digits(value) {
         return norm(value).replace(/[^\\d]/g, '');
       }
@@ -5722,21 +5796,50 @@ def _open_comment_manager_via_store(page: ChromiumPage, post: dict[str, Any], ti
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       const store = resolveStore();
       if (!store) return { ok: false, reason: 'comment_store_missing' };
@@ -5756,7 +5859,21 @@ def _open_comment_manager_via_store(page: ChromiumPage, post: dict[str, Any], ti
         const exportId = norm(feed && (feed.exportId || feed.export_id || feed.postId || objectId || ''));
         if (targetObjectId && objectId && targetObjectId === objectId) return true;
         if (targetExportId && exportId && targetExportId === exportId) return true;
-        const title = norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || ''));
+        const title = (() => {
+          const desc = feed && feed.desc;
+          const objectDesc = feed && feed.objectDesc;
+          return norm(
+            feed && (
+              asText(feed.title)
+              || asText(feed.feed_title)
+              || asText(feed.feedDesc)
+              || asText(desc && (desc.description || desc.desc || desc.content))
+              || asText(objectDesc && (objectDesc.description || objectDesc.desc || objectDesc.content))
+              || asText(feed.content)
+              || ''
+            )
+          );
+        })();
         const published = norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || ''));
         if (targetPublished && !samePublished(published, targetPublished)) return false;
         if (!targetTitle) return !!(title || published || objectId || exportId);
@@ -6819,6 +6936,12 @@ def _playwright_extract_wechat_post_cards_from_store(page: Any, refresh: bool = 
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
       }
+      function asText(value) {
+        if (value === null || value === undefined) return '';
+        const kind = typeof value;
+        if (kind === 'string' || kind === 'number' || kind === 'boolean') return String(value);
+        return '';
+      }
       function toInt(value) {
         const raw = String(value || '').replace(/[^\\d]/g, '');
         return raw ? parseInt(raw, 10) : 0;
@@ -6841,21 +6964,50 @@ def _playwright_extract_wechat_post_cards_from_store(page: Any, refresh: bool = 
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       const store = resolveStore();
       if (!store) {
@@ -6869,7 +7021,21 @@ def _playwright_extract_wechat_post_cards_from_store(page: Any, refresh: bool = 
       }
       const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
       const mapped = feeds.slice(0, 120).map((feed) => ({
-        title: norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || '')),
+        title: (() => {
+          const desc = feed && feed.desc;
+          const objectDesc = feed && feed.objectDesc;
+          return norm(
+            feed && (
+              asText(feed.title)
+              || asText(feed.feed_title)
+              || asText(feed.feedDesc)
+              || asText(desc && (desc.description || desc.desc || desc.content))
+              || asText(objectDesc && (objectDesc.description || objectDesc.desc || objectDesc.content))
+              || asText(feed.content)
+              || ''
+            )
+          );
+        })(),
         published_text: norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || '')),
         comment_count: toInt(feed && (feed.comment_count || feed.commentCount || feed.commentsCount || feed.commentNum || feed.totalCommentCount || 0)),
         has_comments: !!(feed && (feed.has_comments || feed.hasComments || feed.hasComment)),
@@ -7215,6 +7381,12 @@ def _playwright_open_comment_manager_via_store(page: Any, post: dict[str, Any], 
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
       }
+      function asText(value) {
+        if (value === null || value === undefined) return '';
+        const kind = typeof value;
+        if (kind === 'string' || kind === 'number' || kind === 'boolean') return String(value);
+        return '';
+      }
       function digits(value) {
         return norm(value).replace(/[^\\d]/g, '');
       }
@@ -7253,21 +7425,50 @@ def _playwright_open_comment_manager_via_store(page: Any, post: dict[str, Any], 
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       const store = resolveStore();
       if (!store) return { ok: false, reason: 'comment_store_missing' };
@@ -7284,7 +7485,21 @@ def _playwright_open_comment_manager_via_store(page: Any, post: dict[str, Any], 
         const exportId = norm(feed && (feed.exportId || feed.export_id || feed.postId || objectId || ''));
         if (targetObjectId && objectId && targetObjectId === objectId) return true;
         if (targetExportId && exportId && targetExportId === exportId) return true;
-        const title = norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || ''));
+        const title = (() => {
+          const desc = feed && feed.desc;
+          const objectDesc = feed && feed.objectDesc;
+          return norm(
+            feed && (
+              asText(feed.title)
+              || asText(feed.feed_title)
+              || asText(feed.feedDesc)
+              || asText(desc && (desc.description || desc.desc || desc.content))
+              || asText(objectDesc && (objectDesc.description || objectDesc.desc || objectDesc.content))
+              || asText(feed.content)
+              || ''
+            )
+          );
+        })();
         const published = norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || ''));
         if (targetPublished && !samePublished(published, targetPublished)) return false;
         if (!targetTitle) return !!(title || published || objectId || exportId);
@@ -7339,21 +7554,50 @@ def _playwright_open_comment_manager_via_store(page: Any, post: dict[str, Any], 
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       if (document.querySelector('.feed-detail')) return true;
       const store = resolveStore();

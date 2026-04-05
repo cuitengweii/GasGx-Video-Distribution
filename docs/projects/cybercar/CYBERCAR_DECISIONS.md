@@ -1,6 +1,6 @@
 # CyberCar Decisions
 
-Last updated: 2026-04-03
+Last updated: 2026-04-05
 
 ## 2026-03-15
 
@@ -60,3 +60,9 @@ Last updated: 2026-04-03
 - Telegram operator-facing cards now optimize for platform-first scanning instead of bot branding. `CyberCar` is removed from card headers, platform-result titles render the platform line first, and menu-path context is demoted to a weak helper line.
 - Telegram shortcut vocabulary must remain identical across inline buttons, persistent reply keyboards, and help copy. The supported operator-facing labels are `登录 / 进度 / 即采即发 / 点赞评论`; longer variants remain accepted only as backward-compatible aliases.
 - Failure-card login actions may not be inferred from generic summary prose. `🔐 登录` is reserved for explicit login-loss evidence from failure/platform-status/suggestion signals or `status=login_required`.
+
+## 2026-04-05
+
+- WeChat store parsing now treats desc and objectDesc as polymorphic fields: they may be strings or nested objects, and title extraction must read description / desc / content before falling back.
+- WeChat store resolver logic may not stop at the first discovered store object across window/parent/top/iframe scopes; it must select the data-bearing candidate using feed/comment/export evidence.
+- Telegram API calls now support transient proxy failover. On proxy-connection errors, the client opens a temporary direct-connect bypass window, rebuilds the session, and retries instead of failing immediately.

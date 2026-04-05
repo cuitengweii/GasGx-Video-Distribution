@@ -1,6 +1,6 @@
 # CyberCar State
 
-Last updated: 2026-04-03
+Last updated: 2026-04-05
 
 ## Scope
 
@@ -147,6 +147,24 @@ Last updated: 2026-04-03
 - After Douyin is green, open a separate thread for `kuaishou upload timeout (420s)` using the newest `immediate_publish_kuaishou_*.log`.
 - Re-run the failed Douyin video candidate from `collect_publish_latest|ctim-b1e08111a76a71f4` and confirm the next `immediate_publish_douyin_*.log` contains `Waiting for video editor form readiness...` before the first successful caption verification.
 - If the rerun still fails, capture the next Douyin log around upload completion and compare the page text snapshot with `_read_douyin_video_upload_state()` so the ready heuristic can be tightened around the current creator-center DOM.
+
+## 2026-04-05 Archive Update
+
+- `src/cybercar/engine.py` WeChat comment-store extraction was hardened in both runtime and Playwright paths:
+  - feed title resolution now supports nested payloads where `desc` / `objectDesc` are objects (`description` / `desc` / `content`) instead of plain strings.
+  - store discovery no longer picks the first discovered store blindly; it now collects candidate stores from `window`, `parent/top`, and iframes, then selects the best store by feed/comment availability score.
+- This change removes a known mismatch where WeChat pages with nested description objects or multiple injected store contexts could produce empty/incorrect post titles and unstable post matching.
+- `src/cybercar/common/telegram_api.py` now supports proxy-failure self-heal:
+  - proxy connectivity errors trigger a temporary direct-connection bypass window and session reset, so Telegram API calls can recover from transient local proxy outages.
+  - bypass duration is configurable via `CYBERCAR_TELEGRAM_PROXY_BYPASS_SECONDS` (minimum 30 seconds; default 180 seconds).
+- Local regression results for this archive:
+  - `pytest tests/test_telegram_api.py tests/test_engine_wechat.py tests/test_engine_publish_regressions.py -q` -> `78 passed`
+
+## Next Step Update (2026-04-05)
+
+- Run one real WeChat comment-manager session and verify extracted post cards now keep stable non-empty titles on pages where `desc` or `objectDesc` is object-shaped.
+- During the same window, simulate or observe one transient proxy failure and confirm Telegram API retries continue through the direct-bypass window without manual restart.
+- If title/matching still drifts in production, capture one live store snapshot and extend score weights or key fallbacks without changing the callback flow.
 
 ## 2026-04-03 Archive Update
 

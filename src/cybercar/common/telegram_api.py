@@ -93,20 +93,21 @@ def _resolve_session_proxy() -> str:
     return ""
 
 
-def _session_key(*, use_post: bool) -> str:
-    proxy_key = _resolve_session_proxy() or "direct"
+def _session_key(*, use_post: bool, force_direct: bool = False) -> str:
+    proxy_key = "" if force_direct else _resolve_session_proxy()
+    proxy_key = proxy_key or "direct"
     return f"{'post' if use_post else 'get'}|{proxy_key}"
 
 
-def _telegram_session(*, use_post: bool) -> requests.Session:
-    key = _session_key(use_post=use_post)
+def _telegram_session(*, use_post: bool, force_direct: bool = False) -> requests.Session:
+    key = _session_key(use_post=use_post, force_direct=force_direct)
     session = _SESSIONS.get(key)
     if session is None:
         session = requests.Session()
         adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
-        proxy = _resolve_session_proxy()
+        proxy = "" if force_direct else _resolve_session_proxy()
         if proxy and hasattr(session, "proxies"):
             session.proxies.update({"http": proxy, "https": proxy})
         _SESSIONS[key] = session
@@ -155,6 +156,18 @@ def _is_retryable_request_error(exc: BaseException) -> bool:
     )
 
 
+def _is_proxy_connection_error(exc: BaseException) -> bool:
+    if isinstance(exc, requests.exceptions.ProxyError):
+        return True
+    text = str(exc).lower()
+    markers = (
+        "unable to connect to proxy",
+        "proxyerror",
+        "failed to establish a new connection",
+    )
+    return any(marker in text for marker in markers)
+
+
 def call_telegram_api(
     *,
     bot_token: str,
@@ -185,23 +198,46 @@ def call_telegram_api(
         retry_count = max(0, _to_int(max_retries, 0))
 
     total_attempts = 1 + retry_count
-    for attempt in range(total_attempts):
-        session = _telegram_session(use_post=use_post)
+    attempt = 0
+    proxy_failover_used = False
+    force_direct = False
+    resp: requests.Response | None = None
+    while attempt < total_attempts:
+        session = _telegram_session(use_post=use_post, force_direct=force_direct)
+        request_timeout = min(timeout, 5) if force_direct else timeout
         try:
             if use_post:
                 if files:
-                    resp = session.post(endpoint, data=payload, files=dict(files), timeout=timeout)
+                    resp = session.post(endpoint, data=payload, files=dict(files), timeout=request_timeout)
                 else:
-                    resp = session.post(endpoint, data=payload, timeout=timeout)
+                    resp = session.post(endpoint, data=payload, timeout=request_timeout)
             else:
-                resp = session.get(endpoint, params=payload, timeout=timeout)
+                resp = session.get(endpoint, params=payload, timeout=request_timeout)
             break
         except requests.exceptions.RequestException as exc:
+            if (
+                not proxy_failover_used
+                and _resolve_session_proxy()
+                and _is_proxy_connection_error(exc)
+            ):
+                proxy_failover_used = True
+                force_direct = True
+                _reset_telegram_session()
+                if attempt + 1 >= total_attempts:
+                    total_attempts += 1
+                attempt += 1
+                continue
             should_retry = (attempt + 1) < total_attempts and _is_retryable_request_error(exc)
             if not should_retry:
                 raise
             _reset_telegram_session(use_post=use_post)
             time.sleep(_retry_sleep_seconds(attempt, retry_backoff_seconds))
+            attempt += 1
+            continue
+        attempt += 1
+
+    if resp is None:
+        raise RuntimeError(f"telegram {method_name} no response")
 
     try:
         body = resp.json() if (resp.text or "").strip() else {}
