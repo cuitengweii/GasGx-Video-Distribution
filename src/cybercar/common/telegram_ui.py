@@ -21,6 +21,7 @@ _X_LINK_HREF_RE = re.compile(
     r"<a\b[^>]*\bhref=[\"'](https?://(?:www\.)?(?:x\.com|twitter\.com|t\.co)/[^\"']+)[\"']",
     flags=re.IGNORECASE,
 )
+_COMPACT_TASK_TIMESTAMP_RE = re.compile(r"\b\d{8}[_-](\d{6})\b")
 _STALE_CALLBACK_QUERY_ERROR_MARKERS = (
     "query is too old",
     "response timeout expired",
@@ -289,6 +290,27 @@ def _normalize_punctuation(text: str) -> str:
     return token
 
 
+def _compact_task_timestamp_to_hhmm(text: str) -> str:
+    token = str(text or "").strip()
+    if not token:
+        return ""
+
+    def _replace(match: re.Match[str]) -> str:
+        compact = str(match.group(1) or "")
+        if len(compact) != 6:
+            return str(match.group(0) or "")
+        return f"{compact[:2]}:{compact[2:4]}"
+
+    compacted = _COMPACT_TASK_TIMESTAMP_RE.sub(_replace, token)
+    # Collapse fragments like "|3|18:28" to "|18:28" for concise header hints.
+    compacted = re.sub(
+        r"(^|[｜|])\d+\s*[｜|]\s*(\d{2}[:：]\d{2})(?=$|[｜|])",
+        lambda match: f"{str(match.group(1) or '')}{str(match.group(2) or '')}",
+        compacted,
+    )
+    return compacted
+
+
 def _compact_mobile_text(value: Any, *, limit: int = 72) -> str:
     text = str(value or "").strip()
     if not text:
@@ -402,6 +424,8 @@ def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     text = str(value or "").strip()
     if not text:
         return fallback
+    text = _compact_task_timestamp_to_hhmm(text)
+    text = re.sub(r"[Bb]\s*站", "哔站占位符", text)
     text = _strip_current_profile_phrase(text)
     keep_error_code = bool(_extract_error_code(text)) and ("\u53d1\u5e03\u5931\u8d25" in text)
     if not keep_error_code:
@@ -419,6 +443,7 @@ def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     if not re.search(r"[A-Za-z_:;,\-!?\|]", text):
         normalized = _normalize_punctuation(text)
         normalized = normalized.strip(" ：:|｜-_,，。；;！？!?")
+        normalized = normalized.replace("哔站占位符", "B站")
         if _looks_like_garbled_text(normalized):
             return fallback
         return normalized or fallback
@@ -439,6 +464,7 @@ def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     text = text.strip(" ：:|｜-_,，。；;！？!?")
     text = re.sub(r"(：\s*｜\s*)+", "：", text)
     text = re.sub(r"｜{2,}", "｜", text)
+    text = text.replace("哔站占位符", "B站")
     if _looks_like_garbled_text(text):
         return fallback
     return text or fallback
@@ -808,11 +834,8 @@ def _compact_platform_status_value(text: str) -> str:
             parts.append(f"\u65e5\u5fd7:{log_name}")
         return "\uff5c".join(parts)
     if any(token in lowered for token in ("\u5931\u8d25", "\u5f02\u5e38", "\u672a\u542f\u52a8", "failed", "error")):
-        log_name = _extract_log_name(raw)
         parts = ["\U0001f4e3 \u53d1\u5e03\u5931\u8d25"]
-        if log_name:
-            parts.append(f"\u65e5\u5fd7:{log_name}")
-        elif error_code:
+        if error_code:
             parts.append(f"\u9519\u8bef\u7801:{error_code}")
         else:
             parts.append("\u9519\u8bef\u7801")
@@ -872,7 +895,7 @@ def _normalize_platform_status_items(items: Sequence[Any]) -> list[Any]:
         meta = _platform_meta(label or value)
         updated = dict(item)
         compact_value = _compact_platform_status_value(value or label)
-        updated["label"] = f"{meta['emoji']} {meta['name']}{_platform_status_label_suffix(compact_value)}"
+        updated["label"] = f"{meta['name']}{_platform_status_label_suffix(compact_value)}"
         updated["value"] = compact_value
         normalized.append(updated)
     return sorted(normalized, key=_platform_status_priority)
@@ -1396,6 +1419,8 @@ def _prune_sections_for_kind(kind: str, status: str, sections: Sequence[Mapping[
     normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
     if not normalized:
         return []
+    if token == "publish_result" and any(str(section.get("title") or "").strip() == "平台状态" for section in normalized):
+        normalized = [section for section in normalized if str(section.get("title") or "").strip() != "候选信息"]
     if token == "collect_start":
         allowed_titles = {"任务概览", "候选信息", "发布选项"}
         pruned = [section for section in normalized if str(section.get("title") or "").strip() in allowed_titles]
@@ -2012,3 +2037,4 @@ def answer_interaction_toast(
         if _is_stale_callback_query_error(exc):
             return
         raise
+

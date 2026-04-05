@@ -354,7 +354,7 @@ def test_build_telegram_card_splits_prefixed_title_into_title_and_subtitle() -> 
     assert "<b>📌 执行摘要</b>" not in text
 
 
-def test_build_telegram_card_prioritizes_platform_result_sections_by_operator_flow() -> None:
+def test_build_telegram_card_hides_candidate_info_when_platform_status_exists() -> None:
     card = telegram_ui.build_telegram_card(
         "publish_result",
         {
@@ -372,7 +372,8 @@ def test_build_telegram_card_prioritizes_platform_result_sections_by_operator_fl
     text = str(card["text"])
     assert "<b>📌 执行摘要</b>" not in text
     assert "<b>🤖 机器信息</b>" not in text
-    assert text.index("<b>🧩 平台状态</b>") < text.index("<b>🧾 候选信息</b>")
+    assert "<b>🧩 平台状态</b>" in text
+    assert "<b>🧾 候选信息</b>" not in text
 
 
 def test_build_telegram_card_orders_summary_counts_for_platform_results() -> None:
@@ -436,7 +437,7 @@ def test_build_telegram_card_splits_prefixed_badge_title_into_stacked_platform_h
     assert "<b>📌 执行摘要</b>" not in str(card["text"])
 
 
-def test_build_telegram_card_normalizes_platform_status_items_with_platform_emojis() -> None:
+def test_build_telegram_card_normalizes_platform_status_items_without_platform_emojis() -> None:
     card = telegram_ui.build_telegram_card(
         "publish_result",
         {
@@ -456,11 +457,11 @@ def test_build_telegram_card_normalizes_platform_status_items_with_platform_emoj
     )
 
     text = str(card["text"])
-    assert "• <b>⚡ 快手 ❌</b>：🔐 需要登录" in text
-    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜错误码" in text
-    assert "• <b>📝 小红书</b>：✅ 已确认" in text
-    assert text.index("• <b>⚡ 快手 ❌</b>") < text.index("• <b>🎵 抖音 ❌</b>")
-    assert text.index("• <b>🎵 抖音 ❌</b>") < text.index("• <b>📝 小红书</b>")
+    assert "• <b>快手 ❌</b>：🔐 需要登录" in text
+    assert "• <b>抖音 ❌</b>：📣 发布失败｜错误码" in text
+    assert "• <b>小红书</b>：✅ 已确认" in text
+    assert text.index("• <b>快手 ❌</b>") < text.index("• <b>抖音 ❌</b>")
+    assert text.index("• <b>抖音 ❌</b>") < text.index("• <b>小红书</b>")
 
 
 def test_build_telegram_card_uses_neutral_overview_header_for_immediate_platform_summary() -> None:
@@ -493,8 +494,8 @@ def test_build_telegram_card_uses_neutral_overview_header_for_immediate_platform
 
     text = str(card["text"])
     assert text.startswith("<b>📌 平台概览</b>")
-    assert "• <b>📱 视频号 ❌</b>：🔐 需要登录" in text
-    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜错误码" in text
+    assert "• <b>视频号 ❌</b>：🔐 需要登录" in text
+    assert "• <b>抖音 ❌</b>：📣 发布失败｜错误码" in text
 
 
 def test_build_telegram_card_removes_ascii_letters_from_visible_text() -> None:
@@ -541,6 +542,43 @@ def test_build_telegram_card_limits_and_dedupes_platform_status_items() -> None:
     text = str(card["text"])
     assert text.count("• <b>") == 5
     assert "错误码：ERR_UPLOAD_TIMEOUT" in text or "错误码:ERR_UPLOAD_TIMEOUT" in text
+    assert "• <b>B站</b>：🕓 已排队" in text
+    assert "• <b>站</b>：🕓 已排队" not in text
+
+
+def test_build_telegram_card_platform_failure_uses_error_code_not_log_name() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {
+                    "title": "平台状态",
+                    "items": [
+                        {
+                            "label": "抖音",
+                            "value": "发布失败，日志:immediate_publish_douyin_20260405_160000.log，错误码:ERR_UPLOAD_TIMEOUT",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "错误码：ERR_UPLOAD_TIMEOUT" in text or "错误码:ERR_UPLOAD_TIMEOUT" in text
+    assert "日志:immediate_publish_douyin_20260405_160000.log" not in text
+    assert "日志：immediate_publish_douyin_20260405_160000.log" not in text
+
+
+def test_localize_card_text_compacts_task_identifier_timestamp_to_hour_minute() -> None:
+    text = telegram_ui._localize_card_text("collect_publish_latest|video|3|20260405_160321")
+
+    assert "20260405" not in text
+    assert "3｜16" not in text
+    assert "3|16" not in text
+    assert re.search(r"16[:：]03", text)
 
 
 def test_build_telegram_card_sorts_candidate_section_and_uses_readable_link_label() -> None:

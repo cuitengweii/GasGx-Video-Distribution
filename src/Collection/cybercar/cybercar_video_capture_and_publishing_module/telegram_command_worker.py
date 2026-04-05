@@ -1279,7 +1279,28 @@ def _outgoing_reply_markup(reply_markup: Optional[Dict[str, Any]], *, for_edit: 
         return None
     if "inline_keyboard" in reply_markup and _DISABLE_CARD_INLINE_BUTTONS:
         return {"inline_keyboard": []} if for_edit else None
-    return reply_markup if reply_markup else None
+    payload = dict(reply_markup)
+    inline_keyboard = payload.get("inline_keyboard")
+    if isinstance(inline_keyboard, list):
+        filtered_rows: list[list[Dict[str, Any]]] = []
+        for raw_row in inline_keyboard:
+            if not isinstance(raw_row, list):
+                continue
+            filtered_row: list[Dict[str, Any]] = []
+            for raw_button in raw_row:
+                if not isinstance(raw_button, dict):
+                    continue
+                text = str(raw_button.get("text") or "").strip()
+                callback_data = str(raw_button.get("callback_data") or "").strip().lower()
+                if "首页" in text or callback_data.endswith(":home") or callback_data == "home":
+                    continue
+                filtered_row.append(dict(raw_button))
+            if filtered_row:
+                filtered_rows.append(filtered_row)
+        payload["inline_keyboard"] = filtered_rows
+        if not filtered_rows:
+            return {"inline_keyboard": []} if for_edit else None
+    return payload if payload else None
 
 
 def _apply_x_link_preview_options(params: Dict[str, Any], text: Any) -> None:
@@ -2959,8 +2980,8 @@ def _build_runtime_status_section(workspace: Optional[Path]) -> dict[str, Any]:
     )
 
     return {
-        "title": "可继续操作" if all_idle else "执行状态",
-        "emoji": "✅" if all_idle else "🧯",
+        "title": "",
+        "emoji": "",
         "items": items,
     }
 
@@ -7870,24 +7891,29 @@ def _request_wechat_login_qr_via_persistent_entry(
     timeout_seconds: int,
     log_file: Path,
 ) -> Dict[str, Any]:
-    # Single entry for WeChat relogin: always use the persistent login page.
+    # Single entry for WeChat relogin: use persistent login page and keep a single
+    # Telegram QR card in the TTL window. Users can refresh QR on that card.
     return _request_platform_login_qr(
         platform_name="wechat",
         bot_token=bot_token,
         chat_id=chat_id,
         timeout_seconds=timeout_seconds,
         log_file=log_file,
-        refresh_page=True,
+        refresh_page=False,
         prefer_login_entry=True,
     )
 
 
-def _resolve_wechat_login_runtime_context(core_module: Any) -> Dict[str, Any]:
+def _resolve_wechat_login_runtime_context(
+    core_module: Any,
+    *,
+    prefer_login_entry: bool = False,
+) -> Dict[str, Any]:
     try:
         return _resolve_platform_login_runtime_context(
             core_module,
             "wechat",
-            prefer_login_entry=True,
+            prefer_login_entry=bool(prefer_login_entry),
         )
     except TypeError:
         return _resolve_platform_login_runtime_context(core_module, "wechat")
@@ -8164,7 +8190,7 @@ def _confirm_platform_login_done(
             debug_port=runtime_ctx["debug_port"],
             chrome_user_data_dir=runtime_ctx["chrome_user_data_dir"],
             auto_open_chrome=True,
-            refresh_page=True,
+            refresh_page=(runtime_ctx["platform"] != "wechat"),
         )
         if not bool(status.get("needs_login", True)):
             _append_log(log_file, f"[Worker] platform_login_done platform={runtime_ctx['platform']} confirmed=True")
@@ -8429,8 +8455,8 @@ def _build_immediate_platform_feedback_payload(
     feedback_status = "success"
     status_items: list[Any]
     if status == "success":
-        title = f"{label}发布已确认"
-        subtitle = "平台已确认发布成功"
+        title = f"{label}发布成功"
+        subtitle = ""
         status_items = ["平台已确认发布成功。"]
         if publish_id:
             status_items.append({"label": "发布ID", "value": publish_id})
@@ -8542,7 +8568,9 @@ def _send_immediate_platform_feedback(
         claimed = _claim_immediate_platform_feedback(workspace=workspace, item_id=item_id, platform=platform)
     item = claimed.get("item") if isinstance(claimed.get("item"), dict) else {}
     result = claimed.get("platform_result") if isinstance(claimed.get("platform_result"), dict) else {}
-    if bool(claimed.get("send_platform")) and item and result:
+    result_status = str(result.get("status") or "").strip().lower()
+    suppress_platform_feedback = result_status == "login_required"
+    if bool(claimed.get("send_platform")) and item and result and not suppress_platform_feedback:
         payload = _build_immediate_platform_feedback_payload(item=item, platform=platform, result=result)
         _send_background_feedback(
             runner=runner,
@@ -8559,6 +8587,7 @@ def _send_immediate_platform_feedback(
                 value=str(item.get("target_platforms") or ""),
                 item_id=item_id,
             ),
+            show_controls=False,
         )
     if send_summary and bool(claimed.get("send_summary")) and item:
         payload = _build_immediate_publish_summary_feedback_payload(item)
@@ -8577,6 +8606,7 @@ def _send_immediate_platform_feedback(
                 value=str(item.get("target_platforms") or ""),
                 item_id=item_id,
             ),
+            show_controls=False,
         )
 
 
@@ -12666,6 +12696,7 @@ def _send_background_feedback(
     platforms: Optional[Iterable[str]] = None,
     menu_label: str = "",
     task_identifier: str = "",
+    show_controls: bool = True,
 ) -> None:
     if not _should_send_background_feedback(status):
         if hasattr(runner, "core"):
@@ -12698,7 +12729,7 @@ def _send_background_feedback(
     if menu_section is not None:
         normalized_sections = [menu_section, *normalized_sections]
     normalized_sections = _optimize_feedback_sections_for_operator(normalized_sections)
-    feedback_actions = _build_failure_feedback_actions(status=status, sections=normalized_sections)
+    feedback_actions = _build_failure_feedback_actions(status=status, sections=normalized_sections) if show_controls else []
     card = build_action_feedback(
         status=status,
         title=display_title,
@@ -12707,7 +12738,10 @@ def _send_background_feedback(
         actions=feedback_actions,
         bot_name="CyberCar",
     )
-    card["reply_markup"] = _with_home_button(card.get("reply_markup") if isinstance(card, dict) else None)
+    if show_controls:
+        card["reply_markup"] = _with_home_button(card.get("reply_markup") if isinstance(card, dict) else None)
+    else:
+        card["reply_markup"] = None
     bot_token = str(getattr(email_settings, "telegram_bot_token", "") or "").strip()
     chat_id = str(getattr(email_settings, "telegram_chat_id", "") or "").strip()
     if not bot_token or not chat_id:
@@ -13124,7 +13158,7 @@ def _run_home_action_job(
         )
         if deleted:
             updated_task = _update_home_action_task(workspace, task_key, extra={"loading_message_id": 0})
-    if telegram_bot_token and telegram_chat_id and action_token in {"collect_now", "publish_run", "schedule_run", "login_qr"}:
+    if telegram_bot_token and telegram_chat_id and action_token in {"collect_now", "publish_run", "schedule_run"}:
         try:
             card = _home_feedback_response(
                 status="success" if result_status == "done" else "failed",
@@ -13793,7 +13827,9 @@ def _run_collect_publish_latest_job(
                     else []
                 ),
             ],
-            status="done",
+            # Keep this internal summary as non-final so it is not pushed as a
+            # standalone operator card. Actionable candidate cards are enough.
+            status="queued",
             platforms=target_platforms,
             menu_label=_menu_breadcrumb_for_action("collect_publish_latest", f"{normalized_media_kind}:{requested_limit}"),
         )
@@ -14700,6 +14736,10 @@ def handle_callback_update(
     video_name = str(item.get("video_name") or "").strip()
     status = str(item.get("status") or "").strip().lower()
     workflow = str(item.get("workflow") or "").strip().lower()
+    if action == "up" and workflow == "immediate_manual_publish":
+        # Backward compatibility: old prefilter cards used "保留本条(up)" to continue.
+        # In immediate_manual_publish workflow this should start normal publish.
+        action = "publish_normal"
     callback_reply = ""
     down_result_message = ""
     should_clear_buttons = True

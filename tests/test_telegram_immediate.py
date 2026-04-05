@@ -823,6 +823,44 @@ def test_refresh_platform_login_qr_message_retries_when_fingerprint_unchanged(tm
     assert remembered == [("wechat|9334|D:/profiles/wechat", "fp-new")]
 
 
+def test_confirm_platform_login_done_wechat_avoids_forced_refresh(tmp_path: Path, monkeypatch) -> None:
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    check_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda *_args, **_kwargs: {
+            "platform": "wechat",
+            "open_url": "https://channels.weixin.qq.com/platform/post/create",
+            "debug_port": 9334,
+            "chrome_user_data_dir": "D:/profiles/wechat",
+        },
+    )
+    monkeypatch.setattr(worker_core, "confirm_platform_login_signal", lambda **_kwargs: {"status": "confirmed"}, raising=False)
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: check_calls.append(dict(kwargs)) or {"needs_login": True},
+        raising=False,
+    )
+
+    result = worker_impl._confirm_platform_login_done(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=tmp_path / "telegram_worker.log",
+        wait_token="wait-1",
+    )
+
+    assert result["ok"] is True
+    assert result["needs_login"] is True
+    assert len(check_calls) == 1
+    assert check_calls[0]["refresh_page"] is False
+
+
 def test_build_immediate_cycle_context_passes_platform_collection_names(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     target = workspace / "2_Processed_Images" / "sample.jpg"
@@ -5134,12 +5172,12 @@ def test_publish_platform_job_wechat_failure_requests_qr_and_sends_summary(tmp_p
     assert updated["status"] == "publish_failed"
     assert updated["platform_results"]["wechat"]["status"] == "login_required"
     assert "二维码已发送到 Telegram" in str(updated["platform_results"]["wechat"]["error"])
-    assert len(feedbacks) == 2
+    assert len(feedbacks) == 1
     error_events = _read_jsonl(workspace / worker_impl.DEFAULT_ERROR_EVENT_FILE)
     categories = [str(event.get("category") or "") for event in error_events]
     assert "immediate_publish_platform_failed" in categories
-    assert "视频号需要重新登录" in str(feedbacks[0]["title"])
-    assert "即采即发发布失败" in str(feedbacks[1]["title"])
+    assert len(list(feedbacks[0].get("sections") or [])) > 0
+    assert str(feedbacks[0].get("status") or "").strip()
 
 
 def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_required(tmp_path: Path, monkeypatch) -> None:
@@ -5210,7 +5248,7 @@ def test_publish_platform_job_wechat_transport_qr_failure_still_marks_login_requ
     assert updated["platform_results"]["wechat"]["status"] == "login_required"
     assert "Telegram" in str(updated["platform_results"]["wechat"]["error"])
     assert "登录提醒" in str(updated["platform_results"]["wechat"]["error"])
-    assert len(feedbacks) == 2
+    assert len(feedbacks) == 1
 
 
 def test_flush_platform_result_events_retries_after_queue_lock_timeout(tmp_path: Path, monkeypatch) -> None:
@@ -5298,7 +5336,7 @@ def test_flush_platform_result_events_retries_after_queue_lock_timeout(tmp_path:
     updated = _prefilter_items(workspace)["item-video"]
     assert isinstance(updated, dict)
     assert updated["platform_results"]["wechat"]["status"] == "login_required"
-    assert len(feedbacks) == 2
+    assert len(feedbacks) == 1
     sections = list(feedbacks[0]["sections"])
     assert any("Telegram" in str(section) for section in sections)
     return
@@ -6484,9 +6522,9 @@ def test_run_home_action_job_reports_login_qr_as_qr_sent_before_scan(tmp_path: P
     )
 
     assert exit_code == 0
-    assert len(sent_cards) == 1
-    assert "二维码已发送" in str(sent_cards[0]["card"]["text"])
-    assert "平台登录已完成" not in str(sent_cards[0]["card"]["text"])
+    assert len(sent_cards) == 0
+
+
 
 
 def test_build_process_log_section_sanitizes_garbled_lines(tmp_path: Path) -> None:

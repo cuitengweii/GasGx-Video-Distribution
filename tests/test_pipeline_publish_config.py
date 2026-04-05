@@ -367,3 +367,61 @@ def test_recycle_allows_published_plus_skipped_duplicate(tmp_path: Path, monkeyp
 
     assert recycled == 1
     assert moved == [target.name]
+
+
+def test_send_login_required_alert_only_pushes_qr_card(tmp_path: Path, monkeypatch) -> None:
+    qr_calls: list[dict[str, object]] = []
+    text_calls: list[dict[str, object]] = []
+    logs: list[str] = []
+
+    monkeypatch.setattr(
+        pipeline.core,
+        "send_platform_login_qr_notification",
+        lambda **kwargs: qr_calls.append(dict(kwargs)) or {"ok": True, "sent": True},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_send_telegram_text",
+        lambda *args, **kwargs: text_calls.append({"args": args, "kwargs": dict(kwargs)}),
+    )
+    monkeypatch.setattr(pipeline.core, "_log", lambda message: logs.append(str(message)))
+
+    args = SimpleNamespace(monitor_url="")
+    settings = pipeline.EmailSettings(
+        enabled=True,
+        provider="",
+        env_prefix="",
+        resend_api_key="",
+        resend_from_email="",
+        resend_endpoint="",
+        resend_timeout_seconds=10,
+        recipients=[],
+        telegram_bot_token="token",
+        telegram_chat_id="chat",
+        telegram_timeout_seconds=20,
+        telegram_api_base="",
+    )
+
+    pipeline._send_login_required_alert(
+        args=args,
+        settings=settings,
+        platform="xiaohongshu",
+        stage="publish",
+        error_text="未登录，请扫码登录后继续",
+        debug_port=9336,
+        chrome_user_data_dir=str(tmp_path / "profile"),
+    )
+    pipeline._send_login_required_alert(
+        args=args,
+        settings=settings,
+        platform="xiaohongshu",
+        stage="publish",
+        error_text="未登录，请扫码登录后继续",
+        debug_port=9336,
+        chrome_user_data_dir=str(tmp_path / "profile"),
+    )
+
+    assert len(qr_calls) == 1
+    assert str(qr_calls[0].get("open_url") or "").startswith("https://creator.xiaohongshu.com")
+    assert text_calls == []
+    assert any("登录二维码已发送" in line for line in logs)

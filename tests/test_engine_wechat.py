@@ -172,6 +172,96 @@ def test_comment_login_notification_skips_when_page_is_not_login_gate(monkeypatc
     assert result["reason"] == "not_login_gate"
 
 
+def test_platform_login_confirm_wait_window_covers_qr_ttl() -> None:
+    assert engine.PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS >= engine.WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS
+
+
+def test_begin_platform_login_wait_reuses_recent_waiting_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    now_ts = 1_700_000_000.0
+    writes: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        engine,
+        "_read_platform_login_signal",
+        lambda *_args, **_kwargs: {
+            "platform": "wechat",
+            "profile_dir": "D:/profiles/wechat",
+            "open_url": "https://channels.weixin.qq.com/login.html",
+            "status": "waiting",
+            "token": "wait-token-existing",
+            "created_at": now_ts - 10.0,
+            "confirmed_at": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_write_platform_login_signal",
+        lambda _platform, _profile, payload: writes.append(dict(payload)),
+    )
+
+    wait_token = engine._begin_platform_login_wait(
+        platform_name="wechat",
+        profile_dir="D:/profiles/wechat",
+        open_url="https://channels.weixin.qq.com/login.html",
+    )
+
+    assert wait_token == "wait-token-existing"
+    assert len(writes) == 1
+    assert writes[0]["status"] == "waiting"
+    assert writes[0]["token"] == "wait-token-existing"
+
+
+def test_begin_platform_login_wait_rotates_stale_waiting_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    now_ts = 1_700_000_000.0
+    writes: list[dict[str, Any]] = []
+
+    class _FakeUuid:
+        hex = "wait-token-new"
+
+    monkeypatch.setattr(engine.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        engine,
+        "_read_platform_login_signal",
+        lambda *_args, **_kwargs: {
+            "platform": "wechat",
+            "profile_dir": "D:/profiles/wechat",
+            "open_url": "https://channels.weixin.qq.com/login.html",
+            "status": "waiting",
+            "token": "wait-token-old",
+            "created_at": now_ts - float(engine.PLATFORM_LOGIN_WAIT_TOKEN_REUSE_SECONDS) - 1.0,
+            "confirmed_at": 0.0,
+        },
+    )
+    monkeypatch.setattr(engine.uuid, "uuid4", lambda: _FakeUuid())
+    monkeypatch.setattr(
+        engine,
+        "_write_platform_login_signal",
+        lambda _platform, _profile, payload: writes.append(dict(payload)),
+    )
+
+    wait_token = engine._begin_platform_login_wait(
+        platform_name="wechat",
+        profile_dir="D:/profiles/wechat",
+        open_url="https://channels.weixin.qq.com/login.html",
+    )
+
+    assert wait_token == "wait-token-new"
+    assert len(writes) == 1
+    assert writes[0]["token"] == "wait-token-new"
+
+
+def test_match_platform_login_gate_detects_wechat_login_failed_retry_message() -> None:
+    result = engine._match_platform_login_gate_from_snapshot(
+        "wechat",
+        url="https://channels.weixin.qq.com/login.html",
+        text="登录失败，稍后重试",
+    )
+
+    assert result["needs_login"] is True
+    assert result["reason"] == "wechat_login_failed_retry"
+
+
 def test_prepare_platform_login_qr_notice_keeps_current_login_gate_page(monkeypatch: pytest.MonkeyPatch) -> None:
     page = object()
     stabilize_calls: list[dict[str, Any]] = []
@@ -283,6 +373,145 @@ def test_prepare_platform_login_qr_notice_retries_screenshot_before_source_fallb
     assert len(screenshot_calls) == 2
     assert source_calls == []
     assert result["photo_bytes"] == b"png-bytes"
+
+
+def test_wait_for_platform_login_confirmation_uses_stabilized_page_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakePage:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        def get(self, url: str) -> None:
+            self.url = str(url)
+
+        def refresh(self) -> None:
+            return None
+
+    login_page = FakePage("https://channels.weixin.qq.com/login.html")
+    business_page = FakePage("https://channels.weixin.qq.com/platform/post/create")
+    stabilize_calls: list[dict[str, Any]] = []
+    marked_ready: list[dict[str, Any]] = []
+    cleared_wait: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        engine,
+        "_stabilize_platform_session_page",
+        lambda page, **kwargs: stabilize_calls.append(dict(kwargs)) or business_page,
+    )
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda page, _platform: {
+            "needs_login": "login.html" in str(getattr(page, "url", "")),
+            "url": str(getattr(page, "url", "")),
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_clear_platform_login_signal",
+        lambda platform_name, profile_dir, wait_token="": cleared_wait.append(
+            {"platform": platform_name, "profile_dir": profile_dir, "wait_token": wait_token}
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_mark_platform_session_ready",
+        lambda platform_name, profile_dir, **kwargs: marked_ready.append(
+            {"platform": platform_name, "profile_dir": profile_dir, **dict(kwargs)}
+        ),
+    )
+
+    confirmed = engine._wait_for_platform_login_confirmation(
+        login_page,
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        chrome_user_data_dir="D:/profiles/wechat",
+        wait_token="wait-1",
+        timeout_seconds=1,
+    )
+
+    assert confirmed is True
+    assert stabilize_calls
+    assert all(bool(call.get("close_stale_login_tabs")) for call in stabilize_calls)
+    assert len(marked_ready) == 1
+    assert marked_ready[0]["url"] == "https://channels.weixin.qq.com/platform/post/create"
+    assert len(cleared_wait) == 1
+    assert cleared_wait[0]["wait_token"] == "wait-1"
+
+
+def test_wait_for_platform_login_confirmation_wechat_confirmed_signal_skips_forced_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakePage:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.get_calls: list[str] = []
+            self.refresh_calls = 0
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(str(url))
+            self.url = str(url)
+
+        def refresh(self) -> None:
+            self.refresh_calls += 1
+
+    page = FakePage("https://channels.weixin.qq.com/login.html")
+    needs_login_sequence = [True, False]
+
+    monkeypatch.setattr(engine, "_stabilize_platform_session_page", lambda current_page, **_kwargs: current_page)
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda current_page, _platform: {
+            "needs_login": needs_login_sequence.pop(0) if needs_login_sequence else False,
+            "url": str(getattr(current_page, "url", "")),
+            "reason": "login_url" if needs_login_sequence else "",
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_read_platform_login_signal",
+        lambda *_args, **_kwargs: {
+            "status": "confirmed",
+            "token": "wait-1",
+            "confirmed_at": 1.0,
+        },
+    )
+    monkeypatch.setattr(engine, "_clear_platform_login_signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_mark_platform_session_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_mark_platform_session_login_required", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    confirmed = engine._wait_for_platform_login_confirmation(
+        page,
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        chrome_user_data_dir="D:/profiles/wechat",
+        wait_token="wait-1",
+        timeout_seconds=2,
+    )
+
+    assert confirmed is True
+    assert page.get_calls == []
+    assert page.refresh_calls == 0
+
+
+def test_build_platform_login_qr_reply_markup_contains_done_and_refresh_actions() -> None:
+    wait_token = "wait-token-1"
+
+    reply_markup = engine._build_platform_login_qr_reply_markup(
+        platform_name="wechat",
+        wait_token=wait_token,
+    )
+    rows = reply_markup.get("inline_keyboard")
+    assert isinstance(rows, list)
+    assert rows
+    buttons = rows[0]
+    assert isinstance(buttons, list)
+    texts = [str(button.get("text") or "") for button in buttons if isinstance(button, dict)]
+    callback_data = [str(button.get("callback_data") or "") for button in buttons if isinstance(button, dict)]
+
+    assert "我已登录" in texts
+    assert "刷新二维码" in texts
+    assert engine._platform_login_callback_data("done", "wechat", wait_token) in callback_data
+    assert engine._platform_login_callback_data("refresh", "wechat", wait_token) in callback_data
 
 
 def test_build_login_qr_rect_script_wechat_skips_bare_canvas_selector() -> None:

@@ -728,37 +728,11 @@ def _build_telegram_prefilter_candidate_card(
         subtitle = f"\u7b2c {idx} \u6761 \u00b7 \u7b49\u5f85\u4f60\u5ba1\u6838"
     else:
         subtitle = "\u672c\u8f6e\u91c7\u96c6\u9884\u5ba1"
-    banner_platforms = _normalize_platform_tokens_for_banner(target_platforms or platform_hint)
-    target_names = "\u3001".join(_platform_display_name(token) for token in banner_platforms) or (platform_hint or "\u5168\u5e73\u53f0")
-    video_title = _resolve_video_title(
-        Path("candidate.mp4"),
-        manual_caption=_single_line_preview(tweet_text, limit=180),
-        video_meta={},
-    )
-    sections = [
-        {
-            "title": "\u53d1\u5e03\u4fe1\u606f",
-            "emoji": "\U0001f3af",
-            "items": [
-                {"label": "\u5e73\u53f0", "value": target_names},
-                {"label": "\u6807\u9898", "value": video_title},
-            ],
-        },
-    ]
-    warning_text = str(prefilter_warning or "").strip()
-    if warning_text:
-        sections.append(
-            {
-                "title": "\u5e73\u53f0\u9884\u68c0",
-                "emoji": "\U0001f510",
-                "items": [warning_text],
-            }
-        )
     card = build_telegram_card(
         "collect_result",
         {
             "subtitle": subtitle,
-            "sections": sections,
+            "sections": [],
         },
     )
     card["mode"] = "text"
@@ -1053,8 +1027,9 @@ def _send_telegram_prefilter_for_candidate(
         mode=mode,
         target_platforms=target_platforms,
     )
-    if str(media_kind or "").strip().lower() == "image":
-        card["preview_url"] = str(source_url or "").strip()
+    preview_url = str(_extract_x_preview_url(source_url) or "").strip()
+    if preview_url:
+        card["preview_url"] = preview_url
     try:
         return _send_telegram_card_message(
             email_settings,
@@ -1453,10 +1428,7 @@ def _send_login_required_alert(
 
     platform_display = _platform_display_name(platform) if platform else "\u91c7\u96c6\u94fe\u8def"
     stage_display = _stage_display_name(stage) if stage else "\u6267\u884c\u9636\u6bb5"
-    monitor_url = _resolve_monitor_url(args)
     assist_url = _resolve_login_assist_url(platform)
-    profile_dir = str(Path(chrome_user_data_dir or "").expanduser()) if chrome_user_data_dir else "\uff08\u672a\u63d0\u4f9b\uff09"
-    subject = f"[CyberCar][\u767b\u5f55\u63d0\u9192] {platform_display} \u9700\u8981\u626b\u7801"
     qr_result: dict[str, Any] = {}
     try:
         qr_result = core.send_platform_login_qr_notification(
@@ -1475,58 +1447,16 @@ def _send_login_required_alert(
         )
     except Exception as exc:
         qr_result = {"ok": False, "error": str(exc)}
-    card = build_telegram_card(
-        "alert",
-        {
-            "status": "login_required",
-            "title": f"{platform_display}\u767b\u5f55\u63d0\u9192",
-            "subtitle": (
-                f"{stage_display} \u68c0\u6d4b\u5230\u767b\u5f55\u5931\u6548\uff0c\u5df2"
-                + ("\u540c\u6b65\u53d1\u9001\u767b\u5f55\u4e8c\u7ef4\u7801" if bool(qr_result.get("sent")) else "\u5c1d\u8bd5\u63a8\u9001\u767b\u5f55\u4e8c\u7ef4\u7801")
-            ),
-            "sections": [
-                {
-                    "title": "\u5904\u7406\u5efa\u8bae",
-                    "emoji": "\U0001f510",
-                    "items": [
-                        "\u8bf7\u4f18\u5148\u5b8c\u6210\u626b\u7801\u767b\u5f55\uff0c\u518d\u91cd\u8bd5\u53d1\u5e03\u3002",
-                        {"label": "\u4e8c\u7ef4\u7801\u63a8\u9001", "value": "\u5df2\u53d1\u9001\u5230 Telegram" if bool(qr_result.get("sent")) else "\u672a\u6210\u529f\u53d1\u9001\uff0c\u8bf7\u6253\u5f00\u767b\u5f55\u8f85\u52a9\u9875"},
-                        {"label": "\u767b\u5f55\u8f85\u52a9\u9875", "text": "\u6253\u5f00\u8f85\u52a9\u9875", "url": assist_url},
-                        {"label": "\u76d1\u63a7\u9875", "text": "\u6253\u5f00\u76d1\u63a7\u9875", "url": monitor_url},
-                    ],
-                },
-                {
-                    "title": "\u4f1a\u8bdd\u4fe1\u606f",
-                    "emoji": "\U0001f9ed",
-                    "items": [
-                        {"label": "\u6267\u884c\u9636\u6bb5", "value": stage_display},
-                        {"label": "\u8c03\u8bd5\u7aef\u53e3", "value": f"127.0.0.1:{int(debug_port)}"},
-                        {"label": "\u4f1a\u8bdd\u76ee\u5f55", "value": profile_dir, "style": "code"},
-                    ],
-                },
-                {
-                    "title": "\u89e6\u53d1\u539f\u56e0",
-                    "emoji": "\u26a0\ufe0f",
-                    "items": [
-                        {"label": "\u9519\u8bef\u4fe1\u606f", "value": _single_line_preview(error_text, limit=220)},
-                        *(
-                            [{"label": "\u4e8c\u7ef4\u7801\u7ed3\u679c", "value": _single_line_preview(str(qr_result.get("error") or ""), limit=180)}]
-                            if qr_result and qr_result.get("error")
-                            else []
-                        ),
-                    ],
-                },
-            ],
-        },
+    if bool(qr_result.get("sent")):
+        core._log(f"[Notify] 登录二维码已发送：platform={platform_display} stage={stage_display}")
+        return
+    if bool(qr_result.get("skipped")):
+        core._log(f"[Notify] 登录二维码近期已发送，跳过重复卡片：platform={platform_display} stage={stage_display}")
+        return
+    core._log(
+        "[Notify] 登录二维码发送失败："
+        f"platform={platform_display} stage={stage_display} error={str(qr_result.get('error') or '').strip() or '-'}"
     )
-    _send_telegram_text(
-        settings,
-        str(card.get("text") or ""),
-        disable_web_page_preview=False,
-        reply_markup=card.get("reply_markup") if isinstance(card.get("reply_markup"), dict) else None,
-        parse_mode=str(card.get("parse_mode") or "HTML"),
-    )
-    core._log(f"[Notify] \u767b\u5f55\u63d0\u9192\u5df2\u53d1\u9001\uff1a{subject}")
 
 def _build_collect_start_message(args: argparse.Namespace) -> tuple[str, str]:
     keyword = str(getattr(args, "keyword", "") or "").strip() or core.DEFAULT_KEYWORD

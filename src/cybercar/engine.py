@@ -329,8 +329,9 @@ X_DISCOVERY_SCROLL_WAIT_MIN_SECONDS = 1.0
 WECHAT_LOGIN_QR_REFRESH_CALLBACK_PREFIX = "ctqr"
 WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS = 120
 WECHAT_LOGIN_QR_NOTICE_CACHE: dict[str, tuple[str, float]] = {}
-PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
+PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS = max(WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS, MAX_BLOCKING_WAIT_SECONDS)
 PLATFORM_LOGIN_CONFIRM_POLL_SECONDS = 2.0
+PLATFORM_LOGIN_WAIT_TOKEN_REUSE_SECONDS = max(WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS, 60)
 PLATFORM_LOGIN_MONITOR_REPEAT_NOTIFY_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_DEFAULT = 1800
 WECHAT_LOGIN_KEEPALIVE_INTERVAL_SECONDS_MIN = 300
@@ -1858,6 +1859,10 @@ def _build_platform_login_qr_reply_markup(platform_name: str, open_url: str = ""
         "inline_keyboard": [
             [
                 {
+                    "text": "我已登录",
+                    "callback_data": _platform_login_callback_data("done", platform, wait_token),
+                },
+                {
                     "text": "刷新二维码",
                     "callback_data": _platform_login_callback_data("refresh", platform, wait_token),
                 }
@@ -1908,6 +1913,7 @@ def _describe_platform_login_reason(reason: str) -> str:
     mapping = {
         "login_url": "\u53d1\u5e03\u9875\u5df2\u8df3\u8f6c\u5230\u767b\u5f55\u9875\u3002",
         "login_text": "\u53d1\u5e03\u9875\u63d0\u793a\u5f53\u524d\u8d26\u53f7\u9700\u8981\u91cd\u65b0\u767b\u5f55\u3002",
+        "wechat_login_failed_retry": "\u89c6\u9891\u53f7\u767b\u5f55\u9875\u8fd4\u56de\u300c\u767b\u5f55\u5931\u8d25\uff0c\u7a0d\u540e\u91cd\u8bd5\u300d\uff0c\u9700\u8981\u91cd\u65b0\u626b\u7801\u5c1d\u8bd5\u3002",
         "wechat_micro_route_error": "\u89c6\u9891\u53f7\u53d1\u5e03\u9875\u8fd4\u56de\u4e86\u5f02\u5e38\u8def\u7531\u72b6\u6001\uff0c\u901a\u5e38\u610f\u5473\u7740\u4f1a\u8bdd\u5df2\u5931\u6548\u3002",
         "wechat_qr_expired": "\u89c6\u9891\u53f7\u767b\u5f55\u4e8c\u7ef4\u7801\u5df2\u8fc7\u671f\uff0c\u9700\u8981\u91cd\u65b0\u767b\u5f55\u3002",
         "login_qr_not_found": "\u5f53\u524d\u9875\u9762\u672a\u627e\u5230\u53ef\u7528\u7684\u767b\u5f55\u4e8c\u7ef4\u7801\u3002",
@@ -3295,6 +3301,8 @@ def _classify_platform_login_root_cause(
 
     if normalized_reason in {"login_url", "login_text", "wechat_qr_expired"}:
         return "upstream_session_expired"
+    if normalized_reason == "wechat_login_failed_retry":
+        return "upstream_login_rejected_or_risk_control"
     if normalized_reason == "wechat_micro_route_error":
         if recent_session_ready:
             return "local_detection_or_route_anomaly"
@@ -3771,17 +3779,51 @@ def probe_platform_session_via_debug_port(
 
 
 def _begin_platform_login_wait(platform_name: str, profile_dir: str, open_url: str) -> str:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    normalized_profile_dir = str(Path(profile_dir or "").expanduser()).strip()
+    if not normalized_profile_dir:
+        normalized_profile_dir = str(Path(_default_profile_dir_for_platform(platform)).expanduser())
+    resolved_open_url = str(open_url or "").strip()
+    now_ts = time.time()
+
+    existing = _read_platform_login_signal(platform, normalized_profile_dir)
+    existing_token = str(existing.get("token") or "").strip()
+    existing_status = str(existing.get("status") or "").strip().lower()
+    existing_created_at = float(existing.get("created_at") or 0.0)
+    existing_open_url = str(existing.get("open_url") or "").strip()
+    open_url_compatible = (not resolved_open_url) or (not existing_open_url) or (existing_open_url == resolved_open_url)
+    if (
+        existing_token
+        and existing_status == "waiting"
+        and open_url_compatible
+        and (now_ts - existing_created_at) <= float(PLATFORM_LOGIN_WAIT_TOKEN_REUSE_SECONDS)
+    ):
+        payload = dict(existing)
+        payload.update({
+            "platform": platform,
+            "profile_dir": normalized_profile_dir,
+            "status": "waiting",
+            "token": existing_token,
+            "updated_at": now_ts,
+        })
+        if resolved_open_url:
+            payload["open_url"] = resolved_open_url
+        payload.setdefault("created_at", now_ts)
+        payload["confirmed_at"] = 0
+        _write_platform_login_signal(platform, normalized_profile_dir, payload)
+        return existing_token
+
     token = uuid.uuid4().hex
     payload = {
-        "platform": str(platform_name or "wechat").strip().lower() or "wechat",
-        "profile_dir": str(profile_dir or "").strip(),
-        "open_url": str(open_url or "").strip(),
+        "platform": platform,
+        "profile_dir": normalized_profile_dir,
+        "open_url": resolved_open_url,
         "status": "waiting",
         "token": token,
-        "created_at": time.time(),
+        "created_at": now_ts,
         "confirmed_at": 0,
     }
-    _write_platform_login_signal(platform_name, profile_dir, payload)
+    _write_platform_login_signal(platform, normalized_profile_dir, payload)
     return token
 
 
@@ -4096,36 +4138,65 @@ def _wait_for_platform_login_confirmation(
 ) -> bool:
     platform = str(platform_name or "").strip().lower() or "wechat"
     profile_dir = str(Path(chrome_user_data_dir).expanduser())
+    active_page = page
     deadline = time.time() + _normalize_blocking_timeout(
         timeout_seconds,
         PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS,
         minimum=1,
     )
     last_confirmed_at = 0.0
-    next_auto_refresh_at = time.time() + max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
-    while time.time() < deadline:
-        # Always inspect the current page before forcing a navigation.
-        # After the user scans the QR code, some platforms clear the login gate
-        # on the current page first. Jumping back to open_url too early can keep
-        # the session stuck on the login page.
-        if not _is_platform_login_gate(page, platform):
-            _clear_platform_login_signal(platform, profile_dir, wait_token)
-            _mark_platform_session_ready(platform, profile_dir, url=str(_page_current_url(page) or open_url or ""))
-            return True
-        if time.time() >= next_auto_refresh_at:
+    auto_refresh_interval = max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
+    auto_refresh_enabled = platform != "wechat"
+    next_auto_refresh_at = time.time() + auto_refresh_interval
+    last_login_reason = ""
+
+    def _probe_login_gate(*, force_stabilize: bool = False) -> tuple[bool, str, str]:
+        nonlocal active_page
+        probe_page = active_page
+        if force_stabilize or platform == "wechat":
             try:
-                page.get(open_url)
+                probe_page = _stabilize_platform_session_page(
+                    probe_page,
+                    platform_name=platform,
+                    open_url=open_url,
+                    close_stale_login_tabs=True,
+                )
+            except Exception:
+                probe_page = active_page
+        active_page = probe_page
+        state = inspect_platform_login_gate(active_page, platform)
+        needs_login = bool(state.get("needs_login"))
+        current_url = str(state.get("url") or _page_current_url(active_page) or open_url or "")
+        current_reason = str(state.get("reason") or "").strip().lower()
+        return needs_login, current_url, current_reason
+
+    while time.time() < deadline:
+        # Probe against a stabilized tab selection to avoid false negatives when
+        # login completes on a business tab while a stale login tab still exists.
+        needs_login, current_url, current_reason = _probe_login_gate(force_stabilize=False)
+        if current_reason:
+            last_login_reason = current_reason
+        if not needs_login:
+            _clear_platform_login_signal(platform, profile_dir, wait_token)
+            _mark_platform_session_ready(platform, profile_dir, url=current_url)
+            return True
+        if auto_refresh_enabled and time.time() >= next_auto_refresh_at:
+            try:
+                active_page.get(open_url)
             except Exception:
                 try:
-                    page.refresh()
+                    active_page.refresh()
                 except Exception:
                     pass
             time.sleep(1.0)
-            if not _is_platform_login_gate(page, platform):
+            needs_login, current_url, current_reason = _probe_login_gate(force_stabilize=True)
+            if current_reason:
+                last_login_reason = current_reason
+            if not needs_login:
                 _clear_platform_login_signal(platform, profile_dir, wait_token)
-                _mark_platform_session_ready(platform, profile_dir, url=str(_page_current_url(page) or open_url or ""))
+                _mark_platform_session_ready(platform, profile_dir, url=current_url)
                 return True
-            next_auto_refresh_at = time.time() + max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
+            next_auto_refresh_at = time.time() + auto_refresh_interval
         signal = _read_platform_login_signal(platform, profile_dir)
         signal_token = str(signal.get("token") or "").strip()
         signal_status = str(signal.get("status") or "").strip().lower()
@@ -4133,26 +4204,38 @@ def _wait_for_platform_login_confirmation(
         if signal_status == "confirmed" and signal_token and signal_token == str(wait_token or "").strip() and confirmed_at > last_confirmed_at:
             last_confirmed_at = confirmed_at
             _log(f"[Uploader:{platform}] Login confirmation received via Telegram; rechecking session.")
-            try:
-                page.get(open_url)
-            except Exception:
+            if platform != "wechat":
                 try:
-                    page.refresh()
+                    active_page.get(open_url)
                 except Exception:
-                    pass
-            time.sleep(1.0)
-            if not _is_platform_login_gate(page, platform):
+                    try:
+                        active_page.refresh()
+                    except Exception:
+                        pass
+                time.sleep(1.0)
+            needs_login, current_url, current_reason = _probe_login_gate(force_stabilize=True)
+            if current_reason:
+                last_login_reason = current_reason
+            if not needs_login:
                 _clear_platform_login_signal(platform, profile_dir, wait_token)
-                _mark_platform_session_ready(platform, profile_dir, url=str(_page_current_url(page) or open_url or ""))
+                _mark_platform_session_ready(platform, profile_dir, url=current_url)
                 return True
             _log(f"[Uploader:{platform}] Login still not ready after confirmation; continue automatic polling.")
-            next_auto_refresh_at = time.time() + max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
+            if auto_refresh_enabled:
+                next_auto_refresh_at = time.time() + auto_refresh_interval
         time.sleep(max(0.5, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS)))
+    final_needs_login, final_url, final_reason = _probe_login_gate(force_stabilize=True)
+    if final_reason:
+        last_login_reason = final_reason
+    if not final_needs_login:
+        _clear_platform_login_signal(platform, profile_dir, wait_token)
+        _mark_platform_session_ready(platform, profile_dir, url=final_url)
+        return True
     _mark_platform_session_login_required(
         platform,
         profile_dir,
-        url=str(_page_current_url(page) or open_url or ""),
-        reason="login_confirmation_timeout",
+        url=final_url,
+        reason=last_login_reason or "login_confirmation_timeout",
     )
     return False
 
@@ -9975,6 +10058,19 @@ def _match_platform_login_gate_from_snapshot(
         domain_keyword = ".".join(parts[-2:]) if len(parts) >= 2 else host
     except Exception:
         domain_keyword = ""
+
+    if platform == "wechat":
+        wechat_login_failed_markers = (
+            "\u767b\u5f55\u5931\u8d25",
+            "\u7a0d\u540e\u91cd\u8bd5",
+        )
+        if any(marker in combined_text or marker in compact_text for marker in wechat_login_failed_markers):
+            return {
+                "needs_login": True,
+                "reason": "wechat_login_failed_retry",
+                "matched_marker": "\u767b\u5f55\u5931\u8d25",
+                "url": url_text,
+            }
 
     url_tokens = tuple(str(item or "").lower() for item in (cfg.get("url_tokens") or ()) if str(item or "").strip())
     if url_tokens and any(token in url_lower for token in url_tokens):
