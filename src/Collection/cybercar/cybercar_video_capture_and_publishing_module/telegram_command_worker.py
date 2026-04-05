@@ -1270,6 +1270,17 @@ def _split_chunks(text: str, max_chars: int = MAX_REPLY_CHARS) -> list[str]:
     return chunks
 
 
+_DISABLE_CARD_INLINE_BUTTONS = True
+
+
+def _outgoing_reply_markup(reply_markup: Optional[Dict[str, Any]], *, for_edit: bool = False) -> Optional[Dict[str, Any]]:
+    if not isinstance(reply_markup, dict):
+        return None
+    if "inline_keyboard" in reply_markup and _DISABLE_CARD_INLINE_BUTTONS:
+        return {"inline_keyboard": []} if for_edit else None
+    return reply_markup if reply_markup else None
+
+
 def _send_reply(
     *,
     bot_token: str,
@@ -1280,12 +1291,13 @@ def _send_reply(
     parse_mode: str = "",
 ) -> None:
     chunks = _split_chunks(text, MAX_REPLY_CHARS) or ["(empty)"]
+    outgoing_reply_markup = _outgoing_reply_markup(reply_markup, for_edit=False)
     for idx, chunk in enumerate(chunks):
         params: Dict[str, Any] = {"chat_id": chat_id, "text": chunk}
         if str(parse_mode or "").strip():
             params["parse_mode"] = str(parse_mode or "").strip()
-        if idx == 0 and isinstance(reply_markup, dict):
-            params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
+        if idx == 0 and isinstance(outgoing_reply_markup, dict):
+            params["reply_markup"] = json.dumps(outgoing_reply_markup, ensure_ascii=True)
         _telegram_api(
             bot_token=bot_token,
             method="sendMessage",
@@ -1314,8 +1326,9 @@ def _send_text_message(
     reply_markup: Optional[Dict[str, Any]] = None,
 ) -> int:
     params: Dict[str, Any] = {"chat_id": chat_id, "text": str(text or "").strip() or "(empty)"}
-    if isinstance(reply_markup, dict):
-        params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
+    outgoing_reply_markup = _outgoing_reply_markup(reply_markup, for_edit=False)
+    if isinstance(outgoing_reply_markup, dict):
+        params["reply_markup"] = json.dumps(outgoing_reply_markup, ensure_ascii=True)
     payload = _telegram_api(
         bot_token=bot_token,
         method="sendMessage",
@@ -1408,8 +1421,11 @@ def _send_card_message(
     parse_mode = str(card.get("parse_mode") or "").strip()
     if parse_mode:
         params["parse_mode"] = parse_mode
-    reply_markup = card.get("reply_markup")
-    if isinstance(reply_markup, dict) and reply_markup:
+    reply_markup = _outgoing_reply_markup(
+        card.get("reply_markup") if isinstance(card.get("reply_markup"), dict) else None,
+        for_edit=False,
+    )
+    if isinstance(reply_markup, dict):
         params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
     _telegram_api(
         bot_token=bot_token,
@@ -2359,6 +2375,21 @@ def _extract_error_code(*values: str) -> str:
     return ""
 
 
+def _strip_error_code_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    cleaned = re.sub(
+        r"(?:error\s*code|err(?:or)?\s*code|code|错误码)\s*[:=：]\s*[A-Za-z0-9._-]{3,}",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\b(?:E|ERR)_[A-Z0-9_]{3,}\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n,，;；:：|/-")
+    return cleaned
+
+
 def _build_task_log_section(log_paths: Iterable[str]) -> Optional[Dict[str, Any]]:
     normalized = [_log_display_name(path) for path in log_paths if str(path or "").strip()]
     if not normalized:
@@ -2467,7 +2498,7 @@ def _build_task_identifier_section(task_identifier: str) -> Optional[Dict[str, A
 
 
 _OPERATOR_PRIORITY_LABELS = {
-    "执行结果",
+    "状态",
     "目标平台",
     "平台摘要",
     "采集媒体",
@@ -2502,15 +2533,16 @@ def _optimize_feedback_sections_for_operator(
                     machine_items.append(item)
                     continue
                 label = str(item.get("label") or "").strip()
+                normalized_item = dict(item)
+                if label == "执行结果":
+                    label = "状态"
+                    normalized_item["label"] = "状态"
                 if label in _OPERATOR_PRIORITY_LABELS:
-                    operator_items.append(dict(item))
+                    operator_items.append(normalized_item)
                 else:
-                    machine_items.append(dict(item))
+                    machine_items.append(normalized_item)
             continue
-        if title == "执行结果" and not operator_items:
-            operator_items.extend(items[:1])
-            if len(items) > 1:
-                remaining_sections.append({"title": title, "emoji": emoji or "📝", "items": items[1:]})
+        if title == "执行结果":
             continue
         remaining_sections.append({"title": title, "emoji": emoji, "items": items})
 
@@ -2693,22 +2725,9 @@ def _normalize_task_log_sections(sections: Iterable[dict[str, Any]]) -> list[dic
     for section in sections or []:
         if not isinstance(section, dict):
             continue
-        if str(section.get("title") or "").strip() != "任务日志":
-            normalized_sections.append(dict(section))
+        if str(section.get("title") or "").strip() == "任务日志":
             continue
-        items = section.get("items") or []
-        log_paths: list[str] = []
-        if isinstance(items, list):
-            for item in items:
-                if isinstance(item, dict):
-                    value = _log_display_name(str(item.get("value") or "").strip())
-                else:
-                    value = _log_display_name(str(item or "").strip())
-                if value:
-                    log_paths.append(value)
-        replacement = _build_task_log_section(log_paths)
-        if replacement is not None:
-            normalized_sections.append(replacement)
+        normalized_sections.append(dict(section))
     return normalized_sections
 
 
@@ -3913,10 +3932,28 @@ def _candidate_source_url(candidate: Mapping[str, Any]) -> str:
     return str(candidate.get("url") or "").strip()
 
 
+def _source_url_explicitly_points_to_video(source_url: str) -> bool:
+    normalized_url = str(source_url or "").strip()
+    if not normalized_url:
+        return False
+    try:
+        parsed = urlparse(normalized_url)
+        normalized_path = str(parsed.path or "").strip().lower()
+    except Exception:
+        normalized_path = normalized_url.lower()
+    if not normalized_path:
+        return False
+    return any(token in normalized_path for token in ("/video/", "/videos/", "/reel/", "/reels/", "/shorts/"))
+
+
 def _candidate_matches_collect_publish_media_kind(candidate: Mapping[str, Any], media_kind: str) -> bool:
     normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind)
     if normalized_media_kind != "image":
         return True
+
+    source_url = _candidate_source_url(candidate)
+    if _source_url_explicitly_points_to_video(source_url):
+        return False
 
     raw_candidate_media_kind = str(candidate.get("media_kind") or "").strip().lower()
     if raw_candidate_media_kind in {"image", "photo"}:
@@ -3924,7 +3961,6 @@ def _candidate_matches_collect_publish_media_kind(candidate: Mapping[str, Any], 
     if raw_candidate_media_kind in {"video", "animated_gif", "gif"}:
         return False
 
-    source_url = _candidate_source_url(candidate)
     if not _extract_x_status_id_from_url(source_url):
         return True
     try:
@@ -4274,7 +4310,7 @@ def _home_feedback_response(
         sections.append(menu_section)
     detail_text = str(detail or "").strip()
     if detail_text:
-        sections.append({"title": "执行结果", "emoji": "📌", "items": [detail_text[:1200]]})
+        sections.append({"title": "处理状态", "emoji": "📌", "items": [detail_text[:1200]]})
     card = build_action_feedback(
         status=status,
         title=title,
@@ -4402,7 +4438,6 @@ def _build_distribution_result_card(
         else f"{_normalize_immediate_collect_media_kind(media_kind)}:{platform_value}"
     )
     title = _prefix_menu_title(title, _menu_breadcrumb_for_action(action_token, breadcrumb_value))
-    log_paths = _collect_result_log_paths(raw_result, merged)
     video_names = _extract_published_video_names(merged)
     menu_label = _menu_breadcrumb_for_action(action_token, breadcrumb_value)
     menu_section = _build_menu_path_section(menu_label)
@@ -4411,7 +4446,6 @@ def _build_distribution_result_card(
             action=action_token,
             value=breadcrumb_value,
             menu_label=menu_label,
-            log_path=log_paths[0] if log_paths else "",
         )
     )
     sections: list[Dict[str, Any]] = [
@@ -4422,7 +4456,7 @@ def _build_distribution_result_card(
             "emoji": "📌",
             "items": [
                 {"label": "目标平台", "value": _format_platform_text(platforms)},
-                {"label": "执行结果", "value": "成功" if effective_status == "done" else "需处理"},
+                {"label": "状态", "value": "成功" if effective_status == "done" else "需处理"},
                 {"label": "耗时", "value": f"{float(raw_result.get('elapsed') or 0.0):.1f}s"},
             ],
         }
@@ -4441,19 +4475,6 @@ def _build_distribution_result_card(
                     {"label": f"视频 {idx}", "value": _preview_text(name, limit=120) or "-"}
                     for idx, name in enumerate(video_names, start=1)
                 ],
-            }
-        )
-    if log_paths:
-        task_log_section = _build_task_log_section(log_paths)
-        if task_log_section is not None:
-            sections.append(task_log_section)
-    summary = _preview_text(_compact_log_mentions(_summarize_run(dict(raw_result or {}), title)), limit=600)
-    if summary:
-        sections.append(
-            {
-                "title": "执行结果",
-                "emoji": "📝",
-                "items": [summary],
             }
         )
     sections = _optimize_feedback_sections_for_operator(sections)
@@ -4508,7 +4529,6 @@ def _build_collect_result_card(
         title,
         _menu_breadcrumb_for_action("collect_now", f"{normalized_media_kind}:{_extract_collect_candidate_total(merged) or 0}"),
     )
-    log_paths = _collect_result_log_paths(raw_result, merged)
     menu_label = _menu_breadcrumb_for_action("collect_now", f"{normalized_media_kind}:{_extract_collect_candidate_total(merged) or 0}")
     menu_section = _build_menu_path_section(menu_label)
     task_identifier_section = _build_task_identifier_section(
@@ -4516,10 +4536,8 @@ def _build_collect_result_card(
             action="collect_now",
             value=f"{normalized_media_kind}:{_extract_collect_candidate_total(merged) or 0}",
             menu_label=menu_label,
-            log_path=log_paths[0] if log_paths else "",
         )
     )
-    summary = _preview_text(_compact_log_mentions(_summarize_run(dict(raw_result or {}), title)), limit=600)
     sections: list[Dict[str, Any]] = [
         *([task_identifier_section] if task_identifier_section is not None else []),
         *([menu_section] if menu_section is not None else []),
@@ -4528,7 +4546,7 @@ def _build_collect_result_card(
             "emoji": "📌",
             "items": [
                 {"label": "采集媒体", "value": media_label},
-                {"label": "执行结果", "value": "成功" if result_status == "done" else "需处理"},
+                {"label": "状态", "value": "成功" if result_status == "done" else "需处理"},
                 {"label": "耗时", "value": f"{float(raw_result.get('elapsed') or 0.0):.1f}s"},
             ],
         }
@@ -4536,18 +4554,6 @@ def _build_collect_result_card(
     candidate_total = _extract_collect_candidate_total(merged)
     if candidate_total > 0:
         sections[0]["items"].append({"label": "候选数量", "value": str(candidate_total)})
-    if log_paths:
-        task_log_section = _build_task_log_section(log_paths)
-        if task_log_section is not None:
-            sections.append(task_log_section)
-    if summary:
-        sections.append(
-            {
-                "title": "执行结果",
-                "emoji": "📝",
-                "items": [summary],
-            }
-        )
     sections = _optimize_feedback_sections_for_operator(sections)
     card = build_action_feedback(
         status="success" if result_status == "done" else "failed",
@@ -5317,8 +5323,9 @@ def _edit_reply(
             raise RuntimeError("missing target message for edit")
         params["chat_id"] = chat_id
         params["message_id"] = int(message_id)
-    if isinstance(reply_markup, dict):
-        params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
+    outgoing_reply_markup = _outgoing_reply_markup(reply_markup, for_edit=True)
+    if isinstance(outgoing_reply_markup, dict):
+        params["reply_markup"] = json.dumps(outgoing_reply_markup, ensure_ascii=True)
     _telegram_api(
         bot_token=bot_token,
         method="editMessageText",
@@ -5880,7 +5887,6 @@ def _describe_home_action_task(task: Dict[str, Any]) -> str:
     parts = [status_text]
     detail = str(task.get("detail") or "").strip()
     updated_at = str(task.get("updated_at") or "").strip()
-    log_path = str(task.get("log_path") or "").strip()
     task_identifier = str(task.get("task_identifier") or "").strip() or _build_home_task_identifier(task)
     if detail and detail != status_text:
         parts.append(detail)
@@ -5888,8 +5894,6 @@ def _describe_home_action_task(task: Dict[str, Any]) -> str:
         parts.append(f"最近更新：{updated_at}")
     if task_identifier:
         parts.append(f"任务标识：{task_identifier}")
-    if log_path:
-        parts.append(f"任务日志：{log_path}")
     return "\n".join(parts)
 
 
@@ -6110,7 +6114,7 @@ def _recover_orphaned_home_action_tasks(
             task["detail"] = (
                 "后台进程已退出，但当前卡片回传中断。请查看最近结果消息；如仍无结果，请重新发起一次。"
                 if orphaned
-                else "后台任务超过30分钟无进展，已按失活回收。请查看最近日志；如需继续，请重新发起一次。"
+                else "后台任务超过30分钟无进展，已按失活回收。如需继续，请重新发起一次。"
             )
             task["updated_at"] = now_text
             task["updated_epoch"] = now_epoch
@@ -6484,8 +6488,11 @@ def _flush_pending_background_feedback(
         parse_mode = str(card.get("parse_mode") or "").strip()
         if parse_mode:
             params["parse_mode"] = parse_mode
-        reply_markup = card.get("reply_markup")
-        if isinstance(reply_markup, dict) and reply_markup:
+        reply_markup = _outgoing_reply_markup(
+            card.get("reply_markup") if isinstance(card.get("reply_markup"), dict) else None,
+            for_edit=False,
+        )
+        if isinstance(reply_markup, dict):
             params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
         sent = False
         last_exc: Optional[Exception] = None
@@ -7136,7 +7143,7 @@ def _recover_orphaned_immediate_candidate(
         updated["error"] = "后台发布进程已退出，状态回传中断。请重新发起发布。"
         updated["failure_reason"] = str(updated.get("failure_reason") or updated["error"]).strip()
         updated["failure_category"] = str(updated.get("failure_category") or "worker_exit").strip()
-        updated["failure_suggestion"] = str(updated.get("failure_suggestion") or "重新发起发布，若重复出现请查看对应平台日志。").strip()
+        updated["failure_suggestion"] = str(updated.get("failure_suggestion") or "重新发起发布，若重复出现请继续排查。").strip()
         results[platform] = updated
         changed = True
 
@@ -7602,9 +7609,6 @@ def _needs_wechat_original_confirmation(item: Dict[str, Any]) -> bool:
 
 def _build_immediate_publish_confirm_reply_markup(item_id: str, source_url: str) -> Dict[str, Any]:
     rows: list[list[Dict[str, str]]] = []
-    link = str(source_url or "").strip()
-    if link:
-        rows.append([{"text": "🔗 原帖", "url": link}])
     rows.append(
         [
             {"text": "⚡ 发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}"},
@@ -7628,7 +7632,7 @@ def _build_immediate_publish_confirm_text(item: Dict[str, Any]) -> str:
     if tweet_text:
         summary_items: list[Any] = [tweet_text]
     else:
-        summary_items = ["本条未附带原帖摘要，请直接点击原帖确认。"]
+        summary_items = ["本条未附带原帖摘要，请通过卡片预览链接确认。"]
     source_url = str(item.get('source_url') or "").strip()
     coordination_items: list[Any] = []
     coordination_summary = str(item.get("coordination_summary") or "").strip()
@@ -7656,9 +7660,9 @@ def _build_immediate_publish_confirm_text(item: Dict[str, Any]) -> str:
             "items": [
                 {"label": "平台", "value": platforms},
                 {"label": "标题", "value": title},
-                {"label": "原帖链接", "value": source_url or "未记录原帖链接"},
             ],
         },
+        _build_card_preview_link_section(source_url),
     ]
     if coordination_items:
         sections.append(
@@ -7706,9 +7710,9 @@ def _build_immediate_publish_confirm_card(item: Dict[str, Any], item_id: str) ->
                 "items": [
                     {"label": "平台", "value": _platforms_to_logo_text(_resolve_item_target_platforms(item))},
                     {"label": "标题", "value": _resolve_immediate_item_title(item)},
-                    {"label": "原帖链接", "value": source_url or "未记录原帖链接"},
                 ],
             },
+            _build_card_preview_link_section(source_url),
             {
                 "title": "发布选项",
                 "emoji": "✍️",
@@ -7719,6 +7723,7 @@ def _build_immediate_publish_confirm_card(item: Dict[str, Any], item_id: str) ->
             },
         ],
         source_url=source_url,
+        include_source_button=False,
         action_rows=[
             [
                 {"text": "⚡ 发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}"},
@@ -8019,7 +8024,12 @@ def _refresh_platform_login_qr_message(
         filename = str(prepared.get("filename") or "platform_login_qr.png")
         mime = str(prepared.get("mime") or "image/png")
         caption = str(prepared.get("caption") or "")
-        reply_markup = prepared.get("reply_markup") if isinstance(prepared.get("reply_markup"), dict) else {}
+        reply_markup = _outgoing_reply_markup(
+            prepared.get("reply_markup") if isinstance(prepared.get("reply_markup"), dict) else None,
+            for_edit=True,
+        )
+        if not isinstance(reply_markup, dict):
+            reply_markup = {"inline_keyboard": []}
         media = {
             "type": "photo",
             "media": "attach://photo",
@@ -8181,7 +8191,7 @@ def _build_prefilter_down_result_message(
 ) -> str:
     result = "已写入拒绝状态" if changed else "已经是拒绝状态（重复点击）"
     return _build_text_notice(
-        "预过滤执行结果",
+        "预过滤处理通知",
         [
             {
                 "title": "处理结果",
@@ -8232,9 +8242,9 @@ def _build_prefilter_status_card(
             "items": [
                 {"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)},
                 {"label": "标题", "value": _resolve_immediate_item_title(item)},
-                    {"label": "原帖链接", "value": source_url or "未记录原帖链接"},
             ],
         },
+        _build_card_preview_link_section(source_url),
     ]
     actor = str(item.get("actor") or "").strip()
     updated_at = str(item.get("updated_at") or "").strip()
@@ -8251,6 +8261,7 @@ def _build_prefilter_status_card(
         subtitle=subtitle,
         sections=sections,
         source_url=source_url,
+        include_source_button=False,
         menu_label=_menu_breadcrumb_for_item(item),
         task_identifier=_build_task_identifier(
             action="collect_publish_latest",
@@ -8312,22 +8323,14 @@ def _build_platform_launch_result_section(platform_results: Dict[str, Dict[str, 
             ):
                 details = _describe_platform_failure(platform, str(result.get("error") or "").strip())
             status_text = _status_text_for_failure(status, details, pid)
-            error_code = _extract_error_code(
-                str(result.get("error") or "").strip(),
-                str(details.get("category") or "").strip(),
-                str(details.get("reason") or "").strip(),
+            reason = _strip_error_code_text(
+                str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
             )
-            log_name = _log_display_name(str(result.get("log_path") or "").strip())
-            reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
             parts = [status_text]
-            if error_code:
-                parts.append(f"错误码：{error_code}")
-            elif reason:
+            if reason:
                 parts.append(f"原因：{_preview_text(reason, limit=80)}")
-            if log_name:
-                parts.append(f"日志：{log_name}")
             if status == "failed":
-                parts.append("按错误码查日志修复")
+                parts.append("请修复后重试")
             value = "；".join(parts) if parts else "后台任务启动失败"
         items.append({"label": label, "value": value})
     if not items:
@@ -8437,39 +8440,23 @@ def _build_immediate_platform_feedback_payload(
         subtitle = "平台登录态失效，请先完成登录"
         feedback_status = "failed"
         status_items = ["检测到平台当前需要重新登录。"]
-        reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
+        reason = _strip_error_code_text(
+            str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
+        )
         if reason:
             status_items.append({"label": "原因", "value": reason})
-        error_code = _extract_error_code(
-            str(result.get("error") or "").strip(),
-            str(details.get("category") or "").strip(),
-            reason,
-        )
-        if error_code:
-            status_items.append({"label": "错误码", "value": error_code})
-        log_name = _log_display_name(str(result.get("log_path") or "").strip())
-        if log_name:
-            status_items.append({"label": "日志", "value": log_name})
-        status_items.append("登录后如仍失败，按错误码检索日志继续修复。")
+        status_items.append("登录后如仍失败，请继续修复。")
     else:
         title = f"{label}发布失败"
         subtitle = "平台处理失败，请查看原因后重试"
         feedback_status = "failed"
         status_items = ["平台处理失败，本次未确认发布成功。"]
-        reason = str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
-        error_code = _extract_error_code(
-            str(result.get("error") or "").strip(),
-            str(details.get("category") or "").strip(),
-            reason,
+        reason = _strip_error_code_text(
+            str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
         )
-        if error_code:
-            status_items.append({"label": "错误码", "value": error_code})
-        log_name = _log_display_name(str(result.get("log_path") or "").strip())
-        if log_name:
-            status_items.append({"label": "日志", "value": log_name})
-        if not error_code and reason:
+        if reason:
             status_items.append({"label": "原因", "value": _preview_text(reason, limit=120)})
-        status_items.append("按错误码检索对应日志并修复后重试。")
+        status_items.append("请修复后重试。")
 
     return {
         "title": title,
@@ -9048,13 +9035,10 @@ def _summarize_run(result: Dict[str, Any], title: str) -> str:
     lines.append(f"{title}: {status}")
     lines.append(f"退出码: {code}")
     lines.append(f"耗时: {elapsed:.1f}s")
-    for idx, log_path in enumerate(log_paths, start=1):
-        prefix = "日志" if idx == 1 else f"日志{idx}"
-        lines.append(f"{prefix}: {log_path}")
     if skip_reason:
         lines.append(f"结果说明: {skip_reason}")
     elif unconfirmed_publish:
-        lines.append("结果说明: 未检测到平台执行日志或有效执行输出，当前只能确认任务结束，不能确认平台已实际发布。")
+        lines.append("结果说明: 未检测到有效执行输出，当前只能确认任务结束，不能确认平台已实际发布。")
 
     key_lines: list[str] = []
     benign_notify_markers = (
@@ -10484,20 +10468,27 @@ def _resolve_immediate_item_platform_text(item: Dict[str, Any], *, with_logo: bo
     return _platforms_to_text(platforms)
 
 
+def _build_card_preview_link_section(source_url: str) -> dict[str, Any]:
+    link = str(source_url or "").strip()
+    return {
+        "title": "卡片预览链接",
+        "emoji": "🔗",
+        "items": ([link] if link else ["未记录卡片预览链接"]),
+    }
+
+
 def _build_immediate_candidate_info_section(
     item: Dict[str, Any],
     *,
     title: str = "候选信息",
     include_platform: bool = True,
 ) -> dict[str, Any]:
-    source_url = str(item.get("source_url") or "").strip()
     items: list[dict[str, str]] = []
     if include_platform:
         items.append({"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)})
     items.extend(
         [
             {"label": "标题", "value": _resolve_immediate_item_title(item)},
-            {"label": "原帖链接", "value": source_url or "未记录原帖链接"},
         ]
     )
     return {
@@ -11662,7 +11653,7 @@ def _finalize_immediate_collect_target(
                     "items": [
                         source_note,
                         "当前仅完成候选确认，尚未真正进入平台发布。",
-                        "请先检查失败平台的日志或登录状态，再重新点击发布。",
+                        "请先检查失败平台状态，再重新点击发布。",
                     ],
                 },
                 _build_platform_launch_result_section(platform_results),
@@ -12743,8 +12734,11 @@ def _send_background_feedback(
     parse_mode = str(card.get("parse_mode") or "").strip()
     if parse_mode:
         params["parse_mode"] = parse_mode
-    reply_markup = card.get("reply_markup")
-    if isinstance(reply_markup, dict) and reply_markup:
+    reply_markup = _outgoing_reply_markup(
+        card.get("reply_markup") if isinstance(card.get("reply_markup"), dict) else None,
+        for_edit=False,
+    )
+    if isinstance(reply_markup, dict):
         params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
     try:
         _shared_call_telegram_api(
@@ -12814,7 +12808,7 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
     login_required = bool(payload.get("login_required"))
     status = "success" if bool(payload.get("ok")) and reply_count > 0 else "failed"
     title = f"{platform_name}点赞评论已完成" if status == "success" else f"{platform_name}点赞评论未完成"
-    subtitle = "已返回本次命中的短视频和评论内容，便于直接复查。"
+    subtitle = ""
     if login_required:
         subtitle = "视频号当前未登录，本轮未执行点赞评论。"
     sections: list[dict[str, Any]] = [
@@ -12880,39 +12874,11 @@ def _build_comment_reply_result_card(result: Dict[str, Any]) -> Dict[str, Any]:
         })
     records = payload.get("records") if isinstance(payload.get("records"), list) else []
     if not records:
-        sections.append({
-            "title": "结果",
-            "emoji": "🧾",
-            "items": ["本次没有新的评论回复。"],
-        })
-    for idx, record in enumerate(records[:5], start=1):
-        if not isinstance(record, dict):
-            continue
-        record_platform_token = _normalize_platform_tokens([str(record.get("platform") or "")])
-        active_platform_token = record_platform_token[0] if record_platform_token else (platform_token[0] if platform_token else "wechat")
-        published_text = str(record.get("post_published_text") or "").strip()
-        comment_author = str(record.get("comment_author") or "").strip()
-        comment_time = str(record.get("comment_time") or "").strip()
-        author_line = comment_author or "-"
-        if comment_time:
-            author_line = f"{author_line}｜{comment_time}"
-        link_label, link_value = _resolve_comment_reply_post_link(record, active_platform_token)
-        item_lines = [
-            {"label": "短视频", "value": _preview_text(record.get("post_title"), limit=120) or "-"},
-            {"label": "发布时间", "value": published_text or "-"},
-            {"label": "评论用户", "value": author_line},
-            {"label": "原评论", "value": _preview_text(record.get("comment_preview"), limit=160) or "-"},
-            {"label": "回复来源", "value": str(record.get("reply_provider") or "-").strip() or "-"},
-            {"label": "自动回复", "value": _preview_text(record.get("reply_text"), limit=160) or "-"},
-            {"label": "回复时间", "value": str(record.get("replied_at") or "-").strip() or "-"},
-        ]
-        if link_label and link_value:
-            item_lines.insert(1, {"label": link_label, "value": link_value})
         sections.append(
             {
-                "title": f"回复 {idx}",
-                "emoji": "💬",
-                "items": item_lines,
+                "title": "结果",
+                "emoji": "🧾",
+                "items": ["本次没有新的评论回复。"],
             }
         )
 
@@ -13236,7 +13202,7 @@ def _run_home_action_job(
                     _describe_home_action_task(updated_task),
                 ),
                 subtitle=f"当前配置：{resolved_profile}",
-                sections=[{"title": "执行结果", "emoji": "📌", "items": [_describe_home_action_task(updated_task)]}],
+                sections=[{"title": "处理状态", "emoji": "📌", "items": [_describe_home_action_task(updated_task)]}],
                 status="success" if result_status == "done" else "failed",
             )
     return int(exit_code)
@@ -13257,23 +13223,6 @@ def _run_comment_reply_job(
     requested_platform = str(platform or "").strip().lower()
     comment_platform = "all" if requested_platform in {"", "all"} else (_normalize_platform_tokens([requested_platform])[0] if _normalize_platform_tokens([requested_platform]) else "wechat")
     target_platforms = _resolve_comment_reply_platforms(comment_platform)
-    platform_label = " / ".join(_menu_platform_label(item) for item in target_platforms)
-    if telegram_bot_token and telegram_chat_id:
-        try:
-            startup_text = (
-                "点赞评论启动中\n"
-                f"目标平台：{platform_label}\n"
-                f"目标：最近 {max(1, int(post_limit))} 个有评论视频\n"
-                "完成后会回传短视频标题、原评论、自动回复结果。"
-            )
-            _send_reply(
-                bot_token=telegram_bot_token,
-                chat_id=telegram_chat_id,
-                text=startup_text,
-                timeout_seconds=max(10, int(timeout_seconds)),
-            )
-        except Exception:
-            pass
     try:
         _, core = _load_runtime_modules()
         engagement_module = _load_engagement_module()
@@ -14821,7 +14770,7 @@ def handle_callback_update(
                 card_update = _build_prefilter_status_card(
                     item=refreshed_item,
                     title="失败平台已补发" if spawned > 0 else "失败平台补发未启动",
-                    subtitle="后台只重试之前失败或需要登录的平台" if spawned > 0 else "失败平台未成功重新排队，请查看进度和日志",
+                    subtitle="后台只重试之前失败或需要登录的平台" if spawned > 0 else "失败平台未成功重新排队，请查看进度",
                     status="running" if spawned > 0 else "failed",
                     result_section_title="执行状态",
                     result_items=[
@@ -14898,7 +14847,7 @@ def handle_callback_update(
                 )
                 if not optimistic_card_sent:
                     started_item = _get_prefilter_item(workspace, item_id) or {}
-                    final_note = "已选择原创发布，后台任务已提交，等待平台执行结果。" if declare_original else "已选择普通发布，后台任务已提交，等待平台执行结果。"
+                    final_note = "已选择原创发布，后台任务已提交，等待平台状态回传。" if declare_original else "已选择普通发布，后台任务已提交，等待平台状态回传。"
                     if immediate_test_mode:
                         final_note = "测试模式任务已提交，后续会继续真实采集和平台发布，只是放宽了前置筛选。"
                     card_update = _build_prefilter_status_card(

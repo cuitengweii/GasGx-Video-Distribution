@@ -167,7 +167,7 @@ def test_build_telegram_card_compacts_candidate_source_subtitle() -> None:
         },
     )
 
-    assert "<i>· 来源最近 3 条</i>" in str(card["text"])
+    assert "· 来源最近 3 条" in str(card["text"])
 
 
 def test_build_telegram_card_compacts_processing_subtitle() -> None:
@@ -181,7 +181,7 @@ def test_build_telegram_card_compacts_processing_subtitle() -> None:
         },
     )
 
-    assert "<i>· 后台处理中</i>" in str(card["text"])
+    assert "· 后台处理中" in str(card["text"])
 
 
 def test_build_telegram_card_compacts_platform_result_subtitle() -> None:
@@ -307,7 +307,7 @@ def test_build_telegram_home_strips_html_from_title() -> None:
     assert "&lt;b&gt;" not in text
     assert "<b>🏠 CyberCar｜🏠 CyberCar｜即采即发</b>" not in text
     assert "<b>🏠 即采即发</b>" in text
-    assert "<i>· 当前配置：默认配置</i>" in text
+    assert "当前配置" not in text
 
 
 def test_build_telegram_home_strips_html_from_subtitle_and_section_content() -> None:
@@ -330,7 +330,7 @@ def test_build_telegram_home_strips_html_from_subtitle_and_section_content() -> 
     assert "<i><i>" not in text
     assert "&lt;b&gt;" not in text
     assert "&lt;i&gt;" not in text
-    assert "<i>· 当前配置：默认配置｜视频/图片双流程</i>" in text
+    assert "当前配置" not in text
     assert "执行说明" not in text
     assert "视频即采即发：只扫 X 视频帖。" not in text
     assert "• <b>说明</b>：两条流程互相独立。" not in text
@@ -540,7 +540,7 @@ def test_build_telegram_card_limits_and_dedupes_platform_status_items() -> None:
 
     text = str(card["text"])
     assert text.count("• <b>") == 5
-    assert text.count("错误码") == 1
+    assert "错误码" not in text
 
 
 def test_build_telegram_card_sorts_candidate_section_and_uses_readable_link_label() -> None:
@@ -590,3 +590,53 @@ def test_build_telegram_card_filters_garbled_text_and_unifies_punctuation() -> N
     assert "???" not in text
     assert "：" in text
     assert "；" in text or "｜" in text
+
+
+def test_build_telegram_card_strips_candidate_platform_emojis() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {
+                    "title": "候选信息",
+                    "items": [
+                        {"label": "平台", "value": "📱视频号 / 🎵抖音 / 📝小红书 / ⚡快手 / 📺B站"},
+                    ],
+                }
+            ],
+        },
+    )
+    text = str(card["text"])
+    assert "视频号 / 抖音 / 小红书 / 快手 / 哔哩哔哩" in text
+    assert "📱" not in text
+    assert "🎵" not in text
+    assert "📝小红书" not in text
+    assert "⚡快手" not in text
+    assert "📺" not in text
+
+
+def test_build_telegram_card_removes_operation_record_section() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {
+                    "title": "候选信息",
+                    "items": [{"label": "标题", "value": "示例标题"}],
+                },
+                {
+                    "title": "操作记录",
+                    "items": [{"label": "操作人", "value": "@"}, {"label": "时间", "value": "2026-04-05 10:00:00"}],
+                },
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "操作记录" not in text
+    assert "操作人" not in text
+    assert "2026-04-05" not in text

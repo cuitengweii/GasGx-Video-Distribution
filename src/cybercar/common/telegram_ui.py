@@ -70,7 +70,6 @@ _HUMAN_FIRST_SECTION_TITLES = {
     "处理建议": 2,
     "结果说明": 3,
     "执行摘要": 4,
-    "执行结果": 5,
 }
 _MACHINE_LAST_SECTION_TITLES = {
     "机器信息": 100,
@@ -83,8 +82,10 @@ _FAILURE_DETAIL_SECTION_TITLES = {"失败原因", "结果说明", "处理建议"
 _REMOVED_SECTION_TITLES = {
     "执行说明",
     "执行摘要",
+    "执行结果",
     "机器信息",
     "发布选项",
+    "操作记录",
     "任务标识",
     "菜单链路",
     "核心入口",
@@ -232,6 +233,8 @@ _VALUE_LIMIT_BY_LABEL: dict[str, int] = {
     "错误码": 24,
 }
 
+_CANDIDATE_DECORATIVE_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+
 
 def _looks_like_garbled_text(text: str) -> bool:
     token = str(text or "").strip()
@@ -243,6 +246,20 @@ def _looks_like_garbled_text(text: str) -> bool:
     if len(token) >= 4 and q_count >= max(3, len(token) // 2):
         return True
     return False
+
+
+def _strip_candidate_decorative_emoji(text: Any) -> str:
+    token = str(text or "").strip()
+    if not token:
+        return ""
+    if re.fullmatch(r"https?://\S+", token, flags=re.IGNORECASE):
+        return token
+    token = token.replace("\ufe0f", "").replace("\u200d", "")
+    token = _CANDIDATE_DECORATIVE_EMOJI_RE.sub("", token)
+    token = token.replace("B站", "哔哩哔哩").replace("b站", "哔哩哔哩")
+    token = re.sub(r"\s+", " ", token).strip()
+    token = re.sub(r"\s*/\s*", " / ", token)
+    return token.strip()
 
 
 def _normalize_punctuation(text: str) -> str:
@@ -295,8 +312,16 @@ def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
         if isinstance(raw_item, Mapping):
             item = dict(raw_item)
             label = _localize_card_text(_strip_html_like_markup(item.get("label", "")))
+            if label == "执行结果":
+                label = "状态"
+            if label == "错误码":
+                continue
             value = _strip_html_like_markup(item.get("value", ""))
             text = _strip_html_like_markup(item.get("text", ""))
+            if section_title == "候选信息":
+                label = _strip_candidate_decorative_emoji(label)
+                value = _strip_candidate_decorative_emoji(value)
+                text = _strip_candidate_decorative_emoji(text)
             url = str(item.get("url") or "").strip()
             if not url and re.fullmatch(r"https?://\S+", str(value or "").strip(), flags=re.IGNORECASE):
                 url = str(value or "").strip()
@@ -333,6 +358,9 @@ def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
         compact = _compact_mobile_text(_localize_card_text(_strip_html_like_markup(raw_item)), limit=72)
         if not compact or compact in seen:
             continue
+        compact = compact.replace("执行结果", "状态")
+        if "错误码" in compact:
+            continue
         seen.add(compact)
         polished.append(compact)
     if section_title == "候选信息":
@@ -348,8 +376,23 @@ def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
     return polished[: max(1, int(limit))]
 
 
+def _strip_current_profile_phrase(text: Any) -> str:
+    token = str(text or "").strip()
+    if not token:
+        return ""
+    # Remove profile hints like "当前配置：xxx" (and mojibake variant) from card text.
+    token = re.sub(r"(?:^|[|｜])\s*(?:当前配置|褰撳墠閰嶇疆)\s*[:：][^|｜]*", "", token)
+    token = re.sub(r"\s*[|｜]\s*", "｜", token).strip("｜| ").strip()
+    token = re.sub(r"\s+", " ", token).strip()
+    return token
+
+
 def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     text = str(value or "").strip()
+    if not text:
+        return fallback
+    text = _strip_current_profile_phrase(text)
+    text = _strip_error_code_text(text)
     if not text:
         return fallback
     if _looks_like_garbled_text(text):
@@ -363,6 +406,9 @@ def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     for phrase, replacement in _ENGLISH_PHRASE_ALIASES:
         text = re.sub(re.escape(phrase), replacement, text, flags=re.IGNORECASE)
     if re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE):
+        lower_url = text.lower()
+        if "x.com/" in lower_url or "twitter.com/" in lower_url or "t.co/" in lower_url:
+            return text
         return "点击查看"
 
     def _replace_token(match: re.Match[str]) -> str:
@@ -514,7 +560,7 @@ def _format_value(item: Mapping[str, Any]) -> str:
     if style == "bold":
         return f"<b>{rendered_value or escaped_value}</b>"
     if style == "italic":
-        return f"<i>{rendered_value or escaped_value}</i>"
+        return rendered_value or escaped_value
     return rendered_value or escaped_value or "内容已省略"
 
 
@@ -605,6 +651,16 @@ def _extract_error_code(text: str) -> str:
     return ""
 
 
+def _strip_error_code_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    cleaned = _INLINE_ERROR_CODE_PATTERN.sub("", raw)
+    cleaned = _ERROR_CODE_PATTERN.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n,，;；:：|/-")
+    return cleaned
+
+
 def _extract_log_name(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -625,12 +681,7 @@ def _collect_portable_items_from_removed_section(title: str, items: Sequence[Any
             value = str(item.get("value") or item.get("text") or "").strip()
             if not value:
                 continue
-            error_code = _extract_error_code(f"{label} {value}")
             log_name = _extract_log_name(f"{label} {value}")
-            if label == "错误码" and value:
-                collected.append({"label": "错误码", "value": value.upper()})
-            elif error_code:
-                collected.append({"label": "错误码", "value": error_code})
             if label == "日志" and value:
                 collected.append({"label": "日志", "value": _extract_log_name(value) or value})
             elif log_name:
@@ -639,10 +690,7 @@ def _collect_portable_items_from_removed_section(title: str, items: Sequence[Any
         text = str(item or "").strip()
         if not text:
             continue
-        error_code = _extract_error_code(text)
         log_name = _extract_log_name(text)
-        if error_code:
-            collected.append({"label": "错误码", "value": error_code})
         if log_name:
             collected.append({"label": "日志", "value": log_name})
     return collected
@@ -702,25 +750,19 @@ def _merge_portable_items_into_sections(
 
 
 def _compact_platform_status_value(text: str) -> str:
-    raw = str(text or "").strip()
+    raw = _strip_error_code_text(str(text or "").strip())
     lowered = raw.lower()
     if not raw:
         return "⚠️ 待确认"
     if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
-        code = _extract_error_code(raw)
         log_name = _extract_log_name(raw)
         parts = ["🔐 需要登录"]
-        if code:
-            parts.append(f"错误码:{code}")
         if log_name:
             parts.append(f"日志:{log_name}")
         return "｜".join(parts)
     if any(token in lowered for token in ("失败", "异常", "未启动", "failed", "error")):
-        code = _extract_error_code(raw)
         log_name = _extract_log_name(raw)
         parts = ["📣 发布失败"]
-        if code:
-            parts.append(f"错误码:{code}")
         if log_name:
             parts.append(f"日志:{log_name}")
         else:
@@ -959,7 +1001,7 @@ def _extract_primary_result_signal(sections: Sequence[Mapping[str, Any]]) -> str
             if not isinstance(item, Mapping):
                 continue
             label = str(item.get("label") or "").strip()
-            if label not in {"执行结果", "结果", "平台摘要"}:
+            if label not in {"状态", "执行结果", "结果", "平台摘要"}:
                 continue
             value = str(item.get("value") or item.get("text") or "").strip()
             if value:
@@ -1035,8 +1077,9 @@ def _compact_subtitle_text(subtitle: str) -> str:
     ordered_match = re.fullmatch(r"候选来源：X 搜索结果时间倒序｜目标 (\d+) 条", text)
     if ordered_match:
         return f"来源倒序｜{ordered_match.group(1)}条"
-    text = text.replace("当前配置：", "配置：")
-    text = text.replace("当前配置:", "配置：")
+    text = _strip_current_profile_phrase(text)
+    if not text:
+        return ""
     if len(text) <= 28:
         return text
     return text[:25].rstrip() + "..."
@@ -1108,9 +1151,12 @@ def _should_hide_platform_subtitle_line(status: str, platform_header: str, subti
 
 
 def _decorate_context_line(text: str) -> str:
-    clean = str(text or "").strip()
+    clean = _normalize_punctuation(str(text or "").strip())
     if not clean:
         return ""
+    if "http" not in clean.lower():
+        clean = re.sub(r"\s*/\s*", "｜", clean)
+        clean = re.sub(r"｜{2,}", "｜", clean)
     return f"· {clean}"
 
 
@@ -1202,8 +1248,6 @@ def _prioritize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]
         if status_token in {"success", "done"}:
             if title in {"人工关注", "执行摘要"}:
                 return (_HUMAN_FIRST_SECTION_TITLES.get(title, 10), index)
-            if title == "执行结果":
-                return (120, index)
         return (40, index)
 
     return [section for _, section in sorted(enumerate(normalized), key=lambda pair: _section_rank(pair[1], pair[0]))]
@@ -1283,6 +1327,7 @@ def _rank_summary_item(item: Any, index: int) -> tuple[int, int]:
         "成功平台": 0,
         "失败平台": 1,
         "目标平台": 2,
+        "状态": 3,
         "执行结果": 3,
         "结果": 3,
         "平台摘要": 4,
@@ -1481,14 +1526,14 @@ def build_telegram_card(
         subtitle_line = "" if _should_hide_platform_subtitle_line(status, display_platform_header, display_subtitle) else display_subtitle
         merged_hint = _merge_header_hint_parts(context, subtitle_line)
         if merged_hint:
-            header.append(f"<i>{_render_inline_text(_decorate_context_line(_decorate_platform_subtitle_line(status, merged_hint)))}</i>")
+            header.append(_render_inline_text(_decorate_context_line(_decorate_platform_subtitle_line(status, merged_hint))))
     else:
         header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(display_title)}</b>"]
         if hide_success_context_line:
             display_context = ""
         merged_hint = _merge_header_hint_parts(display_context, display_subtitle)
         if merged_hint:
-            header.append(f"<i>{_render_inline_text(_decorate_context_line(merged_hint))}</i>")
+            header.append(_render_inline_text(_decorate_context_line(merged_hint)))
     text_lines = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:
@@ -1530,7 +1575,7 @@ def build_telegram_home(
     display_home_subtitle = _localize_card_text(subtitle)
     header_subtitle_parts = [part for part in (display_home_context, display_home_subtitle) if str(part or "").strip()]
     if header_subtitle_parts:
-        header.append(f"<i>{_render_inline_text(_decorate_context_line('｜'.join(header_subtitle_parts)))}</i>")
+        header.append(_render_inline_text(_decorate_context_line("｜".join(header_subtitle_parts))))
     body = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:
@@ -1687,6 +1732,18 @@ def _known_home_message_ids(state: Mapping[str, Any]) -> list[int]:
     return values[:_HOME_STATE_HISTORY_LIMIT]
 
 
+_DISABLE_CARD_INLINE_BUTTONS = True
+
+
+def _outgoing_reply_markup(reply_markup: Any, *, for_edit: bool = False) -> dict[str, Any] | None:
+    if not isinstance(reply_markup, Mapping):
+        return None
+    payload = dict(reply_markup)
+    if "inline_keyboard" in payload and _DISABLE_CARD_INLINE_BUTTONS:
+        return {"inline_keyboard": []} if for_edit else None
+    return payload if payload else None
+
+
 def _message_params(chat_id: str, card: Mapping[str, Any]) -> dict[str, Any]:
     params: dict[str, Any] = {
         "chat_id": str(chat_id or "").strip(),
@@ -1694,8 +1751,8 @@ def _message_params(chat_id: str, card: Mapping[str, Any]) -> dict[str, Any]:
         "parse_mode": str(card.get("parse_mode") or "HTML"),
         "disable_web_page_preview": True,
     }
-    reply_markup = card.get("reply_markup")
-    if isinstance(reply_markup, Mapping) and reply_markup:
+    reply_markup = _outgoing_reply_markup(card.get("reply_markup"), for_edit=False)
+    if isinstance(reply_markup, Mapping):
         params["reply_markup"] = json.dumps(dict(reply_markup), ensure_ascii=True)
     return params
 
@@ -1752,6 +1809,9 @@ def send_or_update_home_message(
         edit_params.pop("chat_id", None)
         edit_params["chat_id"] = stored_chat_id
         edit_params["message_id"] = stored_message_id
+        edit_reply_markup = _outgoing_reply_markup(reply_markup, for_edit=True)
+        if isinstance(edit_reply_markup, Mapping):
+            edit_params["reply_markup"] = json.dumps(dict(edit_reply_markup), ensure_ascii=True)
         try:
             _call_telegram_api_with_emoji_fallback(
                 bot_token=bot_token,
@@ -1760,14 +1820,14 @@ def send_or_update_home_message(
                 timeout_seconds=api_timeout,
                 use_post=True,
             )
-            if _reply_markup_is_empty(reply_markup):
+            if _reply_markup_is_empty(edit_reply_markup):
                 _call_telegram_api_with_emoji_fallback(
                     bot_token=bot_token,
                     method="editMessageReplyMarkup",
                     params={
                         "chat_id": stored_chat_id,
                         "message_id": stored_message_id,
-                        "reply_markup": json.dumps({}, ensure_ascii=True),
+                        "reply_markup": json.dumps(dict(edit_reply_markup), ensure_ascii=True),
                     },
                     timeout_seconds=api_timeout,
                     use_post=True,
@@ -1851,6 +1911,9 @@ def send_interaction_result(
             edit_params["inline_message_id"] = inline_message_id
         else:
             edit_params["message_id"] = int(message_id)
+        edit_reply_markup = _outgoing_reply_markup(card.get("reply_markup") if isinstance(card, Mapping) else None, for_edit=True)
+        if isinstance(edit_reply_markup, Mapping):
+            edit_params["reply_markup"] = json.dumps(dict(edit_reply_markup), ensure_ascii=True)
         try:
             _call_telegram_api_with_emoji_fallback(
                 bot_token=bot_token,

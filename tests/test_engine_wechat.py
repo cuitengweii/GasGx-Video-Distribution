@@ -1273,3 +1273,86 @@ def test_wechat_keepalive_does_not_reload_when_current_page_is_relevant(
     assert result["login_required"] is False
     assert page.get_calls == []
     assert page.refresh_calls == 0
+
+
+def test_wechat_keepalive_uses_transient_probe_tab_when_active_page_is_irrelevant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Setter:
+        def auto_handle_alert(self, **_kwargs: Any) -> None:
+            return None
+
+    class FakeTab:
+        def __init__(self) -> None:
+            self.tab_id = "keepalive-tab"
+            self.url = "about:blank"
+            self.get_calls: list[str] = []
+            self.closed = False
+            self.set = _Setter()
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(str(url))
+            self.url = str(url)
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakePage:
+        def __init__(self, tab: FakeTab) -> None:
+            self.tab_id = "root-tab"
+            self.url = "chrome://newtab/"
+            self._tab = tab
+            self.new_tab_calls: list[bool] = []
+            self.get_calls: list[str] = []
+            self.refresh_calls = 0
+
+        def new_tab(self, background: bool = False) -> FakeTab:
+            self.new_tab_calls.append(bool(background))
+            return self._tab
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(str(url))
+            self.url = str(url)
+
+        def refresh(self) -> None:
+            self.refresh_calls += 1
+
+    tab = FakeTab()
+    page = FakePage(tab)
+
+    monkeypatch.setattr(engine.time, "time", lambda: 2000.0)
+    monkeypatch.setattr(engine, "_resolve_wechat_keepalive_interval_seconds", lambda *_args, **_kwargs: 300)
+    monkeypatch.setattr(engine, "_read_platform_session_state", lambda *_args, **_kwargs: {"status": "ready", "keepalive_at": 0})
+    monkeypatch.setattr(engine, "_page_current_url", lambda current: str(getattr(current, "url", "") or ""))
+    monkeypatch.setattr(
+        engine,
+        "_is_platform_session_monitor_relevant_url",
+        lambda _platform, current_url, _open_url="": "channels.weixin.qq.com/" in str(current_url or "").lower(),
+    )
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda current, *_args, **_kwargs: {
+            "needs_login": False,
+            "reason": "",
+            "url": str(getattr(current, "url", "") or ""),
+        },
+    )
+    monkeypatch.setattr(engine, "_build_platform_login_diagnostics", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(engine, "_mark_platform_session_ready", lambda *_args, **_kwargs: None)
+
+    result = engine._maybe_touch_wechat_login_keepalive(
+        page,
+        chrome_user_data_dir="D:/profiles/wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+    )
+
+    assert result["ok"] is True
+    assert result["performed"] is True
+    assert result["login_required"] is False
+    assert result["probe_source"] == "transient_tab"
+    assert page.get_calls == []
+    assert page.refresh_calls == 0
+    assert page.new_tab_calls != []
+    assert tab.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
+    assert tab.closed is True

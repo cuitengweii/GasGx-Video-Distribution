@@ -953,7 +953,7 @@ def test_build_comment_reply_record_texts_falls_back_to_public_search_url() -> N
     assert any("Provider: fallback" in text for text in messages)
 
 
-def test_build_comment_reply_result_card_includes_post_link_field() -> None:
+def test_build_comment_reply_result_card_hides_reply_detail_section() -> None:
     card = worker_impl._build_comment_reply_result_card(
         {
             "ok": True,
@@ -978,11 +978,12 @@ def test_build_comment_reply_result_card_includes_post_link_field() -> None:
         }
     )
 
-    assert "原帖链接" in str(card.get("text") or "")
-    assert "https://www.douyin.com/video/1234567890" in str(card.get("text") or "")
-    assert "回复来源" in str(card.get("text") or "")
-    assert "spark" not in str(card.get("text") or "")
-    assert "内容已省略" in str(card.get("text") or "")
+    text = str(card.get("text") or "")
+    assert "明细已精简" not in text
+    assert "·" not in text
+    assert "原帖链接" not in text
+    assert "回复来源" not in text
+    assert "回复 1" not in text
 
 
 def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
@@ -2854,6 +2855,14 @@ def test_run_collect_publish_latest_job_image_filters_out_video_candidates(tmp_p
                 {"url": "https://x.com/mix/status/103", "published_at": "2026-03-15T10:03:00Z", "display_time": "3m", "tweet_text": "video three"},
                 {"url": "https://x.com/mix/status/104", "published_at": "2026-03-15T10:02:00Z", "display_time": "4m", "tweet_text": "video four"},
                 {"url": "https://x.com/mix/status/105", "published_at": "2026-03-15T10:01:00Z", "display_time": "5m", "tweet_text": "image one"},
+                {
+                    "url": "https://www.douyin.com/video/67890",
+                    "published_at": "2026-03-15T10:00:00Z",
+                    "display_time": "6m",
+                    "tweet_text": "wrongly tagged image candidate",
+                    "media_kind": "image",
+                    "source_platform": "douyin",
+                },
             ],
         },
     )
@@ -2883,6 +2892,7 @@ def test_run_collect_publish_latest_job_image_filters_out_video_candidates(tmp_p
     assert isinstance(only_item, dict)
     assert only_item["source_url"] == "https://x.com/mix/status/105"
     assert only_item["media_kind"] == "image"
+    assert only_item["source_url"] != "https://www.douyin.com/video/67890"
     assert set(probe_calls) == {
         "https://x.com/mix/status/101",
         "https://x.com/mix/status/102",
@@ -4026,8 +4036,9 @@ def test_run_comment_reply_job_routes_to_douyin_engagement(tmp_path: Path, monke
     )
 
     assert exit_code == 0
-    assert any("目标平台：抖音" in text for text in sent_texts)
-    assert any("最近 1 个有评论视频" in text for text in sent_texts)
+    assert not any("点赞评论启动中" in text for text in sent_texts)
+    assert not any("目标平台：" in text for text in sent_texts)
+    assert sent_texts
     assert any("[抖音] Reply 1" in text for text in sent_texts)
     assert any("Comment: Looks great" in text for text in sent_texts)
     assert sent_cards[-1]["card"]["result"]["platform"] == "douyin"
@@ -4098,7 +4109,8 @@ def test_run_comment_reply_job_all_runs_three_platforms(tmp_path: Path, monkeypa
     )
 
     assert exit_code == 0
-    assert any("目标平台：视频号 / 抖音 / 快手" in text for text in sent_texts)
+    assert not any("点赞评论启动中" in text for text in sent_texts)
+    assert not any("目标平台：" in text for text in sent_texts)
     assert any("[视频号] Reply 1" in text for text in sent_texts)
     assert any("[抖音] Reply 2" in text for text in sent_texts)
     assert any("[快手] Reply 3" in text for text in sent_texts)
@@ -6420,7 +6432,7 @@ def test_optimize_feedback_sections_for_operator_moves_logs_to_machine_info() ->
     )
 
     assert sections[0]["title"] == "人工关注"
-    assert any(str(item.get("label")) == "执行结果" for item in sections[0]["items"])
+    assert any(str(item.get("label")) == "状态" for item in sections[0]["items"])
     assert sections[-1]["title"] == "机器信息"
     machine_values = [str(item.get("value")) for item in sections[-1]["items"] if isinstance(item, dict)]
     assert "collect|image|3" in machine_values
@@ -6468,7 +6480,7 @@ def test_immediate_publish_feedback_omits_duplicate_platform_in_candidate_sectio
     assert "平台" not in labels
 
 
-def test_immediate_publish_failure_feedback_prefers_error_code_and_log_for_triage() -> None:
+def test_immediate_publish_failure_feedback_hides_error_code_and_log_for_triage() -> None:
     item = _video_item(
         target_platforms="wechat",
         platform_results={
@@ -6498,13 +6510,15 @@ def test_immediate_publish_failure_feedback_prefers_error_code_and_log_for_triag
         if isinstance(item, dict)
     }
 
-    assert mapped.get("错误码") == "E_PUBLISH_UNCONFIRMED_DRAFT_SAVED"
-    assert mapped.get("日志") == "immediate_publish_wechat_20260318_141833.log"
+    assert "错误码" not in mapped
+    assert "日志" not in mapped
     assert "建议" not in mapped
-    assert any("按错误码检索对应日志并修复后重试" in str(item) for item in status_items if isinstance(item, str))
+    assert any("请修复后重试" in str(item) for item in status_items if isinstance(item, str))
+    assert all("错误码" not in str(item) for item in status_items)
+    assert all("日志" not in str(item) for item in status_items)
 
 
-def test_build_platform_launch_result_section_compacts_failure_to_error_code_and_log() -> None:
+def test_build_platform_launch_result_section_hides_error_code_and_log() -> None:
     section = worker_impl._build_platform_launch_result_section(
         {
             "wechat": {
@@ -6519,10 +6533,10 @@ def test_build_platform_launch_result_section_compacts_failure_to_error_code_and
     row = next(item for item in rows if isinstance(item, dict))
     value = str(row.get("value") or "")
 
-    assert "错误码：E_UPLOAD_TIMEOUT_1001" in value
-    assert "日志：immediate_publish_wechat_20260318_141833.log" in value
+    assert "错误码" not in value
+    assert "日志：" not in value
     assert "建议：" not in value
-    assert "按错误码查日志修复" in value
+    assert "请修复后重试" in value
 
 
 def test_build_failure_feedback_actions_prefers_login_and_progress_for_login_failures() -> None:
@@ -6658,7 +6672,7 @@ def test_build_shared_link_status_card_compacts_body_for_operator_scan() -> None
 
     text = str(card["text"])
     assert "<b>⏳ 分享链接已接收</b>" in text
-    assert "· 即采即发 / 视频 / 全部平台｜后台即采即发任务已排队" in text
+    assert "· 即采即发｜视频｜全部平台｜后台即采即发任务已排队" in text
     assert "<b>📌 执行摘要</b>" not in text
     assert "如需查看当前进度，可直接点“进度”。" not in text
     assert "<b>🧾 候选信息</b>" in text

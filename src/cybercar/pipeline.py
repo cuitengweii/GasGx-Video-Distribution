@@ -665,6 +665,15 @@ def _add_card_header_spacing(card: dict[str, Any]) -> dict[str, Any]:
     return card
 
 
+def _build_card_preview_link_section(source_url: str) -> dict[str, Any]:
+    link = str(source_url or "").strip()
+    return {
+        "title": "卡片预览链接",
+        "emoji": "🔗",
+        "items": ([link] if link else ["未记录卡片预览链接"]),
+    }
+
+
 def _build_telegram_prefilter_video_card(
     *,
     workspace_root: Any,
@@ -701,11 +710,7 @@ def _build_telegram_prefilter_video_card(
                         {"label": "\u6807\u9898", "value": video_title},
                     ],
                 },
-                {
-                    "title": "\u89c6\u9891\u94fe\u63a5",
-                    "emoji": "\U0001f517",
-                    "items": ([source_url] if source_url else ["\u672a\u8bb0\u5f55\u89c6\u9891\u94fe\u63a5"]),
-                },
+                _build_card_preview_link_section(source_url),
             ],
         },
     )
@@ -749,11 +754,7 @@ def _build_telegram_prefilter_candidate_card(
                 {"label": "\u6807\u9898", "value": video_title},
             ],
         },
-        {
-            "title": "\u89c6\u9891\u94fe\u63a5",
-            "emoji": "\U0001f517",
-            "items": ([source_url] if source_url else ["\u672a\u8bb0\u5f55\u89c6\u9891\u94fe\u63a5"]),
-        },
+        _build_card_preview_link_section(source_url),
     ]
     warning_text = str(prefilter_warning or "").strip()
     if warning_text:
@@ -785,15 +786,12 @@ def _build_telegram_prefilter_reply_markup(
     target_platforms: str = "",
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
-    link = str(source_url or "").strip()
     mode_token = str(mode or "").strip().lower()
     target_tokens = {
         str(token or "").strip().lower()
         for token in str(target_platforms or "").split(",")
         if str(token or "").strip()
     }
-    if link:
-        actions.append({"text": "🔗 原帖", "url": link, "row": 0})
     if mode_token == "immediate_manual_publish":
         actions.append({"text": "⚡ 发布", "callback_data": f"{TELEGRAM_PREFILTER_CALLBACK_PREFIX}|publish_normal|{item_id}", "row": 1})
         if not target_tokens or "wechat" in target_tokens:

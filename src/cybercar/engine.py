@@ -3074,6 +3074,41 @@ def _resolve_wechat_keepalive_interval_seconds(override_seconds: int = 0) -> int
     )
 
 
+def _open_wechat_keepalive_probe_tab(page: ChromiumPage, target_url: str) -> tuple[Any, bool]:
+    resolved_url = str(target_url or CREATE_POST_URL).strip() or CREATE_POST_URL
+    try:
+        tab = page.new_tab(background=True)
+    except Exception:
+        try:
+            tab = page.new_tab(background=False)
+        except Exception:
+            tab = None
+    if tab is None:
+        return page, False
+    try:
+        tab.set.auto_handle_alert(on_off=True, accept=True)
+    except Exception:
+        pass
+    try:
+        tab.get(resolved_url)
+    except Exception:
+        pass
+    return tab, True
+
+
+def _close_wechat_keepalive_probe_tab(tab: Any, owner_page: ChromiumPage) -> None:
+    if tab is None or _is_same_tab(tab, owner_page):
+        return
+    try:
+        tab.set.auto_handle_alert(on_off=True, accept=True)
+    except Exception:
+        pass
+    try:
+        tab.close()
+    except Exception:
+        pass
+
+
 def _maybe_touch_wechat_login_keepalive(
     page: ChromiumPage,
     *,
@@ -3106,64 +3141,76 @@ def _maybe_touch_wechat_login_keepalive(
     target_url = str(open_url or CREATE_POST_URL).strip() or CREATE_POST_URL
     current_url = str(_page_current_url(page) or "").strip()
     needs_navigation = not _is_platform_session_monitor_relevant_url("wechat", current_url, target_url)
+    probe_page = page
+    transient_probe_tab = False
     if needs_navigation:
-        try:
-            page.get(target_url)
-        except Exception:
+        probe_page, transient_probe_tab = _open_wechat_keepalive_probe_tab(page, target_url)
+        if not transient_probe_tab:
             try:
-                page.refresh()
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "performed": False,
-                    "reason": "keepalive_navigation_failed",
-                    "error": str(exc),
-                    "interval_seconds": interval_seconds,
-                }
-        time.sleep(0.8)
-    login_state = inspect_platform_login_gate(page, "wechat")
-    current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
-    diagnostics = _build_platform_login_diagnostics(
-        "wechat",
-        state=login_state,
-        open_url=target_url,
-        recent_session_ready=True,
-        profile_dir=profile_dir,
-    )
-    if bool(login_state.get("needs_login")):
-        _mark_platform_session_login_required(
+                page.get(target_url)
+                time.sleep(0.8)
+            except Exception:
+                try:
+                    page.refresh()
+                    time.sleep(0.8)
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "performed": False,
+                        "reason": "keepalive_navigation_failed",
+                        "error": str(exc),
+                        "interval_seconds": interval_seconds,
+                    }
+            probe_page = page
+    try:
+        login_state = inspect_platform_login_gate(probe_page, "wechat")
+        current_url = str(login_state.get("url") or _page_current_url(probe_page) or "").strip()
+        diagnostics = _build_platform_login_diagnostics(
+            "wechat",
+            state=login_state,
+            open_url=target_url,
+            recent_session_ready=True,
+            profile_dir=profile_dir,
+        )
+        if bool(login_state.get("needs_login")):
+            _mark_platform_session_login_required(
+                "wechat",
+                profile_dir,
+                url=current_url or target_url,
+                reason=str(login_state.get("reason") or "keepalive_login_required"),
+                diagnostics=diagnostics,
+            )
+            return {
+                "ok": True,
+                "performed": True,
+                "login_required": True,
+                "reason": str(login_state.get("reason") or "keepalive_login_required"),
+                "current_url": current_url,
+                "interval_seconds": interval_seconds,
+                "probe_source": "transient_tab" if transient_probe_tab else "active_page",
+            }
+        keepalive_at = time.time()
+        _mark_platform_session_ready(
             "wechat",
             profile_dir,
             url=current_url or target_url,
-            reason=str(login_state.get("reason") or "keepalive_login_required"),
             diagnostics=diagnostics,
+            keepalive_at=keepalive_at,
+            keepalive_open_url=target_url,
         )
         return {
             "ok": True,
             "performed": True,
-            "login_required": True,
-            "reason": str(login_state.get("reason") or "keepalive_login_required"),
+            "login_required": False,
+            "reason": "",
             "current_url": current_url,
+            "keepalive_at": keepalive_at,
             "interval_seconds": interval_seconds,
+            "probe_source": "transient_tab" if transient_probe_tab else "active_page",
         }
-    keepalive_at = time.time()
-    _mark_platform_session_ready(
-        "wechat",
-        profile_dir,
-        url=current_url or target_url,
-        diagnostics=diagnostics,
-        keepalive_at=keepalive_at,
-        keepalive_open_url=target_url,
-    )
-    return {
-        "ok": True,
-        "performed": True,
-        "login_required": False,
-        "reason": "",
-        "current_url": current_url,
-        "keepalive_at": keepalive_at,
-        "interval_seconds": interval_seconds,
-    }
+    finally:
+        if transient_probe_tab:
+            _close_wechat_keepalive_probe_tab(probe_page, page)
 
 
 def _should_send_platform_login_monitor_notice(
@@ -5247,9 +5294,207 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
                 "comment_count": comment_count,
                 "has_comments": has_comments,
                 "comment_source": comment_source,
+                "source": "dom",
+                "object_id": "",
+                "export_id": "",
             }
         )
     return result
+
+
+def _coerce_positive_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return max(0, int(value))
+    except Exception:
+        pass
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    digits = re.sub(r"[^\d]", "", text)
+    if not digits:
+        return 0
+    try:
+        return max(0, int(digits))
+    except Exception:
+        return 0
+
+
+def _normalize_wechat_store_post(feed: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(feed, dict):
+        return None
+    title = str(
+        feed.get("title")
+        or feed.get("feed_title")
+        or feed.get("feedDesc")
+        or feed.get("desc")
+        or feed.get("objectDesc")
+        or feed.get("content")
+        or ""
+    ).strip()
+    published_text = str(
+        feed.get("published_text")
+        or feed.get("publishTimeDesc")
+        or feed.get("createTimeDesc")
+        or feed.get("publishTime")
+        or feed.get("createTimeText")
+        or feed.get("createTime")
+        or ""
+    ).strip()
+    object_id = str(feed.get("object_id") or feed.get("objectId") or feed.get("objectID") or "").strip()
+    export_id = str(feed.get("export_id") or feed.get("exportId") or feed.get("postId") or "").strip()
+    if not export_id:
+        export_id = object_id
+    create_time = _coerce_positive_int(feed.get("create_time") or feed.get("createTime"))
+    comment_count = _coerce_positive_int(
+        feed.get("comment_count")
+        or feed.get("commentCount")
+        or feed.get("commentsCount")
+        or feed.get("commentNum")
+        or feed.get("totalCommentCount")
+    )
+    has_comments = bool(
+        comment_count > 0
+        or bool(feed.get("has_comments"))
+        or bool(feed.get("hasComments"))
+        or bool(feed.get("hasComment"))
+    )
+    if not has_comments:
+        return None
+    if not title and not published_text and not object_id and not export_id:
+        return None
+    comment_source = str(feed.get("comment_source") or f"store:{comment_count}").strip()
+    post_key_seed = f"store|{object_id}|{export_id}|{title}|{published_text}|{comment_source}"
+    post_key = hashlib.sha1(post_key_seed.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return {
+        "post_key": post_key,
+        "title": title,
+        "published_text": published_text,
+        "comment_count": comment_count,
+        "has_comments": has_comments,
+        "comment_source": comment_source,
+        "source": "store",
+        "object_id": object_id,
+        "export_id": export_id,
+        "create_time": create_time,
+    }
+
+
+def _extract_wechat_post_cards_from_store(page: ChromiumPage, refresh: bool = False) -> dict[str, Any]:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((refreshFeeds) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function toInt(value) {
+        const raw = String(value || '').replace(/[^\\d]/g, '');
+        return raw ? parseInt(raw, 10) : 0;
+      }
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      const store = resolveStore();
+      if (!store) {
+        return { ok: false, reason: 'comment_store_missing', feeds: [], page_loading: false };
+      }
+      if (refreshFeeds && typeof store.getCommentFeeds === 'function') {
+        try {
+          const ret = store.getCommentFeeds();
+          if (ret && typeof ret.then === 'function') {
+            ret.then(() => {}).catch(() => {});
+          }
+        } catch (e) {}
+      }
+      const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
+      const mapped = feeds.slice(0, 120).map((feed) => ({
+        title: norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || '')),
+        published_text: norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || '')),
+        comment_count: toInt(feed && (feed.comment_count || feed.commentCount || feed.commentsCount || feed.commentNum || feed.totalCommentCount || 0)),
+        has_comments: !!(feed && (feed.has_comments || feed.hasComments || feed.hasComment)),
+        comment_source: norm(feed && (feed.comment_source || feed.commentCountText || feed.commentNumText || '')),
+        object_id: norm(feed && (feed.object_id || feed.objectId || feed.objectID || '')),
+        export_id: norm(feed && (feed.export_id || feed.exportId || feed.postId || '')),
+        create_time: toInt(feed && (feed.create_time || feed.createTime || 0)),
+      }));
+      return {
+        ok: true,
+        reason: '',
+        feeds: mapped,
+        feed_count: mapped.length,
+        page_loading: !!((window._store || {}).pageLoading),
+      };
+    })(arguments[0]);
+    """
+    try:
+        payload = page.run_js(js, bool(refresh))
+    except Exception as exc:
+        return {"ok": False, "reason": "store_eval_failed", "error": _single_line_preview(str(exc), 180), "feeds": []}
+    if not isinstance(payload, dict):
+        return {"ok": False, "reason": "invalid_payload", "feeds": []}
+    return payload
+
+
+def _collect_wechat_store_posts(page: ChromiumPage, limit: int, debug: bool = False) -> list[dict[str, Any]]:
+    target = max(1, int(limit))
+    collected: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for round_index in range(4):
+        payload = _extract_wechat_post_cards_from_store(page, refresh=(round_index == 0))
+        feed_items = payload.get("feeds") if isinstance(payload, dict) else []
+        if not isinstance(feed_items, list):
+            feed_items = []
+        for feed in feed_items:
+            card = _normalize_wechat_store_post(feed)
+            if not isinstance(card, dict):
+                continue
+            post_key = str(card.get("post_key") or "").strip()
+            if not post_key or post_key in seen_keys:
+                continue
+            seen_keys.add(post_key)
+            collected.append(card)
+        _comment_reply_log(
+            debug,
+            "Store commented posts: "
+            f"round={round_index} collected={len(collected)} "
+            f"feed_count={_coerce_positive_int((payload or {}).get('feed_count') if isinstance(payload, dict) else 0)} "
+            f"page_loading={bool((payload or {}).get('page_loading')) if isinstance(payload, dict) else False}",
+        )
+        if len(collected) >= target:
+            break
+        if not bool((payload or {}).get("ok")):
+            break
+        if round_index < 3:
+            _humanized_publish_retry_pause("wechat store post list refresh")
+    collected.sort(
+        key=lambda item: (
+            int(item.get("comment_count") or 0),
+            int(item.get("create_time") or 0),
+        ),
+        reverse=True,
+    )
+    return collected[:target]
 
 
 def _normalize_wechat_post_title(text: str) -> str:
@@ -5350,12 +5595,214 @@ def _collect_recent_commented_posts(page: ChromiumPage, limit: int, debug: bool 
             break
         _scroll_wechat_post_list(page)
         _humanized_publish_retry_pause("wechat commented post list scroll")
+    if len(collected) < target:
+        store_posts = _collect_wechat_store_posts(page, target, debug=debug)
+        for post in store_posts:
+            post_key = str(post.get("post_key") or "").strip()
+            if not post_key or post_key in seen_keys:
+                continue
+            seen_keys.add(post_key)
+            collected.append(post)
+            if len(collected) >= target:
+                break
+        _comment_reply_log(debug, f"Merged store commented posts: total={len(collected)} target={target}")
     return collected[:target]
+
+
+def _wechat_post_prefers_store_open(post: dict[str, Any]) -> bool:
+    if not isinstance(post, dict):
+        return False
+    source = str(post.get("source") or "").strip().lower()
+    if source == "store":
+        return True
+    return bool(str(post.get("object_id") or "").strip() or str(post.get("export_id") or "").strip())
+
+
+def _open_comment_manager_via_store(page: ChromiumPage, post: dict[str, Any], timeout_seconds: float = 10.0) -> bool:
+    args = {
+        "title": str(post.get("title") or "").strip(),
+        "published_text": str(post.get("published_text") or "").strip(),
+        "object_id": str(post.get("object_id") or "").strip(),
+        "export_id": str(post.get("export_id") or "").strip(),
+    }
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return ((args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function digits(value) {
+        return norm(value).replace(/[^\\d]/g, '');
+      }
+      function samePublished(left, right) {
+        const a = norm(left);
+        const b = norm(right);
+        if (!a || !b) return !a && !b;
+        if (a === b || a.includes(b) || b.includes(a)) return true;
+        const da = digits(a);
+        const db = digits(b);
+        return !!da && !!db && (da === db || da.endsWith(db) || db.endsWith(da));
+      }
+      function fuzzyTitleMatch(left, right) {
+        const a = norm(left);
+        const b = norm(right);
+        if (!a || !b) return false;
+        if (a === b || a.includes(b) || b.includes(a)) return true;
+        const minPrefix = Math.min(a.length, b.length, 18);
+        return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
+      }
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      const store = resolveStore();
+      if (!store) return { ok: false, reason: 'comment_store_missing' };
+      if (typeof store.getCommentFeeds === 'function') {
+        try {
+          const ret = store.getCommentFeeds();
+          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
+        } catch (e) {}
+      }
+      const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
+      const targetTitle = norm(args && args.title);
+      const targetPublished = norm(args && args.published_text);
+      const targetObjectId = norm(args && args.object_id);
+      const targetExportId = norm(args && args.export_id);
+      const matched = feeds.find((feed) => {
+        const objectId = norm(feed && (feed.objectId || feed.object_id || feed.objectID || ''));
+        const exportId = norm(feed && (feed.exportId || feed.export_id || feed.postId || objectId || ''));
+        if (targetObjectId && objectId && targetObjectId === objectId) return true;
+        if (targetExportId && exportId && targetExportId === exportId) return true;
+        const title = norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || ''));
+        const published = norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || ''));
+        if (targetPublished && !samePublished(published, targetPublished)) return false;
+        if (!targetTitle) return !!(title || published || objectId || exportId);
+        return fuzzyTitleMatch(title, targetTitle);
+      }) || null;
+      if (!matched) {
+        return {
+          ok: false,
+          reason: 'store_feed_not_found',
+          feed_count: feeds.length,
+        };
+      }
+      const objectId = norm(matched.objectId || matched.object_id || matched.objectID || targetObjectId || '');
+      const exportId = norm(matched.exportId || matched.export_id || matched.postId || objectId || targetExportId || '');
+      if (typeof store.setFirstFeed === 'function') {
+        try {
+          const ret = store.setFirstFeed(matched);
+          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
+        } catch (e) {}
+      }
+      if (exportId && typeof store.setCurrentExportId === 'function') {
+        try {
+          const ret = store.setCurrentExportId(exportId);
+          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
+        } catch (e) {}
+      }
+      if (typeof store.getResetCurrentList === 'function') {
+        try {
+          const ret = store.getResetCurrentList();
+          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
+        } catch (e) {}
+      }
+      const detailDoc = resolveWechatCommentDoc();
+      const hasDetail = !!(detailDoc && detailDoc.querySelector && detailDoc.querySelector('.feed-detail'));
+      const commentCount = Array.isArray(store.commentList) ? store.commentList.length : 0;
+      return {
+        ok: true,
+        reason: 'store_feed_selected',
+        feed_title: norm(matched.title || matched.feed_title || matched.feedDesc || matched.desc || ''),
+        object_id: objectId,
+        export_id: exportId,
+        comment_count: commentCount,
+        has_detail: hasDetail,
+      };
+    })(arguments[0]);
+    """
+    try:
+        result = page.run_js(js, args)
+    except Exception as exc:
+        _comment_reply_log(True, f"[CommentReply] Native store open failed: {exc}")
+        return False
+    if not isinstance(result, dict) or not bool(result.get("ok")):
+        _comment_reply_log(
+            True,
+            "[CommentReply] Native store open not ready: "
+            + json.dumps(result if isinstance(result, dict) else {"payload": str(result)}, ensure_ascii=False),
+        )
+        return False
+
+    def _store_ready() -> bool:
+        probe_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+        return (() => {
+          function pickStore(scope) {
+            if (!scope) return null;
+            try {
+              const rootStore = scope._store;
+              if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+            } catch (e) {}
+            return null;
+          }
+          function resolveStore() {
+            const scopes = [window];
+            try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+            try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+            for (const scope of scopes) {
+              const found = pickStore(scope);
+              if (found) return found;
+            }
+            for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+              try {
+                const found = pickStore(frame.contentWindow || null);
+                if (found) return found;
+              } catch (e) {}
+            }
+            return null;
+          }
+          const doc = resolveWechatCommentDoc();
+          if (doc && doc.querySelector && doc.querySelector('.feed-detail')) return true;
+          const store = resolveStore();
+          const count = store && Array.isArray(store.commentList) ? store.commentList.length : 0;
+          return count > 0;
+        })();
+        """
+        try:
+            return bool(page.run_js(probe_js))
+        except Exception:
+            return False
+
+    ready = bool(_wait_until(_store_ready, timeout_seconds=max(2.0, float(timeout_seconds)), poll_seconds=0.35))
+    if not ready:
+        _comment_reply_log(True, f"[CommentReply] Native store open timeout: {json.dumps(result, ensure_ascii=False)}")
+    return ready
 
 
 def open_comment_manager(page: ChromiumPage, post: dict[str, Any], timeout_seconds: float = 10.0) -> bool:
     title = str(post.get("title") or "").strip()
     published_text = str(post.get("published_text") or "").strip()
+    if _wechat_post_prefers_store_open(post):
+        if _open_comment_manager_via_store(page, post, timeout_seconds=timeout_seconds):
+            return True
     js = WECHAT_COMMENT_DOC_HELPER_JS + """
     return ((targetTitle, targetPublishedText) => {
       function norm(value) {
@@ -5459,6 +5906,8 @@ def open_comment_manager(page: ChromiumPage, post: dict[str, Any], timeout_secon
             f"reason={result.get('reason') or 'unknown'} title={title!r} published={published_text!r} "
             f"clicked_target={result.get('clicked_target') or '-'} visible_cards={result.get('visible_cards')!r}",
         )
+        if _wechat_post_prefers_store_open(post):
+            return _open_comment_manager_via_store(page, post, timeout_seconds=timeout_seconds)
         return False
     confirm_js = WECHAT_COMMENT_DOC_HELPER_JS + """
     return (() => {
@@ -5533,6 +5982,150 @@ def _is_wechat_comment_manager_surface_ready(page: ChromiumPage) -> bool:
         return bool(page.run_js(js))
     except Exception:
         return False
+
+
+def _detect_wechat_comment_feature_unavailable(page: ChromiumPage) -> dict[str, Any]:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return (() => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function isActive(node) {
+        if (!node || !node.getBoundingClientRect) return false;
+        const style = window.getComputedStyle(node);
+        if (!style) return false;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 8 && rect.height > 8;
+      }
+      const doc = resolveWechatCommentDoc();
+      const pageText = norm((document && document.body && (document.body.innerText || document.body.textContent)) || '');
+      const docText = norm((doc && doc.body && (doc.body.innerText || doc.body.textContent)) || '');
+      const dialogNodes = Array.from(document.querySelectorAll('.finder-common-dialog, .common-dialog, .weui-desktop-dialog'));
+      const activeDialogs = dialogNodes.filter((node) => isActive(node));
+      const activeDialogText = norm(activeDialogs.map((node) => node && (node.innerText || node.textContent || '')).join(' '));
+      const merged = norm(`${pageText} ${docText} ${activeDialogText}`);
+      const blocked = /暂时无法使用该功能|功能暂不可用|currently unavailable/i.test(activeDialogText);
+      return {
+        blocked,
+        active_dialogs: activeDialogs.length,
+        text_preview: merged.slice(0, 260),
+      };
+    })();
+    """
+    try:
+        payload = page.run_js(js)
+    except Exception as exc:
+        return {"blocked": False, "text_preview": "", "error": _single_line_preview(str(exc), 200)}
+    if isinstance(payload, dict):
+        return {
+            "blocked": bool(payload.get("blocked")),
+            "active_dialogs": int(payload.get("active_dialogs") or 0),
+            "text_preview": str(payload.get("text_preview") or "").strip(),
+        }
+    return {"blocked": False, "active_dialogs": 0, "text_preview": ""}
+
+
+def _dismiss_wechat_comment_blocking_dialogs(page: ChromiumPage, rounds: int = 3, debug: bool = False) -> dict[str, Any]:
+    max_rounds = max(1, int(rounds or 1))
+    clicked: list[str] = []
+    last_preview = ""
+    for _ in range(max_rounds):
+        js = WECHAT_COMMENT_DOC_HELPER_JS + """
+        return (() => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function isVisible(node) {
+            if (!node || !node.getBoundingClientRect) return false;
+            const style = window.getComputedStyle(node);
+            if (!style) return false;
+            if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+            const rect = node.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+          function click(node) {
+            if (!node) return false;
+            try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+            try { node.click(); return true; } catch (e) {}
+            try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+            return false;
+          }
+          const dialogSelector = '.finder-common-dialog, .common-dialog, .weui-desktop-dialog, .weui-desktop-dialog__wrp, [role="dialog"], [class*="dialog"]';
+          const docs = [document];
+          const commentDoc = resolveWechatCommentDoc();
+          if (commentDoc && commentDoc !== document) docs.push(commentDoc);
+          for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+            try {
+              const doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+              if (doc && !docs.includes(doc)) docs.push(doc);
+            } catch (e) {}
+          }
+          const clicked = [];
+          const priorities = ['我知道了', '知道了', '切换', '确认', '继续', '关闭', '取消'];
+          const texts = [];
+          for (const doc of docs) {
+            if (!doc || !doc.querySelectorAll) continue;
+            const dialogs = Array.from(doc.querySelectorAll(dialogSelector)).filter((node) => isVisible(node));
+            if (!dialogs.length) continue;
+            for (const dialog of dialogs) {
+              const dialogText = norm(dialog.innerText || dialog.textContent || '');
+              if (dialogText) texts.push(dialogText);
+              const candidates = Array.from(dialog.querySelectorAll('button, [role="button"], a, div, span'))
+                .filter((node) => isVisible(node))
+                .map((node) => ({ node, text: norm(node.innerText || node.textContent || ''), cls: norm(node.className || '') }))
+                .filter((item) => item.text);
+              for (const keyword of priorities) {
+                const matched = candidates.find((item) => item.text === keyword || item.text.includes(keyword));
+                if (!matched) continue;
+                if (click(matched.node)) {
+                  clicked.push(`${keyword}:${matched.text}`);
+                  break;
+                }
+              }
+            }
+          }
+          const merged = norm(texts.join(' '));
+          const blocked = /暂时无法使用该功能|功能暂不可用|currently unavailable/i.test(merged);
+          return { clicked, blocked, text_preview: merged.slice(0, 260) };
+        })();
+        """
+        try:
+            payload = page.run_js(js)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "clicked": clicked,
+                "clicked_count": len(clicked),
+                "blocked": False,
+                "text_preview": last_preview,
+                "error": _single_line_preview(str(exc), 200),
+            }
+        if not isinstance(payload, dict):
+            break
+        round_clicked = payload.get("clicked") if isinstance(payload.get("clicked"), list) else []
+        for item in round_clicked:
+            text = str(item or "").strip()
+            if text:
+                clicked.append(text)
+        last_preview = str(payload.get("text_preview") or "").strip()
+        if not round_clicked:
+            return {
+                "ok": True,
+                "clicked": clicked,
+                "clicked_count": len(clicked),
+                "blocked": bool(payload.get("blocked")),
+                "text_preview": last_preview,
+            }
+        _humanized_publish_settle_pause("wechat comment blocking dialog settle")
+    blocked_state = _detect_wechat_comment_feature_unavailable(page)
+    return {
+        "ok": True,
+        "clicked": clicked,
+        "clicked_count": len(clicked),
+        "blocked": bool(blocked_state.get("blocked")),
+        "text_preview": str(blocked_state.get("text_preview") or last_preview or "").strip(),
+    }
 
 
 def _maybe_notify_wechat_comment_login_required(
@@ -6148,9 +6741,136 @@ def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
                 "comment_count": comment_count,
                 "has_comments": has_comments,
                 "comment_source": comment_source,
+                "source": "dom",
+                "object_id": "",
+                "export_id": "",
             }
         )
     return result
+
+
+def _playwright_extract_wechat_post_cards_from_store(page: Any, refresh: bool = False) -> dict[str, Any]:
+    js = """
+    async (refreshFeeds) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function toInt(value) {
+        const raw = String(value || '').replace(/[^\\d]/g, '');
+        return raw ? parseInt(raw, 10) : 0;
+      }
+      async function maybeAwait(value) {
+        if (value && typeof value.then === 'function') {
+          try {
+            return await value;
+          } catch (e) {
+            return null;
+          }
+        }
+        return value;
+      }
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      const store = resolveStore();
+      if (!store) {
+        return { ok: false, reason: 'comment_store_missing', feeds: [], page_loading: false };
+      }
+      if (refreshFeeds && typeof store.getCommentFeeds === 'function') {
+        await maybeAwait(store.getCommentFeeds());
+        if (!(Array.isArray(store.commentFeeds) && store.commentFeeds.length)) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }
+      }
+      const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
+      const mapped = feeds.slice(0, 120).map((feed) => ({
+        title: norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || '')),
+        published_text: norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || '')),
+        comment_count: toInt(feed && (feed.comment_count || feed.commentCount || feed.commentsCount || feed.commentNum || feed.totalCommentCount || 0)),
+        has_comments: !!(feed && (feed.has_comments || feed.hasComments || feed.hasComment)),
+        comment_source: norm(feed && (feed.comment_source || feed.commentCountText || feed.commentNumText || '')),
+        object_id: norm(feed && (feed.object_id || feed.objectId || feed.objectID || '')),
+        export_id: norm(feed && (feed.export_id || feed.exportId || feed.postId || '')),
+        create_time: toInt(feed && (feed.create_time || feed.createTime || 0)),
+      }));
+      return {
+        ok: true,
+        reason: '',
+        feeds: mapped,
+        feed_count: mapped.length,
+        page_loading: !!((window._store || {}).pageLoading),
+      };
+    }
+    """
+    try:
+        payload = page.evaluate(js, bool(refresh))
+    except Exception as exc:
+        return {"ok": False, "reason": "store_eval_failed", "error": _single_line_preview(str(exc), 180), "feeds": []}
+    if not isinstance(payload, dict):
+        return {"ok": False, "reason": "invalid_payload", "feeds": []}
+    return payload
+
+
+def _playwright_collect_wechat_store_posts(page: Any, limit: int, debug: bool = False) -> list[dict[str, Any]]:
+    target = max(1, int(limit))
+    collected: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for round_index in range(4):
+        payload = _playwright_extract_wechat_post_cards_from_store(page, refresh=(round_index == 0))
+        feed_items = payload.get("feeds") if isinstance(payload, dict) else []
+        if not isinstance(feed_items, list):
+            feed_items = []
+        for feed in feed_items:
+            card = _normalize_wechat_store_post(feed)
+            if not isinstance(card, dict):
+                continue
+            post_key = str(card.get("post_key") or "").strip()
+            if not post_key or post_key in seen_keys:
+                continue
+            seen_keys.add(post_key)
+            collected.append(card)
+        _comment_reply_log(
+            debug,
+            "Playwright store commented posts: "
+            f"round={round_index} collected={len(collected)} "
+            f"feed_count={_coerce_positive_int((payload or {}).get('feed_count') if isinstance(payload, dict) else 0)} "
+            f"page_loading={bool((payload or {}).get('page_loading')) if isinstance(payload, dict) else False}",
+        )
+        if len(collected) >= target:
+            break
+        if not bool((payload or {}).get("ok")):
+            break
+        if round_index < 3:
+            _humanized_wechat_comment_retry_pause(page, "wechat store post list refresh")
+    collected.sort(
+        key=lambda item: (
+            int(item.get("comment_count") or 0),
+            int(item.get("create_time") or 0),
+        ),
+        reverse=True,
+    )
+    return collected[:target]
 
 
 def _playwright_scroll_wechat_list(frame: Any, selector_candidates: list[str]) -> None:
@@ -6208,6 +6928,19 @@ def _playwright_collect_recent_commented_posts(frame: Any, limit: int, debug: bo
             break
         _playwright_scroll_wechat_list(frame, [".scroll-list", ".scroll-list__wrp.feeds-container", ".feeds-container"])
         _humanized_wechat_comment_retry_pause(getattr(frame, "page", None), "wechat commented post list scroll")
+    if len(collected) < target:
+        owner_page = getattr(frame, "page", None)
+        if owner_page is not None:
+            store_posts = _playwright_collect_wechat_store_posts(owner_page, target, debug=debug)
+            for post in store_posts:
+                post_key = str(post.get("post_key") or "").strip()
+                if not post_key or post_key in seen_keys:
+                    continue
+                seen_keys.add(post_key)
+                collected.append(post)
+                if len(collected) >= target:
+                    break
+            _comment_reply_log(debug, f"Playwright merged store commented posts: total={len(collected)} target={target}")
     return collected[:target]
 
 
@@ -6266,6 +6999,315 @@ def _collect_playwright_comment_manager_diagnostics(page: Any, frame_hint: Any |
     return diagnostics
 
 
+def _playwright_detect_wechat_comment_feature_unavailable(page: Any) -> dict[str, Any]:
+    js = """
+    () => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function isActive(node) {
+        if (!node || !node.getBoundingClientRect) return false;
+        const style = window.getComputedStyle(node);
+        if (!style) return false;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 8 && rect.height > 8;
+      }
+      const pageText = norm((document && document.body && (document.body.innerText || document.body.textContent)) || '');
+      const dialogNodes = Array.from(document.querySelectorAll('.finder-common-dialog, .common-dialog, .weui-desktop-dialog'));
+      const activeDialogs = dialogNodes.filter((node) => isActive(node));
+      const activeDialogText = norm(activeDialogs.map((node) => node && (node.innerText || node.textContent || '')).join(' '));
+      const merged = norm(`${pageText} ${activeDialogText}`);
+      const blocked = /暂时无法使用该功能|功能暂不可用|currently unavailable/i.test(activeDialogText);
+      return {
+        blocked,
+        active_dialogs: activeDialogs.length,
+        text_preview: merged.slice(0, 260),
+      };
+    }
+    """
+    try:
+        payload = page.evaluate(js)
+    except Exception as exc:
+        return {"blocked": False, "text_preview": "", "error": _single_line_preview(str(exc), 200)}
+    if isinstance(payload, dict):
+        return {
+            "blocked": bool(payload.get("blocked")),
+            "active_dialogs": int(payload.get("active_dialogs") or 0),
+            "text_preview": str(payload.get("text_preview") or "").strip(),
+        }
+    return {"blocked": False, "active_dialogs": 0, "text_preview": ""}
+
+
+def _playwright_dismiss_wechat_comment_blocking_dialogs(page: Any, rounds: int = 3, debug: bool = False) -> dict[str, Any]:
+    max_rounds = max(1, int(rounds or 1))
+    clicked: list[str] = []
+    last_preview = ""
+    for _ in range(max_rounds):
+        js = """
+        () => {
+          function norm(value) {
+            return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+          }
+          function isVisible(node) {
+            if (!node || !node.getBoundingClientRect) return false;
+            const style = window.getComputedStyle(node);
+            if (!style) return false;
+            if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+            const rect = node.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+          function click(node) {
+            if (!node) return false;
+            try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+            try { node.click(); return true; } catch (e) {}
+            try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}
+            return false;
+          }
+          const docs = [document];
+          for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+            try {
+              const doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+              if (doc && !docs.includes(doc)) docs.push(doc);
+            } catch (e) {}
+          }
+          const dialogSelector = '.finder-common-dialog, .common-dialog, .weui-desktop-dialog, .weui-desktop-dialog__wrp, [role="dialog"], [class*="dialog"]';
+          const priorities = ['我知道了', '知道了', '切换', '确认', '继续', '关闭', '取消'];
+          const clicked = [];
+          const texts = [];
+          for (const doc of docs) {
+            if (!doc || !doc.querySelectorAll) continue;
+            const dialogs = Array.from(doc.querySelectorAll(dialogSelector)).filter((node) => isVisible(node));
+            if (!dialogs.length) continue;
+            for (const dialog of dialogs) {
+              const dialogText = norm(dialog.innerText || dialog.textContent || '');
+              if (dialogText) texts.push(dialogText);
+              const candidates = Array.from(dialog.querySelectorAll('button, [role="button"], a, div, span'))
+                .filter((node) => isVisible(node))
+                .map((node) => ({ node, text: norm(node.innerText || node.textContent || '') }))
+                .filter((item) => item.text);
+              for (const keyword of priorities) {
+                const matched = candidates.find((item) => item.text === keyword || item.text.includes(keyword));
+                if (!matched) continue;
+                if (click(matched.node)) {
+                  clicked.push(`${keyword}:${matched.text}`);
+                  break;
+                }
+              }
+            }
+          }
+          const merged = norm(texts.join(' '));
+          const blocked = /暂时无法使用该功能|功能暂不可用|currently unavailable/i.test(merged);
+          return { clicked, blocked, text_preview: merged.slice(0, 260) };
+        }
+        """
+        try:
+            payload = page.evaluate(js)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "clicked": clicked,
+                "clicked_count": len(clicked),
+                "blocked": False,
+                "text_preview": last_preview,
+                "error": _single_line_preview(str(exc), 200),
+            }
+        if not isinstance(payload, dict):
+            break
+        round_clicked = payload.get("clicked") if isinstance(payload.get("clicked"), list) else []
+        for item in round_clicked:
+            text = str(item or "").strip()
+            if text:
+                clicked.append(text)
+        last_preview = str(payload.get("text_preview") or "").strip()
+        if not round_clicked:
+            return {
+                "ok": True,
+                "clicked": clicked,
+                "clicked_count": len(clicked),
+                "blocked": bool(payload.get("blocked")),
+                "text_preview": last_preview,
+            }
+        _humanized_wechat_comment_settle_pause(page, "wechat blocking dialog settle")
+    blocked_state = _playwright_detect_wechat_comment_feature_unavailable(page)
+    return {
+        "ok": True,
+        "clicked": clicked,
+        "clicked_count": len(clicked),
+        "blocked": bool(blocked_state.get("blocked")),
+        "text_preview": str(blocked_state.get("text_preview") or last_preview or "").strip(),
+    }
+
+
+def _playwright_open_comment_manager_via_store(page: Any, post: dict[str, Any], timeout_seconds: float = 14.0) -> bool:
+    args = {
+        "title": str(post.get("title") or "").strip(),
+        "published_text": str(post.get("published_text") or "").strip(),
+        "object_id": str(post.get("object_id") or "").strip(),
+        "export_id": str(post.get("export_id") or "").strip(),
+    }
+    js = """
+    async (args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function digits(value) {
+        return norm(value).replace(/[^\\d]/g, '');
+      }
+      function samePublished(left, right) {
+        const a = norm(left);
+        const b = norm(right);
+        if (!a || !b) return !a && !b;
+        if (a === b || a.includes(b) || b.includes(a)) return true;
+        const da = digits(a);
+        const db = digits(b);
+        return !!da && !!db && (da === db || da.endsWith(db) || db.endsWith(da));
+      }
+      function fuzzyTitleMatch(left, right) {
+        const a = norm(left);
+        const b = norm(right);
+        if (!a || !b) return false;
+        if (a === b || a.includes(b) || b.includes(a)) return true;
+        const minPrefix = Math.min(a.length, b.length, 18);
+        return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
+      }
+      async function maybeAwait(value) {
+        if (value && typeof value.then === 'function') {
+          try {
+            return await value;
+          } catch (e) {
+            return null;
+          }
+        }
+        return value;
+      }
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      const store = resolveStore();
+      if (!store) return { ok: false, reason: 'comment_store_missing' };
+      if (typeof store.getCommentFeeds === 'function') {
+        await maybeAwait(store.getCommentFeeds());
+      }
+      const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
+      const targetTitle = norm(args && args.title);
+      const targetPublished = norm(args && args.published_text);
+      const targetObjectId = norm(args && args.object_id);
+      const targetExportId = norm(args && args.export_id);
+      const matched = feeds.find((feed) => {
+        const objectId = norm(feed && (feed.objectId || feed.object_id || feed.objectID || ''));
+        const exportId = norm(feed && (feed.exportId || feed.export_id || feed.postId || objectId || ''));
+        if (targetObjectId && objectId && targetObjectId === objectId) return true;
+        if (targetExportId && exportId && targetExportId === exportId) return true;
+        const title = norm(feed && (feed.title || feed.feed_title || feed.feedDesc || feed.desc || feed.objectDesc || feed.content || ''));
+        const published = norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || ''));
+        if (targetPublished && !samePublished(published, targetPublished)) return false;
+        if (!targetTitle) return !!(title || published || objectId || exportId);
+        return fuzzyTitleMatch(title, targetTitle);
+      }) || null;
+      if (!matched) {
+        return { ok: false, reason: 'store_feed_not_found', feed_count: feeds.length };
+      }
+      const objectId = norm(matched.objectId || matched.object_id || matched.objectID || targetObjectId || '');
+      const exportId = norm(matched.exportId || matched.export_id || matched.postId || objectId || targetExportId || '');
+      if (typeof store.setFirstFeed === 'function') {
+        await maybeAwait(store.setFirstFeed(matched));
+      }
+      if (exportId && typeof store.setCurrentExportId === 'function') {
+        await maybeAwait(store.setCurrentExportId(exportId));
+      }
+      if (typeof store.getResetCurrentList === 'function') {
+        await maybeAwait(store.getResetCurrentList());
+      }
+      const hasDetail = !!document.querySelector('.feed-detail');
+      const commentCount = Array.isArray(store.commentList) ? store.commentList.length : 0;
+      return {
+        ok: true,
+        reason: 'store_feed_selected',
+        object_id: objectId,
+        export_id: exportId,
+        comment_count: commentCount,
+        has_detail: hasDetail,
+      };
+    }
+    """
+    try:
+        payload = page.evaluate(js, args)
+    except Exception as exc:
+        _comment_reply_log(True, f"[CommentReply] Playwright store open failed: {exc}")
+        return False
+    if not isinstance(payload, dict) or not bool(payload.get("ok")):
+        _comment_reply_log(
+            True,
+            "[CommentReply] Playwright store open not ready: "
+            + json.dumps(payload if isinstance(payload, dict) else {"payload": str(payload)}, ensure_ascii=False),
+        )
+        return False
+    deadline = time.time() + max(2.0, float(timeout_seconds))
+    probe_js = """
+    () => {
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      if (document.querySelector('.feed-detail')) return true;
+      const store = resolveStore();
+      const count = store && Array.isArray(store.commentList) ? store.commentList.length : 0;
+      return count > 0;
+    }
+    """
+    while time.time() < deadline:
+        try:
+            if bool(page.evaluate(probe_js)):
+                return True
+        except Exception:
+            pass
+        _humanized_wechat_comment_retry_pause(page, "wechat store manager ready retry")
+    _comment_reply_log(True, f"[CommentReply] Playwright store open timeout: {json.dumps(payload, ensure_ascii=False)}")
+    return False
+
+
 def _playwright_open_comment_manager(
     page: Any,
     post: dict[str, Any],
@@ -6274,6 +7316,9 @@ def _playwright_open_comment_manager(
 ) -> bool:
     title = str(post.get("title") or "").strip()
     published_text = str(post.get("published_text") or "").strip()
+    if _wechat_post_prefers_store_open(post):
+        if _playwright_open_comment_manager_via_store(page, post, timeout_seconds=timeout_seconds):
+            return True
     deadline = time.time() + max(2.0, float(timeout_seconds))
     preferred_frame = frame_hint
     last_retry_reason = ""
@@ -6308,6 +7353,16 @@ def _playwright_open_comment_manager(
             const minPrefix = Math.min(a.length, b.length, 18);
             return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
           }
+          function readTitle(node) {
+            const titleNode = node && node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
+            if (titleNode) return norm(titleNode.innerText || titleNode.textContent || '');
+            const fallbackText = norm(node && (node.innerText || node.textContent || ''));
+            return fallbackText.split(' ').slice(0, 24).join(' ');
+          }
+          function readPublished(node) {
+            const timeNode = node && node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
+            return norm(timeNode ? (timeNode.innerText || timeNode.textContent || '') : '');
+          }
           function click(el) {
             if (!el) return false;
             try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
@@ -6336,25 +7391,21 @@ def _playwright_open_comment_manager(
           const targetPublished = norm(args && args.published_text);
           const cards = Array.from(document.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
           const exactCard = cards.find((node) => {
-            const titleNode = node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
-            const timeNode = node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
-            const title = norm(titleNode ? titleNode.innerText : '');
-            const published = norm(timeNode ? timeNode.innerText : '');
+            const title = readTitle(node);
+            const published = readPublished(node);
             return title === targetTitle && samePublished(published, targetPublished);
           });
           const fuzzyCard = exactCard || cards.find((node) => {
-            const titleNode = node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
-            const timeNode = node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
-            const title = norm(titleNode ? titleNode.innerText : '');
-            const published = norm(timeNode ? timeNode.innerText : '');
+            const title = readTitle(node);
+            const published = readPublished(node);
             if (targetPublished && !samePublished(published, targetPublished)) return false;
-            if (!targetTitle) return !!published;
+            if (!targetTitle) return !!(title || published);
             return fuzzyTitleMatch(title, targetTitle);
           });
           const card = fuzzyCard;
           const visibleCards = cards.slice(0, 5).map((node) => ({
-            title: norm((node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']") || {}).innerText || ''),
-            published_text: norm((node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time") || {}).innerText || ''),
+            title: readTitle(node),
+            published_text: readPublished(node),
           }));
           if (!card) return {
             ok: false,
@@ -6363,10 +7414,8 @@ def _playwright_open_comment_manager(
             matched_published_text: '',
             visible_cards: visibleCards,
           };
-          const matchedTitleNode = card.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
-          const matchedTimeNode = card.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
-          const matchedTitle = norm(matchedTitleNode ? matchedTitleNode.innerText : '');
-          const matchedPublished = norm(matchedTimeNode ? matchedTimeNode.innerText : '');
+          const matchedTitle = readTitle(card);
+          const matchedPublished = readPublished(card);
           const clickedTarget = clickEntry(card);
           return {
             ok: !!clickedTarget,
@@ -6397,6 +7446,9 @@ def _playwright_open_comment_manager(
                 last_retry_reason = "feed_not_found_empty_frame"
                 _humanized_wechat_comment_retry_pause(page, "wechat comment manager empty-frame retry")
                 continue
+            if reason == "feed_not_found" and _wechat_post_prefers_store_open(post):
+                if _playwright_open_comment_manager_via_store(page, post, timeout_seconds=timeout_seconds):
+                    return True
             _comment_reply_log(
                 True,
                 "[CommentReply] Playwright comment manager target not opened: "
@@ -6518,6 +7570,299 @@ def _playwright_extract_comments(frame: Any) -> list[dict[str, Any]]:
     except Exception:
         payload = []
     return payload if isinstance(payload, list) else []
+
+
+def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], debug: bool = False) -> list[dict[str, Any]]:
+    args = {
+        "object_id": str(post.get("object_id") or "").strip(),
+        "export_id": str(post.get("export_id") or "").strip(),
+    }
+    js = """
+    async (args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      async function maybeAwait(value) {
+        if (value && typeof value.then === 'function') {
+          try {
+            return await value;
+          } catch (e) {
+            return null;
+          }
+        }
+        return value;
+      }
+      function pickFeed(store, objectId, exportId) {
+        const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
+        return feeds.find((feed) => {
+          const fid = norm(feed && (feed.objectId || feed.object_id || feed.objectID || ''));
+          const eid = norm(feed && (feed.exportId || feed.export_id || feed.postId || fid || ''));
+          if (objectId && fid && objectId === fid) return true;
+          if (exportId && eid && exportId === eid) return true;
+          return false;
+        }) || null;
+      }
+      const store = resolveStore();
+      if (!store) return { ok: false, reason: 'comment_store_missing', comments: [] };
+      const targetObjectId = norm(args && args.object_id);
+      const targetExportId = norm(args && args.export_id);
+      if ((targetObjectId || targetExportId) && typeof store.getCommentFeeds === 'function') {
+        await maybeAwait(store.getCommentFeeds());
+      }
+      const matchedFeed = (targetObjectId || targetExportId) ? pickFeed(store, targetObjectId, targetExportId) : null;
+      if (matchedFeed) {
+        const exportId = norm(matchedFeed.exportId || matchedFeed.export_id || matchedFeed.postId || matchedFeed.objectId || targetExportId || '');
+        if (typeof store.setFirstFeed === 'function') await maybeAwait(store.setFirstFeed(matchedFeed));
+        if (exportId && typeof store.setCurrentExportId === 'function') await maybeAwait(store.setCurrentExportId(exportId));
+        if (typeof store.getResetCurrentList === 'function') await maybeAwait(store.getResetCurrentList());
+        await new Promise((resolve) => setTimeout(resolve, 240));
+      }
+      const commentList = Array.isArray(store.commentList) ? store.commentList : [];
+      const comments = commentList.map((item, index) => {
+        const lv2 = Array.isArray(item && item.levelTwoComment) ? item.levelTwoComment : [];
+        return {
+          index,
+          author: norm(item && (item.commentNickname || item.nickname || item.commentUserName || '')),
+          content: norm(item && (item.commentContent || item.content || item.replyContent || '')),
+          time_text: norm(item && (item.commentCreatetime || item.createTime || item.time || '')),
+          has_reply: lv2.length > 0,
+          liked: Number(item && (item.likeFlag || item.commentLikeFlag || 0)) > 0,
+          comment_id: norm(item && (item.commentId || item.comment_id || '')),
+          reply_comment_id: norm(item && (item.replyCommentId || item.reply_comment_id || item.commentId || '')),
+          export_id: norm(
+            (matchedFeed && (matchedFeed.exportId || matchedFeed.export_id || matchedFeed.postId))
+            || item && (item.exportId || item.export_id)
+            || store.currentExportId
+            || targetExportId
+            || ''
+          ),
+          object_id: norm(
+            (matchedFeed && (matchedFeed.objectId || matchedFeed.object_id || matchedFeed.objectID))
+            || item && (item.objectId || item.object_id || item.objectID)
+            || targetObjectId
+            || ''
+          ),
+          level_two_count: lv2.length,
+        };
+      }).filter((item) => item.content || item.author || item.time_text || item.comment_id);
+      return {
+        ok: true,
+        reason: '',
+        comments,
+        comment_count: comments.length,
+        current_export_id: norm(store.currentExportId || ''),
+      };
+    }
+    """
+    try:
+        payload = page.evaluate(js, args)
+    except Exception as exc:
+        _comment_reply_log(debug, f"Playwright extract store comments failed: {exc}")
+        return []
+    if not isinstance(payload, dict):
+        return []
+    comments = payload.get("comments")
+    if not isinstance(comments, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in comments:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "index": _coerce_positive_int(item.get("index")),
+                "author": str(item.get("author") or "").strip(),
+                "content": str(item.get("content") or "").strip(),
+                "time_text": str(item.get("time_text") or "").strip(),
+                "has_reply": bool(item.get("has_reply")),
+                "liked": bool(item.get("liked")),
+                "comment_id": str(item.get("comment_id") or "").strip(),
+                "reply_comment_id": str(item.get("reply_comment_id") or "").strip(),
+                "export_id": str(item.get("export_id") or "").strip(),
+                "object_id": str(item.get("object_id") or "").strip(),
+                "level_two_count": _coerce_positive_int(item.get("level_two_count")),
+                "source": "store",
+            }
+        )
+    return normalized
+
+
+def _playwright_like_comment_via_store(page: Any, comment: dict[str, Any], post: dict[str, Any]) -> dict[str, Any]:
+    args = {
+        "comment_id": str(comment.get("comment_id") or comment.get("commentId") or "").strip(),
+        "export_id": str(comment.get("export_id") or post.get("export_id") or post.get("object_id") or "").strip(),
+    }
+    js = """
+    async (args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      const store = resolveStore();
+      if (!store) return { ok: false, err_code: -1, err_msg: 'comment_store_missing' };
+      const commentId = norm(args && args.comment_id);
+      const exportId = norm(args && args.export_id);
+      if (!commentId || !exportId) return { ok: false, err_code: -2, err_msg: 'missing_comment_id_or_export_id' };
+      const payload = { commentId, exportId, scene: 1 };
+      try {
+        const result = await store.service.likeComment(payload);
+        const code = Number(result && result.errCode || 0);
+        return {
+          ok: code === 0,
+          err_code: code,
+          err_msg: norm(result && result.errMsg),
+          payload,
+        };
+      } catch (e) {
+        return { ok: false, err_code: -999, err_msg: norm(e && e.message || e), payload };
+      }
+    }
+    """
+    try:
+        payload = page.evaluate(js, args)
+    except Exception as exc:
+        return {"ok": False, "err_code": -998, "err_msg": _single_line_preview(str(exc), 160), "payload": args}
+    return payload if isinstance(payload, dict) else {"ok": False, "err_code": -997, "err_msg": "invalid_payload", "payload": args}
+
+
+def _playwright_submit_reply_via_store(page: Any, comment: dict[str, Any], post: dict[str, Any], reply_text: str) -> dict[str, Any]:
+    args = {
+        "comment_id": str(comment.get("comment_id") or comment.get("commentId") or "").strip(),
+        "reply_comment_id": str(comment.get("reply_comment_id") or comment.get("comment_id") or "").strip(),
+        "export_id": str(comment.get("export_id") or post.get("export_id") or post.get("object_id") or "").strip(),
+        "reply_text": str(reply_text or "").strip(),
+    }
+    js = """
+    async (args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function pickStore(scope) {
+        if (!scope) return null;
+        try {
+          const rootStore = scope._store;
+          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
+        } catch (e) {}
+        return null;
+      }
+      function resolveStore() {
+        const scopes = [window];
+        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
+        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
+        for (const scope of scopes) {
+          const found = pickStore(scope);
+          if (found) return found;
+        }
+        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+          try {
+            const found = pickStore(frame.contentWindow || null);
+            if (found) return found;
+          } catch (e) {}
+        }
+        return null;
+      }
+      const store = resolveStore();
+      if (!store) return { ok: false, err_code: -1, err_msg: 'comment_store_missing' };
+      const commentId = norm(args && args.comment_id);
+      const replyCommentId = norm(args && args.reply_comment_id) || commentId;
+      const exportId = norm(args && args.export_id);
+      const content = norm(args && args.reply_text);
+      if (!commentId || !exportId || !content) return { ok: false, err_code: -2, err_msg: 'missing_required_fields' };
+      const payload = { commentId, replyCommentId, content, exportId, scene: 1 };
+      try {
+        const result = await store.service.createComment(payload);
+        const code = Number(result && result.errCode || 0);
+        return {
+          ok: code === 0,
+          err_code: code,
+          err_msg: norm(result && result.errMsg),
+          payload,
+        };
+      } catch (e) {
+        return { ok: false, err_code: -999, err_msg: norm(e && e.message || e), payload };
+      }
+    }
+    """
+    try:
+        payload = page.evaluate(js, args)
+    except Exception as exc:
+        return {"ok": False, "err_code": -998, "err_msg": _single_line_preview(str(exc), 160), "payload": args}
+    return payload if isinstance(payload, dict) else {"ok": False, "err_code": -997, "err_msg": "invalid_payload", "payload": args}
+
+
+def _playwright_wait_store_reply_confirm(
+    page: Any,
+    post: dict[str, Any],
+    comment: dict[str, Any],
+    reply_text: str,
+    timeout_seconds: float = 10.0,
+) -> bool:
+    target_comment_id = str(comment.get("comment_id") or "").strip()
+    target_reply = re.sub(r"\s+", "", str(reply_text or "").strip())
+    deadline = time.time() + max(1.0, float(timeout_seconds))
+    while time.time() < deadline:
+        comments = _playwright_extract_comments_from_store(page, post, debug=False)
+        if comments:
+            matched = next(
+                (item for item in comments if str(item.get("comment_id") or "").strip() == target_comment_id),
+                None,
+            )
+            if matched and bool(matched.get("has_reply")):
+                if not target_reply:
+                    return True
+                content = re.sub(r"\s+", "", str(matched.get("content") or "").strip())
+                if target_reply in content:
+                    return True
+                return True
+        _humanized_wechat_comment_retry_pause(page, "wechat store reply confirm retry")
+    return False
 
 
 def _playwright_wait_comment_items_ready(page: Any, timeout_seconds: float = 6.0) -> bool:
@@ -7075,22 +8420,68 @@ def run_wechat_comment_reply(
 
     posts: list[dict[str, Any]] = []
     reply_records: list[dict[str, Any]] = []
+    likes_sent = 0
+    store_submit_failures: list[dict[str, Any]] = []
+    hard_stop_comment_api_failure = False
     posts_scanned = 0
     playwright_needs_native_retry = False
     playwright_bundle = _connect_playwright_wechat_comment_page(debug_port, WECHAT_COMMENT_MANAGER_URL)
     if playwright_bundle:
         playwright, browser, pw_page = playwright_bundle
         try:
-            pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
-            if pw_frame is None:
-                playwright_needs_native_retry = True
+            dismiss_state = _playwright_dismiss_wechat_comment_blocking_dialogs(pw_page, rounds=3, debug=debug_enabled)
+            if int(dismiss_state.get("clicked_count") or 0) > 0:
                 _comment_reply_log(
                     True,
-                    "[CommentReply] Playwright frame missing before post scan: "
-                    + json.dumps(_collect_playwright_comment_manager_diagnostics(pw_page), ensure_ascii=False),
+                    "[CommentReply] Playwright dismissed blocking dialogs: "
+                    + json.dumps(dismiss_state, ensure_ascii=False),
                 )
+            unavailable_state = _playwright_detect_wechat_comment_feature_unavailable(pw_page)
+            if bool(unavailable_state.get("blocked")):
+                _comment_reply_log(
+                    True,
+                    "[CommentReply] WeChat comment feature unavailable (Playwright): "
+                    + json.dumps(unavailable_state, ensure_ascii=False),
+                )
+                return {
+                    "ok": False,
+                    "reason": "comment_feature_unavailable",
+                    "detail": unavailable_state,
+                    "state_path": str(_comment_reply_state_path(workspace)),
+                    "records": reply_records,
+                    "posts_scanned": posts_scanned,
+                    "posts_selected": len(posts),
+                    "replies_sent": len(reply_records),
+                }
+            pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+            if pw_frame is None:
+                posts = _playwright_collect_wechat_store_posts(pw_page, max_posts, debug=debug_enabled)
+                if not posts:
+                    playwright_needs_native_retry = True
+                    _comment_reply_log(
+                        True,
+                        "[CommentReply] Playwright frame missing before post scan: "
+                        + json.dumps(_collect_playwright_comment_manager_diagnostics(pw_page), ensure_ascii=False),
+                    )
+                else:
+                    _comment_reply_log(
+                        True,
+                        "[CommentReply] Playwright frame missing, using store posts: "
+                        + json.dumps({"count": len(posts)}, ensure_ascii=False),
+                    )
             else:
                 posts = _playwright_collect_recent_commented_posts(pw_frame, max_posts, debug=debug_enabled)
+                if len(posts) < max_posts:
+                    store_posts = _playwright_collect_wechat_store_posts(pw_page, max_posts, debug=debug_enabled)
+                    existing_keys = {str(item.get("post_key") or "").strip() for item in posts if isinstance(item, dict)}
+                    for item in store_posts:
+                        key = str(item.get("post_key") or "").strip()
+                        if not key or key in existing_keys:
+                            continue
+                        existing_keys.add(key)
+                        posts.append(item)
+                        if len(posts) >= max_posts:
+                            break
                 _comment_reply_log(debug_enabled, f"Selected commented posts via Playwright: {len(posts)}")
                 for post in posts:
                     if len(reply_records) >= max_replies:
@@ -7118,6 +8509,11 @@ def run_wechat_comment_reply(
                             _comment_reply_log(debug_enabled, "Playwright frame missing while reading comments")
                             break
                         comments = _playwright_extract_comments(pw_frame)
+                        if not comments:
+                            store_comments = _playwright_extract_comments_from_store(pw_page, post, debug=debug_enabled)
+                            if store_comments:
+                                comments = store_comments
+                                _comment_reply_log(debug_enabled, f"Playwright store comments in manager: {len(comments)}")
                         _comment_reply_log(debug_enabled, f"Playwright visible comments in manager: {len(comments)}")
                         sent_in_round = False
                         for comment in comments:
@@ -7167,58 +8563,97 @@ def run_wechat_comment_reply(
                                 last_reply_at=last_reply_at,
                                 debug=debug_enabled,
                             )
+                            comment_source = str(comment.get("source") or "dom").strip().lower()
                             if bool(comment_cfg.get("auto_like")):
+                                if comment_source == "store":
+                                    like_state = _playwright_like_comment_via_store(pw_page, comment, post)
+                                    _comment_reply_log(
+                                        debug_enabled,
+                                        "Playwright store like state: " + json.dumps(like_state, ensure_ascii=False),
+                                    )
+                                    if bool(like_state.get("ok")):
+                                        likes_sent += 1
+                                else:
+                                    pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+                                    if pw_frame is None:
+                                        playwright_needs_native_retry = True
+                                        break
+                                    _playwright_like_comment_if_needed(pw_frame, int(comment.get("index") or 0))
+                                _apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
+                            if comment_source == "store":
+                                submit_state = _playwright_submit_reply_via_store(pw_page, comment, post, reply_text)
+                                _comment_reply_log(
+                                    debug_enabled,
+                                    "Playwright store submit state: " + json.dumps(submit_state, ensure_ascii=False),
+                                )
+                                if not bool(submit_state.get("ok")):
+                                    err_code = _coerce_positive_int(submit_state.get("err_code"))
+                                    store_submit_failures.append(
+                                        {
+                                            "err_code": err_code,
+                                            "err_msg": str(submit_state.get("err_msg") or "").strip(),
+                                            "comment_id": str(comment.get("comment_id") or "").strip(),
+                                            "export_id": str(
+                                                comment.get("export_id")
+                                                or post.get("export_id")
+                                                or post.get("object_id")
+                                                or ""
+                                            ).strip(),
+                                        }
+                                    )
+                                    if err_code == 300800:
+                                        hard_stop_comment_api_failure = True
+                                        break
+                                    continue
+                                if not _playwright_wait_store_reply_confirm(pw_page, post, comment, reply_text):
+                                    _comment_reply_log(debug_enabled, "Playwright store reply confirm timeout")
+                                    continue
+                            else:
                                 pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
                                 if pw_frame is None:
                                     playwright_needs_native_retry = True
+                                    _comment_reply_log(debug_enabled, "Playwright frame missing before submit")
                                     break
-                                _playwright_like_comment_if_needed(pw_frame, int(comment.get("index") or 0))
-                                _apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
-                            pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
-                            if pw_frame is None:
-                                playwright_needs_native_retry = True
-                                _comment_reply_log(debug_enabled, "Playwright frame missing before submit")
-                                break
-                            if debug_enabled:
-                                _comment_reply_log(
-                                    True,
-                                    "Playwright pre-submit state: "
-                                    + json.dumps(
-                                        _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
-                                        ensure_ascii=False,
-                                    ),
-                                )
-                            if not _playwright_submit_reply(pw_frame, int(comment.get("index") or 0), reply_text):
                                 if debug_enabled:
                                     _comment_reply_log(
                                         True,
-                                        "Playwright submit reply failed with state: "
+                                        "Playwright pre-submit state: "
                                         + json.dumps(
                                             _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
                                             ensure_ascii=False,
                                         ),
                                     )
-                                else:
-                                    _comment_reply_log(debug_enabled, "Playwright submit reply failed")
-                                continue
-                            _humanized_wechat_comment_reaction_pause(pw_page, "wechat comment post-submit state refresh")
-                            pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
-                            if pw_frame is None:
-                                playwright_needs_native_retry = True
-                                _comment_reply_log(debug_enabled, "Playwright frame missing after submit")
-                                continue
-                            if debug_enabled:
-                                _comment_reply_log(
-                                    True,
-                                    "Playwright post-submit state: "
-                                    + json.dumps(
-                                        _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
-                                        ensure_ascii=False,
-                                    ),
-                                )
-                            if not _playwright_wait_reply_confirm(pw_frame, int(comment.get("index") or 0), reply_text):
-                                _comment_reply_log(debug_enabled, "Playwright reply confirm timeout")
-                                continue
+                                if not _playwright_submit_reply(pw_frame, int(comment.get("index") or 0), reply_text):
+                                    if debug_enabled:
+                                        _comment_reply_log(
+                                            True,
+                                            "Playwright submit reply failed with state: "
+                                            + json.dumps(
+                                                _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
+                                                ensure_ascii=False,
+                                            ),
+                                        )
+                                    else:
+                                        _comment_reply_log(debug_enabled, "Playwright submit reply failed")
+                                    continue
+                                _humanized_wechat_comment_reaction_pause(pw_page, "wechat comment post-submit state refresh")
+                                pw_frame = _resolve_playwright_wechat_comment_frame(pw_page)
+                                if pw_frame is None:
+                                    playwright_needs_native_retry = True
+                                    _comment_reply_log(debug_enabled, "Playwright frame missing after submit")
+                                    continue
+                                if debug_enabled:
+                                    _comment_reply_log(
+                                        True,
+                                        "Playwright post-submit state: "
+                                        + json.dumps(
+                                            _playwright_reply_debug_state(pw_frame, int(comment.get("index") or 0)),
+                                            ensure_ascii=False,
+                                        ),
+                                    )
+                                if not _playwright_wait_reply_confirm(pw_frame, int(comment.get("index") or 0), reply_text):
+                                    _comment_reply_log(debug_enabled, "Playwright reply confirm timeout")
+                                    continue
                             record = _remember_comment_reply(
                                 items,
                                 fingerprint=fingerprint,
@@ -7237,6 +8672,8 @@ def run_wechat_comment_reply(
                             _humanized_wechat_comment_settle_pause(pw_page, "wechat comment reply post-submit settle")
                             if latest_only or len(reply_records) >= max_replies:
                                 break
+                        if hard_stop_comment_api_failure:
+                            break
                         if latest_only or len(reply_records) >= max_replies:
                             break
                         if sent_in_round:
@@ -7247,6 +8684,8 @@ def run_wechat_comment_reply(
                             break
                         _playwright_scroll_wechat_list(pw_frame, [".comment-list", ".comment-main-content", ".scroll-list", ".scroll-list__wrp", "[class*='scroll-list']"])
                         _humanized_wechat_comment_retry_pause(pw_page, "wechat comment list scroll")
+                    if hard_stop_comment_api_failure:
+                        break
         finally:
             try:
                 browser.close()
@@ -7272,6 +8711,30 @@ def run_wechat_comment_reply(
                 "replies_sent": len(reply_records),
             }
         page = native_page
+        dismiss_state = _dismiss_wechat_comment_blocking_dialogs(page, rounds=3, debug=debug_enabled)
+        if int(dismiss_state.get("clicked_count") or 0) > 0:
+            _comment_reply_log(
+                True,
+                "[CommentReply] Native dismissed blocking dialogs: "
+                + json.dumps(dismiss_state, ensure_ascii=False),
+            )
+        unavailable_state = _detect_wechat_comment_feature_unavailable(page)
+        if bool(unavailable_state.get("blocked")):
+            _comment_reply_log(
+                True,
+                "[CommentReply] WeChat comment feature unavailable (native): "
+                + json.dumps(unavailable_state, ensure_ascii=False),
+            )
+            return {
+                "ok": False,
+                "reason": "comment_feature_unavailable",
+                "detail": unavailable_state,
+                "state_path": str(_comment_reply_state_path(workspace)),
+                "records": reply_records,
+                "posts_scanned": posts_scanned,
+                "posts_selected": len(posts),
+                "replies_sent": len(reply_records),
+            }
         matched = _wait_until(
             lambda: _is_wechat_comment_manager_surface_ready(page),
             timeout_seconds=12.0,
@@ -7502,6 +8965,27 @@ def run_wechat_comment_reply(
     state["items"] = _prune_comment_reply_state_items(items)
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _save_comment_reply_state(workspace, state)
+    if not reply_records and store_submit_failures:
+        err_codes = {int(item.get("err_code") or 0) for item in store_submit_failures}
+        if err_codes == {300800}:
+            return {
+                "ok": False,
+                "reason": "comment_api_request_failed",
+                "error_code": 300800,
+                "error_message": "wechat_comment_api_request_failed",
+                "detail": {
+                    "submit_failures": store_submit_failures[-5:],
+                    "count": len(store_submit_failures),
+                    "likes_sent": likes_sent,
+                },
+                "state_path": str(_comment_reply_state_path(workspace)),
+                "markdown_path": str(_comment_reply_markdown_path(workspace)),
+                "records": reply_records,
+                "posts_scanned": posts_scanned,
+                "posts_selected": len(posts),
+                "replies_sent": len(reply_records),
+                "likes_sent": likes_sent,
+            }
     return {
         "ok": True,
         "reason": "",
@@ -7511,6 +8995,7 @@ def run_wechat_comment_reply(
         "posts_scanned": posts_scanned,
         "posts_selected": len(posts),
         "replies_sent": len(reply_records),
+        "likes_sent": likes_sent,
     }
 
 
@@ -26396,6 +27881,7 @@ def main() -> int:
                     "posts_scanned": int(result.get("posts_scanned") or 0),
                     "posts_selected": int(result.get("posts_selected") or 0),
                     "replies_sent": int(result.get("replies_sent") or 0),
+                    "likes_sent": int(result.get("likes_sent") or 0),
                     "state_path": str(result.get("state_path") or ""),
                 },
                 ensure_ascii=False,
