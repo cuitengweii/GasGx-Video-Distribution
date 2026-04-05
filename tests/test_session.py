@@ -3,8 +3,8 @@ from __future__ import annotations
 from cybercar import engine, session
 
 
-def test_open_url_for_wechat_prefers_publish_surface() -> None:
-    assert session._open_url("wechat") == str(engine.PLATFORM_CREATE_POST_URLS.get("wechat") or engine.CREATE_POST_URL)
+def test_open_url_for_wechat_can_prefer_login_entry() -> None:
+    assert session._open_url("wechat", prefer_login_entry=True) == str(engine.PLATFORM_LOGIN_ENTRY_URLS.get("wechat") or "")
 
 
 def test_login_status_enables_keepalive_only_for_wechat(monkeypatch) -> None:
@@ -29,7 +29,7 @@ def test_login_status_enables_keepalive_only_for_wechat(monkeypatch) -> None:
     assert wechat["platform"] == "wechat"
     assert x_status["platform"] == "x"
     assert calls[0]["platform_name"] == "wechat"
-    assert calls[0]["open_url"] == "https://channels.weixin.qq.com/platform/post/create"
+    assert calls[0]["open_url"] == "https://channels.weixin.qq.com/login.html"
     assert calls[0]["disconnect_after_probe"] is False
     assert calls[0]["enable_wechat_keepalive"] is True
     assert calls[1]["platform_name"] == "x"

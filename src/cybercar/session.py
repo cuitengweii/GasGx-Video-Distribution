@@ -25,8 +25,14 @@ def _profile_dir(platform: str) -> Path:
     return Path(str(runtime_ctx.get("chrome_user_data_dir") or "")).expanduser()
 
 
-def _open_url(platform: str) -> str:
-    runtime_ctx = engine.resolve_platform_runtime_context(platform)
+def _open_url(platform: str, *, prefer_login_entry: bool = False) -> str:
+    try:
+        runtime_ctx = engine.resolve_platform_runtime_context(
+            platform,
+            prefer_login_entry=bool(prefer_login_entry),
+        )
+    except TypeError:
+        runtime_ctx = engine.resolve_platform_runtime_context(platform)
     return str(runtime_ctx.get("open_url") or engine.CREATE_POST_URL)
 
 
@@ -37,7 +43,7 @@ def login_status(platform: str) -> dict[str, Any]:
     enable_wechat_keepalive = token == "wechat"
     return engine.probe_platform_session_via_debug_port(
         platform_name=token,
-        open_url=_open_url(token),
+        open_url=_open_url(token, prefer_login_entry=(token == "wechat")),
         debug_port=debug_port,
         chrome_user_data_dir=str(_profile_dir(token)),
         disconnect_after_probe=not enable_wechat_keepalive,
@@ -49,7 +55,7 @@ def open_login(platform: str) -> dict[str, Any]:
     default_port, wechat_port, x_port = _chrome_settings()
     token = str(platform or "").strip().lower()
     debug_port = wechat_port if token == "wechat" else (x_port if token in {"x", "collect"} else default_port)
-    open_url = _open_url(token)
+    open_url = _open_url(token, prefer_login_entry=(token == "wechat"))
     engine._ensure_chrome_debug_port(
         debug_port=debug_port,
         auto_open_chrome=True,
@@ -75,9 +81,9 @@ def capture_login_qr(platform: str = "wechat") -> dict[str, Any]:
         debug_port=wechat_port,
         auto_open_chrome=True,
         chrome_user_data_dir=str(paths.wechat_profile_dir),
-        startup_url=_open_url("wechat"),
+        startup_url=_open_url("wechat", prefer_login_entry=True),
     )
-    page.get(_open_url("wechat"))
+    page.get(_open_url("wechat", prefer_login_entry=True))
     engine._prepare_platform_login_qr_surface(page, platform_name="wechat")
     qr_path = paths.log_dir / f"wechat_login_qr_{time.strftime('%Y%m%d_%H%M%S')}.png"
     source = engine._extract_login_qr_source(page, platform_name="wechat")

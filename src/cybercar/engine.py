@@ -210,6 +210,10 @@ PLATFORM_LOGIN_ENTRY_URLS = {
 
 def _wechat_primary_create_url() -> str:
     return str(PLATFORM_CREATE_POST_URLS.get("wechat") or CREATE_POST_URL).strip() or CREATE_POST_URL
+
+
+def _wechat_persistent_login_url() -> str:
+    return str(PLATFORM_LOGIN_ENTRY_URLS.get("wechat") or _wechat_primary_create_url()).strip() or _wechat_primary_create_url()
 PLATFORM_LOGIN_DISPLAY_NAMES = {
     "collect": "X采集",
     "x": "X",
@@ -3720,9 +3724,10 @@ def probe_platform_session_via_debug_port(
         result["notification_skipped"] = True
         return _finish(result)
 
+    login_notice_open_url = _wechat_persistent_login_url() if platform == "wechat" else resolved_open_url
     qr_result = send_platform_login_qr_notification(
         platform_name=platform,
-        open_url=resolved_open_url,
+        open_url=login_notice_open_url,
         page=page,
         debug_port=debug_port,
         chrome_user_data_dir=profile_dir,
@@ -3746,7 +3751,7 @@ def probe_platform_session_via_debug_port(
 
     text_result = _send_platform_login_text_notification(
         platform_name=platform,
-        open_url=resolved_open_url,
+        open_url=login_notice_open_url,
         chrome_user_data_dir=profile_dir,
         login_reason=login_reason,
         qr_error=str(qr_result.get("error") or ""),
@@ -3983,7 +3988,7 @@ def send_wechat_login_qr_notification(
 ) -> dict[str, Any]:
     return send_platform_login_qr_notification(
         platform_name="wechat",
-        open_url=CREATE_POST_URL,
+        open_url=_wechat_persistent_login_url(),
         page=page,
         debug_port=debug_port,
         chrome_user_data_dir=chrome_user_data_dir,
@@ -6300,10 +6305,11 @@ def _maybe_notify_wechat_comment_login_required(
     if not looks_like_login:
         return {"ok": True, "sent": False, "needs_login": False, "skipped": True, "reason": "not_login_gate", "url": page_url}
     try:
+        login_open_url = _wechat_persistent_login_url()
         normalized_reason = str(login_state.get("reason") or login_reason or "comment_manager_not_ready")
         qr_result = send_platform_login_qr_notification(
             platform_name="wechat",
-            open_url=open_url,
+            open_url=login_open_url,
             page=page,
             chrome_user_data_dir=chrome_user_data_dir,
             auto_open_chrome=False,
@@ -6328,7 +6334,7 @@ def _maybe_notify_wechat_comment_login_required(
 
         result = _send_platform_login_text_notification(
             platform_name="wechat",
-            open_url=open_url,
+            open_url=login_open_url,
             chrome_user_data_dir=chrome_user_data_dir,
             login_reason=normalized_reason,
             qr_error=str(qr_result.get("error") or "comment reply hit login gate while opening comment manager"),
@@ -10202,11 +10208,12 @@ def _check_platform_login_ready(
             f"url={diagnostics.get('current_url') or '-'}, marker={diagnostics.get('matched_marker') or '-'})"
         )
         try:
+            login_notice_open_url = _wechat_persistent_login_url() if platform == "wechat" else resolved_open_url
             if chrome_user_data_dir:
-                wait_token = _begin_platform_login_wait(platform, chrome_user_data_dir, resolved_open_url)
+                wait_token = _begin_platform_login_wait(platform, chrome_user_data_dir, login_notice_open_url)
             qr_result = send_platform_login_qr_notification(
                 platform_name=platform,
-                open_url=resolved_open_url,
+                open_url=login_notice_open_url,
                 page=page,
                 debug_port=debug_port,
                 chrome_user_data_dir=chrome_user_data_dir,

@@ -943,6 +943,7 @@ def test_home_feedback_response_includes_process_status_button() -> None:
     texts = _reply_markup_texts(card["reply_markup"])
     assert "📍 进度" in texts
     assert "🏠 首页" in texts
+    assert "处理状态" not in str(card.get("text") or "")
 
 
 def test_home_reply_keyboard_uses_same_short_labels_as_inline_actions() -> None:

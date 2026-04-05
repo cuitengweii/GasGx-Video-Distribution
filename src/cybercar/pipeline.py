@@ -124,7 +124,7 @@ PLATFORM_BANNER_ACCENT = {
 PLATFORM_LOGIN_URL = {
     "collect": "https://x.com/search?q=Cybertruck%20filter%3Avideos&src=typed_query&f=live",
     "x": "https://x.com/compose/post",
-    "wechat": "https://channels.weixin.qq.com/platform/post/create",
+    "wechat": "https://channels.weixin.qq.com/login.html",
     "douyin": "https://creator.douyin.com/creator-micro/content/upload",
     "xiaohongshu": "https://creator.xiaohongshu.com/publish/publish",
     "kuaishou": "https://cp.kuaishou.com/article/publish/video",

@@ -4330,12 +4330,13 @@ def _home_feedback_response(
     if menu_section is not None:
         sections.append(menu_section)
     detail_text = str(detail or "").strip()
+    rendered_subtitle = str(subtitle or "").strip()
     if detail_text:
-        sections.append({"title": "处理状态", "emoji": "📌", "items": [detail_text[:1200]]})
+        rendered_subtitle = "\n".join(part for part in [rendered_subtitle, detail_text[:1200]] if part).strip()
     card = build_action_feedback(
         status=status,
         title=title,
-        subtitle=subtitle,
+        subtitle=rendered_subtitle,
         sections=sections,
         bot_name=BOT_NAME,
     )
@@ -13181,16 +13182,17 @@ def _run_home_action_job(
                 timeout_seconds=max(10, int(timeout_seconds)),
             )
         except Exception:
+            task_summary = _describe_home_action_task(updated_task)
             _enqueue_pending_background_feedback(
                 workspace=workspace,
                 title=_home_action_result_title(
                     action_token,
                     "done" if result_status == "done" else "failed",
                     value,
-                    _describe_home_action_task(updated_task),
+                    task_summary,
                 ),
-                subtitle=f"当前配置：{resolved_profile}",
-                sections=[{"title": "处理状态", "emoji": "📌", "items": [_describe_home_action_task(updated_task)]}],
+                subtitle="\n".join(part for part in [f"当前配置：{resolved_profile}", task_summary] if part).strip(),
+                sections=[],
                 status="success" if result_status == "done" else "failed",
             )
     return int(exit_code)
