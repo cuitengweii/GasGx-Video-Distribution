@@ -457,7 +457,7 @@ def test_build_telegram_card_normalizes_platform_status_items_with_platform_emoj
 
     text = str(card["text"])
     assert "• <b>⚡ 快手 ❌</b>：🔐 需要登录" in text
-    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜请查看日志" in text
+    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜错误码" in text
     assert "• <b>📝 小红书</b>：✅ 已确认" in text
     assert text.index("• <b>⚡ 快手 ❌</b>") < text.index("• <b>🎵 抖音 ❌</b>")
     assert text.index("• <b>🎵 抖音 ❌</b>") < text.index("• <b>📝 小红书</b>")
@@ -494,7 +494,7 @@ def test_build_telegram_card_uses_neutral_overview_header_for_immediate_platform
     text = str(card["text"])
     assert text.startswith("<b>📌 平台概览</b>")
     assert "• <b>📱 视频号 ❌</b>：🔐 需要登录" in text
-    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜请查看日志" in text
+    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜错误码" in text
 
 
 def test_build_telegram_card_removes_ascii_letters_from_visible_text() -> None:
@@ -540,7 +540,7 @@ def test_build_telegram_card_limits_and_dedupes_platform_status_items() -> None:
 
     text = str(card["text"])
     assert text.count("• <b>") == 5
-    assert "错误码" not in text
+    assert "错误码:ERR_UPLOAD_TIMEOUT" in text
 
 
 def test_build_telegram_card_sorts_candidate_section_and_uses_readable_link_label() -> None:

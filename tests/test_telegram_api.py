@@ -44,6 +44,21 @@ class _ProxyFailOnceSession(_FakeSession):
         return _FakeResponse()
 
 
+class _ConnResetFailOnceSession(_FakeSession):
+    def __init__(self, *, fail_once: bool = False) -> None:
+        super().__init__()
+        self._fail_once = bool(fail_once)
+
+    def get(self, url: str, params: dict[str, object], timeout: int) -> _FakeResponse:
+        self.calls.append(("get", url, dict(params), timeout))
+        if self._fail_once:
+            self._fail_once = False
+            raise telegram_api.requests.exceptions.ConnectionError(
+                "('Connection aborted.', ConnectionResetError(10054, 'remote host forcibly closed'))"
+            )
+        return _FakeResponse()
+
+
 def test_call_telegram_api_uses_cybercar_proxy(monkeypatch) -> None:
     created: list[_FakeSession] = []
 
@@ -101,6 +116,35 @@ def test_call_telegram_api_proxy_error_falls_back_to_direct(monkeypatch) -> None
     def build_session() -> _ProxyFailOnceSession:
         fail_once = len(created) == 0
         session = _ProxyFailOnceSession(fail_once=fail_once)
+        created.append(session)
+        return session
+
+    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:33210")
+    monkeypatch.delenv("CYBERCAR_USE_SYSTEM_PROXY", raising=False)
+    monkeypatch.setattr(telegram_api.requests, "Session", build_session)
+    telegram_api._SESSIONS.clear()
+
+    response = telegram_api.call_telegram_api(
+        bot_token="123456:abcdefghijklmnopqrstuvwxyzABCDE",
+        method="getUpdates",
+        params={"offset": 1},
+        timeout_seconds=20,
+        use_post=False,
+        max_retries=0,
+    )
+
+    assert response["ok"] is True
+    assert len(created) == 2
+    assert created[0].proxies["https"] == "http://127.0.0.1:33210"
+    assert created[1].proxies == {}
+
+
+def test_call_telegram_api_connection_error_with_proxy_falls_back_to_direct(monkeypatch) -> None:
+    created: list[_ConnResetFailOnceSession] = []
+
+    def build_session() -> _ConnResetFailOnceSession:
+        fail_once = len(created) == 0
+        session = _ConnResetFailOnceSession(fail_once=fail_once)
         created.append(session)
         return session
 

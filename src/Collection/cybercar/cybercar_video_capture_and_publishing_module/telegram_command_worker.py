@@ -1271,7 +1271,7 @@ def _split_chunks(text: str, max_chars: int = MAX_REPLY_CHARS) -> list[str]:
     return chunks
 
 
-_DISABLE_CARD_INLINE_BUTTONS = True
+_DISABLE_CARD_INLINE_BUTTONS = False
 
 
 def _outgoing_reply_markup(reply_markup: Optional[Dict[str, Any]], *, for_edit: bool = False) -> Optional[Dict[str, Any]]:
@@ -2788,7 +2788,7 @@ def _build_home_sections(profile: str) -> list[dict[str, Any]]:
                 {"label": "默认 profile", "value": profile},
                 "国内即采即发：X -> 视频号/抖音/小红书/快手/B站。",
                 "海外即采即发：抖音/小红书 -> TikTok/X。",
-                "平台登录：按平台返回登录二维码。",
+                "视频号登录：统一从视频号入口返回登录二维码。",
                 "点赞评论：处理近期有评论的视频并回传结果。",
             ],
         },
@@ -4092,26 +4092,23 @@ def _build_media_pick_card(*, title: str, subtitle: str, media_action: str, defa
 
 def _build_login_menu_card(*, default_profile: str) -> Dict[str, Any]:
     profile = _normalize_profile_name(default_profile)
-    actions = []
-    for idx, platform in enumerate(PUBLISH_PLATFORM_ORDER):
-        row = idx // 2
-        actions.append(
-            {
-                "text": _platform_button_text(platform),
-                "callback_data": build_home_callback_data("cybercar", "login_qr", platform),
-                "row": row,
-            }
-        )
-    actions.append({"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": 3})
+    actions = [
+        {
+            "text": _platform_button_text("wechat"),
+            "callback_data": build_home_callback_data("cybercar", "login_qr", "wechat"),
+            "row": 0,
+        },
+        {"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": 1},
+    ]
     return _build_submenu_card(
-        title="平台登录",
-        subtitle=f"当前配置：{profile}｜选择平台返回登录二维码",
+        title="视频号登录",
+        subtitle=f"当前配置：{profile}｜统一入口返回登录二维码",
         sections=[
             {
                 "title": "登录说明",
                 "emoji": "🔐",
                 "items": [
-                    "点击平台后会直接返回对应二维码消息。",
+                    "统一通过视频号登录持久化入口返回二维码。",
                     "如果当前会话已登录，会返回无需扫码提示。",
                 ],
             }
@@ -5005,7 +5002,7 @@ def _handle_home_callback(
 
     if action == "login_qr":
         platform_value = value.strip().lower()
-        if platform_value not in PUBLISH_PLATFORM_ORDER:
+        if platform_value and platform_value not in PUBLISH_PLATFORM_ORDER:
             answer_interaction_toast(
                 bot_token=bot_token,
                 query_id=query_id,
@@ -5014,7 +5011,8 @@ def _handle_home_callback(
                 timeout_seconds=timeout_seconds,
             )
             return {"handled": True, "update_id": update_id}
-        value = platform_value
+        # Unify login trigger: callback always routes to WeChat persistent entry.
+        value = "wechat"
 
     title = _home_action_title(action)
     if execution_action in HOME_ACTION_ASYNC_ACTIONS:
@@ -7860,6 +7858,36 @@ def _request_platform_login_qr(
         }
 
 
+def _request_wechat_login_qr_via_persistent_entry(
+    *,
+    bot_token: str,
+    chat_id: str,
+    timeout_seconds: int,
+    log_file: Path,
+) -> Dict[str, Any]:
+    # Single entry for WeChat relogin: always use the persistent login page.
+    return _request_platform_login_qr(
+        platform_name="wechat",
+        bot_token=bot_token,
+        chat_id=chat_id,
+        timeout_seconds=timeout_seconds,
+        log_file=log_file,
+        refresh_page=True,
+        prefer_login_entry=True,
+    )
+
+
+def _resolve_wechat_login_runtime_context(core_module: Any) -> Dict[str, Any]:
+    try:
+        return _resolve_platform_login_runtime_context(
+            core_module,
+            "wechat",
+            prefer_login_entry=True,
+        )
+    except TypeError:
+        return _resolve_platform_login_runtime_context(core_module, "wechat")
+
+
 def _send_platform_login_text_notice(
     *,
     platform_name: str = "wechat",
@@ -7873,86 +7901,13 @@ def _send_platform_login_text_notice(
     telegram_bot_identifier: str = "",
 ) -> Dict[str, Any]:
     platform = str(platform_name or "wechat").strip().lower() or "wechat"
-    runtime_ctx = _resolve_platform_login_runtime_context(core, platform)
-    helper = getattr(core, "_send_platform_login_text_notification", None)
-    helper_error = ""
-    if callable(helper):
-        try:
-            result = helper(
-                platform_name=platform,
-                open_url=str(runtime_ctx.get("open_url") or "").strip(),
-                chrome_user_data_dir=str(runtime_ctx.get("chrome_user_data_dir") or "").strip(),
-                login_reason=str(login_reason or "").strip(),
-                qr_error=str(qr_error or "").strip(),
-                wait_token=str(wait_token or "").strip(),
-                telegram_bot_token=str(bot_token or "").strip(),
-                telegram_chat_id=str(chat_id or "").strip(),
-                telegram_bot_identifier=str(telegram_bot_identifier or "").strip(),
-                telegram_timeout_seconds=max(10, int(timeout_seconds or 20)),
-            )
-            if isinstance(result, dict) and bool(result.get("sent")):
-                _append_log(log_file, f"[Worker] platform_login_text_notice platform={platform} sent=True helper=core")
-                return result
-            if isinstance(result, dict):
-                helper_error = str(result.get("error") or "").strip()
-        except Exception as exc:
-            helper_error = str(exc)
-            _append_log(log_file, f"[Worker] platform_login_text_notice core helper failed: {exc}")
-
-    display_name = str(PUBLISH_PLATFORM_DISPLAY.get(platform, platform) or platform)
-    sections: list[dict[str, Any]] = [
-        {
-            "title": "登录状态",
-            "emoji": "🔐",
-            "items": [f"{display_name}当前未登录，需要重新登录。"],
-        },
-        {
-            "title": "处理建议",
-            "emoji": "🧭",
-            "items": [
-                {"label": "平台", "value": display_name},
-                {"label": "登录页", "value": str(runtime_ctx.get('open_url') or '').strip() or "-"},
-            ],
-        },
-    ]
-    reason_text = str(login_reason or "").strip()
-    qr_error_text = str(qr_error or "").strip()
-    if reason_text or qr_error_text or helper_error:
-        details: list[Any] = []
-        if reason_text:
-            details.append({"label": "原因", "value": reason_text})
-        if qr_error_text:
-            details.append({"label": "二维码状态", "value": qr_error_text})
-        if helper_error:
-            details.append({"label": "补充信息", "value": helper_error})
-        sections.append({"title": "诊断信息", "emoji": "📝", "items": details})
-
-    try:
-        message_id = _send_text_message(
-            bot_token=str(bot_token or "").strip(),
-            chat_id=str(chat_id or "").strip(),
-            text=_build_text_notice("平台登录提醒", sections, title_emoji="🔐"),
-            timeout_seconds=max(10, int(timeout_seconds or 20)),
-        )
-        sent = int(message_id) > 0
-        _append_log(log_file, f"[Worker] platform_login_text_notice platform={platform} sent={sent} helper=fallback")
-        return {
-            "ok": sent,
-            "sent": sent,
-            "message_id": int(message_id),
-            "fallback": True,
-            "error": "" if sent else (helper_error or "text notice send returned empty message id"),
-        }
-    except Exception as exc:
-        error_text = str(exc or "").strip() or helper_error or "text notice send failed"
-        _append_log(log_file, f"[Worker] platform_login_text_notice failed: {error_text}")
-        return {
-            "ok": False,
-            "sent": False,
-            "fallback": True,
-            "transport_error": _is_telegram_transport_error_text(error_text),
-            "error": error_text,
-        }
+    _append_log(log_file, f"[Worker] platform_login_text_notice platform={platform} skipped=True reason=disabled_by_policy")
+    return {
+        "ok": True,
+        "sent": False,
+        "skipped": True,
+        "error": "",
+    }
 
 
 def _refresh_platform_login_qr_message(
@@ -8283,14 +8238,6 @@ def _build_prefilter_status_card(
             "emoji": "📌",
             "items": result_items,
         },
-        {
-            "title": "候选信息",
-            "emoji": "🎯",
-            "items": [
-                {"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)},
-                {"label": "标题", "value": _resolve_immediate_item_title(item)},
-            ],
-        },
     ]
     actor = str(item.get("actor") or "").strip()
     updated_at = str(item.get("updated_at") or "").strip()
@@ -8368,6 +8315,12 @@ def _build_platform_launch_result_section(platform_results: Dict[str, Dict[str, 
                 )
             ):
                 details = _describe_platform_failure(platform, str(result.get("error") or "").strip())
+            error_code = _extract_error_code(
+                str(result.get("error") or "").strip(),
+                str(details.get("reason") or "").strip(),
+                str(details.get("category") or "").strip(),
+                str(details.get("suggestion") or "").strip(),
+            )
             status_text = _status_text_for_failure(status, details, pid)
             reason = _strip_error_code_text(
                 str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
@@ -8375,6 +8328,8 @@ def _build_platform_launch_result_section(platform_results: Dict[str, Dict[str, 
             parts = [status_text]
             if reason:
                 parts.append(f"原因：{_preview_text(reason, limit=80)}")
+            if error_code:
+                parts.append(f"错误码：{error_code}")
             if status == "failed":
                 parts.append("请修复后重试")
             value = "；".join(parts) if parts else "后台任务启动失败"
@@ -8509,7 +8464,6 @@ def _build_immediate_platform_feedback_payload(
         "subtitle": subtitle,
         "status": feedback_status,
         "sections": [
-            _build_immediate_candidate_info_section(item, include_platform=False),
             {
                 "title": "执行状态",
                 "emoji": "📌",
@@ -8551,7 +8505,6 @@ def _build_immediate_publish_summary_feedback_payload(item: Dict[str, Any]) -> D
         "subtitle": subtitle,
         "status": feedback_status,
         "sections": [
-            _build_immediate_candidate_info_section(item, include_platform=False),
             {
                 "title": "执行汇总",
                 "emoji": "📦",
@@ -8642,7 +8595,7 @@ def _probe_platform_login_after_publish_failure(
     except Exception:
         import main as core  # type: ignore
 
-    runtime_ctx = _resolve_platform_login_runtime_context(core, platform_token)
+    runtime_ctx = _resolve_wechat_login_runtime_context(core)
     try:
         login_status = core.check_platform_login_status(
             platform_name=runtime_ctx["platform"],
@@ -8693,14 +8646,11 @@ def _probe_platform_login_after_publish_failure(
         log_file=log_file,
         login_reason=str((login_status or {}).get("reason") or "").strip() or str(error_text or "").strip(),
     )
-    result = _request_platform_login_qr(
-        platform_name=platform_token,
+    result = _request_wechat_login_qr_via_persistent_entry(
         bot_token=telegram_bot_token,
         chat_id=telegram_chat_id,
         timeout_seconds=max(10, int(timeout_seconds or 20)),
         log_file=log_file,
-        refresh_page=True,
-        prefer_login_entry=True,
     )
     if not isinstance(result, dict) or not bool(result.get("needs_login", True)):
         _record_error_event(
@@ -11355,7 +11305,7 @@ def _preflight_immediate_platform_login(
     normalized_platform = str(platform or "").strip().lower()
     if normalized_platform != "wechat":
         return {"ready": True}
-    runtime_ctx = _resolve_platform_login_runtime_context(core, normalized_platform)
+    runtime_ctx = _resolve_wechat_login_runtime_context(core)
     try:
         result = core.probe_platform_session_via_debug_port(
             platform_name=normalized_platform,
@@ -11459,13 +11409,11 @@ def _preflight_immediate_platform_login(
             notices.append("已向 Telegram 发送登录提醒")
         elif str(text_result.get("error") or "").strip():
             notices.append(f"登录提醒发送失败：{str(text_result.get('error') or '').strip()}")
-        qr_result = _request_platform_login_qr(
-            platform_name=normalized_platform,
+        qr_result = _request_wechat_login_qr_via_persistent_entry(
             bot_token=str(telegram_bot_token or "").strip(),
             chat_id=str(telegram_chat_id or "").strip(),
             timeout_seconds=max(10, int(timeout_seconds or 20)),
             log_file=Path(log_file) if log_file is not None else Path.cwd() / "runtime" / "logs" / "telegram_command_worker.log",
-            refresh_page=True,
         )
         if bool(qr_result.get("sent")):
             notices.append("登录二维码已发送到 Telegram")
@@ -13088,15 +13036,12 @@ def _run_home_action_job(
             result_status = "done" if _guess_feedback_status(detail) == "success" else "failed"
             exit_code = 0 if result_status == "done" else 2
         elif action_token == "login_qr":
-            platform_value = str(value or "").strip().lower()
-            result = _request_platform_login_qr(
-                platform_name=platform_value,
+            platform_value = "wechat"
+            result = _request_wechat_login_qr_via_persistent_entry(
                 bot_token=telegram_bot_token,
                 chat_id=telegram_chat_id,
                 timeout_seconds=timeout_seconds,
                 log_file=workspace / DEFAULT_LOG_SUBDIR / "telegram_command_worker.log",
-                refresh_page=True,
-                prefer_login_entry=True,
             )
             if bool(result.get("sent")):
                 detail = f"{PUBLISH_PLATFORM_DISPLAY.get(platform_value, platform_value)}登录二维码已发送，请查看最新消息。"
@@ -14272,14 +14217,11 @@ def _handle_command(
             )
             return _summarize_run(result, "执行发布任务")
         if action == "wechat_login_qr":
-            result = _request_platform_login_qr(
-                platform_name="wechat",
+            result = _request_wechat_login_qr_via_persistent_entry(
                 bot_token="",
                 chat_id=notify_chat_id,
                 timeout_seconds=timeout_seconds,
                 log_file=audit_file.parent / "telegram_command_worker.log",
-                refresh_page=True,
-                prefer_login_entry=True,
             )
             if bool(result.get("sent")):
                 return "视频号登录二维码已发送，请扫码。"

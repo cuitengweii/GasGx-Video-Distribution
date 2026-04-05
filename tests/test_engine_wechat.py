@@ -1356,3 +1356,16 @@ def test_wechat_keepalive_uses_transient_probe_tab_when_active_page_is_irrelevan
     assert page.new_tab_calls != []
     assert tab.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
     assert tab.closed is True
+
+
+def test_send_platform_login_text_notification_is_disabled() -> None:
+    result = engine._send_platform_login_text_notification(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        telegram_bot_token="token",
+        telegram_chat_id="chat",
+    )
+
+    assert result["ok"] is True
+    assert result["sent"] is False
+    assert result["skipped"] is True

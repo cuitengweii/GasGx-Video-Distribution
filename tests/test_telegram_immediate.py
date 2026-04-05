@@ -6557,7 +6557,7 @@ def test_build_platform_status_summary_marks_platforms_individually() -> None:
     assert "📣 抖音失败" in summary
     assert "📣 小红书失败" not in summary
     assert "⚠️ 小红书待确认" in summary or "✅ 小红书成功" in summary
-def test_immediate_publish_feedback_omits_duplicate_platform_in_candidate_section() -> None:
+def test_immediate_publish_feedback_removes_candidate_section() -> None:
     item = _image_item(
         target_platforms="douyin,xiaohongshu,kuaishou",
         platform_results={
@@ -6575,10 +6575,7 @@ def test_immediate_publish_feedback_omits_duplicate_platform_in_candidate_sectio
     )
 
     sections = list(payload.get("sections") or [])
-    candidate_section = next(section for section in sections if section.get("title") == "候选信息")
-    labels = [str(entry.get("label") or "") for entry in candidate_section.get("items", []) if isinstance(entry, dict)]
-
-    assert "平台" not in labels
+    assert all(str(section.get("title") or "").strip() != "候选信息" for section in sections)
 
 
 def test_immediate_publish_failure_feedback_hides_error_code_and_log_for_triage() -> None:
@@ -6619,7 +6616,7 @@ def test_immediate_publish_failure_feedback_hides_error_code_and_log_for_triage(
     assert all("日志" not in str(item) for item in status_items)
 
 
-def test_build_platform_launch_result_section_hides_error_code_and_log() -> None:
+def test_build_platform_launch_result_section_includes_error_code_without_log_details() -> None:
     section = worker_impl._build_platform_launch_result_section(
         {
             "wechat": {
@@ -6634,7 +6631,8 @@ def test_build_platform_launch_result_section_hides_error_code_and_log() -> None
     row = next(item for item in rows if isinstance(item, dict))
     value = str(row.get("value") or "")
 
-    assert "错误码" not in value
+    assert "错误码" in value
+    assert "E_UPLOAD_TIMEOUT_1001" in value
     assert "日志：" not in value
     assert "建议：" not in value
     assert "请修复后重试" in value
@@ -6782,3 +6780,21 @@ def test_build_shared_link_status_card_compacts_body_for_operator_scan() -> None
     assert "任务标识" not in text
     assert "菜单链路" not in text
     assert _reply_markup_texts(card["reply_markup"]) == ["📍 进度", "🏠 首页"]
+
+
+def test_send_platform_login_text_notice_is_disabled(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    log_file = workspace / "runtime" / "logs" / "telegram_command_worker.log"
+
+    result = worker_impl._send_platform_login_text_notice(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        timeout_seconds=20,
+        log_file=log_file,
+        login_reason="login_url",
+    )
+
+    assert result["ok"] is True
+    assert result["sent"] is False
+    assert result["skipped"] is True

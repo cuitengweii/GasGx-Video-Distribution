@@ -2025,46 +2025,13 @@ def _send_platform_login_text_notification(
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
 ) -> dict[str, Any]:
     platform = str(platform_name or "").strip().lower() or "wechat"
-    display_name = str(PLATFORM_LOGIN_DISPLAY_NAMES.get(platform) or platform)
-    settings = _resolve_runtime_telegram_notify_settings(
-        telegram_bot_token=telegram_bot_token,
-        telegram_chat_id=telegram_chat_id,
-        telegram_bot_identifier=telegram_bot_identifier,
-        telegram_registry_file=telegram_registry_file,
-        telegram_timeout_seconds=telegram_timeout_seconds,
-        telegram_api_base=telegram_api_base,
-        notify_env_prefix=notify_env_prefix,
-    )
-    if not settings.enabled:
-        return {"ok": False, "sent": False, "error": "telegram notify not configured"}
-    card = _build_platform_login_text_card(
-        platform_name=platform,
-        display_name=display_name,
-        profile_dir=chrome_user_data_dir,
-        open_url=open_url,
-        login_reason=login_reason,
-        qr_error=qr_error,
-        wait_token=wait_token,
-    )
-    params = {
-        "chat_id": settings.telegram_chat_id,
-        "text": str(card.get("text") or "").strip(),
-        "parse_mode": str(card.get("parse_mode") or "HTML"),
-        "disable_web_page_preview": "false",
+    return {
+        "ok": True,
+        "sent": False,
+        "skipped": True,
+        "platform": platform,
+        "error": "",
     }
-    _apply_x_link_preview_options(params, params.get("text"))
-    reply_markup = card.get("reply_markup")
-    if isinstance(reply_markup, dict) and reply_markup.get("inline_keyboard"):
-        params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
-    shared_call_telegram_api(
-        bot_token=settings.telegram_bot_token,
-        method="sendMessage",
-        params=params,
-        timeout_seconds=settings.telegram_timeout_seconds,
-        api_base=settings.telegram_api_base,
-        use_post=True,
-    )
-    return {"ok": True, "sent": True, "card": card}
 
 def _decode_image_data_url(data_url: str) -> tuple[str, bytes]:
     raw = str(data_url or "").strip()
@@ -7546,6 +7513,9 @@ def _playwright_open_comment_manager_via_store(page: Any, post: dict[str, Any], 
     deadline = time.time() + max(2.0, float(timeout_seconds))
     probe_js = """
     () => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
       function pickStore(scope) {
         if (!scope) return null;
         try {
@@ -7898,21 +7868,50 @@ def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], deb
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       async function maybeAwait(value) {
         if (value && typeof value.then === 'function') {
@@ -8037,21 +8036,50 @@ def _playwright_like_comment_via_store(page: Any, comment: dict[str, Any], post:
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       const store = resolveStore();
       if (!store) return { ok: false, err_code: -1, err_msg: 'comment_store_missing' };
@@ -8108,21 +8136,50 @@ def _playwright_submit_reply_via_store(page: Any, comment: dict[str, Any], post:
         } catch (e) {}
         return null;
       }
-      function resolveStore() {
+      function collectStores() {
+        const stores = [];
+        const seen = new Set();
+        function pushStore(candidate) {
+          if (!candidate) return;
+          if (seen.has(candidate)) return;
+          seen.add(candidate);
+          stores.push(candidate);
+        }
         const scopes = [window];
         try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
         try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
         for (const scope of scopes) {
-          const found = pickStore(scope);
-          if (found) return found;
+          pushStore(pickStore(scope));
         }
         for (const frame of Array.from(document.querySelectorAll('iframe'))) {
           try {
-            const found = pickStore(frame.contentWindow || null);
-            if (found) return found;
+            pushStore(pickStore(frame.contentWindow || null));
           } catch (e) {}
         }
-        return null;
+        return stores;
+      }
+      function resolveStore() {
+        const stores = collectStores();
+        if (!stores.length) return null;
+        let best = stores[0];
+        let bestScore = -1;
+        stores.forEach((store, index) => {
+          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
+          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
+          const hasCurrentExport = !!norm(store && store.currentExportId);
+          const isIframeStore = !!(store && store.isIframeForWxAd);
+          const score =
+            (feedCount > 0 ? 1000 : 0)
+            + (commentCount > 0 ? 500 : 0)
+            + (hasCurrentExport ? 50 : 0)
+            + (isIframeStore ? 10 : 0)
+            - index;
+          if (score > bestScore) {
+            bestScore = score;
+            best = store;
+          }
+        });
+        return best;
       }
       const store = resolveStore();
       if (!store) return { ok: false, err_code: -1, err_msg: 'comment_store_missing' };

@@ -159,11 +159,18 @@ def _is_retryable_request_error(exc: BaseException) -> bool:
 def _is_proxy_connection_error(exc: BaseException) -> bool:
     if isinstance(exc, requests.exceptions.ProxyError):
         return True
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return True
     text = str(exc).lower()
     markers = (
         "unable to connect to proxy",
         "proxyerror",
         "failed to establish a new connection",
+        "connection aborted",
+        "connection reset",
+        "connection refused",
+        "connection reset by peer",
+        "远程主机强迫关闭",
     )
     return any(marker in text for marker in markers)
 

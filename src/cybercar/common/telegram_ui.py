@@ -334,8 +334,12 @@ def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
                     text = "查看原帖" if label == "原帖链接" else "点击查看"
             limit = _VALUE_LIMIT_BY_LABEL.get(label, 72)
             compact_value = _compact_mobile_text(_localize_card_text(value), limit=limit)
-            compact_text = _compact_mobile_text(_localize_card_text(text), limit=limit)
-            if not compact_value and str(value or "").strip() and not url:
+            compact_text = _compact_mobile_text(_localize_card_text(text), limit=limit)            code = _extract_error_code(value)
+            if code and "\u9519\u8bef\u7801" not in compact_value:
+                if compact_value and ("\u53d1\u5e03\u5931\u8d25" in compact_value or "\u5931\u8d25" in compact_value):
+                    compact_value = f"{compact_value}\uff5c\u9519\u8bef\u7801:{code}"
+                elif not compact_value:
+                    compact_value = f"\u9519\u8bef\u7801:{code}"            if not compact_value and str(value or "").strip() and not url:
                 compact_value = "内容已省略"
             if not compact_text and str(text or "").strip() and not url:
                 compact_text = "内容已省略"
@@ -663,7 +667,7 @@ def _extract_platform_reason(text: str) -> str:
 
 _ERROR_CODE_PATTERN = re.compile(r"\b((?:E|ERR)_[A-Z0-9_]{3,})\b", flags=re.IGNORECASE)
 _INLINE_ERROR_CODE_PATTERN = re.compile(
-    r"(?:error\s*code|err(?:or)?\s*code|错误码|code)\s*[:=：]\s*([A-Za-z0-9._-]{3,})",
+    r"(?:error\s*code|err(?:or)?\s*code|\u9519\u8bef\u7801|code)\s*[:=：]\s*([A-Za-z0-9._-]{3,})",
     flags=re.IGNORECASE,
 )
 _LOG_NAME_PATTERN = re.compile(r"([A-Za-z0-9._-]+\.log)\b", flags=re.IGNORECASE)
@@ -781,36 +785,39 @@ def _merge_portable_items_into_sections(
 
 
 def _compact_platform_status_value(text: str) -> str:
-    raw = _strip_error_code_text(str(text or "").strip())
+    source = str(text or "").strip()
+    error_code = _extract_error_code(source)
+    raw = _strip_error_code_text(source)
     lowered = raw.lower()
     if not raw:
-        return "⚠️ 待确认"
-    if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
+        return "\u26a0\ufe0f \u5f85\u786e\u8ba4"
+    if any(token in lowered for token in ("\u767b\u5f55", "\u626b\u7801", "\u672a\u767b\u5f55", "login", "sign in", "qr")):
         log_name = _extract_log_name(raw)
-        parts = ["🔐 需要登录"]
+        parts = ["\U0001f510 \u9700\u8981\u767b\u5f55"]
         if log_name:
-            parts.append(f"日志:{log_name}")
-        return "｜".join(parts)
-    if any(token in lowered for token in ("失败", "异常", "未启动", "failed", "error")):
+            parts.append(f"\u65e5\u5fd7:{log_name}")
+        return "\uff5c".join(parts)
+    if any(token in lowered for token in ("\u5931\u8d25", "\u5f02\u5e38", "\u672a\u542f\u52a8", "failed", "error")):
         log_name = _extract_log_name(raw)
-        parts = ["📣 发布失败"]
+        parts = ["\U0001f4e3 \u53d1\u5e03\u5931\u8d25"]
         if log_name:
-            parts.append(f"日志:{log_name}")
+            parts.append(f"\u65e5\u5fd7:{log_name}")
+        elif error_code:
+            parts.append(f"\u9519\u8bef\u7801:{error_code}")
         else:
-            parts.append("请查看日志")
-        return "｜".join(parts)
-    if any(token in lowered for token in ("发布中", "处理中", "running", "processing")):
-        return "⏳ 发布中"
-    if any(token in lowered for token in ("排队", "queued", "queue")):
-        return "🕓 已排队"
-    if any(token in lowered for token in ("跳过", "duplicate", "历史发布记录", "已发布")):
-        return "⏭️ 已跳过"
-    if any(token in lowered for token in ("成功", "确认发布成功", "模拟发布成功", "success")):
-        return "✅ 已确认"
-    if any(token in lowered for token in ("待确认", "待核实", "pending")):
-        return "⚠️ 待确认"
-    return _localize_card_text(raw, fallback="⚠️ 待确认")
-
+            parts.append("\u9519\u8bef\u7801")
+        return "\uff5c".join(parts)
+    if any(token in lowered for token in ("\u53d1\u5e03\u4e2d", "\u5904\u7406\u4e2d", "running", "processing")):
+        return "\u23f3 \u53d1\u5e03\u4e2d"
+    if any(token in lowered for token in ("\u6392\u961f", "queued", "queue")):
+        return "\U0001f553 \u5df2\u6392\u961f"
+    if any(token in lowered for token in ("\u8df3\u8fc7", "duplicate", "\u5386\u53f2\u53d1\u5e03\u8bb0\u5f55", "\u5df2\u53d1\u5e03")):
+        return "\u23ed\ufe0f \u5df2\u8df3\u8fc7"
+    if any(token in lowered for token in ("\u6210\u529f", "\u786e\u8ba4\u53d1\u5e03\u6210\u529f", "\u6a21\u62df\u53d1\u5e03\u6210\u529f", "success")):
+        return "\u2705 \u5df2\u786e\u8ba4"
+    if any(token in lowered for token in ("\u5f85\u786e\u8ba4", "\u5f85\u6838\u5b9e", "pending")):
+        return "\u26a0\ufe0f \u5f85\u786e\u8ba4"
+    return _localize_card_text(raw, fallback="\u26a0\ufe0f \u5f85\u786e\u8ba4")
 
 def _platform_status_label_suffix(value: str) -> str:
     compact = str(value or "").strip()
@@ -1763,7 +1770,7 @@ def _known_home_message_ids(state: Mapping[str, Any]) -> list[int]:
     return values[:_HOME_STATE_HISTORY_LIMIT]
 
 
-_DISABLE_CARD_INLINE_BUTTONS = True
+_DISABLE_CARD_INLINE_BUTTONS = False
 
 
 def _outgoing_reply_markup(reply_markup: Any, *, for_edit: bool = False) -> dict[str, Any] | None:
