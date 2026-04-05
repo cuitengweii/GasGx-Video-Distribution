@@ -513,3 +513,80 @@ def test_build_telegram_card_removes_ascii_letters_from_visible_text() -> None:
     text = str(card["text"])
     visible = re.sub(r"<[^>]+>", "", text)
     assert re.search(r"[A-Za-z]", visible) is None
+
+
+def test_build_telegram_card_limits_and_dedupes_platform_status_items() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {
+                    "title": "平台状态",
+                    "items": [
+                        {"label": "抖音", "value": "发布失败，错误码:ERR_UPLOAD_TIMEOUT"},
+                        {"label": "抖音", "value": "发布失败，错误码:ERR_UPLOAD_TIMEOUT"},
+                        {"label": "小红书", "value": "平台已确认发布成功"},
+                        {"label": "快手", "value": "需要登录"},
+                        {"label": "视频号", "value": "发布中"},
+                        {"label": "B站", "value": "已排队"},
+                        {"label": "微博", "value": "待确认"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.count("• <b>") == 5
+    assert text.count("错误码") == 1
+
+
+def test_build_telegram_card_sorts_candidate_section_and_uses_readable_link_label() -> None:
+    long_title = "这是一个用于验证移动端卡片长文本截断效果的候选标题" * 3
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "发布失败",
+            "sections": [
+                {
+                    "title": "候选信息",
+                    "items": [
+                        {"label": "原帖链接", "value": "https://x.com/example/status/123"},
+                        {"label": "标题", "value": long_title},
+                        {"label": "平台", "value": "抖音 / 小红书 / 快手"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert text.index("• <b>标题</b>") < text.index("• <b>平台</b>")
+    assert text.index("• <b>平台</b>") < text.index("• <b>原帖链接</b>")
+    assert "查看原帖" in text
+    assert "…" in text
+
+
+def test_build_telegram_card_filters_garbled_text_and_unifies_punctuation() -> None:
+    card = telegram_ui.build_telegram_card(
+        "alert",
+        {
+            "status": "failed",
+            "title": "发送失败",
+            "subtitle": "网络 timeout, please retry!",
+            "sections": [
+                {"title": "失败原因", "items": [{"label": "原因", "value": "???????"}]},
+                {"title": "处理建议", "items": ["retry now!"]},
+                {"title": "结果说明", "items": [{"label": "说明", "value": "原因: network timeout; 建议: refresh"}]},
+            ],
+        },
+    )
+
+    text = str(card["text"])
+    assert "????" not in text
+    assert "???" not in text
+    assert "：" in text
+    assert "；" in text or "｜" in text

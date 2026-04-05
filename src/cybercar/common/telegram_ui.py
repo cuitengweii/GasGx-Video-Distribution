@@ -204,11 +204,162 @@ _ENGLISH_TOKEN_ALIASES: dict[str, str] = {
     "cybertruck": "默认配置",
 }
 
+_SECTION_ITEM_LIMITS: dict[str, int] = {
+    "平台状态": 5,
+    "候选信息": 3,
+    "任务概览": 4,
+    "失败原因": 3,
+    "处理建议": 3,
+    "结果说明": 3,
+    "任务日志": 4,
+}
+
+_CANDIDATE_ITEM_PRIORITY: dict[str, int] = {
+    "标题": 0,
+    "平台": 1,
+    "发布时间": 2,
+    "来源": 3,
+    "原帖链接": 4,
+}
+
+_VALUE_LIMIT_BY_LABEL: dict[str, int] = {
+    "标题": 64,
+    "说明": 72,
+    "详情": 72,
+    "结果": 72,
+    "原因": 48,
+    "日志": 32,
+    "错误码": 24,
+}
+
+
+def _looks_like_garbled_text(text: str) -> bool:
+    token = str(text or "").strip()
+    if not token:
+        return False
+    if "\ufffd" in token or "�" in token:
+        return True
+    q_count = token.count("?")
+    if len(token) >= 4 and q_count >= max(3, len(token) // 2):
+        return True
+    return False
+
+
+def _normalize_punctuation(text: str) -> str:
+    token = str(text or "").strip()
+    if not token:
+        return ""
+    if not any(ch in token for ch in (":", "：", ";", "；", ",", "，", "!", "！", "?", "？", "|", "｜")):
+        return re.sub(r"\s+", " ", token).strip()
+    token = re.sub(r"\s*[：:]\s*", "：", token)
+    token = re.sub(r"\s*[；;]\s*", "；", token)
+    token = re.sub(r"\s*[，,]\s*", "，", token)
+    token = re.sub(r"\s*[！!]\s*", "！", token)
+    token = re.sub(r"\s*[？?]\s*", "？", token)
+    token = re.sub(r"\s*[｜|]\s*", "｜", token)
+    token = re.sub(r"：{2,}", "：", token)
+    token = re.sub(r"；{2,}", "；", token)
+    token = re.sub(r"，{2,}", "，", token)
+    token = re.sub(r"！{2,}", "！", token)
+    token = re.sub(r"？{2,}", "？", token)
+    token = re.sub(r"｜{2,}", "｜", token)
+    token = re.sub(r"\s+", " ", token).strip()
+    return token
+
+
+def _compact_mobile_text(value: Any, *, limit: int = 72) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if _looks_like_garbled_text(text):
+        return ""
+    token = re.sub(r"\s+", " ", text)
+    if len(token) <= max(8, int(limit)):
+        return token
+    if re.fullmatch(r"https?://\S+", token, flags=re.IGNORECASE):
+        return "点击查看"
+    if _extract_error_code(token):
+        return token
+    log_name = _extract_log_name(token)
+    if log_name:
+        return log_name
+    width = max(8, int(limit)) - 1
+    return token[:width].rstrip() + "…"
+
+
+def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
+    section_title = str(title or "").strip()
+    polished: list[Any] = []
+    seen: set[str] = set()
+    for raw_item in list(items or []):
+        if isinstance(raw_item, Mapping):
+            item = dict(raw_item)
+            label = _localize_card_text(_strip_html_like_markup(item.get("label", "")))
+            value = _strip_html_like_markup(item.get("value", ""))
+            text = _strip_html_like_markup(item.get("text", ""))
+            url = str(item.get("url") or "").strip()
+            if not url and re.fullmatch(r"https?://\S+", str(value or "").strip(), flags=re.IGNORECASE):
+                url = str(value or "").strip()
+                if not text:
+                    text = "查看原帖" if label == "原帖链接" else "点击查看"
+            limit = _VALUE_LIMIT_BY_LABEL.get(label, 72)
+            compact_value = _compact_mobile_text(_localize_card_text(value), limit=limit)
+            compact_text = _compact_mobile_text(_localize_card_text(text), limit=limit)
+            if not compact_value and str(value or "").strip() and not url:
+                compact_value = "内容已省略"
+            if not compact_text and str(text or "").strip() and not url:
+                compact_text = "内容已省略"
+            compact_label = _compact_mobile_text(label, limit=12)
+            signature = "|".join([compact_label, compact_value, compact_text, url])
+            if signature in seen:
+                continue
+            seen.add(signature)
+            if not any([compact_value, compact_text, url]):
+                continue
+            if compact_label:
+                item["label"] = compact_label
+            if compact_value:
+                item["value"] = compact_value
+            elif "value" in item:
+                item.pop("value", None)
+            if compact_text:
+                item["text"] = compact_text
+            elif "text" in item:
+                item.pop("text", None)
+            if url:
+                item["url"] = url
+            polished.append(item)
+            continue
+        compact = _compact_mobile_text(_localize_card_text(_strip_html_like_markup(raw_item)), limit=72)
+        if not compact or compact in seen:
+            continue
+        seen.add(compact)
+        polished.append(compact)
+    if section_title == "候选信息":
+        polished = sorted(
+            polished,
+            key=lambda item: (
+                _CANDIDATE_ITEM_PRIORITY.get(str(item.get("label") or "").strip(), 99)
+                if isinstance(item, Mapping)
+                else 99
+            ),
+        )
+    limit = _SECTION_ITEM_LIMITS.get(section_title, 6)
+    return polished[: max(1, int(limit))]
+
 
 def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     text = str(value or "").strip()
     if not text:
         return fallback
+    if _looks_like_garbled_text(text):
+        return fallback
+    if not re.search(r"[A-Za-z_:;,\-!?\|]", text):
+        normalized = _normalize_punctuation(text)
+        normalized = normalized.strip(" ：:|｜-_,，。；;！？!?")
+        if _looks_like_garbled_text(normalized):
+            return fallback
+        return normalized or fallback
     for phrase, replacement in _ENGLISH_PHRASE_ALIASES:
         text = re.sub(re.escape(phrase), replacement, text, flags=re.IGNORECASE)
     if re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE):
@@ -222,10 +373,12 @@ def _localize_card_text(value: Any, *, fallback: str = "") -> str:
         return ""
 
     text = re.sub(r"[A-Za-z_][A-Za-z0-9_]*", _replace_token, text)
-    text = re.sub(r"\s+", " ", text).strip(" ：:|｜-_,，。")
-    text = re.sub(r"(：\s*[｜|]\s*)+", "：", text)
-    text = re.sub(r"[｜|]{2,}", "｜", text)
-    text = re.sub(r"[：:]{2,}", "：", text)
+    text = _normalize_punctuation(text)
+    text = text.strip(" ：:|｜-_,，。；;！？!?")
+    text = re.sub(r"(：\s*｜\s*)+", "：", text)
+    text = re.sub(r"｜{2,}", "｜", text)
+    if _looks_like_garbled_text(text):
+        return fallback
     return text or fallback
 
 
@@ -665,6 +818,9 @@ def _normalize_card_sections(status: str, sections: Sequence[Mapping[str, Any]])
         items = _normalize_summary_section_items(title, items)
         if title == "平台状态":
             items = _normalize_platform_status_items(items)
+        items = _polish_section_items(title, items)
+        if not items:
+            continue
         if title == "平台状态" and status_token in {"success", "done"} and items and all(
             _is_positive_platform_status_item(item) for item in items
         ):
@@ -678,7 +834,7 @@ def _failure_marker_for_text(text: str, *, fallback: str = "⚠️") -> str:
     lowered = str(text or "").strip().lower()
     if not lowered:
         return fallback
-    if any(token in lowered for token in ("timeout", "network", "transport", "连接", "代理", "connection", "proxy")):
+    if any(token in lowered for token in ("timeout", "network", "transport", "连接", "代理", "超时", "connection", "proxy")):
         return "🌐"
     if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
         return "🔐"

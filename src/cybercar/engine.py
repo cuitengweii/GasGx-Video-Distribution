@@ -5165,6 +5165,8 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
           '[class*="commentCount"]',
           '[data-testid*="comment"]',
           '[data-role*="comment"]',
+          '[aria-label*="评论"]',
+          '[title*="评论"]',
           '[aria-label*="璇勮"]',
           '[title*="璇勮"]',
         ];
@@ -5173,13 +5175,22 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
           const text = norm(node ? (node.innerText || node.textContent || '') : '');
           const count = toInt(text);
           if (count > 0) return { count, hasComments: true, source: text || selector };
+          if (/评论|comment/i.test(text)) return { count: 0, hasComments: true, source: text || selector };
           if (/璇勮/.test(text)) return { count: 0, hasComments: true, source: text || selector };
         }
         const fullText = norm(card.innerText || card.textContent || '');
+        const commentCountMatch = fullText.match(/(\\d+)\\s*(?:条)?\\s*(?:评论|comment)/i);
+        if (commentCountMatch) {
+          const count = toInt(commentCountMatch[1]);
+          return { count, hasComments: count > 0, source: commentCountMatch[0] };
+        }
         const explicitMatch = fullText.match(/(\\d+)\\s*(?:鏉??璇勮/);
         if (explicitMatch) {
           const count = toInt(explicitMatch[1]);
           return { count, hasComments: count > 0, source: explicitMatch[0] };
+        }
+        if (/有新评论|新评论|最新评论|评论|comment/i.test(fullText)) {
+          return { count: 0, hasComments: true, source: fullText };
         }
         if (/鏈夋柊璇勮|鏂拌瘎璁簗璇勮/.test(fullText) && !/鍏抽棴璇勮/.test(fullText)) {
           return { count: 0, hasComments: true, source: fullText };
@@ -5187,10 +5198,14 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
         return { count: 0, hasComments: false, source: '' };
       }
       const doc = resolveWechatCommentDoc();
-      const cards = Array.from(doc.querySelectorAll('.comment-feed-wrap'));
+      const cards = Array.from(doc.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
       return cards.map((card) => {
-        const title = norm(card.querySelector('.feed-title') ? card.querySelector('.feed-title').innerText : '');
-        const publishedText = norm(card.querySelector('.feed-time') ? card.querySelector('.feed-time').innerText : '');
+        const titleNode = card.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
+        const timeNode = card.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
+        const fallbackText = norm(card.innerText || card.textContent || '');
+        const fallbackTitle = fallbackText.split(' ').slice(0, 24).join(' ');
+        const title = norm(titleNode ? titleNode.innerText : fallbackTitle);
+        const publishedText = norm(timeNode ? timeNode.innerText : '');
         const commentMeta = parseCommentMeta(card);
         return {
           title,
@@ -5199,7 +5214,7 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
           has_comments: commentMeta.hasComments,
           comment_source: commentMeta.source,
         };
-      }).filter((item) => item.title || item.published_text);
+      }).filter((item) => item.title || item.published_text || item.comment_source);
     })();
     """
     try:
@@ -5214,14 +5229,15 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
             continue
         title = str(item.get("title") or "").strip()
         published_text = str(item.get("published_text") or "").strip()
-        if not title and not published_text:
+        comment_source = str(item.get("comment_source") or "").strip()
+        if not title and not published_text and not comment_source:
             continue
         try:
             comment_count = max(0, int(item.get("comment_count") or 0))
         except Exception:
             comment_count = 0
         has_comments = bool(item.get("has_comments")) or comment_count > 0
-        post_key_seed = f"{title}|{published_text}"
+        post_key_seed = f"{title}|{published_text}|{comment_source}"
         post_key = hashlib.sha1(post_key_seed.encode("utf-8", errors="ignore")).hexdigest()[:16]
         result.append(
             {
@@ -5230,7 +5246,7 @@ def extract_wechat_post_cards(page: ChromiumPage) -> list[dict[str, Any]]:
                 "published_text": published_text,
                 "comment_count": comment_count,
                 "has_comments": has_comments,
-                "comment_source": str(item.get("comment_source") or "").strip(),
+                "comment_source": comment_source,
             }
         )
     return result
@@ -5365,6 +5381,16 @@ def open_comment_manager(page: ChromiumPage, post: dict[str, Any], timeout_secon
         const minPrefix = Math.min(a.length, b.length, 18);
         return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
       }
+      function readTitle(node) {
+        const titleNode = node && node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
+        if (titleNode) return norm(titleNode.innerText || titleNode.textContent || '');
+        const fallbackText = norm(node && (node.innerText || node.textContent || ''));
+        return fallbackText.split(' ').slice(0, 24).join(' ');
+      }
+      function readPublished(node) {
+        const timeNode = node && node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
+        return norm(timeNode ? (timeNode.innerText || timeNode.textContent || '') : '');
+      }
       function click(el) {
         if (!el) return false;
         try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
@@ -5391,25 +5417,25 @@ def open_comment_manager(page: ChromiumPage, post: dict[str, Any], timeout_secon
         return '';
       }
       const doc = resolveWechatCommentDoc();
-      const cards = Array.from(doc.querySelectorAll('.comment-feed-wrap'));
+      const cards = Array.from(doc.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
       const targetTitleNorm = norm(targetTitle);
       const targetPublishedNorm = norm(targetPublishedText);
       const exactCard = cards.find((node) => {
-        const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
-        const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+        const title = readTitle(node);
+        const published = readPublished(node);
         return title === targetTitleNorm && samePublished(published, targetPublishedNorm);
       });
       const fuzzyCard = exactCard || cards.find((node) => {
-        const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
-        const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+        const title = readTitle(node);
+        const published = readPublished(node);
         if (targetPublishedNorm && !samePublished(published, targetPublishedNorm)) return false;
-        if (!targetTitleNorm) return !!published;
+        if (!targetTitleNorm) return !!(title || published);
         return fuzzyTitleMatch(title, targetTitleNorm);
       });
       const card = fuzzyCard;
       const visibleCards = cards.slice(0, 5).map((node) => ({
-        title: norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : ''),
-        published_text: norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : ''),
+        title: readTitle(node),
+        published_text: readPublished(node),
       }));
       if (!card) return { ok: false, reason: 'feed_not_found', visible_cards: visibleCards };
       const clickedTarget = clickEntry(card);
@@ -5472,7 +5498,7 @@ def _collect_native_comment_manager_diagnostics(page: ChromiumPage) -> dict[str,
       const doc = resolveWechatCommentDoc();
       const hasFeedDetail = !!doc.querySelector('.feed-detail');
       const hasCommentList = !!doc.querySelector('.comment-list, .comment-main-content');
-      const hasCommentSurface = !!doc.querySelector('.comment-feed-wrap, .feed-detail, .comment-list, .comment-main-content');
+      const hasCommentSurface = !!doc.querySelector(".comment-feed-wrap, [class*='comment-feed'], .feed-detail, .comment-list, .comment-main-content, .comment-view, .finder-card, [class*='finder-card'], .feeds-container, .scroll-list, .scroll-list__wrp, [class*='feed-list'], [class*='post-list'], [class*='comment-list']");
       return {
         has_feed_detail: hasFeedDetail,
         has_comment_list: hasCommentList,
@@ -5490,6 +5516,23 @@ def _collect_native_comment_manager_diagnostics(page: ChromiumPage) -> dict[str,
         diagnostics["has_comment_list"] = bool(payload.get("has_comment_list"))
         diagnostics["has_comment_surface"] = bool(payload.get("has_comment_surface"))
     return diagnostics
+
+
+def _is_wechat_comment_manager_surface_ready(page: ChromiumPage) -> bool:
+    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    return (() => {
+      const doc = resolveWechatCommentDoc();
+      if (!doc || !doc.querySelector) return false;
+      const hasSurface = !!doc.querySelector(".comment-feed-wrap, [class*='comment-feed'], .feed-detail, .comment-list, .comment-main-content, .comment-view, .finder-card, [class*='finder-card'], .feeds-container, .scroll-list, .scroll-list__wrp, [class*='feed-list'], [class*='post-list'], [class*='comment-list']");
+      if (hasSurface) return true;
+      const cards = doc.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']");
+      return !!(cards && cards.length);
+    })();
+    """
+    try:
+        return bool(page.run_js(js))
+    except Exception:
+        return False
 
 
 def _maybe_notify_wechat_comment_login_required(
@@ -5969,7 +6012,7 @@ def _resolve_playwright_wechat_comment_frame(page: Any):
     fallback: list[Any] = []
     for frame in frames:
         url = str(getattr(frame, "url", "") or "")
-        if "/micro/interaction/comment" in url:
+        if "/micro/interaction/comment" in url or "/platform/interaction/comment" in url:
             preferred.append(frame)
         elif "/micro/content/post/list" in url:
             fallback.append(frame)
@@ -5979,7 +6022,7 @@ def _resolve_playwright_wechat_comment_frame(page: Any):
                 has_comment_surface = bool(
                     frame.evaluate(
                         """() => !!document.querySelector(
-                            '.comment-feed-wrap, .feed-detail, .comment-list, .comment-main-content'
+                            ".comment-feed-wrap, [class*='comment-feed'], .feed-detail, .comment-list, .comment-main-content, .comment-view, .finder-card, [class*='finder-card'], .feeds-container, .scroll-list, .scroll-list__wrp, [class*='feed-list'], [class*='post-list'], [class*='comment-list']"
                         )"""
                     )
                 )
@@ -5987,6 +6030,18 @@ def _resolve_playwright_wechat_comment_frame(page: Any):
                 has_comment_surface = False
             if has_comment_surface:
                 return frame
+    try:
+        has_page_surface = bool(
+            page.evaluate(
+                """() => !!document.querySelector(
+                    ".comment-feed-wrap, [class*='comment-feed'], .feed-detail, .comment-list, .comment-main-content, .comment-view, .finder-card, [class*='finder-card'], .feeds-container, .scroll-list, .scroll-list__wrp, [class*='feed-list'], [class*='post-list'], [class*='comment-list']"
+                )"""
+            )
+        )
+    except Exception:
+        has_page_surface = False
+    if has_page_surface:
+        return page
     if preferred:
         return preferred[0]
     if fallback:
@@ -6013,6 +6068,8 @@ def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
           '[class*="commentCount"]',
           '[data-testid*="comment"]',
           '[data-role*="comment"]',
+          '[aria-label*="评论"]',
+          '[title*="评论"]',
           '[aria-label*="璇勮"]',
           '[title*="璇勮"]',
         ];
@@ -6021,22 +6078,35 @@ def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
           const text = norm(node ? (node.innerText || node.textContent || '') : '');
           const count = toInt(text);
           if (count > 0) return { count, hasComments: true, source: text || selector };
+          if (/评论|comment/i.test(text)) return { count: 0, hasComments: true, source: text || selector };
           if (/璇勮/.test(text)) return { count: 0, hasComments: true, source: text || selector };
         }
         const fullText = norm(card.innerText || card.textContent || '');
+        const commentCountMatch = fullText.match(/(\\d+)\\s*(?:条)?\\s*(?:评论|comment)/i);
+        if (commentCountMatch) {
+          const count = toInt(commentCountMatch[1]);
+          return { count, hasComments: count > 0, source: commentCountMatch[0] };
+        }
         const explicitMatch = fullText.match(/(\\d+)\\s*(?:鏉??璇勮/);
         if (explicitMatch) {
           const count = toInt(explicitMatch[1]);
           return { count, hasComments: count > 0, source: explicitMatch[0] };
+        }
+        if (/有新评论|新评论|最新评论|评论|comment/i.test(fullText)) {
+          return { count: 0, hasComments: true, source: fullText };
         }
         if (/鏈夋柊璇勮|鏂拌瘎璁簗璇勮/.test(fullText) && !/鍏抽棴璇勮/.test(fullText)) {
           return { count: 0, hasComments: true, source: fullText };
         }
         return { count: 0, hasComments: false, source: '' };
       }
-      return Array.from(document.querySelectorAll('.comment-feed-wrap')).map((card) => {
-        const title = norm(card.querySelector('.feed-title') ? card.querySelector('.feed-title').innerText : '');
-        const publishedText = norm(card.querySelector('.feed-time') ? card.querySelector('.feed-time').innerText : '');
+      return Array.from(document.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']")).map((card) => {
+        const titleNode = card.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
+        const timeNode = card.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
+        const fallbackText = norm(card.innerText || card.textContent || '');
+        const fallbackTitle = fallbackText.split(' ').slice(0, 24).join(' ');
+        const title = norm(titleNode ? titleNode.innerText : fallbackTitle);
+        const publishedText = norm(timeNode ? timeNode.innerText : '');
         const commentMeta = parseCommentMeta(card);
         return {
           title,
@@ -6045,7 +6115,7 @@ def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
           has_comments: commentMeta.hasComments,
           comment_source: commentMeta.source,
         };
-      }).filter((item) => item.title || item.published_text);
+      }).filter((item) => item.title || item.published_text || item.comment_source);
     }
     """
     try:
@@ -6060,14 +6130,15 @@ def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
             continue
         title = str(item.get("title") or "").strip()
         published_text = str(item.get("published_text") or "").strip()
-        if not title and not published_text:
+        comment_source = str(item.get("comment_source") or "").strip()
+        if not title and not published_text and not comment_source:
             continue
         try:
             comment_count = max(0, int(item.get("comment_count") or 0))
         except Exception:
             comment_count = 0
         has_comments = bool(item.get("has_comments")) or comment_count > 0
-        post_key_seed = f"{title}|{published_text}"
+        post_key_seed = f"{title}|{published_text}|{comment_source}"
         post_key = hashlib.sha1(post_key_seed.encode("utf-8", errors="ignore")).hexdigest()[:16]
         result.append(
             {
@@ -6076,7 +6147,7 @@ def _playwright_extract_wechat_post_cards(frame: Any) -> list[dict[str, Any]]:
                 "published_text": published_text,
                 "comment_count": comment_count,
                 "has_comments": has_comments,
-                "comment_source": str(item.get("comment_source") or "").strip(),
+                "comment_source": comment_source,
             }
         )
     return result
@@ -6170,14 +6241,14 @@ def _collect_playwright_comment_manager_diagnostics(page: Any, frame_hint: Any |
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
       }
-      const cards = Array.from(document.querySelectorAll('.comment-feed-wrap'));
+      const cards = Array.from(document.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
       return {
         has_feed_detail: !!document.querySelector('.feed-detail'),
         has_comment_list: !!document.querySelector('.comment-list, .comment-main-content'),
-        has_comment_surface: !!document.querySelector('.comment-feed-wrap, .feed-detail, .comment-list, .comment-main-content'),
+        has_comment_surface: !!document.querySelector(".comment-feed-wrap, [class*='comment-feed'], .feed-detail, .comment-list, .comment-main-content, .comment-view, .finder-card, [class*='finder-card'], .feeds-container, .scroll-list, .scroll-list__wrp, [class*='feed-list'], [class*='post-list'], [class*='comment-list']"),
         visible_cards: cards.slice(0, 5).map((node) => ({
-          title: norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : ''),
-          published_text: norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : ''),
+          title: norm((node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']") || {}).innerText || ''),
+          published_text: norm((node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time") || {}).innerText || ''),
         })),
       };
     }
@@ -6263,23 +6334,27 @@ def _playwright_open_comment_manager(
           }
           const targetTitle = norm(args && args.title);
           const targetPublished = norm(args && args.published_text);
-          const cards = Array.from(document.querySelectorAll('.comment-feed-wrap'));
+          const cards = Array.from(document.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
           const exactCard = cards.find((node) => {
-            const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
-            const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+            const titleNode = node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
+            const timeNode = node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
+            const title = norm(titleNode ? titleNode.innerText : '');
+            const published = norm(timeNode ? timeNode.innerText : '');
             return title === targetTitle && samePublished(published, targetPublished);
           });
           const fuzzyCard = exactCard || cards.find((node) => {
-            const title = norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : '');
-            const published = norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : '');
+            const titleNode = node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
+            const timeNode = node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
+            const title = norm(titleNode ? titleNode.innerText : '');
+            const published = norm(timeNode ? timeNode.innerText : '');
             if (targetPublished && !samePublished(published, targetPublished)) return false;
             if (!targetTitle) return !!published;
             return fuzzyTitleMatch(title, targetTitle);
           });
           const card = fuzzyCard;
           const visibleCards = cards.slice(0, 5).map((node) => ({
-            title: norm(node.querySelector('.feed-title') ? node.querySelector('.feed-title').innerText : ''),
-            published_text: norm(node.querySelector('.feed-time') ? node.querySelector('.feed-time').innerText : ''),
+            title: norm((node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']") || {}).innerText || ''),
+            published_text: norm((node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time") || {}).innerText || ''),
           }));
           if (!card) return {
             ok: false,
@@ -6288,8 +6363,10 @@ def _playwright_open_comment_manager(
             matched_published_text: '',
             visible_cards: visibleCards,
           };
-          const matchedTitle = norm(card.querySelector('.feed-title') ? card.querySelector('.feed-title').innerText : '');
-          const matchedPublished = norm(card.querySelector('.feed-time') ? card.querySelector('.feed-time').innerText : '');
+          const matchedTitleNode = card.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
+          const matchedTimeNode = card.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
+          const matchedTitle = norm(matchedTitleNode ? matchedTitleNode.innerText : '');
+          const matchedPublished = norm(matchedTimeNode ? matchedTimeNode.innerText : '');
           const clickedTarget = clickEntry(card);
           return {
             ok: !!clickedTarget,
@@ -6961,26 +7038,40 @@ def run_wechat_comment_reply(
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     last_reply_at = _latest_comment_reply_time(items)
 
-    page = _connect_chrome(
-        debug_port=debug_port,
-        auto_open_chrome=auto_open_chrome,
-        chrome_path=chrome_path,
-        chrome_user_data_dir=chrome_user_data_dir,
-        startup_url=WECHAT_POST_LIST_URL,
-    )
-    page.get(WECHAT_COMMENT_MANAGER_URL)
-    _check_wechat_login_ready(
-        page,
-        chrome_user_data_dir=chrome_user_data_dir,
-        open_url=WECHAT_COMMENT_MANAGER_URL,
-        telegram_bot_token=telegram_bot_token,
-        telegram_chat_id=telegram_chat_id,
-        telegram_bot_identifier=telegram_bot_identifier,
-        telegram_registry_file=telegram_registry_file,
-        telegram_timeout_seconds=telegram_timeout_seconds,
-        telegram_api_base=telegram_api_base,
-        notify_env_prefix=notify_env_prefix,
-    )
+    page: Optional[ChromiumPage] = None
+    native_connect_error = ""
+
+    def _ensure_native_page() -> Optional[ChromiumPage]:
+        nonlocal page, native_connect_error
+        if page is not None:
+            return page
+        try:
+            page = _connect_chrome(
+                debug_port=debug_port,
+                auto_open_chrome=auto_open_chrome,
+                chrome_path=chrome_path,
+                chrome_user_data_dir=chrome_user_data_dir,
+                startup_url=WECHAT_POST_LIST_URL,
+            )
+            page.get(WECHAT_COMMENT_MANAGER_URL)
+            _check_wechat_login_ready(
+                page,
+                chrome_user_data_dir=chrome_user_data_dir,
+                open_url=WECHAT_COMMENT_MANAGER_URL,
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id,
+                telegram_bot_identifier=telegram_bot_identifier,
+                telegram_registry_file=telegram_registry_file,
+                telegram_timeout_seconds=telegram_timeout_seconds,
+                telegram_api_base=telegram_api_base,
+                notify_env_prefix=notify_env_prefix,
+            )
+            native_connect_error = ""
+            return page
+        except Exception as exc:
+            native_connect_error = str(exc)
+            _comment_reply_log(True, f"[CommentReply] Native DrissionPage connect failed: {native_connect_error}")
+            return None
 
     posts: list[dict[str, Any]] = []
     reply_records: list[dict[str, Any]] = []
@@ -7168,11 +7259,35 @@ def run_wechat_comment_reply(
     if (not playwright_bundle) or (playwright_needs_native_retry and not reply_records):
         if playwright_needs_native_retry:
             _comment_reply_log(debug_enabled, "Falling back to DrissionPage comment flow after Playwright instability")
+        native_page = _ensure_native_page()
+        if native_page is None:
+            return {
+                "ok": False,
+                "reason": "native_connect_failed",
+                "error": native_connect_error,
+                "state_path": str(_comment_reply_state_path(workspace)),
+                "records": reply_records,
+                "posts_scanned": posts_scanned,
+                "posts_selected": len(posts),
+                "replies_sent": len(reply_records),
+            }
+        page = native_page
         matched = _wait_until(
-            lambda: bool(extract_wechat_post_cards(page)) and ("/platform/post/list" in _page_current_url(page) or True),
+            lambda: _is_wechat_comment_manager_surface_ready(page),
             timeout_seconds=12.0,
             poll_seconds=0.5,
         )
+        if not matched:
+            try:
+                page.get(WECHAT_COMMENT_MANAGER_URL)
+                _humanized_publish_settle_pause("wechat comment manager page re-open settle")
+            except Exception:
+                pass
+            matched = _wait_until(
+                lambda: _is_wechat_comment_manager_surface_ready(page),
+                timeout_seconds=8.0,
+                poll_seconds=0.5,
+            )
         if not matched:
             _comment_reply_log(
                 True,
@@ -11991,7 +12106,7 @@ def _manual_chrome_launch_cmd(
             chrome_exec = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     return (
         f'"{chrome_exec}" --remote-debugging-port={debug_port} '
-        f'--user-data-dir="{chrome_user_data_dir}" {startup_url}'
+        f'--remote-allow-origins=* --user-data-dir="{chrome_user_data_dir}" {startup_url}'
     )
 
 
@@ -12225,6 +12340,7 @@ def _launch_chrome_debug(
     cmd = [
         chrome_exec,
         f"--remote-debugging-port={debug_port}",
+        "--remote-allow-origins=*",
         f"--user-data-dir={user_dir}",
         "--no-first-run",
         "--no-default-browser-check",
@@ -12375,6 +12491,30 @@ def _has_debug_chrome_process(debug_port: int, chrome_user_data_dir: str) -> boo
     return False
 
 
+def _debug_chrome_has_remote_allow_origins(debug_port: int, chrome_user_data_dir: str) -> bool:
+    target_dir = _normalize_user_data_dir(chrome_user_data_dir)
+    for command_line in _iter_chrome_command_lines():
+        if "--type=" in command_line:
+            continue
+        if "--remote-debugging-port=" not in command_line or "--user-data-dir=" not in command_line:
+            continue
+        running_dir_raw = _extract_cli_flag_value(command_line, "user-data-dir")
+        running_port_raw = _extract_cli_flag_value(command_line, "remote-debugging-port")
+        if not running_dir_raw or not running_port_raw:
+            continue
+        try:
+            running_port = int(running_port_raw)
+        except Exception:
+            continue
+        if running_port != debug_port:
+            continue
+        running_dir = _normalize_user_data_dir(running_dir_raw)
+        if running_dir != target_dir:
+            continue
+        return "--remote-allow-origins=" in command_line
+    return False
+
+
 def _find_debug_chrome_process_pid(debug_port: int, chrome_user_data_dir: str) -> Optional[int]:
     if os.name != "nt":
         return None
@@ -12489,7 +12629,15 @@ def _ensure_chrome_debug_port(
     startup_url: str = CREATE_POST_URL,
 ) -> None:
     if _is_chrome_debug_port_ready(debug_port):
-        return
+        if _debug_chrome_has_remote_allow_origins(debug_port, chrome_user_data_dir):
+            return
+        _log(
+            f"[Uploader] Debug Chrome on port {debug_port} is missing --remote-allow-origins; restarting with compatible flags."
+        )
+        existing_pid = _find_debug_chrome_process_pid(debug_port, chrome_user_data_dir)
+        if existing_pid:
+            _terminate_windows_process_tree(existing_pid)
+            time.sleep(0.8)
 
     launch_cmd = _manual_chrome_launch_cmd(
         debug_port,
