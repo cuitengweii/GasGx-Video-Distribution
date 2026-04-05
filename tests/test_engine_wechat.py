@@ -1175,3 +1175,101 @@ def test_probe_platform_session_ready_records_wechat_keepalive_timestamp(
     assert result["keepalive"]["performed"] is True
     assert len(ready_marks) == 1
     assert ready_marks[0]["kwargs"]["keepalive_at"] == 123.0
+
+
+def test_probe_platform_session_rechecks_wechat_when_active_tab_is_irrelevant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "chrome://newtab/"
+            self.get_calls: list[str] = []
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(str(url))
+            self.url = str(url)
+
+    page = FakePage()
+    inspect_calls = {"count": 0}
+
+    monkeypatch.setattr(engine, "_connect_chrome", lambda **_kwargs: page)
+    monkeypatch.setattr(engine, "_stabilize_platform_session_page", lambda current_page, **_kwargs: current_page)
+
+    def fake_inspect(*_args, **_kwargs):
+        inspect_calls["count"] += 1
+        if inspect_calls["count"] == 1:
+            return {"needs_login": False, "reason": "", "url": "chrome://newtab/"}
+        return {
+            "needs_login": False,
+            "reason": "",
+            "url": "https://channels.weixin.qq.com/platform/post/create",
+        }
+
+    monkeypatch.setattr(engine, "inspect_platform_login_gate", fake_inspect)
+    monkeypatch.setattr(engine, "_page_current_url", lambda current: str(getattr(current, "url", "") or ""))
+    monkeypatch.setattr(engine, "_disconnect_chrome_page_quietly", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_has_recent_platform_session_ready", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_mark_platform_session_ready", lambda *_args, **_kwargs: None)
+
+    result = engine.probe_platform_session_via_debug_port(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        debug_port=9334,
+        chrome_user_data_dir="D:/profiles/wechat",
+        enable_wechat_keepalive=False,
+    )
+
+    assert result["status"] == "ready"
+    assert page.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
+
+
+def test_wechat_keepalive_does_not_reload_when_current_page_is_relevant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://channels.weixin.qq.com/platform/post/create"
+            self.get_calls: list[str] = []
+            self.refresh_calls = 0
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(str(url))
+            self.url = str(url)
+
+        def refresh(self) -> None:
+            self.refresh_calls += 1
+
+    page = FakePage()
+
+    monkeypatch.setattr(engine.time, "time", lambda: 2000.0)
+    monkeypatch.setattr(
+        engine,
+        "_read_platform_session_state",
+        lambda *_args, **_kwargs: {"status": "ready", "keepalive_at": 0},
+    )
+    monkeypatch.setattr(engine, "_resolve_wechat_keepalive_interval_seconds", lambda *_args, **_kwargs: 300)
+    monkeypatch.setattr(engine, "_page_current_url", lambda current: str(getattr(current, "url", "") or ""))
+    monkeypatch.setattr(engine, "_is_platform_session_monitor_relevant_url", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {
+            "needs_login": False,
+            "reason": "",
+            "url": "https://channels.weixin.qq.com/platform/post/create",
+        },
+    )
+    monkeypatch.setattr(engine, "_build_platform_login_diagnostics", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(engine, "_mark_platform_session_ready", lambda *_args, **_kwargs: None)
+
+    result = engine._maybe_touch_wechat_login_keepalive(
+        page,
+        chrome_user_data_dir="D:/profiles/wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+    )
+
+    assert result["ok"] is True
+    assert result["performed"] is True
+    assert result["login_required"] is False
+    assert page.get_calls == []
+    assert page.refresh_calls == 0

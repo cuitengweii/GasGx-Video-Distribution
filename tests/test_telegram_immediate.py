@@ -978,10 +978,11 @@ def test_build_comment_reply_result_card_includes_post_link_field() -> None:
         }
     )
 
-    assert "Post URL" in str(card.get("text") or "")
+    assert "原帖链接" in str(card.get("text") or "")
     assert "https://www.douyin.com/video/1234567890" in str(card.get("text") or "")
     assert "回复来源" in str(card.get("text") or "")
-    assert "spark" in str(card.get("text") or "")
+    assert "spark" not in str(card.get("text") or "")
+    assert "内容已省略" in str(card.get("text") or "")
 
 
 def test_normalize_shortcut_text_accepts_new_short_labels() -> None:
@@ -1020,7 +1021,7 @@ def test_handle_command_domestic_shortcut_returns_domestic_route_menu(tmp_path: 
     )
 
     assert isinstance(result, dict)
-    assert worker_impl.DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE in str(result["text"])
+    assert "国内链路" in str(result["text"])
     callback_values = _reply_markup_callback_data(result["reply_markup"])
     assert any("collect_publish_latest_domestic" in item for item in callback_values)
 
@@ -1045,7 +1046,7 @@ def test_handle_command_global_shortcut_returns_global_route_menu(tmp_path: Path
     )
 
     assert isinstance(result, dict)
-    assert worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE in str(result["text"])
+    assert "海外链路" in str(result["text"])
     callback_values = _reply_markup_callback_data(result["reply_markup"])
     assert any("collect_publish_latest_global" in item for item in callback_values)
 
@@ -1102,7 +1103,7 @@ def test_refresh_home_surface_on_startup_force_refresh_updates_home_and_shortcut
 
     assert len(sent) == 1
     assert sent[0]["force_new"] is True
-    assert "已刷新首页状态" in str(sent[0]["card"]["text"])
+    assert "已刷新首页状态" not in str(sent[0]["card"]["text"])
     assert len(shortcuts) == 1
     assert shortcuts[0]["force_refresh"] is True
 
@@ -1172,21 +1173,23 @@ def test_build_process_status_card_includes_worker_queue_and_log_sections(tmp_pa
 
     assert "即采即发进程查看" in text
     assert "当前发布中" in text
-    assert "执行状态" in text
-    assert "⚠️ 后台任务" in text
-    assert "⚠️ 即采即发队列" in text
-    assert "Bot 心跳" in text
+    assert "执行状态" not in text
+    assert "⚠️ 后台任务" not in text
+    assert "⚠️ 即采即发队列" not in text
+    assert "心跳" in text
+    assert "Bot" not in text
     assert "当前活跃任务" in text
     assert "即采即发队列" in text
-    assert "home_action_collect_publish_latest_test.log" in text
-    assert "clip.mp4" in text
+    assert "日志" in text
+    assert "home_action_collect_publish_latest_test.log" not in text
+    assert "clip.mp4" not in text
     assert "队列更新时间" in text
     assert "✅ 队列更新时间" in text
     assert "✅ 视频｜发布中" in text
     assert "📊 当前积压数" in text
     assert "✅ 发布中" in text
-    assert text.index("当前发布中") < text.index("Bot 心跳")
-    assert text.index("当前活跃任务") < text.index("Bot 心跳")
+    assert text.index("当前发布中") < text.index("心跳")
+    assert text.index("当前活跃任务") < text.index("心跳")
     assert "🔄 刷新" in _reply_markup_texts(card["reply_markup"])
     assert "🧹 队列清理" in _reply_markup_texts(card["reply_markup"])
 
@@ -1250,7 +1253,7 @@ def test_build_process_status_card_hides_old_prefilter_history(tmp_path: Path) -
     )
     text = str(card["text"])
 
-    assert "recent.mp4" in text
+    assert "视频｜发布中" in text
     assert "old.mp4" not in text
     assert "当前发布中" in text
     assert "当前积压数" in text
@@ -1566,7 +1569,7 @@ def test_handle_home_collect_publish_menu_domestic_returns_route_specific_card(t
     assert result["handled"] is True
     assert len(record.cards) == 1
     card = record.cards[0]["card"]
-    assert worker_impl.DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE in str(card["text"])
+    assert "国内链路" in str(card["text"])
     callback_values = _reply_markup_callback_data(card["reply_markup"])
     assert any("collect_publish_latest_domestic" in item for item in callback_values)
 
@@ -4711,7 +4714,7 @@ def test_resolve_platform_login_runtime_context_wechat_defaults_to_shared_browse
     assert runtime_ctx["chrome_user_data_dir"] == r"D:\profiles\shared_env"
 
 
-def test_resolve_platform_login_runtime_context_wechat_explicit_override_ignored(monkeypatch) -> None:
+def test_resolve_platform_login_runtime_context_wechat_explicit_override_preferred(monkeypatch) -> None:
     fake_core = SimpleNamespace(
         DEFAULT_PORT=9333,
         DEFAULT_WECHAT_DEBUG_PORT=9334,
@@ -4727,8 +4730,8 @@ def test_resolve_platform_login_runtime_context_wechat_explicit_override_ignored
 
     runtime_ctx = worker_impl._resolve_platform_login_runtime_context(fake_core, "wechat")
 
-    assert runtime_ctx["debug_port"] == 9444
-    assert runtime_ctx["chrome_user_data_dir"] == r"D:\profiles\shared_env"
+    assert runtime_ctx["debug_port"] == 9555
+    assert runtime_ctx["chrome_user_data_dir"] == r"D:\profiles\wechat_env"
 
 
 def test_probe_platform_login_after_publish_failure_keeps_original_error_when_session_ready(tmp_path: Path, monkeypatch) -> None:
@@ -6656,7 +6659,7 @@ def test_build_shared_link_status_card_compacts_body_for_operator_scan() -> None
     text = str(card["text"])
     assert "<b>⏳ 分享链接已接收</b>" in text
     assert "· 即采即发 / 视频 / 全部平台｜后台即采即发任务已排队" in text
-    assert "<b>📌 执行摘要</b>" in text
+    assert "<b>📌 执行摘要</b>" not in text
     assert "如需查看当前进度，可直接点“进度”。" not in text
     assert "<b>🧾 候选信息</b>" in text
     assert "原帖链接" not in text

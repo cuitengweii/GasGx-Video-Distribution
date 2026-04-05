@@ -31,7 +31,7 @@ def _profile_dir(platform: str) -> Path:
 def _open_url(platform: str) -> str:
     token = str(platform or "").strip().lower()
     if token == "wechat":
-        return str(engine.PLATFORM_CREATE_POST_URLS.get("wechat") or engine.CREATE_POST_URL)
+        return str(engine._wechat_primary_create_url())
     if token in {"x", "collect"}:
         return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.X_LOGIN_URL)
     return str(engine.PLATFORM_LOGIN_ENTRY_URLS.get(token) or engine.CREATE_POST_URL)

@@ -8071,13 +8071,31 @@ def _resolve_platform_login_runtime_context(
 ) -> Dict[str, Any]:
     platform = str(platform_name or "wechat").strip().lower() or "wechat"
     if platform == "wechat":
-        debug_port = int(os.getenv("CYBERCAR_CHROME_DEBUG_PORT", str(getattr(core, "DEFAULT_PORT", 9333))))
+        debug_port = int(
+            os.getenv(
+                "CYBERCAR_WECHAT_CHROME_DEBUG_PORT",
+                os.getenv(
+                    "CYBERCAR_CHROME_DEBUG_PORT",
+                    str(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", getattr(core, "DEFAULT_PORT", 9333))),
+                ),
+            )
+        )
+        default_wechat_profile_dir = str(getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", "")).strip()
+        if not default_wechat_profile_dir and _get_cybercar_paths is not None:
+            try:
+                default_wechat_profile_dir = str(_get_cybercar_paths().wechat_profile_dir)
+            except Exception:
+                default_wechat_profile_dir = ""
         chrome_user_data_dir = str(
             os.getenv(
-                "CYBERCAR_CHROME_USER_DATA_DIR",
-                str(getattr(core, "DEFAULT_CHROME_USER_DATA_DIR", "")),
+                "CYBERCAR_WECHAT_CHROME_USER_DATA_DIR",
+                os.getenv(
+                    "CYBERCAR_CHROME_USER_DATA_DIR",
+                    default_wechat_profile_dir,
+                ),
             )
-        ).strip() or str(getattr(core, "DEFAULT_CHROME_USER_DATA_DIR", "")).strip()
+            or ""
+        ).strip() or default_wechat_profile_dir
     else:
         debug_port = int(os.getenv("CYBERCAR_CHROME_DEBUG_PORT", str(getattr(core, "DEFAULT_PORT", 9333))))
         chrome_user_data_dir = str(
@@ -13273,12 +13291,13 @@ def _run_comment_reply_job(
         total_replies = 0
         for platform_name in target_platforms:
             if platform_name == "wechat":
+                wechat_runtime_ctx = _resolve_platform_login_runtime_context(core, "wechat")
                 platform_result = core.run_wechat_comment_reply(
                     workspace=workspace_ctx,
                     runtime_config=runtime_config,
-                    debug_port=int(getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", 9334)),
+                    debug_port=int(wechat_runtime_ctx.get("debug_port") or getattr(core, "DEFAULT_WECHAT_DEBUG_PORT", 9334)),
                     chrome_path=None,
-                    chrome_user_data_dir=str(getattr(core, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", "") or ""),
+                    chrome_user_data_dir=str(wechat_runtime_ctx.get("chrome_user_data_dir") or ""),
                     auto_open_chrome=True,
                     max_posts_override=max(1, int(post_limit)),
                     max_replies_override=0,

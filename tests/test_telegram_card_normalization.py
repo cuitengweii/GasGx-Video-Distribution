@@ -1,3 +1,5 @@
+import re
+
 from cybercar.common import telegram_ui
 
 
@@ -16,7 +18,7 @@ def test_build_telegram_card_normalizes_section_titles_and_emojis() -> None:
     )
 
     text = str(card["text"])
-    assert "<b>📌 执行摘要</b>" in text
+    assert "<b>📌 执行摘要</b>" not in text
     assert "<b>🛠️ 下一步</b>" in text
     assert "<b>🧾 任务日志</b>" in text
     assert "执行状态" not in text
@@ -71,7 +73,7 @@ def test_build_telegram_card_hides_source_link_on_success_candidate_section() ->
 
     text = str(card["text"])
     assert "原帖链接" not in text
-    assert "Good morning" in text
+    assert "内容已省略" in text
 
 
 def test_build_telegram_card_deprioritizes_current_task_and_link_in_success_machine_info() -> None:
@@ -101,8 +103,10 @@ def test_build_telegram_card_deprioritizes_current_task_and_link_in_success_mach
     )
 
     text = str(card["text"])
-    assert "• <b>log</b>：publish.log" in text
-    assert "• <b>job_id</b>：publish-42" in text
+    assert "日志" in text
+    assert "publish.log" not in text
+    assert "publish-42" not in text
+    assert "机器信息" not in text
     assert "当前任务" not in text
     assert "当前链路" not in text
 
@@ -126,7 +130,7 @@ def test_build_collect_start_card_keeps_only_minimum_sections() -> None:
     text = str(card["text"])
     assert "<b>📦 任务概览</b>" in text
     assert "<b>🧾 候选信息</b>" in text
-    assert "<b>🛠️ 发布选项</b>" in text
+    assert "<b>🛠️ 发布选项</b>" not in text
     assert "原帖链接" not in text
     assert "原帖摘要" not in text
     assert "机器信息" not in text
@@ -163,7 +167,7 @@ def test_build_telegram_card_compacts_candidate_source_subtitle() -> None:
         },
     )
 
-    assert "<i>· X最近 3 条</i>" in str(card["text"])
+    assert "<i>· 来源最近 3 条</i>" in str(card["text"])
 
 
 def test_build_telegram_card_compacts_processing_subtitle() -> None:
@@ -303,7 +307,7 @@ def test_build_telegram_home_strips_html_from_title() -> None:
     assert "&lt;b&gt;" not in text
     assert "<b>🏠 CyberCar｜🏠 CyberCar｜即采即发</b>" not in text
     assert "<b>🏠 即采即发</b>" in text
-    assert "<i>· 当前配置：cybertruck</i>" in text
+    assert "<i>· 当前配置：默认配置</i>" in text
 
 
 def test_build_telegram_home_strips_html_from_subtitle_and_section_content() -> None:
@@ -326,10 +330,10 @@ def test_build_telegram_home_strips_html_from_subtitle_and_section_content() -> 
     assert "<i><i>" not in text
     assert "&lt;b&gt;" not in text
     assert "&lt;i&gt;" not in text
-    assert "<i>· 当前配置：cybertruck｜视频/图片双流程</i>" in text
-    assert "<b>执行说明</b>" in text
-    assert "视频即采即发：只扫 X 视频帖。" in text
-    assert "• <b>说明</b>：两条流程互相独立。" in text
+    assert "<i>· 当前配置：默认配置｜视频/图片双流程</i>" in text
+    assert "执行说明" not in text
+    assert "视频即采即发：只扫 X 视频帖。" not in text
+    assert "• <b>说明</b>：两条流程互相独立。" not in text
 
 
 def test_build_telegram_card_splits_prefixed_title_into_title_and_subtitle() -> None:
@@ -366,9 +370,9 @@ def test_build_telegram_card_prioritizes_platform_result_sections_by_operator_fl
     )
 
     text = str(card["text"])
-    assert text.index("<b>🧩 平台状态</b>") < text.index("<b>📌 执行摘要</b>")
-    assert text.index("<b>📌 执行摘要</b>") < text.index("<b>🤖 机器信息</b>")
-    assert text.index("<b>🤖 机器信息</b>") < text.index("<b>🧾 候选信息</b>")
+    assert "<b>📌 执行摘要</b>" not in text
+    assert "<b>🤖 机器信息</b>" not in text
+    assert text.index("<b>🧩 平台状态</b>") < text.index("<b>🧾 候选信息</b>")
 
 
 def test_build_telegram_card_orders_summary_counts_for_platform_results() -> None:
@@ -391,8 +395,10 @@ def test_build_telegram_card_orders_summary_counts_for_platform_results() -> Non
     )
 
     text = str(card["text"])
-    assert text.index("• <b>成功平台</b>：2") < text.index("• <b>失败平台</b>：1")
-    assert text.index("• <b>失败平台</b>：1") < text.index("• <b>目标平台</b>：3")
+    assert "<b>📌 执行摘要</b>" not in text
+    assert "成功平台" not in text
+    assert "失败平台" not in text
+    assert "目标平台" not in text
 
 
 def test_build_telegram_card_places_platform_title_on_dedicated_header_line() -> None:
@@ -451,7 +457,7 @@ def test_build_telegram_card_normalizes_platform_status_items_with_platform_emoj
 
     text = str(card["text"])
     assert "• <b>⚡ 快手 ❌</b>：🔐 需要登录" in text
-    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜Could not find file input on douyin page" in text
+    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜请查看日志" in text
     assert "• <b>📝 小红书</b>：✅ 已确认" in text
     assert text.index("• <b>⚡ 快手 ❌</b>") < text.index("• <b>🎵 抖音 ❌</b>")
     assert text.index("• <b>🎵 抖音 ❌</b>") < text.index("• <b>📝 小红书</b>")
@@ -488,4 +494,22 @@ def test_build_telegram_card_uses_neutral_overview_header_for_immediate_platform
     text = str(card["text"])
     assert text.startswith("<b>📌 平台概览</b>")
     assert "• <b>📱 视频号 ❌</b>：🔐 需要登录" in text
-    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜collection not confirmed" in text
+    assert "• <b>🎵 抖音 ❌</b>：📣 发布失败｜请查看日志" in text
+
+
+def test_build_telegram_card_removes_ascii_letters_from_visible_text() -> None:
+    card = telegram_ui.build_telegram_card(
+        "publish_result",
+        {
+            "status": "failed",
+            "title": "CyberCar publish failed",
+            "subtitle": "worker running on profile x_to_cn",
+            "sections": [
+                {"title": "平台状态", "items": [{"label": "douyin", "value": "Could not find file input on douyin page"}]},
+                {"title": "候选信息", "items": [{"label": "title", "value": "Good morning"}]},
+            ],
+        },
+    )
+    text = str(card["text"])
+    visible = re.sub(r"<[^>]+>", "", text)
+    assert re.search(r"[A-Za-z]", visible) is None

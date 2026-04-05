@@ -80,9 +80,25 @@ _MACHINE_LAST_SECTION_TITLES = {
     "菜单链路": 104,
 }
 _FAILURE_DETAIL_SECTION_TITLES = {"失败原因", "结果说明", "处理建议"}
+_REMOVED_SECTION_TITLES = {
+    "执行说明",
+    "执行摘要",
+    "机器信息",
+    "发布选项",
+    "任务标识",
+    "菜单链路",
+    "核心入口",
+    "最近有效任务",
+}
 _SECTION_TITLE_ALIASES = {
     "执行状态": "执行摘要",
     "执行汇总": "执行摘要",
+    "platform status": "平台状态",
+    "candidate info": "候选信息",
+    "task overview": "任务概览",
+    "result": "结果说明",
+    "summary": "执行摘要",
+    "machine info": "机器信息",
 }
 _SECTION_EMOJI_BY_TITLE = {
     "人工关注": "🎯",
@@ -132,9 +148,89 @@ _PLATFORM_ALIASES: tuple[tuple[str, str], ...] = (
     ("bili", "bilibili"),
 )
 
+_ENGLISH_PHRASE_ALIASES: tuple[tuple[str, str], ...] = (
+    ("telegram timeout while sending card", "消息发送超时"),
+    ("could not find file input on douyin page", "页面未找到上传入口"),
+    ("collection not confirmed", "采集结果未确认"),
+    ("sign in", "登录"),
+    ("log file", "日志文件"),
+    ("post url", "原帖链接"),
+)
+
+_ENGLISH_TOKEN_ALIASES: dict[str, str] = {
+    "worker": "执行器",
+    "updateid": "更新序号",
+    "update_id": "更新序号",
+    "profile": "配置",
+    "status": "状态",
+    "reason": "原因",
+    "log": "日志",
+    "task": "任务",
+    "job": "任务",
+    "task_id": "任务编号",
+    "job_id": "任务编号",
+    "message_id": "消息编号",
+    "trace_id": "追踪编号",
+    "state": "状态",
+    "pipeline": "流程",
+    "menu": "菜单",
+    "breadcrumb": "链路",
+    "source_url": "来源链接",
+    "candidate": "候选",
+    "download": "下载",
+    "upload": "上传",
+    "running": "处理中",
+    "queued": "已排队",
+    "success": "成功",
+    "failed": "失败",
+    "pending": "待确认",
+    "login": "登录",
+    "home": "首页",
+    "confirm": "确认",
+    "publish": "发布",
+    "collect": "采集",
+    "wechat": "视频号",
+    "douyin": "抖音",
+    "xiaohongshu": "小红书",
+    "kuaishou": "快手",
+    "bilibili": "B站",
+    "bot": "机器人",
+    "manager": "管理台",
+    "cybercar": "赛博车",
+    "gasgx": "采集端",
+    "x": "来源",
+    "x_to_cn": "国内链路",
+    "cn_to_global": "海外链路",
+    "cybertruck": "默认配置",
+}
+
+
+def _localize_card_text(value: Any, *, fallback: str = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    for phrase, replacement in _ENGLISH_PHRASE_ALIASES:
+        text = re.sub(re.escape(phrase), replacement, text, flags=re.IGNORECASE)
+    if re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE):
+        return "点击查看"
+
+    def _replace_token(match: re.Match[str]) -> str:
+        token = str(match.group(0) or "")
+        replacement = _ENGLISH_TOKEN_ALIASES.get(token.lower())
+        if replacement is not None:
+            return replacement
+        return ""
+
+    text = re.sub(r"[A-Za-z_][A-Za-z0-9_]*", _replace_token, text)
+    text = re.sub(r"\s+", " ", text).strip(" ：:|｜-_,，。")
+    text = re.sub(r"(：\s*[｜|]\s*)+", "：", text)
+    text = re.sub(r"[｜|]{2,}", "｜", text)
+    text = re.sub(r"[：:]{2,}", "：", text)
+    return text or fallback
+
 
 def _escape_text(value: Any) -> str:
-    return html.escape(str(value or "").strip())
+    return html.escape(_localize_card_text(value))
 
 
 def _normalize_emoji_token(value: str) -> str:
@@ -169,11 +265,12 @@ def _render_emoji(value: Any) -> str:
 
 
 def _render_inline_text(value: Any) -> str:
-    text = str(value or "").strip()
+    raw_text = str(value or "").strip()
+    if "<tg-emoji" in raw_text.lower():
+        return html.escape(_strip_custom_emoji_markup(raw_text))
+    text = _localize_card_text(raw_text)
     if not text:
         return ""
-    if "<tg-emoji" in text.lower():
-        return html.escape(_strip_custom_emoji_markup(text))
     if not _CUSTOM_EMOJI_ENABLED:
         return html.escape(text)
     placeholders: dict[str, str] = {}
@@ -246,9 +343,12 @@ def _bot_home_title(bot_kind: str) -> str:
 
 
 def _format_value(item: Mapping[str, Any]) -> str:
-    raw_value = _strip_html_like_markup(item.get("value", ""))
+    raw_original_value = _strip_html_like_markup(item.get("value", ""))
+    raw_value = _localize_card_text(raw_original_value)
     link = str(item.get("url", "") or "").strip()
-    text = _strip_html_like_markup(item.get("text", "")) or raw_value
+    if not link and re.fullmatch(r"https?://\S+", raw_original_value, flags=re.IGNORECASE):
+        link = raw_original_value
+    text = _localize_card_text(_strip_html_like_markup(item.get("text", ""))) or raw_value
     style = str(item.get("style", "") or "").strip().lower()
     rendered_text = _render_inline_text(text)
     rendered_value = _render_inline_text(raw_value)
@@ -262,14 +362,14 @@ def _format_value(item: Mapping[str, Any]) -> str:
         return f"<b>{rendered_value or escaped_value}</b>"
     if style == "italic":
         return f"<i>{rendered_value or escaped_value}</i>"
-    return rendered_value or escaped_value
+    return rendered_value or escaped_value or "内容已省略"
 
 
 def _render_section_items(items: Sequence[Any]) -> list[str]:
     lines: list[str] = []
     for item in items:
         if isinstance(item, Mapping):
-            label = _strip_html_like_markup(item.get("label", ""))
+            label = _localize_card_text(_strip_html_like_markup(item.get("label", "")))
             formatted = _format_value(item)
             if label:
                 lines.append(f"• <b>{html.escape(label)}</b>：{formatted}")
@@ -285,7 +385,7 @@ def _render_section_items(items: Sequence[Any]) -> list[str]:
 def _render_sections(sections: Sequence[Mapping[str, Any]]) -> list[str]:
     lines: list[str] = []
     for section in sections:
-        title = _strip_html_like_markup(section.get("title", ""))
+        title = _localize_card_text(_strip_html_like_markup(section.get("title", "")))
         if not title:
             continue
         icon = _render_emoji(section.get("emoji", ""))
@@ -331,16 +431,148 @@ def _extract_platform_reason(text: str) -> str:
     return ""
 
 
+_ERROR_CODE_PATTERN = re.compile(r"\b((?:E|ERR)_[A-Z0-9_]{3,})\b", flags=re.IGNORECASE)
+_INLINE_ERROR_CODE_PATTERN = re.compile(
+    r"(?:error\s*code|err(?:or)?\s*code|错误码|code)\s*[:=：]\s*([A-Za-z0-9._-]{3,})",
+    flags=re.IGNORECASE,
+)
+_LOG_NAME_PATTERN = re.compile(r"([A-Za-z0-9._-]+\.log)\b", flags=re.IGNORECASE)
+
+
+def _extract_error_code(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    matched = _ERROR_CODE_PATTERN.search(raw)
+    if matched:
+        return str(matched.group(1) or "").strip().upper()
+    inline = _INLINE_ERROR_CODE_PATTERN.search(raw)
+    if inline:
+        return str(inline.group(1) or "").strip().upper()
+    return ""
+
+
+def _extract_log_name(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    matched = _LOG_NAME_PATTERN.search(raw)
+    if matched:
+        return str(matched.group(1) or "").strip()
+    return ""
+
+
+def _collect_portable_items_from_removed_section(title: str, items: Sequence[Any]) -> list[dict[str, str]]:
+    collected: list[dict[str, str]] = []
+    if str(title or "").strip() == "执行说明":
+        return collected
+    for item in items:
+        if isinstance(item, Mapping):
+            label = str(item.get("label") or "").strip()
+            value = str(item.get("value") or item.get("text") or "").strip()
+            if not value:
+                continue
+            error_code = _extract_error_code(f"{label} {value}")
+            log_name = _extract_log_name(f"{label} {value}")
+            if label == "错误码" and value:
+                collected.append({"label": "错误码", "value": value.upper()})
+            elif error_code:
+                collected.append({"label": "错误码", "value": error_code})
+            if label == "日志" and value:
+                collected.append({"label": "日志", "value": _extract_log_name(value) or value})
+            elif log_name:
+                collected.append({"label": "日志", "value": log_name})
+            continue
+        text = str(item or "").strip()
+        if not text:
+            continue
+        error_code = _extract_error_code(text)
+        log_name = _extract_log_name(text)
+        if error_code:
+            collected.append({"label": "错误码", "value": error_code})
+        if log_name:
+            collected.append({"label": "日志", "value": log_name})
+    return collected
+
+
+def _merge_portable_items_into_sections(
+    sections: Sequence[dict[str, Any]],
+    portable_items: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized = [dict(section) for section in sections if isinstance(section, Mapping)]
+    if not portable_items:
+        return normalized
+    unique_items: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in portable_items:
+        if not isinstance(item, Mapping):
+            continue
+        label = str(item.get("label") or "").strip()
+        value = str(item.get("value") or item.get("text") or "").strip()
+        if not label or not value:
+            continue
+        key = (label, value)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_items.append({"label": label, "value": value})
+    if not unique_items:
+        return normalized
+
+    for idx, section in enumerate(normalized):
+        if str(section.get("title") or "").strip() != "平台状态":
+            continue
+        current_items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        current_text = " ".join(
+            str(row.get("label") or "") + " " + str(row.get("value") or row.get("text") or "")
+            if isinstance(row, Mapping)
+            else str(row or "")
+            for row in current_items
+        )
+        merged = list(current_items)
+        for portable in unique_items:
+            token = f"{portable['label']} {portable['value']}".strip()
+            if token and token in current_text:
+                continue
+            merged.append(dict(portable))
+        normalized[idx] = {**section, "items": merged}
+        return normalized
+
+    for idx, section in enumerate(normalized):
+        if str(section.get("title") or "").strip() != "人工关注":
+            continue
+        current_items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        normalized[idx] = {**section, "items": [*unique_items, *current_items]}
+        return normalized
+
+    return [{"title": "人工关注", "emoji": "🎯", "items": unique_items}, *normalized]
+
+
 def _compact_platform_status_value(text: str) -> str:
     raw = str(text or "").strip()
     lowered = raw.lower()
     if not raw:
         return "⚠️ 待确认"
     if any(token in lowered for token in ("登录", "扫码", "未登录", "login", "sign in", "qr")):
-        return "🔐 需要登录"
+        code = _extract_error_code(raw)
+        log_name = _extract_log_name(raw)
+        parts = ["🔐 需要登录"]
+        if code:
+            parts.append(f"错误码:{code}")
+        if log_name:
+            parts.append(f"日志:{log_name}")
+        return "｜".join(parts)
     if any(token in lowered for token in ("失败", "异常", "未启动", "failed", "error")):
-        reason = _extract_platform_reason(raw)
-        return f"📣 发布失败｜{reason}" if reason else "📣 发布失败"
+        code = _extract_error_code(raw)
+        log_name = _extract_log_name(raw)
+        parts = ["📣 发布失败"]
+        if code:
+            parts.append(f"错误码:{code}")
+        if log_name:
+            parts.append(f"日志:{log_name}")
+        else:
+            parts.append("请查看日志")
+        return "｜".join(parts)
     if any(token in lowered for token in ("发布中", "处理中", "running", "processing")):
         return "⏳ 发布中"
     if any(token in lowered for token in ("排队", "queued", "queue")):
@@ -351,7 +583,7 @@ def _compact_platform_status_value(text: str) -> str:
         return "✅ 已确认"
     if any(token in lowered for token in ("待确认", "待核实", "pending")):
         return "⚠️ 待确认"
-    return raw
+    return _localize_card_text(raw, fallback="⚠️ 待确认")
 
 
 def _platform_status_label_suffix(value: str) -> str:
@@ -412,7 +644,7 @@ def _is_positive_platform_status_item(item: Any) -> bool:
     lowered = str(text).strip().lower()
     if not lowered:
         return False
-    positive_tokens = ("成功", "确认发布成功", "模拟发布成功", "自动跳过", "历史发布记录", "已自动跳过")
+    positive_tokens = ("成功", "确认发布成功", "模拟发布成功", "自动跳过", "历史发布记录", "已自动跳过", "已确认")
     negative_tokens = ("失败", "登录", "待核实", "待确认", "建议", "原因", "分类", "平台未启动")
     return any(token in lowered for token in positive_tokens) and not any(token in lowered for token in negative_tokens)
 
@@ -420,12 +652,16 @@ def _is_positive_platform_status_item(item: Any) -> bool:
 def _normalize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     status_token = str(status or "").strip().lower()
+    portable_items: list[dict[str, str]] = []
     for section in sections:
         if not isinstance(section, Mapping):
             continue
         raw_title = str(section.get("title") or "").strip()
         title = _canonical_section_title(raw_title)
         items = list(section.get("items") or []) if isinstance(section.get("items"), Sequence) else []
+        if title in _REMOVED_SECTION_TITLES:
+            portable_items.extend(_collect_portable_items_from_removed_section(title, items))
+            continue
         items = _normalize_summary_section_items(title, items)
         if title == "平台状态":
             items = _normalize_platform_status_items(items)
@@ -435,7 +671,7 @@ def _normalize_card_sections(status: str, sections: Sequence[Mapping[str, Any]])
             continue
         emoji = _SECTION_EMOJI_BY_TITLE.get(title) or str(section.get("emoji") or "").strip()
         normalized.append({**section, "title": title, "emoji": emoji, "items": items})
-    return normalized
+    return _merge_portable_items_into_sections(normalized, portable_items)
 
 
 def _failure_marker_for_text(text: str, *, fallback: str = "⚠️") -> str:
@@ -528,7 +764,7 @@ def _short_failure_text(title: str, label: str, value: str) -> str:
         return "重复发布｜已跳过"
     if title_text == "结果说明" and label_text in {"说明", "详情"} and len(text) > 18:
         return text[:18].rstrip() + "..."
-    return text
+    return _localize_card_text(text, fallback="请查看日志")
 
 
 def _pick_failure_header_emoji(status: str, sections: Sequence[Mapping[str, Any]], fallback: str) -> str:
@@ -639,10 +875,10 @@ def _compact_subtitle_text(subtitle: str) -> str:
         return mapped
     candidate_match = re.fullmatch(r"候选来源：X 搜索结果最近 (\d+) 条", text)
     if candidate_match:
-        return f"X最近 {candidate_match.group(1)} 条"
+        return f"来源最近 {candidate_match.group(1)} 条"
     ordered_match = re.fullmatch(r"候选来源：X 搜索结果时间倒序｜目标 (\d+) 条", text)
     if ordered_match:
-        return f"X倒序｜{ordered_match.group(1)}条"
+        return f"来源倒序｜{ordered_match.group(1)}条"
     text = text.replace("当前配置：", "配置：")
     text = text.replace("当前配置:", "配置：")
     if len(text) <= 28:
@@ -775,7 +1011,7 @@ def _decorate_positive_header(status: str, title: str, sections: Sequence[Mappin
 def _decorate_overview_header(status: str, title: str, sections: Sequence[Mapping[str, Any]], fallback: str) -> tuple[str, str]:
     title_text = str(title or "").strip()
     titles = {str(section.get("title") or "").strip() for section in sections if isinstance(section, Mapping)}
-    has_platform_layout = "平台状态" in titles and "执行摘要" in titles
+    has_platform_layout = "平台状态" in titles
     if not has_platform_layout:
         return str(fallback or "").strip(), title_text
     if "即采即发" in title_text:
@@ -791,7 +1027,7 @@ def _prioritize_card_sections(status: str, sections: Sequence[Mapping[str, Any]]
         return []
     status_token = str(status or "").strip().lower()
     titles = {str(section.get("title") or "").strip() for section in normalized}
-    has_platform_result_layout = "平台状态" in titles and "执行摘要" in titles
+    has_platform_result_layout = "平台状态" in titles
 
     def _section_rank(section: Mapping[str, Any], index: int) -> tuple[int, int]:
         title = str(section.get("title") or "").strip()
@@ -923,7 +1159,7 @@ def _prune_sections_for_kind(kind: str, status: str, sections: Sequence[Mapping[
             compacted.append({**section, "items": items[:3] if title != "任务概览" else items[:5]})
         return compacted
     if status_token in {"success", "done"}:
-        allowed_titles = {"人工关注", "执行摘要", "候选信息", "机器信息", "任务日志"}
+        allowed_titles = {"人工关注", "候选信息", "任务日志", "平台状态", "失败原因", "处理建议", "结果说明", "下一步"}
         return [
             section
             for section in normalized
@@ -944,9 +1180,7 @@ def _prune_sections_for_kind(kind: str, status: str, sections: Sequence[Mapping[
             "失败原因",
             "处理建议",
             "结果说明",
-            "执行摘要",
             "候选信息",
-            "机器信息",
             "平台状态",
             "运行上下文",
             "任务日志",
@@ -954,6 +1188,21 @@ def _prune_sections_for_kind(kind: str, status: str, sections: Sequence[Mapping[
         }
         return [section for section in normalized if str(section.get("title") or "").strip() in allowed_titles]
     return normalized
+
+
+def _merge_header_hint_parts(context: str, subtitle: str) -> str:
+    context_text = str(context or "").strip()
+    subtitle_text = str(subtitle or "").strip()
+    if not context_text:
+        return subtitle_text
+    if not subtitle_text:
+        return context_text
+    normalize = lambda text: re.sub(r"\s+", "", str(text or "").strip().lower())
+    a = normalize(context_text)
+    b = normalize(subtitle_text)
+    if a and b and (a in b or b in a):
+        return subtitle_text if len(subtitle_text) <= len(context_text) else context_text
+    return f"{context_text}｜{subtitle_text}"
 
 
 def _suppress_low_priority_success_sections(status: str, sections: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1063,20 +1312,27 @@ def build_telegram_card(
     title_main, title_context = _split_header_title(title)
     platform_header = _build_platform_header_line(title_main or title)
     subtitle = _decorate_card_subtitle(status, subtitle, sections)
+    display_title = re.sub(r"^[^\u4e00-\u9fff0-9]+", "", _localize_card_text(title_main or title, fallback=meta["title"])).strip() or meta[
+        "title"
+    ]
+    display_context = _localize_card_text(title_context)
+    display_subtitle = _localize_card_text(subtitle)
+    display_platform_header = _localize_card_text(platform_header, fallback=display_title) if platform_header else ""
     hide_success_context_line = token == "publish_result" and status in {"success", "done"}
-    if platform_header:
-        header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(platform_header)}</b>"]
-        if title_context and not hide_success_context_line:
-            header.append(f"<i>{_render_inline_text(_decorate_context_line(title_context))}</i>")
-        if subtitle and not _should_hide_platform_subtitle_line(status, platform_header, subtitle):
-            header.append(f"<i>{_render_inline_text(_decorate_platform_subtitle_line(status, subtitle))}</i>")
+    if display_platform_header:
+        header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(display_platform_header)}</b>"]
+        context = "" if hide_success_context_line else display_context
+        subtitle_line = "" if _should_hide_platform_subtitle_line(status, display_platform_header, display_subtitle) else display_subtitle
+        merged_hint = _merge_header_hint_parts(context, subtitle_line)
+        if merged_hint:
+            header.append(f"<i>{_render_inline_text(_decorate_context_line(_decorate_platform_subtitle_line(status, merged_hint)))}</i>")
     else:
-        header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(title_main or title)}</b>"]
+        header = [f"<b>{_render_emoji(emoji)} {_render_inline_text(display_title)}</b>"]
         if hide_success_context_line:
-            title_context = ""
-        header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
-        if header_subtitle_parts:
-            header.append(f"<i>{_render_inline_text(_decorate_context_line('｜'.join(header_subtitle_parts)))}</i>")
+            display_context = ""
+        merged_hint = _merge_header_hint_parts(display_context, display_subtitle)
+        if merged_hint:
+            header.append(f"<i>{_render_inline_text(_decorate_context_line(merged_hint))}</i>")
     text_lines = list(header)
     rendered_sections = _render_sections(list(sections))
     if rendered_sections:
@@ -1109,8 +1365,14 @@ def build_telegram_home(
     sections = payload.get("sections", [])
     if not isinstance(sections, Iterable):
         sections = []
-    header = [f"<b>{_render_emoji('🏠')} {_render_inline_text(title_main or title)}</b>"]
-    header_subtitle_parts = [part for part in (title_context, subtitle) if str(part or "").strip()]
+    sections = _normalize_card_sections("", list(sections))
+    display_home_title = re.sub(r"^[^\u4e00-\u9fff0-9]+", "", _localize_card_text(title_main or title, fallback="控制台")).strip() or "控制台"
+    header = [f"<b>{_render_emoji('🏠')} {_render_inline_text(display_home_title)}</b>"]
+    if display_home_title.strip() == "控制台":
+        subtitle = ""
+    display_home_context = _localize_card_text(title_context)
+    display_home_subtitle = _localize_card_text(subtitle)
+    header_subtitle_parts = [part for part in (display_home_context, display_home_subtitle) if str(part or "").strip()]
     if header_subtitle_parts:
         header.append(f"<i>{_render_inline_text(_decorate_context_line('｜'.join(header_subtitle_parts)))}</i>")
     body = list(header)

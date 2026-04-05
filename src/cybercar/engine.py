@@ -203,6 +203,10 @@ PLATFORM_LOGIN_ENTRY_URLS = {
     "bilibili": "https://passport.bilibili.com/login",
     "tiktok": "https://www.tiktok.com/login",
 }
+
+
+def _wechat_primary_create_url() -> str:
+    return str(PLATFORM_CREATE_POST_URLS.get("wechat") or CREATE_POST_URL).strip() or CREATE_POST_URL
 PLATFORM_LOGIN_DISPLAY_NAMES = {
     "collect": "X采集",
     "x": "X",
@@ -3100,20 +3104,23 @@ def _maybe_touch_wechat_login_keepalive(
         }
 
     target_url = str(open_url or CREATE_POST_URL).strip() or CREATE_POST_URL
-    try:
-        page.get(target_url)
-    except Exception:
+    current_url = str(_page_current_url(page) or "").strip()
+    needs_navigation = not _is_platform_session_monitor_relevant_url("wechat", current_url, target_url)
+    if needs_navigation:
         try:
-            page.refresh()
-        except Exception as exc:
-            return {
-                "ok": False,
-                "performed": False,
-                "reason": "keepalive_navigation_failed",
-                "error": str(exc),
-                "interval_seconds": interval_seconds,
-            }
-    time.sleep(0.8)
+            page.get(target_url)
+        except Exception:
+            try:
+                page.refresh()
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "performed": False,
+                    "reason": "keepalive_navigation_failed",
+                    "error": str(exc),
+                    "interval_seconds": interval_seconds,
+                }
+        time.sleep(0.8)
     login_state = inspect_platform_login_gate(page, "wechat")
     current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
     diagnostics = _build_platform_login_diagnostics(
@@ -3513,15 +3520,33 @@ def probe_platform_session_via_debug_port(
             "url": current_url,
         }
     if not _is_platform_session_monitor_relevant_url(platform, current_url, resolved_open_url):
-        result = {
-            "ok": True,
-            "status": "ignored",
-            "platform": platform,
-            "profile_dir": profile_dir,
-            "current_url": current_url,
-            "reason": str(login_state.get("reason") or "").strip(),
-        }
-        return _finish(result)
+        # WeChat persistent-login probes are expected to run against the create/post
+        # surface. If the current active tab is unrelated (e.g. chrome://newtab),
+        # bring it back to the business URL and re-evaluate once.
+        if platform == "wechat":
+            try:
+                page.get(resolved_open_url)
+                time.sleep(0.8)
+                page = _stabilize_platform_session_page(
+                    page,
+                    platform_name=platform,
+                    open_url=resolved_open_url,
+                    close_stale_login_tabs=True,
+                )
+                login_state = inspect_platform_login_gate(page, platform)
+                current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
+            except Exception:
+                pass
+        if not _is_platform_session_monitor_relevant_url(platform, current_url, resolved_open_url):
+            result = {
+                "ok": True,
+                "status": "ignored",
+                "platform": platform,
+                "profile_dir": profile_dir,
+                "current_url": current_url,
+                "reason": str(login_state.get("reason") or "").strip(),
+            }
+            return _finish(result)
 
     recent_session_ready = bool(profile_dir) and _has_recent_platform_session_ready(platform, profile_dir)
     keepalive_result: dict[str, Any] = {}
@@ -16190,15 +16215,16 @@ def _fill_draft_once(
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
     wechat_publish_click_confirmed: bool = False,
 ) -> Any:
-    if _current_page_matches_publish_entry(page, "wechat", CREATE_POST_URL):
+    wechat_open_url = _wechat_primary_create_url()
+    if _current_page_matches_publish_entry(page, "wechat", wechat_open_url):
         _log(f"[Uploader:wechat] Reusing current publish page: {getattr(page, 'url', '')}")
     else:
-        _log(f"[Uploader] Opening draft page: {CREATE_POST_URL}")
-        _run_page_action(page, "open draft page", lambda: page.get(CREATE_POST_URL))
+        _log(f"[Uploader] Opening draft page: {wechat_open_url}")
+        _run_page_action(page, "open draft page", lambda: page.get(wechat_open_url))
     _check_wechat_login_ready(
         page,
         chrome_user_data_dir=chrome_user_data_dir,
-        open_url=CREATE_POST_URL,
+        open_url=wechat_open_url,
         max_refresh_retry=1,
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
@@ -16394,12 +16420,13 @@ def fill_draft_wechat(
     wechat_publish_click_confirmed: bool = False,
 ) -> Path:
     _log("[Uploader] Connecting Chrome")
+    wechat_open_url = _wechat_primary_create_url()
     page = _connect_chrome(
         debug_port=debug_port,
         auto_open_chrome=auto_open_chrome,
         chrome_path=chrome_path,
         chrome_user_data_dir=chrome_user_data_dir,
-        startup_url=CREATE_POST_URL,
+        startup_url=wechat_open_url,
     )
 
     target = target_video or _find_latest_processed(workspace, include_images=True)
