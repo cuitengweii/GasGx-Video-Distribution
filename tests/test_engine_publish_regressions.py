@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +46,57 @@ def test_extract_upload_progress_skips_regex_errors_and_keeps_matching(monkeypat
 
     progress = engine._extract_upload_progress("processing 42%")
     assert "processing 42%" in progress.lower()
+
+
+def test_split_caption_candidates_handles_mixed_punctuation() -> None:
+    text = "Hot And Humid Texas Day. Reorganizing The CyberTruck Frunk！Ryobi stackable box; works well."
+    parts = engine._split_caption_candidates(text)
+
+    assert len(parts) >= 2
+    assert any("CyberTruck Frunk" in part for part in parts)
+
+
+def test_caption_from_info_json_uses_semantic_text_instead_of_generic_fallback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    info_path = tmp_path / "sample.info.json"
+    info_path.write_text(
+        json.dumps(
+            {
+                "title": "Hot And Humid Texas Day",
+                "description": (
+                    "Hot And Humid Texas Day. I turned on the garage fans. "
+                    "Reorganizing the CyberTruck frunk with stackable boxes."
+                ),
+                "uploader": "Jones1",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, str] = {}
+
+    def fake_build_bilingual_caption(
+        base_text: str,
+        proxy: str | None,
+        spark_ai: dict[str, object] | None,
+        *,
+        use_system_proxy: bool = False,
+    ) -> tuple[str, str]:
+        del proxy, spark_ai, use_system_proxy
+        captured["base_text"] = base_text
+        return "ZH", "EN"
+
+    monkeypatch.setattr(engine, "_build_bilingual_caption", fake_build_bilingual_caption)
+
+    caption = engine._caption_from_info_json(info_path)
+
+    assert caption == "ZH\nEN"
+    assert captured.get("base_text")
+    assert captured["base_text"] != "Cybertruck 最新画面"
+    assert "cybertruck frunk" in captured["base_text"].lower()
 
 
 def test_fill_draft_once_generic_kuaishou_uses_generic_publish_fallback(monkeypatch, tmp_path: Path) -> None:

@@ -10476,7 +10476,7 @@ def _split_caption_candidates(text: str) -> list[str]:
         part = part.strip()
         if not part:
             continue
-        sub_parts = re.split(r"(?<=[銆傦紒锛?!?;锛沒)\s*", part)
+        sub_parts = re.split(r"(?<=[.!?;:。！？；：])\s*", part)
         for seg in sub_parts:
             seg = _normalize_text(seg, limit=200)
             if len(seg) >= 10:
