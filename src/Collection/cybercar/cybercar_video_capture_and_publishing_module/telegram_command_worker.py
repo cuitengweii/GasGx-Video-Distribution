@@ -1720,6 +1720,10 @@ def _build_prefilter_action_card(
     )
     rows: list[list[Dict[str, str]]] = []
     link = str(source_url or "").strip()
+    preview_link = str(extract_x_preview_url(link) or "").strip()
+    card_text = str(card.get("text") or "").strip()
+    if preview_link and preview_link not in card_text:
+        card["text"] = f"{preview_link}\n\n{card_text}".strip()
     if include_source_button and link:
         rows.append([{"text": "🔗 原帖", "url": link}])
     for row in action_rows or []:

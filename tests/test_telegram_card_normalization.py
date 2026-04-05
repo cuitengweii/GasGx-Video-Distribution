@@ -540,7 +540,7 @@ def test_build_telegram_card_limits_and_dedupes_platform_status_items() -> None:
 
     text = str(card["text"])
     assert text.count("• <b>") == 5
-    assert "错误码:ERR_UPLOAD_TIMEOUT" in text
+    assert "错误码：ERR_UPLOAD_TIMEOUT" in text or "错误码:ERR_UPLOAD_TIMEOUT" in text
 
 
 def test_build_telegram_card_sorts_candidate_section_and_uses_readable_link_label() -> None:

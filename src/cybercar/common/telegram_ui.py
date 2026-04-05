@@ -311,19 +311,20 @@ def _compact_mobile_text(value: Any, *, limit: int = 72) -> str:
 
 def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
     section_title = str(title or "").strip()
+    normalized_section_title = _canonical_section_title(section_title)
     polished: list[Any] = []
     seen: set[str] = set()
     for raw_item in list(items or []):
         if isinstance(raw_item, Mapping):
             item = dict(raw_item)
             label = _localize_card_text(_strip_html_like_markup(item.get("label", "")))
-            if label == "执行结果":
-                label = "状态"
-            if label == "错误码":
+            if label == "\u6267\u884c\u7ed3\u679c":
+                label = "\u72b6\u6001"
+            if label == "\u9519\u8bef\u7801":
                 continue
             value = _strip_html_like_markup(item.get("value", ""))
             text = _strip_html_like_markup(item.get("text", ""))
-            if section_title == "候选信息":
+            if normalized_section_title == "\u5019\u9009\u4fe1\u606f":
                 label = _strip_candidate_decorative_emoji(label)
                 value = _strip_candidate_decorative_emoji(value)
                 text = _strip_candidate_decorative_emoji(text)
@@ -331,18 +332,20 @@ def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
             if not url and re.fullmatch(r"https?://\S+", str(value or "").strip(), flags=re.IGNORECASE):
                 url = str(value or "").strip()
                 if not text:
-                    text = "查看原帖" if label == "原帖链接" else "点击查看"
+                    text = "\u67e5\u770b\u539f\u5e16" if label == "\u539f\u5e16\u94fe\u63a5" else "\u70b9\u51fb\u67e5\u770b"
             limit = _VALUE_LIMIT_BY_LABEL.get(label, 72)
             compact_value = _compact_mobile_text(_localize_card_text(value), limit=limit)
-            compact_text = _compact_mobile_text(_localize_card_text(text), limit=limit)            code = _extract_error_code(value)
+            compact_text = _compact_mobile_text(_localize_card_text(text), limit=limit)
+            code = _extract_error_code(value)
             if code and "\u9519\u8bef\u7801" not in compact_value:
                 if compact_value and ("\u53d1\u5e03\u5931\u8d25" in compact_value or "\u5931\u8d25" in compact_value):
                     compact_value = f"{compact_value}\uff5c\u9519\u8bef\u7801:{code}"
                 elif not compact_value:
-                    compact_value = f"\u9519\u8bef\u7801:{code}"            if not compact_value and str(value or "").strip() and not url:
-                compact_value = "内容已省略"
+                    compact_value = f"\u9519\u8bef\u7801:{code}"
+            if not compact_value and str(value or "").strip() and not url:
+                compact_value = "\u5185\u5bb9\u5df2\u7701\u7565"
             if not compact_text and str(text or "").strip() and not url:
-                compact_text = "内容已省略"
+                compact_text = "\u5185\u5bb9\u5df2\u7701\u7565"
             compact_label = _compact_mobile_text(label, limit=12)
             signature = "|".join([compact_label, compact_value, compact_text, url])
             if signature in seen:
@@ -367,12 +370,12 @@ def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
         compact = _compact_mobile_text(_localize_card_text(_strip_html_like_markup(raw_item)), limit=72)
         if not compact or compact in seen:
             continue
-        compact = compact.replace("执行结果", "状态")
-        if "错误码" in compact:
+        compact = compact.replace("\u6267\u884c\u7ed3\u679c", "\u72b6\u6001")
+        if "\u9519\u8bef\u7801" in compact:
             continue
         seen.add(compact)
         polished.append(compact)
-    if section_title == "候选信息":
+    if normalized_section_title == "\u5019\u9009\u4fe1\u606f":
         polished = sorted(
             polished,
             key=lambda item: (
@@ -381,9 +384,8 @@ def _polish_section_items(title: str, items: Sequence[Any]) -> list[Any]:
                 else 99
             ),
         )
-    limit = _SECTION_ITEM_LIMITS.get(section_title, 6)
+    limit = _SECTION_ITEM_LIMITS.get(normalized_section_title, _SECTION_ITEM_LIMITS.get(section_title, 6))
     return polished[: max(1, int(limit))]
-
 
 def _strip_current_profile_phrase(text: Any) -> str:
     token = str(text or "").strip()
@@ -401,7 +403,15 @@ def _localize_card_text(value: Any, *, fallback: str = "") -> str:
     if not text:
         return fallback
     text = _strip_current_profile_phrase(text)
-    text = _strip_error_code_text(text)
+    keep_error_code = bool(_extract_error_code(text)) and ("\u53d1\u5e03\u5931\u8d25" in text)
+    if not keep_error_code:
+        text = _strip_error_code_text(text)
+    else:
+        text = _normalize_punctuation(text)
+        text = text.strip(" ：:|｜-_,，。；;！？!?")
+        if _looks_like_garbled_text(text):
+            return fallback
+        return text or fallback
     if not text:
         return fallback
     if _looks_like_garbled_text(text):
@@ -667,7 +677,7 @@ def _extract_platform_reason(text: str) -> str:
 
 _ERROR_CODE_PATTERN = re.compile(r"\b((?:E|ERR)_[A-Z0-9_]{3,})\b", flags=re.IGNORECASE)
 _INLINE_ERROR_CODE_PATTERN = re.compile(
-    r"(?:error\s*code|err(?:or)?\s*code|\u9519\u8bef\u7801|code)\s*[:=：]\s*([A-Za-z0-9._-]{3,})",
+    r"(?:error\s*code|err(?:or)?\s*code|\u9519\u8bef\u7801|code)\s*[:=\uFF1A]\s*([A-Za-z0-9._-]{3,})",
     flags=re.IGNORECASE,
 )
 _LOG_NAME_PATTERN = re.compile(r"([A-Za-z0-9._-]+\.log)\b", flags=re.IGNORECASE)

@@ -154,6 +154,26 @@ def test_worker_apply_x_link_preview_options_ignores_non_x_links() -> None:
     assert "link_preview_options" not in params
 
 
+def test_build_prefilter_action_card_prepends_x_source_url_for_top_preview() -> None:
+    card = worker_impl._build_prefilter_action_card(
+        status="queued",
+        title="即采即发候选确认",
+        subtitle="请直接选择普通发布、原创发布或跳过本条",
+        sections=[
+            {
+                "title": "候选信息",
+                "emoji": "🎯",
+                "items": [{"label": "标题", "value": "测试标题"}],
+            }
+        ],
+        source_url="https://x.com/tester/status/2033331774894358749",
+        include_source_button=False,
+    )
+    text = str(card.get("text") or "")
+    assert text.startswith("https://x.com/tester/status/2033331774894358749\n\n")
+    assert "即采即发候选确认" in text
+
+
 def _make_callback_update(
     callback_data: str,
     *,
