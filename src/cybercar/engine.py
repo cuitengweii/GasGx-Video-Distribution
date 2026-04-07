@@ -12995,15 +12995,54 @@ def _rebuild_caption_with_hashtags(text: str, hashtags: list[str]) -> str:
     return " ".join(clean_tags)
 
 
+def _caption_segment_key(text: str) -> str:
+    normalized = _normalize_text(str(text or ""), limit=500).lower()
+    if not normalized:
+        return ""
+    normalized = re.sub(r"\s+", "", normalized)
+    normalized = re.sub(r"[^\w\u4e00-\u9fff#]+", "", normalized)
+    return normalized
+
+
+def _dedupe_caption_segments_for_publish(text: str) -> str:
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    seen: set[str] = set()
+    parts: list[str] = []
+    for seg in re.split(r"[\n]+|(?<=[.!?;:。！？；：])\s*", raw):
+        item = str(seg or "").strip()
+        if not item:
+            continue
+        key = _caption_segment_key(item)
+        if key and len(key) >= 6 and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        parts.append(item)
+    if not parts:
+        return raw
+    return "\n".join(parts).strip() or raw
+
+
 def _prepare_caption_for_platform(caption: str, platform_name: str) -> str:
-    text = _ensure_required_hashtags(caption)
-    if platform_name == "x":
+    normalized_platform = str(platform_name or "").strip().lower()
+    normalized_caption = str(caption or "").strip()
+    if normalized_platform in {"tiktok", "x"}:
+        normalized_caption = _dedupe_caption_segments_for_publish(
+            _collapse_repeated_caption_blocks(normalized_caption)
+        )
+    text = _ensure_required_hashtags(normalized_caption)
+    if normalized_platform == "x":
         # X basic accounts use the standard 280-char limit.
         safe_limit = X_NON_PREMIUM_POST_CHAR_LIMIT
         if len(text) > safe_limit:
-            return text[:safe_limit].rstrip()
+            trimmed = text[:safe_limit].rstrip()
+            if trimmed:
+                return trimmed
+            return "Cybertruck clip"
         return text
-    if platform_name != "kuaishou":
+    if normalized_platform != "kuaishou":
         return text
 
     existing = _extract_caption_hashtags(text)
@@ -22620,6 +22659,9 @@ def _force_x_non_premium_caption(primary_ctx: Any, fallback_ctx: Any, caption: s
             continue
         value = str(result.get("value") or "").strip()
         over_limit = bool(result.get("over_limit"))
+        if not value:
+            _log("[Uploader:x] Caption JS fallback reported success but value is empty; retry next context.")
+            continue
         _log(
             f"[Uploader:x] Forced caption set for non-premium limit: "
             f"len={len(value)}, over_limit={over_limit}"
@@ -26322,6 +26364,7 @@ def _wait_publish_feedback(
     republish_attempts = 0
     bilibili_reclick_attempts = 0
     x_char_recovery_attempted = False
+    x_empty_caption_recovery_attempted = False
     x_disabled_logged = False
     loop_started = time.time()
     while time.time() < end_at:
@@ -26384,6 +26427,18 @@ def _wait_publish_feedback(
                     x_safe_recovery_caption,
                 )
                 _log("[Uploader:x] Character-limit warning detected; executed one-time short-caption recovery.")
+                continue
+            if x_caption_len <= 0:
+                if not x_empty_caption_recovery_attempted:
+                    x_empty_caption_recovery_attempted = True
+                    _force_x_non_premium_caption(primary_ctx, fallback_ctx, x_safe_recovery_caption)
+                    _log("[Uploader:x] Empty caption detected during publish feedback; executed one-time refill recovery.")
+                    time.sleep(0.5)
+                    continue
+                if not x_disabled_logged:
+                    _log("[Uploader:x] Caption is still empty after refill recovery; waiting without publish click.")
+                    x_disabled_logged = True
+                time.sleep(0.5)
                 continue
             if not bool(x_state.get("button_found")):
                 _click_x_primary_publish_button(primary_ctx, fallback_ctx)

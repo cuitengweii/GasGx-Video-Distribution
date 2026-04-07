@@ -379,6 +379,12 @@ def test_prepare_caption_for_platform_caps_x_to_non_premium_limit() -> None:
     assert len(prepared) == engine.X_NON_PREMIUM_POST_CHAR_LIMIT
 
 
+def test_prepare_caption_for_platform_dedupes_tiktok_repeated_segments() -> None:
+    raw = "Cybertruck clip drop test.\nCybertruck clip drop test.\nCybertruck clip drop test."
+    prepared = engine._prepare_caption_for_platform(raw, "tiktok")
+    assert prepared.count("Cybertruck clip drop test.") == 1
+
+
 def test_collapse_repeated_caption_blocks_reduces_duplicate_paragraphs() -> None:
     raw = "Cybertruck is insane.\n\nCybertruck is insane.\n\nCybertruck is insane."
     collapsed = engine._collapse_repeated_caption_blocks(raw)
@@ -402,6 +408,16 @@ def test_force_x_non_premium_caption_prefers_first_successful_owner(monkeypatch)
     assert ok is True
     assert len(calls) == 1
     assert calls[0][0] == "primary"
+
+
+def test_force_x_non_premium_caption_rejects_empty_js_result(monkeypatch) -> None:
+    class Ctx:
+        def run_js(self, script: str, value: str):
+            return {"state": "set", "value": "", "over_limit": False}
+
+    monkeypatch.setattr(engine, "_log", lambda message: None)
+    ok = engine._force_x_non_premium_caption(Ctx(), None, "cybertruck")
+    assert ok is False
 
 
 def test_force_tiktok_caption_prefers_first_successful_owner(monkeypatch) -> None:
@@ -543,6 +559,53 @@ def test_wait_publish_feedback_x_over_limit_recovers_once_without_blind_click(mo
     assert calls["force_caption"] == 1
     assert calls["x_click"] == 0
     assert calls["generic_click"] == 0
+
+
+def test_wait_publish_feedback_x_empty_caption_recovery_skips_publish_click(monkeypatch) -> None:
+    calls = {"force_caption": 0, "x_click": 0}
+    timeline = {"now": 0.0}
+
+    def fake_time() -> float:
+        return timeline["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        timeline["now"] += float(seconds)
+
+    monkeypatch.setattr(engine.time, "time", fake_time)
+    monkeypatch.setattr(engine.time, "sleep", fake_sleep)
+    monkeypatch.setattr(engine, "_detect_x_publish_via_network", lambda ctx: (False, ""))
+    monkeypatch.setattr(engine, "_read_page_snapshot", lambda primary, fallback: ("https://x.com/compose/post", ""))
+    monkeypatch.setattr(
+        engine,
+        "_read_x_publish_composer_state",
+        lambda primary, fallback: {
+            "url": "https://x.com/compose/post",
+            "button_found": True,
+            "button_disabled": False,
+            "over_limit": False,
+            "caption_len": 0,
+            "button_text": "Post",
+            "has_post_success_toast": False,
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_force_x_non_premium_caption",
+        lambda primary, fallback, caption: calls.__setitem__("force_caption", calls["force_caption"] + 1) or True,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_click_x_primary_publish_button",
+        lambda primary, fallback: calls.__setitem__("x_click", calls["x_click"] + 1) or True,
+    )
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda primary, fallback: [])
+    monkeypatch.setattr(engine, "_log", lambda message: None)
+
+    with pytest.raises(RuntimeError, match="E_PUBLISH_UNCONFIRMED"):
+        engine._wait_publish_feedback(object(), object(), platform_name="x", timeout_seconds=8)
+
+    assert calls["force_caption"] == 1
+    assert calls["x_click"] == 0
 
 
 def test_wait_publish_feedback_x_clicks_when_button_ready(monkeypatch) -> None:
