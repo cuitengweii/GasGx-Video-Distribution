@@ -5049,6 +5049,77 @@ def test_run_collect_publish_latest_job_filters_candidates_seen_in_collect_ledge
     assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
 
 
+def test_run_collect_publish_latest_job_global_route_ignores_domestic_scoped_collect_ledger(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    sent_urls: list[str] = []
+    source_url = "https://x.com/seen/status/111"
+    (workspace / "candidate_ledger.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-03-20 10:05:00",
+                "items": {
+                    "x_to_cn:x:111:111": {
+                        "candidate_id": "x_to_cn:x:111:111",
+                        "status_id": "111",
+                        "status_url": source_url,
+                        "state": "review_skipped",
+                        "scope": "x_to_cn",
+                        "updated_at": "2026-03-20 10:05:00",
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+            "candidates": [
+                {
+                    "url": source_url,
+                    "published_at": "2026-03-20 10:00:00",
+                    "display_time": "2m",
+                    "tweet_text": "global scope candidate",
+                    "source_platform": "x",
+                }
+            ],
+        },
+    )
+
+    original_send = worker_impl._send_immediate_candidate_prefilter_card
+
+    def capture_send(*args: object, **kwargs: object) -> dict[str, object]:
+        item = dict(kwargs.get("item") or {})
+        sent_urls.append(str(item.get("source_url") or ""))
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(worker_impl, "_send_immediate_candidate_prefilter_card", capture_send)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert sent_urls == [source_url]
+
+
 def test_run_collect_publish_latest_job_uses_buffer_pool_when_front_candidates_are_terminal_duplicates(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
@@ -5185,6 +5256,30 @@ def test_prefilter_skip_syncs_source_url_to_collect_ledger_and_blocks_rerun(tmp_
     assert feedbacks[-1]["status"] == "done"
     overview_items = feedbacks[-1]["sections"][0]["items"]
     assert any(isinstance(entry, dict) and entry.get("label") == "失败/跳过" and str(entry.get("value") or "").startswith("1 ") for entry in overview_items)
+
+
+def test_prefilter_skip_syncs_source_url_to_collect_ledger_with_profile_scope(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    source_url = "https://x.com/repeat/status/321"
+
+    changed = worker_impl._record_prefilter_skip_source_in_collect_ledger(
+        workspace=workspace,
+        source_url=source_url,
+        media_kind="video",
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+    )
+
+    assert changed is True
+    ledger = json.loads((workspace / "candidate_ledger.json").read_text(encoding="utf-8"))
+    items = dict(ledger.get("items") or {})
+    assert any(str(key).startswith("cn_to_global:x:321:321") for key in items.keys())
+    scoped_row = next(
+        row
+        for row in items.values()
+        if isinstance(row, dict) and str(row.get("status_id") or "") == "321"
+    )
+    assert str(scoped_row.get("scope") or "") == "cn_to_global"
+    assert str(scoped_row.get("state") or "") == "review_skipped"
 
 
 def test_run_collect_publish_latest_job_extends_discovery_rounds_until_new_candidates_filled(tmp_path: Path, monkeypatch) -> None:

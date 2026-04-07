@@ -884,6 +884,64 @@ def test_filter_already_processed_x_urls_uses_collect_ledger_sources(tmp_path: P
     assert (workspace.root / engine.DEFAULT_CANDIDATE_LEDGER_FILE).exists()
 
 
+def test_filter_already_processed_x_urls_honors_scope(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    status_url = "https://x.com/repeat/status/111"
+    (workspace.root / engine.DEFAULT_CANDIDATE_LEDGER_FILE).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-04-07 12:00:00",
+                "items": {
+                    "x_to_cn:x:111:111": {
+                        "candidate_id": "x_to_cn:x:111:111",
+                        "status_id": "111",
+                        "status_url": status_url,
+                        "state": "review_skipped",
+                        "scope": "x_to_cn",
+                        "updated_at": "2026-04-07 12:00:00",
+                    },
+                    "cn_to_global:x:111:111": {
+                        "candidate_id": "cn_to_global:x:111:111",
+                        "status_id": "111",
+                        "status_url": status_url,
+                        "state": "published",
+                        "scope": "cn_to_global",
+                        "updated_at": "2026-04-07 12:00:00",
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    remaining_domestic, skipped_domestic = engine._filter_already_processed_x_urls(
+        workspace,
+        [status_url],
+        scope="x_to_cn",
+    )
+    remaining_global, skipped_global = engine._filter_already_processed_x_urls(
+        workspace,
+        [status_url],
+        scope="cn_to_global",
+    )
+    remaining_default, skipped_default = engine._filter_already_processed_x_urls(
+        workspace,
+        [status_url],
+    )
+
+    assert remaining_domestic == []
+    assert skipped_domestic and skipped_domestic[0]["scope"] == "x_to_cn"
+    assert skipped_domestic[0]["state"] == "review_skipped"
+    assert remaining_global == []
+    assert skipped_global and skipped_global[0]["scope"] == "cn_to_global"
+    assert skipped_global[0]["state"] == "published"
+    assert remaining_default == [status_url]
+    assert skipped_default == []
+
+
 def test_download_from_x_opens_extra_discovery_rounds_after_seen_filter(tmp_path: Path, monkeypatch) -> None:
     workspace = _workspace(tmp_path)
     workspace.history.write_text("111:abc\n", encoding="utf-8")

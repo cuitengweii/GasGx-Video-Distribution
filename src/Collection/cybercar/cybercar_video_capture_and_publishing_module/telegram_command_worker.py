@@ -6979,6 +6979,7 @@ def _prune_inactive_prefilter_items_for_manual_cleanup(queue: Dict[str, Any]) ->
                 media_kind=str(row.get("media_kind") or "video"),
                 processed_name=str(row.get("processed_name") or row.get("video_name") or "").strip(),
                 state="review_skipped",
+                profile=str(row.get("profile") or "").strip(),
             ):
                 filter_synced += 1
             continue
@@ -6992,6 +6993,7 @@ def _prune_inactive_prefilter_items_for_manual_cleanup(queue: Dict[str, Any]) ->
                 media_kind=str(row.get("media_kind") or "video"),
                 processed_name=str(row.get("processed_name") or row.get("video_name") or "").strip(),
                 state="review_skipped",
+                profile=str(row.get("profile") or "").strip(),
             ):
                 filter_synced += 1
             continue
@@ -7089,6 +7091,7 @@ def _expire_stale_link_pending_prefilter_items(
             media_kind=str(updated_row.get("media_kind") or "video"),
             processed_name=str(updated_row.get("processed_name") or updated_row.get("video_name") or "").strip(),
             state="review_skipped",
+            profile=str(updated_row.get("profile") or "").strip(),
         ):
             ledger_synced += 1
     return {"expired_pending": expired_pending, "ledger_synced": ledger_synced}
@@ -9118,6 +9121,7 @@ def _record_prefilter_source_in_collect_ledger(
     media_kind: str = "video",
     processed_name: str = "",
     state: str = "review_skipped",
+    profile: str = "",
 ) -> bool:
     clean_source_url = str(source_url or "").strip()
     if not clean_source_url:
@@ -9132,15 +9136,20 @@ def _record_prefilter_source_in_collect_ledger(
         if not isinstance(items, dict):
             items = {}
             payload["items"] = items
+        scope = _candidate_profile_scope(profile)
+        candidate_id = core._make_x_candidate_id(status_id, status_id)
+        if scope:
+            candidate_id = f"{scope}:{candidate_id}"
         changed = core._upsert_candidate_ledger_entry(
             items,
-            candidate_id=core._make_x_candidate_id(status_id, status_id),
+            candidate_id=candidate_id,
             status_id=status_id,
             media_key=status_id,
             media_kind=str(media_kind or "video"),
             state=str(state or "review_skipped").strip() or "review_skipped",
             status_url=clean_source_url,
             processed_name=str(processed_name or "").strip(),
+            scope=scope,
         )
         if not changed:
             return False
@@ -9158,6 +9167,7 @@ def _record_prefilter_skip_source_in_collect_ledger(
     source_url: str,
     media_kind: str = "video",
     processed_name: str = "",
+    profile: str = "",
 ) -> bool:
     return _record_prefilter_source_in_collect_ledger(
         workspace=workspace,
@@ -9165,6 +9175,7 @@ def _record_prefilter_skip_source_in_collect_ledger(
         media_kind=media_kind,
         processed_name=processed_name,
         state="review_skipped",
+        profile=profile,
     )
 
 
@@ -13786,26 +13797,25 @@ def _run_collect_publish_latest_job(
         menu_label=_menu_breadcrumb_for_action("collect_publish_latest", f"{normalized_media_kind}:{requested_limit}"),
     )
     workspace_ctx = runner.core.init_workspace(str(workspace))
-    filter_seen_urls = getattr(core, "_filter_already_processed_x_urls", None)
+    profile_scope = _candidate_profile_scope(profile)
+    filter_seen_urls = None
     filter_workspace_ctx = workspace_ctx
     modern_engine = None
-    if not callable(filter_seen_urls):
-        try:
-            from cybercar import engine as modern_engine
-        except Exception:
-            modern_engine = None  # type: ignore[assignment]
-        filter_seen_urls = getattr(modern_engine, "_filter_already_processed_x_urls", None)
-    if callable(filter_seen_urls) and not hasattr(filter_workspace_ctx, "root"):
-        if modern_engine is None:
-            try:
-                from cybercar import engine as modern_engine
-            except Exception:
-                modern_engine = None  # type: ignore[assignment]
-        if modern_engine is not None:
+    try:
+        from cybercar import engine as modern_engine
+    except Exception:
+        modern_engine = None  # type: ignore[assignment]
+    if modern_engine is not None:
+        modern_filter = getattr(modern_engine, "_filter_already_processed_x_urls", None)
+        if callable(modern_filter):
+            filter_seen_urls = modern_filter
             try:
                 filter_workspace_ctx = modern_engine.init_workspace(str(workspace))
             except Exception:
                 filter_workspace_ctx = workspace_ctx
+    if not callable(filter_seen_urls):
+        filter_seen_urls = getattr(core, "_filter_already_processed_x_urls", None)
+        filter_workspace_ctx = workspace_ctx
     filtered_seen_candidates = 0
     same_story_collapsed = 0
     media_kind_filtered_candidates = 0
@@ -13859,10 +13869,18 @@ def _run_collect_publish_latest_job(
             continue
         filtered_round_candidates = fresh_round_candidates
         if callable(filter_seen_urls):
-            filtered_urls, skipped_urls = filter_seen_urls(
-                filter_workspace_ctx,
-                [_candidate_source_url(item) for item in fresh_round_candidates],
-            )
+            candidate_urls = [_candidate_source_url(item) for item in fresh_round_candidates]
+            try:
+                filtered_urls, skipped_urls = filter_seen_urls(
+                    filter_workspace_ctx,
+                    candidate_urls,
+                    scope=profile_scope,
+                )
+            except TypeError:
+                filtered_urls, skipped_urls = filter_seen_urls(
+                    filter_workspace_ctx,
+                    candidate_urls,
+                )
             filtered_url_set = {str(url or "").strip() for url in filtered_urls if str(url or "").strip()}
             filtered_round_candidates = [
                 item
@@ -15452,6 +15470,7 @@ def handle_callback_update(
             source_url=str(item.get("source_url") or "").strip(),
             media_kind=str(item.get("media_kind") or "video"),
             processed_name=str(item.get("processed_name") or item.get("video_name") or "").strip(),
+            profile=str(item.get("profile") or profile or "").strip(),
         )
         updated_item = _update_prefilter_item(
             workspace,

@@ -11965,12 +11965,14 @@ def _upsert_candidate_ledger_entry(
     state: str,
     status_url: str = "",
     processed_name: str = "",
+    scope: str = "",
 ) -> bool:
     clean_candidate_id = str(candidate_id or "").strip()
     clean_status_id = str(status_id or "").strip()
     if not clean_candidate_id or not clean_status_id:
         return False
     normalized_state = str(state or "").strip().lower()
+    normalized_scope = str(scope or "").strip().lower()
     existing = dict(items.get(clean_candidate_id, {}) or {})
     changed = False
     next_rank = _candidate_state_rank(normalized_state)
@@ -11991,6 +11993,9 @@ def _upsert_candidate_ledger_entry(
         if value and existing.get(key) != value:
             existing[key] = value
             changed = True
+    if existing.get("scope") != normalized_scope:
+        existing["scope"] = normalized_scope
+        changed = True
     if changed:
         existing["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         items[clean_candidate_id] = existing
@@ -12010,6 +12015,7 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
     for value in (payload.get("items", {}) or {}).values():
         if not isinstance(value, dict):
             continue
+        scope = str(value.get("scope", "") or "").strip().lower()
         normalized_url, normalized_status_id, normalized_media_key = _resolve_x_candidate_identity(
             status_url=str(value.get("status_url", "") or "").strip(),
             status_id=str(value.get("status_id", "") or "").strip(),
@@ -12019,15 +12025,19 @@ def _refresh_collect_candidate_ledger(workspace: Workspace) -> dict[str, dict[st
         )
         if not normalized_status_id:
             continue
+        candidate_id = _make_x_candidate_id(normalized_status_id, normalized_media_key)
+        if scope:
+            candidate_id = f"{scope}:{candidate_id}"
         _upsert_candidate_ledger_entry(
             items,
-            candidate_id=_make_x_candidate_id(normalized_status_id, normalized_media_key),
+            candidate_id=candidate_id,
             status_id=normalized_status_id,
             media_key=normalized_media_key,
             media_kind=str(value.get("media_kind", "") or "video"),
             state=str(value.get("state", "") or "").strip().lower(),
             status_url=normalized_url,
             processed_name=str(value.get("processed_name", "") or "").strip(),
+            scope=scope,
         )
     changed = False
 
@@ -15161,11 +15171,20 @@ def _find_processed_target_by_source(
 def _filter_already_processed_x_urls(
     workspace: Workspace,
     urls: Iterable[str],
+    *,
+    scope: str = "",
 ) -> tuple[list[str], list[dict[str, str]]]:
     ledger_items = _refresh_collect_candidate_ledger(workspace)
+    normalized_scope = str(scope or "").strip().lower()
     status_lookup: dict[str, dict[str, str]] = {}
     for item in ledger_items.values():
         if not isinstance(item, dict):
+            continue
+        item_scope = str(item.get("scope", "") or "").strip().lower()
+        if normalized_scope:
+            if item_scope != normalized_scope:
+                continue
+        elif item_scope:
             continue
         status_id = str(item.get("status_id", "") or "").strip()
         if not status_id:
@@ -15180,6 +15199,7 @@ def _filter_already_processed_x_urls(
             "state": state,
             "processed_name": str(item.get("processed_name", "") or "").strip(),
             "status_url": str(item.get("status_url", "") or "").strip(),
+            "scope": item_scope,
         }
 
     remaining: list[str] = []
@@ -15210,6 +15230,7 @@ def _filter_already_processed_x_urls(
                 "processed_name": processed_name,
                 "status_id": status_id,
                 "state": str(ledger_match.get("state", "") or "").strip(),
+                "scope": str(ledger_match.get("scope", "") or "").strip(),
             }
         )
     return remaining, skipped
