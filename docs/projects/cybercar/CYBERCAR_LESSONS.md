@@ -112,3 +112,22 @@ Last updated: 2026-04-07
 - Root cause: domestic-source collect and overseas publish have opposite network requirements in China operation.
 - Earlier detection: capture per-stage network mode in immediate collect/publish logs, not only final publish result.
 - Prevention: enforce stage-specific network policy (collect direct for domestic sources, publish with VPN/proxy as needed) and validate this split on live runs after worker updates.
+
+## 2026-04-07 (Timeout And Mixed-Task Card Reading)
+
+- Symptom: operators observed "publish already succeeded" while earlier Telegram cards still displayed multiple platform failures.
+- Root cause: failures and successes came from different task windows; earlier tasks timed out on lock acquisition (`Timed out waiting for lock`) and later tasks completed successfully, but card stream was read as one batch.
+- Earlier detection: always correlate card timestamps/task IDs with `immediate_publish_*.log` and worker logs before escalating as a platform publish regression.
+- Prevention: keep lock wait and upload timeout baseline aligned at 60 seconds, and treat repeated lock-timeout bursts as concurrency/queue pressure first rather than publish-flow selector failure.
+
+## 2026-04-07 (Telegram Card Iteration Lessons)
+
+- Symptom: removing `Ê×Ò³` in one layer still left visible `Ê×Ò³` buttons on some cards.
+- Root cause: multiple card paths injected `Ê×Ò³` independently (builder helpers and outgoing serialization), so single-point filtering was insufficient.
+- Earlier detection: trace one concrete card from payload builder to send API params and verify button list at each stage.
+- Prevention: treat Telegram inline button cleanup as multi-layer normalization, and keep regression assertions around final rendered button sets.
+
+- Symptom: failure cards became visually heavier than success cards and reduced operator scan speed.
+- Root cause: failure flow kept layered overview + platform-status rendering with extra decorative symbols and repeated context text.
+- Earlier detection: compare success/failure card vertical footprint in the same scenario window, not only field correctness.
+- Prevention: keep failure-card defaults compact and outcome-centric, reserving extended detail for drill-down actions/logs.

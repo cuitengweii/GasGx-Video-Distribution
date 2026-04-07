@@ -210,3 +210,28 @@ Last updated: 2026-04-07
   - TikTok description should not duplicate segments
   - X publish should keep non-empty description under non-premium length constraints.
 - Keep source-keyword freshness checks for domestic sources and confirm active strategy remains `cybertruck` + `赛博皮卡`.
+
+## 2026-04-07 Archive Update (Telegram Card Cleanup)
+
+- Telegram operator cards were simplified to reduce visual noise in high-frequency immediate publish workflows.
+- Platform markers before platform names were removed on status rows; platform names now render as plain text labels.
+- Failure rendering was aligned to success-style brevity: keep concise title-first result cards and retain only necessary outcome symbols (`?` and `?`) plus error code when available.
+- Redundant login/overview reminder cards were reduced; QR login flow keeps the QR card as the primary operator-facing artifact.
+- Card bottom `��ҳ` inline entry was removed across card paths; progress-oriented actions are preserved where needed.
+
+## 2026-04-07 Timeout And Feedback Archive Update
+
+- Investigated a Telegram operator report where WeChat Channels publish was confirmed successful but earlier robot cards still showed multiple platform failures.
+- Runtime evidence confirmed those card groups belonged to different tasks: earlier failures were lock-acquire timeouts (`Timed out waiting for lock`) under `runtime/runtime/platform_publish_locks` and prefilter queue lock paths; later tasks finished with success cards.
+- Unified timeout baseline for immediate publish and feedback-critical lock waits to 60 seconds across active code/config paths:
+  - `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py`
+  - `src/cybercar/engine.py`
+  - `src/cybercar/pipeline.py`
+  - `config/app.json` (all platform `upload_timeout` entries)
+- Bilibili upload-timeout minimum was also aligned to the same 60-second baseline in this route, removing the previous exception.
+- Local regression command passed: `pytest -q tests/test_pipeline_publish_config.py tests/test_pipeline_x_download.py tests/test_telegram_immediate.py tests/test_engine_wechat.py -k "timeout or upload or lock or blocking"` -> `21 passed`.
+
+## Next Step Update (2026-04-07 Timeout)
+
+- Observe one full immediate publish cycle and verify lock-timeout-related Telegram failures drop after the 60-second baseline change.
+- If failures persist, capture matched windows from `runtime/runtime/logs/telegram_command_worker_*.log` and `runtime/runtime/logs/immediate_publish_*.log` to identify lock owner and effective wait duration.

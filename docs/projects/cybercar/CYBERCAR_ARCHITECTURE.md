@@ -91,3 +91,11 @@ Last updated: 2026-04-07
 
 - In global route + domestic source branch, worker collect stage can force direct mode (`proxy_override=""`, `use_system_proxy_override=False`) to separate China-source collection from publish-side VPN needs.
 - This boundary currently lives in worker orchestration, not a standalone network policy module, so future refactor should isolate collect-network and publish-network policy as independent configuration surfaces.
+
+## 2026-04-07 (Telegram Card Surface)
+
+- Telegram card output currently applies two UI-normalization layers:
+  1) source-side payload shaping in `src/Collection/.../telegram_command_worker.py`
+  2) final text normalization in `src/cybercar/common/telegram_ui.py`
+- Home-entry cleanup is enforced at outgoing markup level and card-construction helpers, so stale card builders do not re-inject `Ê×Ò³` on specific paths.
+- Immediate publish feedback architecture now favors compact terminal cards over multi-section verbose failure summaries for operator scan speed.

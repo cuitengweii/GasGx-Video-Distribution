@@ -76,3 +76,17 @@ Last updated: 2026-04-07
   - Domestic source -> `--source-url ... --source-platforms <douyin|xiaohongshu>` plus `--no-domestic-source-discovery` for explicit candidate runs.
 - For `cn_to_global` + domestic source, collect stage must run direct (no proxy/system proxy override) to keep China-source collection independent from VPN path; proxy fallback retries are skipped in that branch.
 - The persistent home keyboard contract now includes dedicated route buttons (`å›½å†…å³é‡‡å³å‘`, `æµ·å¤–å³é‡‡å³å‘`) and route-specific help copy.
+
+## 2026-04-07 (Telegram Card Style Unification)
+
+- Failure cards now follow the same compact, title-first style as success cards for immediate publish feedback.
+- Platform identity in status rows must use plain platform name text; platform-specific decorative emojis are not part of the default operator contract.
+- In publish-result card text, only outcome-critical symbols are retained by default (`?` success, `?` failure/login-required); non-critical decorative symbols should be suppressed.
+- Inline `Ê×Ò³` entry is removed from card bottoms; operators use persistent keyboard/home surface, while card actions stay task-focused (for example `½ø¶È`, `µÇÂ¼`, retry actions).
+- Login QR handling remains single-card oriented: avoid extra reminder cards when QR card already carries actionable controls.
+
+## 2026-04-07 (Timeout Baseline And Feedback Semantics)
+
+- Publish result cards and failure cards must be interpreted per task/item timeline, not as one global snapshot across mixed runs. Operators should correlate by task window before judging final platform outcome.
+- Timeout baseline for immediate publish critical path is standardized to 60 seconds: blocking wait cap, platform upload timeout minima, and Telegram prefilter queue lock wait are all aligned to the same value.
+- Runtime config defaults must stay consistent with code defaults (`config/app.json` platform `upload_timeout` and code-level fallback/minimum), including bilibili in this route.
