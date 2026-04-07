@@ -1,6 +1,6 @@
 # CyberCar Decisions
 
-Last updated: 2026-04-05
+Last updated: 2026-04-07
 
 ## 2026-03-15
 
@@ -66,3 +66,13 @@ Last updated: 2026-04-05
 - WeChat store parsing now treats desc and objectDesc as polymorphic fields: they may be strings or nested objects, and title extraction must read description / desc / content before falling back.
 - WeChat store resolver logic may not stop at the first discovered store object across window/parent/top/iframe scopes; it must select the data-bearing candidate using feed/comment/export evidence.
 - Telegram API calls now support transient proxy failover. On proxy-connection errors, the client opens a temporary direct-connect bypass window, rebuilds the session, and retries instead of failing immediately.
+
+## 2026-04-07
+
+- Telegram immediate operator surface now treats domestic and global routes as separate first-class actions: `collect_publish_latest_domestic` (`x_to_cn`) and `collect_publish_latest_global` (`cn_to_global`).
+- Global route default source platforms are domestic creators (`douyin`, `xiaohongshu`); source platform is resolved per candidate from payload or URL host and is no longer assumed to be X.
+- Candidate collect CLI composition is source-aware and mandatory:
+  - X source -> `--tweet-url ... --source-platforms x`
+  - Domestic source -> `--source-url ... --source-platforms <douyin|xiaohongshu>` plus `--no-domestic-source-discovery` for explicit candidate runs.
+- For `cn_to_global` + domestic source, collect stage must run direct (no proxy/system proxy override) to keep China-source collection independent from VPN path; proxy fallback retries are skipped in that branch.
+- The persistent home keyboard contract now includes dedicated route buttons (`国内即采即发`, `海外即采即发`) and route-specific help copy.

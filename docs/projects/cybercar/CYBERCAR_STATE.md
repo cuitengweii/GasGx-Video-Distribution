@@ -1,6 +1,6 @@
 # CyberCar State
 
-Last updated: 2026-04-05
+Last updated: 2026-04-07
 
 ## Scope
 
@@ -186,3 +186,27 @@ Last updated: 2026-04-05
 - `src/cybercar/engine.py` now resolves collection names with platform-specific defaults ahead of the shared global fallback, so Douyin keeps `赛博皮卡现车：aawbcc` even when other platforms still use the global `collection_name`.
 - Latest verified local regression command: `pytest tests/test_engine_douyin.py tests/test_engine_douyin_upload.py tests/test_telegram_immediate.py -q` -> `89 passed`.
 - Immediate next real-host check: rerun one Douyin image publish and confirm the new log prints `target=赛博皮卡现车：aawbcc`. If the log still shows the old target, the active worker/process has not picked up the latest repo code yet.
+
+## 2026-04-07 Archive Update
+
+- Telegram immediate automation is now split into two explicit routes:
+  - `国内即采即发` -> profile `x_to_cn`
+  - `海外即采即发` -> profile `cn_to_global`
+  The two routes are wired in callback actions and the persistent bottom keyboard.
+- Global route source targeting is now explicit:
+  - default source platforms for `cn_to_global` are Douyin and Xiaohongshu
+  - source platform is inferred per candidate from row payload or URL host
+  - collect CLI args are built per source (`--tweet-url` for X, `--source-url` for Douyin/Xiaohongshu) with `--source-platforms`.
+- For `cn_to_global` domestic-source candidates, immediate collect now forces direct network mode on collect stage (`proxy_override=""`, `use_system_proxy_override=False`) to avoid collecting China sources through VPN by default.
+- Pipeline now supports `--no-domestic-source-discovery`; with this flag, domestic collect uses explicit source URLs only and skips keyword discovery expansion.
+- This thread also validated operational recovery: `python -m cybercar telegram recover --retries 2` successfully rebuilt bot surface and restarted a stale worker process after button-click no-response reports.
+
+## Next Step Update (2026-04-07)
+
+- Run one full `海外即采即发` live pass and verify network split behavior matches operations:
+  - collect from Douyin/Xiaohongshu without VPN dependency
+  - publish to TikTok/X with VPN-enabled session.
+- Validate real publish text quality:
+  - TikTok description should not duplicate segments
+  - X publish should keep non-empty description under non-premium length constraints.
+- Keep source-keyword freshness checks for domestic sources and confirm active strategy remains `cybertruck` + `赛博皮卡`.

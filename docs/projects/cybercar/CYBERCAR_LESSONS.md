@@ -1,6 +1,6 @@
 # CyberCar Lessons
 
-Last updated: 2026-04-05
+Last updated: 2026-04-07
 
 ## 2026-03-15
 
@@ -95,3 +95,20 @@ Last updated: 2026-04-05
 - Earlier detection: when logs show `ProxyError` or `Unable to connect to proxy`, validate direct connectivity before escalating as Telegram endpoint instability.
 - Prevention: keep proxy bypass window + session reset in the request path, and test both proxy and bypass paths when modifying telegram transport code.
 
+
+## 2026-04-07
+
+- Symptom: operators clicked Telegram route buttons and saw no visible response.
+- Root cause: worker poll loop/session could stay stale while process was still present, so callback handling and home-surface freshness drifted.
+- Earlier detection: check `runtime/telegram_command_worker_state.json` heartbeat freshness and last `update_id` movement before assuming Telegram platform outage.
+- Prevention: run `python -m cybercar telegram supervise --once` first, then `python -m cybercar telegram recover --retries 2` to rebuild commands/home surface and rotate stale worker process.
+
+- Symptom: overseas route sometimes started from wrong source expectations (X-oriented collect behavior in a China-source scenario).
+- Root cause: source-platform intent was not enforced per candidate; collect arguments could be composed without strict source-aware routing.
+- Earlier detection: inspect collect command args for each candidate and verify `--source-platforms` plus `--source-url/--tweet-url` match the candidate host.
+- Prevention: keep source-aware CLI build as invariant and keep route labels/source hints explicit in UI and logs.
+
+- Symptom: `cn_to_global` operation can be fragile when collect and publish share one proxy policy.
+- Root cause: domestic-source collect and overseas publish have opposite network requirements in China operation.
+- Earlier detection: capture per-stage network mode in immediate collect/publish logs, not only final publish result.
+- Prevention: enforce stage-specific network policy (collect direct for domestic sources, publish with VPN/proxy as needed) and validate this split on live runs after worker updates.

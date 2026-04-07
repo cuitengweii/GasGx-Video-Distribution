@@ -1,6 +1,6 @@
 # CyberCar Architecture
 
-Last updated: 2026-03-21
+Last updated: 2026-04-07
 
 ## Top-Level Structure
 
@@ -73,3 +73,21 @@ Last updated: 2026-03-21
 - The supported long-running process is the manual Telegram worker only.
 - Scheduled tasks are limited to keeping the Telegram worker available; they do not launch collect/publish flows.
 - Collect/publish jobs may still run as child actions from the Telegram review flow, but they are not launched by Task Scheduler.
+
+## Route Split: Domestic vs Global Immediate
+
+- `src/Collection/cybercar/cybercar_video_capture_and_publishing_module/telegram_command_worker.py` now models immediate entry routing with separate route keys, callbacks, and profile defaults:
+  - domestic route -> `x_to_cn`
+  - global route -> `cn_to_global`
+- The home reply keyboard is versioned and exposes both routes as direct buttons so operators can trigger each chain without free-form command typing.
+
+## Source-Aware Collect Wiring
+
+- Worker-side collect now resolves `source_platform` per candidate and builds source-specific args through `_build_collect_source_cli_args(...)`.
+- `src/cybercar/pipeline.py` accepts `--no-domestic-source-discovery`; when this flag is present, domestic collection skips discovery expansion and only uses explicit source URLs.
+- `extra_urls` are filtered by source platform (X-only URLs for X branch), reducing cross-source leakage between domestic and overseas routes.
+
+## Network Boundary for `cn_to_global`
+
+- In global route + domestic source branch, worker collect stage can force direct mode (`proxy_override=""`, `use_system_proxy_override=False`) to separate China-source collection from publish-side VPN needs.
+- This boundary currently lives in worker orchestration, not a standalone network policy module, so future refactor should isolate collect-network and publish-network policy as independent configuration surfaces.

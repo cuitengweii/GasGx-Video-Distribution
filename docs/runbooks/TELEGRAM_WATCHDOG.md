@@ -67,3 +67,23 @@ Tips:
 2. Confirm the watchdog loop is active: `Get-Process python | Select-String cybercar`
 3. Confirm one-shot health works: `python -m cybercar telegram supervise --once`
 4. Kill the worker process once and verify the watchdog recreates it and refreshes the Telegram home surface.
+
+## Button Click No-Response Recovery (2026-04-07)
+
+When operators report that bot buttons are clickable but no callback feedback appears:
+
+1. Check worker liveness and freshness:
+   - `python -m cybercar telegram supervise --once`
+   - inspect `runtime/telegram_command_worker_state.json` (`status`, `pid`, `heartbeat_at`, `last_update_id`).
+2. Run surface recovery:
+   - `python -m cybercar telegram recover --retries 2`
+3. Confirm recover result includes:
+   - command refresh success
+   - home-surface refresh success
+   - stale worker termination (if any)
+   - new worker PID started.
+4. Re-test in Telegram:
+   - send `/start`
+   - click `国内即采即发` or `海外即采即发` and verify immediate callback feedback.
+
+If recovery succeeds but callback remains silent, capture latest `runtime/logs/telegram_command_worker_*.log` and `runtime/logs/telegram_supervisor_*.log` before next restart.
