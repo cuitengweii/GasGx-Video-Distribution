@@ -2733,6 +2733,79 @@ def test_run_collect_publish_latest_job_expires_stale_link_pending_card_and_filt
     assert ledger_items["x:111:111"]["status_url"] == candidate["url"]
 
 
+def test_run_collect_publish_latest_job_global_route_reopens_expired_candidate_after_cooldown(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    candidate = {
+        "url": "https://www.douyin.com/video/7623731231008954367",
+        "published_at": "",
+        "display_time": "",
+        "tweet_text": "",
+        "source_platform": "douyin",
+        "match_mode": "search_result_inferred",
+        "matched_keyword": "cybertruck",
+    }
+    existing_id = worker_impl._build_immediate_candidate_item_id(
+        candidate["url"],
+        candidate["published_at"],
+        "video",
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+    )
+
+    _save_prefilter_items(
+        workspace,
+        {
+            existing_id: _video_item(
+                existing_id,
+                source_url=candidate["url"],
+                source_platform="douyin",
+                published_at="",
+                display_time="",
+                tweet_text="",
+                status="expired_pending",
+                action="expired",
+                profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+                target_platforms="tiktok,x",
+                message_id=6223,
+                created_at="2026-04-07 00:48:03",
+                updated_at="2026-04-07 07:45:20",
+            ),
+        },
+    )
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {
+            "keyword": worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+            "candidates": [candidate],
+            "source_platforms": ["douyin", "xiaohongshu"],
+        },
+    )
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=1,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert len(runner.sent_candidates) == 1
+    item = _prefilter_items(workspace)[existing_id]
+    assert isinstance(item, dict)
+    assert item["status"] == "link_pending"
+    assert item["action"] == "sent"
+    assert int(item["message_id"]) > 0
+
+
 def test_run_collect_publish_latest_job_recovers_orphaned_publish_running_and_reissues_card(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
@@ -4780,6 +4853,128 @@ def test_upsert_immediate_candidate_preserves_publish_done_terminal_state(tmp_pa
     assert item["message_id"] == 654
 
 
+def test_build_immediate_candidate_item_id_isolated_between_domestic_and_global_profiles() -> None:
+    url = "https://www.douyin.com/video/7623731231008954367"
+    published_at = ""
+    domestic_id = worker_impl._build_immediate_candidate_item_id(
+        url,
+        published_at,
+        "video",
+        profile=worker_impl.DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE,
+    )
+    global_id = worker_impl._build_immediate_candidate_item_id(
+        url,
+        published_at,
+        "video",
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+    )
+    assert domestic_id != global_id
+
+
+def test_upsert_immediate_candidate_global_route_does_not_reuse_domestic_item_state(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    candidate = {
+        "url": "https://www.douyin.com/video/7623731231008954367",
+        "published_at": "",
+        "display_time": "",
+        "tweet_text": "",
+        "source_platform": "douyin",
+        "match_mode": "search_result_inferred",
+        "matched_keyword": "cybertruck",
+    }
+    domestic_item_id = worker_impl._build_immediate_candidate_item_id(
+        candidate["url"],
+        candidate["published_at"],
+        "video",
+        profile=worker_impl.DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE,
+    )
+    _save_prefilter_items(
+        workspace,
+        {
+            domestic_item_id: {
+                "id": domestic_item_id,
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "down_confirmed",
+                "action": "skip",
+                "created_at": "2026-04-07 15:00:00",
+                "updated_at": "2026-04-07 15:01:00",
+                "message_id": 9001,
+                "profile": worker_impl.DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE,
+            }
+        },
+    )
+
+    result = worker_impl._upsert_immediate_candidate_item(
+        workspace=workspace,
+        candidate=candidate,
+        media_kind="video",
+        item_index=1,
+        total_count=3,
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+        target_platforms="tiktok,x",
+        chat_id=CHAT_ID,
+        allow_reuse=True,
+    )
+    item = result["item"]
+    assert result["item_id"] != domestic_item_id
+    assert item["status"] == "link_pending"
+    assert str(item.get("action") or "") != "skip"
+
+
+def test_upsert_immediate_candidate_reopens_global_expired_terminal_after_cooldown(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    candidate = {
+        "url": "https://www.douyin.com/video/7623731231008954367",
+        "published_at": "",
+        "display_time": "",
+        "tweet_text": "",
+        "source_platform": "douyin",
+        "match_mode": "search_result_inferred",
+        "matched_keyword": "cybertruck",
+    }
+    item_id = worker_impl._build_immediate_candidate_item_id(
+        candidate["url"],
+        candidate["published_at"],
+        "video",
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+    )
+    _save_prefilter_items(
+        workspace,
+        {
+            item_id: {
+                "id": item_id,
+                "workflow": "immediate_manual_publish",
+                "media_kind": "video",
+                "status": "expired_pending",
+                "action": "expired",
+                "created_at": "2026-04-07 00:48:03",
+                "updated_at": "2026-04-07 07:45:20",
+                "message_id": 6223,
+                "profile": worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+                "source_platform": "douyin",
+            }
+        },
+    )
+
+    result = worker_impl._upsert_immediate_candidate_item(
+        workspace=workspace,
+        candidate=candidate,
+        media_kind="video",
+        item_index=1,
+        total_count=3,
+        profile=worker_impl.DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE,
+        target_platforms="tiktok,x",
+        chat_id=CHAT_ID,
+        allow_reuse=True,
+    )
+
+    item = result["item"]
+    assert item["status"] == "link_pending"
+    assert item["action"] == "resent_after_expired"
+    assert item["message_id"] == 0
+
+
 def test_run_collect_publish_latest_job_filters_candidates_seen_in_collect_ledger(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     core = FakeCore()
@@ -4852,6 +5047,84 @@ def test_run_collect_publish_latest_job_filters_candidates_seen_in_collect_ledge
     assert sent_urls == ["https://x.com/fresh/status/222"]
     overview_items = feedbacks[-1]["sections"][0]["items"]
     assert any(str(entry.get("value") or "").startswith("1 ") for entry in overview_items if isinstance(entry, dict))
+
+
+def test_run_collect_publish_latest_job_uses_buffer_pool_when_front_candidates_are_terminal_duplicates(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    core = FakeCore()
+    runner = FakeRunner(core)
+    sent_urls: list[str] = []
+    stale_candidates = [
+        {
+            "url": "https://x.com/repeat/status/111",
+            "published_at": "2026-03-20 10:00:00",
+            "display_time": "2m",
+            "tweet_text": "stale candidate 1",
+        },
+        {
+            "url": "https://x.com/repeat/status/222",
+            "published_at": "2026-03-20 10:01:00",
+            "display_time": "1m",
+            "tweet_text": "stale candidate 2",
+        },
+        {
+            "url": "https://x.com/repeat/status/333",
+            "published_at": "2026-03-20 10:02:00",
+            "display_time": "1m",
+            "tweet_text": "stale candidate 3",
+        },
+    ]
+    fresh_candidate = {
+        "url": "https://x.com/fresh/status/999",
+        "published_at": "2026-03-20 10:03:00",
+        "display_time": "1m",
+        "tweet_text": "fresh candidate",
+    }
+    existing_items: dict[str, dict[str, object]] = {}
+    for cand in stale_candidates:
+        item_id = worker_impl._build_immediate_candidate_item_id(cand["url"], cand["published_at"], "video")
+        existing_items[item_id] = _video_item(
+            item_id,
+            source_url=cand["url"],
+            published_at=cand["published_at"],
+            display_time=cand["display_time"],
+            tweet_text=cand["tweet_text"],
+            status="expired_pending",
+            action="expired",
+            message_id=900,
+        )
+    _save_prefilter_items(workspace, existing_items)
+
+    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    monkeypatch.setattr(
+        worker_impl,
+        "_discover_latest_live_candidates",
+        lambda **kwargs: {"keyword": DEFAULT_PROFILE, "candidates": [*stale_candidates, fresh_candidate]},
+    )
+
+    original_send = worker_impl._send_immediate_candidate_prefilter_card
+
+    def capture_send(*args: object, **kwargs: object) -> dict[str, object]:
+        item = dict(kwargs.get("item") or {})
+        sent_urls.append(str(item.get("source_url") or ""))
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(worker_impl, "_send_immediate_candidate_prefilter_card", capture_send)
+
+    exit_code = actions.run_collect_publish_latest_job(
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token="",
+        telegram_chat_id=CHAT_ID,
+        candidate_limit=3,
+        media_kind="video",
+    )
+
+    assert exit_code == 0
+    assert sent_urls == ["https://x.com/fresh/status/999"]
 
 
 def test_prefilter_skip_syncs_source_url_to_collect_ledger_and_blocks_rerun(tmp_path: Path, monkeypatch) -> None:
@@ -4993,7 +5266,7 @@ def test_run_collect_publish_latest_job_extends_discovery_rounds_until_new_candi
     )
 
     assert exit_code == 0
-    assert discovery_limits == [4, 8]
+    assert discovery_limits[:2] == [4, 8]
     assert sent_urls == ["https://x.com/fresh/status/222", "https://x.com/fresh/status/333"]
 
 
@@ -6546,30 +6819,16 @@ def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monke
     assert "\u5373\u91c7\u5373\u53d1\u542f\u52a8\u5931\u8d25" in str(record.updated_cards[-1]["card"]["text"])
 
 
-def test_handle_prefilter_retry_failed_publish_requeues_failed_platforms_only(tmp_path: Path, monkeypatch) -> None:
+def test_handle_prefilter_retry_failed_publish_restarts_publish_job(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     record = _install_transport_mocks(monkeypatch)
-    queue_calls: list[dict[str, object]] = []
+    spawn_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (SimpleNamespace(), FakeCore()))
+    def spawn_immediate_publish_item_job(**kwargs: object) -> dict[str, object]:
+        spawn_calls.append(dict(kwargs))
+        return {"ok": True, "pid": 321, "log_path": "D:/tmp/immediate_publish_item_job_test.log"}
 
-    def queue_immediate_platform_jobs(**kwargs: object) -> dict[str, object]:
-        queue_calls.append(dict(kwargs))
-        updated = worker_impl._update_prefilter_item(
-            workspace,
-            str(kwargs["item_id"]),
-            updates={
-                "status": "publish_running",
-                "platform_results": {
-                    "wechat": {"status": "queued"},
-                    "douyin": {"status": "success"},
-                },
-                "action": "publish",
-            },
-        )
-        return {"spawned": 1, "failed": 0, "skipped_duplicate": 0, "item": updated}
-
-    monkeypatch.setattr(worker_impl, "_queue_immediate_platform_jobs", queue_immediate_platform_jobs)
+    monkeypatch.setattr(worker_impl, "_spawn_immediate_publish_item_job", spawn_immediate_publish_item_job)
 
     item = _video_item(
         status="publish_partial",
@@ -6586,10 +6845,14 @@ def test_handle_prefilter_retry_failed_publish_requeues_failed_platforms_only(tm
     )
 
     assert result["handled"] is True
-    assert len(queue_calls) == 1
-    assert queue_calls[0]["item_id"] == "item-video"
+    assert len(spawn_calls) == 1
+    assert spawn_calls[0]["item_id"] == "item-video"
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_requested"
+    assert updated["action"] == "retry_failed_publish"
     assert len(record.updated_cards) == 1
-    assert "失败平台已补发" in str(record.updated_cards[-1]["card"]["text"])
+    assert "\u5931\u8d25\u4efb\u52a1\u8865\u53d1\u5df2\u6392\u961f" in str(record.updated_cards[-1]["card"]["text"])
 
 
 def test_prefilter_queue_lock_recovers_when_owner_pid_is_dead(tmp_path: Path, monkeypatch) -> None:
@@ -6993,16 +7256,28 @@ def test_build_failure_feedback_actions_adds_retry_when_task_identifier_is_compa
     assert callbacks[0] == "ctpf|retry_failed_publish|item-video"
 
 
-def test_build_failure_feedback_actions_prefers_refresh_for_retryable_failures() -> None:
+def test_build_failure_feedback_actions_prefers_retry_for_retryable_failures() -> None:
     actions = worker_impl._build_failure_feedback_actions(
         status="failed",
         sections=[
-            {"title": "失败原因", "items": [{"label": "原因", "value": "上传失败，network timeout"}]},
+            {
+                "title": "\u5931\u8d25\u539f\u56e0",
+                "items": [{"label": "\u539f\u56e0", "value": "\u4e0a\u4f20\u5931\u8d25\uff0cnetwork timeout"}],
+            },
+            {
+                "title": "\u4efb\u52a1\u6807\u8bc6",
+                "items": [{"label": "\u5f53\u524d\u4efb\u52a1", "value": "collect_publish_latest|item-video"}],
+            },
         ],
     )
 
     texts = [str(action.get("text") or "") for action in actions]
-    assert texts == ["🔄 刷新", "📍 进度"]
+    callbacks = [str(action.get("callback_data") or "") for action in actions]
+    assert len(actions) == 2
+    assert callbacks[0] == "ctpf|retry_failed_publish|item-video"
+    assert "process_status" in callbacks[1]
+    assert "\u8865\u53d1" in texts[0]
+    assert "\u8fdb\u5ea6" in texts[1]
 
 
 def test_build_failure_feedback_actions_prefers_progress_for_duplicate_skip_failures() -> None:

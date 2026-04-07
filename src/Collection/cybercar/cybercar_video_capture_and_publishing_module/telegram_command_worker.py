@@ -159,6 +159,7 @@ DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 3 * 86400
 DEFAULT_PREFILTER_QUEUE_STATUS_WINDOW_SECONDS = 24 * 3600
 DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS = 30 * 60
 DEFAULT_IMMEDIATE_PREFILTER_PENDING_EXPIRY_SECONDS = 10 * 60
+DEFAULT_GLOBAL_EXPIRED_PREFILTER_REOPEN_SECONDS = 6 * 3600
 DEFAULT_QUEUE_MAINTENANCE_INTERVAL_SECONDS = 5 * 60
 DEFAULT_PLATFORM_LOCK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 TELEGRAM_PREFILTER_CALLBACK_PREFIX = "ctpf"
@@ -1673,10 +1674,6 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
     if is_skip_like:
         actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
         return actions
-    if is_retryable_transport:
-        actions.append({"text": "🔄 刷新", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
-        actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
-        return actions
     if retry_item_id:
         actions.append(
             {
@@ -1685,6 +1682,9 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
                 "row": row,
             }
         )
+        actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
+        return actions
+    if is_retryable_transport:
         actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
         return actions
     actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
@@ -3197,6 +3197,25 @@ def _is_prefilter_expired_terminal(row: Mapping[str, Any]) -> bool:
     status = str(row.get("status") or "").strip().lower()
     action = str(row.get("action") or "").strip().lower()
     return status == "expired_pending" and action == "expired"
+
+
+def _should_reopen_expired_prefilter_item_for_profile(
+    row: Mapping[str, Any],
+    *,
+    profile: str,
+) -> bool:
+    if not isinstance(row, Mapping):
+        return False
+    if str(profile or "").strip().lower() != DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE:
+        return False
+    if not _is_prefilter_expired_terminal(row):
+        return False
+    ts = _prefilter_item_timestamp(dict(row))
+    if ts is None:
+        return True
+    cooldown_seconds = max(600, int(DEFAULT_GLOBAL_EXPIRED_PREFILTER_REOPEN_SECONDS))
+    cutoff = datetime.now() - timedelta(seconds=cooldown_seconds)
+    return ts <= cutoff
 
 
 def _is_prefilter_filtered_terminal(row: Mapping[str, Any]) -> bool:
@@ -7145,13 +7164,30 @@ def _normalize_review_media_kind(media_kind: str) -> str:
     return _normalize_immediate_collect_media_kind(media_kind or "video")
 
 
-def _build_immediate_candidate_item_id(source_url: str, published_at: str, media_kind: str = "video") -> str:
+def _candidate_profile_scope(profile: str) -> str:
+    token = _normalize_profile_name(profile).lower()
+    if token in {
+        DEFAULT_DOMESTIC_COLLECT_PUBLISH_PROFILE.lower(),
+        DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE.lower(),
+    }:
+        return token
+    return ""
+
+
+def _build_immediate_candidate_item_id(
+    source_url: str,
+    published_at: str,
+    media_kind: str = "video",
+    profile: str = "",
+) -> str:
+    scope = _candidate_profile_scope(profile)
     raw = "|".join(
         [
             str(source_url or "").strip(),
             str(published_at or "").strip(),
             "immediate_manual_publish",
             _normalize_immediate_collect_media_kind(media_kind),
+            scope,
         ]
     )
     digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
@@ -7529,6 +7565,7 @@ def _upsert_immediate_candidate_item(
         str(candidate.get("url") or "").strip(),
         str(candidate.get("published_at") or "").strip(),
         media_kind,
+        profile=profile,
     )
 
     def _mutate(queue: Dict[str, Any]) -> Dict[str, Any]:
@@ -7538,6 +7575,7 @@ def _upsert_immediate_candidate_item(
             queue["items"] = items
         existing = items.get(item_id, {})
         row = dict(existing) if isinstance(existing, dict) else {}
+        existing_row_snapshot = dict(row)
         existing_status = str(row.get("status") or "").strip().lower()
         existing_message_id = int(row.get("message_id") or 0)
         row["id"] = item_id
@@ -7561,8 +7599,24 @@ def _upsert_immediate_candidate_item(
         row["candidate_index"] = int(item_index or 0)
         row["candidate_limit"] = int(total_count or 0)
         row["chat_id"] = str(chat_id or row.get("chat_id") or "").strip()
+        should_reopen_expired = _should_reopen_expired_prefilter_item_for_profile(
+            existing_row_snapshot,
+            profile=profile,
+        )
         existing_is_filtered_terminal = _is_prefilter_filtered_terminal(row)
-        if existing_is_filtered_terminal:
+        if should_reopen_expired:
+            row["status"] = "link_pending"
+            row["action"] = "resent_after_expired"
+            row["message_id"] = 0
+            row["platform_results"] = {}
+            row["publish_success_count"] = 0
+            row["publish_failed_count"] = 0
+            row["prefilter_retry_pending"] = False
+            row["prefilter_retry_count"] = 0
+            row["prefilter_last_retry_epoch"] = 0.0
+            row["prefilter_last_retry_at"] = ""
+            row["prefilter_warning"] = ""
+        elif existing_is_filtered_terminal:
             if _is_prefilter_expired_terminal(row):
                 row["status"] = "expired_pending"
                 row["action"] = "expired"
@@ -13760,6 +13814,10 @@ def _run_collect_publish_latest_job(
     raw_candidates_discovered = 0
     candidates: list[dict[str, Any]] = []
     seen_discovered_urls: set[str] = set()
+    candidate_pool_target = min(
+        max(1, round_limits[-1] if round_limits else discovery_limit),
+        max(requested_limit, (requested_limit * 4)),
+    )
     for round_no, round_limit in enumerate(round_limits, start=1):
         discovery_rounds_used = round_no
         discovered = _discover_latest_live_candidates(
@@ -13818,9 +13876,9 @@ def _run_collect_publish_latest_job(
         collapsed_all, collapsed_count = _collapse_collect_publish_same_story_candidates(collapsed_existing)
         same_story_collapsed += collapsed_count
         candidates = collapsed_all
-        if len(candidates) >= requested_limit:
+        if len(candidates) >= candidate_pool_target:
             break
-    candidates = candidates[:requested_limit]
+    candidates = candidates[:candidate_pool_target]
     if not candidates:
         if (
             filtered_seen_candidates > 0
@@ -15082,57 +15140,92 @@ def handle_callback_update(
     if action == "retry_failed_publish":
         if workflow != "immediate_manual_publish":
             callback_reply = "该候选不支持失败补发。"
+        elif status in {"publish_requested", "download_running", "publish_running"}:
+            callback_reply = "本条已在补发处理中，请稍后查看进度。"
         else:
-            retry_platforms = [
-                platform
-                for platform, payload in _normalize_platform_results(item.get("platform_results")).items()
-                if str((payload or {}).get("status") or "").strip().lower() in {"failed", "login_required"}
-            ]
-            if not retry_platforms:
-                callback_reply = "当前没有可补发的失败平台。"
-            else:
-                runner, core = _load_runtime_modules()
-                queue_result = _queue_immediate_platform_jobs(
-                    workspace=workspace,
+            updated_item = _update_prefilter_item(
+                workspace,
+                item_id,
+                updates={
+                    "status": "publish_requested",
+                    "updated_at": now_text,
+                    "actor": actor,
+                    "action": "retry_failed_publish",
+                    "last_error": "",
+                },
+            )
+            callback_reply = "🔁 已触发补发，正在重新发布（已采集直发，未采集先采后发）。"
+            if immediate_test_mode:
+                callback_reply += "（测试模式）"
+            _answer_callback_immediately(callback_reply)
+            started_item = _get_prefilter_item(workspace, item_id) or updated_item
+            started_note = "已触发补发，后台会按统一链路重新发布本条候选。"
+            if immediate_test_mode:
+                started_note = "测试模式下已触发补发，后台会继续真实采集与发布，仅放宽前置筛选。"
+            optimistic_card = _build_prefilter_status_card(
+                item=started_item,
+                title="失败任务补发已排队",
+                subtitle="已采集素材会直接发布；未采集素材会先采集再发布",
+                status="running",
+                result_section_title="执行状态",
+                result_items=[
+                    started_note,
+                    "最终结果会通过后续平台状态继续回传。",
+                ],
+            )
+            optimistic_card_sent = _try_update_card_immediately(optimistic_card)
+            if optimistic_card_sent:
+                should_clear_buttons = False
+            try:
+                _spawn_immediate_publish_item_job(
                     repo_root=repo_root,
+                    workspace=workspace,
                     timeout_seconds=timeout_seconds,
                     profile=default_profile,
                     telegram_bot_identifier=telegram_bot_identifier,
                     telegram_bot_token=bot_token,
                     telegram_chat_id=chat_id,
                     item_id=item_id,
-                    item=item,
                     immediate_test_mode=immediate_test_mode,
                 )
-                refreshed_item = queue_result.get("item") if isinstance(queue_result.get("item"), dict) else _get_prefilter_item(workspace, item_id) or item
-                spawned = int(queue_result.get("spawned") or 0)
-                failed = int(queue_result.get("failed") or 0)
-                skipped_duplicate = int(queue_result.get("skipped_duplicate") or 0)
-                retried_labels = _format_platform_text(retry_platforms)
-                if spawned > 0:
-                    callback_reply = f"🔁 已补发失败平台：{retried_labels}"
-                elif skipped_duplicate > 0 and failed <= 0:
-                    callback_reply = f"🔁 失败平台已去重跳过：{retried_labels}"
-                else:
-                    callback_reply = f"⚠️ 失败平台补发未启动：{retried_labels}"
-                card_update = _build_prefilter_status_card(
-                    item=refreshed_item,
-                    title="失败平台已补发" if spawned > 0 else "失败平台补发未启动",
-                    subtitle="后台只重试之前失败或需要登录的平台" if spawned > 0 else "失败平台未成功重新排队，请查看进度",
-                    status="running" if spawned > 0 else "failed",
-                    result_section_title="执行状态",
-                    result_items=[
-                        f"本次补发范围：{retried_labels}",
-                        "成功平台不会重复触发，后台只会重跑失败平台。",
-                    ]
-                    + (
-                        ["部分平台仍未重新排队，请查看进度中的平台状态。"]
-                        if failed > 0 and spawned > 0
-                        else []
-                    ),
+                if not optimistic_card_sent:
+                    started_item = _get_prefilter_item(workspace, item_id) or {}
+                    final_note = "补发任务已提交，系统将自动执行“已采集直发 / 未采集先采后发”。"
+                    if immediate_test_mode:
+                        final_note = "测试模式补发任务已提交，后续会继续真实采集和平台发布。"
+                    card_update = _build_prefilter_status_card(
+                        item=started_item,
+                        title="失败任务补发已排队",
+                        subtitle="已采集素材会直接发布；未采集素材会先采集再发布",
+                        status="running",
+                        result_section_title="执行状态",
+                        result_items=[
+                            final_note,
+                            "最终结果会通过后续平台状态继续回传。",
+                        ],
+                    )
+            except Exception as exc:
+                _append_log(log_file, f"[Worker] retry failed publish spawn failed: {exc}")
+                failed_item = _update_prefilter_item(
+                    workspace,
+                    item_id,
+                    updates={
+                        "status": "link_pending",
+                        "last_error": str(exc),
+                        "action": "publish_spawn_failed",
+                    },
                 )
+                callback_reply = "⚠️ 启动补发失败，请稍后重试。"
                 should_clear_buttons = False
-                _answer_callback_immediately(callback_reply)
+                card_updated_inline = False
+                card_update = _build_prefilter_status_card(
+                    item=failed_item,
+                    title="失败任务补发启动失败",
+                    subtitle="后台任务未成功启动，请稍后重试",
+                    status="failed",
+                    result_section_title="执行状态",
+                    result_items=["后台补发任务启动失败，本条尚未进入补发队列。"],
+                )
     elif action in {"publish_normal", "publish_original"}:
         if workflow != "immediate_manual_publish":
             callback_reply = "该候选不支持直接发布。"
