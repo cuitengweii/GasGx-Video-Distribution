@@ -112,7 +112,7 @@ DEFAULT_POLLER_LOCK_STALE_SECONDS = 300
 DEFAULT_WECHAT_COMMENT_REPLY_STATE_FILE = Path("runtime") / "wechat_comment_reply_state.json"
 DEFAULT_POLL_INTERVAL_SECONDS = 0
 DEFAULT_POLL_TIMEOUT_SECONDS = 10
-MAX_BLOCKING_WAIT_SECONDS = 30
+MAX_BLOCKING_WAIT_SECONDS = 60
 DEFAULT_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DEFAULT_POLL_NETWORK_FAILURE_RESTART_THRESHOLD = 6
 DEFAULT_POLL_NETWORK_FAILURE_RESTART_MIN_SPAN_SECONDS = 600
@@ -154,7 +154,7 @@ DEFAULT_TELEGRAM_PREFILTER_FEEDBACK_HISTORY_FILE = Path("runtime") / "telegram_p
 DEFAULT_PENDING_BACKGROUND_FEEDBACK_FILE = Path("runtime") / "telegram_pending_background_feedback.json"
 DEFAULT_PLATFORM_RESULT_EVENT_DIR = Path("runtime") / "prefilter_platform_result_events"
 DEFAULT_PIPELINE_PRIORITY_REQUEST_DIR = Path("runtime") / "pipeline_priority_requests"
-DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 30
+DEFAULT_PREFILTER_QUEUE_LOCK_TIMEOUT_SECONDS = 60
 DEFAULT_PREFILTER_QUEUE_TERMINAL_RETENTION_SECONDS = 3 * 86400
 DEFAULT_PREFILTER_QUEUE_STATUS_WINDOW_SECONDS = 24 * 3600
 DEFAULT_PREFILTER_QUEUE_ACTIVE_WINDOW_SECONDS = 30 * 60
@@ -269,6 +269,7 @@ IMMEDIATE_COLLECT_MEDIA_KIND_PLATFORMS = {
     "video": PUBLISH_PLATFORM_ORDER.copy(),
     "image": ["douyin", "xiaohongshu", "kuaishou"],
 }
+DEFAULT_GLOBAL_COLLECT_PUBLISH_TARGET_PLATFORMS = ["tiktok", "x"]
 COLLECT_SOURCE_PLATFORM_ORDER = ["x", "douyin", "xiaohongshu"]
 COLLECT_SOURCE_PLATFORM_DISPLAY = {
     "x": "X",
@@ -295,6 +296,8 @@ PUBLISH_PLATFORM_DISPLAY = {
     "xiaohongshu": "小红书",
     "kuaishou": "快手",
     "bilibili": "B站",
+    "tiktok": "TikTok",
+    "x": "X",
 }
 PUBLISH_PLATFORM_LOGO = {
     "collect": "🔎",
@@ -303,6 +306,8 @@ PUBLISH_PLATFORM_LOGO = {
     "xiaohongshu": "📝",
     "kuaishou": "⚡",
     "bilibili": "📺",
+    "tiktok": "🎬",
+    "x": "X",
 }
 PUBLISH_PLATFORM_ALIAS_MAP = {
     "wechat": "wechat",
@@ -324,6 +329,12 @@ PUBLISH_PLATFORM_ALIAS_MAP = {
     "bili": "bilibili",
     "b站": "bilibili",
     "哔哩哔哩": "bilibili",
+    "tiktok": "tiktok",
+    "tik tok": "tiktok",
+    "tt": "tiktok",
+    "x": "x",
+    "twitter": "x",
+    "推特": "x",
 }
 ALL_PLATFORM_ALIAS_SET = {
     "all",
@@ -889,7 +900,13 @@ def _handle_shared_immediate_link_message(
     profile = _normalize_profile_name(default_profile)
     actor = _shared_link_actor(username)
     media_kind = _probe_shared_link_media_kind(source_url)
-    target_platforms = ",".join(_collect_publish_target_platforms(media_kind))
+    target_platforms = ",".join(
+        _resolve_collect_publish_target_platforms(
+            repo_root=repo_root,
+            profile=profile,
+            media_kind=media_kind,
+        )
+    )
     candidate = {
         "url": source_url,
         "published_at": "",
@@ -1524,14 +1541,19 @@ def _with_home_button(reply_markup: Optional[Dict[str, Any]] = None) -> Dict[str
     inline_keyboard = reply_markup.get("inline_keyboard") if isinstance(reply_markup, dict) else None
     if isinstance(inline_keyboard, list):
         for row in inline_keyboard:
-            if isinstance(row, list) and row:
-                rows.append([dict(button) for button in row if isinstance(button, dict) and button])
-    home_callback = build_home_callback_data("cybercar", "home")
-    for row in rows:
-        for button in row:
-            if str(button.get("callback_data") or "").strip() == home_callback:
-                return _build_inline_keyboard(rows)
-    rows.append([{"text": "🏠 首页", "callback_data": home_callback}])
+            if not isinstance(row, list) or not row:
+                continue
+            filtered_row: list[Dict[str, str]] = []
+            for button in row:
+                if not isinstance(button, dict) or not button:
+                    continue
+                text = str(button.get("text") or "").strip()
+                callback_data = str(button.get("callback_data") or "").strip().lower()
+                if "首页" in text or callback_data.endswith(":home") or callback_data == "home":
+                    continue
+                filtered_row.append(dict(button))
+            if filtered_row:
+                rows.append(filtered_row)
     return _build_inline_keyboard(rows)
 
 
@@ -1542,22 +1564,16 @@ def _with_process_status_button(reply_markup: Optional[Dict[str, Any]] = None) -
         for row in inline_keyboard:
             if isinstance(row, list) and row:
                 rows.append([dict(button) for button in row if isinstance(button, dict) and button])
-    home_callback = build_home_callback_data("cybercar", "home")
     process_callback = build_home_callback_data("cybercar", "process_status")
-    has_home = False
     has_process = False
     for row in rows:
         for button in row:
             callback_data = str(button.get("callback_data") or "").strip()
-            if callback_data == home_callback:
-                has_home = True
-            elif callback_data == process_callback:
+            if callback_data == process_callback:
                 has_process = True
     append_row: list[Dict[str, str]] = []
     if not has_process:
         append_row.append({"text": "📍 进度", "callback_data": process_callback})
-    if not has_home:
-        append_row.append({"text": "🏠 首页", "callback_data": home_callback})
     if append_row:
         rows.append(append_row)
     return _build_inline_keyboard(rows)
@@ -1655,7 +1671,7 @@ def _build_failure_feedback_actions(*, status: str, sections: Sequence[Mapping[s
         actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
         return actions
     if is_skip_like:
-        actions.append({"text": "🏠 首页", "callback_data": build_home_callback_data("cybercar", "home"), "row": row})
+        actions.append({"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
         return actions
     if is_retryable_transport:
         actions.append({"text": "🔄 刷新", "callback_data": build_home_callback_data("cybercar", "process_status"), "row": row})
@@ -3763,9 +3779,44 @@ def _parse_publish_request_value(raw: str) -> tuple[str, str]:
     return media_kind, platform_value or "all"
 
 
+def _split_profile_string_tokens(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        return [part for part in re.split(r"[,\s/|]+", raw) if str(part or "").strip()]
+    if isinstance(raw, Iterable) and not isinstance(raw, (dict, bytes, bytearray)):
+        return [str(part).strip() for part in raw if str(part or "").strip()]
+    return []
+
+
 def _collect_publish_target_platforms(media_kind: str) -> list[str]:
     normalized = _normalize_immediate_collect_media_kind(media_kind)
     return list(IMMEDIATE_COLLECT_MEDIA_KIND_PLATFORMS.get(normalized, PUBLISH_PLATFORM_ORDER))
+
+
+def _resolve_collect_publish_target_platforms(
+    *,
+    repo_root: Path,
+    profile: str,
+    media_kind: str,
+) -> list[str]:
+    normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind)
+    media_default = _collect_publish_target_platforms(normalized_media_kind)
+    profile_payload = _resolve_profile_payload(repo_root=repo_root, profile=profile)
+    configured = _normalize_platform_tokens(
+        _split_profile_string_tokens(profile_payload.get("upload_platforms"))
+        or _split_profile_string_tokens(profile_payload.get("target_platforms"))
+    )
+    if configured:
+        if normalized_media_kind == "image":
+            allowed = set(_collect_publish_target_platforms("image"))
+            filtered = [platform for platform in configured if platform in allowed]
+            if filtered:
+                return filtered
+            return media_default
+        return configured
+    if _normalize_profile_name(profile) == _normalize_profile_name(DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE):
+        if normalized_media_kind == "video":
+            return DEFAULT_GLOBAL_COLLECT_PUBLISH_TARGET_PLATFORMS.copy()
+    return media_default
 
 
 def _load_profile_config_payload(repo_root: Path) -> dict[str, Any]:
@@ -3862,6 +3913,37 @@ def _resolve_candidate_collect_source_platform(candidate: Mapping[str, Any]) -> 
     if source_platform:
         return source_platform
     return _resolve_collect_source_platform_from_url(str(candidate.get("url") or ""))
+
+
+def _build_collect_source_cli_args(
+    *,
+    source_url: str,
+    source_platform: str,
+    disable_domestic_discovery: bool = False,
+) -> tuple[list[str], str]:
+    resolved_url = str(source_url or "").strip()
+    resolved_platform = (
+        _normalize_collect_source_platform(source_platform)
+        or _resolve_collect_source_platform_from_url(resolved_url)
+        or "x"
+    )
+    args: list[str] = ["--source-platforms", resolved_platform]
+    if resolved_platform == "x":
+        args = ["--tweet-url", resolved_url, *args]
+    else:
+        args = ["--source-url", resolved_url, *args]
+        if disable_domestic_discovery:
+            args.append("--no-domestic-source-discovery")
+    return args, resolved_platform
+
+
+def _should_collect_domestic_direct_for_global_route(*, profile: str, source_platform: str) -> bool:
+    normalized_profile = _normalize_profile_name(profile).lower()
+    normalized_source = _normalize_collect_source_platform(source_platform)
+    return (
+        normalized_profile == DEFAULT_GLOBAL_COLLECT_PUBLISH_PROFILE.lower()
+        and normalized_source in {"douyin", "xiaohongshu"}
+    )
 
 
 def _collect_publish_source_platforms_text(source_platforms: Sequence[str]) -> str:
@@ -5175,7 +5257,11 @@ def _handle_home_callback(
             if execution_action == COLLECT_PUBLISH_ACTION:
                 media_kind, _count = _parse_collect_publish_request_value(queued_value)
                 media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, "媒体")
-                target_platforms = _collect_publish_target_platforms(media_kind)
+                target_platforms = _resolve_collect_publish_target_platforms(
+                    repo_root=repo_root,
+                    profile=action_profile,
+                    media_kind=media_kind,
+                )
                 detail = (
                     f"{media_label}即采即发后台任务已启动。\n"
                     "后续会先扫描候选，再逐条发送预审卡片；"
@@ -5846,12 +5932,12 @@ def _normalize_home_action_value(action: str, value: str) -> str:
         return f"{media_kind}:{count}" if count > 0 else media_kind
     if action_token == "publish_run":
         media_kind, platform = _parse_publish_request_value(raw)
-        valid_platforms = _collect_publish_target_platforms(media_kind)
+        valid_platforms = set(_collect_publish_target_platforms(media_kind)) | set(PUBLISH_PLATFORM_DISPLAY.keys())
         platform_value = platform if platform == "all" or platform in valid_platforms else "all"
         return f"{media_kind}:{platform_value}"
     if action_token == "schedule_run":
         media_kind, minutes, platform = _parse_schedule_callback_value(raw)
-        valid_platforms = _collect_publish_target_platforms(media_kind)
+        valid_platforms = set(_collect_publish_target_platforms(media_kind)) | set(PUBLISH_PLATFORM_DISPLAY.keys())
         platform_value = platform if platform in valid_platforms else "all"
         return f"{media_kind}:{max(0, int(minutes))}:{platform_value}"
     if _is_collect_publish_action(action_token):
@@ -7919,6 +8005,121 @@ def _resolve_wechat_login_runtime_context(
         return _resolve_platform_login_runtime_context(core_module, "wechat")
 
 
+def _platform_login_signal_dirs_for_lookup(
+    core_module: Any,
+    platform_name: str,
+    *,
+    default_profile_dir: str = "",
+) -> list[Path]:
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    runtime_dirs: list[Path] = []
+    seen: set[str] = set()
+
+    def _append_profile_dir(raw_profile_dir: str) -> None:
+        profile_dir = str(raw_profile_dir or "").strip()
+        if not profile_dir:
+            return
+        try:
+            profile_path = Path(profile_dir).expanduser()
+        except Exception:
+            return
+        base_dir = profile_path.parent if profile_path.parent != Path("") else Path.cwd()
+        try:
+            runtime_dir = (base_dir / "telegram_login_sync").resolve()
+        except Exception:
+            runtime_dir = base_dir / "telegram_login_sync"
+        key = str(runtime_dir).strip().lower()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        runtime_dirs.append(runtime_dir)
+
+    _append_profile_dir(default_profile_dir)
+    if platform == "wechat":
+        _append_profile_dir(os.getenv("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", ""))
+        _append_profile_dir(str(getattr(core_module, "DEFAULT_WECHAT_CHROME_USER_DATA_DIR", "")).strip())
+    else:
+        _append_profile_dir(os.getenv("CYBERCAR_CHROME_USER_DATA_DIR", ""))
+        _append_profile_dir(str(getattr(core_module, "DEFAULT_CHROME_USER_DATA_DIR", "")).strip())
+
+    default_profile_resolver = getattr(core_module, "_default_profile_dir_for_platform", None)
+    if callable(default_profile_resolver):
+        try:
+            _append_profile_dir(str(default_profile_resolver(platform) or "").strip())
+        except Exception:
+            pass
+
+    if _get_cybercar_paths is not None:
+        try:
+            runtime_paths = _get_cybercar_paths()
+            if platform == "wechat":
+                _append_profile_dir(str(getattr(runtime_paths, "wechat_profile_dir", "") or "").strip())
+            else:
+                _append_profile_dir(str(getattr(runtime_paths, "chrome_profile_dir", "") or "").strip())
+        except Exception:
+            pass
+
+    return runtime_dirs
+
+
+def _resolve_platform_profile_dir_by_wait_token(
+    core_module: Any,
+    platform_name: str,
+    *,
+    wait_token: str = "",
+    default_profile_dir: str = "",
+) -> str:
+    token = str(wait_token or "").strip()
+    if not token:
+        return ""
+    platform = str(platform_name or "wechat").strip().lower() or "wechat"
+    runtime_dirs = _platform_login_signal_dirs_for_lookup(
+        core_module,
+        platform,
+        default_profile_dir=default_profile_dir,
+    )
+    best_profile_dir = ""
+    best_score = -1.0
+    for runtime_dir in runtime_dirs:
+        if not runtime_dir.exists():
+            continue
+        for signal_path in runtime_dir.glob(f"{platform}_*.json"):
+            try:
+                payload = json.loads(signal_path.read_text(encoding="utf-8-sig"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload_token = str(payload.get("token") or "").strip()
+            if payload_token != token:
+                continue
+            payload_platform = str(payload.get("platform") or platform).strip().lower() or platform
+            if payload_platform != platform:
+                continue
+            profile_dir = str(payload.get("profile_dir") or "").strip()
+            if not profile_dir:
+                continue
+            try:
+                profile_dir = str(Path(profile_dir).expanduser())
+            except Exception:
+                continue
+            score = 0.0
+            for field in ("updated_at", "confirmed_at", "created_at"):
+                try:
+                    score = max(score, float(payload.get(field) or 0.0))
+                except Exception:
+                    continue
+            if score <= 0:
+                try:
+                    score = float(signal_path.stat().st_mtime)
+                except Exception:
+                    score = 0.0
+            if score >= best_score:
+                best_score = score
+                best_profile_dir = profile_dir
+    return best_profile_dir
+
+
 def _send_platform_login_text_notice(
     *,
     platform_name: str = "wechat",
@@ -7963,6 +8164,20 @@ def _refresh_platform_login_qr_message(
     try:
         runtime_ctx = _resolve_platform_login_runtime_context(core, platform_name, prefer_login_entry=True)
         platform = runtime_ctx["platform"]
+        profile_dir_by_wait_token = _resolve_platform_profile_dir_by_wait_token(
+            core,
+            platform,
+            wait_token=wait_token,
+            default_profile_dir=str(runtime_ctx.get("chrome_user_data_dir") or "").strip(),
+        )
+        if profile_dir_by_wait_token:
+            existing_profile_dir = str(runtime_ctx.get("chrome_user_data_dir") or "").strip()
+            runtime_ctx["chrome_user_data_dir"] = profile_dir_by_wait_token
+            if existing_profile_dir != profile_dir_by_wait_token:
+                _append_log(
+                    log_file,
+                    f"[Worker] platform_login_qr refresh wait_token resolved profile={profile_dir_by_wait_token}",
+                )
         cache_key = ""
         previous_fingerprint = ""
         cache_key_builder = getattr(core, "_platform_login_qr_cache_key", None)
@@ -8179,6 +8394,21 @@ def _confirm_platform_login_done(
 
     try:
         runtime_ctx = _resolve_platform_login_runtime_context(core, platform_name)
+        platform = str(runtime_ctx.get("platform") or platform_name).strip().lower() or str(platform_name or "wechat").strip().lower() or "wechat"
+        profile_dir_by_wait_token = _resolve_platform_profile_dir_by_wait_token(
+            core,
+            platform,
+            wait_token=wait_token,
+            default_profile_dir=str(runtime_ctx.get("chrome_user_data_dir") or "").strip(),
+        )
+        if profile_dir_by_wait_token:
+            existing_profile_dir = str(runtime_ctx.get("chrome_user_data_dir") or "").strip()
+            runtime_ctx["chrome_user_data_dir"] = profile_dir_by_wait_token
+            if existing_profile_dir != profile_dir_by_wait_token:
+                _append_log(
+                    log_file,
+                    f"[Worker] platform_login_done wait_token resolved profile={profile_dir_by_wait_token}",
+                )
         core.confirm_platform_login_signal(
             platform_name=runtime_ctx["platform"],
             profile_dir=runtime_ctx["chrome_user_data_dir"],
@@ -8190,7 +8420,10 @@ def _confirm_platform_login_done(
             debug_port=runtime_ctx["debug_port"],
             chrome_user_data_dir=runtime_ctx["chrome_user_data_dir"],
             auto_open_chrome=True,
-            refresh_page=(runtime_ctx["platform"] != "wechat"),
+            # User explicitly clicked "我已登录": force one page probe so
+            # we can observe restored cookies even when login.html does not
+            # auto-jump back to the business entry immediately.
+            refresh_page=True,
         )
         if not bool(status.get("needs_login", True)):
             _append_log(log_file, f"[Worker] platform_login_done platform={runtime_ctx['platform']} confirmed=True")
@@ -8438,7 +8671,7 @@ def _build_immediate_platform_feedback_payload(
     result: Dict[str, Any],
 ) -> Dict[str, Any]:
     platform_token = str(platform or "").strip().lower()
-    label = _platform_display_with_logo(platform_token)
+    label = PUBLISH_PLATFORM_DISPLAY.get(platform_token, platform_token or "平台")
     status = str(result.get("status") or "").strip().lower()
     publish_id = str(result.get("publish_id") or "").strip()
     details = {
@@ -8450,45 +8683,51 @@ def _build_immediate_platform_feedback_payload(
     if not any((details["reason"], details["category"], details["suggestion"])):
         details = _describe_platform_failure(platform_token, str(result.get("error") or "").strip())
 
-    title = f"{label}发布状态更新"
-    subtitle = "平台已返回最新处理结果"
+    title = f"{label}状态更新"
+    subtitle = ""
     feedback_status = "success"
-    status_items: list[Any]
+    status_items: list[Any] = []
     if status == "success":
-        title = f"{label}发布成功"
+        title = f"✅ {label}发布成功"
         subtitle = ""
-        status_items = ["平台已确认发布成功。"]
+        status_items = ["平台发布成功。"]
         if publish_id:
             status_items.append({"label": "发布ID", "value": publish_id})
     elif status == "skipped_duplicate":
-        title = f"{label}已跳过重复发布"
-        subtitle = "检测到历史发布记录，本轮未重复提交"
+        title = f"✅ {label}已跳过重复发布"
+        subtitle = ""
         status_items = ["平台已有历史发布记录，本轮已自动跳过。"]
         reason = str(result.get("error") or "").strip()
         if reason:
             status_items.append({"label": "原因", "value": reason})
     elif status == "login_required":
-        title = f"{label}需要重新登录"
-        subtitle = "平台登录态失效，请先完成登录"
+        title = f"❌ {label}发布失败"
+        subtitle = "需要登录"
         feedback_status = "failed"
-        status_items = ["检测到平台当前需要重新登录。"]
+        status_items = ["需要登录。"]
         reason = _strip_error_code_text(
             str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
         )
         if reason:
             status_items.append({"label": "原因", "value": reason})
-        status_items.append("登录后如仍失败，请继续修复。")
     else:
-        title = f"{label}发布失败"
-        subtitle = "平台处理失败，请查看原因后重试"
+        title = f"❌ {label}发布失败"
+        subtitle = ""
         feedback_status = "failed"
-        status_items = ["平台处理失败，本次未确认发布成功。"]
+        status_items = ["发布失败。"]
         reason = _strip_error_code_text(
             str(details.get("reason") or "").strip() or str(result.get("error") or "").strip()
         )
         if reason:
             status_items.append({"label": "原因", "value": _preview_text(reason, limit=120)})
-        status_items.append("请修复后重试。")
+    error_code = _extract_error_code(
+        str(result.get("error") or "").strip(),
+        str(details.get("reason") or "").strip(),
+        str(details.get("category") or "").strip(),
+        str(details.get("suggestion") or "").strip(),
+    )
+    if feedback_status == "failed" and error_code:
+        title = f"{title}｜错误码:{error_code}"
 
     return {
         "title": title,
@@ -8500,7 +8739,6 @@ def _build_immediate_platform_feedback_payload(
                 "emoji": "📌",
                 "items": status_items,
             },
-            _build_platform_launch_result_section({platform_token: result}),
         ],
     }
 
@@ -8511,26 +8749,22 @@ def _build_immediate_publish_summary_feedback_payload(item: Dict[str, Any]) -> D
     success_count = int(item.get("publish_success_count") or 0)
     failed_count = int(item.get("publish_failed_count") or 0)
     total_count = len(platform_results)
-    status_items: list[Any] = [
-        {"label": "成功平台", "value": str(success_count)},
-        {"label": "失败平台", "value": str(failed_count)},
-        {"label": "目标平台", "value": str(total_count)},
-    ]
+    status_items: list[Any] = []
     if item_status == "publish_done":
-        title = "即采即发已全部完成"
-        subtitle = "所有目标平台都已进入终态"
+        title = "✅ 即采即发已全部完成"
+        subtitle = ""
         feedback_status = "success"
-        status_items.insert(0, "全部目标平台已完成发布或按去重策略跳过。")
+        status_items = [f"成功:{success_count}｜失败:{failed_count}｜目标:{total_count}"]
     elif item_status == "publish_partial":
-        title = "即采即发部分平台已完成"
-        subtitle = "部分平台成功，部分平台需要继续处理"
+        title = "❌ 即采即发部分失败"
+        subtitle = ""
         feedback_status = "failed"
-        status_items.insert(0, "本轮存在部分平台成功、部分平台失败或需要登录。")
+        status_items = [f"成功:{success_count}｜失败:{failed_count}｜目标:{total_count}"]
     else:
-        title = "即采即发发布失败"
-        subtitle = "所有目标平台都未成功完成"
+        title = "❌ 即采即发发布失败"
+        subtitle = ""
         feedback_status = "failed"
-        status_items.insert(0, "本轮所有目标平台均未确认发布成功。")
+        status_items = [f"成功:{success_count}｜失败:{failed_count}｜目标:{total_count}"]
     return {
         "title": title,
         "subtitle": subtitle,
@@ -8541,7 +8775,6 @@ def _build_immediate_publish_summary_feedback_payload(item: Dict[str, Any]) -> D
                 "emoji": "📦",
                 "items": status_items,
             },
-            _build_platform_launch_result_section(platform_results),
         ],
     }
 
@@ -10698,7 +10931,11 @@ def _run_collect_publish_latest_once(
     media_kind: str = "video",
 ) -> Dict[str, Any]:
     normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind)
-    target_platforms = _collect_publish_target_platforms(normalized_media_kind)
+    target_platforms = _resolve_collect_publish_target_platforms(
+        repo_root=repo_root,
+        profile=profile,
+        media_kind=normalized_media_kind,
+    )
     source_platforms = _resolve_collect_publish_source_platforms(repo_root=repo_root, profile=profile)
     discovered = _discover_latest_live_candidates(
         repo_root=repo_root,
@@ -10740,6 +10977,15 @@ def _run_collect_publish_latest_once(
         collect_source_platform = _resolve_candidate_collect_source_platform(candidate)
         if not collect_source_platform:
             collect_source_platform = source_platforms[0] if source_platforms else "x"
+        source_collect_args, collect_source_platform = _build_collect_source_cli_args(
+            source_url=candidate_url,
+            source_platform=collect_source_platform,
+            disable_domestic_discovery=True,
+        )
+        force_domestic_direct_collect = _should_collect_domestic_direct_for_global_route(
+            profile=profile,
+            source_platform=collect_source_platform,
+        )
         result = _run_unified_once(
             repo_root=repo_root,
             workspace=workspace,
@@ -10750,13 +10996,10 @@ def _run_collect_publish_latest_once(
             telegram_chat_id=telegram_chat_id,
             count=1,
             extra_args=[
-                "--tweet-url",
-                candidate_url,
-                "--source-platforms",
-                collect_source_platform,
+                *source_collect_args,
                 "--no-telegram-collect-notify",
                 "--no-telegram-prefilter",
-                *_build_immediate_fast_x_download_args(repo_root),
+                *(_build_immediate_fast_x_download_args(repo_root) if collect_source_platform == "x" else []),
                 *(
                     [
                         "--collect-media-kind",
@@ -10768,6 +11011,8 @@ def _run_collect_publish_latest_once(
                     else []
                 ),
             ],
+            proxy_override=(None if not force_domestic_direct_collect else ""),
+            use_system_proxy_override=(None if not force_domestic_direct_collect else False),
         )
         processed_count = _extract_processed_file_count(result)
         note = _summarize_collect_publish_attempt(candidate_url, idx, total, processed_count)
@@ -11821,15 +12066,21 @@ def _run_immediate_collect_item_job(
         if not collect_source_platform:
             fallback_sources = _resolve_collect_publish_source_platforms(repo_root=repo_root, profile=profile)
             collect_source_platform = fallback_sources[0] if fallback_sources else "x"
+        source_collect_args, collect_source_platform = _build_collect_source_cli_args(
+            source_url=source_url,
+            source_platform=collect_source_platform,
+            disable_domestic_discovery=True,
+        )
+        force_domestic_direct_collect = _should_collect_domestic_direct_for_global_route(
+            profile=profile,
+            source_platform=collect_source_platform,
+        )
         collect_extra_args = [
-            "--tweet-url",
-            source_url,
-            "--source-platforms",
-            collect_source_platform,
+            *source_collect_args,
             "--no-telegram-collect-notify",
             "--no-telegram-prefilter",
             "--no-publish-skip-notify",
-            *_build_immediate_fast_x_download_args(repo_root),
+            *(_build_immediate_fast_x_download_args(repo_root) if collect_source_platform == "x" else []),
         ]
         if media_kind == "image":
             collect_extra_args += [
@@ -11838,9 +12089,12 @@ def _run_immediate_collect_item_job(
                 "--xiaohongshu-extra-images-per-run",
                 "6",
             ]
-        base_proxy, base_use_system_proxy = _resolve_worker_network_mode()
+        if force_domestic_direct_collect:
+            base_proxy, base_use_system_proxy = "", False
+        else:
+            base_proxy, base_use_system_proxy = _resolve_worker_network_mode()
         base_network_mode = "explicit_proxy" if base_proxy else ("system_proxy" if base_use_system_proxy else "direct_tun")
-        system_proxy_available = _worker_system_proxy_available()
+        system_proxy_available = (not force_domestic_direct_collect) and _worker_system_proxy_available()
         forced_use_system_proxy = False
         forced_direct_tun = False
         elevated_socket_timeout: Optional[int] = None
@@ -11965,6 +12219,7 @@ def _run_immediate_collect_item_job(
                 continue
             if (
                 _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and not force_domestic_direct_collect
                 and not proxy_retry_used
                 and not attempt_use_system_proxy
                 and system_proxy_available
@@ -11986,6 +12241,7 @@ def _run_immediate_collect_item_job(
                 continue
             if (
                 _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and not force_domestic_direct_collect
                 and not direct_tun_retry_used
                 and attempt_use_system_proxy
             ):
@@ -12007,6 +12263,7 @@ def _run_immediate_collect_item_job(
                 continue
             if (
                 _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and not force_domestic_direct_collect
                 and not elevated_timeout_retry_used
             ):
                 elevated_timeout_retry_used = True
@@ -12025,6 +12282,7 @@ def _run_immediate_collect_item_job(
                 continue
             if (
                 _is_immediate_collect_transient_retry_reason(reason, collect_result)
+                and not force_domestic_direct_collect
                 and transient_retry_attempts < int(DEFAULT_IMMEDIATE_COLLECT_TRANSIENT_RETRY_LIMIT)
             ):
                 transient_retry_attempts += 1
@@ -13016,7 +13274,11 @@ def _run_home_action_job(
             exit_code = 0 if result_status == "done" else 2
         elif action_token == "publish_run":
             media_kind, platform_value = _parse_publish_request_value(value)
-            available_platforms = _collect_publish_target_platforms(media_kind)
+            available_platforms = _resolve_collect_publish_target_platforms(
+                repo_root=repo_root,
+                profile=resolved_profile,
+                media_kind=media_kind,
+            )
             platforms = available_platforms.copy() if platform_value == "all" else [platform_value]
             if media_kind == "image" and platforms == ["xiaohongshu"]:
                 raw_result = _run_direct_xiaohongshu_image_publish(
@@ -13055,7 +13317,11 @@ def _run_home_action_job(
             exit_code = 0 if result_status == "done" else 2
         elif action_token == "schedule_run":
             media_kind, minutes, platform_value = _parse_schedule_callback_value(value)
-            available_platforms = _collect_publish_target_platforms(media_kind)
+            available_platforms = _resolve_collect_publish_target_platforms(
+                repo_root=repo_root,
+                profile=resolved_profile,
+                media_kind=media_kind,
+            )
             platforms = available_platforms.copy() if platform_value in {"", "all"} else [platform_value]
             raw_result = _run_distribution_once(
                 repo_root=repo_root,
@@ -13180,7 +13446,15 @@ def _run_home_action_job(
             )
             if action_token == "publish_run":
                 media_kind, platform_value = _parse_publish_request_value(value)
-                publish_platforms = _collect_publish_target_platforms(media_kind) if platform_value == "all" else [platform_value]
+                publish_platforms = (
+                    _resolve_collect_publish_target_platforms(
+                        repo_root=repo_root,
+                        profile=resolved_profile,
+                        media_kind=media_kind,
+                    )
+                    if platform_value == "all"
+                    else [platform_value]
+                )
                 card = _build_distribution_result_card(
                     action_token=action_token,
                     result_status=result_status,
@@ -13191,7 +13465,15 @@ def _run_home_action_job(
                 )
             elif action_token == "schedule_run":
                 _media_kind, minutes, platform_value = _parse_schedule_callback_value(value)
-                schedule_platforms = _collect_publish_target_platforms(_media_kind) if platform_value in {"", "all"} else [platform_value]
+                schedule_platforms = (
+                    _resolve_collect_publish_target_platforms(
+                        repo_root=repo_root,
+                        profile=resolved_profile,
+                        media_kind=_media_kind,
+                    )
+                    if platform_value in {"", "all"}
+                    else [platform_value]
+                )
                 card = _build_distribution_result_card(
                     action_token=action_token,
                     result_status=result_status,
@@ -13415,7 +13697,11 @@ def _run_collect_publish_latest_job(
     email_settings = runner._build_email_settings(args)
     normalized_media_kind = _normalize_immediate_collect_media_kind(media_kind)
     media_label = IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(normalized_media_kind, "媒体")
-    target_platforms = _collect_publish_target_platforms(normalized_media_kind)
+    target_platforms = _resolve_collect_publish_target_platforms(
+        repo_root=repo_root,
+        profile=profile,
+        media_kind=normalized_media_kind,
+    )
     requested_limit = max(1, int(candidate_limit))
     discovery_limit = _resolve_collect_publish_discovery_limit(requested_limit)
     round_limits = _resolve_collect_publish_round_limits(requested_limit, discovery_limit)
@@ -14573,9 +14859,10 @@ def handle_callback_update(
     message_id = int(callback.get("message_id") or 0)
     inline_message_id = str(callback.get("inline_message_id") or "").strip()
     callback_answered = False
+    callback_answer_failed = False
 
     def _answer_callback_once(text: str) -> None:
-        nonlocal callback_answered
+        nonlocal callback_answered, callback_answer_failed
         message = str(text or "").strip()
         if callback_answered or not message:
             return
@@ -14588,10 +14875,25 @@ def handle_callback_update(
             )
             callback_answered = True
         except Exception as exc:
+            callback_answer_failed = True
             _append_log(log_file, f"[Worker] answerCallbackQuery failed: {exc}")
 
     def _answer_callback_queued() -> None:
         _answer_callback_once("已收到，正在处理。")
+
+    def _send_callback_fallback_reply(text: str) -> None:
+        message = str(text or "").strip()
+        if callback_answered or not callback_answer_failed or not message:
+            return
+        try:
+            _send_reply(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=f"操作反馈：{message}",
+                timeout_seconds=max(8, int(timeout_seconds or 20)),
+            )
+        except Exception as exc:
+            _append_log(log_file, f"[Worker] callback fallback send failed: {exc}")
 
     if not _chat_allowed(
         chat_id=chat_id,
@@ -14668,6 +14970,7 @@ def handle_callback_update(
             else:
                 callback_text = str(result.get("error") or "当前仍未检测到登录恢复，系统会继续自动轮询。")[:180]
         _answer_callback_once(callback_text)
+        _send_callback_fallback_reply(callback_text)
         if qr_action == "done" and (bool(result.get("sent")) or not bool(result.get("needs_login", True))):
             try:
                 _try_clear_callback_buttons(

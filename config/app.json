@@ -60,19 +60,19 @@
         "publish_now": false,
         "declare_original": false,
         "publish_click_confirmed": false,
-        "upload_timeout": 30
+        "upload_timeout": 60
       },
       "douyin": {
         "collection_name": "\u8d5b\u535a\u76ae\u5361\u73b0\u8f66\uff1aaawbcc",
         "save_draft": false,
         "publish_now": true,
-        "upload_timeout": 30
+        "upload_timeout": 60
       },
       "xiaohongshu": {
         "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
         "save_draft": false,
         "publish_now": true,
-        "upload_timeout": 30
+        "upload_timeout": 60
       },
       "kuaishou": {
         "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
@@ -80,7 +80,7 @@
         "publish_now": true,
         "auto_publish_random_schedule": false,
         "random_schedule_max_minutes": 45,
-        "upload_timeout": 30
+        "upload_timeout": 60
       },
       "bilibili": {
         "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
@@ -88,19 +88,19 @@
         "publish_now": true,
         "auto_publish_random_schedule": false,
         "random_schedule_max_minutes": 240,
-        "upload_timeout": 30
+        "upload_timeout": 60
       },
       "tiktok": {
         "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
         "save_draft": false,
         "publish_now": true,
-        "upload_timeout": 30
+        "upload_timeout": 60
       },
       "x": {
         "collection_name": "\u8d5b\u535a\u76ae\u5361\u5929\u6d25\u6e2f\u73b0\u8f66",
         "save_draft": false,
         "publish_now": true,
-        "upload_timeout": 30
+        "upload_timeout": 60
       }
     }
   },

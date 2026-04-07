@@ -199,7 +199,7 @@ PLATFORM_CREATE_POST_URLS = {
 PLATFORM_LOGIN_ENTRY_URLS = {
     "collect": X_LOGIN_URL,
     "x": X_CREATE_POST_URL,
-    "wechat": "https://channels.weixin.qq.com/login.html",
+    "wechat": CREATE_POST_URL,
     "douyin": DOUYIN_CREATE_POST_URL,
     "xiaohongshu": "https://creator.xiaohongshu.com/login",
     "kuaishou": "https://passport.kuaishou.com/pc/account/login",
@@ -213,7 +213,10 @@ def _wechat_primary_create_url() -> str:
 
 
 def _wechat_persistent_login_url() -> str:
-    return str(PLATFORM_LOGIN_ENTRY_URLS.get("wechat") or _wechat_primary_create_url()).strip() or _wechat_primary_create_url()
+    configured = str(PLATFORM_LOGIN_ENTRY_URLS.get("wechat") or "").strip()
+    if "login.html" in configured.lower():
+        return _wechat_primary_create_url()
+    return configured or _wechat_primary_create_url()
 PLATFORM_LOGIN_DISPLAY_NAMES = {
     "collect": "X采集",
     "x": "X",
@@ -318,7 +321,7 @@ SUPPORTED_UPLOAD_PLATFORMS = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bi
 DEFAULT_UPLOAD_PLATFORMS = "wechat"
 SUPPORTED_SOURCE_PLATFORMS = ("x", "douyin", "xiaohongshu")
 DEFAULT_SOURCE_PLATFORMS = "x"
-MAX_BLOCKING_WAIT_SECONDS = 30
+MAX_BLOCKING_WAIT_SECONDS = 60
 UPLOAD_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
 DRAFT_SAVE_TIMEOUT_SECONDS = 25
 DRAFT_SAVE_RETRY_COUNT = 3
@@ -624,7 +627,7 @@ def resolve_platform_runtime_context(platform_name: str, *, prefer_login_entry: 
     chrome_user_data_dir = str(os.getenv(_platform_profile_dir_env_key(platform), default_profile_dir) or "").strip()
     if not chrome_user_data_dir:
         chrome_user_data_dir = default_profile_dir
-    login_entry_url = str((PLATFORM_LOGIN_ENTRY_URLS or {}).get(platform) or "").strip()
+    login_entry_url = _wechat_persistent_login_url() if platform == "wechat" else str((PLATFORM_LOGIN_ENTRY_URLS or {}).get(platform) or "").strip()
     create_url = (
         _wechat_primary_create_url()
         if platform == "wechat"
@@ -1783,7 +1786,7 @@ def _prepare_platform_login_qr_notice(
         _humanized_publish_settle_pause("wechat login qr retry settle")
         qr_source = _extract_login_qr_source(active_page, timeout_seconds=12.0, platform_name=platform)
     if allow_navigation and not qr_source:
-        login_entry_url = str(PLATFORM_LOGIN_ENTRY_URLS.get(platform) or "").strip()
+        login_entry_url = _wechat_persistent_login_url() if platform == "wechat" else str(PLATFORM_LOGIN_ENTRY_URLS.get(platform) or "").strip()
         if login_entry_url and login_entry_url != open_target_url:
             _log(
                 f"[Uploader:{platform}] Login QR missing on business page; "
@@ -2985,8 +2988,7 @@ def _read_platform_login_signal(platform_name: str, profile_dir: str) -> dict[st
 
 def _write_platform_login_signal(platform_name: str, profile_dir: str, payload: dict[str, Any]) -> None:
     path = _platform_login_signal_path(platform_name, profile_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json_atomic(path, payload)
 
 
 def _platform_session_state_path(platform_name: str, profile_dir: str) -> Path:
@@ -3008,8 +3010,22 @@ def _read_platform_session_state(platform_name: str, profile_dir: str) -> dict[s
 
 def _write_platform_session_state(platform_name: str, profile_dir: str, payload: dict[str, Any]) -> None:
     path = _platform_session_state_path(platform_name, profile_dir)
+    _write_json_atomic(path, payload)
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_name = f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    temp_path = path.with_name(temp_name)
+    try:
+        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp_path, path)
+    finally:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception:
+            pass
 
 
 def _mark_platform_session_state(
@@ -4139,11 +4155,13 @@ def _wait_for_platform_login_confirmation(
     platform = str(platform_name or "").strip().lower() or "wechat"
     profile_dir = str(Path(chrome_user_data_dir).expanduser())
     active_page = page
-    deadline = time.time() + _normalize_blocking_timeout(
-        timeout_seconds,
-        PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS,
-        minimum=1,
-    )
+    # Login confirmation is a human-in-the-loop operation; keep the full
+    # caller-provided timeout instead of clamping to MAX_BLOCKING_WAIT_SECONDS.
+    try:
+        wait_seconds = int(timeout_seconds)
+    except Exception:
+        wait_seconds = int(PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS)
+    deadline = time.time() + max(1, wait_seconds)
     last_confirmed_at = 0.0
     auto_refresh_interval = max(4.0, float(PLATFORM_LOGIN_CONFIRM_POLL_SECONDS) * 2.0)
     auto_refresh_enabled = platform != "wechat"
@@ -4180,6 +4198,25 @@ def _wait_for_platform_login_confirmation(
             _clear_platform_login_signal(platform, profile_dir, wait_token)
             _mark_platform_session_ready(platform, profile_dir, url=current_url)
             return True
+        if platform == "wechat" and current_reason == "wechat_login_failed_retry" and time.time() >= next_auto_refresh_at:
+            _log("[Uploader:wechat] Login failed toast detected; refreshing QR surface for retry.")
+            try:
+                active_page.get(open_url)
+            except Exception:
+                try:
+                    active_page.refresh()
+                except Exception:
+                    pass
+            time.sleep(0.8)
+            needs_login, current_url, current_reason = _probe_login_gate(force_stabilize=True)
+            if current_reason:
+                last_login_reason = current_reason
+            if not needs_login:
+                _clear_platform_login_signal(platform, profile_dir, wait_token)
+                _mark_platform_session_ready(platform, profile_dir, url=current_url)
+                return True
+            next_auto_refresh_at = time.time() + auto_refresh_interval
+            continue
         if auto_refresh_enabled and time.time() >= next_auto_refresh_at:
             try:
                 active_page.get(open_url)
@@ -4204,15 +4241,16 @@ def _wait_for_platform_login_confirmation(
         if signal_status == "confirmed" and signal_token and signal_token == str(wait_token or "").strip() and confirmed_at > last_confirmed_at:
             last_confirmed_at = confirmed_at
             _log(f"[Uploader:{platform}] Login confirmation received via Telegram; rechecking session.")
-            if platform != "wechat":
+            # After user confirms login in Telegram, actively probe the business
+            # entry once so we do not rely on login.html auto-redirect behavior.
+            try:
+                active_page.get(open_url)
+            except Exception:
                 try:
-                    active_page.get(open_url)
+                    active_page.refresh()
                 except Exception:
-                    try:
-                        active_page.refresh()
-                    except Exception:
-                        pass
-                time.sleep(1.0)
+                    pass
+            time.sleep(1.0 if platform != "wechat" else 0.8)
             needs_login, current_url, current_reason = _probe_login_gate(force_stabilize=True)
             if current_reason:
                 last_login_reason = current_reason
@@ -28585,7 +28623,7 @@ def main() -> int:
                     platform,
                     cli_timeout=int(args.upload_timeout),
                     cli_default=UPLOAD_TIMEOUT_SECONDS,
-                    minimum=(600 if platform == "bilibili" else 30),
+                    minimum=60,
                 )
                 wechat_declare_original = bool(
                     getattr(args, "wechat_declare_original", False) or platform_publish_cfg.get("declare_original", False)

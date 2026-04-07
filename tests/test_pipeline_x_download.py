@@ -258,6 +258,92 @@ def test_run_collect_once_continues_when_one_domestic_source_platform_fails(tmp_
     assert captured_domestic[0]["source_platform"] == "xiaohongshu"
 
 
+def test_run_collect_once_skips_domestic_keyword_discovery_with_cli_flag(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "douyin",
+            "keywords": ["cybertruck"],
+            "watch_accounts": {"douyin": []},
+        },
+        "x_download": {},
+    }
+    captured_x = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+    captured_domestic: list[dict[str, object]] = []
+    discovered_keywords: list[str] = []
+
+    def fake_download_from_source_urls(*args, **kwargs):
+        captured_domestic.append(dict(kwargs))
+        return []
+
+    def fake_discover_domestic_keyword_urls(**kwargs):
+        discovered_keywords.append(str(kwargs.get("keyword") or ""))
+        return ["https://www.douyin.com/video/1234567890"]
+
+    monkeypatch.setattr(pipeline.core, "download_from_source_urls", fake_download_from_source_urls)
+    monkeypatch.setattr(pipeline.core, "discover_domestic_keyword_urls", fake_discover_domestic_keyword_urls)
+    monkeypatch.setattr(
+        pipeline.core,
+        "_normalize_keyword_list",
+        lambda values, defaults: [token.strip() for token in str(values or "").split(",") if token.strip()],
+    )
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "douyin",
+            "--source-url",
+            "https://www.douyin.com/video/123",
+            "--source-keywords",
+            "cybertruck",
+            "--no-domestic-source-discovery",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    assert captured_x == []
+    assert discovered_keywords == []
+    assert len(captured_domestic) == 1
+    assert captured_domestic[0]["source_urls"] == ["https://www.douyin.com/video/123"]
+
+
+def test_run_collect_once_filters_non_x_tweet_urls(tmp_path: Path, monkeypatch) -> None:
+    runtime_config = {
+        "sources": {
+            "platforms": "x",
+            "keywords": [],
+            "watch_accounts": {"x": []},
+        },
+        "x_download": {},
+    }
+    captured_x = _install_collect_mocks(tmp_path, monkeypatch, runtime_config)
+
+    parser = pipeline._build_parser()
+    args = parser.parse_args(
+        [
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--limit",
+            "1",
+            "--source-platforms",
+            "x",
+            "--tweet-url",
+            "https://www.xiaohongshu.com/explore/66aa77bb88cc99dd00ee11ff",
+            "--no-x-auto-discover",
+        ]
+    )
+
+    pipeline._run_collect_once(args)
+
+    assert captured_x
+    assert all(list(item["tweet_urls"]) == [] for item in captured_x)
+
+
 def test_run_collect_once_discovers_domestic_post_urls_from_keywords(tmp_path: Path, monkeypatch) -> None:
     runtime_config = {
         "sources": {

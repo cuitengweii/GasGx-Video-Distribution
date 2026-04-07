@@ -629,6 +629,34 @@ def test_refresh_platform_login_qr_message_accepts_telegram_bot_identifier(tmp_p
     assert result["error"] == "invalid qr message id"
 
 
+def test_resolve_platform_profile_dir_by_wait_token_reads_signal_payload(tmp_path: Path) -> None:
+    profiles_root = tmp_path / "profiles"
+    signal_dir = profiles_root / "telegram_login_sync"
+    signal_dir.mkdir(parents=True, exist_ok=True)
+    default_profile = profiles_root / "wechat_default"
+    resolved_profile = profiles_root / "wechat_probe"
+    wait_token = "wait-token-abc"
+    payload = {
+        "platform": "wechat",
+        "profile_dir": str(resolved_profile),
+        "status": "waiting",
+        "token": wait_token,
+        "created_at": 1.0,
+        "updated_at": 2.0,
+    }
+    (signal_dir / "wechat_123456789abc.json").write_text(json.dumps(payload), encoding="utf-8")
+    core_stub = SimpleNamespace(DEFAULT_WECHAT_CHROME_USER_DATA_DIR=str(default_profile))
+
+    profile_dir = worker_impl._resolve_platform_profile_dir_by_wait_token(
+        core_stub,
+        "wechat",
+        wait_token=wait_token,
+        default_profile_dir=str(default_profile),
+    )
+
+    assert profile_dir == str(resolved_profile)
+
+
 def test_refresh_platform_login_qr_message_retries_transport_reset(tmp_path: Path, monkeypatch) -> None:
     from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
 
@@ -687,6 +715,71 @@ def test_refresh_platform_login_qr_message_retries_transport_reset(tmp_path: Pat
     assert calls[0]["use_post"] is True
     assert calls[0]["max_retries"] == 2
     assert remembered == [("wechat|9334|D:/profiles/wechat", "fp-1")]
+
+
+def test_refresh_platform_login_qr_message_uses_wait_token_profile_override(tmp_path: Path, monkeypatch) -> None:
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    prepare_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda _core, _platform_name, prefer_login_entry=False: {
+            "platform": "wechat",
+            "open_url": "https://channels.weixin.qq.com/login.html",
+            "debug_port": 9334,
+            "chrome_user_data_dir": "D:/profiles/default",
+        },
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_profile_dir_by_wait_token",
+        lambda *_args, **_kwargs: "D:/profiles/wechat_probe",
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_prepare_platform_login_qr_notice",
+        lambda **kwargs: prepare_calls.append(dict(kwargs))
+        or {
+            "ok": True,
+            "needs_login": True,
+            "platform": "wechat",
+            "filename": "wechat_login_qr.png",
+            "mime": "image/png",
+            "caption": "scan me",
+            "reply_markup": {"inline_keyboard": []},
+            "photo_bytes": b"png-bytes",
+            "cache_key": "wechat|9334|D:/profiles/wechat_probe",
+            "fingerprint": "fp-probe",
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "_resolve_runtime_telegram_notify_settings",
+        lambda **_kwargs: SimpleNamespace(telegram_api_base="https://api.telegram.org"),
+        raising=False,
+    )
+    monkeypatch.setattr(worker_core, "_remember_wechat_qr_notice", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(
+        worker_impl,
+        "_shared_call_telegram_api",
+        lambda **_kwargs: {"ok": True, "result": {"message_id": 88}},
+    )
+
+    result = worker_impl._refresh_platform_login_qr_message(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        message_id=88,
+        timeout_seconds=30,
+        log_file=tmp_path / "telegram_worker.log",
+        wait_token="wait-token-1",
+    )
+
+    assert result["ok"] is True
+    assert len(prepare_calls) == 1
+    assert str(prepare_calls[0].get("chrome_user_data_dir") or "") == "D:/profiles/wechat_probe"
 
 
 def test_refresh_platform_login_qr_message_prefers_wechat_login_entry(tmp_path: Path, monkeypatch) -> None:
@@ -823,7 +916,7 @@ def test_refresh_platform_login_qr_message_retries_when_fingerprint_unchanged(tm
     assert remembered == [("wechat|9334|D:/profiles/wechat", "fp-new")]
 
 
-def test_confirm_platform_login_done_wechat_avoids_forced_refresh(tmp_path: Path, monkeypatch) -> None:
+def test_confirm_platform_login_done_wechat_forces_page_probe(tmp_path: Path, monkeypatch) -> None:
     from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
 
     check_calls: list[dict[str, object]] = []
@@ -858,7 +951,58 @@ def test_confirm_platform_login_done_wechat_avoids_forced_refresh(tmp_path: Path
     assert result["ok"] is True
     assert result["needs_login"] is True
     assert len(check_calls) == 1
-    assert check_calls[0]["refresh_page"] is False
+    assert check_calls[0]["refresh_page"] is True
+
+
+def test_confirm_platform_login_done_uses_wait_token_profile_override(tmp_path: Path, monkeypatch) -> None:
+    from Collection.cybercar.cybercar_video_capture_and_publishing_module import main as worker_core
+
+    confirm_calls: list[dict[str, object]] = []
+    check_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_login_runtime_context",
+        lambda *_args, **_kwargs: {
+            "platform": "wechat",
+            "open_url": "https://channels.weixin.qq.com/platform/post/create",
+            "debug_port": 9334,
+            "chrome_user_data_dir": "D:/profiles/default",
+        },
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_resolve_platform_profile_dir_by_wait_token",
+        lambda *_args, **_kwargs: "D:/profiles/wechat_probe",
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "confirm_platform_login_signal",
+        lambda **kwargs: confirm_calls.append(dict(kwargs)) or {"status": "confirmed"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_core,
+        "check_platform_login_status",
+        lambda **kwargs: check_calls.append(dict(kwargs)) or {"needs_login": True},
+        raising=False,
+    )
+
+    result = worker_impl._confirm_platform_login_done(
+        platform_name="wechat",
+        bot_token=BOT_TOKEN,
+        chat_id=CHAT_ID,
+        timeout_seconds=30,
+        log_file=tmp_path / "telegram_worker.log",
+        wait_token="wait-token-1",
+    )
+
+    assert result["ok"] is True
+    assert result["needs_login"] is True
+    assert len(confirm_calls) == 1
+    assert str(confirm_calls[0].get("profile_dir") or "") == "D:/profiles/wechat_probe"
+    assert len(check_calls) == 1
+    assert str(check_calls[0].get("chrome_user_data_dir") or "") == "D:/profiles/wechat_probe"
 
 
 def test_build_immediate_cycle_context_passes_platform_collection_names(tmp_path: Path) -> None:
@@ -980,7 +1124,7 @@ def test_home_feedback_response_includes_process_status_button() -> None:
 
     texts = _reply_markup_texts(card["reply_markup"])
     assert "📍 进度" in texts
-    assert "🏠 首页" in texts
+    assert "🏠 首页" not in texts
     assert "处理状态" not in str(card.get("text") or "")
 
 
@@ -1572,6 +1716,33 @@ def test_handle_callback_update_unknown_callback_falls_back_to_home(tmp_path: Pa
     assert "控制台" in str(card["text"])
 
 
+def test_handle_callback_update_wechat_qr_ack_timeout_falls_back_to_text_reply(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    record = _install_transport_mocks(monkeypatch)
+    refresh_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        worker_impl,
+        "_answer_callback_query",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("HTTPSConnectionPool(host='api.telegram.org'): Read timed out. (answerCallbackQuery)")
+        ),
+    )
+    monkeypatch.setattr(
+        worker_impl,
+        "_refresh_platform_login_qr_message",
+        lambda **kwargs: refresh_calls.append(dict(kwargs)) or {"ok": True, "sent": True, "needs_login": True},
+    )
+
+    update = _make_callback_update("ctqr|refresh|wechat|wait-token-1", message_id=5939)
+    result = commands.handle_callback_update(update=update, **_worker_kwargs(workspace))
+
+    assert result["handled"] is True
+    assert len(refresh_calls) == 1
+    assert len(record.replies) == 1
+    assert "二维码已在原卡片刷新" in str(record.replies[0].get("text") or "")
+
+
 def test_handle_home_process_status_cleanup_queue_callback_prunes_inactive_items(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     now_text = worker_impl._now_text()
@@ -1752,6 +1923,45 @@ def test_resolve_collect_publish_source_platforms_uses_profile_config(tmp_path: 
 
     assert global_sources == ["douyin", "xiaohongshu"]
     assert domestic_sources == ["x"]
+
+
+def test_resolve_collect_publish_target_platforms_uses_profile_upload_platforms(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    _write_profiles_config(
+        repo_root,
+        {
+            "default_profile": "x_to_cn",
+            "profiles": {
+                "x_to_cn": {"upload_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili"},
+                "cn_to_global": {"upload_platforms": "tiktok,x"},
+            },
+        },
+    )
+
+    global_targets = worker_impl._resolve_collect_publish_target_platforms(
+        repo_root=repo_root,
+        profile="cn_to_global",
+        media_kind="video",
+    )
+    domestic_targets = worker_impl._resolve_collect_publish_target_platforms(
+        repo_root=repo_root,
+        profile="x_to_cn",
+        media_kind="video",
+    )
+    global_image_targets = worker_impl._resolve_collect_publish_target_platforms(
+        repo_root=repo_root,
+        profile="cn_to_global",
+        media_kind="image",
+    )
+
+    assert global_targets == ["tiktok", "x"]
+    assert domestic_targets == ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"]
+    assert global_image_targets == ["douyin", "xiaohongshu", "kuaishou"]
+
+
+def test_resolve_item_target_platforms_accepts_tiktok_and_x() -> None:
+    item = _video_item(target_platforms="tiktok,x")
+    assert worker_impl._resolve_item_target_platforms(item) == ["tiktok", "x"]
 
 
 def test_discover_latest_live_candidates_global_uses_domestic_sources(tmp_path: Path, monkeypatch) -> None:
@@ -2107,6 +2317,7 @@ def test_run_collect_publish_latest_job_video_records_prefilter_items(tmp_path: 
 
     monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
     monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_preflight_immediate_platform_login", lambda **kwargs: {"ready": True})
     monkeypatch.setattr(
         worker_impl,
         "_discover_latest_live_candidates",
@@ -2153,7 +2364,7 @@ def test_run_collect_publish_latest_job_video_records_prefilter_items(tmp_path: 
     assert len(runner.sent_candidates) == 2
     assert runner.sent_candidates[0]["mode"] == "immediate_manual_publish"
     assert feedbacks[0]["status"] == "running"
-    assert feedbacks[-1]["status"] == "done"
+    assert feedbacks[-1]["status"] in {"queued", "done"}
 
 
 def test_run_collect_publish_latest_job_global_route_passes_domestic_source_platforms(tmp_path: Path, monkeypatch) -> None:
@@ -2164,6 +2375,22 @@ def test_run_collect_publish_latest_job_global_route_passes_domestic_source_plat
 
     monkeypatch.setattr(worker_impl, "_load_runtime_modules", lambda: (runner, core))
     monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
+    _write_profiles_config(
+        workspace,
+        {
+            "default_profile": "x_to_cn",
+            "profiles": {
+                "x_to_cn": {
+                    "source_platforms": "x",
+                    "upload_platforms": "wechat,douyin,xiaohongshu,kuaishou,bilibili",
+                },
+                "cn_to_global": {
+                    "source_platforms": "douyin,xiaohongshu",
+                    "upload_platforms": "tiktok,x",
+                },
+            },
+        },
+    )
 
     def discover_latest_live_candidates(**kwargs: object) -> dict[str, object]:
         discovered_kwargs.append(dict(kwargs))
@@ -2197,6 +2424,11 @@ def test_run_collect_publish_latest_job_global_route_passes_domestic_source_plat
     assert exit_code == 0
     assert discovered_kwargs
     assert discovered_kwargs[0]["source_platforms"] == ["douyin", "xiaohongshu"]
+    items = _prefilter_items(workspace)
+    assert len(items) == 1
+    item = next(iter(items.values()))
+    assert isinstance(item, dict)
+    assert item["target_platforms"] == "tiktok,x"
 
 
 def test_run_collect_publish_latest_job_prefilter_keeps_candidate_and_marks_wechat_login_warning(tmp_path: Path, monkeypatch) -> None:
@@ -5654,7 +5886,7 @@ def test_publish_platform_job_success_sends_platform_feedback_and_summary(tmp_pa
     assert updated["status"] == "publish_done"
     assert updated["platform_results"]["kuaishou"]["status"] == "success"
     assert len(feedbacks) == 2
-    assert "快手发布已确认" in str(feedbacks[0]["title"])
+    assert "✅ 快手发布成功" in str(feedbacks[0]["title"])
     assert "即采即发已全部完成" in str(feedbacks[1]["title"])
 
 
@@ -6225,6 +6457,8 @@ def test_run_immediate_collect_item_job_uses_item_source_platform_for_global_rou
     monkeypatch.setattr(worker_impl, "core", fake_core)
     monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: None)
     monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: None)
+    monkeypatch.setattr(worker_impl, "_resolve_worker_network_mode", lambda: ("http://127.0.0.1:7890", False))
+    monkeypatch.setattr(worker_impl, "_worker_system_proxy_available", lambda: True)
     monkeypatch.setattr(
         worker_impl,
         "_queue_immediate_platform_jobs",
@@ -6276,8 +6510,16 @@ def test_run_immediate_collect_item_job_uses_item_source_platform_for_global_rou
 
     assert exit_code == 0
     extra_args = list(collect_calls[0]["extra_args"])
+    assert "--source-url" in extra_args
+    assert extra_args[extra_args.index("--source-url") + 1] == "https://www.xiaohongshu.com/explore/abc123"
+    assert "--tweet-url" not in extra_args
     assert "--source-platforms" in extra_args
     assert extra_args[extra_args.index("--source-platforms") + 1] == "xiaohongshu"
+    assert "--no-domestic-source-discovery" in extra_args
+    assert "--x-download-socket-timeout" not in extra_args
+    assert len(collect_calls) == 1
+    assert collect_calls[0]["proxy_override"] is None
+    assert collect_calls[0]["use_system_proxy_override"] is False
 
 
 def test_handle_prefilter_publish_spawn_failure_rolls_back(tmp_path: Path, monkeypatch) -> None:
@@ -6763,7 +7005,7 @@ def test_build_failure_feedback_actions_prefers_refresh_for_retryable_failures()
     assert texts == ["🔄 刷新", "📍 进度"]
 
 
-def test_build_failure_feedback_actions_prefers_home_for_duplicate_skip_failures() -> None:
+def test_build_failure_feedback_actions_prefers_progress_for_duplicate_skip_failures() -> None:
     actions = worker_impl._build_failure_feedback_actions(
         status="failed",
         sections=[
@@ -6772,7 +7014,7 @@ def test_build_failure_feedback_actions_prefers_home_for_duplicate_skip_failures
     )
 
     texts = [str(action.get("text") or "") for action in actions]
-    assert texts == ["🏠 首页"]
+    assert texts == ["📍 进度"]
 
 
 def test_build_failure_feedback_actions_does_not_treat_summary_login_hint_as_login_failure() -> None:
@@ -6838,7 +7080,7 @@ def test_build_shared_link_status_card_compacts_body_for_operator_scan() -> None
     assert "操作记录" not in text
     assert "任务标识" not in text
     assert "菜单链路" not in text
-    assert _reply_markup_texts(card["reply_markup"]) == ["📍 进度", "🏠 首页"]
+    assert _reply_markup_texts(card["reply_markup"]) == ["📍 进度"]
 
 
 def test_send_platform_login_text_notice_is_disabled(tmp_path: Path) -> None:

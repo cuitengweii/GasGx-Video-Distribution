@@ -826,38 +826,29 @@ def _compact_platform_status_value(text: str) -> str:
     raw = _strip_error_code_text(source)
     lowered = raw.lower()
     if not raw:
-        return "\u26a0\ufe0f \u5f85\u786e\u8ba4"
+        return "\u5f85\u786e\u8ba4"
     if any(token in lowered for token in ("\u767b\u5f55", "\u626b\u7801", "\u672a\u767b\u5f55", "login", "sign in", "qr")):
-        log_name = _extract_log_name(raw)
-        parts = ["\U0001f510 \u9700\u8981\u767b\u5f55"]
-        if log_name:
-            parts.append(f"\u65e5\u5fd7:{log_name}")
-        return "\uff5c".join(parts)
+        return "\u274c \u9700\u8981\u767b\u5f55"
     if any(token in lowered for token in ("\u5931\u8d25", "\u5f02\u5e38", "\u672a\u542f\u52a8", "failed", "error")):
-        parts = ["\U0001f4e3 \u53d1\u5e03\u5931\u8d25"]
+        parts = ["\u274c \u53d1\u5e03\u5931\u8d25"]
         if error_code:
             parts.append(f"\u9519\u8bef\u7801:{error_code}")
         else:
             parts.append("\u9519\u8bef\u7801")
         return "\uff5c".join(parts)
     if any(token in lowered for token in ("\u53d1\u5e03\u4e2d", "\u5904\u7406\u4e2d", "running", "processing")):
-        return "\u23f3 \u53d1\u5e03\u4e2d"
+        return "\u53d1\u5e03\u4e2d"
     if any(token in lowered for token in ("\u6392\u961f", "queued", "queue")):
-        return "\U0001f553 \u5df2\u6392\u961f"
+        return "\u5df2\u6392\u961f"
     if any(token in lowered for token in ("\u8df3\u8fc7", "duplicate", "\u5386\u53f2\u53d1\u5e03\u8bb0\u5f55", "\u5df2\u53d1\u5e03")):
-        return "\u23ed\ufe0f \u5df2\u8df3\u8fc7"
+        return "\u5df2\u8df3\u8fc7"
     if any(token in lowered for token in ("\u6210\u529f", "\u786e\u8ba4\u53d1\u5e03\u6210\u529f", "\u6a21\u62df\u53d1\u5e03\u6210\u529f", "success")):
-        return "\u2705 \u5df2\u786e\u8ba4"
+        return "\u2705 \u53d1\u5e03\u6210\u529f"
     if any(token in lowered for token in ("\u5f85\u786e\u8ba4", "\u5f85\u6838\u5b9e", "pending")):
-        return "\u26a0\ufe0f \u5f85\u786e\u8ba4"
-    return _localize_card_text(raw, fallback="\u26a0\ufe0f \u5f85\u786e\u8ba4")
+        return "\u5f85\u786e\u8ba4"
+    return _localize_card_text(raw, fallback="\u5f85\u786e\u8ba4")
 
 def _platform_status_label_suffix(value: str) -> str:
-    compact = str(value or "").strip()
-    if compact.startswith("🔐") or compact.startswith("📣"):
-        return " ❌"
-    if compact.startswith("⚠️"):
-        return " ⚠️"
     return ""
 
 

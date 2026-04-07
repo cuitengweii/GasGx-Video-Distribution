@@ -241,7 +241,7 @@ def _file_lock_dir(path: Path) -> Path:
     return path.with_name(f"{path.name}.lock")
 
 
-def _acquire_file_lock(path: Path, timeout_seconds: float = 30.0) -> Path:
+def _acquire_file_lock(path: Path, timeout_seconds: float = 60.0) -> Path:
     lock_dir = _file_lock_dir(path)
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + max(5.0, float(timeout_seconds))
@@ -566,9 +566,9 @@ def _resolve_platform_upload_timeout(
     *,
     minimum: int,
 ) -> int:
-    hard_cap = int(getattr(core, "MAX_BLOCKING_WAIT_SECONDS", 30) or 30)
+    hard_cap = int(getattr(core, "MAX_BLOCKING_WAIT_SECONDS", 60) or 60)
     normalized_minimum = max(1, min(hard_cap, int(minimum)))
-    default_timeout = max(normalized_minimum, min(hard_cap, int(getattr(core, "UPLOAD_TIMEOUT_SECONDS", 30) or 30)))
+    default_timeout = max(normalized_minimum, min(hard_cap, int(getattr(core, "UPLOAD_TIMEOUT_SECONDS", 60) or 60)))
     cli_timeout = max(1, min(hard_cap, int(getattr(args, "upload_timeout", default_timeout) or default_timeout)))
     config = (
         core.resolve_platform_publish_config(runtime_config, platform)
@@ -2836,7 +2836,8 @@ def _run_collect_once(
         int(getattr(args, "xiaohongshu_extra_images_per_run", DEFAULT_XIAOHONGSHU_EXTRA_IMAGES_PER_RUN)),
     )
     x_source_urls = core._dedupe_urls(
-        list(extra_urls) + [url for url in source_urls if _is_url_for_source_platform(url, "x")]
+        [url for url in extra_urls if _is_url_for_source_platform(url, "x")]
+        + [url for url in source_urls if _is_url_for_source_platform(url, "x")]
     )
     domestic_source_urls = core._dedupe_urls(
         [url for url in source_urls if _is_url_for_source_platform(url, "douyin") or _is_url_for_source_platform(url, "xiaohongshu")]
@@ -2988,6 +2989,12 @@ def _run_collect_once(
         core._log("[Collector] X source collect is disabled for this run (source_platforms excludes x).")
 
     domestic_enabled_platforms = domestic_keyword_platforms
+    disable_domestic_source_discovery = bool(getattr(args, "no_domestic_source_discovery", False))
+    if disable_domestic_source_discovery and domestic_enabled_platforms:
+        core._log(
+            "[Collector] Domestic keyword discovery disabled by CLI flag; "
+            "will only use explicit domestic source URLs."
+        )
     if domestic_enabled_platforms:
         any_candidate = False
         for platform in domestic_enabled_platforms:
@@ -2999,15 +3006,17 @@ def _run_collect_once(
             if not platform_urls and not source_keywords:
                 continue
             direct_urls = [url for url in platform_urls if not _is_domestic_search_url(url, platform)]
-            discovered_urls = _discover_domestic_source_urls(
-                platform=platform,
-                source_keywords=source_keywords,
-                source_platform_urls=platform_urls,
-                collect_limit=collect_limit,
-                args=args,
-                chrome_path=chrome_path,
-                chrome_user_data_dir=chrome_user_data_dir,
-            )
+            discovered_urls: list[str] = []
+            if not disable_domestic_source_discovery:
+                discovered_urls = _discover_domestic_source_urls(
+                    platform=platform,
+                    source_keywords=source_keywords,
+                    source_platform_urls=platform_urls,
+                    collect_limit=collect_limit,
+                    args=args,
+                    chrome_path=chrome_path,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                )
             candidate_urls = core._dedupe_urls(direct_urls + discovered_urls)
             if not candidate_urls:
                 core._log(
@@ -3262,7 +3271,7 @@ def _publish_once(
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
                 declare_original=_resolve_wechat_declare_original(args, runtime_config),
-                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "wechat", minimum=30),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "wechat", minimum=60),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -3281,7 +3290,7 @@ def _publish_once(
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
-                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "douyin", minimum=30),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "douyin", minimum=60),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -3299,7 +3308,7 @@ def _publish_once(
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
-                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "xiaohongshu", minimum=30),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "xiaohongshu", minimum=60),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -3326,7 +3335,7 @@ def _publish_once(
                     parser_default=45,
                     minimum=1,
                 ),
-                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "kuaishou", minimum=30),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "kuaishou", minimum=60),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -3353,7 +3362,7 @@ def _publish_once(
                     parser_default=DEFAULT_BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES,
                     minimum=BILIBILI_RANDOM_SCHEDULE_MIN_LEAD_MINUTES,
                 ),
-                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "bilibili", minimum=600),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "bilibili", minimum=60),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -3371,7 +3380,7 @@ def _publish_once(
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
-                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "tiktok", minimum=30),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "tiktok", minimum=60),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -3389,7 +3398,7 @@ def _publish_once(
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
-                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "x", minimum=30),
+                upload_timeout=_resolve_platform_upload_timeout(args, runtime_config, "x", minimum=60),
                 auto_open_chrome=not args.no_auto_open_chrome,
                 chrome_path=ctx.chrome_path,
                 chrome_user_data_dir=runtime_chrome_user_data_dir,
@@ -4292,6 +4301,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Text file with one source URL per line for domestic platforms.",
     )
+    parser.add_argument("--no-domestic-source-discovery", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-x-auto-discover", action="store_true")
     parser.add_argument(
         "--require-x-live-discovery",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -174,6 +175,13 @@ def test_comment_login_notification_skips_when_page_is_not_login_gate(monkeypatc
 
 def test_platform_login_confirm_wait_window_covers_qr_ttl() -> None:
     assert engine.PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS >= engine.WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS
+
+
+def test_wechat_persistent_login_url_prefers_create_entry_over_legacy_login_html(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(engine.PLATFORM_CREATE_POST_URLS, "wechat", "https://channels.weixin.qq.com/platform/post/create")
+    monkeypatch.setitem(engine.PLATFORM_LOGIN_ENTRY_URLS, "wechat", "https://channels.weixin.qq.com/login.html")
+
+    assert engine._wechat_persistent_login_url() == "https://channels.weixin.qq.com/platform/post/create"
 
 
 def test_begin_platform_login_wait_reuses_recent_waiting_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -438,7 +446,7 @@ def test_wait_for_platform_login_confirmation_uses_stabilized_page_probe(monkeyp
     assert cleared_wait[0]["wait_token"] == "wait-1"
 
 
-def test_wait_for_platform_login_confirmation_wechat_confirmed_signal_skips_forced_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wait_for_platform_login_confirmation_wechat_confirmed_signal_triggers_entry_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakePage:
         def __init__(self, url: str) -> None:
             self.url = url
@@ -489,8 +497,103 @@ def test_wait_for_platform_login_confirmation_wechat_confirmed_signal_skips_forc
     )
 
     assert confirmed is True
-    assert page.get_calls == []
+    assert page.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
     assert page.refresh_calls == 0
+
+
+def test_wait_for_platform_login_confirmation_wechat_keeps_long_timeout_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakePage:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        def get(self, url: str) -> None:
+            self.url = str(url)
+
+        def refresh(self) -> None:
+            return None
+
+    page = FakePage("https://channels.weixin.qq.com/login.html")
+    inspect_calls: list[str] = []
+
+    monkeypatch.setattr(engine, "_stabilize_platform_session_page", lambda current_page, **_kwargs: current_page)
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda current_page, _platform: inspect_calls.append(str(getattr(current_page, "url", ""))) or {
+            "needs_login": True,
+            "url": str(getattr(current_page, "url", "")),
+            "reason": "login_url",
+        },
+    )
+    monkeypatch.setattr(engine, "_read_platform_login_signal", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(engine, "_clear_platform_login_signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_mark_platform_session_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_mark_platform_session_login_required", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+    time_samples = iter([100.0, 100.0, 100.0, 131.0, 146.0])
+    monkeypatch.setattr(engine.time, "time", lambda: next(time_samples))
+
+    confirmed = engine._wait_for_platform_login_confirmation(
+        page,
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        chrome_user_data_dir="D:/profiles/wechat",
+        wait_token="wait-1",
+        timeout_seconds=45,
+    )
+
+    assert confirmed is False
+    assert len(inspect_calls) == 3
+
+
+def test_wait_for_platform_login_confirmation_wechat_login_failed_toast_triggers_qr_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakePage:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.get_calls: list[str] = []
+            self.refresh_calls = 0
+
+        def get(self, url: str) -> None:
+            self.url = str(url)
+            self.get_calls.append(str(url))
+
+        def refresh(self) -> None:
+            self.refresh_calls += 1
+
+    page = FakePage("https://channels.weixin.qq.com/login.html")
+    inspect_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine, "_stabilize_platform_session_page", lambda current_page, **_kwargs: current_page)
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda current_page, _platform: inspect_calls.append({"url": str(getattr(current_page, "url", ""))}) or {
+            "needs_login": True,
+            "url": str(getattr(current_page, "url", "")),
+            "reason": "wechat_login_failed_retry",
+        },
+    )
+    monkeypatch.setattr(engine, "_read_platform_login_signal", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(engine, "_clear_platform_login_signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_mark_platform_session_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_mark_platform_session_login_required", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+    time_samples = iter([100.0, 100.0, 100.1, 104.1, 104.2, 111.0])
+    monkeypatch.setattr(engine.time, "time", lambda: next(time_samples))
+
+    confirmed = engine._wait_for_platform_login_confirmation(
+        page,
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        chrome_user_data_dir="D:/profiles/wechat",
+        wait_token="wait-1",
+        timeout_seconds=10,
+    )
+
+    assert confirmed is False
+    assert page.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
+    assert page.refresh_calls == 0
+    assert len(inspect_calls) == 3
 
 
 def test_build_platform_login_qr_reply_markup_contains_done_and_refresh_actions() -> None:
@@ -512,6 +615,18 @@ def test_build_platform_login_qr_reply_markup_contains_done_and_refresh_actions(
     assert "刷新二维码" in texts
     assert engine._platform_login_callback_data("done", "wechat", wait_token) in callback_data
     assert engine._platform_login_callback_data("refresh", "wechat", wait_token) in callback_data
+
+
+def test_write_json_atomic_replaces_target_without_temp_residue(tmp_path) -> None:
+    path = tmp_path / "wechat_state.json"
+    path.write_text("{}", encoding="utf-8")
+
+    engine._write_json_atomic(path, {"status": "ready", "page_title_excerpt": "视频号助手"})
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["status"] == "ready"
+    assert payload["page_title_excerpt"] == "视频号助手"
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_build_login_qr_rect_script_wechat_skips_bare_canvas_selector() -> None:
