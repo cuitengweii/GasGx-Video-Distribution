@@ -131,3 +131,11 @@ Last updated: 2026-04-07
 - Root cause: failure flow kept layered overview + platform-status rendering with extra decorative symbols and repeated context text.
 - Earlier detection: compare success/failure card vertical footprint in the same scenario window, not only field correctness.
 - Prevention: keep failure-card defaults compact and outcome-centric, reserving extended detail for drill-down actions/logs.
+
+## 2026-04-07 (WeChat QR Refresh No-Response Lessons)
+
+- Symptom: operator clicked `Ë¢ÐÂ¶þÎ¬Âë` and observed no visible response in Telegram while browser login state was changing.
+- Root cause: callback execution context and QR login session context were not strictly bound; callback could run on default profile while QR card belonged to another wait-token session.
+- Secondary amplifier: Telegram `answerCallbackQuery` can timeout under network jitter, making a successfully-handled callback appear silent to the operator.
+- Earlier detection: correlate callback click timestamp with worker logs for both `answerCallbackQuery failed` and `platform_login_qr refreshed in-place` / `platform_login_done` markers to distinguish transport silence from logic silence.
+- Prevention: keep wait-token-to-profile resolution as mandatory pre-step for QR callback actions, and keep fallback visible reply when callback ack fails.

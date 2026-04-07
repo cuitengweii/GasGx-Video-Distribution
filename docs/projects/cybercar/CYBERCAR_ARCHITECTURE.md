@@ -99,3 +99,12 @@ Last updated: 2026-04-07
   2) final text normalization in `src/cybercar/common/telegram_ui.py`
 - Home-entry cleanup is enforced at outgoing markup level and card-construction helpers, so stale card builders do not re-inject `Ê×Ò³` on specific paths.
 - Immediate publish feedback architecture now favors compact terminal cards over multi-section verbose failure summaries for operator scan speed.
+
+## 2026-04-07 (QR Callback Session Routing Layer)
+
+- WeChat QR callback architecture now has an explicit runtime routing layer in Telegram worker:
+  1) parse callback payload (`ctqr|action|platform|wait_token`)
+  2) resolve profile by login-signal token from `telegram_login_sync`
+  3) execute refresh/confirm against the resolved runtime context.
+- This routing layer bridges Telegram callback actions with engine login-signal persistence, preventing callback actions from unintentionally falling back to default profile state.
+- Callback acknowledgement and callback-result visibility are separated: even when `answerCallbackQuery` transport fails, user-visible feedback is still emitted via standard message send path.

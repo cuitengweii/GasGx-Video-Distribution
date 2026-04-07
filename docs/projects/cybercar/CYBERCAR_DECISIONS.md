@@ -90,3 +90,10 @@ Last updated: 2026-04-07
 - Publish result cards and failure cards must be interpreted per task/item timeline, not as one global snapshot across mixed runs. Operators should correlate by task window before judging final platform outcome.
 - Timeout baseline for immediate publish critical path is standardized to 60 seconds: blocking wait cap, platform upload timeout minima, and Telegram prefilter queue lock wait are all aligned to the same value.
 - Runtime config defaults must stay consistent with code defaults (`config/app.json` platform `upload_timeout` and code-level fallback/minimum), including bilibili in this route.
+
+## 2026-04-07 (WeChat QR Callback Persistence Decisions)
+
+- `ctqr` callback handling (`refresh` / `done`) must resolve runtime session by `wait_token` first, then execute on the resolved `profile_dir`; default profile fallback is only a backup path.
+- WeChat login confirmation signal (`confirm_platform_login_signal`) must be written to the same resolved profile context to avoid token/profile mismatch.
+- If `answerCallbackQuery` fails due to Telegram transport timeout, worker must send a normal chat message fallback so operators always get visible feedback instead of a silent click.
+- QR login interaction remains single-entry and single-card oriented: operator actions continue to use one QR card with `我已登录` and `刷新二维码` controls.

@@ -235,3 +235,15 @@ Last updated: 2026-04-07
 
 - Observe one full immediate publish cycle and verify lock-timeout-related Telegram failures drop after the 60-second baseline change.
 - If failures persist, capture matched windows from `runtime/runtime/logs/telegram_command_worker_*.log` and `runtime/runtime/logs/immediate_publish_*.log` to identify lock owner and effective wait duration.
+
+## 2026-04-07 Archive Update (WeChat QR Callback Persistence)
+
+- Continued investigation for operator report: "扫码后浏览器已响应，但 Telegram 按钮点击看起来无反应 / 仍提示登录失败".
+- Root-cause branch confirmed in worker callback path: QR button callback could execute against default profile context instead of the active QR wait-token session, causing refresh/done actions to drift from the actual logged-in browser profile.
+- Implemented callback-session binding in worker flow: use `wait_token` to resolve the real login signal profile under `telegram_login_sync`, then run both QR refresh and login confirmation on that resolved profile.
+- Added callback-timeout UX fallback: when `answerCallbackQuery` hits Telegram transport timeout, worker sends a standard text feedback message to avoid silent operator interaction.
+- Targeted regression commands passed:
+  - `python -m pytest tests/test_telegram_immediate.py -k "resolve_platform_profile_dir_by_wait_token or refresh_platform_login_qr_message_uses_wait_token_profile_override or confirm_platform_login_done_uses_wait_token_profile_override or handle_callback_update_wechat_qr_ack_timeout_falls_back_to_text_reply"` -> `4 passed`
+  - `python -m pytest tests/test_engine_wechat.py -k "platform_login_qr_reply_markup_contains_done_and_refresh_actions"` -> `1 passed`
+- Runtime operations:
+  - Telegram `supervise` / `worker` process was restarted in hidden-window mode to load latest callback handling.
