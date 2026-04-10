@@ -8,6 +8,7 @@ param(
     [string]$Priority = "",
     [string]$Proxy = "",
     [switch]$UseSystemProxy,
+    [switch]$ForceDirect,
     [string]$TelegramChatId = "",
     [int]$Limit = 0,
     [string]$UploadPlatforms = "",
@@ -25,6 +26,13 @@ if ($Proxy) {
 elseif ($UseSystemProxy) {
     $env:CYBERCAR_USE_SYSTEM_PROXY = "1"
     Remove-Item Env:CYBERCAR_PROXY -ErrorAction SilentlyContinue
+}
+elseif ($ForceDirect) {
+    Remove-Item Env:CYBERCAR_PROXY -ErrorAction SilentlyContinue
+    Remove-Item Env:CYBERCAR_USE_SYSTEM_PROXY -ErrorAction SilentlyContinue
+    foreach ($proxyEnvName in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")) {
+        Remove-Item "Env:$proxyEnvName" -ErrorAction SilentlyContinue
+    }
 }
 
 $cliArgs = @("-m", "cybercar", $Mode, "--profile", $Profile)

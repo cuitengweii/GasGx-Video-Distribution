@@ -1028,6 +1028,8 @@ def _send_telegram_prefilter_for_candidate(
         target_platforms=target_platforms,
     )
     preview_url = str(_extract_x_preview_url(source_url) or "").strip()
+    if not preview_url:
+        preview_url = str(source_url or "").strip()
     if preview_url:
         card["preview_url"] = preview_url
     try:
@@ -1180,8 +1182,31 @@ def _apply_x_link_preview_options(
     *,
     preview_url: Any = "",
 ) -> None:
-    explicit_preview = str(_extract_x_preview_url(preview_url) or "").strip()
-    preview_url = explicit_preview or str(_extract_x_preview_url(text) or "").strip()
+    def _extract_generic_http_url(raw: Any) -> str:
+        token = str(raw or "").strip()
+        if not token:
+            return ""
+        href_match = re.search(r'''href=["'](https?://[^"']+)["']''', token, flags=re.IGNORECASE)
+        if href_match:
+            return str(href_match.group(1) or "").strip()
+        plain_match = re.search(r"https?://[^\s<>\"']+", token, flags=re.IGNORECASE)
+        if not plain_match:
+            return ""
+        return str(plain_match.group(0) or "").strip().rstrip(".,;:!?)")
+
+    def _resolve_preview_url(raw: Any) -> str:
+        token = str(raw or "").strip()
+        if not token:
+            return ""
+        x_url = str(_extract_x_preview_url(token) or "").strip()
+        if x_url:
+            return x_url
+        if token.lower().startswith("http://") or token.lower().startswith("https://"):
+            return token
+        return _extract_generic_http_url(token)
+
+    explicit_preview = _resolve_preview_url(preview_url)
+    preview_url = explicit_preview or _resolve_preview_url(text)
     if not preview_url:
         return
     params["disable_web_page_preview"] = "false"

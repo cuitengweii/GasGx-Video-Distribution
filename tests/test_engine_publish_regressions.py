@@ -278,6 +278,144 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     assert ("SAVE_DRAFT",) in clicked_button_texts
 
 
+def test_fill_draft_once_generic_xiaohongshu_publish_unconfirmed_manage_verified_treated_as_success(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    click_calls: list[tuple[str, ...]] = []
+    publish_clicks = {"count": 0}
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://creator.xiaohongshu.com/publish/publish"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+        def get(self, _url: str) -> None:
+            return None
+
+    def fake_click_publish(*_args, **_kwargs) -> bool:
+        publish_clicks["count"] += 1
+        return publish_clicks["count"] == 1
+
+    def fake_click_first(_ctx, _page, texts, **_kwargs):
+        text_tuple = tuple(texts or ())
+        click_calls.append(text_tuple)
+        return False
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_activate_upload_trigger_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_is_image_file", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_xiaohongshu_title_from_caption", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: ["token-hit"])
+    monkeypatch.setattr(engine, "_click_xiaohongshu_primary_publish_button", fake_click_publish)
+    monkeypatch.setattr(engine, "_click_xiaohongshu_publish_confirm_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_wait_publish_feedback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("publish feedback timeout")),
+    )
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(engine, "_verify_platform_publish_in_manage_page", lambda *_args, **_kwargs: "token-hit")
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    result = engine._fill_draft_once_generic(
+        page=page,
+        target=target,
+        final_caption="caption",
+        open_url=page.url,
+        platform_name="xiaohongshu",
+        save_draft=False,
+        publish_now=True,
+        upload_timeout=30,
+        draft_button_texts=("保存为草稿",),
+        publish_button_texts=("发布笔记",),
+    )
+
+    assert result is page
+    assert ("保存为草稿",) in click_calls
+
+
+def test_fill_draft_once_generic_xiaohongshu_publish_unconfirmed_manage_verify_miss_keeps_coded_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    publish_clicks = {"count": 0}
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://creator.xiaohongshu.com/publish/publish"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+        def get(self, _url: str) -> None:
+            return None
+
+    def fake_click_publish(*_args, **_kwargs) -> bool:
+        publish_clicks["count"] += 1
+        return publish_clicks["count"] == 1
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_activate_upload_trigger_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_is_image_file", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_xiaohongshu_title_from_caption", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: ["token-miss"])
+    monkeypatch.setattr(engine, "_click_xiaohongshu_primary_publish_button", fake_click_publish)
+    monkeypatch.setattr(engine, "_click_xiaohongshu_publish_confirm_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_wait_publish_feedback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("publish feedback timeout")),
+    )
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_verify_platform_publish_in_manage_page", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    with pytest.raises(RuntimeError, match="E_PUBLISH_UNCONFIRMED_DRAFT_SAVED"):
+        engine._fill_draft_once_generic(
+            page=page,
+            target=target,
+            final_caption="caption",
+            open_url=page.url,
+            platform_name="xiaohongshu",
+            save_draft=False,
+            publish_now=True,
+            upload_timeout=30,
+            draft_button_texts=("保存为草稿",),
+            publish_button_texts=("发布笔记",),
+        )
+
+
 def test_fill_draft_once_generic_tiktok_publish_button_missing_falls_back_to_draft(
     monkeypatch,
     tmp_path: Path,

@@ -143,15 +143,32 @@ def test_pipeline_apply_x_link_preview_options_accepts_explicit_preview_url() ->
     assert options.get("prefer_large_media") is True
 
 
-def test_worker_apply_x_link_preview_options_ignores_non_x_links() -> None:
+def test_pipeline_apply_x_link_preview_options_accepts_non_x_link_preview() -> None:
     params = {
-        "text": '<a href="https://example.com/post/1">点击查看</a>',
+        "text": '<a href="https://www.douyin.com/video/123456">open</a>',
+        "disable_web_page_preview": "true",
+    }
+    pipeline._apply_x_link_preview_options(params, params["text"])
+
+    assert params["disable_web_page_preview"] == "false"
+    options = json.loads(str(params.get("link_preview_options") or "{}"))
+    assert options.get("url") == "https://www.douyin.com/video/123456"
+    assert options.get("show_above_text") is True
+    assert options.get("prefer_large_media") is True
+
+
+def test_worker_apply_x_link_preview_options_accepts_non_x_links() -> None:
+    params = {
+        "text": '<a href="https://example.com/post/1">open</a>',
         "disable_web_page_preview": "true",
     }
     worker_impl._apply_x_link_preview_options(params, params["text"])
 
-    assert params["disable_web_page_preview"] == "true"
-    assert "link_preview_options" not in params
+    assert params["disable_web_page_preview"] == "false"
+    options = json.loads(str(params.get("link_preview_options") or "{}"))
+    assert options.get("url") == "https://example.com/post/1"
+    assert options.get("show_above_text") is True
+    assert options.get("prefer_large_media") is True
 
 
 def test_build_prefilter_action_card_prepends_x_source_url_for_top_preview() -> None:
@@ -172,6 +189,77 @@ def test_build_prefilter_action_card_prepends_x_source_url_for_top_preview() -> 
     text = str(card.get("text") or "")
     assert text.startswith("https://x.com/tester/status/2033331774894358749\n\n")
     assert "即采即发候选确认" in text
+
+
+def test_build_prefilter_action_card_prepends_non_x_source_url_for_top_preview() -> None:
+    card = worker_impl._build_prefilter_action_card(
+        status="queued",
+        title="candidate",
+        subtitle="manual review",
+        sections=[
+            {
+                "title": "item",
+                "emoji": "🎯",
+                "items": [{"label": "title", "value": "demo"}],
+            }
+        ],
+        source_url="https://www.douyin.com/video/7654321",
+        include_source_button=False,
+    )
+    text = str(card.get("text") or "")
+    assert text.startswith("https://www.douyin.com/video/7654321\n\n")
+
+
+def test_worker_run_unified_once_passes_force_direct_when_override_requests_direct(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_cmd(cmd: object, timeout_seconds: int, workdir: object = None) -> dict[str, object]:
+        captured["cmd"] = list(cmd) if isinstance(cmd, list) else cmd
+        captured["timeout_seconds"] = timeout_seconds
+        captured["workdir"] = workdir
+        return {"ok": True, "code": 0, "stdout": "", "stderr": "", "elapsed": 0.0}
+
+    monkeypatch.setattr(worker_impl, "_run_cmd", fake_run_cmd)
+    monkeypatch.setattr(worker_impl, "_resolve_worker_network_mode", lambda: ("http://127.0.0.1:7890", False))
+
+    worker_impl._run_unified_once(
+        repo_root=tmp_path,
+        workspace=tmp_path,
+        timeout_seconds=30,
+        mode="collect",
+        proxy_override=None,
+        use_system_proxy_override=False,
+    )
+
+    cmd = list(captured.get("cmd") or [])
+    assert "-ForceDirect" in cmd
+    assert "-Proxy" not in cmd
+    assert "-UseSystemProxy" not in cmd
+
+
+def test_worker_run_unified_once_uses_proxy_when_override_is_not_provided(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_cmd(cmd: object, timeout_seconds: int, workdir: object = None) -> dict[str, object]:
+        captured["cmd"] = list(cmd) if isinstance(cmd, list) else cmd
+        captured["timeout_seconds"] = timeout_seconds
+        captured["workdir"] = workdir
+        return {"ok": True, "code": 0, "stdout": "", "stderr": "", "elapsed": 0.0}
+
+    monkeypatch.setattr(worker_impl, "_run_cmd", fake_run_cmd)
+    monkeypatch.setattr(worker_impl, "_resolve_worker_network_mode", lambda: ("http://127.0.0.1:7890", False))
+
+    worker_impl._run_unified_once(
+        repo_root=tmp_path,
+        workspace=tmp_path,
+        timeout_seconds=30,
+        mode="collect",
+    )
+
+    cmd = list(captured.get("cmd") or [])
+    assert "-Proxy" in cmd
+    assert "http://127.0.0.1:7890" in cmd
+    assert "-ForceDirect" not in cmd
 
 
 def _make_callback_update(
@@ -3885,6 +3973,44 @@ def test_send_telegram_prefilter_for_candidate_image_sets_preview_url(monkeypatc
     assert "链接：" not in str(primary_card.get("text") or "")
 
 
+def test_send_telegram_prefilter_for_candidate_non_x_source_sets_preview_url(monkeypatch, tmp_path: Path) -> None:
+    attempts: list[dict[str, object]] = []
+
+    def send_card(settings: object, card: dict[str, object], **kwargs: object) -> dict[str, object]:
+        attempts.append({"card": dict(card), "kwargs": dict(kwargs)})
+        return {"result": {"message_id": 780, "chat": {"id": CHAT_ID}}}
+
+    monkeypatch.setattr(pipeline, "_send_telegram_card_message", send_card)
+    result = pipeline._send_telegram_prefilter_for_candidate(
+        workspace=SimpleNamespace(root=tmp_path),
+        email_settings=SimpleNamespace(
+            enabled=True,
+            telegram_bot_token=BOT_TOKEN,
+            telegram_chat_id=CHAT_ID,
+            telegram_timeout_seconds=20,
+            telegram_api_base="",
+        ),
+        source_url="https://www.douyin.com/video/7654321",
+        item_id="item-non-x-preview",
+        idx=1,
+        total=1,
+        platform_hint="video",
+        mode="immediate_manual_publish",
+        tweet_text="non x preview",
+        published_at="2026-03-15 10:00:00",
+        display_time="1m",
+        target_platforms="tiktok,x",
+        media_kind="video",
+        fast_send=True,
+    )
+
+    assert result["result"]["message_id"] == 780
+    assert len(attempts) == 1
+    primary_card = attempts[0]["card"]
+    assert isinstance(primary_card, dict)
+    assert primary_card.get("preview_url") == "https://www.douyin.com/video/7654321"
+
+
 def test_handle_prefilter_publish_normal_queues_publish_job(tmp_path: Path, monkeypatch) -> None:
     workspace = _make_workspace(tmp_path)
     record = _install_transport_mocks(monkeypatch)
@@ -4281,6 +4407,7 @@ def test_preflight_immediate_platform_login_uses_probe_notification_without_dupl
     workspace = _make_workspace(tmp_path)
     qr_requests: list[dict[str, object]] = []
     text_notices: list[dict[str, object]] = []
+    probe_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         worker_impl,
@@ -4298,7 +4425,8 @@ def test_preflight_immediate_platform_login_uses_probe_notification_without_dupl
     monkeypatch.setattr(
         fake_core,
         "probe_platform_session_via_debug_port",
-        lambda **kwargs: {
+        lambda **kwargs: probe_calls.append(dict(kwargs))
+        or {
             "status": "login_required",
             "reason": "login_url",
             "current_url": "https://channels.weixin.qq.com/login.html",
@@ -4332,6 +4460,8 @@ def test_preflight_immediate_platform_login_uses_probe_notification_without_dupl
     assert "Telegram" in str(result["error"])
     assert len(text_notices) == 1
     assert qr_requests == []
+    assert probe_calls
+    assert probe_calls[0]["enable_wechat_keepalive"] is True
 
 
 def test_preflight_immediate_platform_login_falls_back_to_status_check_when_probe_raises(tmp_path: Path, monkeypatch) -> None:

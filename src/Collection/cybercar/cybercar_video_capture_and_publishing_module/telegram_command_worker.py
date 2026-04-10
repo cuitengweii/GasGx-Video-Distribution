@@ -1321,8 +1321,38 @@ def _outgoing_reply_markup(reply_markup: Optional[Dict[str, Any]], *, for_edit: 
     return payload if payload else None
 
 
-def _apply_x_link_preview_options(params: Dict[str, Any], text: Any) -> None:
-    preview_url = str(extract_x_preview_url(text) or "").strip()
+def _extract_generic_http_url(raw: Any) -> str:
+    token = str(raw or "").strip()
+    if not token:
+        return ""
+    href_match = re.search(r'''href=["'](https?://[^"']+)["']''', token, flags=re.IGNORECASE)
+    if href_match:
+        return str(href_match.group(1) or "").strip()
+    plain_match = re.search(r"https?://[^\s<>\"']+", token, flags=re.IGNORECASE)
+    if not plain_match:
+        return ""
+    return str(plain_match.group(0) or "").strip().rstrip(".,;:!?)")
+
+
+def _resolve_link_preview_url(raw: Any) -> str:
+    token = str(raw or "").strip()
+    if not token:
+        return ""
+    x_url = str(extract_x_preview_url(token) or "").strip()
+    if x_url:
+        return x_url
+    if token.lower().startswith("http://") or token.lower().startswith("https://"):
+        return token.rstrip(".,;:!?)")
+    return _extract_generic_http_url(token)
+
+
+def _apply_x_link_preview_options(
+    params: Dict[str, Any],
+    text: Any,
+    *,
+    preview_url: Any = "",
+) -> None:
+    preview_url = _resolve_link_preview_url(preview_url) or _resolve_link_preview_url(text)
     if not preview_url:
         return
     params["disable_web_page_preview"] = "false"
@@ -1757,7 +1787,7 @@ def _build_prefilter_action_card(
     )
     rows: list[list[Dict[str, str]]] = []
     link = str(source_url or "").strip()
-    preview_link = str(extract_x_preview_url(link) or "").strip()
+    preview_link = _resolve_link_preview_url(link)
     card_text = str(card.get("text") or "").strip()
     if preview_link and preview_link not in card_text:
         card["text"] = f"{preview_link}\n\n{card_text}".strip()
@@ -9663,7 +9693,8 @@ def _run_unified_once(
     use_system_proxy_override: Optional[bool] = None,
 ) -> Dict[str, Any]:
     script = repo_root / DEFAULT_UNIFIED_RUNNER_REL
-    if proxy_override is not None or use_system_proxy_override is not None:
+    override_requested = proxy_override is not None or use_system_proxy_override is not None
+    if override_requested:
         resolved_proxy = str(proxy_override or "").strip()
         resolved_use_system_proxy = bool(use_system_proxy_override) and not resolved_proxy
     else:
@@ -9694,6 +9725,8 @@ def _run_unified_once(
         cmd += ["-Proxy", resolved_proxy]
     elif resolved_use_system_proxy:
         cmd += ["-UseSystemProxy"]
+    elif override_requested:
+        cmd += ["-ForceDirect"]
     notify_chat_id = str(telegram_chat_id or "").strip()
     if notify_chat_id:
         cmd += ["-TelegramChatId", notify_chat_id]
@@ -11662,6 +11695,7 @@ def _preflight_immediate_platform_login(
             telegram_chat_id=str(telegram_chat_id or "").strip(),
             telegram_bot_identifier=str(telegram_bot_identifier or "").strip(),
             telegram_timeout_seconds=max(10, int(timeout_seconds or 20)),
+            enable_wechat_keepalive=(normalized_platform == "wechat"),
         )
     except Exception as exc:
         if isinstance(log_file, Path):

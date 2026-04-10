@@ -27596,13 +27596,31 @@ def _fill_draft_once_generic(
             bilibili_mode = "immediate"
             _log("[Uploader:bilibili] Publish mode(fixed): immediate")
 
-        def _fallback_publish_to_draft(reason: str, error: Exception | None = None) -> None:
+        def _fallback_publish_to_draft(reason: str, error: Exception | None = None) -> bool:
             _log(f"[Uploader:{platform_name}] {reason}, fallback to save draft.")
             draft_saved = _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name)
             if draft_saved:
                 _log(f"[Uploader:{platform_name}] Publish unconfirmed; draft save was used as failure fallback.")
             else:
                 _log(f"[Uploader:{platform_name}] Draft fallback button not confirmed.")
+            if platform_name == "xiaohongshu":
+                verify_page = page if hasattr(page, "get") and hasattr(page, "run_js") else None
+                if verify_page is not None:
+                    matched = _verify_platform_publish_in_manage_page(
+                        verify_page,
+                        platform_name=platform_name,
+                        expected_tokens=publish_verify_tokens,
+                        timeout_seconds=18.0,
+                    )
+                    if matched:
+                        _log(
+                            f"[Uploader:{platform_name}] Publish unconfirmed but manage-page verification matched token: {matched}; treat as landed."
+                        )
+                        return True
+                _log(
+                    "[Uploader:xiaohongshu] Publish unconfirmed and manage-page verification missed; "
+                    "account may be restricted, and content may only land in draft box."
+                )
             failure_code = _classify_publish_failure_code(reason=reason, error=error)
             detail = (
                 "automatically saved as draft / returned to draft-state."
@@ -27724,7 +27742,8 @@ def _fill_draft_once_generic(
                     return ctx
                 except Exception as feedback_exc:
                     _log(f"[Uploader:bilibili] Manual publish fallback not confirmed: {feedback_exc}")
-                    _fallback_publish_to_draft("publish was not confirmed", feedback_exc)
+                    if _fallback_publish_to_draft("publish was not confirmed", feedback_exc):
+                        return ctx
             if platform_name == "kuaishou":
                 _log(
                     "[Uploader:kuaishou] Publish button not located; "
@@ -27742,7 +27761,8 @@ def _fill_draft_once_generic(
                     return ctx
                 except Exception as feedback_exc:
                     _log(f"[Uploader:kuaishou] Delayed-submit fallback not confirmed: {feedback_exc}")
-                    _fallback_publish_to_draft("publish was not confirmed", feedback_exc)
+                    if _fallback_publish_to_draft("publish was not confirmed", feedback_exc):
+                        return ctx
             if platform_name == "x":
                 _log(
                     "[Uploader:x] Publish button not ready yet; "
@@ -27772,7 +27792,8 @@ def _fill_draft_once_generic(
             actions = _collect_visible_action_texts(ctx, page)
             if actions:
                 _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
-            _fallback_publish_to_draft("publish button was not located")
+            if _fallback_publish_to_draft("publish button was not located"):
+                return ctx
         try:
             _confirm_publish()
         except Exception as exc:
@@ -27811,7 +27832,8 @@ def _fill_draft_once_generic(
                     _log(f"[Uploader:bilibili] Publish probe summary: {probe_summary}")
                 if probe_diagnosis:
                     _log(f"[Uploader:bilibili] Publish probe diagnosis: {probe_diagnosis}")
-            _fallback_publish_to_draft("publish was not confirmed", exc)
+            if _fallback_publish_to_draft("publish was not confirmed", exc):
+                return ctx
             raise
         if platform_name == "douyin":
             _log(f"[Success:{platform_name}] 发布已确认（mode={douyin_mode}）。")
