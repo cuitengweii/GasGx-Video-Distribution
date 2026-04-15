@@ -137,8 +137,8 @@ X_DOWNLOAD_CONFIG_FRAGMENT_RETRIES = 2
 X_DOWNLOAD_CONFIG_RETRY_SLEEP_SECONDS = 1.0
 X_DOWNLOAD_CONFIG_BATCH_RETRY_SLEEP_SECONDS = 1.0
 X_DOWNLOAD_CONFIG_FAIL_FAST = False
-MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS = 5.0
-MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS = 120.0
+MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS = 3.0
+MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS = 180.0
 WINDOWS_CHROME_WINDOW_MODE_DEFAULT = "minimized"
 WINDOWS_SW_SHOWMINNOACTIVE = 7
 WINDOWS_SW_FORCEMINIMIZE = 11
@@ -424,9 +424,12 @@ BILIBILI_PUBLISH_BUTTON_TEXTS = (
 )
 BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS = (
     "\u786e\u8ba4\u6295\u7a3f",
+    "\u786e\u8ba4\u5e76\u6295\u7a3f",
     "\u7ee7\u7eed\u6295\u7a3f",
+    "\u7ee7\u7eed\u63d0\u4ea4",
     "\u786e\u5b9a\u6295\u7a3f",
     "\u786e\u8ba4\u53d1\u5e03",
+    "\u786e\u8ba4\u63d0\u4ea4",
     "\u786e\u8ba4\u5b9a\u65f6\u53d1\u5e03",
     "\u786e\u8ba4\u5b9a\u65f6\u6295\u7a3f",
     "\u53bb\u53d1\u5e03",
@@ -13376,7 +13379,11 @@ def download_from_source_urls(
         str(max(1, int(limit))),
     ]
     if not include_images:
-        cmd += ["--match-filter", "duration > 5"]
+        cmd += [
+            "--match-filter",
+            f"duration >= {MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f} & "
+            f"duration <= {MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f}",
+        ]
     cookie_export_path: Optional[Path] = None
     cookie_export_status = "skipped"
     try:
@@ -13471,7 +13478,15 @@ def download_from_x(
         _log("[Downloader] X media mode enabled: video + image (for Xiaohongshu).")
     _ensure_binary("yt-dlp")
     before = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
-    media_filter_args = [] if include_images else ["--match-filter", "duration > 10 & duration < 60"]
+    media_filter_args = (
+        []
+        if include_images
+        else [
+            "--match-filter",
+            f"duration >= {MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f} & "
+            f"duration <= {MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f}",
+        ]
+    )
     effective_fail_fast = bool(x_download_fail_fast)
     effective_socket_timeout = max(5, int(x_download_socket_timeout or X_DOWNLOAD_SOCKET_TIMEOUT_SECONDS))
     effective_extractor_retries = max(0, int(x_download_extractor_retries or 0))
@@ -25309,6 +25324,204 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
     return False
 
 
+def _ensure_bilibili_publish_agreement_checked(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function isChecked(input, carrier) {
+      if (input && input.checked) return true;
+      const role = carrier && String(carrier.getAttribute('role') || '').toLowerCase();
+      if (role === 'checkbox') {
+        return String(carrier.getAttribute('aria-checked') || '').toLowerCase() === 'true';
+      }
+      const cls = String(((carrier && carrier.className) || (input && input.className) || '') || '');
+      return /(checked|is-checked|active)/i.test(cls);
+    }
+    const candidates = [];
+    const nodes = Array.from(document.querySelectorAll('label, div, span, input[type="checkbox"], [role="checkbox"], .checkbox, .ant-checkbox-wrapper'));
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const text = norm(node.innerText || node.textContent || '');
+      if (!text || text.length > 140) continue;
+      const wrap = node.closest('[role="dialog"], .dialog, .modal, .popup, form, section, .publish, .submit, .setting, .bcc-upload, div') || node.parentElement || node;
+      const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 360);
+      if (!/(声明|协议|同意|原创|承诺)/.test(text + ' ' + wrapText)) continue;
+      const checkbox = (
+        (node.matches && node.matches('input[type="checkbox"]') && node) ||
+        node.querySelector('input[type="checkbox"]') ||
+        (node.closest && node.closest('label, .ant-checkbox-wrapper, .checkbox, [role="checkbox"]') && node.closest('label, .ant-checkbox-wrapper, .checkbox, [role="checkbox"]').querySelector('input[type="checkbox"]'))
+      );
+      const carrier = (node.closest && node.closest('label, .ant-checkbox-wrapper, .checkbox, [role="checkbox"]')) || node;
+      if (!checkbox && String(carrier.getAttribute && carrier.getAttribute('role') || '').toLowerCase() !== 'checkbox') continue;
+      let score = 0;
+      if (/创作声明|原创声明/.test(text + ' ' + wrapText)) score += 30;
+      if (/声明|协议|同意|承诺/.test(text + ' ' + wrapText)) score += 18;
+      if (/投稿|发布|稿件|视频/.test(wrapText)) score += 8;
+      if (String((wrap && wrap.className) || '').match(/dialog|modal|popup/i)) score += 6;
+      if (isChecked(checkbox, carrier)) score -= 4;
+      candidates.push({node, checkbox, carrier, text, score, checked: isChecked(checkbox, carrier)});
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    if (!candidates.length) return {state:'not_found'};
+    const best = candidates[0];
+    if (best.checked) return {state:'already_checked', text: best.text};
+    const clickTarget = best.checkbox || best.carrier || best.node;
+    try { clickTarget.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+    try { clickTarget.click(); } catch (e) {}
+    if (!isChecked(best.checkbox, best.carrier)) {
+      try { best.carrier.click(); } catch (e) {}
+    }
+    const finalChecked = isChecked(best.checkbox, best.carrier);
+    return {
+      state: finalChecked ? 'checked' : 'click_attempted',
+      text: best.text,
+      checked: finalChecked
+    };
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = {}
+        if not isinstance(result, dict):
+            continue
+        state = str(result.get("state", "") or "").strip().lower()
+        text = _single_line_preview(str(result.get("text", "") or ""), limit=80)
+        if state == "checked":
+            _log(f"[Uploader:bilibili] Publish agreement checkbox enabled: {text or '-'}")
+            return True
+        if state == "already_checked":
+            return True
+    return False
+
+
+def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    _ensure_bilibili_publish_agreement_checked(primary_ctx, fallback_ctx)
+    selectors = (
+        "text:确认投稿",
+        "text:确认并投稿",
+        "text:继续投稿",
+        "text:继续提交",
+        "text:确定投稿",
+        "text:确认发布",
+        "text:确认提交",
+        "text:确认定时发布",
+        "text:确认定时投稿",
+        "text:去发布",
+        "xpath://button[contains(normalize-space(.), '确认投稿')]",
+        "xpath://button[contains(normalize-space(.), '确认并投稿')]",
+        "xpath://button[contains(normalize-space(.), '继续投稿')]",
+        "xpath://button[contains(normalize-space(.), '继续提交')]",
+        "xpath://button[contains(normalize-space(.), '确认提交')]",
+        "xpath://button[contains(normalize-space(.), '确认发布')]",
+    )
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                btn = owner.ele(selector, timeout=0.35)
+            except Exception:
+                btn = None
+            if not btn or (not _is_visible_element(btn)):
+                continue
+            try:
+                disabled = bool(
+                    btn.run_js(
+                        """
+                        return !!(
+                          this.disabled ||
+                          String(this.getAttribute('aria-disabled') || '').toLowerCase() === 'true' ||
+                          /\\bdisabled\\b/i.test(String(this.className || ''))
+                        );
+                        """
+                    )
+                )
+            except Exception:
+                disabled = False
+            if disabled:
+                continue
+            _humanized_publish_reaction_pause("bilibili publish confirm click")
+            try:
+                btn.click()
+            except Exception:
+                try:
+                    btn.click(by_js=True)
+                except Exception:
+                    continue
+            _log(f"[Uploader:bilibili] Clicked publish confirm button by selector: {selector}")
+            return True
+
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function norm(s) {
+      return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+    }
+    function disabled(el) {
+      if (!el) return true;
+      if (el.disabled) return true;
+      if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      const cls = String(el.className || '');
+      return /\\bdisabled\\b/i.test(cls);
+    }
+    const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
+    const candidates = [];
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const text = norm(node.innerText || node.textContent || '');
+      if (!text || text.length > 24) continue;
+      const wrap = node.closest('[role="dialog"], .dialog, .modal, .popup, form, section, .publish, .submit, div') || node.parentElement || node;
+      const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 320);
+      let score = 0;
+      if (/^(确认投稿|确认并投稿|继续投稿|继续提交|确定投稿|确认发布|确认提交|确认定时发布|确认定时投稿|去发布)$/.test(text)) score += 30;
+      if (/投稿|发布|提交/.test(text)) score += 14;
+      if (/确认|继续|确定/.test(text)) score += 10;
+      if (/取消|返回|草稿|暂存/.test(text)) score -= 40;
+      if (/dialog|modal|popup/.test(String((wrap && wrap.className) || ''))) score += 8;
+      if (/声明|协议|同意|投稿|发布|稿件|风险/.test(wrapText)) score += 6;
+      if (disabled(node)) score -= 80;
+      if (score > 0) candidates.push({node, text, score});
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    if (!candidates.length) return false;
+    const chosen = candidates[0].node.closest('button, [role="button"], a') || candidates[0].node;
+    chosen.scrollIntoView({block:'center', inline:'nearest'});
+    chosen.click();
+    return candidates[0].text || true;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        _humanized_publish_reaction_pause("bilibili publish confirm click")
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = False
+        if isinstance(result, str) and result.strip():
+            _log(f"[Uploader:bilibili] Clicked publish confirm button by JS fallback: {result.strip()}")
+            return True
+        if bool(result):
+            _log("[Uploader:bilibili] Clicked publish confirm button by JS fallback.")
+            return True
+    return False
+
+
 def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
         "xpath://button[normalize-space(.)='发布' and ../button[normalize-space(.)='取消']]",
@@ -25571,12 +25784,7 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
         )
     if not clicked:
         return False
-    _click_first_matching_button(
-        primary_ctx,
-        fallback_ctx,
-        BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
-        platform_name="bilibili",
-    )
+    _click_bilibili_publish_confirm_button(primary_ctx, fallback_ctx)
     return True
 
 
@@ -26492,12 +26700,7 @@ def _wait_publish_feedback(
             # Best effort: some accounts show a delayed confirm dialog or secondary publish gate.
             _click_xiaohongshu_publish_confirm_button(primary_ctx, fallback_ctx)
         elif platform_name == "bilibili":
-            _click_first_matching_button(
-                primary_ctx,
-                fallback_ctx,
-                BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
-                platform_name=platform_name,
-            )
+            _click_bilibili_publish_confirm_button(primary_ctx, fallback_ctx)
             if bilibili_reclick_attempts < 3 and (time.time() - loop_started) >= (12 * (bilibili_reclick_attempts + 1)):
                 if _retry_bilibili_publish_if_still_editing(primary_ctx, fallback_ctx):
                     bilibili_reclick_attempts += 1
@@ -27193,12 +27396,7 @@ def _publish_bilibili_with_random_schedule(
         if actions:
             _log(f"[Uploader:bilibili] Visible action texts: {actions}")
         raise RuntimeError("Failed to click Bilibili publish button.")
-    _click_first_matching_button(
-        primary_ctx,
-        fallback_ctx,
-        BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
-        platform_name="bilibili",
-    )
+    _click_bilibili_publish_confirm_button(primary_ctx, fallback_ctx)
     _wait_publish_feedback(
         primary_ctx,
         fallback_ctx,
@@ -27642,12 +27840,7 @@ def _fill_draft_once_generic(
             if platform_name == "xiaohongshu":
                 _click_xiaohongshu_publish_confirm_button(ctx, page)
             if platform_name == "bilibili":
-                _click_first_matching_button(
-                    ctx,
-                    page,
-                    BILIBILI_PUBLISH_CONFIRM_BUTTON_TEXTS,
-                    platform_name=platform_name,
-                )
+                _click_bilibili_publish_confirm_button(ctx, page)
             # 闈炴姈闊冲钩鍙板悓鏍疯绛夊緟椤甸潰鍥炴墽锛岄伩鍏嶁€滅偣鍑诲彂甯冨嵆鎴愬姛鈥濈殑璇垽銆?
             if platform_name == "bilibili":
                 wait_seconds = 180

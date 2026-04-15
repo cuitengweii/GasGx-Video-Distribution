@@ -67,6 +67,39 @@ def _to_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _load_global_env_defaults(repo_root: Path) -> None:
+    env_file = Path(r"D:\code\.global.env")
+    if not env_file.exists():
+        return
+    try:
+        lines = env_file.read_text(encoding="utf-8-sig").splitlines()
+    except Exception:
+        return
+    for line in lines:
+        item = line.strip()
+        if not item or item.startswith("#") or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if value.startswith("${") and value.endswith("}"):
+            ref = value[2:-1].strip()
+            if ref:
+                value = os.environ.get(ref, value)
+        os.environ.setdefault(key, value)
+
+
+def _resolve_env_placeholder(value: str) -> str:
+    token = value.strip()
+    if token.startswith("${") and token.endswith("}"):
+        ref = token[2:-1].strip()
+        if ref:
+            return str(os.environ.get(ref, "")).strip()
+    return token
+
+
 @lru_cache(maxsize=1)
 def load_app_config() -> dict[str, Any]:
     return _load_json(_repo_root() / "config" / "app.json")
@@ -108,6 +141,7 @@ def get_paths() -> AppPaths:
 def apply_runtime_environment() -> AppPaths:
     paths = get_paths()
     paths.ensure()
+    _load_global_env_defaults(paths.repo_root)
     config = load_app_config()
     os.environ.setdefault("CYBERCAR_CHROME_USER_DATA_DIR", str(paths.default_profile_dir))
     os.environ.setdefault("CYBERCAR_WECHAT_CHROME_USER_DATA_DIR", str(paths.wechat_profile_dir))
@@ -118,7 +152,7 @@ def apply_runtime_environment() -> AppPaths:
     default_port = str(chrome_cfg.get("default_debug_port") or "").strip()
     wechat_port = str(chrome_cfg.get("wechat_debug_port") or "").strip()
     x_port = str(chrome_cfg.get("x_debug_port") or "").strip()
-    default_proxy = str(network_cfg.get("proxy") or "").strip()
+    default_proxy = _resolve_env_placeholder(str(network_cfg.get("proxy") or ""))
     if default_proxy:
         os.environ.setdefault("CYBERCAR_PROXY", default_proxy)
     if "use_system_proxy" in network_cfg:

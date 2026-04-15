@@ -12,7 +12,7 @@
     "x_debug_port": 9335
   },
   "network": {
-    "proxy": "http://127.0.0.1:33210",
+    "proxy": "${PROXY_URL}",
     "use_system_proxy": false
   },
   "x": {

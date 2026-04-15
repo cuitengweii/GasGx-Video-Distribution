@@ -67,7 +67,7 @@ def test_call_telegram_api_uses_cybercar_proxy(monkeypatch) -> None:
         created.append(session)
         return session
 
-    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:33210")
+    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:7897")
     monkeypatch.delenv("CYBERCAR_USE_SYSTEM_PROXY", raising=False)
     telegram_api._SESSIONS.clear()
     monkeypatch.setattr(telegram_api.requests, "Session", build_session)
@@ -83,8 +83,8 @@ def test_call_telegram_api_uses_cybercar_proxy(monkeypatch) -> None:
     assert response["ok"] is True
     assert len(created) == 1
     assert created[0].proxies == {
-        "http": "http://127.0.0.1:33210",
-        "https": "http://127.0.0.1:33210",
+        "http": "http://127.0.0.1:7897",
+        "https": "http://127.0.0.1:7897",
     }
     assert created[0].calls[0][0] == "post"
 
@@ -99,14 +99,14 @@ def test_telegram_session_rebuilds_when_proxy_changes(monkeypatch) -> None:
 
     telegram_api._SESSIONS.clear()
     monkeypatch.setattr(telegram_api.requests, "Session", build_session)
-    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:33210")
+    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:7897")
     first = telegram_api._telegram_session(use_post=True)
     monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:33211")
     second = telegram_api._telegram_session(use_post=True)
 
     assert first is not second
     assert len(created) == 2
-    assert created[0].proxies["https"] == "http://127.0.0.1:33210"
+    assert created[0].proxies["https"] == "http://127.0.0.1:7897"
     assert created[1].proxies["https"] == "http://127.0.0.1:33211"
 
 
@@ -119,7 +119,7 @@ def test_call_telegram_api_proxy_error_falls_back_to_direct(monkeypatch) -> None
         created.append(session)
         return session
 
-    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:33210")
+    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:7897")
     monkeypatch.delenv("CYBERCAR_USE_SYSTEM_PROXY", raising=False)
     monkeypatch.setattr(telegram_api.requests, "Session", build_session)
     telegram_api._SESSIONS.clear()
@@ -135,7 +135,7 @@ def test_call_telegram_api_proxy_error_falls_back_to_direct(monkeypatch) -> None
 
     assert response["ok"] is True
     assert len(created) == 2
-    assert created[0].proxies["https"] == "http://127.0.0.1:33210"
+    assert created[0].proxies["https"] == "http://127.0.0.1:7897"
     assert created[1].proxies == {}
 
 
@@ -148,7 +148,7 @@ def test_call_telegram_api_connection_error_with_proxy_falls_back_to_direct(monk
         created.append(session)
         return session
 
-    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:33210")
+    monkeypatch.setenv("CYBERCAR_PROXY", "http://127.0.0.1:7897")
     monkeypatch.delenv("CYBERCAR_USE_SYSTEM_PROXY", raising=False)
     monkeypatch.setattr(telegram_api.requests, "Session", build_session)
     telegram_api._SESSIONS.clear()
@@ -164,5 +164,5 @@ def test_call_telegram_api_connection_error_with_proxy_falls_back_to_direct(monk
 
     assert response["ok"] is True
     assert len(created) == 2
-    assert created[0].proxies["https"] == "http://127.0.0.1:33210"
+    assert created[0].proxies["https"] == "http://127.0.0.1:7897"
     assert created[1].proxies == {}

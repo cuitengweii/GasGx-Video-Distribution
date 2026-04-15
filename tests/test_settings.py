@@ -6,7 +6,7 @@ from cybercar.settings import apply_runtime_environment, get_paths, load_app_con
 def test_app_config_has_local_runtime_paths() -> None:
     cfg = load_app_config()
     assert cfg["paths"]["runtime_root"] == "runtime"
-    assert cfg["network"]["proxy"] == "http://127.0.0.1:33210"
+    assert cfg["network"]["proxy"] == "${PROXY_URL}"
     assert cfg["cleanup"]["targets"]["processed_videos"]["retention_days"] == 14
     assert cfg["publish"]["platforms"]["wechat"]["upload_timeout"] == 30
 
@@ -27,7 +27,7 @@ def test_apply_runtime_environment_sets_default_proxy_env(monkeypatch) -> None:
 
     apply_runtime_environment()
 
-    assert os.environ["CYBERCAR_PROXY"] == "http://127.0.0.1:33210"
+    assert os.environ["CYBERCAR_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["CYBERCAR_USE_SYSTEM_PROXY"] == "0"
     assert os.environ["CYBERCAR_WECHAT_CHROME_DEBUG_PORT"] == "9334"
     assert os.environ["CYBERCAR_WECHAT_CHROME_USER_DATA_DIR"].replace("\\", "/").endswith("profiles/wechat")

@@ -1989,8 +1989,27 @@ def send_interaction_result(
             )
             return {"ok": True, "action": "edited", "message_id": int(message_id)}
         except Exception as exc:
-            if "message is not modified" in str(exc).lower():
+            error_text = str(exc).lower()
+            if "message is not modified" in error_text:
                 return {"ok": True, "action": "unchanged", "message_id": int(message_id)}
+            # Media cards (video/photo with caption) cannot be edited via editMessageText.
+            # Retry with editMessageCaption so callback updates replace the original card.
+            if "there is no text in the message to edit" in error_text:
+                caption_params = dict(edit_params)
+                caption_params["caption"] = str(caption_params.pop("text", "") or "").strip() or "(empty)"
+                caption_params.pop("disable_web_page_preview", None)
+                try:
+                    _call_telegram_api_with_emoji_fallback(
+                        bot_token=bot_token,
+                        method="editMessageCaption",
+                        params=caption_params,
+                        timeout_seconds=api_timeout,
+                        use_post=True,
+                    )
+                    return {"ok": True, "action": "edited", "message_id": int(message_id)}
+                except Exception as caption_exc:
+                    if "message is not modified" in str(caption_exc).lower():
+                        return {"ok": True, "action": "unchanged", "message_id": int(message_id)}
     payload = _call_telegram_api_with_emoji_fallback(
         bot_token=bot_token,
         method="sendMessage",

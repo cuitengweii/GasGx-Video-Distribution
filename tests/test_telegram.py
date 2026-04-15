@@ -247,6 +247,78 @@ def test_answer_interaction_toast_keeps_non_stale_error(monkeypatch) -> None:
         raise AssertionError("expected non-stale callback error to be raised")
 
 
+def test_send_interaction_result_uses_edit_caption_when_text_edit_not_supported(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_call(**kwargs):
+        calls.append(dict(kwargs))
+        method = str(kwargs.get("method") or "")
+        if method == "editMessageText":
+            raise RuntimeError("Bad Request: there is no text in the message to edit")
+        if method == "editMessageCaption":
+            return {"ok": True, "result": {"message_id": 42}}
+        if method == "sendMessage":
+            raise AssertionError("should not fallback to sendMessage when caption edit succeeds")
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_ui, "_call_telegram_api_with_emoji_fallback", fake_call)
+
+    result = telegram_ui.send_interaction_result(
+        bot_token="123456:token",
+        chat_id="1",
+        card={
+            "text": "status updated",
+            "parse_mode": "HTML",
+            "reply_markup": {"inline_keyboard": [[{"text": "A", "callback_data": "a"}]]},
+        },
+        timeout_seconds=10,
+        message_id=42,
+    )
+
+    assert result["ok"] is True
+    assert result["action"] == "edited"
+    assert [str(call.get("method") or "") for call in calls][:2] == ["editMessageText", "editMessageCaption"]
+    caption_params = calls[1]["params"]
+    assert isinstance(caption_params, dict)
+    assert str(caption_params.get("caption") or "") == "status updated"
+    assert "text" not in caption_params
+    assert "disable_web_page_preview" not in caption_params
+
+
+def test_send_interaction_result_falls_back_to_send_message_when_caption_edit_fails(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_call(**kwargs):
+        calls.append(dict(kwargs))
+        method = str(kwargs.get("method") or "")
+        if method == "editMessageText":
+            raise RuntimeError("Bad Request: there is no text in the message to edit")
+        if method == "editMessageCaption":
+            raise RuntimeError("Bad Request: message caption is too long")
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": 77}}
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_ui, "_call_telegram_api_with_emoji_fallback", fake_call)
+
+    result = telegram_ui.send_interaction_result(
+        bot_token="123456:token",
+        chat_id="1",
+        card={"text": "status updated", "parse_mode": "HTML"},
+        timeout_seconds=10,
+        message_id=42,
+    )
+
+    assert result["ok"] is True
+    assert result["action"] == "sent"
+    assert int(result["message_id"]) == 77
+    assert [str(call.get("method") or "") for call in calls][:3] == [
+        "editMessageText",
+        "editMessageCaption",
+        "sendMessage",
+    ]
+
+
 def test_build_telegram_card_uses_clean_section_layout() -> None:
     card = telegram_ui.build_telegram_card(
         "publish_result",

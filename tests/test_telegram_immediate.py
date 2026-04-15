@@ -3848,6 +3848,145 @@ def test_run_periodic_queue_maintenance_runs_and_reports_summary(tmp_path: Path,
     assert calls == ["tasks", "prefilter"]
 
 
+def test_resolve_x_prefilter_video_url_candidates_prioritizes_low_bitrate(monkeypatch) -> None:
+    monkeypatch.setattr(pipeline, "_extract_x_preview_url", lambda _source_url: "https://x.com/example/status/123")
+    monkeypatch.setattr(pipeline.core, "_extract_status_id_from_url", lambda _url: "123")
+    monkeypatch.setattr(pipeline.core, "_default_network_proxy", lambda: "")
+    monkeypatch.setattr(pipeline.core, "_default_use_system_proxy", lambda: False)
+    monkeypatch.setattr(
+        pipeline.core,
+        "_resolve_network_proxy",
+        lambda proxy, use_system_proxy=False: (proxy, use_system_proxy),
+    )
+    monkeypatch.setattr(pipeline.core, "_fetch_x_syndication_payload", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(
+        pipeline.core,
+        "_extract_x_video_variants_from_payload",
+        lambda _payload: [
+            {"content_type": "video/mp4", "bitrate": 2176000, "url": "https://video.twimg.com/high.mp4?tag=12"},
+            {"content_type": "video/mp4", "bitrate": 256000, "url": "https://video.twimg.com/low.mp4?tag=12"},
+            {"content_type": "application/x-mpegurl", "bitrate": 0, "url": "https://video.twimg.com/index.m3u8"},
+        ],
+    )
+
+    urls = pipeline._resolve_x_prefilter_video_url_candidates("https://x.com/example/status/123")
+
+    assert urls[0] == "https://video.twimg.com/low.mp4?tag=12"
+    assert urls[1] == "https://video.twimg.com/low.mp4"
+    assert "https://video.twimg.com/high.mp4?tag=12" in urls
+    assert all(".m3u8" not in token for token in urls)
+
+
+def test_send_telegram_prefilter_for_candidate_video_tries_alternative_urls(monkeypatch, tmp_path: Path) -> None:
+    video_calls: list[dict[str, object]] = []
+    card_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        pipeline,
+        "_resolve_x_prefilter_video_url_candidates",
+        lambda _source_url: [
+            "https://video.twimg.com/primary.mp4?tag=12",
+            "https://video.twimg.com/secondary.mp4?tag=12",
+        ],
+    )
+
+    def send_video(_settings: object, **kwargs: object) -> dict[str, object]:
+        video_calls.append(dict(kwargs))
+        if len(video_calls) == 1:
+            raise RuntimeError("primary failed")
+        return {"result": {"message_id": 880, "chat": {"id": CHAT_ID}}}
+
+    def send_card(_settings: object, _card: dict[str, object], **kwargs: object) -> dict[str, object]:
+        card_calls.append(dict(kwargs))
+        return {"result": {"message_id": 881, "chat": {"id": CHAT_ID}}}
+
+    monkeypatch.setattr(pipeline, "_send_telegram_video_message", send_video)
+    monkeypatch.setattr(pipeline, "_send_telegram_card_message", send_card)
+    result = pipeline._send_telegram_prefilter_for_candidate(
+        workspace=SimpleNamespace(root=tmp_path),
+        email_settings=SimpleNamespace(
+            enabled=True,
+            telegram_bot_token=BOT_TOKEN,
+            telegram_chat_id=CHAT_ID,
+            telegram_timeout_seconds=20,
+            telegram_api_base="",
+        ),
+        source_url="https://x.com/example/status/123456",
+        item_id="item-video-alt-urls",
+        idx=1,
+        total=1,
+        platform_hint="video",
+        mode="immediate_manual_publish",
+        tweet_text="video alt urls",
+        published_at="2026-03-15 10:00:00",
+        display_time="1m",
+        target_platforms="wechat,douyin",
+        media_kind="video",
+        fast_send=True,
+    )
+
+    assert result["result"]["message_id"] == 880
+    assert len(video_calls) == 2
+    assert str(video_calls[0].get("video_url")) == "https://video.twimg.com/primary.mp4?tag=12"
+    assert str(video_calls[1].get("video_url")) == "https://video.twimg.com/secondary.mp4?tag=12"
+    assert card_calls == []
+
+
+def test_send_telegram_prefilter_for_candidate_video_falls_back_after_all_urls_fail(monkeypatch, tmp_path: Path) -> None:
+    video_calls: list[dict[str, object]] = []
+    card_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        pipeline,
+        "_resolve_x_prefilter_video_url_candidates",
+        lambda _source_url: [
+            "https://video.twimg.com/primary.mp4?tag=12",
+            "https://video.twimg.com/secondary.mp4?tag=12",
+        ],
+    )
+
+    def send_video(_settings: object, **kwargs: object) -> dict[str, object]:
+        video_calls.append(dict(kwargs))
+        raise RuntimeError(f"video send failed: {kwargs.get('video_url')}")
+
+    def send_card(_settings: object, card: dict[str, object], **kwargs: object) -> dict[str, object]:
+        card_calls.append({"card": dict(card), "kwargs": dict(kwargs)})
+        return {"result": {"message_id": 882, "chat": {"id": CHAT_ID}}}
+
+    monkeypatch.setattr(pipeline, "_send_telegram_video_message", send_video)
+    monkeypatch.setattr(pipeline, "_send_telegram_card_message", send_card)
+    result = pipeline._send_telegram_prefilter_for_candidate(
+        workspace=SimpleNamespace(root=tmp_path),
+        email_settings=SimpleNamespace(
+            enabled=True,
+            telegram_bot_token=BOT_TOKEN,
+            telegram_chat_id=CHAT_ID,
+            telegram_timeout_seconds=20,
+            telegram_api_base="",
+        ),
+        source_url="https://x.com/example/status/123456",
+        item_id="item-video-fallback-all-fail",
+        idx=1,
+        total=1,
+        platform_hint="video",
+        mode="immediate_manual_publish",
+        tweet_text="video fallback all fail",
+        published_at="2026-03-15 10:00:00",
+        display_time="1m",
+        target_platforms="wechat,douyin",
+        media_kind="video",
+        fast_send=False,
+    )
+
+    assert len(video_calls) == 2
+    assert len(card_calls) == 1
+    assert result["result"]["message_id"] == 882
+    assert "secondary.mp4" in str(result.get("preview_error") or "")
+    fallback_card = card_calls[0]["card"]
+    assert isinstance(fallback_card, dict)
+    assert str(fallback_card.get("parse_mode") or "") == ""
+    assert "链接：https://x.com/example/status/123456" in str(fallback_card.get("text") or "")
+    assert card_calls[0]["kwargs"]["disable_web_page_preview"] is False
+
+
 def test_send_telegram_prefilter_for_candidate_fallback_keeps_buttons(monkeypatch, tmp_path: Path) -> None:
     attempts: list[dict[str, object]] = []
 
@@ -4042,6 +4181,7 @@ def test_handle_prefilter_publish_normal_queues_publish_job(tmp_path: Path, monk
     assert updated["action"] == "publish_normal"
     assert updated["wechat_declare_original"] is False
     assert len(record.updated_cards) == 1
+    assert "即采即发｜视频｜全部平台｜后台处理中" in str(record.updated_cards[0]["card"]["text"])
 
 
 def test_handle_prefilter_publish_callback_acks_before_queue_read(tmp_path: Path, monkeypatch) -> None:
@@ -6499,6 +6639,76 @@ def test_run_immediate_collect_item_job_adopts_downloaded_video_after_successful
     assert updated["status"] == "publish_running"
     assert updated["processed_name"] == "fresh-video.mp4"
     assert (workspace / "2_Processed" / "fresh-video.mp4").exists()
+
+
+def test_run_immediate_collect_item_job_skips_running_feedback_for_manual_publish_action(tmp_path: Path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_core = FakeCore()
+    fake_runner = FakeRunner(fake_core)
+    collect_calls: list[dict[str, object]] = []
+    approvals: list[dict[str, object]] = []
+    feedbacks: list[dict[str, object]] = []
+
+    monkeypatch.setattr(worker_impl, "core", fake_core)
+    monkeypatch.setattr(worker_impl, "_send_background_feedback", lambda **kwargs: feedbacks.append(dict(kwargs)))
+    monkeypatch.setattr(worker_impl, "_apply_review_approve", lambda **kwargs: approvals.append(dict(kwargs)))
+    monkeypatch.setattr(
+        worker_impl,
+        "_queue_immediate_platform_jobs",
+        lambda **kwargs: {
+            "spawned": 1,
+            "failed": 0,
+            "skipped_duplicate": 0,
+            "item": worker_impl._update_prefilter_item(
+                workspace,
+                str(kwargs["item_id"]),
+                updates={
+                    "status": "publish_running",
+                    "platform_results": {"wechat": {"status": "queued"}},
+                    "action": "publish",
+                },
+            ),
+        },
+    )
+
+    def run_unified_once(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        downloaded = workspace / "1_Downloads" / "manual-click.mp4"
+        downloaded.parent.mkdir(parents=True, exist_ok=True)
+        downloaded.write_text("video", encoding="utf-8")
+        return {"ok": True, "code": 0, "stdout": "collect success"}
+
+    monkeypatch.setattr(worker_impl, "_run_unified_once", run_unified_once)
+
+    item = _video_item(
+        video_name="",
+        processed_name="",
+        status="publish_requested",
+        action="publish_normal",
+        source_url="https://x.test/post/manual-click",
+    )
+    _save_prefilter_items(workspace, {str(item["id"]): item})
+
+    exit_code = actions.run_immediate_collect_item_job(
+        runner=fake_runner,
+        core=fake_core,
+        repo_root=workspace,
+        workspace=workspace,
+        timeout_seconds=30,
+        profile=DEFAULT_PROFILE,
+        telegram_bot_token=BOT_TOKEN,
+        telegram_chat_id=CHAT_ID,
+        item_id="item-video",
+    )
+
+    assert exit_code == 0
+    assert len(collect_calls) == 1
+    assert len(approvals) == 1
+    updated = _prefilter_items(workspace)["item-video"]
+    assert isinstance(updated, dict)
+    assert updated["status"] == "publish_running"
+    assert updated["processed_name"] == "manual-click.mp4"
+    assert len(feedbacks) == 0
 
 
 def test_run_immediate_collect_item_job_prefers_processed_target_matching_source(tmp_path: Path, monkeypatch) -> None:

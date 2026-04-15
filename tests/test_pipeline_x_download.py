@@ -644,14 +644,73 @@ def test_run_collect_once_reuses_latest_keywords_in_followup_run(tmp_path: Path,
 
 
 def test_build_parser_uses_configured_proxy_defaults(monkeypatch) -> None:
-    monkeypatch.setattr(pipeline.core, "_default_network_proxy", lambda: "http://127.0.0.1:33210")
+    monkeypatch.setattr(pipeline.core, "_default_network_proxy", lambda: "http://127.0.0.1:7897")
     monkeypatch.setattr(pipeline.core, "_default_use_system_proxy", lambda: False)
 
     parser = pipeline._build_parser()
     args = parser.parse_args([])
 
-    assert args.proxy == "http://127.0.0.1:33210"
+    assert args.proxy == "http://127.0.0.1:7897"
     assert args.use_system_proxy is False
+
+
+def test_download_video_filters_follow_publishable_duration_window(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path)
+    expected_filter = (
+        f"duration >= {engine.MIN_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f} & "
+        f"duration <= {engine.MAX_PUBLISHABLE_VIDEO_DURATION_SECONDS:.0f}"
+    )
+
+    source_commands: list[list[str]] = []
+    x_commands: list[list[str]] = []
+
+    monkeypatch.setattr(engine, "_log", lambda message: None)
+    monkeypatch.setattr(engine, "_ensure_binary", lambda name: None)
+    monkeypatch.setattr(engine, "_resolve_network_proxy", lambda proxy, use_system_proxy=False: (proxy, use_system_proxy))
+    monkeypatch.setattr(engine, "_build_subprocess_network_env", lambda proxy=None, use_system_proxy=False: {})
+    monkeypatch.setattr(engine, "_export_source_platform_cookies_for_ytdlp", lambda **kwargs: (None, "skipped-empty"))
+    monkeypatch.setattr(
+        engine,
+        "_run_command_result",
+        lambda cmd, step_name, env=None: source_commands.append(list(cmd))
+        or subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+
+    engine.download_from_source_urls(
+        workspace=workspace,
+        source_urls=["https://www.douyin.com/video/1234567890"],
+        source_platform="douyin",
+        limit=1,
+        include_images=False,
+    )
+
+    monkeypatch.setattr(engine, "_export_x_cookies_for_ytdlp", lambda *args, **kwargs: (None, "skipped-empty"))
+    monkeypatch.setattr(engine, "_filter_already_processed_x_urls", lambda workspace, urls: (list(urls), []))
+
+    def _capture_x_command(cmd, *, selected_urls, **kwargs):
+        x_commands.append(list(cmd))
+        return (
+            subprocess.CompletedProcess(args=["yt-dlp"], returncode=0, stdout="", stderr=""),
+            engine.XDownloadRetryStats(),
+        )
+
+    monkeypatch.setattr(engine, "_run_ytdlp_download_with_retries", _capture_x_command)
+
+    engine.download_from_x(
+        workspace=workspace,
+        limit=1,
+        tweet_urls=["https://x.com/example/status/1234567890"],
+        auto_discover_x=False,
+        x_download_fail_fast=False,
+    )
+
+    assert source_commands
+    assert "--match-filter" in source_commands[0]
+    assert source_commands[0][source_commands[0].index("--match-filter") + 1] == expected_filter
+
+    assert x_commands
+    assert "--match-filter" in x_commands[0]
+    assert x_commands[0][x_commands[0].index("--match-filter") + 1] == expected_filter
 
 
 def test_download_from_x_uses_direct_status_fallback_for_partial_failures(tmp_path: Path, monkeypatch) -> None:

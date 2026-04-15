@@ -809,6 +809,12 @@ def _build_shared_link_status_card(
     result_items: Sequence[Any],
 ) -> Dict[str, Any]:
     source_url = str(item.get("source_url") or "").strip()
+    normalized_status = str(status or "").strip().lower()
+    candidate_items: list[dict[str, str]] = [
+        {"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)},
+    ]
+    if normalized_status != "running":
+        candidate_items.append({"label": "标题", "value": _resolve_immediate_item_title(item)})
     sections = [
         {
             "title": "执行摘要",
@@ -818,10 +824,7 @@ def _build_shared_link_status_card(
         {
             "title": "候选信息",
             "emoji": "🎯",
-            "items": [
-                {"label": "平台", "value": _resolve_immediate_item_platform_text(item, with_logo=True)},
-                {"label": "标题", "value": _resolve_immediate_item_title(item)},
-            ],
+            "items": candidate_items,
         },
     ]
     return _build_prefilter_action_card(
@@ -829,7 +832,7 @@ def _build_shared_link_status_card(
         title=title,
         subtitle=f"{_menu_breadcrumb_for_item(item)}｜{subtitle}",
         sections=sections,
-        source_url=source_url,
+        source_url=source_url if normalized_status != "running" else "",
         include_source_button=False,
         action_rows=[[{"text": "📍 进度", "callback_data": build_home_callback_data("cybercar", "process_status")}]],
         menu_label="",
@@ -2341,6 +2344,14 @@ def _menu_breadcrumb_for_item(item: Dict[str, Any]) -> str:
     if platforms:
         parts.append(_menu_platform_label(platforms[0] if len(platforms) == 1 else "all"))
     return " / ".join(part for part in parts if str(part or "").strip())
+
+
+def _prefilter_running_subtitle(item: Dict[str, Any]) -> str:
+    breadcrumb = _menu_breadcrumb_for_item(item).replace(" / ", "｜").strip()
+    if not breadcrumb:
+        media_kind = _normalize_immediate_collect_media_kind(str(item.get("media_kind") or "video"))
+        breadcrumb = f"即采即发｜{IMMEDIATE_COLLECT_MEDIA_KIND_DISPLAY.get(media_kind, '媒体')}｜全部平台"
+    return f"{breadcrumb}｜后台处理中"
 
 
 def _menu_breadcrumb_for_action(action: str, value: str = "") -> str:
@@ -8583,6 +8594,9 @@ def _build_prefilter_status_card(
     result_items: list[Any],
 ) -> Dict[str, Any]:
     source_url = str(item.get("source_url") or "").strip()
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "running":
+        source_url = ""
     sections = [
         {
             "title": result_section_title,
@@ -11827,6 +11841,8 @@ def _finalize_immediate_collect_target(
 ) -> int:
     actor = str(item.get("actor") or "").strip() or "@manual"
     workflow = str(item.get("workflow") or "").strip().lower()
+    action_token = str(item.get("action") or "").strip().lower()
+    suppress_running_feedback_for_manual_publish = action_token in {"publish_normal", "publish_original"}
     updated_item = _update_prefilter_item(
         workspace,
         item_id,
@@ -12062,34 +12078,35 @@ def _finalize_immediate_collect_target(
                 item_id=item_id,
             ),
         )
-    _send_background_feedback(
-        runner=runner,
-        email_settings=email_settings,
-        workspace=workspace,
-        title="即采即发任务已排队",
-        subtitle="测试模式已放宽过滤，最终结果以后续平台通知为准" if immediate_test_mode else "后台已接管处理，最终结果以后续平台通知为准",
-        sections=[
-            _build_immediate_candidate_info_section(final_item),
-            {
-                "title": "执行状态",
-                "emoji": "🚀",
-                "items": [
-                    source_note,
-                    "测试模式下会放宽采集与重复内容过滤，但不代表平台已经发布成功。" if immediate_test_mode else "当前只确认后台任务已启动，不代表平台已经发布成功。",
-                    "各平台任务互不阻塞，会按实际结果分别回传通知。",
-                ],
-            },
-            _build_platform_launch_result_section(platform_results),
-        ],
-        status="running",
-        platforms=_resolve_item_target_platforms(final_item),
-        menu_label=_menu_breadcrumb_for_item(final_item),
-        task_identifier=_build_task_identifier(
-            action="collect_publish_latest",
-            value=str(final_item.get("target_platforms") or ""),
-            item_id=item_id,
-        ),
-    )
+    if not suppress_running_feedback_for_manual_publish:
+        _send_background_feedback(
+            runner=runner,
+            email_settings=email_settings,
+            workspace=workspace,
+            title="即采即发任务已排队",
+            subtitle="测试模式已放宽过滤，最终结果以后续平台通知为准" if immediate_test_mode else "后台已接管处理，最终结果以后续平台通知为准",
+            sections=[
+                _build_immediate_candidate_info_section(final_item),
+                {
+                    "title": "执行状态",
+                    "emoji": "🚀",
+                    "items": [
+                        source_note,
+                        "测试模式下会放宽采集与重复内容过滤，但不代表平台已经发布成功。" if immediate_test_mode else "当前只确认后台任务已启动，不代表平台已经发布成功。",
+                        "各平台任务互不阻塞，会按实际结果分别回传通知。",
+                    ],
+                },
+                _build_platform_launch_result_section(platform_results),
+            ],
+            status="running",
+            platforms=_resolve_item_target_platforms(final_item),
+            menu_label=_menu_breadcrumb_for_item(final_item),
+            task_identifier=_build_task_identifier(
+                action="collect_publish_latest",
+                value=str(final_item.get("target_platforms") or ""),
+                item_id=item_id,
+            ),
+        )
     return 0
 
 
@@ -15312,10 +15329,11 @@ def handle_callback_update(
             started_note = "已选择原创发布，后台任务正在排队，尚未确认平台发布成功。" if declare_original else "已选择普通发布，后台任务正在排队，尚未确认平台发布成功。"
             if immediate_test_mode:
                 started_note = "测试模式已放宽候选与重复内容过滤，后台仍会继续真实采集和平台排队。"
+            running_subtitle = "测试模式仅放宽前置过滤，后续仍走真实链路" if immediate_test_mode else _prefilter_running_subtitle(started_item)
             optimistic_card = _build_prefilter_status_card(
                 item=started_item,
                 title="即采即发测试已排队" if immediate_test_mode else "即采即发任务已排队",
-                subtitle="测试模式仅放宽前置过滤，后续仍走真实链路" if immediate_test_mode else "当前卡片已锁定，等待后台下载素材并分平台执行",
+                subtitle=running_subtitle,
                 status="running",
                 result_section_title="执行状态",
                 result_items=[
@@ -15343,10 +15361,11 @@ def handle_callback_update(
                     final_note = "已选择原创发布，后台任务已提交，等待平台状态回传。" if declare_original else "已选择普通发布，后台任务已提交，等待平台状态回传。"
                     if immediate_test_mode:
                         final_note = "测试模式任务已提交，后续会继续真实采集和平台发布，只是放宽了前置筛选。"
+                    running_subtitle = "测试模式仅放宽前置过滤，后续仍走真实链路" if immediate_test_mode else _prefilter_running_subtitle(started_item)
                     card_update = _build_prefilter_status_card(
                         item=started_item,
                         title="即采即发测试已排队" if immediate_test_mode else "即采即发任务已排队",
-                        subtitle="测试模式仅放宽前置过滤，后续仍走真实链路" if immediate_test_mode else "当前卡片已锁定，等待后台下载素材并分平台执行",
+                        subtitle=running_subtitle,
                         status="running",
                         result_section_title="执行状态",
                         result_items=[

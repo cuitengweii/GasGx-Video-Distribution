@@ -922,12 +922,17 @@ def _send_telegram_prefilter_for_video(
         target_platforms=str(getattr(args, "upload_platforms", "") or ""),
     )
     card["reply_markup"] = reply_markup
-
+    parse_mode = str(card.get("parse_mode") or "").strip() or "HTML"
+    text = str(card.get("text") or "").strip()
+    preview_result: dict[str, Any] = {}
+    preview_error = ""
     try:
-        resp = _send_telegram_card_message(
+        resp = _send_telegram_video_message(
             email_settings,
-            card,
-            disable_web_page_preview=(not source_url),
+            video_path=video,
+            caption=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
         )
         result = resp.get("result") if isinstance(resp, dict) else {}
         if not isinstance(result, dict):
@@ -955,6 +960,53 @@ def _send_telegram_prefilter_for_video(
             latest_row["video_name"] = str(latest_row.get("video_name", "") or video.name)
             latest_row["collected_at"] = str(latest_row.get("collected_at", "") or collected_at)
             latest_row["message_id"] = msg_id
+            latest_row["preview_message_id"] = msg_id
+            latest_row["chat_id"] = str(msg_chat.get("id") or chat_id or "")
+            _save_telegram_prefilter_queue(queue_path, latest_queue)
+        finally:
+            _release_file_lock(lock_dir)
+        if total > 0:
+            core._log(f"[Prefilter] Sent review message {idx}/{total}: {video.name} (id={item_id}).")
+        else:
+            core._log(f"[Prefilter] Sent immediate review message #{idx}: {video.name} (id={item_id}).")
+        return True
+    except Exception as exc:
+        preview_error = str(exc)
+        core._log(
+            f"[Prefilter] Video container send failed for {video.name} (id={item_id}): {exc}; fallback to card flow."
+        )
+    try:
+        resp = _send_telegram_card_message(
+            email_settings,
+            card,
+            disable_web_page_preview=(not source_url),
+        )
+        result = resp.get("result") if isinstance(resp, dict) else {}
+        if not isinstance(result, dict):
+            result = {}
+        msg_id = int(result.get("message_id") or 0)
+        msg_chat = result.get("chat") if isinstance(result.get("chat"), dict) else {}
+        lock_dir = _acquire_file_lock(queue_path)
+        try:
+            latest_queue = _load_telegram_prefilter_queue(queue_path)
+            latest_items = latest_queue.get("items", {})
+            if not isinstance(latest_items, dict):
+                latest_items = {}
+                latest_queue["items"] = latest_items
+            latest_row = latest_items.get(item_id, {})
+            if not isinstance(latest_row, dict):
+                latest_row = {"id": item_id, "video_name": video.name, "created_at": now_ts}
+                latest_items[item_id] = latest_row
+            current_status = str(latest_row.get("status", "") or "").strip().lower()
+            if current_status not in {"up_confirmed", "down_confirmed"}:
+                latest_row["status"] = "pending"
+                latest_row["updated_at"] = _now_text()
+                latest_row["action"] = "sent"
+                latest_row["actor"] = ""
+            latest_row["video_name"] = str(latest_row.get("video_name", "") or video.name)
+            latest_row["collected_at"] = str(latest_row.get("collected_at", "") or collected_at)
+            latest_row["message_id"] = msg_id
+            latest_row["preview_message_id"] = 0
             latest_row["chat_id"] = str(msg_chat.get("id") or chat_id or "")
             _save_telegram_prefilter_queue(queue_path, latest_queue)
         finally:
@@ -977,11 +1029,15 @@ def _send_telegram_prefilter_for_video(
                 latest_row = {"id": item_id, "video_name": video.name, "created_at": now_ts}
                 latest_items[item_id] = latest_row
             current_status = str(latest_row.get("status", "") or "").strip().lower()
+            latest_row["preview_message_id"] = 0
             if current_status not in {"up_confirmed", "down_confirmed"}:
                 latest_row["status"] = "send_failed"
                 latest_row["updated_at"] = _now_text()
                 latest_row["action"] = f"send_failed:{_single_line_preview(str(exc), limit=120)}"
-            latest_row["last_error"] = str(exc)
+            if preview_error:
+                latest_row["last_error"] = f"{exc}；video_preview={preview_error}"
+            else:
+                latest_row["last_error"] = str(exc)
             _save_telegram_prefilter_queue(queue_path, latest_queue)
         finally:
             _release_file_lock(lock_dir)
@@ -1007,6 +1063,22 @@ def _send_telegram_prefilter_for_candidate(
     media_kind: str = "",
     fast_send: bool = False,
 ) -> dict[str, Any]:
+    def _build_legacy_preview_fallback_card() -> dict[str, Any]:
+        preview = _single_line_preview(tweet_text, limit=180) or "-"
+        lines = [
+            f"图片采集审核候选 {idx}/{total}" if total > 0 else "图片采集审核候选",
+            f"平台：{platform_hint or '-'}",
+            f"时间：{display_time or published_at or '-'}",
+            f"内容：{preview}",
+        ]
+        if source_url:
+            lines.append(f"链接：{source_url}")
+        return {
+            "text": "\n".join(lines),
+            "reply_markup": card.get("reply_markup"),
+            "parse_mode": "",
+        }
+
     card = _build_telegram_prefilter_candidate_card(
         workspace_root=workspace.root,
         source_url=source_url,
@@ -1027,35 +1099,67 @@ def _send_telegram_prefilter_for_candidate(
         mode=mode,
         target_platforms=target_platforms,
     )
+    normalized_media_kind = str(media_kind or "").strip().lower()
+    preview_result: dict[str, Any] = {}
+    preview_error = ""
+    force_legacy_preview_fallback = False
+    if normalized_media_kind == "video":
+        preview_video_urls = _resolve_x_prefilter_video_url_candidates(source_url)
+        if not preview_video_urls:
+            core._log(f"[Prefilter] Candidate video URL unresolved: {item_id}; fallback to card flow.")
+        for attempt_index, preview_video_url in enumerate(preview_video_urls, 1):
+            try:
+                preview_response = _send_telegram_video_message(
+                    email_settings,
+                    video_url=preview_video_url,
+                    caption=str(card.get("text") or "").strip(),
+                    parse_mode=str(card.get("parse_mode") or "").strip() or "HTML",
+                    reply_markup=card.get("reply_markup") if isinstance(card.get("reply_markup"), dict) else None,
+                    max_attempts=2 if fast_send else 3,
+                    api_retries=1 if fast_send else 2,
+                    timeout_seconds_override=8 if fast_send else None,
+                )
+                if isinstance(preview_response, dict):
+                    preview_result = dict(preview_response)
+                    return preview_result
+            except Exception as exc:
+                preview_error = str(exc)
+                core._log(
+                    "[Prefilter] Candidate video container send failed: "
+                    f"{item_id} attempt={attempt_index}/{len(preview_video_urls)} "
+                    f"url={_single_line_preview(preview_video_url, limit=120)} ({exc})"
+                )
+        if preview_video_urls:
+            force_legacy_preview_fallback = True
+            core._log(
+                f"[Prefilter] Candidate video container exhausted: {item_id}; fallback to card flow."
+            )
     preview_url = str(_extract_x_preview_url(source_url) or "").strip()
     if not preview_url:
         preview_url = str(source_url or "").strip()
     if preview_url:
         card["preview_url"] = preview_url
+    if force_legacy_preview_fallback:
+        card = _build_legacy_preview_fallback_card()
     try:
-        return _send_telegram_card_message(
+        response = _send_telegram_card_message(
             email_settings,
             card,
-            disable_web_page_preview=(not source_url),
+            disable_web_page_preview=(False if force_legacy_preview_fallback else (not source_url)),
             max_attempts=2 if fast_send else 3,
             api_retries=1 if fast_send else 2,
             timeout_seconds_override=8 if fast_send else None,
         )
+        if preview_result or preview_error:
+            enriched = dict(response if isinstance(response, dict) else {})
+            if preview_result:
+                enriched["preview_result"] = preview_result
+            if preview_error:
+                enriched["preview_error"] = preview_error
+            return enriched
+        return response
     except Exception as exc:
-        preview = _single_line_preview(tweet_text, limit=180) or "-"
-        lines = [
-            f"图片采集审核候选 {idx}/{total}" if total > 0 else "图片采集审核候选",
-            f"平台：{platform_hint or '-'}",
-            f"时间：{display_time or published_at or '-'}",
-            f"内容：{preview}",
-        ]
-        if source_url:
-            lines.append(f"链接：{source_url}")
-        fallback_card = {
-            "text": "\n".join(lines),
-            "reply_markup": card.get("reply_markup"),
-            "parse_mode": "",
-        }
+        fallback_card = _build_legacy_preview_fallback_card()
         fallback_response = _send_telegram_card_message(
             email_settings,
             fallback_card,
@@ -1064,6 +1168,13 @@ def _send_telegram_prefilter_for_candidate(
             api_retries=1 if fast_send else 0,
             timeout_seconds_override=8 if fast_send else None,
         )
+        if preview_result or preview_error:
+            enriched = dict(fallback_response if isinstance(fallback_response, dict) else {})
+            if preview_result:
+                enriched["preview_result"] = preview_result
+            if preview_error:
+                enriched["preview_error"] = preview_error
+            fallback_response = enriched
         core._log(f"[Prefilter] Candidate card send failed, fallback text sent: {item_id} ({exc})")
         return fallback_response
 
@@ -1221,6 +1332,93 @@ def _apply_x_link_preview_options(
     )
 
 
+def _resolve_x_prefilter_video_url_candidates(source_url: str) -> list[str]:
+    preview_url = str(_extract_x_preview_url(source_url) or "").strip()
+    if not preview_url:
+        return []
+    try:
+        status_id = str(core._extract_status_id_from_url(preview_url) or "").strip()
+    except Exception:
+        status_id = ""
+    if not status_id.isdigit():
+        return []
+    proxy = str(core._default_network_proxy() or "").strip() or None
+    use_system_proxy = bool(core._default_use_system_proxy())
+    try:
+        proxy, use_system_proxy = core._resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    except Exception:
+        pass
+    try:
+        payload = core._fetch_x_syndication_payload(
+            status_id,
+            proxy=proxy,
+            use_system_proxy=use_system_proxy,
+        )
+    except Exception:
+        payload = None
+    if not isinstance(payload, dict) or not payload:
+        return []
+    try:
+        variants = core._extract_x_video_variants_from_payload(payload)
+    except Exception:
+        variants = []
+    if not isinstance(variants, list):
+        return []
+
+    ranked: list[tuple[int, str]] = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        variant_url = str(variant.get("url") or "").strip()
+        if not variant_url:
+            continue
+        content_type = str(variant.get("content_type") or "").strip().lower()
+        if content_type and content_type != "video/mp4":
+            continue
+        try:
+            bitrate = int(variant.get("bitrate") or 0)
+        except Exception:
+            bitrate = 0
+        # Prioritize low bitrate mp4 URLs first: remote Telegram fetch is usually
+        # more stable with smaller payloads and less strict CDN edge behavior.
+        normalized_bitrate = bitrate if bitrate > 0 else 10**9
+        ranked.append((normalized_bitrate, variant_url))
+
+    ranked.sort(key=lambda item: item[0])
+    urls: list[str] = []
+    seen: set[str] = set()
+    for _bitrate, url in ranked:
+        for candidate_url in _expand_video_url_candidates(url):
+            if not candidate_url or candidate_url in seen:
+                continue
+            seen.add(candidate_url)
+            urls.append(candidate_url)
+    return urls
+
+
+def _expand_video_url_candidates(video_url: str) -> list[str]:
+    clean_url = str(video_url or "").strip()
+    if not clean_url:
+        return []
+    results = [clean_url]
+    try:
+        parsed = urlparse(clean_url)
+    except Exception:
+        parsed = None
+    if parsed is not None and str(parsed.query or "").strip():
+        queryless = parsed._replace(query="", fragment="").geturl()
+        if queryless and queryless not in results:
+            results.append(queryless)
+    return results
+
+
+def _resolve_x_prefilter_video_url(source_url: str) -> str:
+    urls = _resolve_x_prefilter_video_url_candidates(source_url)
+    if urls:
+        return str(urls[0] or "").strip()
+    return ""
+
+
 def _send_telegram_text(
     settings: EmailSettings,
     text: str,
@@ -1260,6 +1458,98 @@ def _send_telegram_text(
     except Exception as exc:
         core._log(f"[Notify] Telegram send failed: {exc}")
         return False
+
+
+def _send_telegram_video_message(
+    settings: EmailSettings,
+    *,
+    video_path: Optional[Path] = None,
+    video_url: str = "",
+    caption: str = "",
+    reply_markup: Optional[dict[str, Any]] = None,
+    parse_mode: str = "",
+    supports_streaming: bool = True,
+    max_attempts: int = 3,
+    api_retries: int = 2,
+    timeout_seconds_override: Optional[int] = None,
+) -> dict[str, Any]:
+    if not settings.enabled:
+        raise RuntimeError("telegram settings not enabled")
+    bot_token = str(settings.telegram_bot_token or "").strip()
+    chat_id = str(settings.telegram_chat_id or "").strip()
+    if not bot_token or not chat_id:
+        raise RuntimeError("telegram bot token/chat id missing")
+    normalized_video_url = str(video_url or "").strip()
+    resolved_video_path = Path(video_path).resolve() if isinstance(video_path, Path) else None
+    has_local_video = bool(
+        isinstance(resolved_video_path, Path)
+        and resolved_video_path.exists()
+        and resolved_video_path.is_file()
+    )
+    if not has_local_video and not normalized_video_url:
+        raise RuntimeError("telegram video path/url missing")
+    timeout_seconds = max(3, int(timeout_seconds_override or settings.telegram_timeout_seconds or 20))
+    params: dict[str, Any] = {
+        "chat_id": chat_id,
+        "supports_streaming": "true" if supports_streaming else "false",
+    }
+    clean_caption = str(caption or "").strip()
+    if clean_caption:
+        params["caption"] = clean_caption
+        if str(parse_mode or "").strip():
+            params["parse_mode"] = str(parse_mode or "").strip()
+    if isinstance(reply_markup, dict):
+        params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=True)
+
+    total_attempts = max(1, int(max_attempts))
+    request_retries = max(0, int(api_retries))
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, total_attempts + 1):
+        try:
+            if has_local_video and isinstance(resolved_video_path, Path):
+                suffix = str(resolved_video_path.suffix or "").strip().lower()
+                if suffix in {".mp4", ".m4v"}:
+                    mime = "video/mp4"
+                elif suffix == ".mov":
+                    mime = "video/quicktime"
+                elif suffix == ".webm":
+                    mime = "video/webm"
+                else:
+                    mime = "application/octet-stream"
+                return _telegram_call_api(
+                    bot_token=bot_token,
+                    method="sendVideo",
+                    params=params,
+                    files={
+                        "video": (
+                            resolved_video_path.name,
+                            resolved_video_path.read_bytes(),
+                            mime,
+                        )
+                    },
+                    timeout_seconds=timeout_seconds,
+                    api_base=str(settings.telegram_api_base or "").strip(),
+                    use_post=True,
+                    max_retries=request_retries,
+                )
+            payload = dict(params)
+            payload["video"] = normalized_video_url
+            return _telegram_call_api(
+                bot_token=bot_token,
+                method="sendVideo",
+                params=payload,
+                timeout_seconds=timeout_seconds,
+                api_base=str(settings.telegram_api_base or "").strip(),
+                use_post=True,
+                max_retries=request_retries,
+            )
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= total_attempts:
+                break
+            core._log(f"[Notify] Telegram video send retry {attempt}/{max(0, total_attempts - 1)} failed: {exc}")
+            time.sleep(float(attempt))
+    raise RuntimeError(str(last_exc) if last_exc else "telegram video send failed")
 
 
 def _send_telegram_card_message(
