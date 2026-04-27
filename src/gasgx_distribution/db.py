@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import sqlite3
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Iterator
+
+from .paths import get_paths
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS matrix_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    niche TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_platforms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    platform TEXT NOT NULL,
+    handle TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    capability_status TEXT NOT NULL DEFAULT 'registered',
+    login_status TEXT NOT NULL DEFAULT 'unknown',
+    last_checked_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(account_id, platform),
+    FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS browser_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_platform_id INTEGER NOT NULL UNIQUE,
+    profile_dir TEXT NOT NULL,
+    debug_port INTEGER NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(account_platform_id) REFERENCES account_platforms(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS automation_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,
+    platform TEXT NOT NULL DEFAULT '',
+    task_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    summary TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS video_stats_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,
+    platform TEXT NOT NULL,
+    video_ref TEXT NOT NULL DEFAULT '',
+    views INTEGER NOT NULL DEFAULT 0,
+    likes INTEGER NOT NULL DEFAULT 0,
+    comments INTEGER NOT NULL DEFAULT 0,
+    shares INTEGER NOT NULL DEFAULT 0,
+    messages INTEGER NOT NULL DEFAULT 0,
+    published_at TEXT NOT NULL DEFAULT '',
+    captured_at INTEGER NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE SET NULL
+);
+"""
+
+
+def now_ts() -> int:
+    return int(time.time())
+
+
+def dict_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {key: row[key] for key in row.keys()}
+
+
+def database_path() -> Path:
+    paths = get_paths()
+    paths.ensure()
+    return paths.database_path
+
+
+@contextmanager
+def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
+    db_path = path or database_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_db(path: Path | None = None) -> None:
+    with connect(path) as conn:
+        conn.executescript(SCHEMA)

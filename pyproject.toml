@@ -11,7 +11,10 @@ dependencies = [
   "requests",
   "python-dotenv",
   "websocket-client",
-  "pillow"
+  "pillow",
+  "fastapi",
+  "uvicorn",
+  "pydantic"
 ]
 
 [project.optional-dependencies]
@@ -25,6 +28,7 @@ dev = [
 
 [project.scripts]
 cybercar = "cybercar.cli:main"
+gasgx-distribution = "gasgx_distribution.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -2,6 +2,33 @@
 
 Standalone CyberCar workspace extracted from the legacy monorepo.
 
+## GasGx Video Distribution console
+
+This workspace also contains a local GasGx matrix-account console for maintaining 30+ short-video accounts with separate browser profiles.
+
+```powershell
+python -m gasgx_distribution web
+```
+
+Default URL: `http://127.0.0.1:8765/`
+
+The console stores its SQLite database at `runtime/gasgx_distribution.db` and creates per-account browser state under `profiles/matrix/<account_key>/<platform>/`. Phase 1 keeps existing CyberCar CLI behavior intact and exposes unsupported deep automations for LinkedIn, Facebook, YouTube, VK, and Instagram as explicit `unsupported` task records instead of pretending they are production-ready.
+
+For one-pass WeChat test publishing across active matrix accounts, place videos in:
+
+```powershell
+G:\GasGx Video Distribution\runtime\materials\videos
+```
+
+Then run:
+
+```powershell
+python -m gasgx_distribution matrix-publish-wechat --dry-run
+python -m gasgx_distribution matrix-publish-wechat
+```
+
+The matrix publisher assigns the newest unused video to each active account in account-id order and writes usage state to `runtime/matrix_publish_state.json` so the same material is not selected again.
+
 ## Core scope
 
 - Manual collect/publish review through the Telegram bot

@@ -1141,6 +1141,25 @@ def _default_use_system_proxy() -> bool:
     return _parse_bool_token(str(raw or ""), default=False)
 
 
+def _default_download_network_proxy() -> str:
+    configured = _env_first("CYBERCAR_DOWNLOAD_PROXY")
+    if configured:
+        return configured
+    return str(_app_network_config().get("download_proxy") or "").strip()
+
+
+def _default_download_use_system_proxy() -> bool:
+    configured = _env_first("CYBERCAR_DOWNLOAD_USE_SYSTEM_PROXY")
+    if configured:
+        return _parse_bool_token(configured, default=False)
+    raw = _app_network_config().get("download_use_system_proxy")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    return _parse_bool_token(str(raw or ""), default=False)
+
+
 def _merge_no_proxy_items(raw_no_proxy: str, extras: Iterable[str]) -> str:
     values = [str(raw_no_proxy or "").strip(), *[str(x or "").strip() for x in extras]]
     items: list[str] = []
@@ -13445,6 +13464,8 @@ def download_from_x(
     tweet_urls: Optional[list[str]] = None,
     proxy: Optional[str] = None,
     use_system_proxy: bool = False,
+    download_proxy: Optional[str] = None,
+    download_use_system_proxy: bool = False,
     include_images: bool = False,
     image_min_target: int = 0,
     auto_discover_x: bool = True,
@@ -13472,8 +13493,18 @@ def download_from_x(
     download_dir = _workspace_download_dir(workspace, download_media_kind)
     history_file = _workspace_history_file(workspace, download_media_kind)
     effective_proxy, effective_use_system_proxy = _resolve_network_proxy(proxy, use_system_proxy=use_system_proxy)
+    effective_download_proxy, effective_download_use_system_proxy = _resolve_network_proxy(
+        download_proxy,
+        use_system_proxy=download_use_system_proxy,
+    )
     network_mode = "explicit_proxy" if effective_proxy else ("system_proxy" if effective_use_system_proxy else "direct_tun")
-    _log(f"[Network] mode={network_mode} (proxy={'set' if effective_proxy else 'none'})")
+    download_network_mode = (
+        "explicit_proxy"
+        if effective_download_proxy
+        else ("system_proxy" if effective_download_use_system_proxy else "direct_tun")
+    )
+    _log(f"[Network] discovery_mode={network_mode} (proxy={'set' if effective_proxy else 'none'})")
+    _log(f"[Network] download_mode={download_network_mode} (proxy={'set' if effective_download_proxy else 'none'})")
     if include_images:
         _log("[Downloader] X media mode enabled: video + image (for Xiaohongshu).")
     _ensure_binary("yt-dlp")
@@ -13725,11 +13756,17 @@ def download_from_x(
             ]
     if effective_proxy:
         cmd.extend(["--proxy", effective_proxy])
+    if effective_download_proxy:
+        with contextlib.suppress(Exception):
+            proxy_index = cmd.index("--proxy")
+            if proxy_index >= 0 and proxy_index + 1 < len(cmd):
+                del cmd[proxy_index : proxy_index + 2]
+        cmd.extend(["--proxy", effective_download_proxy])
     if isinstance(cookie_export_path, Path) and cookie_export_path.exists():
         cmd.extend(["--cookies", str(cookie_export_path)])
     command_env = _build_subprocess_network_env(
-        proxy=effective_proxy,
-        use_system_proxy=effective_use_system_proxy,
+        proxy=effective_download_proxy,
+        use_system_proxy=effective_download_use_system_proxy,
     )
     discovery_elapsed = time.monotonic() - discovery_started_at
     _log(
@@ -13779,8 +13816,8 @@ def download_from_x(
                         status_urls=image_status_candidates,
                         limit=need_images,
                         keyword=keyword,
-                        proxy=effective_proxy,
-                        use_system_proxy=effective_use_system_proxy,
+                        proxy=effective_download_proxy,
+                        use_system_proxy=effective_download_use_system_proxy,
                     )
                     if extra_images:
                         after = {p.resolve() for p in download_dir.iterdir() if p.is_file()}
@@ -13803,8 +13840,8 @@ def download_from_x(
                     status_urls=fallback_status_urls,
                     limit=need_videos,
                     keyword=keyword,
-                    proxy=effective_proxy,
-                    use_system_proxy=effective_use_system_proxy,
+                    proxy=effective_download_proxy,
+                    use_system_proxy=effective_download_use_system_proxy,
                 )
                 fallback_elapsed = time.monotonic() - fallback_started_at
                 direct_status_fallback_downloaded = len(extra_videos)
@@ -28779,6 +28816,12 @@ def main() -> int:
     )
     x_cookie_file = str(getattr(args, "x_cookie_file", "") or "").strip() or DEFAULT_X_COOKIE_FILE
     x_debug_port = max(1, int(getattr(args, "x_debug_port", DEFAULT_X_DEBUG_PORT) or DEFAULT_X_DEBUG_PORT))
+    download_proxy = _default_download_network_proxy().strip() or None
+    download_use_system_proxy = _default_download_use_system_proxy()
+    download_proxy, download_use_system_proxy = _resolve_network_proxy(
+        download_proxy,
+        use_system_proxy=download_use_system_proxy,
+    )
     configured_collection_name = str(runtime_config.get("collection_name", "") or "").strip()
     resolved_collection_name = (args.collection_name or "").strip() or configured_collection_name or DEFAULT_COLLECTION_NAME
     resolved_collection_names = {
@@ -28813,6 +28856,7 @@ def main() -> int:
         f"collection_name={resolved_collection_name}, "
         f"collection_names={resolved_collection_names}, "
         f"network_mode={network_mode}, "
+        f"download_network_mode={'explicit_proxy' if download_proxy else ('system_proxy' if download_use_system_proxy else 'direct_tun')}, "
         f"auto_delete_source_files={auto_delete_source_files}, "
         f"spark_ai_ready={_spark_config_ready(spark_ai_config)}, "
         f"exclude_keywords={len(exclude_keywords)}, "
@@ -28839,6 +28883,8 @@ def main() -> int:
                 tweet_urls=extra_urls,
                 proxy=proxy,
                 use_system_proxy=use_system_proxy,
+                download_proxy=download_proxy,
+                download_use_system_proxy=download_use_system_proxy,
                 include_images=image_publish_enabled,
                 image_min_target=(max(1, int(args.limit)) if image_publish_enabled else 0),
                 auto_discover_x=not args.no_x_auto_discover,
