@@ -52,6 +52,7 @@ def get_state() -> dict[str, Any]:
         "templates": load_templates(TEMPLATES_PATH),
         "cover_templates": load_cover_templates(COVER_TEMPLATES_PATH),
         "bgm_library": _load_json(BGM_LIBRARY_PATH, {}),
+        "local_bgm_dir": str(BGM_DIR),
         "local_bgm": [path.name for path in _list_local_bgm_files(BGM_DIR)],
         "category_counts": _count_category_files(settings.source_root),
         "source_dirs": {

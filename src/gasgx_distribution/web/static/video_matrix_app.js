@@ -188,19 +188,14 @@ async function generate() {
   updateJobStatus({ status: "queued", stage: "queued", progress: 0, message: "正在提交生成任务..." });
   try {
     const statePayload = collectState();
-    const bgm = $("bgmUpload")?.files?.[0];
-    if (statePayload.bgm_source !== "Local library" && !bgm) {
-      throw new Error("请先上传背景音乐，或在背景音乐库中选择本地音乐。");
-    }
-    if (statePayload.bgm_source === "Local library" && !statePayload.bgm_library_id) {
-      throw new Error("本地音乐库没有可用音乐，请先上传背景音乐。");
+    if (!statePayload.bgm_library_id) {
+      throw new Error("本地背景音乐库还没有可用 MP3。请把 MP3 文件放入左侧问号提示里的目录，然后刷新页面。");
     }
     if (statePayload.source_mode === "Upload files" && !$("sourceFiles").files.length) {
       throw new Error("手动上传模式下请先选择素材视频。");
     }
     const form = new FormData();
     form.append("payload", JSON.stringify({...statePayload, transcript_text: $("transcriptText").value}));
-    if (bgm) form.append("bgm_file", bgm);
     [...($("sourceFiles").files || [])].forEach((file) => form.append("source_files", file));
     const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
     updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
@@ -235,35 +230,31 @@ function collectState() {
     source_mode: radioValue("source_mode"), use_live_data: true,
     headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value,
     follow_text: $("followText").value, hud_text: $("hudText").value,
-    bgm_source: radioValue("bgm_source"), bgm_library_id: $("bgmLibrary")?.value || "",
+    bgm_source: "Local library", bgm_library_id: $("bgmLibrary")?.value || "",
     recent_limits: {category_A:Number($("category_A").value), category_B:Number($("category_B").value), category_C:Number($("category_C").value)}
   };
 }
 
 function renderBgm(data) {
+  const localBgm = Array.isArray(data.local_bgm) ? data.local_bgm : [];
+  const localBgmDir = data.local_bgm_dir || "runtime/video_matrix/bgm";
   $("bgmPanel").innerHTML = `
-    <div class="radio-row" id="bgmSourceGroup"></div>
+    <div class="bgm-label-row">
+      <strong>本地背景音乐</strong>
+      <button class="help-dot" type="button" aria-label="背景音乐目录" title="把 MP3 文件放到：${escapeHtml(localBgmDir)}">?</button>
+    </div>
     <select id="bgmLibrary"></select>
-    <label class="file-picker">
-      <input id="bgmUpload" type="file" accept=".mp3,.wav,.m4a">
-      <span>选择背景音乐</span>
-      <small id="bgmFileName">未选择文件</small>
-    </label>
+    <p id="bgmLibraryHint" class="bgm-library-hint"></p>
     <div class="links bgm-links"></div>`;
-  renderRadio("bgmSourceGroup", "bgm_source", [["Upload file", "上传文件"], ["Local library", "本地库"]], state.bgm_source || "Upload file", updateBgmMode);
-  $("bgmLibrary").innerHTML = data.local_bgm.map(name => `<option>${name}</option>`).join("");
-  $("bgmLibrary").value = state.bgm_library_id || "";
+  $("bgmLibrary").innerHTML = localBgm.length
+    ? localBgm.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")
+    : `<option value="">暂无 MP3 文件</option>`;
+  $("bgmLibrary").disabled = localBgm.length === 0;
+  $("bgmLibrary").value = localBgm.includes(state.bgm_library_id) ? state.bgm_library_id : (localBgm[0] || "");
+  $("bgmLibraryHint").textContent = localBgm.length
+    ? `已找到 ${localBgm.length} 首本地 MP3，默认读取：${localBgmDir}`
+    : `请把 MP3 文件放入：${localBgmDir}，然后刷新页面。`;
   document.querySelector("#bgmPanel .links").innerHTML = Object.values(data.bgm_library || {}).map(item => `<a href="${item.download_page}" target="_blank" rel="noopener">${item.name}</a>`).join("");
-  $("bgmUpload").onchange = () => {
-    $("bgmFileName").textContent = $("bgmUpload").files?.[0]?.name || "未选择文件";
-  };
-  updateBgmMode();
-}
-
-function updateBgmMode() {
-  const local = radioValue("bgm_source") === "Local library";
-  $("bgmLibrary").classList.toggle("hidden", !local);
-  $("bgmUpload").classList.toggle("hidden", local);
 }
 function updateSourceMode() { $("uploadSourcesWrap").classList.toggle("hidden", radioValue("source_mode") !== "Upload files"); }
 function renderRadio(containerId, name, options, selected, onchange) {
@@ -278,10 +269,13 @@ function openFolder(path) { return api("/api/video-matrix/open-folder", {method:
 function updateJobStatus(job) {
   const stage = job.stage || job.status || "queued";
   const percent = Math.max(0, Math.min(100, Math.round((job.progress || 0) * 100)));
+  const isError = job.status === "error";
   $("jobStatusTitle").textContent = job.status === "error" ? "生成失败" : job.status === "complete" ? "生成完成" : `正在${jobMessages[stage] ? jobMessages[stage].replace(/^正在/, "").replace(/。$/, "") : "处理"}`;
   $("jobPercent").textContent = `${percent}%`;
   $("jobProgressFill").style.width = `${percent}%`;
   $("jobMessage").textContent = job.error || job.message || jobMessages[stage] || "正在处理，请稍等。";
+  $("jobLog").classList.toggle("error", isError);
+  $("jobMessage").classList.toggle("error-message", isError);
   $("jobSteps").innerHTML = jobStepLabels.map(([key, label]) => {
     const stepPercent = key === "queued" ? 0 : key === "ingestion" ? 5 : key === "hud" ? 20 : key === "beat" ? 30 : key === "planning" ? 42 : key === "render" ? 45 : key === "finalizing" ? 97 : 100;
     const done = percent >= stepPercent || job.status === "complete";

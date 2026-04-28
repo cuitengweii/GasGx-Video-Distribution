@@ -19,7 +19,7 @@ DEFAULT_UI_STATE: dict[str, Any] = {
     "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
     "cta": "Learn more at gasgx.com/roi",
     "follow_text": "Follow GasGx for more field power cases",
-    "bgm_source": "Upload file",
+    "bgm_source": "Local library",
     "bgm_library_id": "",
 }
 

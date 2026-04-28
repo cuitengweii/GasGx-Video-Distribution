@@ -40,3 +40,107 @@ create table if not exists upgrade_run_items (
     started_at bigint,
     finished_at bigint
 );
+
+create table if not exists control_members (
+    user_id uuid primary key references auth.users(id) on delete cascade,
+    role text not null check (role in ('owner', 'admin', 'operator', 'viewer')),
+    created_at bigint not null,
+    updated_at bigint not null
+);
+
+create or replace function control_current_role()
+returns text
+language sql
+security definer
+set search_path = public
+stable
+as $$
+    select role from control_members where user_id = auth.uid()
+$$;
+
+create or replace function control_has_role(allowed_roles text[])
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+    select coalesce(control_current_role() = any(allowed_roles), false)
+$$;
+
+alter table brand_instances enable row level security;
+alter table brand_templates enable row level security;
+alter table upgrade_runs enable row level security;
+alter table upgrade_run_items enable row level security;
+alter table control_members enable row level security;
+
+drop policy if exists "control members can read own row" on control_members;
+create policy "control members can read own row"
+on control_members for select
+to authenticated
+using (user_id = auth.uid() or control_has_role(array['owner', 'admin']));
+
+drop policy if exists "control owners manage members" on control_members;
+create policy "control owners manage members"
+on control_members for all
+to authenticated
+using (control_has_role(array['owner']))
+with check (control_has_role(array['owner']));
+
+drop policy if exists "control viewers read brands" on brand_instances;
+create policy "control viewers read brands"
+on brand_instances for select
+to authenticated
+using (control_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "control admins manage brands" on brand_instances;
+create policy "control admins manage brands"
+on brand_instances for all
+to authenticated
+using (control_has_role(array['owner', 'admin']))
+with check (control_has_role(array['owner', 'admin']));
+
+drop policy if exists "control viewers read templates" on brand_templates;
+create policy "control viewers read templates"
+on brand_templates for select
+to authenticated
+using (control_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "control admins manage templates" on brand_templates;
+create policy "control admins manage templates"
+on brand_templates for all
+to authenticated
+using (control_has_role(array['owner', 'admin']))
+with check (control_has_role(array['owner', 'admin']));
+
+drop policy if exists "control viewers read upgrade runs" on upgrade_runs;
+create policy "control viewers read upgrade runs"
+on upgrade_runs for select
+to authenticated
+using (control_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "control operators create upgrade runs" on upgrade_runs;
+create policy "control operators create upgrade runs"
+on upgrade_runs for insert
+to authenticated
+with check (control_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "control operators update upgrade runs" on upgrade_runs;
+create policy "control operators update upgrade runs"
+on upgrade_runs for update
+to authenticated
+using (control_has_role(array['owner', 'admin', 'operator']))
+with check (control_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "control viewers read upgrade run items" on upgrade_run_items;
+create policy "control viewers read upgrade run items"
+on upgrade_run_items for select
+to authenticated
+using (control_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "control operators manage upgrade run items" on upgrade_run_items;
+create policy "control operators manage upgrade run items"
+on upgrade_run_items for all
+to authenticated
+using (control_has_role(array['owner', 'admin', 'operator']))
+with check (control_has_role(array['owner', 'admin', 'operator']));

@@ -32,11 +32,18 @@ body {
 }
 
 .embed-mode body {
+  height: 100vh;
+  overflow: hidden;
   grid-template-columns: 260px 1fr;
 }
 
 .embed-mode .sidebar {
   display: grid;
+  width: 280px;
+  height: 100vh;
+  padding: 14px 20px 18px;
+  overflow: hidden;
+  align-content: start;
 }
 
 .embed-mode .back-link {
@@ -44,7 +51,15 @@ body {
 }
 
 .embed-mode .workspace {
-  padding: 28px 32px 44px;
+  height: 100vh;
+  margin-left: 280px;
+  padding: 26px 32px 44px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.embed-mode .workspace::-webkit-scrollbar {
+  display: none;
 }
 
 .embed-mode .hero {
@@ -55,12 +70,37 @@ body {
   display: none;
 }
 
-.embed-mode .sidebar {
-  padding-top: 20px;
-}
-
 .embed-mode .metrics {
   margin-top: 0;
+}
+
+.embed-mode .sidebar label {
+  margin: 10px 0;
+}
+
+.embed-mode .sidebar input,
+.embed-mode .sidebar select {
+  min-height: 44px;
+  padding: 10px 12px;
+}
+
+.embed-mode .sidebar button {
+  min-height: 52px;
+  margin: 8px 0 6px;
+}
+
+.embed-mode .sidebar details {
+  margin-top: 6px;
+}
+
+.embed-mode .sidebar summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.embed-mode .bgm-library-hint {
+  max-height: 38px;
+  overflow: hidden;
 }
 button, input, select, textarea { font: inherit; }
 .sidebar {
@@ -142,10 +182,50 @@ label > input, label > select, label > textarea { margin-top:8px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.bgm-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+.bgm-label-row strong {
+  color: var(--text);
+  font-size: 14px;
+}
+.help-dot {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid rgba(93, 214, 44, .44);
+  border-radius: 999px;
+  color: var(--green);
+  background: rgba(93, 214, 44, .1);
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 900;
+}
 .bgm-links {
   display: grid;
   gap: 8px;
   margin-top: 10px;
+}
+.bgm-library-hint {
+  margin: 8px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+select:disabled {
+  color: #c4c9c2;
+  opacity: 1;
+  background: #121612;
+  border-color: rgba(255, 255, 255, .18);
+  cursor: not-allowed;
 }
 .bgm-links a {
   display: block;
@@ -200,6 +280,15 @@ button.secondary { background:#222; color:var(--text); border:1px solid #444; bo
   border: 1px solid rgba(93, 214, 44, .28);
   border-radius: 8px;
   background: rgba(9, 11, 9, .82);
+}
+.job-status-card.error {
+  border-color: rgba(255, 64, 83, .72);
+  background: rgba(54, 13, 18, .92);
+  box-shadow: 0 0 0 1px rgba(255, 64, 83, .18), 0 16px 36px rgba(255, 64, 83, .12);
+}
+.job-status-card.error .job-status-head strong,
+.job-status-card.error .job-status-head span {
+  color: #ff6f7f;
 }
 .job-status-head {
   display: flex;
@@ -261,6 +350,31 @@ button.secondary { background:#222; color:var(--text); border:1px solid #444; bo
   color: var(--muted);
   white-space: pre-wrap;
   line-height: 1.55;
+}
+#jobMessage.error-message {
+  position: relative;
+  min-height: 42px;
+  padding: 11px 12px 11px 38px;
+  border: 1px solid rgba(255, 64, 83, .58);
+  border-radius: 8px;
+  color: #ffd7dc;
+  background: rgba(255, 64, 83, .16);
+  font-weight: 900;
+}
+#jobMessage.error-message::before {
+  content: "!";
+  position: absolute;
+  left: 12px;
+  top: 11px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #230608;
+  background: #ff6f7f;
+  font-size: 13px;
+  font-weight: 900;
 }
 @media (max-width: 1280px) {
   .editor-grid, .cover-editor { grid-template-columns:1fr; }

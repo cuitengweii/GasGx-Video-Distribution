@@ -13,6 +13,7 @@ def test_video_matrix_api_state_and_preview() -> None:
     payload = state.json()
     assert payload["cover_templates"]
     assert "industrial_engine_hook" in payload["cover_templates"]
+    assert payload["local_bgm_dir"].endswith("runtime\\video_matrix\\bgm") or payload["local_bgm_dir"].endswith("runtime/video_matrix/bgm")
 
     preview = client.post(
         "/api/video-matrix/cover-preview",

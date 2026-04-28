@@ -101,3 +101,170 @@ create table if not exists schema_migrations (
     app_version text not null default '',
     applied_at bigint not null
 );
+
+create table if not exists brand_members (
+    user_id uuid primary key references auth.users(id) on delete cascade,
+    role text not null check (role in ('owner', 'admin', 'operator', 'viewer')),
+    created_at bigint not null,
+    updated_at bigint not null
+);
+
+create or replace function brand_current_role()
+returns text
+language sql
+security definer
+set search_path = public
+stable
+as $$
+    select role from brand_members where user_id = auth.uid()
+$$;
+
+create or replace function brand_has_role(allowed_roles text[])
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+    select coalesce(brand_current_role() = any(allowed_roles), false)
+$$;
+
+alter table matrix_accounts enable row level security;
+alter table account_platforms enable row level security;
+alter table browser_profiles enable row level security;
+alter table automation_tasks enable row level security;
+alter table video_stats_snapshots enable row level security;
+alter table ai_robot_configs enable row level security;
+alter table ai_robot_messages enable row level security;
+alter table brand_settings enable row level security;
+alter table schema_migrations enable row level security;
+alter table brand_members enable row level security;
+
+drop policy if exists "brand members can read own row" on brand_members;
+create policy "brand members can read own row"
+on brand_members for select
+to authenticated
+using (user_id = auth.uid() or brand_has_role(array['owner', 'admin']));
+
+drop policy if exists "brand owners manage members" on brand_members;
+create policy "brand owners manage members"
+on brand_members for all
+to authenticated
+using (brand_has_role(array['owner']))
+with check (brand_has_role(array['owner']));
+
+drop policy if exists "brand viewers read accounts" on matrix_accounts;
+create policy "brand viewers read accounts"
+on matrix_accounts for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand operators manage accounts" on matrix_accounts;
+create policy "brand operators manage accounts"
+on matrix_accounts for all
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator']))
+with check (brand_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "brand viewers read account platforms" on account_platforms;
+create policy "brand viewers read account platforms"
+on account_platforms for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand operators manage account platforms" on account_platforms;
+create policy "brand operators manage account platforms"
+on account_platforms for all
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator']))
+with check (brand_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "brand viewers read browser profiles" on browser_profiles;
+create policy "brand viewers read browser profiles"
+on browser_profiles for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand operators manage browser profiles" on browser_profiles;
+create policy "brand operators manage browser profiles"
+on browser_profiles for all
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator']))
+with check (brand_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "brand viewers read tasks" on automation_tasks;
+create policy "brand viewers read tasks"
+on automation_tasks for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand operators manage tasks" on automation_tasks;
+create policy "brand operators manage tasks"
+on automation_tasks for all
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator']))
+with check (brand_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "brand viewers read stats" on video_stats_snapshots;
+create policy "brand viewers read stats"
+on video_stats_snapshots for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand operators import stats" on video_stats_snapshots;
+create policy "brand operators import stats"
+on video_stats_snapshots for insert
+to authenticated
+with check (brand_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "brand admins manage robot configs" on ai_robot_configs;
+create policy "brand admins manage robot configs"
+on ai_robot_configs for all
+to authenticated
+using (brand_has_role(array['owner', 'admin']))
+with check (brand_has_role(array['owner', 'admin']));
+
+drop policy if exists "brand operators read robot configs" on ai_robot_configs;
+create policy "brand operators read robot configs"
+on ai_robot_configs for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "brand viewers read robot messages" on ai_robot_messages;
+create policy "brand viewers read robot messages"
+on ai_robot_messages for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand operators manage robot messages" on ai_robot_messages;
+create policy "brand operators manage robot messages"
+on ai_robot_messages for all
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator']))
+with check (brand_has_role(array['owner', 'admin', 'operator']));
+
+drop policy if exists "brand viewers read settings" on brand_settings;
+create policy "brand viewers read settings"
+on brand_settings for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand admins manage settings" on brand_settings;
+create policy "brand admins manage settings"
+on brand_settings for all
+to authenticated
+using (brand_has_role(array['owner', 'admin']))
+with check (brand_has_role(array['owner', 'admin']));
+
+drop policy if exists "brand viewers read migrations" on schema_migrations;
+create policy "brand viewers read migrations"
+on schema_migrations for select
+to authenticated
+using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+
+drop policy if exists "brand admins manage migrations" on schema_migrations;
+create policy "brand admins manage migrations"
+on schema_migrations for all
+to authenticated
+using (brand_has_role(array['owner', 'admin']))
+with check (brand_has_role(array['owner', 'admin']));

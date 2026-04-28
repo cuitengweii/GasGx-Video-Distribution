@@ -1,5 +1,19 @@
 # GasGx Video Distribution State
 
+## 2026-04-28 Supabase RLS Update
+
+- Supabase control-plane SQL now defines `control_members` with `owner/admin/operator/viewer` roles, helper functions `control_current_role()` / `control_has_role()`, RLS enablement, and policies for brand instances, templates, upgrade runs, upgrade run items, and member management.
+- Brand baseline SQL now defines `brand_members` with the same role set, helper functions `brand_current_role()` / `brand_has_role()`, RLS enablement, and policies for matrix accounts, account platforms, browser profiles, automation tasks, stats snapshots, AI robot config/message tables, brand settings, schema migrations, and member management.
+- The customer deployment model is direct installation on the customer's computer plus manual Supabase SQL initialization. The temporary local `Control Plane` frontend page was removed, so the customer-facing console does not expose brand registry or upgrade-run management.
+- Targeted regression passed: `pytest tests\test_supabase_rls_sql.py tests\test_gasgx_distribution.py -q` and `node --check src\gasgx_distribution\web\static\app.js`.
+
+## Current Open Work From This Update
+
+- Migration runner is no longer the immediate deployment path for customer setup. For now, initialize each customer's free Supabase database by manually executing the SQL files, then configure the project connection for that customer's local install.
+- AI robot worker still needs real senders for WeCom, DingTalk, Lark, Telegram, and WhatsApp.
+- Supabase dashboard aggregation still needs a SQL view/RPC path to avoid pulling full tables at larger scale.
+- Brand logo storage still needs Supabase Storage upload/read/delete instead of config-field data URL handling.
+
 Last updated: 2026-04-28
 
 ## Scope
