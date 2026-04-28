@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from gasgx_distribution import service
 from gasgx_distribution import db as dist_db
+from gasgx_distribution.supabase_backend import SupabaseError, SupabaseRestClient
 from gasgx_distribution.web import create_app
 
 
@@ -390,6 +391,20 @@ def test_brand_runtime_can_use_supabase_for_brand_and_ai_robot(monkeypatch, tmp_
     assert store["brand_settings"][0]["name"] == "Brand Remote"
     assert store["ai_robot_configs"][0]["signing_secret"] == "sign-secret"
     assert store["ai_robot_messages"][0]["payload_json"]["test"] is True
+
+
+def test_supabase_client_does_not_use_publishable_key_as_service_role(monkeypatch) -> None:
+    monkeypatch.setenv("CONTROL_SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.delenv("CONTROL_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.setenv("CONTROL_SUPABASE_KEY", "publishable")
+    monkeypatch.setenv("SUPABASE_KEY", "publishable")
+
+    try:
+        SupabaseRestClient.from_env(prefix="CONTROL_SUPABASE")
+    except SupabaseError as exc:
+        assert "service role key" in str(exc)
+    else:
+        raise AssertionError("publishable key was accepted as service role")
 
 
 def test_brand_supabase_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None:

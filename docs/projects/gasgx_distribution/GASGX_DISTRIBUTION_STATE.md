@@ -1,5 +1,20 @@
 # GasGx Video Distribution State
 
+## 2026-04-29 AI Robot Sender Worker And Supabase Key Safety Update
+
+- Current repository path: `G:\GasGx Video Distribution`.
+- Local `.env` no longer contains the previously exposed Supabase `service_role` value in `CONTROL_SUPABASE_SERVICE_ROLE_KEY` or `BRAND_SUPABASE_SERVICE_KEY`; both are intentionally blank until a fresh key is generated in the correct Supabase project.
+- Supabase key rotation could not be completed from this machine because the available `SUPABASE_ACCESS_TOKEN` only lists project `mkpcliytqudclkwtewru`, while this repo's `.env` points at `fmlneautjackwrcoaevo`. Do not paste the old key back in; generate a fresh service-role key for `fmlneautjackwrcoaevo` in Supabase before production/customer use.
+- AI robot messages now have retry metadata: `retry_count`, `last_attempt_at`, and `sent_at` in SQLite and the Supabase brand baseline SQL.
+- A real sender worker is available through `python -m gasgx_distribution ai-robot-send-worker --limit 10` and `POST /api/ai-robots/messages/send-worker?limit=10`.
+- The worker claims `pending/retry` messages, sends platform-shaped webhook payloads for WeCom, DingTalk, Lark, Telegram, and WhatsApp, marks success as `sent`, and records failed attempts as `retry` until the retry limit is reached.
+
+## Current Open Work From This Update
+
+- Generate and install a fresh `service_role` key for Supabase project `fmlneautjackwrcoaevo`; current local Supabase-backed runtime will fail until `CONTROL_SUPABASE_SERVICE_ROLE_KEY` and `BRAND_SUPABASE_SERVICE_KEY` are repopulated with the new value.
+- Validate each robot platform against real external endpoints because current regression uses local fake HTTP responses.
+- Decide whether the worker should run as a scheduled background loop, Windows task, or manual operator action in the first customer install.
+
 ## 2026-04-29 Thread Archive: Supabase Multi-Brand And Video Matrix
 
 - Current repository path: `G:\GasGx Video Distribution`.
