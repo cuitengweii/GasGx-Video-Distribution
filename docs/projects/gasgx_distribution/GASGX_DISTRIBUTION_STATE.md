@@ -1,5 +1,26 @@
 # GasGx Video Distribution State
 
+## 2026-04-29 Thread Archive: Supabase Multi-Brand And Video Matrix
+
+- Current repository path: `G:\GasGx Video Distribution`.
+- Current Git remote: `https://github.com/cuitengweii/GasGx-Video-Distribution.git`.
+- Latest pushed commit: `2ddbd2f feat(gasgx): refine video matrix and supabase policies` on `main`.
+- Supabase multi-brand runtime is committed and pushed: control-plane schema, brand baseline schema, tenant resolver, Supabase REST backend, brand settings API, AI robot config/message queue API, and `/api/system/supabase-health`.
+- Local browser loading failure on `http://127.0.0.1:8765/#overview` was fixed by restarting the current-code service, bypassing tenant DB binding for `/` and `/static/*`, defaulting local `127.0.0.1/localhost` to the `gasgx` brand, and bounding Supabase REST timeout.
+- AI robot config is now real enough for platform config save, secret preservation/redaction, webhook HMAC verification, webhook/test message enqueue, and queue display. Real outbound sender workers remain pending.
+- Supabase SQL now includes control-plane and brand-database RLS policy scaffolding, with targeted tests for expected SQL policy structures.
+- Video Matrix UI/API refinements and targeted tests were committed and pushed in `2ddbd2f`.
+
+## Current Open Work From 2026-04-29 Archive
+
+- Rotate the Supabase `service_role` key before production/customer use because it was exposed in chat during setup.
+- Add real AI robot outbound worker senders for WeCom, DingTalk, Lark, Telegram, and WhatsApp.
+- Decide whether remote Supabase smoke/demo rows should be deleted or converted into formal demo seed data.
+- Replace Supabase dashboard summary's small-data client aggregation with a SQL view/RPC before larger customer datasets.
+- Finish Supabase Storage-backed brand logo upload/read/delete.
+- Build customer setup/diagnostic flow for manual Supabase SQL initialization, project connection validation, health checks, and RLS readiness.
+- Run full browser end-to-end acceptance for account creation, task creation, AI robot test message, brand settings persistence, video matrix UI, and system health.
+
 ## 2026-04-28 Supabase RLS Update
 
 - Supabase control-plane SQL now defines `control_members` with `owner/admin/operator/viewer` roles, helper functions `control_current_role()` / `control_has_role()`, RLS enablement, and policies for brand instances, templates, upgrade runs, upgrade run items, and member management.

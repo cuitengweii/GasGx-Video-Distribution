@@ -1,6 +1,16 @@
 # GasGx Video Distribution Decisions
 
-Last updated: 2026-04-28
+Last updated: 2026-04-29
+
+## 2026-04-29 Supabase And Customer Install Decisions
+
+- Production/customer database direction is Supabase, with each brand/customer intended to own an independent Supabase Project and independent brand data. Local SQLite remains useful for development and fallback, not the formal multi-brand production boundary.
+- Customer deployment path is a local app install plus manual Supabase SQL initialization for now. The app should not expose a customer-facing global Control Plane unless a real platform-operator role and authentication model are in place.
+- Local development requests to `127.0.0.1` or `localhost` should resolve to `LOCAL_BRAND_INSTANCE`, defaulting to `gasgx`, when Supabase env vars are configured.
+- Static shell routes `/` and `/static/*` must not require tenant database binding; slow remote database checks must not block the page shell or static assets.
+- Supabase REST calls need bounded timeouts, and optional diagnostics should degrade locally instead of freezing the whole UI.
+- Secrets policy remains: `service_role` only on server side, AI robot webhook/signing secrets stored server side only, and APIs return `has_*_secret` flags rather than plaintext.
+- System diagnostics belong in the existing System Settings view, not a separate standalone page.
 
 ## 2026-04-27
 

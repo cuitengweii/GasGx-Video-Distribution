@@ -1,6 +1,21 @@
 # GasGx Video Distribution Lessons
 
-Last updated: 2026-04-28
+Last updated: 2026-04-29
+
+## 2026-04-29
+
+- Symptom: `http://127.0.0.1:8765/#overview` showed load failure after adding the Supabase health widget.
+  - Root cause: the browser was using a running old backend process that did not have `/api/system/supabase-health`; after restart, API requests could still block because tenant resolution/control-plane lookup and Supabase calls were in the request path for every route.
+  - Earlier detection: after adding any frontend API dependency, verify the live process is running the new code and check `/`, `/static/app.js`, and the new API endpoint on the exact browser port.
+  - Prevention: keep static shell routes out of tenant DB middleware, add bounded Supabase REST timeouts, default local host to a known brand instance, and make optional/diagnostic endpoints non-fatal to first-page rendering.
+- Symptom: Git push was about to target the wrong repository.
+  - Root cause: `origin` initially pointed to `https://github.com/cuitengweii/Chrome_Extensions.git` even though the working repo was `G:\GasGx Video Distribution`.
+  - Earlier detection: always check `git remote -v` before push when a repo was copied, restored, or moved.
+  - Prevention: set both fetch and push URLs explicitly to `https://github.com/cuitengweii/GasGx-Video-Distribution.git` before pushing.
+- Symptom: Supabase setup moved quickly enough that a `service_role` key was pasted into chat.
+  - Root cause: manual credential setup lacked a redaction/rotation checkpoint.
+  - Earlier detection: treat any service-role exchange as a production secret incident even in local setup.
+  - Prevention: rotate the Supabase service-role key before customer use and keep future setup instructions focused on where to paste secrets into local `.env`, not on exposing them in chat.
 
 ## 2026-04-28
 

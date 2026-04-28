@@ -1,6 +1,22 @@
 # GasGx Video Distribution Architecture
 
-Last updated: 2026-04-28
+Last updated: 2026-04-29
+
+## Supabase Multi-Brand Runtime
+
+- `gasgx_distribution.control_plane` owns brand-instance metadata, templates, upgrade-run records, and the switch between SQLite control DB and Supabase control-plane backend.
+- `gasgx_distribution.tenant` resolves the active brand from `X-Brand-Instance`, host/domain, or local fallback `LOCAL_BRAND_INSTANCE=gasgx`, then binds API requests to that brand runtime.
+- `gasgx_distribution.supabase_backend` is the minimal PostgREST client for Supabase table CRUD and service-key resolution through `env:` references.
+- `gasgx_distribution.service` has a runtime backend split: SQLite remains local/dev mode; Supabase branches are used for brand settings, matrix accounts/platforms/profiles, automation tasks, AI robot configs/messages, stats snapshots, and summary reads.
+- Static web shell routes `/` and `/static/*` bypass tenant DB binding so remote DB latency cannot prevent the console shell from loading.
+- `config/supabase/control_plane.sql` and `config/supabase/brand_baseline.sql` are the current manual initialization baselines for customer Supabase projects, including RLS helper functions and policies.
+
+## AI Robot Runtime
+
+- AI robot config lives in `ai_robot_configs`, with secret fields preserved server side and redacted from public API responses.
+- AI robot inbound/outbound queue entries live in `ai_robot_messages`.
+- Webhook verification uses per-platform signing secret and HMAC SHA256; successful inbound webhook payloads enqueue messages.
+- The queue currently records messages and test messages; real platform sender workers are still a separate runtime component to implement.
 
 ## Runtime Boundaries
 
