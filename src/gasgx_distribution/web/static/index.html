@@ -283,39 +283,72 @@
       <div class="ai-robot-layout">
         <section class="panel ai-hero-panel">
           <div>
-            <span class="system-status">AI Customer Service</span>
+            <span class="system-status">Live Integration</span>
             <h2>AI客服与企业消息机器人</h2>
-            <p class="muted">统一接入国内外主流企业通讯平台，把客户看板推送、营销线索提醒、风险告警和指令交互集中到一个机器人入口。</p>
+            <p class="muted">保存真实平台机器人配置，接收已验签 Webhook，并把测试消息或回调消息写入本地发送队列。</p>
           </div>
           <div class="ai-hero-actions">
-            <button class="btn primary" type="button">新建机器人</button>
-            <button class="btn secondary" type="button">查看接入文档</button>
+            <button class="btn primary" id="ai-save-config" type="button">保存配置</button>
+            <button class="btn secondary" id="ai-send-test" type="button">发送测试</button>
           </div>
+        </section>
+        <section class="panel ai-config-panel">
+          <div class="panel-head">
+            <div>
+              <h2>平台配置</h2>
+              <p class="muted">Webhook Secret 用于平台发送，Signing Secret 用于本地回调验签。</p>
+            </div>
+            <span class="system-status" id="ai-config-state">未加载</span>
+          </div>
+          <form id="ai-robot-form" class="ai-config-form">
+            <label>平台
+              <select name="platform" id="ai-platform-select">
+                <option value="wecom">企业微信</option>
+                <option value="dingtalk">钉钉</option>
+                <option value="lark">飞书 / Lark</option>
+                <option value="telegram">Telegram</option>
+                <option value="whatsapp">WhatsApp</option>
+              </select>
+            </label>
+            <label>机器人名称
+              <input name="bot_name" placeholder="GasGx AI Robot">
+            </label>
+            <label>启用状态
+              <select name="enabled">
+                <option value="true">启用</option>
+                <option value="false">停用</option>
+              </select>
+            </label>
+            <label>Webhook URL
+              <input name="webhook_url" placeholder="https://...">
+            </label>
+            <label>Webhook Secret
+              <input name="webhook_secret" type="password" autocomplete="new-password" placeholder="发送侧密钥">
+            </label>
+            <label>Signing Secret
+              <input name="signing_secret" type="password" autocomplete="new-password" placeholder="回调验签密钥">
+            </label>
+            <label>目标会话 / 群组 ID
+              <input name="target_id" placeholder="chat_id / open_conversation_id">
+            </label>
+            <label>测试消息
+              <textarea name="test_text" rows="4">GasGx AI robot test message</textarea>
+            </label>
+          </form>
         </section>
         <section class="panel">
           <div class="panel-head">
-            <h2>核心功能</h2>
-            <span class="system-status">预留接口</span>
+            <h2>发送队列</h2>
+            <span class="system-status">最近 100 条</span>
           </div>
-          <div class="ai-feature-grid">
-            <article><span class="ai-icon customer"></span><strong>AI客服</strong><p>承接客户咨询、产品问答、线索初筛和常见问题自动回复。</p></article>
-            <article><span class="ai-icon report"></span><strong>数据看板推送</strong><p>定时推送播放、粉丝、线索、风险和运营完成率日报。</p></article>
-            <article><span class="ai-icon alert"></span><strong>告警通知</strong><p>素材不足、账号限流、发布失败、掉粉异常等事件实时提醒。</p></article>
-            <article><span class="ai-icon command"></span><strong>指令交互</strong><p>支持通过菜单或关键词触发生成视频、查看报表、启动任务。</p></article>
-          </div>
+          <div id="ai-message-list" class="task-list"></div>
         </section>
         <section class="panel">
           <div class="panel-head">
-            <h2>平台接入</h2>
+            <h2>平台接入状态</h2>
             <span class="system-status">国内 + 海外</span>
           </div>
-          <div class="bot-channel-grid">
-            <article class="bot-channel-card"><span class="bot-logo wecom">企</span><div><strong>企业微信</strong><p>消息、卡片、文件、机器人、应用回调全支持；适合客户看板推送、告警、审批流和指令菜单。</p></div><button class="btn secondary" type="button">配置</button></article>
-            <article class="bot-channel-card"><span class="bot-logo dingtalk">钉</span><div><strong>钉钉</strong><p>企业通知、Webhook、卡片消息和工作流；适合运维告警、日报、设备控制指令和审批通知。</p></div><button class="btn secondary" type="button">配置</button></article>
-            <article class="bot-channel-card"><span class="bot-logo lark">飞</span><div><strong>飞书 / Lark</strong><p>文档、消息、机器人一体化，富文本卡片和 API 体验现代，适合国际化团队协作。</p></div><button class="btn secondary" type="button">配置</button></article>
-            <article class="bot-channel-card"><span class="bot-logo telegram">T</span><div><strong>Telegram</strong><p>海外客户响应快，Bot API 成熟，适合跨境线索提醒、群组通知和轻量指令交互。</p></div><button class="btn secondary" type="button">配置</button></article>
-            <article class="bot-channel-card"><span class="bot-logo whatsapp">W</span><div><strong>WhatsApp</strong><p>面向海外客户触达，预留 Business API 接入，用于线索跟进、通知和客户服务。</p></div><button class="btn secondary" type="button">配置</button></article>
-          </div>
+          <div class="bot-channel-grid" id="ai-channel-grid"></div>
         </section>
       </div>
     </section>
@@ -552,6 +585,18 @@
           <div class="panel-head"><h2>安全设置</h2><span class="system-status">待接入</span></div>
           <div class="system-list">
             <span>访问密码</span><span>本机白名单</span><span>操作审计</span>
+          </div>
+        </section>
+        <section class="panel system-card wide-system-card">
+          <div class="panel-head">
+            <div>
+              <h2>Supabase 运行检查</h2>
+              <p class="muted" id="supabase-health-meta"></p>
+            </div>
+            <span class="system-status" id="supabase-health-state">未加载</span>
+          </div>
+          <div class="health-list" id="supabase-health-list">
+            <div class="muted">暂无 Supabase 健康检查结果。</div>
           </div>
         </section>
       </div>

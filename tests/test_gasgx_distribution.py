@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import hmac
+import hashlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,20 +14,27 @@ from gasgx_distribution.web import create_app
 
 
 def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CONTROL_DB_BACKEND", "sqlite")
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "sqlite")
     class FakePaths:
         repo_root = tmp_path
         runtime_root = tmp_path / "runtime"
         profiles_root = tmp_path / "profiles" / "matrix"
         database_path = tmp_path / "runtime" / "gasgx_distribution.db"
+        control_database_path = tmp_path / "runtime" / "control_plane.db"
+        brand_databases_root = tmp_path / "runtime" / "brands"
 
         def ensure(self) -> None:
             self.runtime_root.mkdir(parents=True, exist_ok=True)
             self.profiles_root.mkdir(parents=True, exist_ok=True)
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
+            self.control_database_path.parent.mkdir(parents=True, exist_ok=True)
+            self.brand_databases_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr("gasgx_distribution.db.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.service.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.public_settings.get_paths", lambda: FakePaths())
+    monkeypatch.setattr("gasgx_distribution.control_plane.get_paths", lambda: FakePaths())
     dist_db.init_db(FakePaths.database_path)
 
 
@@ -130,6 +139,410 @@ def test_api_smoke_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None
     stats = client.get(f"/api/stats?account_id={account['id']}&platform=wechat")
     assert stats.status_code == 200
     assert stats.json()[0]["views"] == 100
+
+
+def test_control_plane_provisions_isolated_brand_databases(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    first = client.post("/control/brands", json={"id": "brand-a", "name": "Brand A", "domain": "a.example.test"})
+    second = client.post("/control/brands", json={"id": "brand-b", "name": "Brand B", "domain": "b.example.test"})
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert client.post("/control/brands/brand-a/provision").status_code == 200
+    assert client.post("/control/brands/brand-b/provision").status_code == 200
+
+    created = client.post(
+        "/api/accounts",
+        headers={"x-brand-instance": "brand-a"},
+        json={"account_key": "a-01", "display_name": "A 01", "platforms": ["wechat"]},
+    )
+    assert created.status_code == 200
+    assert len(client.get("/api/accounts", headers={"x-brand-instance": "brand-a"}).json()) == 1
+    assert client.get("/api/accounts", headers={"x-brand-instance": "brand-b"}).json() == []
+
+
+def test_brand_settings_are_server_side_per_brand(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    assert client.post("/control/brands", json={"id": "brand-a", "name": "Brand A", "domain": "a.example.test"}).status_code == 200
+    assert client.post("/control/brands/brand-a/provision").status_code == 200
+
+    patched = client.patch(
+        "/api/brand",
+        headers={"x-brand-instance": "brand-a"},
+        json={"name": "Brand A", "slogan": "Client Console", "theme_id": "methane-teal", "default_account_prefix": "BA"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "Brand A"
+
+    brand_a = client.get("/api/brand", headers={"x-brand-instance": "brand-a"}).json()
+    default_brand = client.get("/api/brand").json()
+    assert brand_a["settings"]["name"] == "Brand A"
+    assert default_brand["settings"]["name"] == "GasGx"
+
+
+def test_system_supabase_health_reports_current_brand(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    assert client.post("/control/brands", json={"id": "brand-a", "name": "Brand A", "domain": "a.example.test"}).status_code == 200
+    assert client.post("/control/brands/brand-a/provision").status_code == 200
+
+    health = client.get("/api/system/supabase-health", headers={"x-brand-instance": "brand-a"})
+
+    assert health.status_code == 200
+    data = health.json()
+    assert data["ok"] is True
+    assert data["brand_id"] == "brand-a"
+    assert data["schema_version"]
+    checks = {item["name"]: item for item in data["checks"]}
+    assert checks["control_plane"]["details"]["backend"] == "sqlite"
+    assert checks["tenant"]["details"]["brand_id"] == "brand-a"
+    assert checks["brand_database"]["details"]["brand_name"] == "GasGx"
+    assert checks["ai_robot_queue"]["details"]["queued_message_count"] == 0
+
+
+def test_control_upgrade_records_each_active_brand(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    assert client.post("/control/brands", json={"id": "brand-a", "name": "Brand A", "domain": "a.example.test"}).status_code == 200
+    assert client.post("/control/brands", json={"id": "brand-b", "name": "Brand B", "domain": "b.example.test"}).status_code == 200
+
+    run = client.post("/control/upgrades")
+    assert run.status_code == 200
+    data = run.json()
+    assert data["status"] == "succeeded"
+    assert {item["brand_id"] for item in data["items"]} >= {"default", "brand-a", "brand-b"}
+
+
+def test_control_plane_can_use_supabase_rest_backend(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("CONTROL_DB_BACKEND", "supabase")
+    monkeypatch.setenv("CONTROL_SUPABASE_URL", "https://control.example.supabase.co")
+    monkeypatch.setenv("CONTROL_SUPABASE_SERVICE_ROLE_KEY", "service-role")
+    store: dict[str, list[dict[str, object]]] = {
+        "brand_instances": [],
+        "brand_templates": [],
+        "upgrade_runs": [],
+        "upgrade_run_items": [],
+    }
+    counters = {"upgrade_runs": 0, "upgrade_run_items": 0}
+
+    class FakeResponse:
+        def __init__(self, payload: object, status_code: int = 200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+            self.text = json.dumps(payload)
+
+        def json(self) -> object:
+            return self._payload
+
+    def table_from_url(url: str) -> str:
+        return url.rstrip("/").split("/")[-1]
+
+    def fake_get(url: str, headers: dict[str, str], params: dict[str, str], timeout: int) -> FakeResponse:
+        del headers, timeout
+        rows = list(store[table_from_url(url)])
+        for key, value in params.items():
+            if key in {"select", "order"}:
+                continue
+            expected = value.removeprefix("eq.")
+            rows = [row for row in rows if str(row.get(key)) == expected]
+        return FakeResponse(rows)
+
+    def fake_post(url: str, headers: dict[str, str], params: dict[str, str] | None = None, json: dict[str, object] | None = None, timeout: int = 30) -> FakeResponse:
+        del headers, timeout
+        table = table_from_url(url)
+        payload = dict(json or {})
+        if params and params.get("on_conflict"):
+            key = str(params["on_conflict"])
+            for row in store[table]:
+                if row.get(key) == payload.get(key):
+                    row.update(payload)
+                    return FakeResponse([row])
+        if table in counters:
+            counters[table] += 1
+            payload.setdefault("id", counters[table])
+        store[table].append(payload)
+        return FakeResponse([payload])
+
+    def fake_patch(url: str, headers: dict[str, str], params: dict[str, str], json: dict[str, object], timeout: int) -> FakeResponse:
+        del headers, timeout
+        table = table_from_url(url)
+        matches = store[table]
+        for key, value in params.items():
+            expected = value.removeprefix("eq.")
+            matches = [row for row in matches if str(row.get(key)) == expected]
+        if matches:
+            matches[0].update(json)
+            return FakeResponse([matches[0]])
+        return FakeResponse([])
+
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.get", fake_get)
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.post", fake_post)
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.patch", fake_patch)
+
+    client = TestClient(create_app())
+    created = client.post(
+        "/control/brands",
+        json={"id": "brand-s", "name": "Brand Supabase", "domain": "s.example.test", "supabase_url": "https://brand.supabase.co", "service_key_ref": "vault://brand-s"},
+    )
+    assert created.status_code == 200
+    assert created.json()["has_service_key_ref"] is True
+    assert "service_key_ref" not in created.json()
+
+    brands = client.get("/control/brands")
+    assert brands.status_code == 200
+    assert {item["id"] for item in brands.json()} >= {"default", "brand-s"}
+
+    upgrade = client.post("/control/upgrades")
+    assert upgrade.status_code == 200
+    assert upgrade.json()["status"] == "succeeded"
+
+
+def test_brand_runtime_can_use_supabase_for_brand_and_ai_robot(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+    monkeypatch.setenv("BRAND_SUPABASE_SERVICE_KEY", "brand-service")
+    store: dict[str, list[dict[str, object]]] = {
+        "brand_settings": [],
+        "ai_robot_configs": [],
+        "ai_robot_messages": [],
+    }
+    counters = {"ai_robot_configs": 0, "ai_robot_messages": 0}
+
+    class FakeResponse:
+        def __init__(self, payload: object, status_code: int = 200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+            self.text = json.dumps(payload)
+
+        def json(self) -> object:
+            return self._payload
+
+    def table_from_url(url: str) -> str:
+        return url.rstrip("/").split("/")[-1]
+
+    def fake_get(url: str, headers: dict[str, str], params: dict[str, str], timeout: int) -> FakeResponse:
+        del headers, timeout
+        rows = list(store[table_from_url(url)])
+        for key, value in params.items():
+            if key in {"select", "order"}:
+                continue
+            expected = value.removeprefix("eq.")
+            rows = [row for row in rows if str(row.get(key)) == expected]
+        return FakeResponse(rows)
+
+    def fake_post(url: str, headers: dict[str, str], params: dict[str, str] | None = None, json: dict[str, object] | None = None, timeout: int = 30) -> FakeResponse:
+        del headers, timeout
+        table = table_from_url(url)
+        payload = dict(json or {})
+        if params and params.get("on_conflict"):
+            key = str(params["on_conflict"])
+            for row in store[table]:
+                if str(row.get(key)) == str(payload.get(key)):
+                    row.update(payload)
+                    return FakeResponse([row])
+        if table in counters:
+            counters[table] += 1
+            payload.setdefault("id", counters[table])
+        store[table].append(payload)
+        return FakeResponse([payload])
+
+    def fake_patch(url: str, headers: dict[str, str], params: dict[str, str], json: dict[str, object], timeout: int) -> FakeResponse:
+        del headers, timeout
+        table = table_from_url(url)
+        matches = store[table]
+        for key, value in params.items():
+            expected = value.removeprefix("eq.")
+            matches = [row for row in matches if str(row.get(key)) == expected]
+        if matches:
+            matches[0].update(json)
+            return FakeResponse([matches[0]])
+        return FakeResponse([])
+
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.get", fake_get)
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.post", fake_post)
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.patch", fake_patch)
+
+    runtime = {"supabase_url": "https://brand.example.supabase.co", "service_key_ref": "env:BRAND_SUPABASE_SERVICE_KEY"}
+    with service.use_brand_runtime(runtime):
+        saved_brand = service.save_brand_settings({"name": "Brand Remote", "slogan": "Remote Console"})
+        assert saved_brand["name"] == "Brand Remote"
+
+        config = service.save_ai_robot_config(
+            "telegram",
+            {
+                "enabled": True,
+                "bot_name": "Remote Bot",
+                "webhook_url": "https://example.test/bot",
+                "webhook_secret": "send-secret",
+                "signing_secret": "sign-secret",
+                "target_id": "chat-remote",
+            },
+        )
+        assert config["has_signing_secret"] is True
+        assert "sign-secret" not in json.dumps(config)
+
+        message = service.enqueue_ai_robot_message("telegram", {"message_type": "text", "text": "hello"}, test=True)
+        assert message["status"] == "pending"
+
+    assert store["brand_settings"][0]["name"] == "Brand Remote"
+    assert store["ai_robot_configs"][0]["signing_secret"] == "sign-secret"
+    assert store["ai_robot_messages"][0]["payload_json"]["test"] is True
+
+
+def test_brand_supabase_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+    monkeypatch.setenv("BRAND_SUPABASE_SERVICE_KEY", "brand-service")
+    store: dict[str, list[dict[str, object]]] = {
+        "matrix_accounts": [],
+        "account_platforms": [],
+        "browser_profiles": [],
+        "automation_tasks": [],
+        "video_stats_snapshots": [],
+    }
+    counters = {key: 0 for key in store}
+
+    class FakeResponse:
+        def __init__(self, payload: object, status_code: int = 200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+            self.text = json.dumps(payload)
+
+        def json(self) -> object:
+            return self._payload
+
+    def table_from_url(url: str) -> str:
+        return url.rstrip("/").split("/")[-1]
+
+    def matches(row: dict[str, object], params: dict[str, str]) -> bool:
+        for key, value in params.items():
+            if key in {"select", "order"}:
+                continue
+            if value.startswith("eq.") and str(row.get(key)) != value[3:]:
+                return False
+            if value.startswith("in.("):
+                values = value[4:-1].split(",")
+                if str(row.get(key)) not in values:
+                    return False
+        return True
+
+    def fake_get(url: str, headers: dict[str, str], params: dict[str, str], timeout: int) -> FakeResponse:
+        del headers, timeout
+        rows = [row for row in store[table_from_url(url)] if matches(row, params)]
+        return FakeResponse(rows)
+
+    def fake_post(url: str, headers: dict[str, str], params: dict[str, str] | None = None, json: dict[str, object] | None = None, timeout: int = 30) -> FakeResponse:
+        del headers, params, timeout
+        table = table_from_url(url)
+        payload = dict(json or {})
+        counters[table] += 1
+        payload.setdefault("id", counters[table])
+        store[table].append(payload)
+        return FakeResponse([payload])
+
+    def fake_patch(url: str, headers: dict[str, str], params: dict[str, str], json: dict[str, object], timeout: int) -> FakeResponse:
+        del headers, timeout
+        rows = [row for row in store[table_from_url(url)] if matches(row, params)]
+        if rows:
+            rows[0].update(json)
+            return FakeResponse([rows[0]])
+        return FakeResponse([])
+
+    def fake_delete(url: str, headers: dict[str, str], params: dict[str, str], timeout: int) -> FakeResponse:
+        del headers, timeout
+        table = table_from_url(url)
+        before = len(store[table])
+        store[table] = [row for row in store[table] if not matches(row, params)]
+        return FakeResponse({"deleted": before - len(store[table])}, 200)
+
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.get", fake_get)
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.post", fake_post)
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.patch", fake_patch)
+    monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.delete", fake_delete)
+
+    runtime = {"supabase_url": "https://brand.example.supabase.co", "service_key_ref": "env:BRAND_SUPABASE_SERVICE_KEY"}
+    with service.use_brand_runtime(runtime):
+        account = service.create_account({"account_key": "remote-01", "display_name": "Remote 01", "platforms": ["wechat"]})
+        assert account["platforms"][0]["platform"] == "wechat"
+
+        task = service.create_task({"account_id": account["id"], "platform": "wechat", "task_type": "publish"})
+        assert task["status"] == "pending"
+        try:
+            service.create_task({"account_id": account["id"], "platform": "wechat", "task_type": "publish"})
+        except ValueError as exc:
+            assert "duplicate active task" in str(exc)
+        else:
+            raise AssertionError("duplicate active task was accepted")
+
+        imported = service.import_stats({"account_id": account["id"], "platform": "wechat", "video_ref": "v1", "views": 7, "comments": 2})
+        assert imported["inserted"] == 1
+        summary = service.dashboard_summary()
+        assert summary["accounts"] == 1
+        assert summary["running_tasks"] == 1
+        assert summary["views"] == 7
+        assert service.delete_task(int(task["id"])) is True
+
+
+def test_ai_robot_config_webhook_and_test_message(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    saved = client.put(
+        "/api/ai-robots/telegram/config",
+        json={
+            "enabled": True,
+            "bot_name": "GasGx Bot",
+            "webhook_url": "https://example.test/bot",
+            "webhook_secret": "send-secret",
+            "signing_secret": "sign-secret",
+            "target_id": "chat-1",
+        },
+    )
+    assert saved.status_code == 200
+    config = saved.json()
+    assert config["enabled"] is True
+    assert config["has_webhook_secret"] is True
+    assert config["has_signing_secret"] is True
+    assert "sign-secret" not in json.dumps(config)
+
+    resaved = client.put(
+        "/api/ai-robots/telegram/config",
+        json={
+            "enabled": True,
+            "bot_name": "GasGx Bot Updated",
+            "webhook_url": "https://example.test/bot",
+            "target_id": "chat-1",
+        },
+    )
+    assert resaved.status_code == 200
+    assert resaved.json()["has_signing_secret"] is True
+
+    test_message = client.post(
+        "/api/ai-robots/telegram/test-message",
+        json={"message_type": "text", "text": "hello"},
+    )
+    assert test_message.status_code == 200
+    assert test_message.json()["status"] == "pending"
+
+    body = b'{"text":"from platform"}'
+    signature = hmac.new(b"sign-secret", body, hashlib.sha256).hexdigest()
+    webhook = client.post(
+        "/api/ai-robots/telegram/webhook",
+        content=body,
+        headers={"x-gasgx-signature": signature, "content-type": "application/json"},
+    )
+    assert webhook.status_code == 200
+    assert webhook.json()["ok"] is True
+
+    rejected = client.post(
+        "/api/ai-robots/telegram/webhook",
+        content=body,
+        headers={"x-gasgx-signature": "bad"},
+    )
+    assert rejected.status_code == 401
 
 
 def test_dashboard_summary_counts_remaining_material_videos(monkeypatch, tmp_path: Path) -> None:

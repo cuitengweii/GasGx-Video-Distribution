@@ -650,6 +650,27 @@ select option {
   flex: 0 0 auto;
 }
 
+.ai-config-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-config-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ai-config-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-config-form label:nth-last-child(1),
+.ai-config-form label:nth-last-child(2) {
+  grid-column: 1 / -1;
+}
+
 .ai-feature-grid,
 .bot-channel-grid {
   display: grid;
@@ -1515,6 +1536,42 @@ select option {
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.system-status.danger {
+  border-color: rgba(255, 77, 95, 0.36);
+  color: #ff4d5f;
+  background: rgba(255, 77, 95, 0.12);
+}
+
+.health-list {
+  display: grid;
+  gap: 10px;
+}
+
+.health-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) auto minmax(180px, 2fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  background: #101010;
+}
+
+.health-row strong {
+  color: var(--accent-aurora);
+}
+
+.health-row.fail strong {
+  color: #ff4d5f;
+}
+
+.health-row small {
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .profile-row {

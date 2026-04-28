@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from contextvars import ContextVar
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
 from .paths import get_paths
+
+_database_path_override: ContextVar[Path | None] = ContextVar("gasgx_distribution_database_path", default=None)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS matrix_accounts (
@@ -73,6 +76,49 @@ CREATE TABLE IF NOT EXISTS video_stats_snapshots (
     captured_at INTEGER NOT NULL,
     FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS ai_robot_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    bot_name TEXT NOT NULL DEFAULT '',
+    webhook_url TEXT NOT NULL DEFAULT '',
+    webhook_secret TEXT NOT NULL DEFAULT '',
+    signing_secret TEXT NOT NULL DEFAULT '',
+    target_id TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_robot_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'text',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    summary TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS brand_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    name TEXT NOT NULL DEFAULT 'GasGx',
+    slogan TEXT NOT NULL DEFAULT 'Video Distribution',
+    logo_asset_path TEXT NOT NULL DEFAULT '',
+    primary_color TEXT NOT NULL DEFAULT '#5dd62c',
+    theme_id TEXT NOT NULL DEFAULT 'gasgx-green',
+    default_account_prefix TEXT NOT NULL DEFAULT 'GasGx',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    app_version TEXT NOT NULL DEFAULT '',
+    applied_at INTEGER NOT NULL
+);
 """
 
 
@@ -85,9 +131,22 @@ def dict_from_row(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def database_path() -> Path:
+    override = _database_path_override.get()
+    if override is not None:
+        override.parent.mkdir(parents=True, exist_ok=True)
+        return override
     paths = get_paths()
     paths.ensure()
     return paths.database_path
+
+
+@contextmanager
+def use_database(path: Path) -> Iterator[None]:
+    token = _database_path_override.set(path)
+    try:
+        yield
+    finally:
+        _database_path_override.reset(token)
 
 
 @contextmanager

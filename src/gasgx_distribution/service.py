@@ -4,18 +4,25 @@ import json
 import os
 import subprocess
 import sys
+import hmac
+import hashlib
+from contextvars import ContextVar
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from cybercar import engine
 from cybercar.settings import apply_runtime_environment as apply_cybercar_environment
 
-from .db import connect, dict_from_row, init_db, now_ts
+from .db import connect, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
 from .platforms import get_platform, normalize_platform, stable_debug_port
 from .public_settings import resolve_material_dir
+from .supabase_backend import SupabaseRestClient
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
+AI_ROBOT_PLATFORMS = {"wecom", "dingtalk", "lark", "telegram", "whatsapp"}
+_brand_runtime: ContextVar[dict[str, Any] | None] = ContextVar("gasgx_brand_runtime", default=None)
 
 
 def _account_slug(account_key: str) -> str:
@@ -28,6 +35,341 @@ def _account_slug(account_key: str) -> str:
 
 def ensure_database() -> None:
     init_db()
+
+
+def use_brand_database(path: Path):
+    return use_database(path)
+
+
+@contextmanager
+def use_brand_runtime(instance: dict[str, Any]) -> Iterator[None]:
+    token = _brand_runtime.set(dict(instance))
+    try:
+        yield
+    finally:
+        _brand_runtime.reset(token)
+
+
+def brand_database_backend() -> str:
+    explicit = os.getenv("BRAND_DATABASE_BACKEND", "").strip().lower()
+    if explicit:
+        return explicit
+    instance = _brand_runtime.get() or {}
+    if instance.get("supabase_url") and instance.get("service_key_ref"):
+        return "supabase"
+    return "sqlite"
+
+
+def _brand_supabase() -> SupabaseRestClient:
+    instance = _brand_runtime.get() or {}
+    return SupabaseRestClient.from_instance(instance)
+
+
+def load_brand_settings() -> dict[str, Any]:
+    if brand_database_backend() == "supabase":
+        row = _brand_supabase().select_one("brand_settings", filters={"id": 1})
+        if row is None:
+            ts = now_ts()
+            row = _brand_supabase().upsert(
+                "brand_settings",
+                {
+                    "id": 1,
+                    "name": "GasGx",
+                    "slogan": "Video Distribution",
+                    "logo_asset_path": "",
+                    "primary_color": "#5dd62c",
+                    "theme_id": "gasgx-green",
+                    "default_account_prefix": "GasGx",
+                    "created_at": ts,
+                    "updated_at": ts,
+                },
+                on_conflict="id",
+            )
+        return row
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM brand_settings WHERE id = 1").fetchone()
+        if row is None:
+            ts = now_ts()
+            conn.execute(
+                """
+                INSERT INTO brand_settings(id, name, slogan, logo_asset_path, primary_color, theme_id, default_account_prefix, created_at, updated_at)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("GasGx", "Video Distribution", "", "#5dd62c", "gasgx-green", "GasGx", ts, ts),
+            )
+            row = conn.execute("SELECT * FROM brand_settings WHERE id = 1").fetchone()
+        return dict_from_row(row)
+
+
+def save_brand_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    if brand_database_backend() == "supabase":
+        current = load_brand_settings()
+        next_data = {
+            "name": str(payload.get("name") or current.get("name") or "GasGx").strip() or "GasGx",
+            "slogan": str(payload.get("slogan") or current.get("slogan") or "Video Distribution").strip() or "Video Distribution",
+            "logo_asset_path": str(payload.get("logo_asset_path") or current.get("logo_asset_path") or "").strip(),
+            "primary_color": str(payload.get("primary_color") or current.get("primary_color") or "#5dd62c").strip() or "#5dd62c",
+            "theme_id": str(payload.get("theme_id") or current.get("theme_id") or "gasgx-green").strip() or "gasgx-green",
+            "default_account_prefix": str(payload.get("default_account_prefix") or current.get("default_account_prefix") or "GasGx").strip() or "GasGx",
+            "updated_at": now_ts(),
+        }
+        return _brand_supabase().update("brand_settings", next_data, filters={"id": 1})
+    ensure_database()
+    current = load_brand_settings()
+    next_data = {
+        "name": str(payload.get("name") or current.get("name") or "GasGx").strip() or "GasGx",
+        "slogan": str(payload.get("slogan") or current.get("slogan") or "Video Distribution").strip() or "Video Distribution",
+        "logo_asset_path": str(payload.get("logo_asset_path") or current.get("logo_asset_path") or "").strip(),
+        "primary_color": str(payload.get("primary_color") or current.get("primary_color") or "#5dd62c").strip() or "#5dd62c",
+        "theme_id": str(payload.get("theme_id") or current.get("theme_id") or "gasgx-green").strip() or "gasgx-green",
+        "default_account_prefix": str(payload.get("default_account_prefix") or current.get("default_account_prefix") or "GasGx").strip() or "GasGx",
+    }
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE brand_settings
+            SET name = ?, slogan = ?, logo_asset_path = ?, primary_color = ?, theme_id = ?, default_account_prefix = ?, updated_at = ?
+            WHERE id = 1
+            """,
+            (
+                next_data["name"],
+                next_data["slogan"],
+                next_data["logo_asset_path"],
+                next_data["primary_color"],
+                next_data["theme_id"],
+                next_data["default_account_prefix"],
+                now_ts(),
+            ),
+        )
+    return load_brand_settings()
+
+
+def _normalize_ai_platform(platform: str) -> str:
+    token = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(platform or "").strip())
+    aliases = {"enterprise-wechat": "wecom", "wechat-work": "wecom", "feishu": "lark"}
+    token = aliases.get(token, token)
+    if token not in AI_ROBOT_PLATFORMS:
+        raise ValueError("platform must be wecom, dingtalk, lark, telegram, or whatsapp")
+    return token
+
+
+def _public_ai_config(row: dict[str, Any]) -> dict[str, Any]:
+    data = dict(row)
+    data["enabled"] = bool(data.get("enabled"))
+    data["has_webhook_secret"] = bool(data.pop("webhook_secret", ""))
+    data["has_signing_secret"] = bool(data.pop("signing_secret", ""))
+    return data
+
+
+def list_ai_robot_configs() -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        rows = {
+            row["platform"]: _public_ai_config(row)
+            for row in _brand_supabase().select("ai_robot_configs", order="platform.asc")
+        }
+        return [_default_ai_robot_config(platform, rows.get(platform)) for platform in sorted(AI_ROBOT_PLATFORMS)]
+    ensure_database()
+    with connect() as conn:
+        rows = {
+            row["platform"]: _public_ai_config(dict_from_row(row))
+            for row in conn.execute("SELECT * FROM ai_robot_configs ORDER BY platform")
+        }
+    return [_default_ai_robot_config(platform, rows.get(platform)) for platform in sorted(AI_ROBOT_PLATFORMS)]
+
+
+def _default_ai_robot_config(platform: str, row: dict[str, Any] | None = None) -> dict[str, Any]:
+    return row or {
+        "id": None,
+        "platform": platform,
+        "enabled": False,
+        "bot_name": "",
+        "webhook_url": "",
+        "target_id": "",
+        "created_at": None,
+        "updated_at": None,
+        "has_webhook_secret": False,
+        "has_signing_secret": False,
+    }
+
+
+def get_ai_robot_config(platform: str) -> dict[str, Any] | None:
+    token = _normalize_ai_platform(platform)
+    if brand_database_backend() == "supabase":
+        row = _brand_supabase().select_one("ai_robot_configs", filters={"platform": token})
+        return _public_ai_config(row) if row else None
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM ai_robot_configs WHERE platform = ?", (token,)).fetchone()
+        return _public_ai_config(dict_from_row(row)) if row else None
+
+
+def save_ai_robot_config(platform: str, payload: dict[str, Any]) -> dict[str, Any]:
+    token = _normalize_ai_platform(platform)
+    ts = now_ts()
+    fields = {
+        "enabled": 1 if payload.get("enabled") else 0,
+        "bot_name": str(payload.get("bot_name") or "").strip(),
+        "webhook_url": str(payload.get("webhook_url") or "").strip(),
+        "webhook_secret": str(payload.get("webhook_secret") or "").strip(),
+        "signing_secret": str(payload.get("signing_secret") or "").strip(),
+        "target_id": str(payload.get("target_id") or "").strip(),
+    }
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        existing = client.select_one("ai_robot_configs", filters={"platform": token})
+        data = {
+            "platform": token,
+            "enabled": fields["enabled"],
+            "bot_name": fields["bot_name"],
+            "webhook_url": fields["webhook_url"],
+            "webhook_secret": fields["webhook_secret"] or str((existing or {}).get("webhook_secret") or ""),
+            "signing_secret": fields["signing_secret"] or str((existing or {}).get("signing_secret") or ""),
+            "target_id": fields["target_id"],
+            "updated_at": ts,
+        }
+        if existing is None:
+            data["created_at"] = ts
+        row = client.upsert("ai_robot_configs", data, on_conflict="platform")
+        return _public_ai_config(row)
+    with connect() as conn:
+        existing = conn.execute("SELECT * FROM ai_robot_configs WHERE platform = ?", (token,)).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO ai_robot_configs(platform, enabled, bot_name, webhook_url, webhook_secret, signing_secret, target_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    token,
+                    fields["enabled"],
+                    fields["bot_name"],
+                    fields["webhook_url"],
+                    fields["webhook_secret"],
+                    fields["signing_secret"],
+                    fields["target_id"],
+                    ts,
+                    ts,
+                ),
+            )
+        else:
+            webhook_secret = fields["webhook_secret"] or str(existing["webhook_secret"] or "")
+            signing_secret = fields["signing_secret"] or str(existing["signing_secret"] or "")
+            conn.execute(
+                """
+                UPDATE ai_robot_configs
+                SET enabled = ?, bot_name = ?, webhook_url = ?, webhook_secret = ?, signing_secret = ?, target_id = ?, updated_at = ?
+                WHERE platform = ?
+                """,
+                (
+                    fields["enabled"],
+                    fields["bot_name"],
+                    fields["webhook_url"],
+                    webhook_secret,
+                    signing_secret,
+                    fields["target_id"],
+                    ts,
+                    token,
+                ),
+            )
+    return get_ai_robot_config(token) or {}
+
+
+def verify_ai_robot_webhook(platform: str, body: bytes, signature: str) -> dict[str, Any]:
+    token = _normalize_ai_platform(platform)
+    if brand_database_backend() == "supabase":
+        row = _brand_supabase().select_one("ai_robot_configs", filters={"platform": token})
+        signing_secret = str((row or {}).get("signing_secret") or "")
+    else:
+        ensure_database()
+        with connect() as conn:
+            row = conn.execute("SELECT signing_secret FROM ai_robot_configs WHERE platform = ?", (token,)).fetchone()
+        signing_secret = str(row["signing_secret"] or "") if row is not None else ""
+    if not signing_secret:
+        raise ValueError("signing_secret is not configured")
+    digest = hmac.new(signing_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    expected = f"sha256={digest}"
+    ok = hmac.compare_digest(signature, digest) or hmac.compare_digest(signature, expected)
+    if not ok:
+        raise ValueError("invalid webhook signature")
+    return {"ok": True, "platform": token}
+
+
+def _verify_ai_robot_webhook_sqlite(platform: str, body: bytes, signature: str) -> dict[str, Any]:
+    token = _normalize_ai_platform(platform)
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT signing_secret FROM ai_robot_configs WHERE platform = ?", (token,)).fetchone()
+    if row is None or not str(row["signing_secret"] or ""):
+        raise ValueError("signing_secret is not configured")
+    digest = hmac.new(str(row["signing_secret"]).encode("utf-8"), body, hashlib.sha256).hexdigest()
+    expected = f"sha256={digest}"
+    ok = hmac.compare_digest(signature, digest) or hmac.compare_digest(signature, expected)
+    if not ok:
+        raise ValueError("invalid webhook signature")
+    return {"ok": True, "platform": token}
+
+
+def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bool = False) -> dict[str, Any]:
+    token = _normalize_ai_platform(platform)
+    ensure_database()
+    config = get_ai_robot_config(token)
+    supported = bool(config and config.get("enabled") and config.get("webhook_url"))
+    status = "pending" if supported else "unsupported"
+    summary = "queued for robot sender" if supported else f"{token} robot is not enabled or missing webhook_url"
+    message = dict(payload or {})
+    if test:
+        message.setdefault("text", "GasGx AI robot test message")
+        message["test"] = True
+    ts = now_ts()
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().insert(
+            "ai_robot_messages",
+            {
+                "platform": token,
+                "message_type": str(message.get("message_type") or "text"),
+                "payload_json": message,
+                "status": status,
+                "summary": summary,
+                "created_at": ts,
+                "updated_at": ts,
+            },
+        )
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO ai_robot_messages(platform, message_type, payload_json, status, summary, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                token,
+                str(message.get("message_type") or "text"),
+                json.dumps(message, ensure_ascii=False),
+                status,
+                summary,
+                ts,
+                ts,
+            ),
+        )
+        message_id = int(cursor.lastrowid)
+    return get_ai_robot_message(message_id) or {}
+
+
+def get_ai_robot_message(message_id: int) -> dict[str, Any] | None:
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().select_one("ai_robot_messages", filters={"id": message_id})
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM ai_robot_messages WHERE id = ?", (message_id,)).fetchone()
+        return dict_from_row(row) if row else None
+
+
+def list_ai_robot_messages() -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().select("ai_robot_messages", order="id.desc")
+    ensure_database()
+    with connect() as conn:
+        return [dict_from_row(row) for row in conn.execute("SELECT * FROM ai_robot_messages ORDER BY id DESC LIMIT 100")]
 
 
 def _matrix_publish_success_counts() -> dict[int, int]:
@@ -53,6 +395,12 @@ def _matrix_publish_success_counts() -> dict[int, int]:
             continue
         counts[account_id] = counts.get(account_id, 0) + 1
     return counts
+
+
+def _matrix_publish_success_counts_for_backend() -> dict[int, int]:
+    if brand_database_backend() == "supabase":
+        return {}
+    return _matrix_publish_success_counts()
 
 
 def _video_key(path: Path) -> str:
@@ -101,6 +449,21 @@ def open_material_directory(raw_path: str) -> dict[str, Any]:
 
 
 def list_accounts() -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        publish_success_counts = _matrix_publish_success_counts_for_backend()
+        client = _brand_supabase()
+        accounts = client.select("matrix_accounts", order="id.desc")
+        for account in accounts:
+            platforms = client.select("account_platforms", filters={"account_id": account["id"]}, order="platform.asc")
+            profiles = {item["account_platform_id"]: item for item in client.select("browser_profiles")}
+            for platform in platforms:
+                profile = profiles.get(platform.get("id"))
+                if profile:
+                    platform["profile_dir"] = profile.get("profile_dir", "")
+                    platform["debug_port"] = profile.get("debug_port")
+            account["platforms"] = platforms
+            account["publish_success_count"] = publish_success_counts.get(int(account["id"]), 0)
+        return accounts
     ensure_database()
     publish_success_counts = _matrix_publish_success_counts()
     with connect() as conn:
@@ -122,6 +485,21 @@ def list_accounts() -> list[dict[str, Any]]:
 
 
 def get_account(account_id: int) -> dict[str, Any] | None:
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        account = client.select_one("matrix_accounts", filters={"id": account_id})
+        if account is None:
+            return None
+        platforms = client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc")
+        profiles = {item["account_platform_id"]: item for item in client.select("browser_profiles")}
+        for platform in platforms:
+            profile = profiles.get(platform.get("id"))
+            if profile:
+                platform["profile_dir"] = profile.get("profile_dir", "")
+                platform["debug_port"] = profile.get("debug_port")
+        account["platforms"] = platforms
+        account["publish_success_count"] = 0
+        return account
     ensure_database()
     with connect() as conn:
         row = conn.execute("SELECT * FROM matrix_accounts WHERE id = ?", (account_id,)).fetchone()
@@ -146,6 +524,29 @@ def get_account(account_id: int) -> dict[str, Any] | None:
 
 
 def create_account(payload: dict[str, Any]) -> dict[str, Any]:
+    if brand_database_backend() == "supabase":
+        ts = now_ts()
+        account_key = _account_slug(str(payload.get("account_key") or payload.get("display_name") or ""))
+        display_name = str(payload.get("display_name") or account_key).strip()
+        platforms = payload.get("platforms")
+        if not isinstance(platforms, list) or not platforms:
+            platforms = ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x"]
+        client = _brand_supabase()
+        account = client.insert(
+            "matrix_accounts",
+            {
+                "account_key": account_key,
+                "display_name": display_name,
+                "niche": str(payload.get("niche") or "").strip(),
+                "status": str(payload.get("status") or "active").strip() or "active",
+                "notes": str(payload.get("notes") or "").strip(),
+                "created_at": ts,
+                "updated_at": ts,
+            },
+        )
+        for platform in platforms:
+            ensure_account_platform(None, int(account["id"]), str(platform))
+        return get_account(int(account["id"])) or {}
     ensure_database()
     ts = now_ts()
     account_key = _account_slug(str(payload.get("account_key") or payload.get("display_name") or ""))
@@ -176,6 +577,13 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if brand_database_backend() == "supabase":
+        allowed = {"display_name", "niche", "status", "notes"}
+        update = {key: str(payload.get(key) or "").strip() for key in allowed if key in payload}
+        if update:
+            update["updated_at"] = now_ts()
+            _brand_supabase().update("matrix_accounts", update, filters={"id": account_id})
+        return get_account(account_id)
     ensure_database()
     allowed = {"display_name", "niche", "status", "notes"}
     assignments: list[str] = []
@@ -199,6 +607,40 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
     if capability is None:
         raise ValueError(f"unsupported platform: {platform}")
     ts = now_ts()
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        account = client.select_one("matrix_accounts", filters={"id": account_id})
+        if account is None:
+            raise ValueError("account not found")
+        existing = client.select_one("account_platforms", filters={"account_id": account_id, "platform": token})
+        if existing is None:
+            ap = client.insert(
+                "account_platforms",
+                {
+                    "account_id": account_id,
+                    "platform": token,
+                    "handle": handle,
+                    "capability_status": "registered",
+                    "created_at": ts,
+                    "updated_at": ts,
+                },
+            )
+        else:
+            ap = existing
+        profile_dir = profile_dir_for(str(account["account_key"]), token)
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        if client.select_one("browser_profiles", filters={"account_platform_id": ap["id"]}) is None:
+            client.insert(
+                "browser_profiles",
+                {
+                    "account_platform_id": ap["id"],
+                    "profile_dir": str(profile_dir),
+                    "debug_port": stable_debug_port(str(account["account_key"]), token),
+                    "created_at": ts,
+                    "updated_at": ts,
+                },
+            )
+        return ap
     conn.execute(
         """
         INSERT OR IGNORE INTO account_platforms(account_id, platform, handle, capability_status, created_at, updated_at)
@@ -314,6 +756,35 @@ def create_task(payload: dict[str, Any]) -> dict[str, Any]:
     status = "pending" if supported else "unsupported"
     summary = "queued for manual worker execution" if supported else f"{platform or 'platform'} does not support {task_type} in phase 1"
     ts = now_ts()
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        if status in {"pending", "running"} and account_id:
+            existing = client.select_where(
+                "automation_tasks",
+                params={
+                    "account_id": f"eq.{int(account_id)}",
+                    "platform": f"eq.{platform}",
+                    "task_type": f"eq.{task_type}",
+                    "status": "in.(pending,running)",
+                },
+                order="id.desc",
+            )
+            if existing:
+                raise ValueError(f"duplicate active task already queued: #{existing[0]['id']}")
+        task = client.insert(
+            "automation_tasks",
+            {
+                "account_id": int(account_id) if account_id else None,
+                "platform": platform,
+                "task_type": task_type,
+                "payload_json": payload.get("payload") or {},
+                "status": status,
+                "summary": summary,
+                "created_at": ts,
+                "updated_at": ts,
+            },
+        )
+        return task
     with connect() as conn:
         if status in {"pending", "running"} and account_id:
             existing = conn.execute(
@@ -351,12 +822,16 @@ def create_task(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_tasks() -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().select("automation_tasks", order="id.desc")
     ensure_database()
     with connect() as conn:
         return [dict_from_row(row) for row in conn.execute("SELECT * FROM automation_tasks ORDER BY id DESC LIMIT 200")]
 
 
 def get_task(task_id: int) -> dict[str, Any] | None:
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().select_one("automation_tasks", filters={"id": task_id})
     ensure_database()
     with connect() as conn:
         row = conn.execute("SELECT * FROM automation_tasks WHERE id = ?", (task_id,)).fetchone()
@@ -364,6 +839,8 @@ def get_task(task_id: int) -> dict[str, Any] | None:
 
 
 def delete_task(task_id: int) -> bool:
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().delete("automation_tasks", filters={"id": task_id})
     ensure_database()
     with connect() as conn:
         cursor = conn.execute("DELETE FROM automation_tasks WHERE id = ?", (task_id,))
@@ -377,6 +854,28 @@ def import_stats(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(rows, list):
         rows = [payload]
     inserted = 0
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            client.insert(
+                "video_stats_snapshots",
+                {
+                    "account_id": item.get("account_id"),
+                    "platform": normalize_platform(str(item.get("platform") or "")),
+                    "video_ref": str(item.get("video_ref") or ""),
+                    "views": int(item.get("views") or 0),
+                    "likes": int(item.get("likes") or 0),
+                    "comments": int(item.get("comments") or 0),
+                    "shares": int(item.get("shares") or 0),
+                    "messages": int(item.get("messages") or 0),
+                    "published_at": str(item.get("published_at") or ""),
+                    "captured_at": int(item.get("captured_at") or ts),
+                },
+            )
+            inserted += 1
+        return {"ok": True, "inserted": inserted}
     with connect() as conn:
         for item in rows:
             if not isinstance(item, dict):
@@ -404,6 +903,14 @@ def import_stats(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        params: dict[str, str] = {}
+        if account_id:
+            params["account_id"] = f"eq.{account_id}"
+        token = normalize_platform(platform)
+        if token:
+            params["platform"] = f"eq.{token}"
+        return _brand_supabase().select_where("video_stats_snapshots", params=params, order="captured_at.desc,id.desc")
     ensure_database()
     clauses: list[str] = []
     values: list[Any] = []
@@ -426,6 +933,23 @@ def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[s
 
 
 def dashboard_summary() -> dict[str, Any]:
+    if brand_database_backend() == "supabase":
+        accounts = _brand_supabase().select("matrix_accounts")
+        platforms = [item for item in _brand_supabase().select("account_platforms") if bool(item.get("enabled", True))]
+        tasks = _brand_supabase().select("automation_tasks")
+        stats_rows = _brand_supabase().select("video_stats_snapshots")
+        return {
+            "accounts": len(accounts),
+            "platforms": len(platforms),
+            "running_tasks": len([item for item in tasks if item.get("status") in {"pending", "running"}]),
+            "failed_tasks": len([item for item in tasks if item.get("status") == "failed"]),
+            "unsupported_tasks": len([item for item in tasks if item.get("status") == "unsupported"]),
+            "remaining_material_videos": 0,
+            "views": sum(int(item.get("views") or 0) for item in stats_rows),
+            "likes": sum(int(item.get("likes") or 0) for item in stats_rows),
+            "comments": sum(int(item.get("comments") or 0) for item in stats_rows),
+            "messages": sum(int(item.get("messages") or 0) for item in stats_rows),
+        }
     ensure_database()
     with connect() as conn:
         account_count = conn.execute("SELECT COUNT(*) AS c FROM matrix_accounts").fetchone()["c"]

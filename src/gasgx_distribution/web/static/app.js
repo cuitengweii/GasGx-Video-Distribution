@@ -56,6 +56,10 @@ const state = {
   summary: {},
   distributionSettings: { common: {}, platforms: {} },
   matrixJobStatus: {},
+  aiRobotConfigs: [],
+  aiRobotMessages: [],
+  brand: { settings: {} },
+  systemHealth: null,
 };
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -175,15 +179,36 @@ function initBrandSettings() {
     reader.onload = () => applyShellBrand({ name: nameInput.value, slogan: sloganInput.value, logoDataUrl: String(reader.result || "") });
     reader.readAsDataURL(file);
   });
-  document.querySelector("#save-brand-settings").addEventListener("click", () => {
+  document.querySelector("#save-brand-settings").addEventListener("click", async () => {
     const currentLogo = document.querySelector("#brand-logo-image").src || "";
-    saveShellBrand({ name: nameInput.value, slogan: sloganInput.value, logoDataUrl: currentLogo.startsWith("data:") ? currentLogo : "" });
+    const payload = {
+      name: nameInput.value,
+      slogan: sloganInput.value,
+      logo_asset_path: currentLogo.startsWith("data:") ? currentLogo : "",
+      primary_color: getComputedStyle(document.documentElement).getPropertyValue("--accent-aurora").trim() || "#5dd62c",
+      theme_id: localStorage.getItem(SHELL_THEME_KEY) || "gasgx-green",
+      default_account_prefix: nameInput.value || "GasGx",
+    };
+    const settings = await api("/api/brand", { method: "PATCH", body: JSON.stringify(payload) });
+    saveShellBrand({ name: settings.name, slogan: settings.slogan, logoDataUrl: settings.logo_asset_path || "" });
   });
   document.querySelector("#reset-brand-settings").addEventListener("click", () => {
     localStorage.removeItem(SHELL_BRAND_KEY);
     upload.value = "";
     applyShellBrand({});
   });
+}
+
+function applyServerBrand(brand) {
+  const settings = brand?.settings || {};
+  applyShellBrand({
+    name: settings.name || "GasGx",
+    slogan: settings.slogan || "Video Distribution",
+    logoDataUrl: settings.logo_asset_path || "",
+  });
+  if (settings.theme_id) applyShellTheme(settings.theme_id);
+  const prefix = document.querySelector('input[name="brand_prefix"]');
+  if (prefix) prefix.value = settings.default_account_prefix || settings.name || "GasGx";
 }
 
 function initUserMenu() {
@@ -480,17 +505,109 @@ function renderMatrixJobStatus() {
   ].map(([label, value]) => `<div class="job-status-item"><span>${label}</span><strong>${value}</strong></div>`).join("");
 }
 
+function aiPlatformLabel(platform) {
+  return {
+    wecom: "企业微信",
+    dingtalk: "钉钉",
+    lark: "飞书 / Lark",
+    telegram: "Telegram",
+    whatsapp: "WhatsApp",
+  }[platform] || platform;
+}
+
+function selectedAiRobotConfig() {
+  const platform = document.querySelector("#ai-platform-select")?.value || "wecom";
+  return state.aiRobotConfigs.find((item) => item.platform === platform) || { platform };
+}
+
+function renderAiRobot() {
+  const form = document.querySelector("#ai-robot-form");
+  if (!form) return;
+  const config = selectedAiRobotConfig();
+  form.elements.platform.value = config.platform || "wecom";
+  form.elements.bot_name.value = config.bot_name || "";
+  form.elements.enabled.value = String(config.enabled === true);
+  form.elements.webhook_url.value = config.webhook_url || "";
+  form.elements.webhook_secret.value = "";
+  form.elements.signing_secret.value = "";
+  form.elements.target_id.value = config.target_id || "";
+  document.querySelector("#ai-config-state").textContent = config.enabled ? "已启用" : "未启用";
+  document.querySelector("#ai-channel-grid").innerHTML = state.aiRobotConfigs.map((item) => `
+    <article class="bot-channel-card">
+      <span class="bot-logo ${item.platform}">${aiPlatformLabel(item.platform).slice(0, 1)}</span>
+      <div>
+        <strong>${aiPlatformLabel(item.platform)}</strong>
+        <p>${item.enabled ? "已启用" : "未启用"} · ${item.webhook_url ? "Webhook 已保存" : "缺少 Webhook"} · ${item.has_signing_secret ? "验签密钥已保存" : "缺少验签密钥"}</p>
+      </div>
+      <button class="btn secondary" type="button" data-ai-platform="${item.platform}">配置</button>
+    </article>
+  `).join("");
+  document.querySelectorAll("[data-ai-platform]").forEach((button) => {
+    button.onclick = () => {
+      form.elements.platform.value = button.dataset.aiPlatform;
+      renderAiRobot();
+    };
+  });
+  document.querySelector("#ai-message-list").innerHTML = state.aiRobotMessages.length
+    ? state.aiRobotMessages.map((item) => `<article class="task-row">
+        <div><strong>#${item.id} ${aiPlatformLabel(item.platform)}</strong><span>${item.summary || item.message_type}</span></div>
+        <span class="task-status">${item.status}</span>
+      </article>`).join("")
+    : `<div class="muted">暂无机器人消息队列。</div>`;
+}
+
+function renderSystemHealth() {
+  const status = document.querySelector("#supabase-health-state");
+  const list = document.querySelector("#supabase-health-list");
+  const meta = document.querySelector("#supabase-health-meta");
+  if (!status || !list || !meta) return;
+  const health = state.systemHealth;
+  if (!health) {
+    status.textContent = "未加载";
+    list.innerHTML = `<div class="muted">暂无 Supabase 健康检查结果。</div>`;
+    meta.textContent = "";
+    return;
+  }
+  status.textContent = health.ok ? "正常" : "异常";
+  status.classList.toggle("danger", !health.ok);
+  meta.textContent = `品牌 ${health.brand_id || "-"} · App ${health.app_version || "-"} · Schema ${health.schema_version || "-"}`;
+  list.innerHTML = (health.checks || []).map((item) => `
+    <div class="health-row ${item.ok ? "ok" : "fail"}">
+      <span>${item.name}</span>
+      <strong>${item.ok ? "通过" : "失败"}</strong>
+      <small>${item.ok ? healthDetailText(item.details || {}) : item.error || "未知错误"}</small>
+    </div>
+  `).join("");
+}
+
+function healthDetailText(details) {
+  return Object.entries(details)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(" · ");
+}
+
 async function refresh() {
-  const [summary, platforms, accounts, tasks, stats, distributionSettings, matrixJobStatus] = await Promise.all([
-    api("/api/summary"),
+  const [brand, platforms, accounts, tasks, distributionSettings, matrixJobStatus, aiRobotConfigs, aiRobotMessages] = await Promise.all([
+    api("/api/brand"),
     api("/api/platforms"),
     api("/api/accounts"),
     api("/api/tasks"),
-    api("/api/stats"),
     api("/api/settings/distribution"),
     api("/api/jobs/matrix-wechat/status"),
+    api("/api/ai-robots/configs"),
+    api("/api/ai-robots/messages"),
   ]);
-  Object.assign(state, { summary, platforms, accounts, tasks, stats, distributionSettings, matrixJobStatus });
+  Object.assign(state, { brand, platforms, accounts, tasks, distributionSettings, matrixJobStatus, aiRobotConfigs, aiRobotMessages });
+
+  const optional = await Promise.allSettled([
+    api("/api/summary"),
+    api("/api/stats"),
+    api("/api/system/supabase-health"),
+  ]);
+  if (optional[0].status === "fulfilled") state.summary = optional[0].value;
+  if (optional[1].status === "fulfilled") state.stats = optional[1].value;
+  if (optional[2].status === "fulfilled") state.systemHealth = optional[2].value;
+  applyServerBrand(brand);
   renderSummary();
   renderPlatforms();
   renderTaskSelects();
@@ -499,6 +616,8 @@ async function refresh() {
   renderAccounts();
   renderTasks();
   renderStats();
+  renderAiRobot();
+  renderSystemHealth();
 }
 
 function renderDistributionSettings() {
@@ -737,6 +856,41 @@ document.querySelector("#distribution-settings-form").addEventListener("submit",
       body: JSON.stringify(collectDistributionSettings(event.target)),
     });
     stateNode.textContent = "已保存，下一次矩阵分发会按全局配置和平台独立配置执行。";
+    await refresh();
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("#ai-platform-select").addEventListener("change", renderAiRobot);
+
+document.querySelector("#ai-save-config").addEventListener("click", async (event) => {
+  const form = document.querySelector("#ai-robot-form");
+  const data = Object.fromEntries(new FormData(form).entries());
+  const platform = data.platform;
+  delete data.platform;
+  delete data.test_text;
+  data.enabled = data.enabled === "true";
+  const restoreButton = setButtonLoading(event.currentTarget, "保存中");
+  try {
+    await api(`/api/ai-robots/${platform}/config`, { method: "PUT", body: JSON.stringify(data) });
+    document.querySelector("#ai-config-state").textContent = "已保存";
+    await refresh();
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("#ai-send-test").addEventListener("click", async (event) => {
+  const form = document.querySelector("#ai-robot-form");
+  const platform = form.elements.platform.value;
+  const text = form.elements.test_text.value || "GasGx AI robot test message";
+  const restoreButton = setButtonLoading(event.currentTarget, "发送中");
+  try {
+    await api(`/api/ai-robots/${platform}/test-message`, {
+      method: "POST",
+      body: JSON.stringify({ message_type: "text", text }),
+    });
     await refresh();
   } finally {
     restoreButton();
