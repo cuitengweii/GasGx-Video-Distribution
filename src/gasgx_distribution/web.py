@@ -16,6 +16,8 @@ from .public_settings import (
     save_distribution_settings,
     save_wechat_publish_settings,
 )
+from .scheduler import scheduler_status, start_scheduler, trigger_matrix_wechat_job
+from .video_matrix_api import router as video_matrix_router
 
 
 def _model_payload(model: BaseModel, *, exclude_unset: bool = False) -> dict[str, Any]:
@@ -43,20 +45,30 @@ class TaskPayload(BaseModel):
 class WechatPublishSettingsPayload(BaseModel):
     material_dir: str = ""
     publish_mode: str = "publish"
+    topics: str = ""
     collection_name: str = ""
     caption: str = ""
     declare_original: bool = False
+    short_title: str = "GasGx"
+    location: str = ""
     upload_timeout: int = 60
 
 
 class DistributionSettingsPayload(BaseModel):
     common: dict[str, Any] = Field(default_factory=dict)
+    jobs: dict[str, dict[str, Any]] = Field(default_factory=dict)
     platforms: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class OpenMaterialDirPayload(BaseModel):
+    material_dir: str = ""
 
 
 def create_app() -> FastAPI:
     service.ensure_database()
     app = FastAPI(title="GasGx Video Distribution", version="0.1.0")
+    app.include_router(video_matrix_router)
+    start_scheduler()
     static_dir = Path(__file__).resolve().parent / "web" / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
@@ -87,6 +99,18 @@ def create_app() -> FastAPI:
     @app.patch("/api/settings/distribution")
     def update_distribution_settings(payload: DistributionSettingsPayload) -> dict[str, Any]:
         return save_distribution_settings(_model_payload(payload))
+
+    @app.post("/api/settings/material-dir/open")
+    def open_material_dir(payload: OpenMaterialDirPayload) -> dict[str, Any]:
+        return service.open_material_directory(payload.material_dir)
+
+    @app.get("/api/jobs/matrix-wechat/status")
+    def matrix_wechat_job_status() -> dict[str, Any]:
+        return scheduler_status()
+
+    @app.post("/api/jobs/matrix-wechat/run-now")
+    def matrix_wechat_job_run_now() -> dict[str, Any]:
+        return trigger_matrix_wechat_job()
 
     @app.get("/api/accounts")
     def accounts() -> list[dict[str, Any]]:
@@ -137,6 +161,12 @@ def create_app() -> FastAPI:
         if item is None:
             raise HTTPException(status_code=404, detail="task not found")
         return item
+
+    @app.delete("/api/tasks/{task_id}")
+    def delete_task(task_id: int) -> dict[str, Any]:
+        if not service.delete_task(task_id):
+            raise HTTPException(status_code=404, detail="task not found")
+        return {"ok": True, "deleted": task_id}
 
     @app.get("/api/stats")
     def stats(account_id: int | None = Query(default=None), platform: str = Query(default="")) -> list[dict[str, Any]]:

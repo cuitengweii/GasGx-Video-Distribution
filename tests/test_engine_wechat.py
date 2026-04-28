@@ -1091,6 +1091,53 @@ def test_fill_draft_once_defaults_publish_click_confirmation_to_false(monkeypatc
     assert wait_calls == [{"expected_title": "发布标题", "publish_click_confirmed": False}]
 
 
+def test_fill_draft_once_uses_configured_short_title(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    target = tmp_path / "wechat-short-title.mp4"
+    target.write_bytes(b"video")
+    captured: dict[str, Any] = {}
+
+    class FakeFileInput:
+        def input(self, _path: str) -> None:
+            return None
+
+    class FakePage:
+        url = "https://channels.weixin.qq.com/platform/post/create"
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_wechat_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda *_args, **_kwargs: "editor")
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _name, action, retries=3: action())
+    monkeypatch.setattr(engine, "_find_upload_file_input", lambda *_args, **_kwargs: FakeFileInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready", lambda _page, ctx, timeout_seconds=0: ctx)
+    monkeypatch.setattr(engine, "_clear_location_if_selected", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_collection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_save_draft", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    def fake_short_title(_ctx: Any, title: str, *, configured: bool = False) -> str:
+        captured["title"] = title
+        captured["configured"] = configured
+        return title
+
+    monkeypatch.setattr(engine, "_fill_wechat_short_title", fake_short_title)
+
+    engine._fill_draft_once(
+        FakePage(),
+        target,
+        "天然气发电描述很长",
+        "collection",
+        True,
+        False,
+        False,
+        30,
+        short_title="GasGx",
+    )
+
+    assert captured == {"title": "GasGx", "configured": True}
+
+
 def test_fill_draft_once_passes_publish_click_confirmation_to_feedback_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

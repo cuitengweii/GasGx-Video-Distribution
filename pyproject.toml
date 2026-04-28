@@ -14,7 +14,10 @@ dependencies = [
   "pillow",
   "fastapi",
   "uvicorn",
-  "pydantic"
+  "pydantic",
+  "python-multipart",
+  "numpy",
+  "librosa"
 ]
 
 [project.optional-dependencies]

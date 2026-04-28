@@ -1,0 +1,37 @@
+{
+  "pixabay_industrial_background": {
+    "name": "Industrial Background Search",
+    "mood": "industrial / manufacturing / steady beat",
+    "source": "Pixabay Music",
+    "license_note": "Check the track page before commercial use.",
+    "download_page": "https://pixabay.com/music/search/industrial%20background/"
+  },
+  "pixabay_industry": {
+    "name": "Industry Search",
+    "mood": "factory / generator / B2B promo",
+    "source": "Pixabay Music",
+    "license_note": "Check the track page before commercial use.",
+    "download_page": "https://pixabay.com/music/search/industry/"
+  },
+  "pixabay_corporate_technology": {
+    "name": "Corporate Technology Search",
+    "mood": "clean technology / product intro",
+    "source": "Pixabay Music",
+    "license_note": "Check the track page before commercial use.",
+    "download_page": "https://pixabay.com/music/search/corporate%20technology/"
+  },
+  "pixabay_dark_tech": {
+    "name": "Dark Tech Search",
+    "mood": "cyber-industrial / strong hook",
+    "source": "Pixabay Music",
+    "license_note": "Check the track page before commercial use.",
+    "download_page": "https://pixabay.com/music/search/dark%20tech/"
+  },
+  "pixabay_machinery": {
+    "name": "Machinery Search",
+    "mood": "mechanical / heavy equipment",
+    "source": "Pixabay Music",
+    "license_note": "Check the track page before commercial use.",
+    "download_page": "https://pixabay.com/music/search/machinery/"
+  }
+}

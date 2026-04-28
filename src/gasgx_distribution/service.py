@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +13,9 @@ from cybercar.settings import apply_runtime_environment as apply_cybercar_enviro
 from .db import connect, dict_from_row, init_db, now_ts
 from .paths import get_paths
 from .platforms import get_platform, normalize_platform, stable_debug_port
+from .public_settings import resolve_material_dir
+
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 
 
 def _account_slug(account_key: str) -> str:
@@ -24,8 +30,79 @@ def ensure_database() -> None:
     init_db()
 
 
+def _matrix_publish_success_counts() -> dict[int, int]:
+    path = get_paths().runtime_root / "matrix_publish_state.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {}
+    runs = payload.get("runs") if isinstance(payload, dict) else []
+    if not isinstance(runs, list):
+        return {}
+    counts: dict[int, int] = {}
+    for item in runs:
+        if not isinstance(item, dict) or not bool(item.get("success")):
+            continue
+        try:
+            account_id = int(item.get("account_id") or 0)
+        except Exception:
+            account_id = 0
+        if account_id <= 0:
+            continue
+        counts[account_id] = counts.get(account_id, 0) + 1
+    return counts
+
+
+def _video_key(path: Path) -> str:
+    stat = path.stat()
+    return f"{path.name}|{stat.st_size}|{int(stat.st_mtime)}"
+
+
+def _remaining_material_video_count() -> int:
+    try:
+        material_dir = resolve_material_dir()
+    except Exception:
+        return 0
+    if not material_dir.exists():
+        return 0
+    state_path = get_paths().runtime_root / "matrix_publish_state.json"
+    used: set[str] = set()
+    if state_path.exists():
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8-sig"))
+            if isinstance(payload, dict):
+                used = set(str(item) for item in payload.get("used_videos", []))
+        except Exception:
+            used = set()
+    remaining = 0
+    for path in material_dir.iterdir():
+        if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        try:
+            key = _video_key(path)
+        except OSError:
+            continue
+        if key not in used:
+            remaining += 1
+    return remaining
+
+
+def open_material_directory(raw_path: str) -> dict[str, Any]:
+    material_dir = resolve_material_dir({"material_dir": raw_path})
+    if sys.platform.startswith("win"):
+        os.startfile(str(material_dir))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(material_dir)])
+    else:
+        subprocess.Popen(["xdg-open", str(material_dir)])
+    return {"ok": True, "path": str(material_dir)}
+
+
 def list_accounts() -> list[dict[str, Any]]:
     ensure_database()
+    publish_success_counts = _matrix_publish_success_counts()
     with connect() as conn:
         accounts = [dict_from_row(row) for row in conn.execute("SELECT * FROM matrix_accounts ORDER BY id DESC")]
         for account in accounts:
@@ -40,6 +117,7 @@ def list_accounts() -> list[dict[str, Any]]:
                 (account["id"],),
             ).fetchall()
             account["platforms"] = [dict_from_row(row) for row in platforms]
+            account["publish_success_count"] = publish_success_counts.get(int(account["id"]), 0)
         return accounts
 
 
@@ -50,6 +128,7 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         if row is None:
             return None
         account = dict_from_row(row)
+        account["publish_success_count"] = _matrix_publish_success_counts().get(int(account_id), 0)
         account["platforms"] = [
             dict_from_row(item)
             for item in conn.execute(
@@ -284,6 +363,13 @@ def get_task(task_id: int) -> dict[str, Any] | None:
         return dict_from_row(row) if row else None
 
 
+def delete_task(task_id: int) -> bool:
+    ensure_database()
+    with connect() as conn:
+        cursor = conn.execute("DELETE FROM automation_tasks WHERE id = ?", (task_id,))
+        return bool(cursor.rowcount)
+
+
 def import_stats(payload: dict[str, Any]) -> dict[str, Any]:
     ensure_database()
     ts = now_ts()
@@ -356,6 +442,7 @@ def dashboard_summary() -> dict[str, Any]:
         "running_tasks": int(running),
         "failed_tasks": int(failed),
         "unsupported_tasks": int(unsupported),
+        "remaining_material_videos": _remaining_material_video_count(),
         "views": int(stats["views"]),
         "likes": int(stats["likes"]),
         "comments": int(stats["comments"]),

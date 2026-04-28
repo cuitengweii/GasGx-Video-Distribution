@@ -1,0 +1,91 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GasGx Vibe-Matrix</title>
+    <script>
+      if (new URLSearchParams(window.location.search).get("embed") === "1") {
+        document.documentElement.classList.add("embed-mode");
+      }
+    </script>
+    <link rel="stylesheet" href="/static/video_matrix_styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand"><span></span><div><strong>GasGx</strong><small>Vibe-Matrix Console</small></div></div>
+      <a class="back-link" href="/">返回 Distribution 控制台</a>
+      <label>生成数量<input id="outputCount" class="number-field" type="number" min="1" max="100" step="1" value="3" /></label>
+      <label>并行线程<div class="range-with-value"><input id="maxWorkers" type="range" min="1" max="6" /><output id="maxWorkersValue"></output></div></label>
+      <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option><option value="png">png</option><option value="txt">txt</option><option value="json">json</option></select></label>
+      <label>最终视频生成目录<input id="outputRoot" /></label>
+      <button id="openOutput">打开输出目录</button>
+      <label>9:16 视频模板<select id="videoTemplate"></select></label>
+      <p id="coverStatus" class="muted"></p>
+      <div class="radio-row" id="languageGroup"></div>
+      <details><summary>背景音乐库</summary><div id="bgmPanel"></div></details>
+      <button id="saveState">保存当前设置</button>
+    </aside>
+
+    <main class="workspace">
+      <header class="hero">
+        <div>
+          <p>GASGX VIDEO PRODUCTION CONSOLE</p>
+          <h1>GasGx 短视频矩阵批量生成工具</h1>
+          <span>分类素材入库、节奏卡点混剪、燃气发动机组视觉模板与批量导出。</span>
+        </div>
+        <b>Vibe-Matrix</b>
+      </header>
+
+      <section class="metrics">
+        <article><span>本地素材</span><strong id="metricSources">0</strong></article>
+        <article><span>生成数量</span><strong id="metricCount">0</strong></article>
+        <article><span>并行线程</span><strong id="metricWorkers">0</strong></article>
+        <article><span>默认比例</span><strong>1080:1920</strong></article>
+      </section>
+
+      <section class="source-panel">
+        <div class="section-title"><span>SOURCE LIBRARY</span><b>分类素材目录</b></div>
+        <div id="sourceDirs" class="dir-list"></div>
+        <p id="sourceCounts" class="muted"></p>
+        <div class="radio-row" id="sourceModeGroup"></div>
+        <div id="recentLimits" class="compact-grid"></div>
+        <label id="uploadSourcesWrap" class="file-drop hidden">手动上传素材<input id="sourceFiles" type="file" multiple accept="video/*" /></label>
+      </section>
+
+      <section class="editor-grid">
+        <section class="cover-workbench">
+          <div class="section-title"><span>FIRST SCREEN</span><b>第一屏封面模板</b></div>
+          <div id="coverSelector" class="template-tabs"></div>
+          <div class="cover-editor">
+            <div class="preview-stage"><div class="phone"><img id="coverPreview" alt="cover preview" /></div><small id="previewCaption"></small></div>
+            <form id="coverForm" class="control-panel"></form>
+          </div>
+          <div id="coverGallery" class="cover-gallery"></div>
+        </section>
+
+        <section class="side-editor">
+          <div class="section-title"><span>TEXT</span><b>视频文字设置</b></div>
+          <label>主标题 / 视频口号<input id="headline" /></label>
+          <label>副标题 / 视频标题<input id="subhead" /></label>
+          <label>首屏 CTA<input id="cta" /></label>
+          <label>结尾关注提醒<input id="followText" /></label>
+          <label>视频 HUD 文本<textarea id="hudText"></textarea></label>
+          <label>上传文字稿<input id="transcriptFile" type="file" accept=".txt,.md" /></label>
+          <label>文字稿内容<textarea id="transcriptText"></textarea></label>
+          <div id="jobLog" class="job-status-card">
+            <div class="job-status-head">
+              <strong id="jobStatusTitle">等待生成</strong>
+              <span id="jobPercent">0%</span>
+            </div>
+            <div class="job-progress"><div id="jobProgressFill"></div></div>
+            <ol id="jobSteps" class="job-steps"></ol>
+            <p id="jobMessage">点击生成后，这里会显示每一步进度。</p>
+          </div>
+          <button id="generateBtn" class="primary" type="button">生成 Vibe Matrix</button>
+        </section>
+      </section>
+    </main>
+    <script src="/static/video_matrix_app.js"></script>
+  </body>
+</html>

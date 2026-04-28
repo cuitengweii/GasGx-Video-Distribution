@@ -1,0 +1,41 @@
+{
+  "project_name": "GasGx Vibe-Matrix",
+  "source_root": "../runtime/video_matrix/incoming",
+  "library_root": "../runtime/video_matrix/library",
+  "output_root": "../runtime/materials/videos",
+  "output_count": 30,
+  "target_width": 1080,
+  "target_height": 1920,
+  "target_fps": 60,
+  "recent_limits": {
+    "category_A": 15,
+    "category_B": 8,
+    "category_C": 6
+  },
+  "video_duration_min": 8.0,
+  "video_duration_max": 12.0,
+  "default_title_prefix": "GasGx",
+  "website_url": "https://www.gasgx.com/roi",
+  "hud_enable_live_data": true,
+  "hud_fixed_formulas": [
+    "Flare_Gas_Input -> Hash_Output",
+    "Captured_Gas -> Power -> ASIC_Throughput",
+    "Onsite_Gas_Value -> BTC_Revenue"
+  ],
+  "slogans": [
+    "Stop Flaring. Start Hashing.",
+    "Monetize On-site.",
+    "Turn Waste Gas Into Hashrate.",
+    "Deploy Power Where Gas Lives."
+  ],
+  "titles": [
+    "Industrial Power, Programmed",
+    "Gas To Compute",
+    "Monetized On-site",
+    "Hashrate In Motion"
+  ],
+  "hud_sources": {
+    "btc_usd": "https://api.coinbase.com/v2/prices/spot?currency=USD",
+    "hashrate": "https://api.blockchain.info/q/hashrate"
+  }
+}

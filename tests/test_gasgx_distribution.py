@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -23,6 +25,7 @@ def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr("gasgx_distribution.db.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.service.get_paths", lambda: FakePaths())
+    monkeypatch.setattr("gasgx_distribution.public_settings.get_paths", lambda: FakePaths())
     dist_db.init_db(FakePaths.database_path)
 
 
@@ -47,6 +50,31 @@ def test_account_crud_creates_independent_platform_profiles(monkeypatch, tmp_pat
     updated = service.update_account(int(account["id"]), {"notes": "phase-one"})
     assert updated is not None
     assert updated["notes"] == "phase-one"
+
+
+def test_accounts_include_matrix_publish_success_count(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    first = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
+    second = service.create_account({"account_key": "gasgx-02", "display_name": "GasGx 02", "platforms": ["wechat"]})
+    state_path = tmp_path / "runtime" / "matrix_publish_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {"account_id": first["id"], "success": True},
+                    {"account_id": first["id"], "success": True},
+                    {"account_id": first["id"], "success": False},
+                    {"account_id": second["id"], "success": True},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    accounts = {item["id"]: item for item in service.list_accounts()}
+
+    assert accounts[first["id"]]["publish_success_count"] == 2
+    assert accounts[second["id"]]["publish_success_count"] == 1
 
 
 def test_task_creation_marks_phase_one_unsupported_platform(monkeypatch, tmp_path: Path) -> None:
@@ -102,6 +130,29 @@ def test_api_smoke_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None
     stats = client.get(f"/api/stats?account_id={account['id']}&platform=wechat")
     assert stats.status_code == 200
     assert stats.json()[0]["views"] == 100
+
+
+def test_dashboard_summary_counts_remaining_material_videos(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    material_dir = tmp_path / "runtime" / "materials" / "videos"
+    material_dir.mkdir(parents=True)
+    used = material_dir / "used.mp4"
+    remaining = material_dir / "remaining.mp4"
+    ignored = material_dir / "ignored.txt"
+    used.write_bytes(b"used")
+    remaining.write_bytes(b"remaining")
+    ignored.write_text("ignored", encoding="utf-8")
+    os.utime(used, (1000, 1000))
+    os.utime(remaining, (2000, 2000))
+    used_key = f"{used.name}|{used.stat().st_size}|{int(used.stat().st_mtime)}"
+    (tmp_path / "runtime" / "matrix_publish_state.json").write_text(
+        json.dumps({"used_videos": [used_key], "runs": []}),
+        encoding="utf-8",
+    )
+
+    summary = service.dashboard_summary()
+
+    assert summary["remaining_material_videos"] == 1
 
 
 def test_open_browser_uses_account_specific_profile(monkeypatch, tmp_path: Path) -> None:

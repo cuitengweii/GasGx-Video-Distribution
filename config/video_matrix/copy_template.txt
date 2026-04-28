@@ -1,0 +1,12 @@
+{title}
+
+{slogan}
+
+GasGx Vibe-Matrix export {sequence_number} turns field footage into a cyber-industrial campaign asset. Explore the ROI engine here:
+{website_url}
+
+HUD:
+{hud_summary}
+
+Transcript:
+{transcript}

@@ -3574,6 +3574,11 @@ def _publish_once(
 
     runtime_config = core._load_runtime_config(args.config or core.DEFAULT_CONFIG_PATH)
     publish_mode = _resolve_platform_publish_mode_with_config(args, platform, runtime_config=runtime_config)
+    platform_publish_cfg = (
+        core.resolve_platform_publish_config(runtime_config, platform)
+        if hasattr(core, "resolve_platform_publish_config")
+        else {}
+    )
     platform_collection_name = str((ctx.collection_names or {}).get(platform, "") or ctx.collection_name or "").strip()
     try:
         if platform == "wechat":
@@ -3582,6 +3587,7 @@ def _publish_once(
                 caption=caption,
                 target_video=target,
                 collection_name=platform_collection_name,
+                short_title=str(platform_publish_cfg.get("short_title") or "").strip(),
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,

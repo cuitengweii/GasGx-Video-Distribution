@@ -40,9 +40,12 @@ def test_wechat_public_settings_persist_and_normalize(monkeypatch, tmp_path: Pat
         {
             "material_dir": "runtime/materials/videos",
             "publish_mode": "draft",
+            "topics": "#one #two",
             "collection_name": "test collection",
             "caption": "hello",
             "declare_original": "true",
+            "short_title": "GasGx Test",
+            "location": "天津",
             "upload_timeout": 10,
         }
     )
@@ -50,6 +53,9 @@ def test_wechat_public_settings_persist_and_normalize(monkeypatch, tmp_path: Pat
     assert saved["publish_mode"] == "draft"
     assert saved["declare_original"] is True
     assert saved["upload_timeout"] == 60
+    assert saved["topics"] == "#one #two"
+    assert saved["short_title"] == "GasGx Test"
+    assert saved["location"] == "天津"
     assert load_wechat_publish_settings()["collection_name"] == "test collection"
 
 
@@ -62,15 +68,19 @@ def test_wechat_public_settings_api(monkeypatch, tmp_path: Path) -> None:
         json={
             "material_dir": "runtime/materials/videos",
             "publish_mode": "publish",
-            "collection_name": "赛博皮卡天津港现车",
-            "caption": "统一文案",
+            "collection_name": "test collection",
+            "caption": "shared caption",
             "declare_original": False,
+            "short_title": "GasGx API",
+            "location": "",
             "upload_timeout": 120,
         },
     )
 
     assert result.status_code == 200
-    assert result.json()["caption"] == "统一文案"
+    assert result.json()["caption"] == "shared caption"
+    assert result.json()["short_title"] == "GasGx API"
+    assert result.json()["location"] == ""
     assert client.get("/api/settings/wechat-publish").json()["upload_timeout"] == 120
 
 
@@ -82,16 +92,33 @@ def test_distribution_settings_store_common_and_platforms(monkeypatch, tmp_path:
             "common": {
                 "material_dir": "runtime/materials/videos",
                 "publish_mode": "draft",
+                "topics": "#gas #power",
                 "upload_timeout": 120,
+            },
+            "jobs": {
+                "matrix_wechat_publish": {
+                    "batch_size": 5,
+                    "batch_interval_min_minutes": 10,
+                    "batch_interval_max_minutes": 3,
+                    "enabled": "true",
+                    "schedule_mode": "daily",
+                    "daily_time": "25:90",
+                    "run_interval_minutes": 30,
+                    "rotate_start_group": "true",
+                    "shuffle_within_batch": "false",
+                    "retry_failed_last": True,
+                }
             },
             "platforms": {
                 "wechat": {
-                    "caption": "视频号文案",
-                    "collection_name": "赛博皮卡天津港现车",
+                    "caption": "wechat caption",
+                    "collection_name": "test collection",
                     "declare_original": True,
+                    "short_title": "GasGx Matrix",
+                    "location": "上海",
                 },
                 "douyin": {
-                    "caption": "抖音文案",
+                    "caption": "douyin caption",
                     "visibility": "private",
                     "publish_mode": "publish",
                 },
@@ -100,9 +127,19 @@ def test_distribution_settings_store_common_and_platforms(monkeypatch, tmp_path:
     )
 
     assert saved["common"]["publish_mode"] == "draft"
+    assert saved["common"]["topics"] == "#gas #power"
+    assert saved["jobs"]["matrix_wechat_publish"]["batch_size"] == 5
+    assert saved["jobs"]["matrix_wechat_publish"]["enabled"] is True
+    assert saved["jobs"]["matrix_wechat_publish"]["schedule_mode"] == "daily"
+    assert saved["jobs"]["matrix_wechat_publish"]["daily_time"] == "23:59"
+    assert saved["jobs"]["matrix_wechat_publish"]["run_interval_minutes"] == 30
+    assert saved["jobs"]["matrix_wechat_publish"]["batch_interval_max_minutes"] == 10
+    assert saved["jobs"]["matrix_wechat_publish"]["shuffle_within_batch"] is False
     assert saved["platforms"]["wechat"]["declare_original"] is True
+    assert saved["platforms"]["wechat"]["short_title"] == "GasGx Matrix"
+    assert saved["platforms"]["wechat"]["location"] == "上海"
     assert saved["platforms"]["douyin"]["visibility"] == "private"
-    assert load_distribution_settings()["platforms"]["douyin"]["caption"] == "抖音文案"
+    assert load_distribution_settings()["platforms"]["douyin"]["caption"] == "douyin caption"
 
 
 def test_distribution_settings_api(monkeypatch, tmp_path: Path) -> None:
@@ -113,10 +150,60 @@ def test_distribution_settings_api(monkeypatch, tmp_path: Path) -> None:
         "/api/settings/distribution",
         json={
             "common": {"material_dir": "runtime/materials/videos", "publish_mode": "publish", "upload_timeout": 180},
-            "platforms": {"tiktok": {"caption": "TikTok 文案", "comment_permission": "closed"}},
+            "jobs": {"matrix_wechat_publish": {"batch_size": 3, "enabled": True, "run_interval_minutes": 60, "rotate_start_group": False}},
+            "platforms": {"tiktok": {"caption": "TikTok caption", "comment_permission": "closed"}},
         },
     )
 
     assert result.status_code == 200
-    assert result.json()["platforms"]["tiktok"]["caption"] == "TikTok 文案"
+    assert result.json()["jobs"]["matrix_wechat_publish"]["batch_size"] == 3
+    assert result.json()["jobs"]["matrix_wechat_publish"]["enabled"] is True
+    assert result.json()["platforms"]["tiktok"]["caption"] == "TikTok caption"
     assert client.get("/api/settings/distribution").json()["common"]["upload_timeout"] == 180
+
+
+def test_open_material_dir_api(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    opened = []
+
+    def fake_open_material_directory(raw_path: str) -> dict[str, str | bool]:
+        opened.append(raw_path)
+        return {"ok": True, "path": str(tmp_path / raw_path)}
+
+    monkeypatch.setattr("gasgx_distribution.service.open_material_directory", fake_open_material_directory)
+    client = TestClient(create_app())
+
+    result = client.post("/api/settings/material-dir/open", json={"material_dir": "runtime/materials/videos"})
+
+    assert result.status_code == 200
+    assert result.json()["ok"] is True
+    assert opened == ["runtime/materials/videos"]
+
+
+def test_matrix_wechat_job_status_api(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    result = client.get("/api/jobs/matrix-wechat/status")
+
+    assert result.status_code == 200
+    assert result.json()["enabled"] is False
+    assert "thread_alive" in result.json()
+
+
+def test_delete_task_api(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    account = client.post(
+        "/api/accounts",
+        json={"account_key": "a-01", "display_name": "A", "platforms": ["wechat"]},
+    ).json()
+    task = client.post(
+        "/api/tasks",
+        json={"account_id": account["id"], "platform": "wechat", "task_type": "publish"},
+    ).json()
+
+    result = client.delete(f"/api/tasks/{task['id']}")
+
+    assert result.status_code == 200
+    assert all(item["id"] != task["id"] for item in client.get("/api/tasks").json())

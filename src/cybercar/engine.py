@@ -12969,8 +12969,14 @@ def _match_duplicate_by_fingerprint(
     return best
 
 
+def _required_hashtags_disabled() -> bool:
+    return str(os.environ.get("CYBERCAR_DISABLE_REQUIRED_HASHTAGS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _ensure_required_hashtags(caption: str) -> str:
     text = (caption or "").strip()
+    if _required_hashtags_disabled():
+        return text
     if not text:
         text = "Cybertruck 璧涘崥鐨崱鏈€鏂扮敾闈紒"
     if REQUIRED_CAPTION_KEYWORD not in text:
@@ -16388,8 +16394,9 @@ def _find_wechat_short_title_input(ctx: Any) -> Optional[Any]:
     return None
 
 
-def _fill_wechat_short_title(ctx: Any, short_title: str) -> str:
-    final_title = _build_wechat_short_title(short_title)
+def _fill_wechat_short_title(ctx: Any, short_title: str, *, configured: bool = False) -> str:
+    raw_title = str(short_title or "").strip()
+    final_title = raw_title[:16] if configured and raw_title else _build_wechat_short_title(raw_title)
     editor = _find_wechat_short_title_input(ctx)
     if not editor:
         raise RuntimeError("Failed to locate WeChat short title input.")
@@ -16414,7 +16421,8 @@ def _fill_caption(ctx: Any, caption: str) -> None:
 
     _humanized_publish_reaction_pause("wechat caption verification")
     current = _read_element_text(editor) or _read_caption_text(ctx)
-    if REQUIRED_HASHTAGS[0].lower() in current.lower():
+    expected_marker = caption.strip() if _required_hashtags_disabled() else REQUIRED_HASHTAGS[0]
+    if expected_marker and expected_marker.lower() in current.lower():
         tag_name = "unknown"
         class_name = ""
         try:
@@ -16428,6 +16436,9 @@ def _fill_caption(ctx: Any, caption: str) -> None:
         _log(f"[Uploader] Caption filled by visible editor: {tag_name} {class_name}".strip())
         return
 
+    if _required_hashtags_disabled():
+        _log("[Uploader] Caption read-back did not expose configured text; continue after successful keyboard input.")
+        return
     raise RuntimeError("Caption fill verification failed: target input text does not contain required hashtags.")
 
 
@@ -18007,14 +18018,14 @@ def _get_location_state(ctx: Any) -> dict[str, Any]:
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && norm(el.textContent) === '浣嶇疆');
+      .find(el => isVisible(el) && ['位置', '浣嶇疆'].includes(norm(el.textContent)));
     if (!label) return {hasLocationField: false, current: '', isNone: true};
     const item = label.closest('.form-item') || label.parentElement;
     const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
     const nameEl = wrap && (wrap.querySelector('.location-name') || wrap.querySelector('.place') || wrap.querySelector('.position-display-wrap'));
     const currentRaw = norm(nameEl ? nameEl.innerText : '');
     const current = currentRaw.replace(/^浣嶇疆/, '').trim();
-    return {hasLocationField: true, current, isNone: (!current || /涓嶆樉绀轰綅缃畖涓嶆樉绀?.test(current))};
+    return {hasLocationField: true, current, isNone: (!current || /不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀?.test(current))};
     """
     try:
         state = ctx.run_js(js)
@@ -18055,13 +18066,13 @@ def _clear_location_if_selected(ctx: Any) -> None:
 
     const pool = Array.from((wrap || document).querySelectorAll('.option-item, .location-item, .name, div, span'))
       .filter(el => isVisible(el));
-    let target = pool.find(el => /^涓嶆樉绀轰綅缃?/.test(norm(el.innerText)));
-    if (!target) target = pool.find(el => /涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
+    let target = pool.find(el => /^不显示位置$/.test(norm(el.innerText)));
+    if (!target) target = pool.find(el => /不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
     if (!target) {
       const globalPool = Array.from(document.querySelectorAll('.option-item, .location-item, .name, div, span'))
         .filter(el => isVisible(el));
-      target = globalPool.find(el => /^涓嶆樉绀轰綅缃?/.test(norm(el.innerText)))
-        || globalPool.find(el => /涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
+      target = globalPool.find(el => /^不显示位置$/.test(norm(el.innerText)))
+        || globalPool.find(el => /不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
     }
     if (!target) return {state: 'option_not_found'};
     target.click();
@@ -18547,6 +18558,7 @@ def _fill_draft_once(
     telegram_api_base: str = "",
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
     wechat_publish_click_confirmed: bool = False,
+    short_title: str = "",
 ) -> Any:
     wechat_open_url = _wechat_primary_create_url()
     if _current_page_matches_publish_entry(page, "wechat", wechat_open_url):
@@ -18645,7 +18657,12 @@ def _fill_draft_once(
     _log("[Uploader] Location strategy: keep current browser network/proxy context.")
     _clear_location_if_selected(editor_ctx)
     _fill_caption(editor_ctx, final_caption)
-    wechat_short_title = _fill_wechat_short_title(editor_ctx, final_caption)
+    configured_short_title = str(short_title or "").strip()
+    wechat_short_title = _fill_wechat_short_title(
+        editor_ctx,
+        configured_short_title or final_caption,
+        configured=bool(configured_short_title),
+    )
     _select_collection(editor_ctx, collection_name)
     if declare_original:
         _declare_wechat_original(editor_ctx, page)
@@ -18735,6 +18752,7 @@ def fill_draft_wechat(
     caption: Optional[str] = None,
     target_video: Optional[Path] = None,
     collection_name: str = DEFAULT_COLLECTION_NAME,
+    short_title: str = "",
     debug_port: int = DEFAULT_PORT,
     save_draft: bool = True,
     publish_now: bool = False,
@@ -18795,6 +18813,7 @@ def fill_draft_wechat(
                     telegram_api_base=telegram_api_base,
                     notify_env_prefix=notify_env_prefix,
                     wechat_publish_click_confirmed=wechat_publish_click_confirmed,
+                    short_title=short_title,
                 )
                 return target
             except Exception as exc:
@@ -29002,6 +29021,7 @@ def main() -> int:
                             caption=(args.caption or "").strip() or None,
                             target_video=target,
                             collection_name=platform_collection_name,
+                            short_title=str(platform_publish_cfg.get("short_title") or "").strip(),
                             debug_port=args.debug_port,
                             save_draft=platform_save_draft,
                             publish_now=platform_publish_now,

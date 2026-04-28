@@ -9,28 +9,68 @@
 <body>
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-mark"></span>
+      <span class="brand-mark" id="brand-mark"></span>
+      <img class="brand-logo-image hidden" id="brand-logo-image" alt="GasGx logo">
       <div>
-        <strong>GasGx</strong>
-        <small>Video Distribution</small>
+        <strong id="brand-name">GasGx</strong>
+        <small id="brand-slogan">Video Distribution</small>
       </div>
     </div>
     <nav>
+      <span class="nav-group-label">业务工作台</span>
       <button class="nav-btn active" data-view="overview">总览</button>
       <button class="nav-btn" data-view="accounts">账号矩阵</button>
       <button class="nav-btn" data-view="settings">公共设置</button>
       <button class="nav-btn" data-view="tasks">任务中心</button>
       <button class="nav-btn" data-view="stats">数据统计</button>
+      <button class="nav-btn" data-view="video-matrix">视频生成</button>
+      <span class="nav-group-label">系统管理</span>
+      <button class="nav-btn" data-view="user-center">用户中心</button>
+      <button class="nav-btn" data-view="notifications">通知中心</button>
+      <button class="nav-btn" data-view="system-settings">系统设置</button>
+      <button class="nav-btn" data-view="help-center">帮助文档</button>
     </nav>
+    <section class="sidebar-user-panel">
+      <button class="mini-user" id="user-menu-toggle" type="button" aria-expanded="false">
+        <span class="mini-avatar settings-avatar">⚙</span>
+        <div>
+          <strong>系统管理</strong>
+        </div>
+      </button>
+      <div class="sidebar-user-actions hidden" id="sidebar-user-actions">
+        <button class="btn secondary" type="button" data-quick-view="user-center">用户中心</button>
+        <button class="btn secondary" type="button" data-quick-view="notifications">通知中心</button>
+        <button class="btn secondary" type="button" data-quick-view="system-settings">系统设置</button>
+        <button class="btn secondary" type="button" data-quick-view="help-center">帮助文档</button>
+        <button class="btn secondary" type="button">退出登录</button>
+      </div>
+    </section>
   </aside>
   <main class="workspace">
     <header class="topbar">
-      <div>
-        <h1>账号矩阵维护系统</h1>
-        <p>独立账号、独立浏览器、发布/评论/私信/统计任务入口</p>
+      <div class="topbar-title">
+        <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="隐藏左侧栏" aria-expanded="true">‹</button>
+        <div>
+          <h1 id="page-title">账号矩阵维护系统</h1>
+          <p id="page-description">独立账号、独立浏览器、发布/评论/私信/统计任务入口</p>
+        </div>
       </div>
-      <button id="refresh" class="btn primary">刷新</button>
+      <div class="topbar-actions">
+        <div class="signed-user-wrap">
+          <div class="signed-user-badge" aria-label="当前登录用户 Allen">
+            <span class="operator-avatar" aria-hidden="true"></span>
+            <strong>Allen</strong>
+          </div>
+          <div class="top-user-menu">
+            <button class="btn secondary" type="button" data-quick-view="user-center">用户中心</button>
+            <button class="btn secondary" type="button">退出登录</button>
+          </div>
+        </div>
+      </div>
     </header>
+    <div class="page-toolbar">
+      <button id="refresh" class="btn secondary">刷新当前数据</button>
+    </div>
 
     <section id="overview" class="view active">
       <div id="summary" class="metric-grid"></div>
@@ -46,7 +86,10 @@
       <div class="split">
         <form id="account-form" class="panel form-panel">
           <h2>新增矩阵账号</h2>
-          <label>账号名称<input name="display_name" required placeholder="例如：GasGx 小白"></label>
+          <div class="account-name-fields">
+            <label>品牌前缀<input name="brand_prefix" value="GasGx" required placeholder="例如：GasGx"></label>
+            <label>名称<input name="account_name" required placeholder="例如：小白"></label>
+          </div>
           <label>账号编号
             <select name="account_suffix">
               <option value="auto">自动生成</option>
@@ -98,8 +141,11 @@
               <p class="muted">所有平台默认继承这里的素材目录、发布方式和上传超时。</p>
             </div>
           </div>
-          <label>发布素材目录
-            <input name="common.material_dir" list="material-dir-options" placeholder="runtime/materials/videos">
+          <label class="material-dir-field">发布素材目录
+            <span class="input-action">
+              <input name="common.material_dir" list="material-dir-options" placeholder="runtime/materials/videos">
+              <button class="btn secondary icon-btn" id="open-material-dir" type="button" title="修改素材目录">修改</button>
+            </span>
             <datalist id="material-dir-options">
               <option value="runtime/materials/videos"></option>
               <option value="runtime/materials/douyin"></option>
@@ -114,6 +160,10 @@
             </select>
           </label>
           <label>默认上传超时
+            <span>全局话题</span>
+            <input name="common.topics" placeholder="#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿">
+          </label>
+          <label>全局上传超时
             <select name="common.upload_timeout">
               <option value="60">60 秒</option>
               <option value="120">120 秒</option>
@@ -123,11 +173,102 @@
           </label>
         </section>
 
+        <section class="panel form-panel settings-job">
+          <div class="panel-head">
+            <div>
+              <h2>矩阵发布作业</h2>
+              <p class="muted">控制视频号矩阵发布的账号批次、轮换顺序和失败补跑策略。</p>
+            </div>
+            <button class="btn primary job-run-button" id="matrix-run-now" type="button">立即启动一次</button>
+          </div>
+          <label class="job-icon-field">每批账号数
+            <select name="jobs.matrix_wechat_publish.batch_size">
+              <option value="1">1 个</option>
+              <option value="2">2 个</option>
+              <option value="3">3 个</option>
+              <option value="4">4 个</option>
+              <option value="5">5 个</option>
+              <option value="6">6 个</option>
+              <option value="7">7 个</option>
+              <option value="8">8 个</option>
+              <option value="9">9 个</option>
+              <option value="10">10 个</option>
+            </select>
+          </label>
+          <label class="job-icon-field">后台定时启动
+            <select name="jobs.matrix_wechat_publish.enabled">
+              <option value="false">关闭</option>
+              <option value="true">开启</option>
+            </select>
+          </label>
+          <label class="job-icon-field">定时模式
+            <select name="jobs.matrix_wechat_publish.schedule_mode">
+              <option value="interval">按间隔</option>
+              <option value="daily">每天固定时间</option>
+            </select>
+          </label>
+          <label class="job-icon-field">每天发布时间
+            <input type="time" name="jobs.matrix_wechat_publish.daily_time" value="09:00">
+          </label>
+          <label class="job-icon-field">间隔发布
+            <select name="jobs.matrix_wechat_publish.run_interval_minutes">
+              <option value="30">30 分钟</option>
+              <option value="60">1 小时</option>
+              <option value="360">6 小时</option>
+              <option value="720">12 小时</option>
+              <option value="1440">24 小时</option>
+            </select>
+          </label>
+          <label class="job-icon-field">批次最小间隔
+            <select name="jobs.matrix_wechat_publish.batch_interval_min_minutes">
+              <option value="0">0 分钟</option>
+              <option value="3">3 分钟</option>
+              <option value="5">5 分钟</option>
+              <option value="10">10 分钟</option>
+              <option value="15">15 分钟</option>
+            </select>
+          </label>
+          <label class="job-icon-field">批次最大间隔
+            <select name="jobs.matrix_wechat_publish.batch_interval_max_minutes">
+              <option value="0">0 分钟</option>
+              <option value="5">5 分钟</option>
+              <option value="10">10 分钟</option>
+              <option value="15">15 分钟</option>
+              <option value="30">30 分钟</option>
+            </select>
+          </label>
+          <label class="job-icon-field">起始批次轮换
+            <select name="jobs.matrix_wechat_publish.rotate_start_group">
+              <option value="true">开启</option>
+              <option value="false">关闭</option>
+            </select>
+          </label>
+          <label class="job-icon-field">批次内随机顺序
+            <select name="jobs.matrix_wechat_publish.shuffle_within_batch">
+              <option value="true">开启</option>
+              <option value="false">关闭</option>
+            </select>
+          </label>
+          <label class="job-icon-field">失败最后补跑
+            <select name="jobs.matrix_wechat_publish.retry_failed_last">
+              <option value="true">开启</option>
+              <option value="false">关闭</option>
+            </select>
+          </label>
+          <div class="job-monitor wide-field">
+            <div class="row-head">
+              <strong>作业监控</strong>
+            </div>
+            <div id="matrix-job-status" class="job-status-grid"></div>
+          </div>
+        </section>
+
         <section class="panel">
           <div class="panel-head">
             <div>
               <h2>平台独立配置</h2>
               <p class="muted">每个平台可以单独配置文案、权限和发布策略；视频号有额外合集和原创声明。</p>
+              <p class="muted">配置优先级：平台独立配置 &gt; 继承全局时使用全局公共配置 &gt; 代码默认值。视频号短标题优先使用平台独立配置（默认 GasGx）；位置留空表示不显示位置；视频描述不会覆盖短标题。</p>
             </div>
             <button class="btn primary" type="submit">保存全部设置</button>
           </div>
@@ -167,11 +308,285 @@
     </section>
 
     <section id="stats" class="view">
+      <section class="client-dashboard">
+        <div class="dashboard-filters panel">
+          <label>时间维度
+            <select id="stats-period">
+              <option>今日</option>
+              <option>昨日</option>
+              <option selected>近7天</option>
+              <option>近30天</option>
+              <option>自定义时间</option>
+            </select>
+          </label>
+          <label>筛选平台
+            <select id="stats-platform-filter">
+              <option>全部平台</option>
+              <option>抖音</option>
+              <option>视频号</option>
+              <option>小红书</option>
+              <option>快手</option>
+            </select>
+          </label>
+          <label>筛选账号
+            <select id="stats-account-filter">
+              <option>全部账号</option>
+              <option>GasGx小绿</option>
+              <option>GasGx小黄</option>
+              <option>GasGx发电机组案例</option>
+            </select>
+          </label>
+        </div>
+        <div id="stats-overview" class="metric-grid client-overview"></div>
+        <div class="dashboard-grid two-col">
+          <section class="panel dashboard-panel">
+            <div class="panel-head"><h2>账号矩阵统计</h2><span class="system-status">账号分层</span></div>
+            <div class="chart-row">
+              <div class="donut-chart" style="--a:42%;--b:70%;--c:88%"><span>异常<br>12%</span></div>
+              <div class="kpi-list">
+                <div><span>矩阵平均完播率</span><strong>38.6%</strong></div>
+                <div><span>矩阵平均互动率</span><strong>7.9%</strong></div>
+                <div><span>异常账号占比</span><strong>12%</strong></div>
+              </div>
+            </div>
+            <div class="table-tools"><input id="account-stats-search" placeholder="搜索账号 / 平台 / 标签"><span>支持排序、分页、搜索筛选</span></div>
+            <div id="account-stats-table" class="data-table"></div>
+          </section>
+          <section class="panel dashboard-panel">
+            <div class="panel-head"><h2>作品内容数据</h2><span class="system-status">TOP10</span></div>
+            <div class="content-rank">
+              <div id="content-top-list"></div>
+              <div class="bar-chart">
+                <strong>发布时段分析</strong>
+                <span style="--v:54%">09:00</span>
+                <span style="--v:78%">12:00</span>
+                <span style="--v:92%">18:00</span>
+                <span style="--v:66%">21:00</span>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="dashboard-grid two-col">
+          <section class="panel dashboard-panel">
+            <div class="panel-head"><h2>流量来源分析</h2><span class="system-status">占比</span></div>
+            <div class="traffic-layout">
+              <div class="pie-chart"></div>
+              <div id="traffic-list" class="kpi-list"></div>
+            </div>
+          </section>
+          <section class="panel dashboard-panel highlight-panel">
+            <div class="panel-head"><h2>营销商业转化</h2><span class="system-status">客户核心</span></div>
+            <div id="conversion-cards" class="mini-metric-grid"></div>
+            <div class="funnel-chart">
+              <span style="--w:100%">播放 286,400</span>
+              <span style="--w:62%">主页访问 17,860</span>
+              <span style="--w:38%">私信咨询 1,286</span>
+              <span style="--w:22%">有效线索 426</span>
+              <span style="--w:12%">意向客户 138</span>
+            </div>
+          </section>
+        </div>
+        <div class="dashboard-grid two-col">
+          <section class="panel dashboard-panel">
+            <div class="panel-head"><h2>运营执行数据</h2><span class="system-status">工作量透明</span></div>
+            <div id="operation-progress" class="progress-list"></div>
+          </section>
+          <section class="panel dashboard-panel">
+            <div class="panel-head"><h2>数据趋势 & 风险预警</h2><span class="system-status">趋势</span></div>
+            <div class="trend-lines">
+              <div class="line-chart"></div>
+              <div id="risk-list" class="risk-list"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </section>
+
+    <section id="user-center" class="view">
+      <div class="system-grid">
+        <section class="panel system-card">
+          <div class="panel-head">
+            <div>
+              <h2>个人资料</h2>
+              <p class="muted">预留操作者信息、头像、角色权限和工作偏好。</p>
+            </div>
+            <span class="system-status">预留</span>
+          </div>
+          <div class="profile-row">
+            <div class="avatar">GX</div>
+            <div>
+              <strong>GasGx Operator</strong>
+              <p class="muted">本地部署管理员 / 视频矩阵运营</p>
+            </div>
+          </div>
+        </section>
+        <section class="panel system-card">
+          <div class="panel-head"><h2>权限角色</h2><span class="system-status">待接入</span></div>
+          <div class="system-list">
+            <span>管理员</span><span>发布员</span><span>数据查看</span><span>素材维护</span>
+          </div>
+        </section>
+        <section class="panel system-card">
+          <div class="panel-head"><h2>操作偏好</h2><span class="system-status">本地</span></div>
+          <div class="system-list">
+            <span>深色模式</span><span>GasGx 绿色高亮</span><span>本地文件优先</span>
+          </div>
+        </section>
+        <section class="panel system-card wide-system-card">
+          <div class="panel-head">
+            <div>
+              <h2>系统配色</h2>
+              <p class="muted">基于当前深色 GasGx 风格扩展 14 套强调色，点击后立即预览并保存在本机浏览器。</p>
+            </div>
+            <span class="system-status">14 套</span>
+          </div>
+          <div class="theme-palette-grid" id="theme-palette-grid"></div>
+        </section>
+        <section class="panel system-card wide-system-card">
+          <div class="panel-head">
+            <div>
+              <h2>Logo 与 Slogan</h2>
+              <p class="muted">支持文字和图片 Logo。图片建议 96x96px，最小 48x48px，最大 256x256px，页面会按 34x34px 等比显示。</p>
+            </div>
+            <span class="system-status">本地预览</span>
+          </div>
+          <div class="brand-settings-grid">
+            <label>Logo 文字
+              <input id="brand-name-input" maxlength="24" placeholder="GasGx">
+            </label>
+            <label>Slogan
+              <input id="brand-slogan-input" maxlength="42" placeholder="Video Distribution">
+            </label>
+            <label>图片 Logo
+              <input id="brand-logo-upload" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml">
+            </label>
+            <div class="brand-preview-box">
+              <span class="brand-mark preview-mark" id="brand-preview-mark"></span>
+              <img class="brand-logo-image hidden" id="brand-preview-logo" alt="logo preview">
+              <div>
+                <strong id="brand-preview-name">GasGx</strong>
+                <small id="brand-preview-slogan">Video Distribution</small>
+              </div>
+            </div>
+            <div class="brand-actions">
+              <button class="btn primary" id="save-brand-settings" type="button">保存品牌设置</button>
+              <button class="btn secondary" id="reset-brand-settings" type="button">恢复默认</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="notifications" class="view">
       <div class="panel">
         <div class="panel-head">
-          <h2>短视频数据快照</h2>
+          <div>
+            <h2>消息与提醒</h2>
+            <p class="muted">预留生成完成、发布失败、账号登录失效和素材不足提醒。</p>
+          </div>
+          <span class="system-status">0 条未读</span>
         </div>
-        <div id="stats-list" class="stats-list"></div>
+        <div class="empty-state">
+          <strong>当前没有新的系统提醒</strong>
+          <p>后续可接入任务中心、视频生成和账号检测结果。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="system-settings" class="view">
+      <div class="system-grid">
+        <section class="panel system-card">
+          <div class="panel-head"><h2>部署环境</h2><span class="system-status">本地</span></div>
+          <div class="system-kv"><span>运行地址</span><strong>127.0.0.1:8765</strong></div>
+          <div class="system-kv"><span>程序目录</span><strong>G:\GasGx Video Distribution</strong></div>
+        </section>
+        <section class="panel system-card">
+          <div class="panel-head"><h2>存储与缓存</h2><span class="system-status">预留</span></div>
+          <div class="system-list">
+            <span>素材目录</span><span>输出目录</span><span>任务日志</span><span>临时缓存</span>
+          </div>
+        </section>
+        <section class="panel system-card">
+          <div class="panel-head"><h2>安全设置</h2><span class="system-status">待接入</span></div>
+          <div class="system-list">
+            <span>访问密码</span><span>本机白名单</span><span>操作审计</span>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="help-center" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>使用帮助</h2>
+            <p class="muted">预留本地部署说明、视频生成流程、账号矩阵维护和常见问题。</p>
+          </div>
+          <span class="system-status">GasGx Docs</span>
+        </div>
+        <div class="help-grid">
+          <article><strong>视频生成</strong><p>分类素材、第一屏封面、背景音乐、批量导出。</p></article>
+          <article><strong>账号矩阵</strong><p>账号档案、平台槽位、独立浏览器和登录状态。</p></article>
+          <article><strong>发布任务</strong><p>任务队列、失败重试、定时策略和数据统计。</p></article>
+        </div>
+      </div>
+    </section>
+
+
+    <section id="video-matrix" class="view">
+      <div class="panel video-matrix-panel">
+        <div class="panel-head">
+          <div>
+            <h2>GasGx 视频生成工作台</h2>
+            <p class="muted">分类素材入库、首屏封面模板、视频文字和批量生成集中在本地程序内完成。</p>
+          </div>
+          <button id="video-matrix-save-state" class="btn primary" type="button">保存当前设置</button>
+        </div>
+        <div id="video-matrix-metrics" class="metric-grid"></div>
+        <div class="video-matrix-layout">
+          <aside class="video-matrix-side">
+            <label>生成数量<input id="vm-output-count" type="range" min="1" max="30"><strong id="vm-output-count-value"></strong></label>
+            <label>并行线程<input id="vm-max-workers" type="range" min="1" max="6"><strong id="vm-max-workers-value"></strong></label>
+            <label>输出文件<select id="vm-output-options" multiple><option>mp4</option><option>png</option><option>txt</option><option>json</option></select></label>
+            <label>最终视频生成目录<input id="vm-output-root"></label>
+            <button id="vm-open-output" class="btn primary" type="button">打开生成目录</button>
+            <label>9:16 模板<select id="vm-video-template"></select></label>
+            <div id="vm-language-group" class="radio-line"></div>
+            <details open><summary>背景音乐库</summary><div id="vm-bgm-panel"></div></details>
+          </aside>
+          <section class="video-matrix-main">
+            <div class="vm-source-block">
+              <div class="panel-head compact-head"><h2>素材来源</h2></div>
+              <div id="vm-source-dirs" class="vm-dir-list"></div>
+              <p id="vm-source-counts" class="muted"></p>
+              <div id="vm-source-mode-group" class="radio-line"></div>
+              <div id="vm-recent-limits" class="vm-compact-grid"></div>
+              <label id="vm-upload-sources-wrap" class="hidden">手动上传素材<input id="vm-source-files" type="file" multiple accept="video/*"></label>
+            </div>
+            <div class="vm-cover-workbench">
+              <div class="panel-head compact-head"><h2>第一屏封面模板</h2></div>
+              <div id="vm-cover-selector" class="vm-template-tabs"></div>
+              <div class="vm-cover-editor">
+                <div class="vm-preview-stage"><div class="vm-phone"><img id="vm-cover-preview" alt="cover preview"></div><small id="vm-preview-caption"></small></div>
+                <form id="vm-cover-form" class="vm-control-panel"></form>
+              </div>
+              <div id="vm-cover-gallery" class="vm-cover-gallery"></div>
+            </div>
+            <div class="vm-text-panel">
+              <div class="panel-head compact-head"><h2>视频文字设置</h2></div>
+              <label>主标题 / 视频口号<input id="vm-headline"></label>
+              <label>副标题 / 视频标题<input id="vm-subhead"></label>
+              <label>首屏 CTA<input id="vm-cta"></label>
+              <label>结尾关注提醒<input id="vm-follow-text"></label>
+              <label>视频 HUD 文本<textarea id="vm-hud-text"></textarea></label>
+              <label>上传文字稿<input id="vm-transcript-file" type="file" accept=".txt,.md"></label>
+              <label>文字稿内容<textarea id="vm-transcript-text"></textarea></label>
+              <button id="vm-generate" class="btn primary" type="button">生成 Vibe Matrix</button>
+              <div class="vm-progress"><div id="vm-progress-bar"></div></div>
+              <pre id="vm-job-log"></pre>
+            </div>
+          </section>
+        </div>
       </div>
     </section>
   </main>

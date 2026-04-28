@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GasGx 视频号预览</title>
+    <link rel="stylesheet" href="/static/video_matrix_preview.css" />
+  </head>
+  <body>
+    <main class="preview-shell">
+      <section class="preview-copy">
+        <p>GASGX VIDEO PREVIEW</p>
+        <h1>视频号门板真实预览</h1>
+        <span>以 iPhone Air 轮廓展示首屏封面、竖屏比例和视频号观看界面的最终效果。</span>
+      </section>
+      <section class="iphone-air" aria-label="iPhone Air video preview">
+        <div class="device-button"></div>
+        <div class="screen">
+          <div class="dynamic-island"></div>
+          <video id="previewVideo" playsinline autoplay muted loop></video>
+          <div class="channels-top">
+            <strong>视频号</strong>
+            <span>GasGx</span>
+          </div>
+          <div class="channels-actions">
+            <button>赞</button>
+            <button>评</button>
+            <button>转</button>
+          </div>
+          <div class="channels-caption">
+            <strong>GasGx</strong>
+            <p>燃气发动机组现场能源案例</p>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const videoPath = params.get("path") || "";
+      const video = document.getElementById("previewVideo");
+      if (videoPath) {
+        video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(videoPath)}`;
+      }
+      video.addEventListener("click", () => {
+        if (video.paused) video.play();
+        else video.pause();
+      });
+    </script>
+  </body>
+</html>

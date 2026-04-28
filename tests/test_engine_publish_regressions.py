@@ -56,6 +56,56 @@ def test_split_caption_candidates_handles_mixed_punctuation() -> None:
     assert any("CyberTruck Frunk" in part for part in parts)
 
 
+def test_required_hashtags_can_be_disabled_for_matrix_distribution(monkeypatch) -> None:
+    monkeypatch.setenv("CYBERCAR_DISABLE_REQUIRED_HASHTAGS", "1")
+
+    caption = engine._ensure_required_hashtags("GasGx caption")
+
+    assert caption == "GasGx caption"
+    assert "Cybertruck" not in caption
+
+
+def test_fill_caption_verifies_configured_caption_when_required_hashtags_disabled(monkeypatch) -> None:
+    class FakeEditor:
+        tag = "div"
+
+        def attr(self, _name: str) -> str:
+            return "caption-editor"
+
+    editor = FakeEditor()
+    monkeypatch.setenv("CYBERCAR_DISABLE_REQUIRED_HASHTAGS", "1")
+    monkeypatch.setattr(engine, "_find_visible_caption_editor", lambda _ctx: editor)
+    monkeypatch.setattr(engine, "_input_caption_with_keyboard", lambda _editor, _caption: True)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_read_element_text", lambda _editor: "GasGx caption #天然气")
+    monkeypatch.setattr(engine, "_read_caption_text", lambda _ctx: "")
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._fill_caption(object(), "GasGx caption #天然气")
+
+
+def test_fill_caption_continues_when_matrix_caption_readback_is_empty(monkeypatch) -> None:
+    class FakeEditor:
+        tag = "div"
+
+        def attr(self, _name: str) -> str:
+            return "caption-editor"
+
+    editor = FakeEditor()
+    messages: list[str] = []
+    monkeypatch.setenv("CYBERCAR_DISABLE_REQUIRED_HASHTAGS", "1")
+    monkeypatch.setattr(engine, "_find_visible_caption_editor", lambda _ctx: editor)
+    monkeypatch.setattr(engine, "_input_caption_with_keyboard", lambda _editor, _caption: True)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_read_element_text", lambda _editor: "")
+    monkeypatch.setattr(engine, "_read_caption_text", lambda _ctx: "")
+    monkeypatch.setattr(engine, "_log", messages.append)
+
+    engine._fill_caption(object(), "GasGx caption #天然气")
+
+    assert any("continue after successful keyboard input" in item for item in messages)
+
+
 def test_caption_from_info_json_uses_semantic_text_instead_of_generic_fallback(
     monkeypatch,
     tmp_path: Path,
