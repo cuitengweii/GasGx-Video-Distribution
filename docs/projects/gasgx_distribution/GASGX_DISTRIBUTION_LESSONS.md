@@ -23,3 +23,13 @@ Last updated: 2026-04-28
   - Root cause: 缺少统一的平台 logo helper 和真实 SVG 资产策略。
   - Earlier detection: UI 评审时应检查总览、账号、任务、统计、设置页是否都使用同一平台标识组件。
   - Prevention: 平台展示统一走 `platformIcon()` / `platformName()`；logo 使用第三方真实 SVG 源并套标准 App 外框，后续可迁移成本地静态资产。
+
+- Symptom: 左侧栏折叠按钮放在侧栏中部时，折叠后容易遮挡右侧业务内容或被隐藏区域一起带走。
+  - Root cause: 折叠控制和侧栏内容混在同一区域，按钮定位没有跟随顶栏信息架构。
+  - Earlier detection: 侧栏折叠类功能必须同时检查“隐藏后如何恢复”和“恢复按钮是否遮挡主内容”。
+  - Prevention: 折叠按钮放入固定顶部标题区，作为全局壳层控制，而不是放在侧栏正文区域。
+
+- Symptom: 新增功能入口如果只做独立页面或外跳，会让用户误以为左侧系统能力丢失。
+  - Root cause: 本地控制台已经从单页工具升级为系统壳层，但新增模块容易沿用工具页思路。
+  - Earlier detection: 每个新模块必须先确认是否应该成为左侧一级菜单，并继承统一顶栏、用户入口和系统管理入口。
+  - Prevention: 新增业务能力默认在统一壳层内新增 `view`，通过 `data-view` 路由，不做页面外跳。

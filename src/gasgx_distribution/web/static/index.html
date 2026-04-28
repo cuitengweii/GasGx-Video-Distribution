@@ -23,6 +23,7 @@
       <button class="nav-btn" data-view="settings">公共设置</button>
       <button class="nav-btn" data-view="tasks">任务中心</button>
       <button class="nav-btn" data-view="stats">数据统计</button>
+      <button class="nav-btn" data-view="ai-robot">AI机器人</button>
       <button class="nav-btn" data-view="video-matrix">视频生成</button>
       <span class="nav-group-label">系统管理</span>
       <button class="nav-btn" data-view="user-center">用户中心</button>
@@ -276,6 +277,47 @@
           <div id="settings-save-state" class="muted"></div>
         </section>
       </form>
+    </section>
+
+    <section id="ai-robot" class="view">
+      <div class="ai-robot-layout">
+        <section class="panel ai-hero-panel">
+          <div>
+            <span class="system-status">AI Customer Service</span>
+            <h2>AI客服与企业消息机器人</h2>
+            <p class="muted">统一接入国内外主流企业通讯平台，把客户看板推送、营销线索提醒、风险告警和指令交互集中到一个机器人入口。</p>
+          </div>
+          <div class="ai-hero-actions">
+            <button class="btn primary" type="button">新建机器人</button>
+            <button class="btn secondary" type="button">查看接入文档</button>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>核心功能</h2>
+            <span class="system-status">预留接口</span>
+          </div>
+          <div class="ai-feature-grid">
+            <article><span class="ai-icon customer"></span><strong>AI客服</strong><p>承接客户咨询、产品问答、线索初筛和常见问题自动回复。</p></article>
+            <article><span class="ai-icon report"></span><strong>数据看板推送</strong><p>定时推送播放、粉丝、线索、风险和运营完成率日报。</p></article>
+            <article><span class="ai-icon alert"></span><strong>告警通知</strong><p>素材不足、账号限流、发布失败、掉粉异常等事件实时提醒。</p></article>
+            <article><span class="ai-icon command"></span><strong>指令交互</strong><p>支持通过菜单或关键词触发生成视频、查看报表、启动任务。</p></article>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>平台接入</h2>
+            <span class="system-status">国内 + 海外</span>
+          </div>
+          <div class="bot-channel-grid">
+            <article class="bot-channel-card"><span class="bot-logo wecom">企</span><div><strong>企业微信</strong><p>消息、卡片、文件、机器人、应用回调全支持；适合客户看板推送、告警、审批流和指令菜单。</p></div><button class="btn secondary" type="button">配置</button></article>
+            <article class="bot-channel-card"><span class="bot-logo dingtalk">钉</span><div><strong>钉钉</strong><p>企业通知、Webhook、卡片消息和工作流；适合运维告警、日报、设备控制指令和审批通知。</p></div><button class="btn secondary" type="button">配置</button></article>
+            <article class="bot-channel-card"><span class="bot-logo lark">飞</span><div><strong>飞书 / Lark</strong><p>文档、消息、机器人一体化，富文本卡片和 API 体验现代，适合国际化团队协作。</p></div><button class="btn secondary" type="button">配置</button></article>
+            <article class="bot-channel-card"><span class="bot-logo telegram">T</span><div><strong>Telegram</strong><p>海外客户响应快，Bot API 成熟，适合跨境线索提醒、群组通知和轻量指令交互。</p></div><button class="btn secondary" type="button">配置</button></article>
+            <article class="bot-channel-card"><span class="bot-logo whatsapp">W</span><div><strong>WhatsApp</strong><p>面向海外客户触达，预留 Business API 接入，用于线索跟进、通知和客户服务。</p></div><button class="btn secondary" type="button">配置</button></article>
+          </div>
+        </section>
+      </div>
     </section>
 
     <section id="tasks" class="view">
