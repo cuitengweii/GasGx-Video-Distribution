@@ -98,6 +98,9 @@ CREATE TABLE IF NOT EXISTS ai_robot_messages (
     status TEXT NOT NULL DEFAULT 'pending',
     summary TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER,
+    sent_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -166,3 +169,10 @@ def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
 def init_db(path: Path | None = None) -> None:
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(ai_robot_messages)")}
+        if "retry_count" not in columns:
+            conn.execute("ALTER TABLE ai_robot_messages ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+        if "last_attempt_at" not in columns:
+            conn.execute("ALTER TABLE ai_robot_messages ADD COLUMN last_attempt_at INTEGER")
+        if "sent_at" not in columns:
+            conn.execute("ALTER TABLE ai_robot_messages ADD COLUMN sent_at INTEGER")

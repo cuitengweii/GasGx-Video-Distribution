@@ -29,7 +29,7 @@ class SupabaseRestClient:
             load_dotenv()
         return cls(
             os.getenv(f"{prefix}_URL", "") or os.getenv("SUPABASE_URL", ""),
-            os.getenv(f"{prefix}_SERVICE_ROLE_KEY", "") or os.getenv(f"{prefix}_KEY", "") or os.getenv("SUPABASE_KEY", ""),
+            os.getenv(f"{prefix}_SERVICE_ROLE_KEY", ""),
         )
 
     @classmethod
@@ -106,6 +106,15 @@ class SupabaseRestClient:
         )
         self._json_response(response)
         return response.status_code in {200, 204}
+
+    def rpc(self, function_name: str, payload: dict[str, Any] | None = None) -> Any:
+        response = requests.post(
+            f"{self.url}/rest/v1/rpc/{quote(function_name, safe='')}",
+            headers=self._headers(),
+            json=payload or {},
+            timeout=self._timeout(),
+        )
+        return self._json_response(response)
 
     def upsert(self, table: str, payload: dict[str, Any], *, on_conflict: str) -> dict[str, Any]:
         response = requests.post(

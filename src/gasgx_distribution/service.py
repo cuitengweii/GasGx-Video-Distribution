@@ -6,10 +6,13 @@ import subprocess
 import sys
 import hmac
 import hashlib
+import base64
 from contextvars import ContextVar
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+
+import requests
 
 from cybercar import engine
 from cybercar.settings import apply_runtime_environment as apply_cybercar_environment
@@ -22,6 +25,7 @@ from .supabase_backend import SupabaseRestClient
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 AI_ROBOT_PLATFORMS = {"wecom", "dingtalk", "lark", "telegram", "whatsapp"}
+AI_ROBOT_RETRY_LIMIT = 3
 _brand_runtime: ContextVar[dict[str, Any] | None] = ContextVar("gasgx_brand_runtime", default=None)
 
 
@@ -160,6 +164,16 @@ def _public_ai_config(row: dict[str, Any]) -> dict[str, Any]:
     data["has_webhook_secret"] = bool(data.pop("webhook_secret", ""))
     data["has_signing_secret"] = bool(data.pop("signing_secret", ""))
     return data
+
+
+def _private_ai_config(platform: str) -> dict[str, Any] | None:
+    token = _normalize_ai_platform(platform)
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().select_one("ai_robot_configs", filters={"platform": token})
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM ai_robot_configs WHERE platform = ?", (token,)).fetchone()
+        return dict_from_row(row) if row else None
 
 
 def list_ai_robot_configs() -> list[dict[str, Any]]:
@@ -331,6 +345,7 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
                 "payload_json": message,
                 "status": status,
                 "summary": summary,
+                "retry_count": 0,
                 "created_at": ts,
                 "updated_at": ts,
             },
@@ -338,8 +353,8 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
     with connect() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO ai_robot_messages(platform, message_type, payload_json, status, summary, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ai_robot_messages(platform, message_type, payload_json, status, summary, retry_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 token,
@@ -347,6 +362,7 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
                 json.dumps(message, ensure_ascii=False),
                 status,
                 summary,
+                0,
                 ts,
                 ts,
             ),
@@ -370,6 +386,200 @@ def list_ai_robot_messages() -> list[dict[str, Any]]:
     ensure_database()
     with connect() as conn:
         return [dict_from_row(row) for row in conn.execute("SELECT * FROM ai_robot_messages ORDER BY id DESC LIMIT 100")]
+
+
+def run_ai_robot_sender_worker(*, limit: int = 10) -> dict[str, Any]:
+    limit = max(1, int(limit or 10))
+    messages = _claim_ai_robot_messages(limit)
+    sent = 0
+    failed = 0
+    results: list[dict[str, Any]] = []
+    for message in messages:
+        try:
+            _send_ai_robot_message(message)
+        except Exception as exc:
+            failed += 1
+            updated = _mark_ai_robot_message_failed(message, str(exc))
+        else:
+            sent += 1
+            updated = _mark_ai_robot_message_sent(message)
+        results.append(updated)
+    return {"ok": failed == 0, "claimed": len(messages), "sent": sent, "failed": failed, "messages": results}
+
+
+def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        rows = _brand_supabase().select_where(
+            "ai_robot_messages",
+            params={"status": "in.(pending,retry)", "retry_count": f"lt.{AI_ROBOT_RETRY_LIMIT}"},
+            order="id.asc",
+        )
+        claimed = rows[:limit]
+        ts = now_ts()
+        for row in claimed:
+            _brand_supabase().update(
+                "ai_robot_messages",
+                {"status": "sending", "summary": "claimed by robot sender", "last_attempt_at": ts, "updated_at": ts},
+                filters={"id": row["id"]},
+            )
+            row["status"] = "sending"
+            row["last_attempt_at"] = ts
+        return claimed
+    ensure_database()
+    with connect() as conn:
+        rows = [
+            dict_from_row(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM ai_robot_messages
+                WHERE status IN ('pending', 'retry') AND retry_count < ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (AI_ROBOT_RETRY_LIMIT, limit),
+            )
+        ]
+        ts = now_ts()
+        for row in rows:
+            conn.execute(
+                """
+                UPDATE ai_robot_messages
+                SET status = 'sending', summary = 'claimed by robot sender', last_attempt_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (ts, ts, row["id"]),
+            )
+            row["status"] = "sending"
+            row["last_attempt_at"] = ts
+        return rows
+
+
+def _send_ai_robot_message(message: dict[str, Any]) -> None:
+    platform = _normalize_ai_platform(str(message.get("platform") or ""))
+    config = _private_ai_config(platform)
+    if not config or not bool(config.get("enabled")):
+        raise ValueError(f"{platform} robot is not enabled")
+    webhook_url = str(config.get("webhook_url") or "").strip()
+    if not webhook_url:
+        raise ValueError(f"{platform} robot webhook_url is required")
+    payload = _message_payload(message)
+    text = _message_text(payload)
+    body, headers = _robot_http_request(platform, webhook_url, config, text, payload)
+    response = requests.post(webhook_url, json=body, headers=headers, timeout=float(os.getenv("AI_ROBOT_SEND_TIMEOUT", "10") or 10))
+    if response.status_code >= 400:
+        raise RuntimeError(f"{platform} send failed: {response.status_code} {response.text[:500]}")
+    try:
+        data = response.json()
+    except Exception:
+        data = {}
+    if isinstance(data, dict):
+        if platform == "wecom" and int(data.get("errcode") or 0) != 0:
+            raise RuntimeError(f"wecom send failed: {data}")
+        if platform == "dingtalk" and int(data.get("errcode") or 0) != 0:
+            raise RuntimeError(f"dingtalk send failed: {data}")
+        if platform == "lark" and int(data.get("code") or 0) != 0:
+            raise RuntimeError(f"lark send failed: {data}")
+        if platform == "telegram" and data.get("ok") is False:
+            raise RuntimeError(f"telegram send failed: {data}")
+
+
+def _message_payload(message: dict[str, Any]) -> dict[str, Any]:
+    raw = message.get("payload_json")
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        parsed = json.loads(str(raw or "{}"))
+    except Exception:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _message_text(payload: dict[str, Any]) -> str:
+    text = str(payload.get("text") or payload.get("content") or "").strip()
+    if text:
+        return text
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _robot_http_request(
+    platform: str,
+    webhook_url: str,
+    config: dict[str, Any],
+    text: str,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    headers: dict[str, str] = {}
+    secret = str(config.get("webhook_secret") or "").strip()
+    target_id = str(config.get("target_id") or "").strip()
+    if platform == "wecom":
+        return {"msgtype": "text", "text": {"content": text}}, headers
+    if platform == "dingtalk":
+        if secret:
+            timestamp = str(now_ts() * 1000)
+            digest = hmac.new(secret.encode("utf-8"), f"{timestamp}\n{secret}".encode("utf-8"), hashlib.sha256).digest()
+            headers["x-gasgx-dingtalk-timestamp"] = timestamp
+            headers["x-gasgx-dingtalk-sign"] = base64.b64encode(digest).decode("ascii")
+        return {"msgtype": "text", "text": {"content": text}}, headers
+    if platform == "lark":
+        body: dict[str, Any] = {"msg_type": "text", "content": {"text": text}}
+        if secret:
+            body["sign"] = hmac.new(secret.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest()
+        return body, headers
+    if platform == "telegram":
+        body = {"text": text, "parse_mode": str(payload.get("parse_mode") or "")}
+        if target_id:
+            body["chat_id"] = target_id
+        return {key: value for key, value in body.items() if value}, headers
+    if platform == "whatsapp":
+        if secret:
+            headers["authorization"] = f"Bearer {secret}"
+        body = {"text": text, "recipient": target_id, "payload": payload}
+        return {key: value for key, value in body.items() if value}, headers
+    return {"text": text, "payload": payload}, headers
+
+
+def _mark_ai_robot_message_sent(message: dict[str, Any]) -> dict[str, Any]:
+    ts = now_ts()
+    payload = {"status": "sent", "summary": "sent by robot sender", "error": "", "sent_at": ts, "updated_at": ts}
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE ai_robot_messages
+            SET status = ?, summary = ?, error = ?, sent_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (payload["status"], payload["summary"], payload["error"], payload["sent_at"], payload["updated_at"], message["id"]),
+        )
+    return get_ai_robot_message(int(message["id"])) or {}
+
+
+def _mark_ai_robot_message_failed(message: dict[str, Any], error: str) -> dict[str, Any]:
+    ts = now_ts()
+    retry_count = int(message.get("retry_count") or 0) + 1
+    status = "failed" if retry_count >= AI_ROBOT_RETRY_LIMIT else "retry"
+    summary = "robot sender failed; retry scheduled" if status == "retry" else "robot sender failed; retry limit reached"
+    payload = {
+        "status": status,
+        "summary": summary,
+        "error": error[:1000],
+        "retry_count": retry_count,
+        "last_attempt_at": ts,
+        "updated_at": ts,
+    }
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE ai_robot_messages
+            SET status = ?, summary = ?, error = ?, retry_count = ?, last_attempt_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, summary, error[:1000], retry_count, ts, ts, message["id"]),
+        )
+    return get_ai_robot_message(int(message["id"])) or {}
 
 
 def _matrix_publish_success_counts() -> dict[int, int]:
@@ -934,22 +1144,7 @@ def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[s
 
 def dashboard_summary() -> dict[str, Any]:
     if brand_database_backend() == "supabase":
-        accounts = _brand_supabase().select("matrix_accounts")
-        platforms = [item for item in _brand_supabase().select("account_platforms") if bool(item.get("enabled", True))]
-        tasks = _brand_supabase().select("automation_tasks")
-        stats_rows = _brand_supabase().select("video_stats_snapshots")
-        return {
-            "accounts": len(accounts),
-            "platforms": len(platforms),
-            "running_tasks": len([item for item in tasks if item.get("status") in {"pending", "running"}]),
-            "failed_tasks": len([item for item in tasks if item.get("status") == "failed"]),
-            "unsupported_tasks": len([item for item in tasks if item.get("status") == "unsupported"]),
-            "remaining_material_videos": 0,
-            "views": sum(int(item.get("views") or 0) for item in stats_rows),
-            "likes": sum(int(item.get("likes") or 0) for item in stats_rows),
-            "comments": sum(int(item.get("comments") or 0) for item in stats_rows),
-            "messages": sum(int(item.get("messages") or 0) for item in stats_rows),
-        }
+        return _dashboard_summary_supabase()
     ensure_database()
     with connect() as conn:
         account_count = conn.execute("SELECT COUNT(*) AS c FROM matrix_accounts").fetchone()["c"]
@@ -972,3 +1167,51 @@ def dashboard_summary() -> dict[str, Any]:
         "comments": int(stats["comments"]),
         "messages": int(stats["messages"]),
     }
+
+
+def _dashboard_summary_supabase() -> dict[str, Any]:
+    client = _brand_supabase()
+    try:
+        payload = client.rpc("dashboard_summary")
+    except Exception:
+        return _dashboard_summary_supabase_legacy(client)
+    row = payload[0] if isinstance(payload, list) and payload else payload
+    if not isinstance(row, dict):
+        return _dashboard_summary_supabase_legacy(client)
+    return _normalize_dashboard_summary(row)
+
+
+def _normalize_dashboard_summary(row: dict[str, Any]) -> dict[str, int]:
+    return {
+        "accounts": int(row.get("accounts") or 0),
+        "platforms": int(row.get("platforms") or 0),
+        "running_tasks": int(row.get("running_tasks") or 0),
+        "failed_tasks": int(row.get("failed_tasks") or 0),
+        "unsupported_tasks": int(row.get("unsupported_tasks") or 0),
+        "remaining_material_videos": int(row.get("remaining_material_videos") or 0),
+        "views": int(row.get("views") or 0),
+        "likes": int(row.get("likes") or 0),
+        "comments": int(row.get("comments") or 0),
+        "messages": int(row.get("messages") or 0),
+    }
+
+
+def _dashboard_summary_supabase_legacy(client: SupabaseRestClient) -> dict[str, int]:
+    accounts = client.select("matrix_accounts")
+    platforms = [item for item in client.select("account_platforms") if bool(item.get("enabled", True))]
+    tasks = client.select("automation_tasks")
+    stats_rows = client.select("video_stats_snapshots")
+    return _normalize_dashboard_summary(
+        {
+            "accounts": len(accounts),
+            "platforms": len(platforms),
+            "running_tasks": len([item for item in tasks if item.get("status") in {"pending", "running"}]),
+            "failed_tasks": len([item for item in tasks if item.get("status") == "failed"]),
+            "unsupported_tasks": len([item for item in tasks if item.get("status") == "unsupported"]),
+            "remaining_material_videos": 0,
+            "views": sum(int(item.get("views") or 0) for item in stats_rows),
+            "likes": sum(int(item.get("likes") or 0) for item in stats_rows),
+            "comments": sum(int(item.get("comments") or 0) for item in stats_rows),
+            "messages": sum(int(item.get("messages") or 0) for item in stats_rows),
+        }
+    )

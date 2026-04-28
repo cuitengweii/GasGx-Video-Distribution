@@ -9,6 +9,7 @@
 - Local browser loading failure on `http://127.0.0.1:8765/#overview` was fixed by restarting the current-code service, bypassing tenant DB binding for `/` and `/static/*`, defaulting local `127.0.0.1/localhost` to the `gasgx` brand, and bounding Supabase REST timeout.
 - AI robot config is now real enough for platform config save, secret preservation/redaction, webhook HMAC verification, webhook/test message enqueue, and queue display. Real outbound sender workers remain pending.
 - Supabase SQL now includes control-plane and brand-database RLS policy scaffolding, with targeted tests for expected SQL policy structures.
+- Supabase dashboard summary now has a brand-database SQL RPC `dashboard_summary()` and the backend uses that RPC first in Supabase mode, falling back to the earlier small-data PostgREST aggregation only when an older customer database has not run the new SQL yet.
 - Video Matrix UI/API refinements and targeted tests were committed and pushed in `2ddbd2f`.
 
 ## Current Open Work From 2026-04-29 Archive
@@ -16,7 +17,7 @@
 - Rotate the Supabase `service_role` key before production/customer use because it was exposed in chat during setup.
 - Add real AI robot outbound worker senders for WeCom, DingTalk, Lark, Telegram, and WhatsApp.
 - Decide whether remote Supabase smoke/demo rows should be deleted or converted into formal demo seed data.
-- Replace Supabase dashboard summary's small-data client aggregation with a SQL view/RPC before larger customer datasets.
+- Apply the updated brand baseline SQL to customer Supabase projects so `dashboard_summary()` is available remotely; older databases still work through the fallback path.
 - Finish Supabase Storage-backed brand logo upload/read/delete.
 - Build customer setup/diagnostic flow for manual Supabase SQL initialization, project connection validation, health checks, and RLS readiness.
 - Run full browser end-to-end acceptance for account creation, task creation, AI robot test message, brand settings persistence, video matrix UI, and system health.
@@ -104,3 +105,18 @@ Last updated: 2026-04-28
 - AI机器人页面目前是 UI 和入口预留，尚未接入真实机器人配置 API、Webhook 密钥保存、回调验签、消息发送队列或权限控制。
 - 数据统计页当前使用前端样例数据展示结构，后续需要接真实统计聚合接口和时间/平台/账号筛选联动。
 - 侧栏折叠后展开按钮在顶部标题区保留，仍需人工在真实浏览器中确认不同页面滚动位置下不会影响标题可读性。
+
+## 2026-04-29 AI Robot Sender And Supabase Summary Update
+
+- AI机器人消息队列已新增发送 worker：CLI 入口为 `python -m gasgx_distribution ai-robot-send-worker --limit 10`，Web API 入口为 `POST /api/ai-robots/messages/send-worker?limit=10`。
+- `ai_robot_messages` 新增 `retry_count`、`last_attempt_at`、`sent_at` 字段；SQLite 初始化会对已有本地库执行兼容列补齐，Supabase baseline SQL 也同步了字段。
+- 发送 worker 当前会 claim `pending/retry` 消息，状态流转为 `sending -> sent` 或 `retry/failed`，最多重试 3 次。
+- 已实现企业微信、钉钉、飞书/Lark、Telegram、WhatsApp 的基础 HTTP 发送请求结构；真实可用性仍依赖每个平台的 webhook_url、secret、target_id 配置。
+- Supabase backend 新增 RPC 调用能力，Dashboard 汇总优先调用 `dashboard_summary()`，失败时回退到旧的 REST 拉表聚合。
+- `config/supabase/brand_baseline.sql` 新增 `dashboard_summary()` RPC，减少 Supabase 模式下总览页对全量表拉取的依赖。
+
+## Current Open Work
+
+- AI机器人真实发送还需要用实际企业微信、钉钉、飞书/Lark、Telegram、WhatsApp Webhook 配置做端到端验收。
+- 机器人 webhook 签名算法目前是基础结构，钉钉/飞书等平台如果要求精确签名参数，还需按官方协议做一次实测校准。
+- Supabase `dashboard_summary()` 已进入 baseline SQL，但已部署客户库需要手动补执行该 SQL 或后续迁移脚本。

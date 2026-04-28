@@ -37,3 +37,13 @@ def test_brand_baseline_supabase_sql_defines_role_based_rls() -> None:
         assert f"alter table {table} enable row level security" in sql
     assert "brand_has_role(array['owner', 'admin'])" in sql
     assert "brand_has_role(array['owner', 'admin', 'operator'])" in sql
+
+
+def test_brand_baseline_supabase_sql_defines_dashboard_summary_rpc() -> None:
+    sql = _sql("brand_baseline.sql")
+    assert "create or replace function dashboard_summary()" in sql
+    assert "returns table" in sql
+    assert "from matrix_accounts" in sql
+    assert "from account_platforms where enabled = 1" in sql
+    assert "from automation_tasks where status in ('pending', 'running')" in sql
+    assert "sum(views) from video_stats_snapshots" in sql

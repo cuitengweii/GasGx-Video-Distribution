@@ -11,6 +11,8 @@ Last updated: 2026-04-29
 - Supabase REST calls need bounded timeouts, and optional diagnostics should degrade locally instead of freezing the whole UI.
 - Secrets policy remains: `service_role` only on server side, AI robot webhook/signing secrets stored server side only, and APIs return `has_*_secret` flags rather than plaintext.
 - System diagnostics belong in the existing System Settings view, not a separate standalone page.
+- AI robot queued message sending must be worker-driven instead of direct UI blocking. The worker claims pending/retry messages, records attempt metadata, and only exposes send status back to UI/API.
+- Dashboard summary in Supabase mode should prefer database-side RPC aggregation and keep REST table-scan aggregation only as a fallback.
 
 ## 2026-04-27
 

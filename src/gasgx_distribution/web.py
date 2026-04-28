@@ -247,6 +247,10 @@ def create_app() -> FastAPI:
     def ai_robot_messages() -> list[dict[str, Any]]:
         return service.list_ai_robot_messages()
 
+    @app.post("/api/ai-robots/messages/send-worker")
+    def run_ai_robot_sender(limit: int = Query(default=10, ge=1, le=100)) -> dict[str, Any]:
+        return service.run_ai_robot_sender_worker(limit=limit)
+
     @app.post("/api/ai-robots/{platform}/messages")
     def create_ai_robot_message(platform: str, payload: AiRobotMessagePayload) -> dict[str, Any]:
         data = _model_payload(payload)

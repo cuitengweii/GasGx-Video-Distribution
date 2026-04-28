@@ -434,8 +434,26 @@ def test_brand_supabase_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) ->
         rows = [row for row in store[table_from_url(url)] if matches(row, params)]
         return FakeResponse(rows)
 
+    rpc_calls: list[str] = []
+
     def fake_post(url: str, headers: dict[str, str], params: dict[str, str] | None = None, json: dict[str, object] | None = None, timeout: int = 30) -> FakeResponse:
         del headers, params, timeout
+        if "/rpc/" in url:
+            rpc_calls.append(url.rstrip("/").split("/")[-1])
+            return FakeResponse(
+                {
+                    "accounts": len(store["matrix_accounts"]),
+                    "platforms": len([row for row in store["account_platforms"] if row.get("enabled", 1)]),
+                    "running_tasks": len([row for row in store["automation_tasks"] if row.get("status") in {"pending", "running"}]),
+                    "failed_tasks": len([row for row in store["automation_tasks"] if row.get("status") == "failed"]),
+                    "unsupported_tasks": len([row for row in store["automation_tasks"] if row.get("status") == "unsupported"]),
+                    "remaining_material_videos": 0,
+                    "views": sum(int(row.get("views") or 0) for row in store["video_stats_snapshots"]),
+                    "likes": sum(int(row.get("likes") or 0) for row in store["video_stats_snapshots"]),
+                    "comments": sum(int(row.get("comments") or 0) for row in store["video_stats_snapshots"]),
+                    "messages": sum(int(row.get("messages") or 0) for row in store["video_stats_snapshots"]),
+                }
+            )
         table = table_from_url(url)
         payload = dict(json or {})
         counters[table] += 1
@@ -483,6 +501,7 @@ def test_brand_supabase_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) ->
         assert summary["accounts"] == 1
         assert summary["running_tasks"] == 1
         assert summary["views"] == 7
+        assert rpc_calls == ["dashboard_summary"]
         assert service.delete_task(int(task["id"])) is True
 
 
@@ -543,6 +562,65 @@ def test_ai_robot_config_webhook_and_test_message(monkeypatch, tmp_path: Path) -
         headers={"x-gasgx-signature": "bad"},
     )
     assert rejected.status_code == 401
+
+
+def test_ai_robot_sender_worker_sends_and_records_failures(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    sent: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    def fake_post(url: str, json: dict[str, object], headers: dict[str, str], timeout: float) -> FakeResponse:
+        sent.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("gasgx_distribution.service.requests.post", fake_post)
+
+    config = client.put(
+        "/api/ai-robots/telegram/config",
+        json={
+            "enabled": True,
+            "bot_name": "GasGx Bot",
+            "webhook_url": "https://api.telegram.org/botTOKEN/sendMessage",
+            "webhook_secret": "",
+            "signing_secret": "sign-secret",
+            "target_id": "chat-1",
+        },
+    )
+    assert config.status_code == 200
+    message = client.post("/api/ai-robots/telegram/test-message", json={"message_type": "text", "text": "hello"})
+    assert message.status_code == 200
+
+    worker = client.post("/api/ai-robots/messages/send-worker?limit=1")
+    assert worker.status_code == 200
+    assert worker.json()["sent"] == 1
+    assert sent[0]["json"] == {"text": "hello", "chat_id": "chat-1"}
+    messages = client.get("/api/ai-robots/messages").json()
+    assert messages[0]["status"] == "sent"
+    assert messages[0]["retry_count"] == 0
+    assert messages[0]["sent_at"]
+
+    def fake_fail(url: str, json: dict[str, object], headers: dict[str, str], timeout: float) -> FakeResponse:
+        del url, json, headers, timeout
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("gasgx_distribution.service.requests.post", fake_fail)
+    failed_message = client.post("/api/ai-robots/telegram/messages", json={"message_type": "text", "text": "retry me"})
+    assert failed_message.status_code == 200
+    failed = client.post("/api/ai-robots/messages/send-worker?limit=1")
+    assert failed.status_code == 200
+    assert failed.json()["failed"] == 1
+    messages = client.get("/api/ai-robots/messages").json()
+    retry = next(item for item in messages if item["id"] == failed_message.json()["id"])
+    assert retry["status"] == "retry"
+    assert retry["retry_count"] == 1
+    assert "network down" in retry["error"]
 
 
 def test_dashboard_summary_counts_remaining_material_videos(monkeypatch, tmp_path: Path) -> None:
