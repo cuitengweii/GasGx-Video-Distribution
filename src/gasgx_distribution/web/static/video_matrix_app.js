@@ -6,6 +6,7 @@ let selectedCover = "";
 let selectedVideoTemplate = "";
 let settings = {};
 let lastPreviewPath = "";
+let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [] };
 
 const jobStepLabels = [
   ["queued", "任务排队"],
@@ -64,30 +65,53 @@ function renderSidebar(data) {
   $("maxWorkers").value = state.max_workers || 3;
   syncNumber("outputCount");
   syncRange("maxWorkers");
-  $("outputRoot").value = settings.output_root;
+  $("outputRoot").dataset.fullPath = settings.output_root;
+  $("outputRoot").title = settings.output_root;
+  $("outputRoot").value = shortPath(settings.output_root);
   $("outputOptions").value = (state.output_options || ["mp4"])[0] || "mp4";
   $("videoTemplate").innerHTML = Object.entries(templates).map(([id, t]) => `<option value="${id}">${t.name || id}</option>`).join("");
   $("videoTemplate").value = selectedVideoTemplate;
   $("videoTemplate").onchange = () => selectedVideoTemplate = $("videoTemplate").value;
-  $("openOutput").onclick = () => openFolder($("outputRoot").value);
+  $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("languageGroup", "copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], state.copy_language || "zh");
   renderBgm(data);
-  $("saveState").onclick = saveState;
+  $("saveState").onclick = toggleBgmLibraryPopover;
+  document.querySelector(".sidebar details summary")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    toggleBgmLibraryPopover();
+  });
 }
 
 function renderSource(data) {
   $("metricSources").textContent = Object.values(data.category_counts).reduce((a, b) => a + b, 0);
   $("metricCount").textContent = $("outputCount").value;
   $("metricWorkers").textContent = $("maxWorkers").value;
-  $("sourceDirs").innerHTML = Object.entries(data.source_dirs).map(([key, path]) =>
-    `<div class="dir-row"><span class="badge">${key}</span><code>${path}</code><button data-path="${path}">打开</button></div>`).join("");
+  const categories = materialCategories(data);
+  $("sourceDirs").innerHTML = categories.map((category) =>
+    `<div class="dir-row"><span class="badge">${escapeHtml(category.label)}</span><code title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(shortPath(data.source_dirs[category.id] || ""))}</code><button data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开</button></div>`).join("");
   $("sourceDirs").querySelectorAll("button").forEach((btn) => btn.onclick = () => openFolder(btn.dataset.path));
-  $("sourceCounts").textContent = `当前素材数量：A=${data.category_counts.category_A} / B=${data.category_counts.category_B} / C=${data.category_counts.category_C}`;
-  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "分类目录"], ["Upload files", "手动上传"]], state.source_mode || "Category folders", updateSourceMode);
-  $("recentLimits").innerHTML = ["category_A", "category_B", "category_C"].map((id, index) =>
-    `<label>${"ABC"[index]} 类最新素材<input id="${id}" type="range" min="1" max="50" value="${settings.recent_limits[id] || 8}"><output id="${id}Value"></output></label>`).join("");
-  ["category_A", "category_B", "category_C"].forEach(syncRange);
+  $("addCategory").onclick = addMaterialCategory;
+  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材，优先取每类最新文件，再按节奏窗口自动组合混剪。";
+  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], "Category folders", updateSourceMode);
+  $("recentLimits").innerHTML = categories.map((category) =>
+    `<label>${escapeHtml(category.label)}最新素材<input id="${category.id}" type="range" min="1" max="50" value="${settings.recent_limits[category.id] || 8}"><output id="${category.id}Value"></output></label>`).join("");
+  categories.forEach((category) => syncRange(category.id));
   updateSourceMode();
+}
+
+async function addMaterialCategory() {
+  const input = $("newCategoryLabel");
+  const label = input.value.trim();
+  if (!label) {
+    log("请先输入目录名称。");
+    return;
+  }
+  await api("/api/video-matrix/material-categories", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({label})});
+  input.value = "";
+  const data = await api("/api/video-matrix/state");
+  state = data.ui_state; settings = data.settings;
+  renderSource(data);
+  log(`已添加素材目录：${label}`);
 }
 
 function renderTextSettings() {
@@ -188,15 +212,12 @@ async function generate() {
   updateJobStatus({ status: "queued", stage: "queued", progress: 0, message: "正在提交生成任务..." });
   try {
     const statePayload = collectState();
-    if (!statePayload.bgm_library_id) {
+    if (!bgmLibraryState.local.length) {
       throw new Error("本地背景音乐库还没有可用 MP3。请把 MP3 文件放入左侧问号提示里的目录，然后刷新页面。");
-    }
-    if (statePayload.source_mode === "Upload files" && !$("sourceFiles").files.length) {
-      throw new Error("手动上传模式下请先选择素材视频。");
     }
     const form = new FormData();
     form.append("payload", JSON.stringify({...statePayload, transcript_text: $("transcriptText").value}));
-    [...($("sourceFiles").files || [])].forEach((file) => form.append("source_files", file));
+    [...($("sourceFiles")?.files || [])].forEach((file) => form.append("source_files", file));
     const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
     updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
     pollJob(job_id);
@@ -223,40 +244,165 @@ async function pollJob(jobId) {
 }
 
 function collectState() {
+  const categories = Array.isArray(settings.material_categories) ? settings.material_categories : [];
   return {
     output_count: Number($("outputCount").value), max_workers: Number($("maxWorkers").value),
-    output_options: [$("outputOptions").value], output_root: $("outputRoot").value,
+    output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: radioValue("copy_language"),
     source_mode: radioValue("source_mode"), use_live_data: true,
     headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value,
     follow_text: $("followText").value, hud_text: $("hudText").value,
-    bgm_source: "Local library", bgm_library_id: $("bgmLibrary")?.value || "",
-    recent_limits: {category_A:Number($("category_A").value), category_B:Number($("category_B").value), category_C:Number($("category_C").value)}
+    bgm_source: "Local library", bgm_library_id: "",
+    recent_limits: Object.fromEntries(categories.map((category) => [category.id, Number($(category.id)?.value || settings.recent_limits[category.id] || 8)]))
   };
+}
+
+function materialCategories(data = { settings }) {
+  const source = data.settings || settings;
+  const categories = Array.isArray(source.material_categories) ? source.material_categories : [];
+  return categories.length ? categories : [
+    { id: "category_A", label: "A 类" },
+    { id: "category_B", label: "B 类" },
+    { id: "category_C", label: "C 类" },
+  ];
+}
+
+function shortPath(value) {
+  const parts = String(value).split(/[\\/]+/).filter(Boolean);
+  return parts.slice(-2).join("\\") || value;
+}
+
+function outputRootPath() {
+  return $("outputRoot").dataset.fullPath || $("outputRoot").value;
 }
 
 function renderBgm(data) {
   const localBgm = Array.isArray(data.local_bgm) ? data.local_bgm : [];
   const localBgmDir = data.local_bgm_dir || "runtime/video_matrix/bgm";
+  bgmLibraryState = {
+    local: localBgm,
+    directory: localBgmDir,
+    links: Object.values(data.bgm_library || {}),
+    pixabay: [],
+  };
   $("bgmPanel").innerHTML = `
     <div class="bgm-label-row">
       <strong>本地背景音乐</strong>
       <button class="help-dot" type="button" aria-label="背景音乐目录" title="把 MP3 文件放到：${escapeHtml(localBgmDir)}">?</button>
     </div>
-    <select id="bgmLibrary"></select>
     <p id="bgmLibraryHint" class="bgm-library-hint"></p>
     <div class="links bgm-links"></div>`;
-  $("bgmLibrary").innerHTML = localBgm.length
-    ? localBgm.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")
-    : `<option value="">暂无 MP3 文件</option>`;
-  $("bgmLibrary").disabled = localBgm.length === 0;
-  $("bgmLibrary").value = localBgm.includes(state.bgm_library_id) ? state.bgm_library_id : (localBgm[0] || "");
   $("bgmLibraryHint").textContent = localBgm.length
-    ? `已找到 ${localBgm.length} 首本地 MP3，默认读取：${localBgmDir}`
+    ? `已找到 ${localBgm.length} 首本地音频，生成时每次随机取 1 首：${localBgmDir}`
     : `请把 MP3 文件放入：${localBgmDir}，然后刷新页面。`;
   document.querySelector("#bgmPanel .links").innerHTML = Object.values(data.bgm_library || {}).map(item => `<a href="${item.download_page}" target="_blank" rel="noopener">${item.name}</a>`).join("");
 }
-function updateSourceMode() { $("uploadSourcesWrap").classList.toggle("hidden", radioValue("source_mode") !== "Upload files"); }
+function toggleBgmLibraryPopover() {
+  const panel = $("bgmLibraryPopover");
+  if (!panel) return;
+  const isHidden = panel.classList.toggle("hidden");
+  panel.classList.toggle("modal", !isHidden);
+  document.body.classList.toggle("bgm-modal-open", !isHidden);
+  if (isHidden) return;
+  const localList = bgmLibraryState.local.length
+    ? bgmLibraryState.local.map((name) => `
+      <li class="bgm-local-item">
+        <span>${escapeHtml(name)}</span>
+        <audio controls preload="none" src="/api/video-matrix/bgm/${encodeURIComponent(name)}"></audio>
+      </li>`).join("")
+    : "<li>暂无本地 MP3 文件</li>";
+  const linkList = bgmLibraryState.links.length
+    ? bgmLibraryState.links.map((item) => `<a href="${escapeHtml(item.download_page || "#")}" target="_blank" rel="noopener">${escapeHtml(item.name || "曲库来源")} / 打开试听来源</a>`).join("")
+    : "<span>暂无外部曲库链接</span>";
+  const pixabayList = bgmLibraryState.pixabay.length
+    ? renderPixabayTracks()
+    : `<button id="loadPixabayTracks" type="button">抓取 Pixabay industry 前 10 首</button>`;
+  panel.innerHTML = `
+    <div class="bgm-popover-head">
+      <div>
+        <strong>本地曲库列表</strong>
+        <small title="${escapeHtml(bgmLibraryState.directory)}">下载目录：${escapeHtml(shortPath(bgmLibraryState.directory))}</small>
+      </div>
+      <button id="toggleBgmLibrarySize" type="button" class="secondary">收起</button>
+    </div>
+    <section class="bgm-local-section">
+      <ul>${localList}</ul>
+    </section>
+    <section class="bgm-pixabay-section">
+      <strong>Pixabay industry 曲库</strong>
+      <div id="pixabayTrackList" class="pixabay-track-list">${pixabayList}</div>
+    </section>
+    <div class="bgm-download-box">
+      <strong>音频直链试听 / 下载</strong>
+      <label><span>音频地址</span><input id="bgmDownloadUrl" placeholder="https://.../music.mp3"></label>
+      <audio id="bgmUrlPreview" controls preload="none"></audio>
+      <button id="downloadBgm" type="button">下载到本地曲库</button>
+      <small id="bgmDownloadStatus"></small>
+    </div>
+    <div class="bgm-popover-links">${linkList}</div>
+  `;
+  $("bgmDownloadUrl").oninput = () => {
+    $("bgmUrlPreview").src = $("bgmDownloadUrl").value.trim();
+  };
+  $("downloadBgm").onclick = downloadBgmToLibrary;
+  $("toggleBgmLibrarySize").onclick = toggleBgmLibrarySize;
+  $("loadPixabayTracks")?.addEventListener("click", loadPixabayTracks);
+  panel.querySelectorAll("[data-pixabay-open]").forEach((button) => {
+    button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
+  });
+}
+function toggleBgmLibrarySize() {
+  const panel = $("bgmLibraryPopover");
+  panel.classList.add("hidden");
+  panel.classList.remove("modal");
+  document.body.classList.remove("bgm-modal-open");
+}
+function renderPixabayTracks() {
+  return bgmLibraryState.pixabay.slice(0, 10).map((track, index) => `
+    <article class="pixabay-track">
+      <div><strong>${index + 1}. ${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)} / ${escapeHtml(track.duration)}</span></div>
+      <button type="button" data-pixabay-open="${escapeHtml(track.source_url)}">试听</button>
+      <button type="button" data-pixabay-open="${escapeHtml(track.source_url)}">下载页</button>
+    </article>
+  `).join("");
+}
+async function loadPixabayTracks() {
+  const list = $("pixabayTrackList");
+  list.textContent = "正在抓取 Pixabay industry...";
+  try {
+    const data = await api("/api/video-matrix/pixabay/industry");
+    bgmLibraryState.pixabay = data.tracks || [];
+    list.innerHTML = renderPixabayTracks();
+    list.querySelectorAll("[data-pixabay-open]").forEach((button) => {
+      button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
+    });
+  } catch (error) {
+    list.textContent = error.message;
+  }
+}
+async function downloadBgmToLibrary() {
+  const url = $("bgmDownloadUrl").value.trim();
+  const status = $("bgmDownloadStatus");
+  if (!url) {
+    status.textContent = "请先粘贴 MP3/WAV/M4A 音频直链。";
+    return;
+  }
+  status.textContent = "正在下载到本地曲库...";
+  try {
+    const result = await api("/api/video-matrix/bgm/download", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({url})});
+    status.textContent = `已下载：${result.filename}`;
+    const data = await api("/api/video-matrix/state");
+    state = data.ui_state; settings = data.settings;
+    renderBgm(data);
+    const panel = $("bgmLibraryPopover");
+    panel.classList.remove("hidden");
+    toggleBgmLibraryPopover();
+    toggleBgmLibraryPopover();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+function updateSourceMode() { $("uploadSourcesWrap")?.classList.toggle("hidden", true); }
 function renderRadio(containerId, name, options, selected, onchange) {
   $(containerId).innerHTML = options.map(([value, label]) => `<label><input type="radio" name="${name}" value="${value}" ${value === selected ? "checked" : ""}>${label}</label>`).join("");
   document.querySelectorAll(`input[name="${name}"]`).forEach(r => r.onchange = onchange || (() => {}));

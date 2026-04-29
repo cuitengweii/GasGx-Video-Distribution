@@ -58,6 +58,8 @@ const state = {
   matrixJobStatus: {},
   aiRobotConfigs: [],
   aiRobotMessages: [],
+  aiRobotEditingPlatform: "",
+  aiRobotMessagesCollapsed: false,
   brand: { settings: {} },
   systemHealth: null,
 };
@@ -520,10 +522,133 @@ function selectedAiRobotConfig() {
   return state.aiRobotConfigs.find((item) => item.platform === platform) || { platform };
 }
 
+function aiRobotConfigFor(platform) {
+  return state.aiRobotConfigs.find((item) => item.platform === platform) || { platform };
+}
+
+function isAiRobotBound(config) {
+  return Boolean(config && config.enabled && config.webhook_url && config.target_id);
+}
+
+function visibleAiRobotConfigs() {
+  return state.aiRobotConfigs.filter((item) => item.platform !== "whatsapp");
+}
+
+function syncTelegramSetupVisibility() {
+  const form = document.querySelector("#ai-robot-form");
+  const card = document.querySelector("#telegram-setup-card");
+  if (!form || !card) return;
+  const isTelegram = form.elements.platform.value === "telegram";
+  card.hidden = !isTelegram;
+  form.classList.toggle("telegram-simple-mode", isTelegram);
+  if (isTelegram && !form.elements.bot_name.value) {
+    form.elements.bot_name.value = "GasGx Telegram Bot";
+  }
+}
+
+function telegramWebhookUrl(token) {
+  return `https://api.telegram.org/bot${token}/sendMessage`;
+}
+
+async function openTelegramBotChat() {
+  const form = document.querySelector("#ai-robot-form");
+  if (!form) return;
+  const token = String(form.elements.telegram_bot_token?.value || "").trim();
+  if (!token) {
+    setTelegramChatIdState("Fill Bot token first, then open bot chat.", "danger");
+    return;
+  }
+  setTelegramChatIdState("Finding bot username...");
+  try {
+    const payload = await api("/api/ai-robots/telegram/resolve", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    if (payload.chat_id) {
+      form.elements.telegram_chat_id.value = String(payload.chat_id);
+      form.elements.target_id.value = String(payload.chat_id);
+    }
+    if (!payload.username) {
+      throw new Error("Telegram did not return a bot username.");
+    }
+    window.open(`https://t.me/${encodeURIComponent(payload.username)}`, "_blank", "noopener,noreferrer");
+    setTelegramChatIdState("Telegram opened. Press Start or send hi, then return here and click Save config.");
+  } catch (error) {
+    setTelegramChatIdState(`Telegram setup failed: ${error.message || "failed to open bot chat."}`, "danger");
+  }
+}
+
+function fillTelegramFields() {
+  const form = document.querySelector("#ai-robot-form");
+  if (!form) return false;
+  const token = String(form.elements.telegram_bot_token?.value || "").trim();
+  const chatId = String(form.elements.telegram_chat_id?.value || "").trim();
+  if (!token || !chatId) {
+    window.alert("Fill Bot token and Chat ID first.");
+    return false;
+  }
+  form.elements.platform.value = "telegram";
+  form.elements.enabled.value = "true";
+  form.elements.bot_name.value = form.elements.bot_name.value || "GasGx Telegram Bot";
+  form.elements.webhook_url.value = telegramWebhookUrl(token);
+  form.elements.target_id.value = chatId;
+  form.elements.webhook_secret.value = "";
+  if (!form.elements.signing_secret.value) {
+    form.elements.signing_secret.value = `gasgx-${Date.now().toString(36)}`;
+  }
+  syncTelegramSetupVisibility();
+  return true;
+}
+
+function setTelegramChatIdState(message, tone = "") {
+  const node = document.querySelector("#telegram-chat-id-state");
+  if (!node) return;
+  node.textContent = message;
+  node.classList.toggle("danger", tone === "danger");
+}
+
+async function fetchTelegramChatId() {
+  const form = document.querySelector("#ai-robot-form");
+  if (!form) return false;
+  const token = String(form.elements.telegram_bot_token?.value || "").trim();
+  if (!token) {
+    setTelegramChatIdState("Fill Bot token first.", "danger");
+    return false;
+  }
+  setTelegramChatIdState("Fetching chat id...");
+  try {
+    const payload = await api("/api/ai-robots/telegram/resolve", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    if (!payload.chat_id) {
+      setTelegramChatIdState("No chat found. Send one message to the bot or group, then save again.", "danger");
+      return false;
+    }
+    form.elements.telegram_chat_id.value = String(payload.chat_id);
+    form.elements.target_id.value = String(payload.chat_id);
+    setTelegramChatIdState(`Chat ID found: ${payload.chat_id}`);
+    return true;
+  } catch (error) {
+    setTelegramChatIdState(`Telegram setup failed: ${error.message || "failed to fetch chat id."}`, "danger");
+    return false;
+  }
+}
+
 function renderAiRobot() {
   const form = document.querySelector("#ai-robot-form");
   if (!form) return;
-  const config = selectedAiRobotConfig();
+  const telegramConfig = state.aiRobotConfigs.find((item) => item.platform === "telegram") || { platform: "telegram" };
+  const telegramBound = isAiRobotBound(telegramConfig);
+  const editingPlatform = state.aiRobotEditingPlatform;
+  const editingTelegram = editingPlatform === "telegram" || !telegramBound;
+  const config = editingPlatform ? aiRobotConfigFor(editingPlatform) : (telegramBound ? telegramConfig : selectedAiRobotConfig());
+  const saveButton = document.querySelector("#ai-save-config");
+  const sendTestButton = document.querySelector("#ai-send-test");
+  const formHidden = telegramBound && !editingPlatform;
+  form.hidden = formHidden;
+  saveButton.classList.toggle("hidden", formHidden);
+  sendTestButton.classList.toggle("hidden", formHidden);
   form.elements.platform.value = config.platform || "wecom";
   form.elements.bot_name.value = config.bot_name || "";
   form.elements.enabled.value = String(config.enabled === true);
@@ -531,8 +656,12 @@ function renderAiRobot() {
   form.elements.webhook_secret.value = "";
   form.elements.signing_secret.value = "";
   form.elements.target_id.value = config.target_id || "";
-  document.querySelector("#ai-config-state").textContent = config.enabled ? "已启用" : "未启用";
-  document.querySelector("#ai-channel-grid").innerHTML = state.aiRobotConfigs.map((item) => `
+  if (form.elements.telegram_bot_token) form.elements.telegram_bot_token.value = "";
+  if (form.elements.telegram_chat_id) form.elements.telegram_chat_id.value = config.platform === "telegram" ? (config.target_id || "") : "";
+  syncTelegramSetupVisibility();
+  document.querySelector("#ai-config-state").textContent = telegramBound && !editingTelegram ? "已绑定" : (config.enabled ? "已启用" : "未启用");
+  renderBoundAiRobotPlatforms();
+  document.querySelector("#ai-channel-grid").innerHTML = visibleAiRobotConfigs().map((item) => `
     <article class="bot-channel-card">
       <span class="bot-logo ${item.platform}">${aiPlatformLabel(item.platform).slice(0, 1)}</span>
       <div>
@@ -544,16 +673,76 @@ function renderAiRobot() {
   `).join("");
   document.querySelectorAll("[data-ai-platform]").forEach((button) => {
     button.onclick = () => {
-      form.elements.platform.value = button.dataset.aiPlatform;
+      state.aiRobotEditingPlatform = button.dataset.aiPlatform;
       renderAiRobot();
+      document.querySelector("#ai-config-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
     };
   });
-  document.querySelector("#ai-message-list").innerHTML = state.aiRobotMessages.length
+  const messageList = document.querySelector("#ai-message-list");
+  const messageToggle = document.querySelector("#ai-message-toggle");
+  messageList.hidden = state.aiRobotMessagesCollapsed;
+  if (messageToggle) {
+    messageToggle.textContent = state.aiRobotMessagesCollapsed ? "展开" : "最近 100 条";
+  }
+  messageList.innerHTML = state.aiRobotMessages.length
     ? state.aiRobotMessages.map((item) => `<article class="task-row">
         <div><strong>#${item.id} ${aiPlatformLabel(item.platform)}</strong><span>${item.summary || item.message_type}</span></div>
         <span class="task-status">${item.status}</span>
       </article>`).join("")
     : `<div class="muted">暂无机器人消息队列。</div>`;
+}
+
+function renderBoundAiRobotPlatforms() {
+  const node = document.querySelector("#ai-bound-platforms");
+  if (!node) return;
+  const bound = state.aiRobotConfigs.filter(isAiRobotBound);
+  if (!bound.length) {
+    node.innerHTML = `<div class="bound-empty">还没有绑定消息机器人。先填写 Telegram Bot Token，保存后即可发送测试。</div>`;
+    return;
+  }
+  node.innerHTML = bound.map((item) => `
+    <article class="bound-platform-card">
+      <span class="bot-logo ${item.platform}">${aiPlatformLabel(item.platform).slice(0, 1)}</span>
+      <div>
+        <strong>${aiPlatformLabel(item.platform)} 已绑定</strong>
+        <p>${item.target_id ? `目标会话 ${item.target_id}` : "目标会话已保存"} · 可发送测试消息</p>
+      </div>
+      <div class="bound-platform-actions">
+        <button class="btn secondary" type="button" data-ai-test="${item.platform}">发送测试</button>
+        <button class="btn secondary" type="button" data-ai-edit="${item.platform}">修改</button>
+        <button class="btn secondary danger" type="button" data-ai-delete="${item.platform}">删除</button>
+      </div>
+    </article>
+  `).join("");
+  node.querySelectorAll("[data-ai-test]").forEach((button) => {
+    button.onclick = async () => {
+      await sendAiRobotTest(button.dataset.aiTest, button);
+    };
+  });
+  node.querySelectorAll("[data-ai-edit]").forEach((button) => {
+    button.onclick = () => {
+      state.aiRobotEditingPlatform = button.dataset.aiEdit;
+      renderAiRobot();
+      document.querySelector("#ai-config-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+  });
+  node.querySelectorAll("[data-ai-delete]").forEach((button) => {
+    button.onclick = async () => {
+      const platform = button.dataset.aiDelete;
+      if (!window.confirm(`确认删除 ${aiPlatformLabel(platform)} 机器人配置？删除后需要重新填写 Bot Token。`)) return;
+      const restoreButton = setButtonLoading(button, "删除中");
+      try {
+        await api(`/api/ai-robots/${platform}/config`, { method: "DELETE" });
+        state.aiRobotConfigs = await api("/api/ai-robots/configs");
+        state.aiRobotMessages = await api("/api/ai-robots/messages");
+        state.aiRobotEditingPlatform = "";
+        renderAiRobot();
+        document.querySelector("#ai-config-state").textContent = "已删除";
+      } finally {
+        restoreButton();
+      }
+    };
+  });
 }
 
 function renderSystemHealth() {
@@ -587,6 +776,7 @@ function healthDetailText(details) {
 }
 
 async function refresh() {
+  renderAiRobotLoading();
   const [brand, platforms, accounts, tasks, distributionSettings, matrixJobStatus, aiRobotConfigs, aiRobotMessages] = await Promise.all([
     api("/api/brand"),
     api("/api/platforms"),
@@ -799,7 +989,10 @@ document.querySelectorAll(".nav-btn").forEach((button) => {
 document.querySelector("#refresh").addEventListener("click", async (event) => {
   const restoreButton = setButtonLoading(event.currentTarget, "刷新中");
   try {
-    await refresh();
+    state.aiRobotConfigs = await api("/api/ai-robots/configs");
+    state.aiRobotMessages = await api("/api/ai-robots/messages");
+    renderAiRobot();
+    document.querySelector("#ai-config-state").textContent = "已保存";
   } finally {
     restoreButton();
   }
@@ -862,39 +1055,141 @@ document.querySelector("#distribution-settings-form").addEventListener("submit",
   }
 });
 
-document.querySelector("#ai-platform-select").addEventListener("change", renderAiRobot);
+document.querySelector("#ai-platform-select").addEventListener("change", () => {
+  renderAiRobot();
+  syncTelegramSetupVisibility();
+});
 
-document.querySelector("#ai-save-config").addEventListener("click", async (event) => {
-  const form = document.querySelector("#ai-robot-form");
-  const data = Object.fromEntries(new FormData(form).entries());
-  const platform = data.platform;
-  delete data.platform;
-  delete data.test_text;
-  data.enabled = data.enabled === "true";
-  const restoreButton = setButtonLoading(event.currentTarget, "保存中");
+document.querySelector("#telegram-auto-fill")?.addEventListener("click", fillTelegramFields);
+
+document.querySelector("#telegram-fetch-chat-id")?.addEventListener("click", async (event) => {
+  const restoreButton = setButtonLoading(event.currentTarget, "Fetching");
   try {
-    await api(`/api/ai-robots/${platform}/config`, { method: "PUT", body: JSON.stringify(data) });
-    document.querySelector("#ai-config-state").textContent = "已保存";
-    await refresh();
+    await fetchTelegramChatId();
   } finally {
     restoreButton();
   }
 });
 
-document.querySelector("#ai-send-test").addEventListener("click", async (event) => {
+document.querySelector("#ai-message-toggle")?.addEventListener("click", () => {
+  state.aiRobotMessagesCollapsed = !state.aiRobotMessagesCollapsed;
+  renderAiRobot();
+});
+
+document.querySelector("#telegram-open-bot-chat")?.addEventListener("click", openTelegramBotChat);
+document.querySelector("#telegram-open-bot-chat-primary")?.addEventListener("click", openTelegramBotChat);
+
+document.querySelector("#telegram-open-updates")?.addEventListener("click", () => {
   const form = document.querySelector("#ai-robot-form");
-  const platform = form.elements.platform.value;
-  const text = form.elements.test_text.value || "GasGx AI robot test message";
-  const restoreButton = setButtonLoading(event.currentTarget, "发送中");
+  const token = String(form?.elements.telegram_bot_token?.value || "").trim();
+  if (!token) {
+    window.alert("Fill Bot token first.");
+    return;
+  }
+  window.open(`https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates`, "_blank", "noopener,noreferrer");
+});
+
+document.querySelector("#ai-save-config").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const form = document.querySelector("#ai-robot-form");
+  const stateNode = document.querySelector("#ai-config-state");
+  stateNode.textContent = "保存中...";
+  stateNode.classList.remove("danger");
+  let saved = false;
+  const restoreButton = setButtonLoading(button, "保存中");
   try {
-    await api(`/api/ai-robots/${platform}/test-message`, {
+    if (form.elements.platform.value === "telegram") {
+      const token = String(form.elements.telegram_bot_token?.value || "").trim();
+      if (token && !String(form.elements.telegram_chat_id?.value || "").trim()) {
+        await fetchTelegramChatId();
+      }
+      const chatId = String(form.elements.telegram_chat_id?.value || "").trim();
+      if (token) {
+        form.elements.platform.value = "telegram";
+        form.elements.enabled.value = "true";
+        form.elements.bot_name.value = form.elements.bot_name.value || "GasGx Telegram Bot";
+        form.elements.webhook_url.value = telegramWebhookUrl(token);
+        form.elements.target_id.value = chatId || form.elements.target_id.value;
+        form.elements.webhook_secret.value = "";
+        if (!form.elements.signing_secret.value) {
+          form.elements.signing_secret.value = `gasgx-${Date.now().toString(36)}`;
+        }
+      }
+    }
+    const data = Object.fromEntries(new FormData(form).entries());
+    const platform = data.platform;
+    delete data.platform;
+    delete data.test_text;
+    delete data.telegram_bot_token;
+    delete data.telegram_chat_id;
+    data.enabled = data.enabled === "true";
+    await api(`/api/ai-robots/${platform}/config`, { method: "PUT", body: JSON.stringify(data) });
+    state.aiRobotConfigs = await api("/api/ai-robots/configs");
+    state.aiRobotMessages = await api("/api/ai-robots/messages");
+    state.aiRobotEditingPlatform = "";
+    renderAiRobot();
+    stateNode.textContent = "已保存";
+    saved = true;
+  } catch (error) {
+    stateNode.textContent = error.message || "保存失败";
+    stateNode.classList.add("danger");
+  } finally {
+    restoreButton();
+    if (saved) {
+      button.textContent = "已保存";
+    }
+  }
+});
+
+async function sendAiRobotTest(platform, button) {
+  const form = document.querySelector("#ai-robot-form");
+  const stateNode = document.querySelector("#ai-config-state");
+  const text = form && !form.hidden && form.elements.platform.value === platform
+    ? (form.elements.test_text.value || "GasGx AI robot test message")
+    : "GasGx AI robot test message";
+  stateNode.textContent = "发送中...";
+  stateNode.classList.remove("danger");
+  let finalButtonText = "";
+  const restoreButton = setButtonLoading(button, "发送中");
+  try {
+    const result = await api(`/api/ai-robots/${platform}/test-message`, {
       method: "POST",
       body: JSON.stringify({ message_type: "text", text }),
     });
-    await refresh();
+    state.aiRobotConfigs = await api("/api/ai-robots/configs");
+    state.aiRobotMessages = await api("/api/ai-robots/messages");
+    renderAiRobot();
+    if (result.status === "sent") {
+      stateNode.textContent = "测试消息已发送";
+      finalButtonText = "已发送";
+      return;
+    }
+    stateNode.textContent = `发送失败：${result.error || result.summary || result.status || "未知错误"}`;
+    stateNode.classList.add("danger");
+    finalButtonText = "发送失败";
+  } catch (error) {
+    stateNode.textContent = `发送失败：${error.message || "未知错误"}`;
+    stateNode.classList.add("danger");
+    finalButtonText = "发送失败";
   } finally {
     restoreButton();
+    if (finalButtonText) {
+      button.textContent = finalButtonText;
+    }
   }
+}
+
+function renderAiRobotLoading() {
+  const loading = `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>加载中...</span></div>`;
+  const channelGrid = document.querySelector("#ai-channel-grid");
+  const messageList = document.querySelector("#ai-message-list");
+  if (channelGrid) channelGrid.innerHTML = loading;
+  if (messageList && !state.aiRobotMessagesCollapsed) messageList.innerHTML = loading;
+}
+
+document.querySelector("#ai-send-test").addEventListener("click", async (event) => {
+  const form = document.querySelector("#ai-robot-form");
+  await sendAiRobotTest(form.elements.platform.value, event.currentTarget);
 });
 
 document.querySelector("#open-material-dir").addEventListener("click", async (event) => {
@@ -984,6 +1279,7 @@ initBrandSettings();
 initUserMenu();
 
 
+/*
 const vm = {
   loaded: false,
   state: {},
@@ -1051,22 +1347,23 @@ function renderVideoMatrixSidebar(data) {
 
 function renderVideoMatrixSource(data) {
   const total = Object.values(data.category_counts).reduce((sum, value) => sum + value, 0);
+  const categories = vmMaterialCategories(data);
   vmNode("video-matrix-metrics").innerHTML = [
     `<div class="metric"><span>本地素材</span><strong>${total}</strong></div>`,
     `<div class="metric"><span>生成数量</span><strong id="vm-metric-count">${vmNode("vm-output-count").value}</strong></div>`,
     `<div class="metric"><span>并行线程</span><strong id="vm-metric-workers">${vmNode("vm-max-workers").value}</strong></div>`,
     `<div class="metric"><span>默认比例</span><strong>1080:1920</strong></div>`,
   ].join("");
-  vmNode("vm-source-dirs").innerHTML = Object.entries(data.source_dirs).map(([key, sourcePath]) => `
-    <div class="vm-dir-row"><span class="vm-badge">${key}</span><code>${sourcePath}</code><button class="btn primary" data-vm-open="${vmEscape(sourcePath)}">打开</button></div>
+  vmNode("vm-source-dirs").innerHTML = categories.map((category) => `
+    <div class="vm-dir-row"><span class="vm-badge">${vmEscape(category.label)}</span><code>${vmEscape(data.source_dirs[category.id] || "")}</code><button class="btn primary" data-vm-open="${vmEscape(data.source_dirs[category.id] || "")}">鎵撳紑</button></div>
   `).join("");
   vmNode("vm-source-dirs").querySelectorAll("[data-vm-open]").forEach((button) => { button.onclick = () => vmOpenFolder(button.dataset.vmOpen); });
-  vmNode("vm-source-counts").textContent = `当前素材数量：A=${data.category_counts.category_A} / B=${data.category_counts.category_B} / C=${data.category_counts.category_C}`;
-  renderVmRadio("vm-source-mode-group", "vm_source_mode", [["Category folders", "分类目录"], ["Upload files", "手动上传"]], vm.state.source_mode || "Category folders", updateVideoMatrixSourceMode);
-  vmNode("vm-recent-limits").innerHTML = ["category_A", "category_B", "category_C"].map((id, index) => `
-    <label>${"ABC"[index]} 类读取最新素材<input id="vm-${id}" type="range" min="1" max="50" value="${vm.settings.recent_limits[id] || 8}"><strong id="vm-${id}-value"></strong></label>
+  vmNode("vm-source-counts").textContent = `褰撳墠绱犳潗鏁伴噺锛${categories.map((category) => `${category.label}=${data.category_counts[category.id] || 0}`).join(" / ")}`;
+  renderVmRadio("vm-source-mode-group", "vm_source_mode", [["Category folders", "鍒嗙被鐩綍"], ["Upload files", "鎵嬪姩涓婁紶"]], vm.state.source_mode || "Category folders", updateVideoMatrixSourceMode);
+  vmNode("vm-recent-limits").innerHTML = categories.map((category) => `
+    <label>${vmEscape(category.label)} 绫昏鍙栨渶鏂扮礌鏉?input id="vm-${category.id}" type="range" min="1" max="50" value="${vm.settings.recent_limits[category.id] || 8}"><strong id="vm-${category.id}-value"></strong></label>
   `).join("");
-  ["category_A", "category_B", "category_C"].forEach((id) => vmSyncRange(`vm-${id}`));
+  categories.forEach((category) => vmSyncRange(`vm-${category.id}`));
   updateVideoMatrixSourceMode();
 }
 
@@ -1172,6 +1469,7 @@ async function pollVideoMatrixJob(jobId) {
 }
 
 function collectVideoMatrixState() {
+  const categories = Array.isArray(vm.settings.material_categories) ? vm.settings.material_categories : [];
   return {
     output_count: Number(vmNode("vm-output-count").value), max_workers: Number(vmNode("vm-max-workers").value),
     output_options: [...vmNode("vm-output-options").selectedOptions].map((item) => item.value), output_root: vmNode("vm-output-root").value,
@@ -1179,8 +1477,18 @@ function collectVideoMatrixState() {
     source_mode: vmRadioValue("vm_source_mode"), use_live_data: true, headline: vmNode("vm-headline").value, subhead: vmNode("vm-subhead").value,
     cta: vmNode("vm-cta").value, follow_text: vmNode("vm-follow-text").value, hud_text: vmNode("vm-hud-text").value,
     bgm_source: vmRadioValue("vm_bgm_source"), bgm_library_id: vmNode("vm-bgm-library")?.value || "",
-    recent_limits: { category_A: Number(vmNode("vm-category_A").value), category_B: Number(vmNode("vm-category_B").value), category_C: Number(vmNode("vm-category_C").value) },
+    recent_limits: Object.fromEntries(categories.map((category) => [category.id, Number(vmNode(`vm-${category.id}`)?.value || vm.settings.recent_limits[category.id] || 8)])),
   };
+}
+
+function vmMaterialCategories(data = { settings: vm.settings }) {
+  const source = data.settings || vm.settings;
+  const categories = Array.isArray(source.material_categories) ? source.material_categories : [];
+  return categories.length ? categories : [
+    { id: "category_A", label: "A 类" },
+    { id: "category_B", label: "B 类" },
+    { id: "category_C", label: "C 类" },
+  ];
 }
 
 function renderVideoMatrixBgm(data) {
@@ -1201,6 +1509,7 @@ function vmLog(text) { vmNode("vm-job-log").textContent = text; }
 function vmEscape(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
 function vmDebounce(fn, delay) { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); }; }
 
+*/
 function mountVideoMatrixWorkbench() {
   const section = document.querySelector("#video-matrix");
   if (!section || section.dataset.mounted === "true") return;

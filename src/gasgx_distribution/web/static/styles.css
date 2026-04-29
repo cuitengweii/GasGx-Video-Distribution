@@ -370,6 +370,11 @@ nav {
   flex: 0 0 auto;
 }
 
+.btn.primary .btn-spinner {
+  border-color: rgba(0, 0, 0, 0.22);
+  border-top-color: #050505;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -661,9 +666,145 @@ select option {
   gap: 12px;
 }
 
+.ai-config-form[hidden] {
+  display: none;
+}
+
+.task-list[hidden] {
+  display: none;
+}
+
 .ai-config-form label {
   display: grid;
   gap: 6px;
+}
+
+.telegram-setup-card {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(42, 171, 238, 0.28);
+  border-radius: 8px;
+  background: rgba(16, 28, 34, 0.72);
+  padding: 14px;
+}
+
+.telegram-setup-card[hidden] {
+  display: none;
+}
+
+.telegram-setup-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.telegram-setup-head span,
+.setup-steps {
+  color: var(--text-secondary);
+}
+
+.setup-steps {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.7;
+}
+
+.telegram-helper-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.telegram-chat-id-field,
+.telegram-helper-actions {
+  display: none;
+}
+
+.ai-config-form .telegram-chat-id-field {
+  display: none;
+}
+
+.ai-config-form.telegram-simple-mode .ai-platform-picker,
+.ai-config-form.telegram-simple-mode .ai-advanced-field,
+.ai-config-form.telegram-simple-mode .ai-telegram-default-field {
+  display: none;
+}
+
+.bound-platform-list {
+  display: grid;
+  gap: 10px;
+}
+
+.bound-empty,
+.bound-platform-card {
+  border: 1px solid rgba(93, 214, 44, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.bound-empty {
+  color: var(--text-secondary);
+  padding: 14px;
+}
+
+.bound-platform-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+}
+
+.bound-platform-card p {
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.bound-platform-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn.danger {
+  border-color: rgba(255, 77, 95, 0.34);
+  color: #ff8a96;
+}
+
+.panel-toggle {
+  cursor: pointer;
+  font: inherit;
+}
+
+.loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  padding: 12px 0;
+}
+
+.loading-inline .btn-spinner {
+  border-color: rgba(93, 214, 44, 0.22);
+  border-top-color: var(--accent-aurora);
+}
+
+.telegram-bot-chat-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px;
+}
+
+.telegram-bot-chat-action span {
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 
 .ai-config-form label:nth-last-child(1),
@@ -1292,6 +1433,10 @@ select option {
     grid-template-columns: 1fr;
     display: grid;
   }
+
+  .telegram-helper-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .video-matrix-panel {
@@ -1738,7 +1883,8 @@ select option {
 
 .video-matrix-frame {
   width: 100%;
-  min-height: calc(100vh - 48px);
+  height: 100%;
+  min-height: 0;
   border: 0;
   display: block;
   background: #0b0b0b;
@@ -1748,9 +1894,30 @@ select option {
   margin: -32px -28px -44px;
 }
 
+body.video-matrix-active {
+  overflow: hidden;
+}
+
+body.video-matrix-active .sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 260px;
+}
+
+body.video-matrix-active .workspace {
+  grid-column: 2;
+  height: 100vh;
+  margin-left: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 body.video-matrix-active .topbar {
   display: flex;
-  margin-bottom: 12px;
+  position: static;
+  flex: 0 0 auto;
+  margin-bottom: 0;
 }
 
 body.video-matrix-active .topbar #refresh {
@@ -1758,7 +1925,9 @@ body.video-matrix-active .topbar #refresh {
 }
 
 body.video-matrix-active #video-matrix {
-  margin-top: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: -18px -28px -44px;
 }
 
 @media (max-width: 1180px) {

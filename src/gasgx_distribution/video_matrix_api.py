@@ -3,11 +3,16 @@ from __future__ import annotations
 import base64
 import json
 import os
+import random
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -31,6 +36,18 @@ UI_STATE_PATH = CONFIG_DIR / "ui_state.json"
 BGM_LIBRARY_PATH = CONFIG_DIR / "bgm_library.json"
 TMP_DIR = ROOT / "runtime" / "video_matrix" / "web_uploads"
 BGM_DIR = ROOT / "runtime" / "video_matrix" / "bgm"
+PIXABAY_INDUSTRY_TRACKS = [
+    {"title": "Corporate Industry", "artist": "Ivan_Luzan", "duration": "2:29", "source_url": "https://pixabay.com/music/upbeat-corporate-industry-408747/"},
+    {"title": "Industry", "artist": "MomotMusic", "duration": "2:11", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "AI Industry", "artist": "AlisiaBeats", "duration": "1:58", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "Simple Piano Melody", "artist": "Good_B_Music", "duration": "1:31", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "Industrial", "artist": "Audioknap", "duration": "1:43", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "Abandoned Industry", "artist": "HarumachiMusic", "duration": "1:42", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "Industrial", "artist": "Bransboynd", "duration": "2:12", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "Technology", "artist": "Crab_Audio", "duration": "2:05", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "Heavy Industry", "artist": "SPmusic", "duration": "3:22", "source_url": "https://pixabay.com/music/search/industry/"},
+    {"title": "Visite rapide dans l'industrie", "artist": "Jean-Paul-V", "duration": "4:00", "source_url": "https://pixabay.com/music/search/industry/"},
+]
 
 router = APIRouter(prefix="/api/video-matrix", tags=["video-matrix"])
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -41,10 +58,19 @@ class OpenFolderPayload(BaseModel):
     path: str = ""
 
 
+class MaterialCategoryPayload(BaseModel):
+    label: str = ""
+
+
+class BgmDownloadPayload(BaseModel):
+    url: str = ""
+    filename: str = ""
+
+
 @router.get("/state")
 def get_state() -> dict[str, Any]:
     settings = _settings()
-    ensure_category_dirs(settings.source_root)
+    ensure_category_dirs(settings.source_root, settings.material_categories)
     BGM_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "settings": _settings_payload(settings),
@@ -54,11 +80,10 @@ def get_state() -> dict[str, Any]:
         "bgm_library": _load_json(BGM_LIBRARY_PATH, {}),
         "local_bgm_dir": str(BGM_DIR),
         "local_bgm": [path.name for path in _list_local_bgm_files(BGM_DIR)],
-        "category_counts": _count_category_files(settings.source_root),
+        "category_counts": _count_category_files(settings.source_root, settings.material_categories),
         "source_dirs": {
-            "A": str(settings.source_root / "category_A"),
-            "B": str(settings.source_root / "category_B"),
-            "C": str(settings.source_root / "category_C"),
+            category["id"]: str(settings.source_root / category["id"])
+            for category in settings.material_categories
         },
     }
 
@@ -69,6 +94,29 @@ def post_state(payload: dict[str, Any]) -> dict[str, Any]:
     state.update(payload)
     save_ui_state(UI_STATE_PATH, state)
     return {"ok": True, "ui_state": state}
+
+
+@router.post("/material-categories")
+def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
+    label = payload.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required")
+    config = _load_json(CONFIG_PATH, {})
+    categories = list(config.get("material_categories") or [])
+    existing_ids = {str(item.get("id") or "") for item in categories if isinstance(item, dict)}
+    next_index = 1
+    while f"category_custom_{next_index}" in existing_ids:
+        next_index += 1
+    category_id = f"category_custom_{next_index}"
+    categories.append({"id": category_id, "label": label})
+    config["material_categories"] = categories
+    recent_limits = dict(config.get("recent_limits") or {})
+    recent_limits[category_id] = 6
+    config["recent_limits"] = recent_limits
+    CONFIG_PATH.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    settings = ProjectSettings.from_file(CONFIG_PATH)
+    ensure_category_dirs(settings.source_root, settings.material_categories)
+    return {"ok": True, "category": {"id": category_id, "label": label}}
 
 
 @router.post("/templates/{template_id}")
@@ -126,6 +174,44 @@ def preview_file(path: str) -> FileResponse:
     if video_path.suffix.lower() not in VIDEO_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Unsupported preview file")
     return FileResponse(video_path, media_type="video/mp4", filename=video_path.name)
+
+
+@router.get("/bgm/{filename}")
+def local_bgm_file(filename: str) -> FileResponse:
+    target = BGM_DIR / Path(filename).name
+    if not target.exists() or target.suffix.lower() not in {".mp3", ".wav", ".m4a"}:
+        raise HTTPException(status_code=404, detail="BGM file not found")
+    return FileResponse(target, media_type=_audio_media_type(target), filename=target.name)
+
+
+@router.get("/pixabay/industry")
+def pixabay_industry_tracks() -> dict[str, Any]:
+    return {"tracks": PIXABAY_INDUSTRY_TRACKS[:10], "source_url": "https://pixabay.com/music/search/industry/"}
+
+
+@router.post("/bgm/download")
+def download_bgm(payload: BgmDownloadPayload) -> dict[str, Any]:
+    url = payload.url.strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="A valid http/https audio URL is required")
+    filename = _safe_bgm_filename(payload.filename or unquote(Path(parsed.path).name))
+    if not filename:
+        raise HTTPException(status_code=400, detail="The audio URL must include a supported filename")
+    target = BGM_DIR / filename
+    target.parent.mkdir(parents=True, exist_ok=True)
+    request = UrlRequest(url, headers={"User-Agent": "GasGx Video Distribution/0.1"})
+    try:
+        with urlopen(request, timeout=30) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if content_type and not content_type.lower().startswith(("audio/", "application/octet-stream")):
+                raise HTTPException(status_code=400, detail="The URL did not return an audio file")
+            target.write_bytes(response.read(80 * 1024 * 1024))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to download audio: {exc}") from exc
+    return {"ok": True, "filename": target.name, "path": str(target.resolve())}
 
 
 @router.post("/generate")
@@ -214,9 +300,12 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
 async def _resolve_bgm_path(request: dict[str, Any], temp_root: Path, bgm_file: UploadFile | None) -> Path:
     if request.get("bgm_source") == "Local library":
         filename = Path(str(request.get("bgm_library_id") or "")).name
-        candidate = BGM_DIR / filename
-        if candidate.exists():
+        local_files = _list_local_bgm_files(BGM_DIR)
+        candidate = BGM_DIR / filename if filename else None
+        if candidate is not None and candidate.exists():
             return candidate.resolve()
+        if local_files:
+            return random.choice(local_files).resolve()
     if bgm_file is None:
         raise HTTPException(status_code=400, detail="BGM file is required")
     target = temp_root / "bgm" / Path(bgm_file.filename or "bgm.mp3").name
@@ -254,14 +343,15 @@ def _settings_payload(settings: ProjectSettings) -> dict[str, Any]:
         "target_width": settings.target_width,
         "target_height": settings.target_height,
         "recent_limits": settings.recent_limits,
+        "material_categories": settings.material_categories,
         "hud_enable_live_data": settings.hud_enable_live_data,
     }
 
 
-def _count_category_files(root: Path) -> dict[str, int]:
+def _count_category_files(root: Path, categories: list[dict[str, str]]) -> dict[str, int]:
     return {
-        category: len([path for path in (root / category).glob("*") if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS])
-        for category in ("category_A", "category_B", "category_C")
+        category["id"]: len([path for path in (root / category["id"]).glob("*") if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS])
+        for category in categories
     }
 
 
@@ -269,6 +359,25 @@ def _list_local_bgm_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
     return sorted(path for path in folder.iterdir() if path.suffix.lower() in {".mp3", ".wav", ".m4a"})
+
+
+def _safe_bgm_filename(value: str) -> str:
+    name = Path(value).name.strip()
+    if not name:
+        return ""
+    suffix = Path(name).suffix.lower()
+    if suffix not in {".mp3", ".wav", ".m4a"}:
+        return ""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).stem).strip("._-") or "bgm"
+    return f"{stem}{suffix}"
+
+
+def _audio_media_type(path: Path) -> str:
+    return {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+    }.get(path.suffix.lower(), "application/octet-stream")
 
 
 def _load_json(path: Path, default: Any) -> Any:

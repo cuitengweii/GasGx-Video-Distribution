@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
+import gasgx_distribution.video_matrix_api as video_matrix_api
 from gasgx_distribution.web import create_app
 
 
@@ -14,6 +17,20 @@ def test_video_matrix_api_state_and_preview() -> None:
     assert payload["cover_templates"]
     assert "industrial_engine_hook" in payload["cover_templates"]
     assert payload["local_bgm_dir"].endswith("runtime\\video_matrix\\bgm") or payload["local_bgm_dir"].endswith("runtime/video_matrix/bgm")
+    labels = [item["label"] for item in payload["settings"]["material_categories"]]
+    for expected in [
+        "矿机部分",
+        "集装箱部分",
+        "发电机部分",
+        "各显示器部分",
+        "传感器部分",
+        "施工过程",
+        "测试动线",
+        "工厂全貌",
+    ]:
+        assert expected in labels
+    assert "category_H" in payload["source_dirs"]
+    assert "category_H" in payload["category_counts"]
 
     preview = client.post(
         "/api/video-matrix/cover-preview",
@@ -37,7 +54,8 @@ def test_video_matrix_static_entry_exists() -> None:
     assert response.status_code == 200
     html = response.text
     assert 'data-view="video-matrix"' in html
-    assert 'id="vm-cover-gallery"' in html
+    assert 'class="video-matrix-frame"' in html
+    assert 'src="/static/video_matrix.html?embed=1"' in html
 
     script = client.get("/static/app.js")
     assert script.status_code == 200
@@ -54,3 +72,67 @@ def test_video_matrix_full_clone_page_exists() -> None:
     assert "GasGx 短视频矩阵批量生成工具" in html
     assert "/static/video_matrix_app.js" in html
     assert "/static/video_matrix_styles.css" in html
+
+
+def test_video_matrix_can_add_named_material_category(monkeypatch, tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "defaults.json"
+    config_path.write_text(video_matrix_api.CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(video_matrix_api, "CONFIG_PATH", config_path)
+
+    client = TestClient(create_app())
+
+    response = client.post("/api/video-matrix/material-categories", json={"label": "泵站细节"})
+
+    assert response.status_code == 200
+    state = client.get("/api/video-matrix/state").json()
+    assert any(item["label"] == "泵站细节" for item in state["settings"]["material_categories"])
+    assert "category_custom_1" in state["source_dirs"]
+
+
+def test_video_matrix_uses_random_local_bgm_when_no_track_is_selected(monkeypatch, tmp_path) -> None:
+    bgm_dir = tmp_path / "bgm"
+    bgm_dir.mkdir()
+    first = bgm_dir / "one.mp3"
+    second = bgm_dir / "two.mp3"
+    first.write_bytes(b"one")
+    second.write_bytes(b"two")
+    monkeypatch.setattr(video_matrix_api, "BGM_DIR", bgm_dir)
+    monkeypatch.setattr(video_matrix_api.random, "choice", lambda items: items[-1])
+
+    selected = asyncio.run(
+        video_matrix_api._resolve_bgm_path(
+            {"bgm_source": "Local library", "bgm_library_id": ""},
+            tmp_path,
+            None,
+        )
+    )
+
+    assert selected == second.resolve()
+
+
+def test_video_matrix_local_bgm_file_endpoint(monkeypatch, tmp_path) -> None:
+    bgm_dir = tmp_path / "bgm"
+    bgm_dir.mkdir()
+    (bgm_dir / "track.mp3").write_bytes(b"audio")
+    monkeypatch.setattr(video_matrix_api, "BGM_DIR", bgm_dir)
+    client = TestClient(create_app())
+
+    response = client.get("/api/video-matrix/bgm/track.mp3")
+
+    assert response.status_code == 200
+    assert response.content == b"audio"
+
+
+def test_video_matrix_pixabay_industry_tracks_endpoint() -> None:
+    client = TestClient(create_app())
+
+    response = client.get("/api/video-matrix/pixabay/industry")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_url"] == "https://pixabay.com/music/search/industry/"
+    assert len(payload["tracks"]) == 10
+    assert payload["tracks"][0]["title"] == "Corporate Industry"
+    assert payload["tracks"][0]["source_url"].startswith("https://pixabay.com/music/")
