@@ -23,6 +23,7 @@ from .video_matrix.cover_templates import DEFAULT_COVER_TEMPLATE_ID, load_cover_
 from .video_matrix.ingestion import VIDEO_EXTENSIONS, ensure_category_dirs
 from .video_matrix.pipeline import run_pipeline
 from .video_matrix.settings import ProjectSettings
+from .video_matrix.template_preview import render_video_template_preview_image
 from .video_matrix.templates import DEFAULT_TEMPLATE_ID, load_templates, save_templates
 from .video_matrix.ui_state import load_ui_state, save_ui_state
 
@@ -125,6 +126,21 @@ def save_video_template(template_id: str, payload: dict[str, Any]) -> dict[str, 
     templates[template_id] = payload
     save_templates(TEMPLATES_PATH, templates)
     return {"ok": True, "template_id": template_id, "template": payload}
+
+
+@router.post("/template-preview")
+def template_preview(payload: dict[str, Any]) -> dict[str, str]:
+    image = render_video_template_preview_image(
+        _settings(),
+        payload.get("template") or {},
+        hud_text=str(payload.get("hud_text") or ""),
+        slogan=str(payload.get("slogan") or ""),
+        title=str(payload.get("title") or ""),
+    )
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return {"data_url": f"data:image/png;base64,{encoded}"}
 
 
 @router.post("/cover-templates/{template_id}")

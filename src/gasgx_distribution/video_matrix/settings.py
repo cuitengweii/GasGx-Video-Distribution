@@ -16,6 +16,7 @@ class ProjectSettings:
     target_height: int
     target_fps: int
     recent_limits: dict[str, int]
+    material_categories: list[dict[str, str]]
     video_duration_min: float
     video_duration_max: float
     default_title_prefix: str
@@ -40,6 +41,7 @@ class ProjectSettings:
             target_height=int(payload["target_height"]),
             target_fps=int(payload["target_fps"]),
             recent_limits={key: int(value) for key, value in payload.get("recent_limits", {}).items()},
+            material_categories=_material_categories(payload.get("material_categories")),
             video_duration_min=float(payload["video_duration_min"]),
             video_duration_max=float(payload["video_duration_max"]),
             default_title_prefix=str(payload["default_title_prefix"]),
@@ -50,3 +52,27 @@ class ProjectSettings:
             titles=list(payload["titles"]),
             hud_sources=dict(payload["hud_sources"]),
         )
+
+
+def _material_categories(raw: object) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return [
+            {"id": "category_A", "label": "A 类"},
+            {"id": "category_B", "label": "B 类"},
+            {"id": "category_C", "label": "C 类"},
+        ]
+    categories: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        category_id = str(item.get("id") or "").strip()
+        if not category_id or category_id in seen or "/" in category_id or "\\" in category_id:
+            continue
+        seen.add(category_id)
+        categories.append({"id": category_id, "label": str(item.get("label") or category_id).strip() or category_id})
+    return categories or [
+        {"id": "category_A", "label": "A 类"},
+        {"id": "category_B", "label": "B 类"},
+        {"id": "category_C", "label": "C 类"},
+    ]

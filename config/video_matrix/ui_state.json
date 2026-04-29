@@ -1,19 +1,19 @@
 {
-  "cover_template_id": "industrial_engine_hook",
-  "follow_text": "Follow GasGx for more field power cases",
-  "max_workers": 3,
-  "output_count": 3,
+  "source_mode": "Category folders",
   "bgm_library_id": "",
+  "max_workers": 3,
+  "subhead": "Generator sets for onsite Bitcoin and industrial load",
+  "output_count": 3,
+  "copy_language": "zh",
+  "use_live_data": true,
+  "headline": "Gas Engines That Turn Field Gas Into Power",
+  "template_id": "impact_hud",
+  "cover_template_id": "industrial_engine_hook",
+  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
   "output_options": [
     "mp4"
   ],
-  "subhead": "Generator sets for onsite Bitcoin and industrial load",
-  "bgm_source": "Upload file",
-  "headline": "Gas Engines That Turn Field Gas Into Power",
-  "source_mode": "Category folders",
-  "use_live_data": true,
-  "copy_language": "zh",
   "cta": "Learn more at gasgx.com/roi",
-  "template_id": "impact_hud",
-  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate"
+  "follow_text": "Follow GasGx for more field power cases",
+  "bgm_source": "Local library"
 }

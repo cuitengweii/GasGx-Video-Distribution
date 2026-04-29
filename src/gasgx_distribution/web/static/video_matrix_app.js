@@ -40,6 +40,27 @@ const coverFields = [
   ["tint_opacity", "背景罩透明度", "rangeFloat", 0, 1], ["gradient_opacity", "渐变透明度", "rangeFloat", 0, 1],
   ["panel_opacity", "HUD 面板透明度", "rangeFloat", 0, 1],
 ];
+const videoTemplateFields = [
+  ["name", "模板名称", "text"],
+  ["show_hud", "显示 HUD", "checkbox"],
+  ["show_slogan", "显示口号", "checkbox"],
+  ["show_title", "显示标题", "checkbox"],
+  ["hud_bar_y", "HUD 背景 Y", "range", 0, 1920],
+  ["hud_bar_height", "HUD 背景高度", "range", 40, 320],
+  ["hud_x", "HUD 文本 X", "range", 0, 1080],
+  ["hud_y", "HUD 文本 Y", "range", 0, 1920],
+  ["hud_font_size", "HUD 字号", "range", 12, 72],
+  ["slogan_x", "口号 X", "range", 0, 1080],
+  ["slogan_y", "口号 Y", "range", 0, 1920],
+  ["slogan_font_size", "口号字号", "range", 18, 96],
+  ["title_x", "标题 X", "range", 0, 1080],
+  ["title_y", "标题 Y", "range", 0, 1920],
+  ["title_font_size", "标题字号", "range", 12, 72],
+  ["hud_bar_color", "HUD 背景色", "color"],
+  ["hud_bar_opacity", "HUD 透明度", "rangeFloat", 0, 1],
+  ["primary_color", "主文字色", "color"],
+  ["secondary_color", "副文字色", "color"],
+];
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -55,6 +76,7 @@ async function init() {
   renderSidebar(data);
   renderSource(data);
   renderTextSettings();
+  renderVideoTemplateEditor();
   renderCoverSelector();
   renderCoverEditor();
   await refreshAllPreviews();
@@ -71,7 +93,11 @@ function renderSidebar(data) {
   $("outputOptions").value = (state.output_options || ["mp4"])[0] || "mp4";
   $("videoTemplate").innerHTML = Object.entries(templates).map(([id, t]) => `<option value="${id}">${t.name || id}</option>`).join("");
   $("videoTemplate").value = selectedVideoTemplate;
-  $("videoTemplate").onchange = () => selectedVideoTemplate = $("videoTemplate").value;
+  $("videoTemplate").onchange = async () => {
+    selectedVideoTemplate = $("videoTemplate").value;
+    renderVideoTemplateEditor();
+    await refreshVideoTemplatePreview();
+  };
   $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("languageGroup", "copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], state.copy_language || "zh");
   renderBgm(data);
@@ -160,8 +186,75 @@ function renderCoverEditor() {
 }
 
 async function refreshAllPreviews() {
+  await refreshVideoTemplatePreview();
   await refreshMainPreview();
   await refreshGallery();
+}
+
+function renderVideoTemplateEditor() {
+  const template = templates[selectedVideoTemplate];
+  if (!template) return;
+  $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
+  const html = [`<h3>当前正文模板调整</h3>`];
+  for (const [key, label, type, min, max] of videoTemplateFields) {
+    const value = template[key] ?? "";
+    if (type === "checkbox") {
+      html.push(`<label class="check-row"><input data-key="${key}" type="checkbox" ${value ? "checked" : ""}><span>${label}</span></label>`);
+    } else if (type === "range") {
+      html.push(`<label>${label}<input data-key="${key}" type="range" min="${min}" max="${max}" value="${value}"><output>${value}</output></label>`);
+    } else if (type === "rangeFloat") {
+      html.push(`<label>${label}<input data-key="${key}" type="range" min="${min}" max="${max}" step="0.01" value="${value}"><output>${value}</output></label>`);
+    } else {
+      html.push(`<label>${label}<input data-key="${key}" type="${type}" value="${escapeHtml(value)}"></label>`);
+    }
+  }
+  html.push(`<button type="button" id="saveVideoTemplate">保存当前正文模板</button>`);
+  $("videoTemplateForm").innerHTML = html.join("");
+  $("videoTemplateForm").querySelectorAll("[data-key]").forEach((input) => {
+    const key = input.dataset.key;
+    if (input.type === "checkbox") input.checked = Boolean(template[key]);
+    else input.value = template[key] ?? input.value;
+    input.oninput = () => updateVideoTemplateField(input);
+    input.onchange = () => updateVideoTemplateField(input);
+  });
+  $("saveVideoTemplate").onclick = saveVideoTemplate;
+}
+
+function updateVideoTemplateField(input) {
+  const template = templates[selectedVideoTemplate];
+  const key = input.dataset.key;
+  if (input.type === "checkbox") template[key] = input.checked;
+  else if (input.type === "range") template[key] = Number(input.value);
+  else template[key] = input.value;
+  const out = input.parentElement.querySelector("output");
+  if (out) out.textContent = input.value;
+  refreshVideoTemplatePreview();
+}
+
+async function refreshVideoTemplatePreview() {
+  const template = templates[selectedVideoTemplate];
+  if (!template) return;
+  const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
+  $("videoTemplatePreview").src = data.data_url;
+  $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
+}
+
+function videoTemplatePreviewPayload(template) {
+  return {
+    template,
+    slogan: $("headline").value,
+    title: $("subhead").value,
+    hud_text: $("hudText").value,
+  };
+}
+
+async function saveVideoTemplate() {
+  await api(`/api/video-matrix/templates/${selectedVideoTemplate}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[selectedVideoTemplate])});
+  await saveState();
+  log(`已保存正文模板：${templates[selectedVideoTemplate].name || selectedVideoTemplate}`);
+  const option = Array.from($("videoTemplate").options).find((item) => item.value === selectedVideoTemplate);
+  if (option) option.textContent = templates[selectedVideoTemplate].name || selectedVideoTemplate;
+  renderVideoTemplateEditor();
 }
 
 async function refreshMainPreview() {

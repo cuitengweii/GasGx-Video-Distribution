@@ -10,8 +10,52 @@
   "recent_limits": {
     "category_A": 15,
     "category_B": 8,
-    "category_C": 6
+    "category_C": 6,
+    "category_D": 6,
+    "category_E": 6,
+    "category_F": 8,
+    "category_G": 6,
+    "category_H": 6,
+    "category_custom_1": 6
   },
+  "material_categories": [
+    {
+      "id": "category_A",
+      "label": "矿机部分"
+    },
+    {
+      "id": "category_B",
+      "label": "集装箱部分"
+    },
+    {
+      "id": "category_C",
+      "label": "发电机部分"
+    },
+    {
+      "id": "category_D",
+      "label": "各显示器部分"
+    },
+    {
+      "id": "category_E",
+      "label": "传感器部分"
+    },
+    {
+      "id": "category_F",
+      "label": "施工过程"
+    },
+    {
+      "id": "category_G",
+      "label": "测试动线"
+    },
+    {
+      "id": "category_H",
+      "label": "工厂全貌"
+    },
+    {
+      "id": "category_custom_1",
+      "label": "测试"
+    }
+  ],
   "video_duration_min": 8.0,
   "video_duration_max": 12.0,
   "default_title_prefix": "GasGx",

@@ -118,13 +118,13 @@ button, input, select, textarea { font: inherit; }
 .hero span, .muted { color: var(--muted); }
 .hero b { border:1px solid var(--line); border-radius:24px; padding:14px 24px; color:var(--green); background:rgba(93,214,44,.08); }
 .metrics { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:14px; margin-bottom:28px; }
-.metrics article, .source-panel, .cover-workbench, .side-editor {
+.metrics article, .source-panel, .video-template-workbench, .cover-workbench, .side-editor {
   background: rgba(24,25,24,.92); border:1px solid var(--line); border-radius:8px; box-shadow:0 18px 42px rgba(0,0,0,.32);
 }
 .metrics article { padding:18px; }
 .metrics span { display:block; color:var(--muted); font-size:13px; margin-bottom:12px; }
 .metrics strong { font-size:28px; }
-.source-panel, .cover-workbench, .side-editor { padding:18px; margin-bottom:18px; }
+.source-panel, .video-template-workbench, .cover-workbench, .side-editor { padding:18px; margin-bottom:18px; }
 .add-category-row {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) 112px;
@@ -466,6 +466,24 @@ button.secondary { background:#222; color:var(--text); border:1px solid #444; bo
 .compact-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
 .hidden { display:none !important; }
 .editor-grid { display:block; }
+.template-preview-editor { display:grid; grid-template-columns:minmax(300px,0.36fr) minmax(460px,0.64fr); gap:22px; align-items:start; }
+.compact-preview { min-height: 620px; }
+.video-template-workbench .phone { height:min(58vh, 620px); }
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin: 8px 14px 8px 0;
+}
+.check-row input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--green);
+}
+.check-row span {
+  color: var(--text);
+}
 .template-tabs { display:flex; flex-wrap:wrap; gap:10px; margin:12px 0 18px; }
 .template-tabs button { background:#202520; color:var(--text); border:1px solid #3b463b; box-shadow:none; padding:9px 12px; }
 .template-tabs button.active { background:var(--green); color:#071108; }
