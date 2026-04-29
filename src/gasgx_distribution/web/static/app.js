@@ -1,4 +1,4 @@
-﻿const PLATFORM_LABELS = {
+const PLATFORM_LABELS = {
   wechat: "视频号",
   douyin: "抖音",
   kuaishou: "快手",
@@ -62,6 +62,7 @@ const state = {
   aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
   systemHealth: null,
+  analytics: {},
 };
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -481,6 +482,55 @@ function renderStats() {
 
   const risks = ["违规作品 1 条，待整改", "1 个账号播放断崖下跌", "1 个账号长期断更休眠", "高掉粉账号预警 1 个"];
   document.querySelector("#risk-list").innerHTML = risks.map((risk) => `<article>${risk}</article>`).join("");
+  renderAnalyticsFromDatabase();
+}
+
+function renderAnalyticsFromDatabase() {
+  const analytics = state.analytics || {};
+  if (!Object.keys(analytics).length) return;
+  const overview = analytics.overview || [];
+  if (overview.length) {
+    document.querySelector("#stats-overview").innerHTML = [
+      { label: "矩阵账号总数", value: state.summary?.accounts || 0, change: "+8.4%", trend: "up" },
+      ...overview,
+    ].map((item) => `<div class="metric client-metric"><span>${item.label}</span><strong>${item.value}</strong><em class="${item.trend || "up"}">${item.change || ""}</em></div>`).join("");
+  }
+  const accounts = (analytics.account_rank || []).map((item) => item.row).filter(Boolean);
+  if (accounts.length) {
+    const headers = ["账号名称", "平台", "状态", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "分层", "异常"];
+    document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${accounts.map((row) => `<tr>${row.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`).join("")}</tbody></table><div class="table-pager">1 / 1 · ${accounts.length} 条账号</div>`;
+  }
+  const works = analytics.content_top || [];
+  if (works.length) document.querySelector("#content-top-list").innerHTML = works.map((item, index) => `<article class="rank-row"><span>${index + 1}</span><strong>${item.title}</strong><em>${item.value}</em><b>${item.tag}</b></article>`).join("");
+  const traffic = analytics.traffic || [];
+  if (traffic.length) document.querySelector("#traffic-list").innerHTML = traffic.map((item) => `<div><span>${item.label}</span><strong>${item.value}</strong></div>`).join("");
+  const conversions = analytics.conversion || [];
+  if (conversions.length) document.querySelector("#conversion-cards").innerHTML = conversions.map((item) => `<div><span>${item.label}</span><strong>${item.value}</strong></div>`).join("");
+  const ops = analytics.operation || [];
+  if (ops.length) document.querySelector("#operation-progress").innerHTML = ops.map((item) => `<div><div><strong>${item.label}</strong><span>${item.value}%</span></div><i style="--p:${item.value}%"></i></div>`).join("");
+  const risksFromDb = analytics.risk || [];
+  if (risksFromDb.length) document.querySelector("#risk-list").innerHTML = risksFromDb.map((item) => `<article>${item.text}</article>`).join("");
+}
+
+function initSystemInitialize() {
+  const button = document.querySelector("#system-initialize");
+  const stateNode = document.querySelector("#system-initialize-state");
+  if (!button || !stateNode) return;
+  button.addEventListener("click", async () => {
+    const restoreButton = setButtonLoading(button, "初始化中");
+    stateNode.innerHTML = `<div class="muted">正在补齐 Supabase 初始化数据...</div>`;
+    try {
+      const result = await api("/api/system/initialize", { method: "POST" });
+      const inserted = Object.entries(result.inserted || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "无";
+      const skipped = Object.entries(result.skipped || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "无";
+      stateNode.innerHTML = `<div><strong>${result.ok ? "初始化完成" : "初始化未完成"}</strong><span>${result.seed_version || result.error || ""}</span></div><div><span>新增</span><strong>${inserted}</strong></div><div><span>跳过</span><strong>${skipped}</strong></div>`;
+      await refresh();
+    } catch (error) {
+      stateNode.innerHTML = `<div><strong>初始化失败</strong><span>${error.message}</span></div>`;
+    } finally {
+      restoreButton();
+    }
+  });
 }
 
 function formatTime(seconds) {
@@ -857,10 +907,12 @@ async function refresh() {
     api("/api/summary"),
     api("/api/stats"),
     api("/api/system/supabase-health"),
+    api("/api/stats/analytics"),
   ]);
   if (optional[0].status === "fulfilled") state.summary = optional[0].value;
   if (optional[1].status === "fulfilled") state.stats = optional[1].value;
   if (optional[2].status === "fulfilled") state.systemHealth = optional[2].value;
+  if (optional[3].status === "fulfilled") state.analytics = optional[3].value;
   applyServerBrand(brand);
   renderSummary();
   renderPlatforms();
@@ -1369,6 +1421,7 @@ refresh().catch((error) => {
 setViewHeader(document.querySelector(".nav-btn.active")?.dataset.view || "overview");
 renderThemePalette();
 initBrandSettings();
+initSystemInitialize();
 initUserMenu();
 
 

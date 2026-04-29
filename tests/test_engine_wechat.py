@@ -177,6 +177,41 @@ def test_platform_login_confirm_wait_window_covers_qr_ttl() -> None:
     assert engine.PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS >= engine.WECHAT_LOGIN_QR_NOTICE_TTL_SECONDS
 
 
+def test_check_wechat_login_waits_for_local_scan_when_telegram_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    wait_calls: list[dict[str, Any]] = []
+    log_messages: list[str] = []
+
+    monkeypatch.setattr(
+        engine,
+        "inspect_platform_login_gate",
+        lambda *_args, **_kwargs: {"needs_login": True, "url": "https://channels.weixin.qq.com/login.html", "reason": "login_url"},
+    )
+    monkeypatch.setattr(engine, "_build_platform_login_diagnostics", lambda *_args, **_kwargs: {"root_cause_hint": "upstream_session_expired"})
+    monkeypatch.setattr(engine, "_mark_platform_session_login_required", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_begin_platform_login_wait", lambda *_args, **_kwargs: "wait-token")
+    monkeypatch.setattr(engine, "send_platform_login_qr_notification", lambda **_kwargs: {"ok": False, "sent": False, "error": "telegram notify not configured"})
+    monkeypatch.setattr(engine, "_send_platform_login_text_notification", lambda **_kwargs: {"ok": False, "sent": False, "error": "telegram notify not configured"})
+    monkeypatch.setattr(engine, "_clear_platform_login_signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda message: log_messages.append(str(message)))
+
+    def fake_wait(*_args: Any, **kwargs: Any) -> bool:
+        wait_calls.append(dict(kwargs))
+        return True
+
+    monkeypatch.setattr(engine, "_wait_for_platform_login_confirmation", fake_wait)
+
+    engine._check_wechat_login_ready(
+        object(),
+        chrome_user_data_dir="D:/profiles/wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        max_refresh_retry=0,
+    )
+
+    assert wait_calls
+    assert wait_calls[0]["wait_token"] == "wait-token"
+    assert any("Login notification unavailable" in item for item in log_messages)
+
+
 def test_wechat_persistent_login_url_prefers_create_entry_over_legacy_login_html(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(engine.PLATFORM_CREATE_POST_URLS, "wechat", "https://channels.weixin.qq.com/platform/post/create")
     monkeypatch.setitem(engine.PLATFORM_LOGIN_ENTRY_URLS, "wechat", "https://channels.weixin.qq.com/login.html")

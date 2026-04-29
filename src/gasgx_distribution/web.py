@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -11,12 +11,6 @@ from pydantic import BaseModel, Field
 
 from . import control_plane, service
 from .platforms import SUPPORTED_PLATFORMS
-from .public_settings import (
-    load_distribution_settings,
-    load_wechat_publish_settings,
-    save_distribution_settings,
-    save_wechat_publish_settings,
-)
 from .scheduler import scheduler_status, start_scheduler, trigger_matrix_wechat_job
 from .tenant import bind_tenant_database
 from .video_matrix_api import router as video_matrix_router
@@ -194,6 +188,10 @@ def create_app() -> FastAPI:
             "checks": checks,
         }
 
+    @app.post("/api/system/initialize")
+    def system_initialize() -> dict[str, Any]:
+        return service.initialize_system()
+
     @app.patch("/api/brand")
     def update_brand(payload: BrandSettingsPayload) -> dict[str, Any]:
         return service.save_brand_settings(_model_payload(payload, exclude_unset=True))
@@ -229,19 +227,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/settings/wechat-publish")
     def get_wechat_publish_settings() -> dict[str, Any]:
-        return load_wechat_publish_settings()
+        return service.load_wechat_publish_settings_db()
 
     @app.patch("/api/settings/wechat-publish")
     def update_wechat_publish_settings(payload: WechatPublishSettingsPayload) -> dict[str, Any]:
-        return save_wechat_publish_settings(_model_payload(payload))
+        return service.save_wechat_publish_settings_db(_model_payload(payload))
 
     @app.get("/api/settings/distribution")
     def get_distribution_settings() -> dict[str, Any]:
-        return load_distribution_settings()
+        return service.load_distribution_settings_db()
 
     @app.patch("/api/settings/distribution")
     def update_distribution_settings(payload: DistributionSettingsPayload) -> dict[str, Any]:
-        return save_distribution_settings(_model_payload(payload))
+        return service.save_distribution_settings_db(_model_payload(payload))
 
     @app.post("/api/settings/material-dir/open")
     def open_material_dir(payload: OpenMaterialDirPayload) -> dict[str, Any]:
@@ -390,6 +388,10 @@ def create_app() -> FastAPI:
     @app.get("/api/stats")
     def stats(account_id: int | None = Query(default=None), platform: str = Query(default="")) -> list[dict[str, Any]]:
         return service.list_stats(account_id=account_id, platform=platform)
+
+    @app.get("/api/stats/analytics")
+    def stats_analytics() -> dict[str, list[dict[str, Any]]]:
+        return service.list_analytics_items()
 
     @app.post("/api/stats/import")
     def import_stats(payload: dict[str, Any]) -> dict[str, Any]:

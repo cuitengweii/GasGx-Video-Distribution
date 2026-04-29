@@ -3,14 +3,11 @@ from __future__ import annotations
 import hashlib
 import random
 from collections import defaultdict
+from typing import Any
 
 from .hud import HudPayload
 from .models import ClipMetadata, SegmentPlan, VideoVariant
-from .settings import ProjectSettings
-
-
-SEQUENCE_PATTERN = ["category_A", "category_B", "category_A", "category_C"]
-SEGMENT_WINDOWS = [1.5, 3.4, 1.5, 3.0]
+from .settings import DEFAULT_COMPOSITION_SEQUENCE, ProjectSettings
 
 
 def plan_variants(
@@ -20,17 +17,22 @@ def plan_variants(
     beat_grid: list[float],
     output_count: int | None = None,
     seed: int = 42,
+    composition_sequence: list[dict[str, Any]] | None = None,
+    max_attempts: int | None = None,
+    existing_signatures: set[str] | None = None,
 ) -> list[VideoVariant]:
     count = output_count or settings.output_count
+    sequence = _resolve_sequence(composition_sequence or settings.composition_sequence)
+    attempts_limit = max(1, int(max_attempts or settings.max_variant_attempts))
+    historical_signatures = set(existing_signatures or set())
     buckets = defaultdict(list)
     for clip in clips:
         buckets[clip.category].append(clip)
-    for category in SEQUENCE_PATTERN:
+    for category, _target_window in sequence:
         if not buckets[category]:
             raise ValueError(
                 "Missing required category clips for "
-                f"{category}. Upload more varied clips or rename some files with keywords such as "
-                "'office/screen/roi' for category_B and 'logo/factory/brand' for category_C."
+                f"{category}. Upload or enable source videos for this category before generating."
             )
 
     rng = random.Random(seed)
@@ -39,9 +41,10 @@ def plan_variants(
 
     for sequence_number in range(1, count + 1):
         attempts = 0
-        while attempts < 50:
+        history_collision: VideoVariant | None = None
+        while attempts < attempts_limit:
             attempts += 1
-            segments = _pick_segments(buckets, beat_grid, rng)
+            segments = _pick_segments(buckets, beat_grid, rng, sequence)
             title = rng.choice(settings.titles)
             slogan = rng.choice(settings.slogans)
             lut_strength = round(1.0 + rng.uniform(-0.03, 0.03), 4)
@@ -52,35 +55,46 @@ def plan_variants(
             signature = _signature_for(segments, slogan, title, lut_strength, zoom, mirror, x_offset, y_offset, hud_payload.lines)
             if signature in seen_signatures:
                 continue
-            seen_signatures.add(signature)
-            variants.append(
-                VideoVariant(
-                    sequence_number=sequence_number,
-                    title=title,
-                    slogan=slogan,
-                    hud_lines=list(hud_payload.lines),
-                    lut_strength=lut_strength,
-                    zoom=zoom,
-                    mirror=mirror,
-                    x_offset=x_offset,
-                    y_offset=y_offset,
-                    segments=segments,
-                    signature=signature,
-                )
+            candidate = VideoVariant(
+                sequence_number=sequence_number,
+                title=title,
+                slogan=slogan,
+                hud_lines=list(hud_payload.lines),
+                lut_strength=lut_strength,
+                zoom=zoom,
+                mirror=mirror,
+                x_offset=x_offset,
+                y_offset=y_offset,
+                segments=segments,
+                signature=signature,
             )
+            if signature in historical_signatures:
+                history_collision = candidate
+                continue
+            seen_signatures.add(signature)
+            variants.append(candidate)
             break
         else:
+            if history_collision is not None:
+                seen_signatures.add(history_collision.signature)
+                variants.append(history_collision)
+                continue
             raise RuntimeError("Unable to produce a unique variant signature")
     return variants
 
 
-def _pick_segments(buckets: dict[str, list[ClipMetadata]], beat_grid: list[float], rng: random.Random) -> list[SegmentPlan]:
+def _pick_segments(
+    buckets: dict[str, list[ClipMetadata]],
+    beat_grid: list[float],
+    rng: random.Random,
+    sequence: list[tuple[str, float]],
+) -> list[SegmentPlan]:
     beat_pairs = list(zip(beat_grid, beat_grid[1:]))
     if not beat_pairs:
         raise ValueError("Beat grid is empty")
     selected: list[SegmentPlan] = []
     beat_index = 0
-    for index, (category, target_window) in enumerate(zip(SEQUENCE_PATTERN, SEGMENT_WINDOWS, strict=True)):
+    for index, (category, target_window) in enumerate(sequence):
         clip = rng.choice(buckets[category])
         start_time = max(0.0, round(rng.uniform(0.0, max(clip.duration - target_window, 0.0)), 3))
         duration = _align_duration(target_window, beat_pairs, beat_index)
@@ -95,6 +109,24 @@ def _pick_segments(buckets: dict[str, list[ClipMetadata]], beat_grid: list[float
             )
         )
     return selected
+
+
+def _resolve_sequence(raw: list[dict[str, Any]] | None) -> list[tuple[str, float]]:
+    sequence: list[tuple[str, float]] = []
+    for item in raw or []:
+        category_id = str(item.get("category_id") or "").strip()
+        if not category_id:
+            continue
+        try:
+            duration = float(item.get("duration", 0))
+        except (TypeError, ValueError):
+            continue
+        if duration <= 0:
+            continue
+        sequence.append((category_id, duration))
+    if not sequence:
+        sequence = [(str(item["category_id"]), float(item["duration"])) for item in DEFAULT_COMPOSITION_SEQUENCE]
+    return sequence
 
 
 def _align_duration(target_window: float, beat_pairs: list[tuple[float, float]], start_index: int) -> float:

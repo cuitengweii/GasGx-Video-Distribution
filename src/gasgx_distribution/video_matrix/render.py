@@ -53,7 +53,7 @@ def render_variant(
     intro_cover_path = None
     if cover_template_config is not None and cover_intro_seconds > 0:
         first_segment = variant.segments[0]
-        extract_frame(first_segment.clip.normalized_path, intro_frame, timestamp=first_segment.start_time)
+        _extract_frame_or_fallback(first_segment.clip.normalized_path, intro_frame, timestamp=first_segment.start_time)
         render_intro_cover(intro_frame, intro_cover, variant, settings, cover_template_config)
         intro_frame.unlink(missing_ok=True)
         intro_cover_path = intro_cover
@@ -61,7 +61,7 @@ def render_variant(
     if cover_template_config is not None and outro_text.strip() and outro_seconds > 0:
         last_segment = variant.segments[-1]
         timestamp = last_segment.start_time + max(0.0, last_segment.duration - 0.2)
-        extract_frame(last_segment.clip.normalized_path, outro_frame, timestamp=timestamp)
+        _extract_frame_or_fallback(last_segment.clip.normalized_path, outro_frame, timestamp=timestamp)
         render_outro_cover(outro_frame, outro_cover, settings, cover_template_config, outro_text.strip(), variant.hud_lines)
         outro_frame.unlink(missing_ok=True)
         outro_cover_path = outro_cover
@@ -129,6 +129,15 @@ def render_variant(
             encoding="utf-8",
         )
     return RenderedAsset(variant, video_path, cover_path, copy_path, manifest_path)
+
+
+def _extract_frame_or_fallback(video_path: Path, output_path: Path, timestamp: float) -> None:
+    extract_frame(video_path, output_path, timestamp=timestamp)
+    if output_path.exists():
+        return
+    extract_frame(video_path, output_path, timestamp=0.0)
+    if not output_path.exists():
+        raise FileNotFoundError(f"Unable to extract frame from {video_path}")
 
 
 def _build_filter_complex(

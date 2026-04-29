@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from gasgx_distribution import service
 from gasgx_distribution import db as dist_db
 from gasgx_distribution.supabase_backend import SupabaseError, SupabaseRestClient
+from gasgx_distribution.video_matrix.ingestion import _select_source_files
 from gasgx_distribution.web import create_app
 
 
@@ -240,6 +241,28 @@ def test_video_matrix_template_preview_returns_png(monkeypatch, tmp_path: Path) 
 
     assert response.status_code == 200
     assert response.json()["data_url"].startswith("data:image/png;base64,")
+
+
+def test_video_matrix_source_selection_respects_active_categories(tmp_path: Path) -> None:
+    categories = [{"id": "category_A", "label": "A"}, {"id": "category_B", "label": "B"}]
+    source_root = tmp_path / "incoming"
+    category_a = source_root / "category_A"
+    category_b = source_root / "category_B"
+    category_a.mkdir(parents=True)
+    category_b.mkdir(parents=True)
+    first = category_a / "machine.mp4"
+    second = category_b / "screen.mp4"
+    first.write_bytes(b"a")
+    second.write_bytes(b"b")
+
+    selected = _select_source_files(
+        source_root,
+        recent_limits={"category_A": 5, "category_B": 5},
+        categories=categories,
+        active_category_ids=["category_B"],
+    )
+
+    assert selected == [second]
 
 
 def test_control_upgrade_records_each_active_brand(monkeypatch, tmp_path: Path) -> None:
@@ -877,3 +900,68 @@ def test_open_browser_uses_account_specific_profile(monkeypatch, tmp_path: Path)
     assert calls
     assert calls[0]["auto_open_chrome"] is True
     assert "gasgx-x-01" in str(calls[0]["chrome_user_data_dir"])
+
+
+def test_supabase_system_initialize_is_idempotent(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.tables: dict[str, list[dict[str, object]]] = {"app_settings": [], "analytics_items": [], "app_seed_runs": []}
+
+        def select_one(self, table: str, *, filters: dict[str, object]) -> dict[str, object] | None:
+            for row in self.tables.setdefault(table, []):
+                if all(row.get(key) == value for key, value in filters.items()):
+                    return row
+            return None
+
+        def insert(self, table: str, payload: dict[str, object]) -> dict[str, object]:
+            row = dict(payload)
+            row.setdefault("id", len(self.tables.setdefault(table, [])) + 1)
+            self.tables[table].append(row)
+            return row
+
+        def upsert(self, table: str, payload: dict[str, object], *, on_conflict: str) -> dict[str, object]:
+            existing = self.select_one(table, filters={on_conflict: payload[on_conflict]})
+            if existing is not None:
+                existing.update(payload)
+                return existing
+            return self.insert(table, payload)
+
+    fake = FakeClient()
+    monkeypatch.setattr(service, "_brand_supabase", lambda: fake)
+
+    first = service.initialize_system()
+    second = service.initialize_system()
+
+    assert first["ok"] is True
+    assert first["inserted"]["distribution_settings"] == 1
+    assert first["inserted"]["video_matrix_state"] == 1
+    assert first["inserted"]["analytics_items"] > 1
+    assert second["skipped"]["distribution_settings"] == 1
+    assert second["skipped"]["video_matrix_state"] == 1
+    assert len(fake.tables["app_settings"]) == 2
+    assert len(fake.tables["app_seed_runs"]) == 1
+
+
+def test_supabase_distribution_settings_roundtrip(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+    store: dict[str, dict[str, object]] = {}
+
+    class FakeClient:
+        def select_one(self, table: str, *, filters: dict[str, object]) -> dict[str, object] | None:
+            return store.get(str(filters["setting_key"]))
+
+        def upsert(self, table: str, payload: dict[str, object], *, on_conflict: str) -> dict[str, object]:
+            store[str(payload["setting_key"])] = dict(payload)
+            return store[str(payload["setting_key"])]
+
+    monkeypatch.setattr(service, "_brand_supabase", lambda: FakeClient())
+
+    saved = service.save_distribution_settings_db({"common": {"material_dir": "runtime/a", "publish_mode": "draft", "upload_timeout": 120}})
+    loaded = service.load_distribution_settings_db()
+
+    assert saved["common"]["publish_mode"] == "draft"
+    assert loaded["common"]["material_dir"] == "runtime/a"

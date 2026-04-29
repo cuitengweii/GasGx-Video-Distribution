@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,15 +15,18 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "视频碎片素材目录" in html
     assert "手动上传素材" not in html
     assert "上传文字稿" not in html
+    assert "文案参考资料" in html
     assert "transcriptFile" not in html
     assert "transcriptText" in html
+    assert "generationConfirmModal" in html
     assert "点击查看" in html
     assert "bgmLibraryPopover" in html
     assert "materialCategories(data)" in app
     assert "settings.material_categories" in app
     assert "addMaterialCategory" in app
     assert "shortPath(data.source_dirs[category.id]" in app
-    assert '$("outputRoot").dataset.fullPath = settings.output_root' in app
+    assert "const outputRoot = state.output_root || settings.output_root" in app
+    assert '$("outputRoot").dataset.fullPath = outputRoot' in app
     assert "output_root: outputRootPath()" in app
     assert "toggleBgmLibraryPopover" in app
     assert "本地曲库列表" in app
@@ -102,6 +105,23 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "上传文件" not in app
     assert "bgmLibraryHint" in app
     assert 'bgm_library_id: ""' in app
+    assert "renderComposition" in app
+    assert "composition_sequence" in app
+    assert "composition_customized" in app
+    assert "defaultCompositionSequence" in app
+    assert "scheduleStateSave" in app
+    assert "const recentLimits = state.recent_limits || {}" in app
+    assert '$("transcriptText").value = state.transcript_text || ""' in app
+    assert 'transcript_text: $("transcriptText").value' in app
+    assert "confirmGeneration(statePayload)" in app
+    assert "generationConfirmHtml" in app
+    assert "启用素材分类" in app
+    assert "生成结构" in app
+    assert "本次算法框架" in app
+    assert "分析本地背景音乐节拍" in app
+    assert "data-composition-category" in app
+    assert "data-composition-duration" in app
+    assert "data-composition-remove" in app
     assert "/api/video-matrix/bgm/" in app
     assert ".help-dot" in css
     assert ".bgm-local-item" in css
@@ -119,3 +139,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'classList.toggle("error-message", isError)' in app
     assert ".job-status-card.error" in css
     assert "#jobMessage.error-message" in css
+    assert ".confirm-modal" in css
+    assert ".confirm-panel" in css
+    assert ".confirm-algorithm" in css
+    assert "composition-panel" in html
+    assert "videoDurationMax" in html
+    assert "video_duration_max" in app
+    assert "composition-rows" in css
+    assert "composition-row" in css

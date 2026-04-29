@@ -13,14 +13,24 @@ DEFAULT_UI_STATE: dict[str, Any] = {
     "cover_template_id": "industrial_engine_hook",
     "copy_language": "zh",
     "source_mode": "Category folders",
+    "active_category_ids": None,
+    "video_duration_max": 12.0,
     "use_live_data": True,
     "headline": "Gas Engines That Turn Field Gas Into Power",
     "subhead": "Generator sets for onsite Bitcoin and industrial load",
     "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
     "cta": "Learn more at gasgx.com/roi",
     "follow_text": "Follow GasGx for more field power cases",
+    "transcript_text": "",
     "bgm_source": "Local library",
     "bgm_library_id": "",
+    "composition_customized": False,
+    "composition_sequence": [
+        {"category_id": "category_A", "duration": 1.5},
+        {"category_id": "category_B", "duration": 3.4},
+        {"category_id": "category_A", "duration": 1.5},
+        {"category_id": "category_C", "duration": 3.0},
+    ],
 }
 
 

@@ -2,6 +2,10 @@
 
 This repository uses entity documents as the persistent handoff layer.
 
+## Help documents
+
+- `docs/help/DEVELOPER_VIDEO_GENERATION_ALGORITHM.md` - Developer-only reference for the current GasGx video-generation algorithm.
+
 ## Core documents
 
 - `docs/projects/cybercar/CYBERCAR_STATE.md`

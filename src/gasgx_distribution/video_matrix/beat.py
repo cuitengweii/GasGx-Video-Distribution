@@ -5,11 +5,20 @@ from pathlib import Path
 import numpy as np
 
 
-def detect_beat_grid(audio_path: Path, duration_hint: float, target_bpm_min: int = 120, target_bpm_max: int = 130) -> list[float]:
+def detect_beat_grid(
+    audio_path: Path,
+    duration_hint: float,
+    target_bpm_min: int = 120,
+    target_bpm_max: int = 130,
+    fallback_spacing: float = 0.48,
+    mode: str = "auto",
+) -> list[float]:
+    if mode == "fallback":
+        return _fallback_grid(duration_hint, spacing=fallback_spacing)
     try:
         import librosa
     except Exception:
-        return _fallback_grid(duration_hint)
+        return _fallback_grid(duration_hint, spacing=fallback_spacing)
 
     try:
         y, sr = librosa.load(str(audio_path), sr=None, mono=True)
@@ -23,7 +32,7 @@ def detect_beat_grid(audio_path: Path, duration_hint: float, target_bpm_min: int
             return _fallback_grid(duration_hint, spacing=spacing)
         return [round(float(point), 4) for point in beat_times]
     except Exception:
-        return _fallback_grid(duration_hint)
+        return _fallback_grid(duration_hint, spacing=fallback_spacing)
 
 
 def _fallback_grid(duration_hint: float, spacing: float = 0.48) -> list[float]:

@@ -1,19 +1,82 @@
 {
-  "source_mode": "Category folders",
-  "bgm_library_id": "",
-  "max_workers": 3,
-  "subhead": "Generator sets for onsite Bitcoin and industrial load",
   "output_count": 3,
-  "copy_language": "zh",
-  "use_live_data": true,
-  "headline": "Gas Engines That Turn Field Gas Into Power",
-  "template_id": "impact_hud",
-  "cover_template_id": "industrial_engine_hook",
-  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
+  "max_workers": 3,
   "output_options": [
     "mp4"
   ],
+  "template_id": "center_brand",
+  "cover_template_id": "generator_set_roi",
+  "copy_language": "zh",
+  "source_mode": "Category folders",
+  "active_category_ids": [
+    "category_A",
+    "category_B",
+    "category_C",
+    "category_D",
+    "category_E",
+    "category_F",
+    "category_G",
+    "category_H",
+    "category_custom_1"
+  ],
+  "use_live_data": true,
+  "headline": "Gas Engines That Turn Field Gas Into Power",
+  "subhead": "Generator sets for onsite Bitcoin and industrial load",
+  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
   "cta": "Learn more at gasgx.com/roi",
   "follow_text": "Follow GasGx for more field power cases",
-  "bgm_source": "Local library"
+  "bgm_source": "Local library",
+  "bgm_library_id": "",
+  "composition_customized": true,
+  "composition_sequence": [
+    {
+      "category_id": "category_A",
+      "duration": 2
+    },
+    {
+      "category_id": "category_B",
+      "duration": 1.5
+    },
+    {
+      "category_id": "category_C",
+      "duration": 2
+    },
+    {
+      "category_id": "category_D",
+      "duration": 1.5
+    },
+    {
+      "category_id": "category_E",
+      "duration": 2
+    },
+    {
+      "category_id": "category_F",
+      "duration": 1.5
+    },
+    {
+      "category_id": "category_G",
+      "duration": 2
+    },
+    {
+      "category_id": "category_H",
+      "duration": 1.5
+    },
+    {
+      "category_id": "category_custom_1",
+      "duration": 2
+    }
+  ],
+  "output_root": "G:\\GasGx Video Distribution\\runtime\\materials\\videos",
+  "recent_limits": {
+    "category_A": 8,
+    "category_B": 8,
+    "category_C": 6,
+    "category_D": 6,
+    "category_E": 6,
+    "category_F": 8,
+    "category_G": 6,
+    "category_H": 6,
+    "category_custom_1": 6
+  },
+  "transcript_text": "文案参考资料1\n文案参考资料2\n文案参考资料3"
 }

@@ -66,11 +66,12 @@ def ingest_sources(
     settings: ProjectSettings,
     source_root: Path | None = None,
     recent_limits: dict[str, int] | None = None,
+    active_category_ids: list[str] | None = None,
 ) -> list[ClipMetadata]:
     root = source_root or settings.source_root
     root.mkdir(parents=True, exist_ok=True)
     metadata_items: list[ClipMetadata] = []
-    for source_path in _select_source_files(root, recent_limits, settings.material_categories):
+    for source_path in _select_source_files(root, recent_limits, settings.material_categories, active_category_ids):
         category = infer_category(source_path, settings.material_categories) or "uncategorized"
         clip_id = hashlib.sha1(str(source_path).encode("utf-8")).hexdigest()[:12]
         normalized_path = settings.library_root / category / f"{clip_id}.mp4"
@@ -118,16 +119,20 @@ def _select_source_files(
     root: Path,
     recent_limits: dict[str, int] | None,
     categories: list[dict[str, str]] | None = None,
+    active_category_ids: list[str] | None = None,
 ) -> list[Path]:
     files = [
         path
         for path in root.rglob("*")
         if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
     ]
+    known_categories = category_ids(categories)
+    active_categories = {str(item).strip() for item in active_category_ids or [] if str(item).strip()}
+    if active_category_ids is not None:
+        files = [path for path in files if infer_category(path, categories) in active_categories]
     if not recent_limits:
         return sorted(files)
 
-    known_categories = category_ids(categories)
     grouped: dict[str, list[Path]] = {category: [] for category in set(known_categories) | set(recent_limits.keys())}
     other: list[Path] = []
     for path in files:

@@ -75,7 +75,9 @@ async function init() {
   selectedVideoTemplate = state.template_id || Object.keys(templates)[0];
   renderSidebar(data);
   renderSource(data);
+  renderComposition(data);
   renderTextSettings();
+  renderVideoTemplateSelector();
   renderVideoTemplateEditor();
   renderCoverSelector();
   renderCoverEditor();
@@ -85,21 +87,18 @@ async function init() {
 function renderSidebar(data) {
   $("outputCount").value = state.output_count || 3;
   $("maxWorkers").value = state.max_workers || 3;
+  $("videoDurationMax").value = state.video_duration_max || settings.video_duration_max || 12;
   syncNumber("outputCount");
+  syncNumber("videoDurationMax");
   syncRange("maxWorkers");
-  $("outputRoot").dataset.fullPath = settings.output_root;
-  $("outputRoot").title = settings.output_root;
-  $("outputRoot").value = shortPath(settings.output_root);
+  const outputRoot = state.output_root || settings.output_root;
+  $("outputRoot").dataset.fullPath = outputRoot;
+  $("outputRoot").title = outputRoot;
+  $("outputRoot").value = shortPath(outputRoot);
   $("outputOptions").value = (state.output_options || ["mp4"])[0] || "mp4";
-  $("videoTemplate").innerHTML = Object.entries(templates).map(([id, t]) => `<option value="${id}">${t.name || id}</option>`).join("");
-  $("videoTemplate").value = selectedVideoTemplate;
-  $("videoTemplate").onchange = async () => {
-    selectedVideoTemplate = $("videoTemplate").value;
-    renderVideoTemplateEditor();
-    await refreshVideoTemplatePreview();
-  };
+  $("outputOptions").onchange = scheduleStateSave;
   $("openOutput").onclick = () => openFolder(outputRootPath());
-  renderRadio("languageGroup", "copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], state.copy_language || "zh");
+  renderRadio("languageGroup", "copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], state.copy_language || "zh", scheduleStateSave);
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
   document.querySelector(".sidebar details summary")?.addEventListener("click", (event) => {
@@ -113,15 +112,30 @@ function renderSource(data) {
   $("metricCount").textContent = $("outputCount").value;
   $("metricWorkers").textContent = $("maxWorkers").value;
   const categories = materialCategories(data);
+  const activeCategoryIds = activeCategories(categories);
   $("sourceDirs").innerHTML = categories.map((category) =>
-    `<div class="dir-row"><span class="badge">${escapeHtml(category.label)}</span><code title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(shortPath(data.source_dirs[category.id] || ""))}</code><button data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开</button></div>`).join("");
+    `<div class="dir-row"><label class="category-toggle"><input type="checkbox" data-category-id="${escapeHtml(category.id)}" ${activeCategoryIds.includes(category.id) ? "checked" : ""}><span class="badge">${escapeHtml(category.label)}</span></label><code title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(shortPath(data.source_dirs[category.id] || ""))}</code><button data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开</button></div>`).join("");
   $("sourceDirs").querySelectorAll("button").forEach((btn) => btn.onclick = () => openFolder(btn.dataset.path));
+  $("sourceDirs").querySelectorAll("[data-category-id]").forEach((input) => input.onchange = () => {
+    state.active_category_ids = selectedActiveCategoryIds(categories);
+    if (!state.composition_customized) {
+      state.composition_sequence = defaultCompositionSequence(categories);
+      renderComposition(data);
+    }
+    updateRecentLimitVisibility(categories);
+    saveState();
+  });
   $("addCategory").onclick = addMaterialCategory;
   $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材，优先取每类最新文件，再按节奏窗口自动组合混剪。";
-  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], "Category folders", updateSourceMode);
+  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], state.source_mode || "Category folders", () => {
+    updateSourceMode();
+    scheduleStateSave();
+  });
+  const recentLimits = state.recent_limits || {};
   $("recentLimits").innerHTML = categories.map((category) =>
-    `<label>${escapeHtml(category.label)}最新素材<input id="${category.id}" type="range" min="1" max="50" value="${settings.recent_limits[category.id] || 8}"><output id="${category.id}Value"></output></label>`).join("");
+    `<label>${escapeHtml(category.label)}最新素材<input id="${category.id}" type="range" min="1" max="50" value="${recentLimits[category.id] || settings.recent_limits[category.id] || 8}"><output id="${category.id}Value"></output></label>`).join("");
   categories.forEach((category) => syncRange(category.id));
+  updateRecentLimitVisibility(categories);
   updateSourceMode();
 }
 
@@ -137,7 +151,105 @@ async function addMaterialCategory() {
   const data = await api("/api/video-matrix/state");
   state = data.ui_state; settings = data.settings;
   renderSource(data);
+  renderComposition(data);
   log(`已添加素材目录：${label}`);
+}
+
+function renderComposition(data = { settings }) {
+  const categories = materialCategories(data);
+  const savedRows = Array.isArray(state.composition_sequence) && state.composition_sequence.length
+    ? normalizeCompositionSequence(state.composition_sequence)
+    : [];
+  const rows = savedRows.length ? savedRows : defaultCompositionSequence(categories);
+  state.composition_sequence = rows;
+  $("compositionRows").innerHTML = rows.map((row, index) => {
+    const options = categories.map((category) =>
+      `<option value="${escapeHtml(category.id)}" ${category.id === row.category_id ? "selected" : ""}>${escapeHtml(category.label)} / ${escapeHtml(category.id)}</option>`
+    ).join("");
+    return `
+      <div class="composition-row" data-index="${index}">
+        <span>${index + 1}</span>
+        <select data-composition-category>${options}</select>
+        <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" />
+        <button type="button" data-composition-remove>删除</button>
+      </div>`;
+  }).join("");
+  $("compositionRows").querySelectorAll(".composition-row").forEach((row) => {
+    row.querySelector("[data-composition-category]").onchange = () => {
+      updateCompositionState(true);
+      scheduleStateSave();
+    };
+    row.querySelector("[data-composition-duration]").oninput = () => {
+      updateCompositionState(true);
+      scheduleStateSave();
+    };
+    row.querySelector("[data-composition-remove]").onclick = () => removeCompositionRow(Number(row.dataset.index));
+  });
+  $("addCompositionRow").onclick = addCompositionRow;
+}
+
+function compositionSequence() {
+  const source = Array.isArray(state.composition_sequence) && state.composition_sequence.length
+    ? state.composition_sequence
+    : settings.composition_sequence;
+  return normalizeCompositionSequence(source);
+}
+
+function defaultCompositionSequence(categories) {
+  const selected = activeCategories(categories);
+  if (selected.length) {
+    return selected.map((categoryId) => ({category_id: categoryId, duration: defaultDurationForCategory(categoryId)}));
+  }
+  const fallback = settings.composition_sequence || [
+    {category_id: "category_A", duration: 1.5},
+    {category_id: "category_B", duration: 3.4},
+    {category_id: "category_A", duration: 1.5},
+    {category_id: "category_C", duration: 3.0},
+  ];
+  const available = new Set(categories.map((category) => category.id));
+  return normalizeCompositionSequence(fallback).filter((row) => available.has(row.category_id));
+}
+
+function defaultDurationForCategory(categoryId) {
+  const existing = normalizeCompositionSequence(settings.composition_sequence)
+    .find((row) => row.category_id === categoryId);
+  return existing?.duration || 2.0;
+}
+
+function normalizeCompositionSequence(source) {
+  return (Array.isArray(source) ? source : [])
+    .map((row) => ({category_id: String(row.category_id || "").trim(), duration: Number(row.duration || 0)}))
+    .filter((row) => row.category_id && row.duration > 0);
+}
+
+function updateCompositionState(markCustomized = false) {
+  if (markCustomized) state.composition_customized = true;
+  state.composition_sequence = [...document.querySelectorAll(".composition-row")].map((row) => ({
+    category_id: row.querySelector("[data-composition-category]").value,
+    duration: Number(row.querySelector("[data-composition-duration]").value || 1),
+  })).filter((row) => row.category_id && row.duration > 0);
+}
+
+function addCompositionRow() {
+  updateCompositionState();
+  state.composition_customized = true;
+  const categories = materialCategories({ settings });
+  const category = categories[0]?.id || "category_A";
+  state.composition_sequence.push({category_id: category, duration: 2.0});
+  renderComposition({ settings });
+  saveState();
+}
+
+function removeCompositionRow(index) {
+  updateCompositionState();
+  if (state.composition_sequence.length <= 1) {
+    log("生成结构至少保留 1 个片段。");
+    return;
+  }
+  state.composition_sequence.splice(index, 1);
+  state.composition_customized = true;
+  renderComposition({ settings });
+  saveState();
 }
 
 function renderTextSettings() {
@@ -146,6 +258,10 @@ function renderTextSettings() {
   $("cta").value = state.cta || "";
   $("followText").value = state.follow_text || "";
   $("hudText").value = state.hud_text || "";
+  $("transcriptText").value = state.transcript_text || "";
+  ["headline", "subhead", "cta", "followText", "hudText", "transcriptText"].forEach((id) => {
+    $(id).addEventListener("input", scheduleStateSave);
+  });
   ["headline", "subhead", "cta", "hudText"].forEach((id) => $(id).addEventListener("input", debounce(refreshAllPreviews, 250)));
   $("generateBtn").onclick = generate;
 }
@@ -157,7 +273,17 @@ function renderCoverSelector() {
     selectedCover = btn.dataset.id;
     renderCoverSelector(); renderCoverEditor(); await refreshAllPreviews();
   });
-  $("coverStatus").textContent = `第一屏封面：${coverTemplates[selectedCover]?.name || selectedCover}`;
+}
+
+function renderVideoTemplateSelector() {
+  $("videoTemplateSelector").innerHTML = Object.entries(templates).map(([id, item]) =>
+    `<button class="${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${item.name || id}</button>`).join("");
+  $("videoTemplateSelector").querySelectorAll("button").forEach((btn) => btn.onclick = async () => {
+    selectedVideoTemplate = btn.dataset.id;
+    renderVideoTemplateSelector();
+    renderVideoTemplateEditor();
+    await refreshVideoTemplatePreview();
+  });
 }
 
 function renderCoverEditor() {
@@ -187,6 +313,7 @@ function renderCoverEditor() {
 
 async function refreshAllPreviews() {
   await refreshVideoTemplatePreview();
+  await refreshVideoTemplateGallery();
   await refreshMainPreview();
   await refreshGallery();
 }
@@ -239,6 +366,22 @@ async function refreshVideoTemplatePreview() {
   $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
 }
 
+async function refreshVideoTemplateGallery() {
+  const cards = [];
+  for (const [id, template] of Object.entries(templates)) {
+    const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
+    cards.push(`<div class="cover-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}"><img src="${data.data_url}"><span>${id} / ${template.name || id}</span></div>`);
+  }
+  $("videoTemplateGallery").innerHTML = cards.join("");
+  $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => card.onclick = async () => {
+    selectedVideoTemplate = card.dataset.id;
+    renderVideoTemplateSelector();
+    renderVideoTemplateEditor();
+    await refreshVideoTemplatePreview();
+    await refreshVideoTemplateGallery();
+  });
+}
+
 function videoTemplatePreviewPayload(template) {
   return {
     template,
@@ -252,8 +395,7 @@ async function saveVideoTemplate() {
   await api(`/api/video-matrix/templates/${selectedVideoTemplate}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[selectedVideoTemplate])});
   await saveState();
   log(`已保存正文模板：${templates[selectedVideoTemplate].name || selectedVideoTemplate}`);
-  const option = Array.from($("videoTemplate").options).find((item) => item.value === selectedVideoTemplate);
-  if (option) option.textContent = templates[selectedVideoTemplate].name || selectedVideoTemplate;
+  renderVideoTemplateSelector();
   renderVideoTemplateEditor();
 }
 
@@ -292,6 +434,11 @@ async function saveState() {
   log("当前设置已保存");
 }
 
+const scheduleStateSave = debounce(async () => {
+  state = collectState();
+  await api("/api/video-matrix/state", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(state)});
+}, 500);
+
 async function generate() {
   const button = $("generateBtn");
   if (lastPreviewPath && button.dataset.mode === "preview") {
@@ -300,16 +447,17 @@ async function generate() {
   }
   lastPreviewPath = "";
   button.dataset.mode = "generate";
-  button.disabled = true;
-  button.textContent = "提交中...";
-  updateJobStatus({ status: "queued", stage: "queued", progress: 0, message: "正在提交生成任务..." });
   try {
     const statePayload = collectState();
+    if (!(await confirmGeneration(statePayload))) return;
+    button.disabled = true;
+    button.textContent = "提交中...";
+    updateJobStatus({ status: "queued", stage: "queued", progress: 0, message: "正在提交生成任务..." });
     if (!bgmLibraryState.local.length) {
       throw new Error("本地背景音乐库还没有可用 MP3。请把 MP3 文件放入左侧问号提示里的目录，然后刷新页面。");
     }
     const form = new FormData();
-    form.append("payload", JSON.stringify({...statePayload, transcript_text: $("transcriptText").value}));
+    form.append("payload", JSON.stringify(statePayload));
     [...($("sourceFiles")?.files || [])].forEach((file) => form.append("source_files", file));
     const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
     updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
@@ -318,7 +466,7 @@ async function generate() {
     updateJobStatus({ status: "error", stage: "error", progress: 0, message: error.message, error: error.message });
   } finally {
     button.disabled = false;
-    if (!lastPreviewPath) button.textContent = "生成 Vibe Matrix";
+    if (!lastPreviewPath) button.textContent = "立即生成";
   }
 }
 
@@ -336,18 +484,107 @@ async function pollJob(jobId) {
   } else if (job.status !== "error") setTimeout(() => pollJob(jobId), 1200);
 }
 
+function confirmGeneration(statePayload) {
+  const modal = $("generationConfirmModal");
+  $("generationConfirmBody").innerHTML = generationConfirmHtml(statePayload);
+  modal.classList.remove("hidden");
+  document.body.classList.add("confirm-modal-open");
+  return new Promise((resolve) => {
+    const close = (confirmed) => {
+      modal.classList.add("hidden");
+      document.body.classList.remove("confirm-modal-open");
+      $("confirmSubmit").onclick = null;
+      $("confirmCancel").onclick = null;
+      $("confirmClose").onclick = null;
+      resolve(confirmed);
+    };
+    $("confirmSubmit").onclick = () => close(true);
+    $("confirmCancel").onclick = () => close(false);
+    $("confirmClose").onclick = () => close(false);
+  });
+}
+
+function generationConfirmHtml(statePayload) {
+  const categories = materialCategories({ settings });
+  const categoryNames = Object.fromEntries(categories.map((category) => [category.id, category.label]));
+  const active = statePayload.active_category_ids || [];
+  const activeRows = active.length
+    ? active.map((id) => `<tr><td>${escapeHtml(categoryNames[id] || id)}</td><td>${escapeHtml(id)}</td><td>${statePayload.recent_limits?.[id] || 0}</td></tr>`).join("")
+    : `<tr><td colspan="3">未选择素材分类</td></tr>`;
+  const compositionRows = (statePayload.composition_sequence || []).map((row, index) =>
+    `<tr><td>${index + 1}</td><td>${escapeHtml(categoryNames[row.category_id] || row.category_id)}</td><td>${escapeHtml(row.category_id)}</td><td>${Number(row.duration || 0).toFixed(1)} 秒</td></tr>`
+  ).join("") || `<tr><td colspan="4">未配置生成结构</td></tr>`;
+  return `
+    <div class="confirm-summary">
+      <div><span>生成数量</span><strong>${statePayload.output_count}</strong></div>
+      <div><span>并行线程</span><strong>${statePayload.max_workers}</strong></div>
+      <div><span>最大节拍分析</span><strong>${statePayload.video_duration_max} 秒</strong></div>
+      <div><span>输出格式</span><strong>${escapeHtml((statePayload.output_options || []).join(", "))}</strong></div>
+    </div>
+    <section>
+      <h4>输出目录</h4>
+      <code>${escapeHtml(statePayload.output_root)}</code>
+    </section>
+    <section>
+      <h4>启用素材分类</h4>
+      <table><thead><tr><th>分类</th><th>ID</th><th>最近素材</th></tr></thead><tbody>${activeRows}</tbody></table>
+    </section>
+    <section>
+      <h4>生成结构</h4>
+      <table><thead><tr><th>#</th><th>分类</th><th>ID</th><th>片段秒数</th></tr></thead><tbody>${compositionRows}</tbody></table>
+    </section>
+    <section class="confirm-algorithm">
+      <h4>本次算法框架</h4>
+      <ol>
+        <li>按启用分类读取素材目录，每类最多取“最近素材”数量对应的新文件。</li>
+        <li>将候选素材归一化为 1080:1920、60fps 的短视频片段库。</li>
+        <li>按“生成结构”的分类顺序和片段秒数，为每条视频抽取不同素材片段。</li>
+        <li>分析本地背景音乐节拍，把片段切换点尽量对齐节奏窗口。</li>
+        <li>按当前模板、HUD 文本和文案参考资料并行渲染，导出到最终视频目录。</li>
+      </ol>
+    </section>
+  `;
+}
+
 function collectState() {
   const categories = Array.isArray(settings.material_categories) ? settings.material_categories : [];
+  updateCompositionState();
   return {
     output_count: Number($("outputCount").value), max_workers: Number($("maxWorkers").value),
+    video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 12),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: radioValue("copy_language"),
     source_mode: radioValue("source_mode"), use_live_data: true,
     headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value,
     follow_text: $("followText").value, hud_text: $("hudText").value,
+    transcript_text: $("transcriptText").value,
     bgm_source: "Local library", bgm_library_id: "",
+    composition_sequence: state.composition_sequence,
+    composition_customized: Boolean(state.composition_customized),
+    active_category_ids: selectedActiveCategoryIds(categories),
     recent_limits: Object.fromEntries(categories.map((category) => [category.id, Number($(category.id)?.value || settings.recent_limits[category.id] || 8)]))
   };
+}
+
+function activeCategories(categories) {
+  const saved = Array.isArray(state.active_category_ids) ? state.active_category_ids : [];
+  return saved.length ? saved : categories.map((category) => category.id);
+}
+
+function selectedActiveCategoryIds(categories) {
+  const selected = categories
+    .map((category) => document.querySelector(`[data-category-id="${CSS.escape(category.id)}"]`))
+    .filter((input) => input?.checked)
+    .map((input) => input.dataset.categoryId);
+  return selected;
+}
+
+function updateRecentLimitVisibility(categories) {
+  const selected = new Set(selectedActiveCategoryIds(categories));
+  categories.forEach((category) => {
+    const input = $(category.id);
+    if (input) input.closest("label").classList.toggle("disabled-category", !selected.has(category.id));
+  });
 }
 
 function materialCategories(data = { settings }) {
@@ -501,8 +738,8 @@ function renderRadio(containerId, name, options, selected, onchange) {
   document.querySelectorAll(`input[name="${name}"]`).forEach(r => r.onchange = onchange || (() => {}));
 }
 function radioValue(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value || ""; }
-function syncNumber(id) { const el = $(id); if (!el) return; el.oninput = () => { let value = Number(el.value || 3); value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value)); if (String(value) !== el.value) el.value = value; if (id === "outputCount") $("metricCount").textContent = el.value; }; }
-function syncRange(id) { const el = $(id), out = $(`${id}Value`); if (!el || !out) return; out.textContent = el.value; el.oninput = () => { out.textContent = el.value; if (id === "outputCount") $("metricCount").textContent = el.value; if (id === "maxWorkers") $("metricWorkers").textContent = el.value; }; }
+function syncNumber(id) { const el = $(id); if (!el) return; el.oninput = () => { let value = Number(el.value || 3); value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value)); if (String(value) !== el.value) el.value = value; if (id === "outputCount") $("metricCount").textContent = el.value; scheduleStateSave(); }; }
+function syncRange(id) { const el = $(id), out = $(`${id}Value`); if (!el || !out) return; out.textContent = el.value; el.oninput = () => { out.textContent = el.value; if (id === "outputCount") $("metricCount").textContent = el.value; if (id === "maxWorkers") $("metricWorkers").textContent = el.value; scheduleStateSave(); }; }
 function setMulti(select, values) { [...select.options].forEach(o => o.selected = values.includes(o.value)); }
 function openFolder(path) { return api("/api/video-matrix/open-folder", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path})}); }
 function updateJobStatus(job) {

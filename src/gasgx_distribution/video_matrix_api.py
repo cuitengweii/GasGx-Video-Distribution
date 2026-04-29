@@ -18,6 +18,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from . import service
 from .video_matrix.cover import render_cover_preview_image
 from .video_matrix.cover_templates import DEFAULT_COVER_TEMPLATE_ID, load_cover_templates, require_cover_template
 from .video_matrix.ingestion import VIDEO_EXTENSIONS, ensure_category_dirs
@@ -37,6 +38,7 @@ UI_STATE_PATH = CONFIG_DIR / "ui_state.json"
 BGM_LIBRARY_PATH = CONFIG_DIR / "bgm_library.json"
 TMP_DIR = ROOT / "runtime" / "video_matrix" / "web_uploads"
 BGM_DIR = ROOT / "runtime" / "video_matrix" / "bgm"
+SIGNATURE_HISTORY_PATH = ROOT / "runtime" / "video_matrix" / "signature_history.json"
 PIXABAY_INDUSTRY_TRACKS = [
     {"title": "Corporate Industry", "artist": "Ivan_Luzan", "duration": "2:29", "source_url": "https://pixabay.com/music/upbeat-corporate-industry-408747/"},
     {"title": "Industry", "artist": "MomotMusic", "duration": "2:11", "source_url": "https://pixabay.com/music/search/industry/"},
@@ -70,6 +72,23 @@ class BgmDownloadPayload(BaseModel):
 
 @router.get("/state")
 def get_state() -> dict[str, Any]:
+    stored = service._app_setting("video_matrix_state") if service.brand_database_backend() == "supabase" else None
+    if isinstance(stored, dict):
+        settings_payload = _merge_settings_payload(stored.get("settings") or {})
+        source_root = Path(settings_payload.get("source_root") or _settings().source_root)
+        categories = settings_payload.get("material_categories") or []
+        BGM_DIR.mkdir(parents=True, exist_ok=True)
+        return {
+            "settings": settings_payload,
+            "ui_state": stored.get("ui_state") or {},
+            "templates": stored.get("templates") or {},
+            "cover_templates": stored.get("cover_templates") or {},
+            "bgm_library": stored.get("bgm_library") or {},
+            "local_bgm_dir": str(BGM_DIR),
+            "local_bgm": [path.name for path in _list_local_bgm_files(BGM_DIR)],
+            "category_counts": _count_category_files(source_root, categories),
+            "source_dirs": {category["id"]: str(source_root / category["id"]) for category in categories},
+        }
     settings = _settings()
     ensure_category_dirs(settings.source_root, settings.material_categories)
     BGM_DIR.mkdir(parents=True, exist_ok=True)
@@ -91,6 +110,13 @@ def get_state() -> dict[str, Any]:
 
 @router.post("/state")
 def post_state(payload: dict[str, Any]) -> dict[str, Any]:
+    if service.brand_database_backend() == "supabase":
+        current = service._app_setting("video_matrix_state", {}) or {}
+        state = dict(current.get("ui_state") or {})
+        state.update(payload)
+        current["ui_state"] = state
+        service._save_app_setting("video_matrix_state", current)
+        return {"ok": True, "ui_state": state}
     state = load_ui_state(UI_STATE_PATH)
     state.update(payload)
     save_ui_state(UI_STATE_PATH, state)
@@ -102,6 +128,24 @@ def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
     label = payload.label.strip()
     if not label:
         raise HTTPException(status_code=400, detail="label is required")
+    if service.brand_database_backend() == "supabase":
+        current = service._app_setting("video_matrix_state", {}) or {}
+        settings_payload = dict(current.get("settings") or _settings_payload(_settings()))
+        categories = list(settings_payload.get("material_categories") or [])
+        existing_ids = {str(item.get("id") or "") for item in categories if isinstance(item, dict)}
+        next_index = 1
+        while f"category_custom_{next_index}" in existing_ids:
+            next_index += 1
+        category = {"id": f"category_custom_{next_index}", "label": label}
+        categories.append(category)
+        settings_payload["material_categories"] = categories
+        recent_limits = dict(settings_payload.get("recent_limits") or {})
+        recent_limits[category["id"]] = 6
+        settings_payload["recent_limits"] = recent_limits
+        current["settings"] = settings_payload
+        service._save_app_setting("video_matrix_state", current)
+        ensure_category_dirs(Path(settings_payload["source_root"]), categories)
+        return {"ok": True, "category": category}
     config = _load_json(CONFIG_PATH, {})
     categories = list(config.get("material_categories") or [])
     existing_ids = {str(item.get("id") or "") for item in categories if isinstance(item, dict)}
@@ -122,6 +166,13 @@ def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
 
 @router.post("/templates/{template_id}")
 def save_video_template(template_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if service.brand_database_backend() == "supabase":
+        current = service._app_setting("video_matrix_state", {}) or {}
+        templates = dict(current.get("templates") or {})
+        templates[template_id] = payload
+        current["templates"] = templates
+        service._save_app_setting("video_matrix_state", current)
+        return {"ok": True, "template_id": template_id, "template": payload}
     templates = load_templates(TEMPLATES_PATH)
     templates[template_id] = payload
     save_templates(TEMPLATES_PATH, templates)
@@ -145,6 +196,13 @@ def template_preview(payload: dict[str, Any]) -> dict[str, str]:
 
 @router.post("/cover-templates/{template_id}")
 def save_cover_template(template_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if service.brand_database_backend() == "supabase":
+        current = service._app_setting("video_matrix_state", {}) or {}
+        templates = dict(current.get("cover_templates") or {})
+        templates[template_id] = payload
+        current["cover_templates"] = templates
+        service._save_app_setting("video_matrix_state", current)
+        return {"ok": True, "template_id": template_id, "template": payload}
     templates = load_cover_templates(COVER_TEMPLATES_PATH)
     templates[template_id] = payload
     COVER_TEMPLATES_PATH.write_text(json.dumps(templates, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -243,12 +301,28 @@ async def generate(
     bgm_path = await _resolve_bgm_path(request, temp_root, bgm_file)
     source_root = await _resolve_source_root(request, temp_root, source_files or [])
     _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    if service.brand_database_backend() == "supabase":
+        service._brand_supabase().insert(
+            "video_matrix_jobs",
+            {"job_key": job_id, "status": "queued", "progress": 0, "message": "Queued", "request_json": request, "assets_json": [], "error": "", "created_at": service.now_ts(), "updated_at": service.now_ts()},
+        )
     _executor.submit(_run_generate_job, job_id, request, bgm_path, source_root)
     return {"job_id": job_id}
 
 
 @router.get("/jobs/{job_id}")
 def job_status(job_id: str) -> dict[str, Any]:
+    if service.brand_database_backend() == "supabase":
+        row = service._brand_supabase().select_one("video_matrix_jobs", filters={"job_key": job_id})
+        if row is None:
+            raise HTTPException(status_code=404, detail="Unknown job")
+        return {
+            "status": row.get("status"),
+            "progress": row.get("progress"),
+            "message": row.get("message"),
+            "assets": row.get("assets_json") or [],
+            "error": row.get("error") or "",
+        }
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Unknown job")
     return _jobs[job_id]
@@ -258,6 +332,12 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
     try:
         settings = _settings()
         settings.hud_enable_live_data = bool(request.get("use_live_data", True))
+        if request.get("video_duration_max") is not None:
+            settings.video_duration_max = max(
+                settings.video_duration_min,
+                float(request.get("video_duration_max") or settings.video_duration_max),
+            )
+        existing_signatures = _load_signature_history(settings)
         templates = load_templates(TEMPLATES_PATH)
         cover_templates = load_cover_templates(COVER_TEMPLATES_PATH)
         template_id = str(request.get("template_id") or DEFAULT_TEMPLATE_ID)
@@ -265,9 +345,12 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
         template_config = templates.get(template_id) or next(iter(templates.values()))
         cover_template_config = require_cover_template(cover_templates, cover_template_id)
         recent_limits = request.get("recent_limits") if request.get("source_mode") == "Category folders" else None
+        active_category_ids = request.get("active_category_ids") if request.get("source_mode") == "Category folders" else None
 
         def progress(stage: str, value: float, message: str) -> None:
             _jobs[job_id].update({"status": "running", "stage": stage, "progress": value, "message": message})
+            if service.brand_database_backend() == "supabase":
+                service._brand_supabase().update("video_matrix_jobs", {"status": "running", "stage": stage, "progress": value, "message": message, "updated_at": service.now_ts()}, filters={"job_key": job_id})
 
         assets = run_pipeline(
             settings=settings,
@@ -281,9 +364,12 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
             copy_language=str(request.get("copy_language") or "zh"),
             max_workers=int(request.get("max_workers") or 3),
             recent_limits=recent_limits,
+            active_category_ids=active_category_ids,
             template_config=template_config,
             cover_template_id=cover_template_id,
             cover_template_config=cover_template_config,
+            composition_sequence=_request_composition_sequence(request, settings),
+            existing_signatures=existing_signatures if settings.variant_history_enabled else None,
             text_overrides={
                 "headline": str(request.get("headline") or ""),
                 "subhead": str(request.get("subhead") or ""),
@@ -292,25 +378,29 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
                 "follow_text": str(request.get("follow_text") or ""),
             },
         )
-        _jobs[job_id].update(
-            {
-                "status": "complete",
-                "progress": 1.0,
-                "message": f"Completed {len(assets)} exports",
-                "assets": [
-                    {
-                        "video_path": str(asset.video_path),
-                        "cover_path": str(asset.cover_path) if asset.cover_path else "",
-                        "copy_path": str(asset.copy_path) if asset.copy_path else "",
-                        "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
-                    }
-                    for asset in assets
-                ],
-            }
-        )
+        complete_payload = {
+            "status": "complete",
+            "progress": 1.0,
+            "message": f"Completed {len(assets)} exports",
+            "assets": [
+                {
+                    "video_path": str(asset.video_path),
+                    "cover_path": str(asset.cover_path) if asset.cover_path else "",
+                    "copy_path": str(asset.copy_path) if asset.copy_path else "",
+                    "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
+                }
+                for asset in assets
+            ],
+        }
+        _jobs[job_id].update(complete_payload)
+        if service.brand_database_backend() == "supabase":
+            service._brand_supabase().update("video_matrix_jobs", {"status": "complete", "progress": 1, "message": complete_payload["message"], "assets_json": complete_payload["assets"], "updated_at": service.now_ts()}, filters={"job_key": job_id})
+        _save_signature_history(settings, existing_signatures | {asset.variant.signature for asset in assets})
         save_ui_state(UI_STATE_PATH, _ui_state_from_request(request))
     except Exception as exc:  # pragma: no cover - surfaced through job endpoint
         _jobs[job_id].update({"status": "error", "error": str(exc), "message": str(exc)})
+        if service.brand_database_backend() == "supabase":
+            service._brand_supabase().update("video_matrix_jobs", {"status": "error", "error": str(exc), "message": str(exc), "updated_at": service.now_ts()}, filters={"job_key": job_id})
 
 
 async def _resolve_bgm_path(request: dict[str, Any], temp_root: Path, bgm_file: UploadFile | None) -> Path:
@@ -358,10 +448,52 @@ def _settings_payload(settings: ProjectSettings) -> dict[str, Any]:
         "output_count": settings.output_count,
         "target_width": settings.target_width,
         "target_height": settings.target_height,
+        "video_duration_min": settings.video_duration_min,
+        "video_duration_max": settings.video_duration_max,
         "recent_limits": settings.recent_limits,
         "material_categories": settings.material_categories,
         "hud_enable_live_data": settings.hud_enable_live_data,
+        "composition_sequence": settings.composition_sequence,
+        "beat_detection": settings.beat_detection,
+        "max_variant_attempts": settings.max_variant_attempts,
+        "variant_history_enabled": settings.variant_history_enabled,
+        "variant_history_limit": settings.variant_history_limit,
+        "enhancement_modules": settings.enhancement_modules,
+        "copy_mode": settings.copy_mode,
     }
+
+
+def _merge_settings_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    merged = _settings_payload(_settings())
+    merged.update(payload)
+    return merged
+
+
+def _load_signature_history(settings: ProjectSettings) -> set[str]:
+    if not settings.variant_history_enabled:
+        return set()
+    if service.brand_database_backend() == "supabase":
+        current = service._app_setting("video_matrix_state", {}) or {}
+        raw = current.get("signature_history") or []
+    else:
+        raw = _load_json(SIGNATURE_HISTORY_PATH, [])
+    if not isinstance(raw, list):
+        return set()
+    return {str(item) for item in raw if str(item).strip()}
+
+
+def _save_signature_history(settings: ProjectSettings, signatures: set[str]) -> None:
+    if not settings.variant_history_enabled:
+        return
+    limit = settings.variant_history_limit
+    history = sorted(signatures)[-limit:] if limit else []
+    if service.brand_database_backend() == "supabase":
+        current = service._app_setting("video_matrix_state", {}) or {}
+        current["signature_history"] = history
+        service._save_app_setting("video_matrix_state", current)
+        return
+    SIGNATURE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SIGNATURE_HISTORY_PATH.write_text(json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _count_category_files(root: Path, categories: list[dict[str, str]]) -> dict[str, int]:
@@ -415,17 +547,43 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "output_count",
         "max_workers",
         "output_options",
+        "output_root",
         "template_id",
         "cover_template_id",
         "copy_language",
         "source_mode",
+        "active_category_ids",
+        "recent_limits",
+        "video_duration_max",
         "use_live_data",
         "headline",
         "subhead",
         "cta",
         "follow_text",
         "hud_text",
+        "transcript_text",
         "bgm_source",
         "bgm_library_id",
+        "composition_sequence",
+        "composition_customized",
     }
     return {key: request[key] for key in keys if key in request}
+
+
+def _request_composition_sequence(request: dict[str, Any], settings: ProjectSettings) -> list[dict[str, Any]]:
+    sequence = request.get("composition_sequence")
+    if isinstance(sequence, list) and sequence:
+        return sequence
+    active = request.get("active_category_ids")
+    if isinstance(active, list) and active:
+        defaults = {
+            str(item.get("category_id")): float(item.get("duration", 2.0))
+            for item in settings.composition_sequence
+            if isinstance(item, dict) and item.get("category_id")
+        }
+        return [
+            {"category_id": str(category_id), "duration": defaults.get(str(category_id), 2.0)}
+            for category_id in active
+            if str(category_id).strip()
+        ]
+    return settings.composition_sequence

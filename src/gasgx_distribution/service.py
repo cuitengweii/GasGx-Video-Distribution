@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -8,6 +8,7 @@ import sys
 import hmac
 import hashlib
 import base64
+import sqlite3
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
 from contextlib import contextmanager
@@ -22,12 +23,18 @@ from cybercar.settings import apply_runtime_environment as apply_cybercar_enviro
 from .db import connect, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
 from .platforms import get_platform, normalize_platform, stable_debug_port
-from .public_settings import resolve_material_dir
+from .public_settings import load_distribution_settings, resolve_material_dir
+from .public_settings import save_distribution_settings as save_local_distribution_settings
 from .supabase_backend import SupabaseRestClient
+from .video_matrix.cover_templates import load_cover_templates
+from .video_matrix.settings import ProjectSettings
+from .video_matrix.templates import load_templates
+from .video_matrix.ui_state import load_ui_state
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 AI_ROBOT_PLATFORMS = {"wecom", "dingtalk", "lark", "telegram", "whatsapp"}
 AI_ROBOT_RETRY_LIMIT = 3
+SEED_VERSION = "2026-04-29-supabase-db-init-v1"
 _brand_runtime: ContextVar[dict[str, Any] | None] = ContextVar("gasgx_brand_runtime", default=None)
 
 
@@ -71,6 +78,199 @@ def _brand_supabase() -> SupabaseRestClient:
     if not instance:
         return SupabaseRestClient.from_env(prefix="BRAND_SUPABASE")
     return SupabaseRestClient.from_instance(instance)
+
+
+def _json_payload(value: Any, default: Any = None) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return default
+    return value
+
+
+def _config_root() -> Path:
+    configured = get_paths().repo_root / "config" / "video_matrix"
+    if configured.exists():
+        return configured
+    return Path(__file__).resolve().parents[2] / "config" / "video_matrix"
+
+
+def _app_setting(key: str, default: Any = None) -> Any:
+    if brand_database_backend() != "supabase":
+        return default
+    row = _brand_supabase().select_one("app_settings", filters={"setting_key": key})
+    return _json_payload(row.get("payload_json") if row else None, default)
+
+
+def _save_app_setting(key: str, payload: Any) -> dict[str, Any]:
+    return _brand_supabase().upsert(
+        "app_settings",
+        {"setting_key": key, "payload_json": payload, "updated_at": now_ts()},
+        on_conflict="setting_key",
+    )
+
+
+def load_distribution_settings_db() -> dict[str, Any]:
+    if brand_database_backend() != "supabase":
+        return load_distribution_settings()
+    payload = _app_setting("distribution_settings")
+    if isinstance(payload, dict):
+        return payload
+    settings = load_distribution_settings()
+    _save_app_setting("distribution_settings", settings)
+    return settings
+
+
+def save_distribution_settings_db(payload: dict[str, Any]) -> dict[str, Any]:
+    if brand_database_backend() != "supabase":
+        return save_local_distribution_settings(payload)
+    settings = save_local_distribution_settings(payload)
+    _save_app_setting("distribution_settings", settings)
+    return settings
+
+
+def load_wechat_publish_settings_db() -> dict[str, Any]:
+    settings = load_distribution_settings_db()
+    common = settings["common"]
+    platform = settings["platforms"].get("wechat", {})
+    return {
+        **platform,
+        "material_dir": common.get("material_dir", ""),
+        "publish_mode": common.get("publish_mode", "publish") if platform.get("publish_mode") == "inherit" else platform.get("publish_mode", "publish"),
+        "topics": common.get("topics", ""),
+        "upload_timeout": platform.get("upload_timeout") or common.get("upload_timeout", 60),
+    }
+
+
+def save_wechat_publish_settings_db(payload: dict[str, Any]) -> dict[str, Any]:
+    settings = load_distribution_settings_db()
+    settings["common"].update(
+        {
+            "material_dir": payload.get("material_dir", settings["common"].get("material_dir")),
+            "publish_mode": payload.get("publish_mode", settings["common"].get("publish_mode")),
+            "topics": payload.get("topics", settings["common"].get("topics")),
+            "upload_timeout": payload.get("upload_timeout", settings["common"].get("upload_timeout")),
+        }
+    )
+    settings["platforms"].setdefault("wechat", {}).update(
+        {
+            "caption": payload.get("caption", settings["platforms"].get("wechat", {}).get("caption")),
+            "collection_name": payload.get("collection_name", settings["platforms"].get("wechat", {}).get("collection_name")),
+            "declare_original": payload.get("declare_original", settings["platforms"].get("wechat", {}).get("declare_original")),
+            "short_title": payload.get("short_title", settings["platforms"].get("wechat", {}).get("short_title")),
+            "location": payload.get("location", settings["platforms"].get("wechat", {}).get("location")),
+            "publish_mode": "inherit",
+            "upload_timeout": payload.get("upload_timeout", settings["platforms"].get("wechat", {}).get("upload_timeout")),
+        }
+    )
+    save_distribution_settings_db(settings)
+    return load_wechat_publish_settings_db()
+
+
+def _seed_analytics_items() -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        ("overview", "new_accounts", {"label": "新增账号数", "value": 2, "change": "+100%", "trend": "up"}),
+        ("overview", "works", {"label": "累计作品总量", "value": 186, "change": "+18.6%", "trend": "up"}),
+        ("overview", "exposure", {"label": "累计总曝光", "value": "68.4万", "change": "+24.8%", "trend": "up"}),
+        ("overview", "followers", {"label": "矩阵总粉丝", "value": "4.8万", "change": "+9.7%", "trend": "up"}),
+        ("account_rank", "gasgx-green", {"row": ["GasGx小绿", "视频号", "正常", "86,200", "18,600", "12,480", "+860", "42.1%", "8.6%", 12, "爆款账号", ""]}),
+        ("account_rank", "gasgx-yellow", {"row": ["GasGx小黄", "抖音", "正常", "72,100", "16,900", "10,220", "+640", "37.8%", "7.9%", 10, "稳定账号", ""]}),
+        ("account_rank", "case-xhs", {"row": ["发电机组案例", "小红书", "低流量", "18,400", "3,420", "3,180", "+92", "28.4%", "4.1%", 5, "潜力账号", "低流量"]}),
+        ("content_top", "field-engine", {"title": "燃气发动机组现场并机", "value": "8.6万", "tag": "爆款"}),
+        ("content_top", "oilfield-power", {"title": "油气田自发电改造案例", "value": "6.9万", "tag": "爆款"}),
+        ("traffic", "recommend", {"label": "推荐流量", "value": "54%"}),
+        ("traffic", "search", {"label": "搜索流量", "value": "18%"}),
+        ("traffic", "home", {"label": "主页流量", "value": "12%"}),
+        ("conversion", "profile", {"label": "主页访问量", "value": "17,860"}),
+        ("conversion", "dm", {"label": "私信咨询量", "value": "1,286"}),
+        ("conversion", "leads", {"label": "有效线索数", "value": "426"}),
+        ("operation", "publish", {"label": "计划发布量 VS 实际发布量", "value": 92}),
+        ("operation", "copy", {"label": "周期文案产出数", "value": 84}),
+        ("operation", "edit", {"label": "剪辑产出数", "value": 78}),
+        ("risk", "violation", {"text": "违规作品 1 条，待整改"}),
+        ("risk", "drop", {"text": "1 个账号播放断崖下跌"}),
+        ("risk", "sleep", {"text": "1 个账号长期断更休眠"}),
+    ]
+
+
+def list_analytics_items() -> dict[str, list[dict[str, Any]]]:
+    if brand_database_backend() == "supabase":
+        rows = _brand_supabase().select("analytics_items", order="sort_order.asc,id.asc")
+        items = [(str(row["section"]), str(row["item_key"]), _json_payload(row.get("payload_json"), {})) for row in rows]
+    else:
+        items = _seed_analytics_items()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for section, key, payload in items:
+        item = dict(payload or {})
+        item.setdefault("key", key)
+        grouped.setdefault(section, []).append(item)
+    return grouped
+
+
+def _insert_seed_item(table: str, key_field: str, key: str, payload: dict[str, Any]) -> bool:
+    client = _brand_supabase()
+    if client.select_one(table, filters={key_field: key}) is not None:
+        return False
+    data = dict(payload)
+    data[key_field] = key
+    client.insert(table, data)
+    return True
+
+
+def initialize_system() -> dict[str, Any]:
+    if brand_database_backend() != "supabase":
+        return {"ok": False, "backend": "sqlite", "error": "system initialization is Supabase-only"}
+    client = _brand_supabase()
+    ts = now_ts()
+    inserted: dict[str, int] = {}
+    skipped: dict[str, int] = {}
+
+    def mark(name: str, did_insert: bool) -> None:
+        target = inserted if did_insert else skipped
+        target[name] = target.get(name, 0) + 1
+
+    mark("distribution_settings", _insert_seed_item("app_settings", "setting_key", "distribution_settings", {"payload_json": load_distribution_settings(), "updated_at": ts}))
+    config_dir = _config_root()
+    settings = ProjectSettings.from_file(config_dir / "defaults.json")
+    bgm_path = config_dir / "bgm_library.json"
+    video_state = {
+        "settings": {
+            "project_name": settings.project_name,
+            "source_root": str(settings.source_root),
+            "library_root": str(settings.library_root),
+            "output_root": str(settings.output_root),
+            "output_count": settings.output_count,
+            "target_width": settings.target_width,
+            "target_height": settings.target_height,
+            "recent_limits": settings.recent_limits,
+            "material_categories": settings.material_categories,
+            "hud_enable_live_data": settings.hud_enable_live_data,
+        },
+        "ui_state": load_ui_state(config_dir / "ui_state.json"),
+        "templates": load_templates(config_dir / "templates.json"),
+        "cover_templates": load_cover_templates(config_dir / "cover_templates.json"),
+        "bgm_library": _json_payload(bgm_path.read_text(encoding="utf-8"), {}) if bgm_path.exists() else {},
+    }
+    mark("video_matrix_state", _insert_seed_item("app_settings", "setting_key", "video_matrix_state", {"payload_json": video_state, "updated_at": ts}))
+
+    for index, (section, key, payload) in enumerate(_seed_analytics_items(), start=1):
+        exists = client.select_one("analytics_items", filters={"section": section, "item_key": key})
+        if exists is None:
+            client.insert("analytics_items", {"section": section, "item_key": key, "payload_json": payload, "source": "seed", "sort_order": index, "created_at": ts, "updated_at": ts})
+            mark("analytics_items", True)
+        else:
+            mark("analytics_items", False)
+
+    existing = client.select_one("app_seed_runs", filters={"seed_version": SEED_VERSION})
+    if existing is None:
+        client.insert("app_seed_runs", {"seed_version": SEED_VERSION, "summary_json": {"inserted": inserted, "skipped": skipped}, "applied_at": ts})
+        mark("seed_runs", True)
+    else:
+        mark("seed_runs", False)
+    return {"ok": True, "backend": "supabase", "seed_version": SEED_VERSION, "inserted": inserted, "skipped": skipped}
 
 
 def load_brand_settings() -> dict[str, Any]:
@@ -871,22 +1071,28 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(platforms, list) or not platforms:
         platforms = ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x"]
     with connect() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO matrix_accounts(account_key, display_name, niche, status, notes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                account_key,
-                display_name,
-                str(payload.get("niche") or "").strip(),
-                str(payload.get("status") or "active").strip() or "active",
-                str(payload.get("notes") or "").strip(),
-                ts,
-                ts,
-            ),
-        )
-        account_id = int(cursor.lastrowid)
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO matrix_accounts(account_key, display_name, niche, status, notes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    account_key,
+                    display_name,
+                    str(payload.get("niche") or "").strip(),
+                    str(payload.get("status") or "active").strip() or "active",
+                    str(payload.get("notes") or "").strip(),
+                    ts,
+                    ts,
+                ),
+            )
+            account_id = int(cursor.lastrowid)
+        except sqlite3.IntegrityError:
+            existing = conn.execute("SELECT id FROM matrix_accounts WHERE account_key = ?", (account_key,)).fetchone()
+            if existing is None:
+                raise
+            account_id = int(existing["id"])
         for platform in platforms:
             ensure_account_platform(conn, account_id, str(platform))
     return get_account(account_id) or {}

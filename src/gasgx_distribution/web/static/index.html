@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -640,6 +640,18 @@
         <section class="panel system-card wide-system-card">
           <div class="panel-head">
             <div>
+              <h2>数据库初始化</h2>
+              <p class="muted">补齐 Supabase 表内默认配置、视频矩阵模板和数据统计案例。</p>
+            </div>
+            <button class="btn primary" id="system-initialize" type="button">一键初始化</button>
+          </div>
+          <div id="system-initialize-state" class="health-list">
+            <div class="muted">未执行初始化。</div>
+          </div>
+        </section>
+        <section class="panel system-card wide-system-card">
+          <div class="panel-head">
+            <div>
               <h2>Supabase 运行检查</h2>
               <p class="muted" id="supabase-health-meta"></p>
             </div>
@@ -665,6 +677,10 @@
           <article><strong>视频生成</strong><p>分类素材、第一屏封面、背景音乐、批量导出。</p></article>
           <article><strong>账号矩阵</strong><p>账号档案、平台槽位、独立浏览器和登录状态。</p></article>
           <article><strong>发布任务</strong><p>任务队列、失败重试、定时策略和数据统计。</p></article>
+          <article class="developer-help-card">
+            <strong>开发专用</strong>
+            <p>视频生成算法：素材分桶、BGM 节拍切片、随机去重变体、FFmpeg 合成、封面和文案输出。完整文档见 docs/help/DEVELOPER_VIDEO_GENERATION_ALGORITHM.md。</p>
+          </article>
         </div>
       </div>
     </section>

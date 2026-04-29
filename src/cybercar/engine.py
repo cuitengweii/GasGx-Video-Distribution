@@ -10424,6 +10424,9 @@ def _check_platform_login_ready(
                     )
             except Exception as exc:
                 _log(f"[Uploader:{platform}] Login text reminder failed: {exc}")
+        if wait_token and not should_wait_for_confirmation:
+            _log(f"[Uploader:{platform}] Login notification unavailable; wait for local browser login.")
+            should_wait_for_confirmation = True
         if wait_token and should_wait_for_confirmation and _wait_for_platform_login_confirmation(
             page,
             platform_name=platform,
@@ -10432,7 +10435,7 @@ def _check_platform_login_ready(
             wait_token=wait_token,
             timeout_seconds=PLATFORM_LOGIN_CONFIRM_WAIT_SECONDS,
         ):
-            _log(f"[Uploader:{platform}] Login restored after Telegram confirmation; continue publishing.")
+            _log(f"[Uploader:{platform}] Login restored after human confirmation; continue publishing.")
             return
         _clear_platform_login_signal(platform, chrome_user_data_dir, wait_token)
         raise RuntimeError(

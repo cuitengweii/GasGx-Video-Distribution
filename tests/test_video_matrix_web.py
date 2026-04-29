@@ -31,6 +31,12 @@ def test_video_matrix_api_state_and_preview() -> None:
         assert expected in labels
     assert "category_H" in payload["source_dirs"]
     assert "category_H" in payload["category_counts"]
+    assert payload["settings"]["composition_sequence"][0]["category_id"] == "category_A"
+    assert payload["settings"]["composition_sequence"][1]["duration"] == 3.4
+    assert payload["settings"]["video_duration_max"] == 12.0
+    assert payload["settings"]["beat_detection"]["fallback_spacing"] == 0.48
+    assert payload["settings"]["max_variant_attempts"] == 20
+    assert payload["settings"]["variant_history_enabled"] is True
 
     preview = client.post(
         "/api/video-matrix/cover-preview",
@@ -44,6 +50,90 @@ def test_video_matrix_api_state_and_preview() -> None:
     )
     assert preview.status_code == 200
     assert preview.json()["data_url"].startswith("data:image/png;base64,")
+
+
+def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(video_matrix_api, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    video_matrix_api._jobs["test-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    request = {
+        "output_count": 1,
+        "output_options": ["mp4"],
+        "copy_language": "zh",
+        "source_mode": "Category folders",
+        "video_duration_max": 24,
+        "composition_sequence": [{"category_id": "category_D", "duration": 2.2}],
+    }
+
+    video_matrix_api._run_generate_job("test-job", request, tmp_path / "bgm.mp3", None)
+
+    assert captured["composition_sequence"] == [{"category_id": "category_D", "duration": 2.2}]
+    assert captured["settings"].video_duration_max == 24
+    assert isinstance(captured["existing_signatures"], set)
+
+
+def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> None:
+    def fake_run_pipeline(**kwargs):
+        return []
+
+    monkeypatch.setattr(video_matrix_api, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    video_matrix_api._jobs["persist-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    request = {
+        "output_count": 2,
+        "output_options": ["mp4"],
+        "output_root": str(tmp_path / "exports"),
+        "copy_language": "zh",
+        "source_mode": "Category folders",
+        "recent_limits": {"category_A": 12},
+        "active_category_ids": ["category_A"],
+        "video_duration_max": 18,
+        "transcript_text": "field gas project notes",
+    }
+
+    video_matrix_api._run_generate_job("persist-job", request, tmp_path / "bgm.mp3", None)
+
+    state = video_matrix_api.load_ui_state(tmp_path / "ui_state.json")
+    assert state["output_root"].endswith("exports")
+    assert state["recent_limits"] == {"category_A": 12}
+    assert state["video_duration_max"] == 18
+    assert state["transcript_text"] == "field gas project notes"
+
+
+def test_video_matrix_generate_falls_back_to_active_categories(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(video_matrix_api, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    video_matrix_api._jobs["active-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    request = {
+        "output_count": 1,
+        "output_options": ["mp4"],
+        "copy_language": "zh",
+        "source_mode": "Category folders",
+        "active_category_ids": ["category_A", "category_D", "category_E"],
+    }
+
+    video_matrix_api._run_generate_job("active-job", request, tmp_path / "bgm.mp3", None)
+
+    assert captured["composition_sequence"] == [
+        {"category_id": "category_A", "duration": 1.5},
+        {"category_id": "category_D", "duration": 2.0},
+        {"category_id": "category_E", "duration": 2.0},
+    ]
 
 
 def test_video_matrix_static_entry_exists() -> None:
