@@ -1,33 +1,6 @@
 {
-  "output_count": 3,
-  "max_workers": 3,
-  "output_options": [
-    "mp4"
-  ],
-  "template_id": "center_brand",
-  "cover_template_id": "generator_set_roi",
-  "copy_language": "zh",
-  "source_mode": "Category folders",
-  "active_category_ids": [
-    "category_A",
-    "category_B",
-    "category_C",
-    "category_D",
-    "category_E",
-    "category_F",
-    "category_G",
-    "category_H",
-    "category_custom_1"
-  ],
-  "use_live_data": true,
-  "headline": "Gas Engines That Turn Field Gas Into Power",
-  "subhead": "Generator sets for onsite Bitcoin and industrial load",
-  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
-  "cta": "Learn more at gasgx.com/roi",
   "follow_text": "Follow GasGx for more field power cases",
-  "bgm_source": "Local library",
-  "bgm_library_id": "",
-  "composition_customized": true,
+  "subhead": "Generator sets for onsite Bitcoin and industrial load",
   "composition_sequence": [
     {
       "category_id": "category_A",
@@ -66,7 +39,7 @@
       "duration": 2
     }
   ],
-  "output_root": "G:\\GasGx Video Distribution\\runtime\\materials\\videos",
+  "copy_language": "zh",
   "recent_limits": {
     "category_A": 8,
     "category_B": 8,
@@ -78,5 +51,33 @@
     "category_H": 6,
     "category_custom_1": 6
   },
-  "transcript_text": "文案参考资料1\n文案参考资料2\n文案参考资料3"
+  "source_mode": "Category folders",
+  "video_duration_max": 12,
+  "template_id": "center_brand",
+  "bgm_library_id": "",
+  "transcript_text": "文案参考资料1\n文案参考资料2\n文案参考资料3",
+  "bgm_source": "Local library",
+  "headline": "Gas Engines That Turn Field Gas Into Power",
+  "output_count": 3,
+  "output_options": [
+    "mp4"
+  ],
+  "cover_template_id": "generator_set_roi",
+  "cta": "Learn more at gasgx.com/roi",
+  "output_root": "G:\\GasGx Video Distribution\\runtime\\materials\\videos",
+  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
+  "active_category_ids": [
+    "category_A",
+    "category_B",
+    "category_C",
+    "category_D",
+    "category_E",
+    "category_F",
+    "category_G",
+    "category_H",
+    "category_custom_1"
+  ],
+  "composition_customized": true,
+  "max_workers": 3,
+  "use_live_data": true
 }

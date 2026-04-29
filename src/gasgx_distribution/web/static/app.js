@@ -33,6 +33,14 @@ const PLATFORM_LOGOS = {
   instagram: { icon: "simple-icons:instagram", bg: "linear-gradient(135deg, #feda75 0%, #fa7e1e 28%, #d62976 58%, #962fbf 78%, #4f5bd5 100%)", fg: "ffffff" },
 };
 
+const AI_ROBOT_LOGOS = {
+  wecom: { icon: "tdesign:logo-wecom-filled", bg: "#20c160", fg: "ffffff" },
+  dingtalk: { icon: "mingcute:dingtalk-fill", bg: "#1677ff", fg: "ffffff" },
+  lark: { icon: "icon-park:lark", bg: "#00c795", fg: "06130f" },
+  telegram: { icon: "simple-icons:telegram", bg: "#2aabee", fg: "ffffff" },
+  whatsapp: { icon: "simple-icons:whatsapp", bg: "#25d366", fg: "07150b" },
+};
+
 const PLATFORM_ORDER = [
   "wechat",
   "douyin",
@@ -83,6 +91,12 @@ const SHELL_THEMES = [
   { id: "laser-orange", name: "Laser Orange", accent: "#ff5a1f", soft: "rgba(255, 90, 31, 0.16)" },
   { id: "electric-indigo", name: "Electric Indigo", accent: "#536dff", soft: "rgba(83, 109, 255, 0.16)" },
   { id: "acid-yellow", name: "Acid Yellow", accent: "#dfff24", soft: "rgba(223, 255, 36, 0.16)" },
+  { id: "plasma-pink", name: "Plasma Pink", accent: "#ff2f7d", soft: "rgba(255, 47, 125, 0.16)" },
+  { id: "volt-green", name: "Volt Green", accent: "#39ff14", soft: "rgba(57, 255, 20, 0.16)" },
+  { id: "aqua-burst", name: "Aqua Burst", accent: "#00e5ff", soft: "rgba(0, 229, 255, 0.16)" },
+  { id: "solar-orange", name: "Solar Orange", accent: "#ff7a00", soft: "rgba(255, 122, 0, 0.16)" },
+  { id: "royal-purple", name: "Royal Purple", accent: "#b026ff", soft: "rgba(176, 38, 255, 0.16)" },
+  { id: "hot-coral", name: "Hot Coral", accent: "#ff4f3a", soft: "rgba(255, 79, 58, 0.16)" },
 ];
 
 const VIEW_HEADERS = {
@@ -98,6 +112,10 @@ const VIEW_HEADERS = {
   "system-settings": ["系统设置", "预留本地部署、存储缓存、安全策略和系统维护入口。"],
   "help-center": ["帮助文档", "预留操作手册、部署说明、视频生成流程和常见问题。"],
 };
+
+function displayDatabaseKeyword(value) {
+  return String(value ?? "").replaceAll("Supabase", "数据库");
+}
 
 function setViewHeader(view) {
   const [title, description] = VIEW_HEADERS[view] || VIEW_HEADERS.overview;
@@ -138,9 +156,9 @@ function applyShellBrand(brand) {
     logoDataUrl: brand?.logoDataUrl || "",
   };
   document.querySelector("#brand-name").textContent = next.name;
-  document.querySelector("#brand-slogan").textContent = next.slogan;
+  document.querySelector("#brand-slogan").textContent = displayDatabaseKeyword(next.slogan);
   document.querySelector("#brand-preview-name").textContent = next.name;
-  document.querySelector("#brand-preview-slogan").textContent = next.slogan;
+  document.querySelector("#brand-preview-slogan").textContent = displayDatabaseKeyword(next.slogan);
   document.querySelector("#brand-name-input").value = next.name;
   document.querySelector("#brand-slogan-input").value = next.slogan;
 
@@ -295,6 +313,14 @@ function platformIcon(key) {
 
 function platformName(key) {
   return `<span class="platform-name">${platformIcon(key)}<span>${platformLabel(key)}</span></span>`;
+}
+
+function aiRobotLogo(platform) {
+  const logo = AI_ROBOT_LOGOS[platform] || { icon: "simple-icons:simpleicons", bg: "#5dd62c", fg: "101010" };
+  const src = `https://api.iconify.design/${logo.icon}.svg?color=%23${logo.fg}`;
+  return `<span class="bot-logo ${platform}" title="${aiPlatformLabel(platform)}" aria-hidden="true" style="background:${logo.bg}">
+    <img src="${src}" alt="" loading="lazy" decoding="async">
+  </span>`;
 }
 
 function metric(label, value) {
@@ -518,7 +544,7 @@ function initSystemInitialize() {
   if (!button || !stateNode) return;
   button.addEventListener("click", async () => {
     const restoreButton = setButtonLoading(button, "初始化中");
-    stateNode.innerHTML = `<div class="muted">正在补齐 Supabase 初始化数据...</div>`;
+    stateNode.innerHTML = `<div class="muted">正在补齐数据库初始化数据...</div>`;
     try {
       const result = await api("/api/system/initialize", { method: "POST" });
       const inserted = Object.entries(result.inserted || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "无";
@@ -749,7 +775,7 @@ function renderAiRobot() {
   renderBoundAiRobotPlatforms();
   document.querySelector("#ai-channel-grid").innerHTML = visibleAiRobotConfigs().map((item) => `
     <article class="bot-channel-card">
-      <span class="bot-logo ${item.platform}">${aiPlatformLabel(item.platform).slice(0, 1)}</span>
+      ${aiRobotLogo(item.platform)}
       <div>
         <strong>${aiPlatformLabel(item.platform)}</strong>
         <p>${item.webhook_url ? "已配置" : "未配置"} · ${item.enabled ? "通知开启" : "通知关闭"} · ${item.has_signing_secret ? "验签密钥已保存" : "无需验签密钥"}</p>
@@ -788,7 +814,7 @@ function renderBoundAiRobotPlatforms() {
   }
   node.innerHTML = bound.map((item) => `
     <article class="bound-platform-card">
-      <span class="bot-logo ${item.platform}">${aiPlatformLabel(item.platform).slice(0, 1)}</span>
+      ${aiRobotLogo(item.platform)}
       <div>
         <strong>${aiPlatformLabel(item.platform)} 已配置</strong>
         <p>${item.enabled ? "通知开启" : "通知关闭"} · ${item.target_id ? `目标会话 ${item.target_id}` : "Webhook 已保存"} · 可发送测试消息</p>
@@ -867,7 +893,7 @@ function renderSystemHealth() {
   const health = state.systemHealth;
   if (!health) {
     status.textContent = "未加载";
-    list.innerHTML = `<div class="muted">暂无 Supabase 健康检查结果。</div>`;
+    list.innerHTML = `<div class="muted">暂无数据库健康检查结果。</div>`;
     meta.textContent = "";
     return;
   }
@@ -878,14 +904,14 @@ function renderSystemHealth() {
     <div class="health-row ${item.ok ? "ok" : "fail"}">
       <span>${item.name}</span>
       <strong>${item.ok ? "通过" : "失败"}</strong>
-      <small>${item.ok ? healthDetailText(item.details || {}) : item.error || "未知错误"}</small>
+      <small>${item.ok ? healthDetailText(item.details || {}) : displayDatabaseKeyword(item.error || "未知错误")}</small>
     </div>
   `).join("");
 }
 
 function healthDetailText(details) {
   return Object.entries(details)
-    .map(([key, value]) => `${key}: ${value}`)
+    .map(([key, value]) => `${key}: ${displayDatabaseKeyword(value)}`)
     .join(" · ");
 }
 

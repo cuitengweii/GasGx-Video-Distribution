@@ -101,6 +101,7 @@ function renderSidebar(data) {
   renderRadio("languageGroup", "copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], state.copy_language || "zh", scheduleStateSave);
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
+  $("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory);
   document.querySelector(".sidebar details summary")?.addEventListener("click", (event) => {
     event.preventDefault();
     toggleBgmLibraryPopover();
@@ -679,6 +680,16 @@ function toggleBgmLibraryPopover() {
   $("loadPixabayTracks")?.addEventListener("click", loadPixabayTracks);
   panel.querySelectorAll("[data-pixabay-open]").forEach((button) => {
     button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
+  });
+  bindExclusiveBgmAudioPlayback(panel);
+}
+function bindExclusiveBgmAudioPlayback(panel) {
+  panel.querySelectorAll("audio").forEach((audio) => {
+    audio.addEventListener("play", () => {
+      panel.querySelectorAll("audio").forEach((otherAudio) => {
+        if (otherAudio !== audio) otherAudio.pause();
+      });
+    });
   });
 }
 function toggleBgmLibrarySize() {

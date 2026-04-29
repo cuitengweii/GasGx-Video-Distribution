@@ -457,6 +457,9 @@ select:disabled {
 }
 .library-action {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) minmax(96px, 1fr);
+  gap: 8px;
 }
 .sidebar details summary {
   cursor: pointer;
@@ -464,9 +467,10 @@ select:disabled {
 .sidebar details summary::marker {
   color: var(--text);
 }
-#saveState {
+#saveState,
+#openBgmDir {
   width: auto;
-  min-width: 96px;
+  min-width: 0;
   min-height: 40px !important;
   padding: 10px 16px;
   border-radius: 8px;

@@ -59,7 +59,7 @@ category_A -> category_B -> category_A -> category_C
 6. De-duplication
    - Builds a SHA1 signature from segment clip IDs, start times, durations, title, slogan, visual parameters, and HUD lines.
    - If a signature has already been used in the batch, planning retries.
-   - If `variant_history_enabled` is true, previously generated signatures are loaded from `runtime/video_matrix/signature_history.json` or Supabase `video_matrix_state.signature_history`.
+   - If `variant_history_enabled` is true, previously generated signatures are loaded from `runtime/video_matrix/signature_history.json` or database `video_matrix_state.signature_history`.
    - `max_variant_attempts` controls the retry limit. The default is 20.
 
 7. Rendering

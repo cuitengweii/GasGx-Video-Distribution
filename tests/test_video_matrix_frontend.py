@@ -20,6 +20,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "transcriptText" in html
     assert "generationConfirmModal" in html
     assert "点击查看" in html
+    assert "openBgmDir" in html
     assert "bgmLibraryPopover" in html
     assert "materialCategories(data)" in app
     assert "settings.material_categories" in app
@@ -29,6 +30,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert '$("outputRoot").dataset.fullPath = outputRoot' in app
     assert "output_root: outputRootPath()" in app
     assert "toggleBgmLibraryPopover" in app
+    assert '$("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory)' in app
     assert "本地曲库列表" in app
     assert "downloadBgmToLibrary" in app
     assert "/api/video-matrix/bgm/download" in app
@@ -59,6 +61,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     app_shell = ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js"
     shell_app = app_shell.read_text(encoding="utf-8")
     shell_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "6 条未读" in shell_html
+    assert "视频生成完成" in shell_html
+    assert "视频号发布失败" in shell_html
+    assert "素材分类不足" in shell_html
+    assert "企业微信群机器人已发送日报" in shell_html
+    assert "发布前审核等待确认" in shell_html
+    assert "当前没有新的系统提醒" not in shell_html
+    assert ".notification-list" in shell_css
+    assert ".notification-card.danger" in shell_css
+    assert ".notification-card.warning" in shell_css
     assert "function isWebhookOnlyAiRobot" in shell_app
     assert '["wecom", "dingtalk", "lark"].includes(platform)' in shell_app
     assert "function aiRobotWebhookHint" in shell_app
@@ -84,6 +96,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'id="ai-copy-lark-callback"' in shell_html
     assert 'id="ai-save-config-panel"' in shell_html
     assert 'id="ai-send-test-panel"' in shell_html
+    assert "使用帮助知识库" in shell_html
+    assert "help-layout" in shell_html
+    assert "help-category-section" in shell_html
+    assert "docs/help/VIDEO_GENERATION_WORKBENCH.md" in shell_html
+    assert "docs/help/ACCOUNT_MATRIX.md" in shell_html
+    assert "docs/help/SYSTEM_SETTINGS.md" in shell_html
+    assert "docs/help/DEVELOPER_VIDEO_GENERATION_ALGORITHM.md" in shell_html
     assert ".notify-switch" in shell_css
     assert ".ai-config-mode-card" in shell_css
     assert ".ai-config-panel[hidden]" in shell_css
@@ -91,6 +110,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".ai-config-actions" in shell_css
     assert ".ai-config-form.webhook-simple-mode .ai-advanced-field" in shell_css
     assert ".ai-config-form.webhook-simple-mode .ai-test-message-field" in shell_css
+    assert ".help-layout" in shell_css
+    assert ".help-hero-panel" in shell_css
+    assert ".help-doc-grid" in shell_css
+    assert ".help-doc-card" in shell_css
     assert "body.video-matrix-active" in shell_css
     assert "overflow: hidden" in shell_css
     assert "flex-direction: column" in shell_css
@@ -136,6 +159,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "scrollbar-width: thin" in css
     assert "::-webkit-scrollbar-thumb" in css
     assert "#saveState" in css
+    assert "#openBgmDir" in css
     assert 'classList.toggle("error-message", isError)' in app
     assert ".job-status-card.error" in css
     assert "#jobMessage.error-message" in css
