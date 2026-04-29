@@ -80,6 +80,10 @@ class AiRobotMessagePayload(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class TelegramResolvePayload(BaseModel):
+    token: str = ""
+
+
 class BrandInstancePayload(BaseModel):
     id: str = ""
     name: str
@@ -105,6 +109,16 @@ def create_app() -> FastAPI:
     app = FastAPI(title="GasGx Video Distribution", version="0.1.0")
     app.include_router(video_matrix_router)
     app.middleware("http")(bind_tenant_database)
+
+    @app.middleware("http")
+    async def disable_console_cache(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
     start_scheduler()
     static_dir = Path(__file__).resolve().parent / "web" / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -243,9 +257,24 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.delete("/api/ai-robots/{platform}/config")
+    def delete_ai_robot_config(platform: str) -> dict[str, Any]:
+        try:
+            deleted = service.delete_ai_robot_config(platform)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "deleted": deleted, "platform": platform}
+
     @app.get("/api/ai-robots/messages")
     def ai_robot_messages() -> list[dict[str, Any]]:
         return service.list_ai_robot_messages()
+
+    @app.post("/api/ai-robots/telegram/resolve")
+    def resolve_telegram(payload: TelegramResolvePayload) -> dict[str, Any]:
+        try:
+            return service.resolve_telegram_bot_setup(payload.token)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/ai-robots/messages/send-worker")
     def run_ai_robot_sender(limit: int = Query(default=10, ge=1, le=100)) -> dict[str, Any]:
@@ -271,7 +300,8 @@ def create_app() -> FastAPI:
             message["text"] = data["text"]
         message["message_type"] = data.get("message_type") or "text"
         try:
-            return service.enqueue_ai_robot_message(platform, message, test=True)
+            queued = service.enqueue_ai_robot_message(platform, message, test=True)
+            return service.send_ai_robot_message_now(queued)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

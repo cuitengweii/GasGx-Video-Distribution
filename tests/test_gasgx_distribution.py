@@ -203,6 +203,44 @@ def test_system_supabase_health_reports_current_brand(monkeypatch, tmp_path: Pat
     assert checks["ai_robot_queue"]["details"]["queued_message_count"] == 0
 
 
+def test_video_matrix_template_preview_returns_png(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/video-matrix/template-preview",
+        json={
+            "template": {
+                "name": "Preview Test",
+                "show_hud": True,
+                "show_slogan": True,
+                "show_title": True,
+                "hud_bar_y": 1700,
+                "hud_bar_height": 140,
+                "hud_x": 60,
+                "hud_y": 1760,
+                "hud_font_size": 30,
+                "slogan_x": 80,
+                "slogan_y": 240,
+                "slogan_font_size": 58,
+                "title_x": 80,
+                "title_y": 340,
+                "title_font_size": 32,
+                "hud_bar_color": "#0E1A10",
+                "hud_bar_opacity": 0.38,
+                "primary_color": "#5DD62C",
+                "secondary_color": "#FFFFFF",
+            },
+            "slogan": "Stop Flaring. Start Hashing.",
+            "title": "Gas To Compute",
+            "hud_text": "Gas Input -> Power\nPower -> Hashrate",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data_url"].startswith("data:image/png;base64,")
+
+
 def test_control_upgrade_records_each_active_brand(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     client = TestClient(create_app())
@@ -395,7 +433,8 @@ def test_brand_runtime_can_use_supabase_for_brand_and_ai_robot(monkeypatch, tmp_
 
 def test_supabase_client_does_not_use_publishable_key_as_service_role(monkeypatch) -> None:
     monkeypatch.setenv("CONTROL_SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.delenv("CONTROL_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.setenv("CONTROL_SUPABASE_SERVICE_ROLE_KEY", "")
+    monkeypatch.setenv("CONTROL_SUPABASE_SERVICE_KEY", "")
     monkeypatch.setenv("CONTROL_SUPABASE_KEY", "publishable")
     monkeypatch.setenv("SUPABASE_KEY", "publishable")
 
@@ -523,6 +562,20 @@ def test_brand_supabase_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) ->
 def test_ai_robot_config_webhook_and_test_message(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     client = TestClient(create_app())
+    sent: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    def fake_post(url: str, json: dict[str, object], headers: dict[str, str], timeout: float) -> FakeResponse:
+        sent.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("gasgx_distribution.service.requests.post", fake_post)
 
     saved = client.put(
         "/api/ai-robots/telegram/config",
@@ -559,7 +612,8 @@ def test_ai_robot_config_webhook_and_test_message(monkeypatch, tmp_path: Path) -
         json={"message_type": "text", "text": "hello"},
     )
     assert test_message.status_code == 200
-    assert test_message.json()["status"] == "pending"
+    assert test_message.json()["status"] == "sent"
+    assert sent[-1]["json"] == {"text": "hello", "chat_id": "chat-1"}
 
     body = b'{"text":"from platform"}'
     signature = hmac.new(b"sign-secret", body, hashlib.sha256).hexdigest()
@@ -577,6 +631,12 @@ def test_ai_robot_config_webhook_and_test_message(monkeypatch, tmp_path: Path) -
         headers={"x-gasgx-signature": "bad"},
     )
     assert rejected.status_code == 401
+
+    deleted = client.delete("/api/ai-robots/telegram/config")
+    assert deleted.status_code == 200
+    telegram = next(item for item in client.get("/api/ai-robots/configs").json() if item["platform"] == "telegram")
+    assert telegram["enabled"] is False
+    assert telegram["webhook_url"] == ""
 
 
 def test_ai_robot_sender_worker_sends_and_records_failures(monkeypatch, tmp_path: Path) -> None:
@@ -609,7 +669,7 @@ def test_ai_robot_sender_worker_sends_and_records_failures(monkeypatch, tmp_path
         },
     )
     assert config.status_code == 200
-    message = client.post("/api/ai-robots/telegram/test-message", json={"message_type": "text", "text": "hello"})
+    message = client.post("/api/ai-robots/telegram/messages", json={"message_type": "text", "text": "hello"})
     assert message.status_code == 200
 
     worker = client.post("/api/ai-robots/messages/send-worker?limit=1")
@@ -636,6 +696,35 @@ def test_ai_robot_sender_worker_sends_and_records_failures(monkeypatch, tmp_path
     assert retry["status"] == "retry"
     assert retry["retry_count"] == 1
     assert "network down" in retry["error"]
+
+
+def test_telegram_resolve_uses_local_api(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+            self.status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def fake_get(url: str, timeout: float) -> FakeResponse:
+        assert "SECRET_TOKEN" in url
+        if url.endswith("/getMe"):
+            return FakeResponse({"ok": True, "result": {"username": "GasGxBot"}})
+        return FakeResponse({"ok": True, "result": [{"message": {"chat": {"id": -10042}}}]})
+
+    monkeypatch.setattr("gasgx_distribution.service.requests.get", fake_get)
+    client = TestClient(create_app())
+
+    response = client.post("/api/ai-robots/telegram/resolve", json={"token": "SECRET_TOKEN"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["username"] == "GasGxBot"
+    assert data["chat_id"] == "-10042"
+    assert data["webhook_url"] == "https://api.telegram.org/botSECRET_TOKEN/sendMessage"
 
 
 def test_dashboard_summary_counts_remaining_material_videos(monkeypatch, tmp_path: Path) -> None:

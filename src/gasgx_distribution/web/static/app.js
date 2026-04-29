@@ -59,7 +59,7 @@ const state = {
   aiRobotConfigs: [],
   aiRobotMessages: [],
   aiRobotEditingPlatform: "",
-  aiRobotMessagesCollapsed: false,
+  aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
   systemHealth: null,
 };

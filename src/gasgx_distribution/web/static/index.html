@@ -292,16 +292,26 @@
             <button class="btn secondary" id="ai-send-test" type="button">发送测试</button>
           </div>
         </section>
-        <section class="panel ai-config-panel">
+        <section class="panel" id="ai-platform-status-panel">
+          <div class="panel-head">
+            <h2>平台接入状态</h2>
+            <span class="system-status">国内 + 海外</span>
+          </div>
+          <div class="bot-channel-grid" id="ai-channel-grid">
+            <div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>加载中...</span></div>
+          </div>
+        </section>
+        <section class="panel ai-config-panel" id="ai-config-panel">
           <div class="panel-head">
             <div>
               <h2>平台配置</h2>
-              <p class="muted">Webhook Secret 用于平台发送，Signing Secret 用于本地回调验签。</p>
+              <p class="muted">已绑定的平台会显示在这里，需要调整时点击修改。</p>
             </div>
             <span class="system-status" id="ai-config-state">未加载</span>
           </div>
+          <div id="ai-bound-platforms" class="bound-platform-list"></div>
           <form id="ai-robot-form" class="ai-config-form">
-            <label>平台
+            <label class="ai-platform-picker">平台
               <select name="platform" id="ai-platform-select">
                 <option value="wecom">企业微信</option>
                 <option value="dingtalk">钉钉</option>
@@ -310,25 +320,56 @@
                 <option value="whatsapp">WhatsApp</option>
               </select>
             </label>
-            <label>机器人名称
+            <label class="ai-telegram-default-field">机器人名称
               <input name="bot_name" placeholder="GasGx AI Robot">
             </label>
-            <label>启用状态
+            <label class="ai-telegram-default-field">启用状态
               <select name="enabled">
                 <option value="true">启用</option>
                 <option value="false">停用</option>
               </select>
             </label>
-            <label>Webhook URL
+            <div class="telegram-setup-card" id="telegram-setup-card" hidden>
+              <div class="telegram-setup-head">
+                <strong>Telegram 快速配置</strong>
+                <span>只需要填写 Bot Token</span>
+              </div>
+              <ol class="setup-steps">
+                <li>在 Telegram 里找 @BotFather 创建机器人，把 Bot Token 粘贴到下面。</li>
+                <li>点击“打开机器人聊天”，在 Telegram 里点 Start 或发送 hi。</li>
+                <li>回到这里点击“保存配置”，然后点击“发送测试”。</li>
+              </ol>
+              <div class="telegram-helper-grid">
+                <label>Bot token
+                  <input name="telegram_bot_token" type="password" autocomplete="new-password" placeholder="1234567890:AA...">
+                </label>
+                <label class="telegram-chat-id-field">Chat ID
+                  <input name="telegram_chat_id" placeholder="123456789 or -100...">
+                </label>
+              </div>
+              <div class="telegram-helper-actions">
+                <button class="btn secondary" id="telegram-open-bot-chat" type="button">Open bot chat</button>
+                <button class="btn secondary" id="telegram-open-updates" type="button">Open getUpdates</button>
+                <button class="btn secondary" id="telegram-fetch-chat-id" type="button">Fetch Chat ID</button>
+                <button class="btn secondary" id="telegram-auto-fill" type="button">Auto fill Telegram fields</button>
+              </div>
+              <div class="telegram-bot-chat-action">
+                <button class="btn secondary" id="telegram-open-bot-chat-primary" type="button">打开机器人聊天</button>
+                <span>打开 Telegram 后，点 Start 或发送 hi，再回到这里保存配置。</span>
+              </div>
+              <div class="muted" id="telegram-chat-id-state"></div>
+              <p class="muted">系统会自动获取 Chat ID，并把发送地址、密钥和目标会话保存到数据库。</p>
+            </div>
+            <label class="ai-advanced-field">Webhook URL
               <input name="webhook_url" placeholder="https://...">
             </label>
-            <label>Webhook Secret
+            <label class="ai-advanced-field">Webhook Secret
               <input name="webhook_secret" type="password" autocomplete="new-password" placeholder="发送侧密钥">
             </label>
-            <label>Signing Secret
+            <label class="ai-advanced-field">Signing Secret
               <input name="signing_secret" type="password" autocomplete="new-password" placeholder="回调验签密钥">
             </label>
-            <label>目标会话 / 群组 ID
+            <label class="ai-advanced-field">目标会话 / 群组 ID
               <input name="target_id" placeholder="chat_id / open_conversation_id">
             </label>
             <label>测试消息
@@ -339,16 +380,11 @@
         <section class="panel">
           <div class="panel-head">
             <h2>发送队列</h2>
-            <span class="system-status">最近 100 条</span>
+            <button class="system-status panel-toggle" id="ai-message-toggle" type="button">最近 100 条</button>
           </div>
-          <div id="ai-message-list" class="task-list"></div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>平台接入状态</h2>
-            <span class="system-status">国内 + 海外</span>
+          <div id="ai-message-list" class="task-list">
+            <div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>加载中...</span></div>
           </div>
-          <div class="bot-channel-grid" id="ai-channel-grid"></div>
         </section>
       </div>
     </section>
@@ -621,62 +657,9 @@
 
 
     <section id="video-matrix" class="view">
-      <div class="panel video-matrix-panel">
-        <div class="panel-head">
-          <div>
-            <h2>GasGx 视频生成工作台</h2>
-            <p class="muted">分类素材入库、首屏封面模板、视频文字和批量生成集中在本地程序内完成。</p>
-          </div>
-          <button id="video-matrix-save-state" class="btn primary" type="button">保存当前设置</button>
-        </div>
-        <div id="video-matrix-metrics" class="metric-grid"></div>
-        <div class="video-matrix-layout">
-          <aside class="video-matrix-side">
-            <label>生成数量<input id="vm-output-count" type="range" min="1" max="30"><strong id="vm-output-count-value"></strong></label>
-            <label>并行线程<input id="vm-max-workers" type="range" min="1" max="6"><strong id="vm-max-workers-value"></strong></label>
-            <label>输出文件<select id="vm-output-options" multiple><option>mp4</option><option>png</option><option>txt</option><option>json</option></select></label>
-            <label>最终视频生成目录<input id="vm-output-root"></label>
-            <button id="vm-open-output" class="btn primary" type="button">打开生成目录</button>
-            <label>9:16 模板<select id="vm-video-template"></select></label>
-            <div id="vm-language-group" class="radio-line"></div>
-            <details open><summary>背景音乐库</summary><div id="vm-bgm-panel"></div></details>
-          </aside>
-          <section class="video-matrix-main">
-            <div class="vm-source-block">
-              <div class="panel-head compact-head"><h2>素材来源</h2></div>
-              <div id="vm-source-dirs" class="vm-dir-list"></div>
-              <p id="vm-source-counts" class="muted"></p>
-              <div id="vm-source-mode-group" class="radio-line"></div>
-              <div id="vm-recent-limits" class="vm-compact-grid"></div>
-              <label id="vm-upload-sources-wrap" class="hidden">手动上传素材<input id="vm-source-files" type="file" multiple accept="video/*"></label>
-            </div>
-            <div class="vm-cover-workbench">
-              <div class="panel-head compact-head"><h2>第一屏封面模板</h2></div>
-              <div id="vm-cover-selector" class="vm-template-tabs"></div>
-              <div class="vm-cover-editor">
-                <div class="vm-preview-stage"><div class="vm-phone"><img id="vm-cover-preview" alt="cover preview"></div><small id="vm-preview-caption"></small></div>
-                <form id="vm-cover-form" class="vm-control-panel"></form>
-              </div>
-              <div id="vm-cover-gallery" class="vm-cover-gallery"></div>
-            </div>
-            <div class="vm-text-panel">
-              <div class="panel-head compact-head"><h2>视频文字设置</h2></div>
-              <label>主标题 / 视频口号<input id="vm-headline"></label>
-              <label>副标题 / 视频标题<input id="vm-subhead"></label>
-              <label>首屏 CTA<input id="vm-cta"></label>
-              <label>结尾关注提醒<input id="vm-follow-text"></label>
-              <label>视频 HUD 文本<textarea id="vm-hud-text"></textarea></label>
-              <label>上传文字稿<input id="vm-transcript-file" type="file" accept=".txt,.md"></label>
-              <label>文字稿内容<textarea id="vm-transcript-text"></textarea></label>
-              <button id="vm-generate" class="btn primary" type="button">生成 Vibe Matrix</button>
-              <div class="vm-progress"><div id="vm-progress-bar"></div></div>
-              <pre id="vm-job-log"></pre>
-            </div>
-          </section>
-        </div>
-      </div>
+      <iframe class="video-matrix-frame" src="/static/video_matrix.html?embed=1" title="GasGx 视频生成工作台"></iframe>
     </section>
   </main>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260429-ai-queue-closed"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import hmac
@@ -66,6 +67,8 @@ def brand_database_backend() -> str:
 
 def _brand_supabase() -> SupabaseRestClient:
     instance = _brand_runtime.get() or {}
+    if not instance:
+        return SupabaseRestClient.from_env(prefix="BRAND_SUPABASE")
     return SupabaseRestClient.from_instance(instance)
 
 
@@ -218,6 +221,16 @@ def get_ai_robot_config(platform: str) -> dict[str, Any] | None:
         return _public_ai_config(dict_from_row(row)) if row else None
 
 
+def delete_ai_robot_config(platform: str) -> bool:
+    token = _normalize_ai_platform(platform)
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().delete("ai_robot_configs", filters={"platform": token})
+    ensure_database()
+    with connect() as conn:
+        cursor = conn.execute("DELETE FROM ai_robot_configs WHERE platform = ?", (token,))
+        return cursor.rowcount > 0
+
+
 def save_ai_robot_config(platform: str, payload: dict[str, Any]) -> dict[str, Any]:
     token = _normalize_ai_platform(platform)
     ts = now_ts()
@@ -240,10 +253,9 @@ def save_ai_robot_config(platform: str, payload: dict[str, Any]) -> dict[str, An
             "webhook_secret": fields["webhook_secret"] or str((existing or {}).get("webhook_secret") or ""),
             "signing_secret": fields["signing_secret"] or str((existing or {}).get("signing_secret") or ""),
             "target_id": fields["target_id"],
+            "created_at": int((existing or {}).get("created_at") or ts),
             "updated_at": ts,
         }
-        if existing is None:
-            data["created_at"] = ts
         row = client.upsert("ai_robot_configs", data, on_conflict="platform")
         return _public_ai_config(row)
     with connect() as conn:
@@ -407,6 +419,18 @@ def run_ai_robot_sender_worker(*, limit: int = 10) -> dict[str, Any]:
     return {"ok": failed == 0, "claimed": len(messages), "sent": sent, "failed": failed, "messages": results}
 
 
+def send_ai_robot_message_now(message: dict[str, Any]) -> dict[str, Any]:
+    status = str((message or {}).get("status") or "")
+    if status not in {"pending", "retry", "sending"}:
+        return message
+    claimed = _mark_ai_robot_message_sending(message)
+    try:
+        _send_ai_robot_message(claimed)
+    except Exception as exc:
+        return _mark_ai_robot_message_failed(claimed, str(exc))
+    return _mark_ai_robot_message_sent(claimed)
+
+
 def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
     if brand_database_backend() == "supabase":
         rows = _brand_supabase().select_where(
@@ -538,6 +562,23 @@ def _robot_http_request(
     return {"text": text, "payload": payload}, headers
 
 
+def _mark_ai_robot_message_sending(message: dict[str, Any]) -> dict[str, Any]:
+    ts = now_ts()
+    payload = {"status": "sending", "summary": "claimed by robot sender", "last_attempt_at": ts, "updated_at": ts}
+    if brand_database_backend() == "supabase":
+        return _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE ai_robot_messages
+            SET status = ?, summary = ?, last_attempt_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (payload["status"], payload["summary"], payload["last_attempt_at"], payload["updated_at"], message["id"]),
+        )
+    return get_ai_robot_message(int(message["id"])) or {**message, **payload}
+
+
 def _mark_ai_robot_message_sent(message: dict[str, Any]) -> dict[str, Any]:
     ts = now_ts()
     payload = {"status": "sent", "summary": "sent by robot sender", "error": "", "sent_at": ts, "updated_at": ts}
@@ -560,10 +601,11 @@ def _mark_ai_robot_message_failed(message: dict[str, Any], error: str) -> dict[s
     retry_count = int(message.get("retry_count") or 0) + 1
     status = "failed" if retry_count >= AI_ROBOT_RETRY_LIMIT else "retry"
     summary = "robot sender failed; retry scheduled" if status == "retry" else "robot sender failed; retry limit reached"
+    safe_error = _redact_ai_robot_error(error)
     payload = {
         "status": status,
         "summary": summary,
-        "error": error[:1000],
+        "error": safe_error[:1000],
         "retry_count": retry_count,
         "last_attempt_at": ts,
         "updated_at": ts,
@@ -580,6 +622,52 @@ def _mark_ai_robot_message_failed(message: dict[str, Any], error: str) -> dict[s
             (status, summary, error[:1000], retry_count, ts, ts, message["id"]),
         )
     return get_ai_robot_message(int(message["id"])) or {}
+
+
+def _redact_ai_robot_error(error: str) -> str:
+    text = str(error or "")
+    text = re.sub(r"bot[^/\s]+/", "bot***REDACTED***/", text)
+    return re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "***TOKEN***", text)
+
+
+def resolve_telegram_bot_setup(token: str) -> dict[str, Any]:
+    bot_token = str(token or "").strip()
+    if not bot_token:
+        raise ValueError("telegram bot token is required")
+    timeout = float(os.getenv("AI_ROBOT_SEND_TIMEOUT", "10") or 10)
+    me_response = requests.get(f"https://api.telegram.org/bot{bot_token}/getMe", timeout=timeout)
+    me_payload = _telegram_json(me_response)
+    username = str(((me_payload.get("result") or {}).get("username")) or "")
+    updates_response = requests.get(f"https://api.telegram.org/bot{bot_token}/getUpdates", timeout=timeout)
+    updates_payload = _telegram_json(updates_response)
+    updates = updates_payload.get("result") if isinstance(updates_payload.get("result"), list) else []
+    chat = next(
+        (
+            item.get("message", {}).get("chat")
+            or item.get("channel_post", {}).get("chat")
+            or item.get("my_chat_member", {}).get("chat")
+            for item in updates
+            if isinstance(item, dict)
+        ),
+        None,
+    )
+    chat_id = str((chat or {}).get("id") or "")
+    return {
+        "ok": True,
+        "username": username,
+        "chat_id": chat_id,
+        "webhook_url": f"https://api.telegram.org/bot{bot_token}/sendMessage",
+    }
+
+
+def _telegram_json(response: requests.Response) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except Exception as exc:
+        raise ValueError("telegram returned a non-json response") from exc
+    if response.status_code >= 400 or payload.get("ok") is False:
+        raise ValueError(str(payload.get("description") or f"telegram returned {response.status_code}"))
+    return payload
 
 
 def _matrix_publish_success_counts() -> dict[int, int]:

@@ -29,7 +29,7 @@ class SupabaseRestClient:
             load_dotenv()
         return cls(
             os.getenv(f"{prefix}_URL", "") or os.getenv("SUPABASE_URL", ""),
-            os.getenv(f"{prefix}_SERVICE_ROLE_KEY", ""),
+            os.getenv(f"{prefix}_SERVICE_ROLE_KEY", "") or os.getenv(f"{prefix}_SERVICE_KEY", ""),
         )
 
     @classmethod

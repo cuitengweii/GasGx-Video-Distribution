@@ -8,8 +8,15 @@ from fastapi import Request
 
 from . import control_plane, service
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - python-dotenv is a declared dependency.
+    load_dotenv = None
+
 
 def resolve_brand_instance(request: Request) -> dict[str, Any]:
+    if load_dotenv is not None:
+        load_dotenv(override=not bool(os.getenv("PYTEST_CURRENT_TEST")))
     brand_id = request.headers.get("x-brand-instance", "")
     host = request.headers.get("host", "")
     host_name = str(host or "").split(":", 1)[0].lower()
