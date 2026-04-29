@@ -1,10 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
 import hmac
 import hashlib
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 
@@ -614,6 +615,120 @@ def test_ai_robot_config_webhook_and_test_message(monkeypatch, tmp_path: Path) -
     assert test_message.status_code == 200
     assert test_message.json()["status"] == "sent"
     assert sent[-1]["json"] == {"text": "hello", "chat_id": "chat-1"}
+
+    wecom_saved = client.put(
+        "/api/ai-robots/wecom/config",
+        json={
+            "enabled": True,
+            "bot_name": "企业微信机器人",
+            "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
+        },
+    )
+    assert wecom_saved.status_code == 200
+    wecom_config = wecom_saved.json()
+    assert wecom_config["enabled"] is True
+    assert wecom_config["webhook_url"].startswith("https://qyapi.weixin.qq.com/")
+    assert wecom_config["target_id"] == ""
+    wecom_message = client.post(
+        "/api/ai-robots/wecom/test-message",
+        json={"message_type": "text", "text": "wecom hello"},
+    )
+    assert wecom_message.status_code == 200
+    assert wecom_message.json()["status"] == "sent"
+    assert sent[-1]["json"] == {"msgtype": "text", "text": {"content": "wecom hello"}}
+
+    disabled = client.put(
+        "/api/ai-robots/wecom/config",
+        json={
+            "enabled": False,
+            "bot_name": "企业微信机器人",
+            "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    disabled_message = client.post(
+        "/api/ai-robots/wecom/test-message",
+        json={"message_type": "text", "text": "disabled"},
+    )
+    assert disabled_message.status_code == 200
+    assert disabled_message.json()["status"] == "unsupported"
+    assert "not enabled" in disabled_message.json()["summary"]
+
+    for platform, url in [
+        ("dingtalk", "https://oapi.dingtalk.com/robot/send?access_token=abc"),
+        ("lark", "https://open.feishu.cn/open-apis/bot/v2/hook/abc"),
+    ]:
+        saved_webhook_only = client.put(
+            f"/api/ai-robots/{platform}/config",
+            json={
+                "enabled": True,
+                "bot_name": f"{platform} webhook bot",
+                "webhook_url": url,
+            },
+        )
+        assert saved_webhook_only.status_code == 200
+        assert saved_webhook_only.json()["enabled"] is True
+        assert saved_webhook_only.json()["target_id"] == ""
+        sent_before = len(sent)
+        webhook_only_test = client.post(
+            f"/api/ai-robots/{platform}/test-message",
+            json={"message_type": "text", "text": f"{platform} hello"},
+        )
+        assert webhook_only_test.status_code == 200
+        assert webhook_only_test.json()["status"] == "sent"
+        assert len(sent) == sent_before + 1
+        if platform == "dingtalk":
+            assert sent[-1]["json"] == {"msgtype": "text", "text": {"content": "dingtalk hello"}}
+        else:
+            assert sent[-1]["json"] == {"msg_type": "text", "content": {"text": "lark hello"}}
+
+    signed_dingtalk = client.put(
+        "/api/ai-robots/dingtalk/config",
+        json={
+            "enabled": True,
+            "bot_name": "signed dingtalk bot",
+            "webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=abc",
+            "webhook_secret": "SECabc",
+        },
+    )
+    assert signed_dingtalk.status_code == 200
+    signed_dingtalk_message = client.post(
+        "/api/ai-robots/dingtalk/test-message",
+        json={"message_type": "text", "text": "signed dingtalk"},
+    )
+    assert signed_dingtalk_message.status_code == 200
+    query = parse_qs(urlsplit(str(sent[-1]["url"])).query)
+    assert query["access_token"] == ["abc"]
+    assert query["timestamp"]
+    assert query["sign"]
+
+    signed_lark = client.put(
+        "/api/ai-robots/lark/config",
+        json={
+            "enabled": True,
+            "bot_name": "signed lark bot",
+            "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
+            "webhook_secret": "SECabc",
+        },
+    )
+    assert signed_lark.status_code == 200
+    signed_lark_message = client.post(
+        "/api/ai-robots/lark/test-message",
+        json={"message_type": "text", "text": "signed lark"},
+    )
+    assert signed_lark_message.status_code == 200
+    assert sent[-1]["json"]["msg_type"] == "text"
+    assert sent[-1]["json"]["content"] == {"text": "signed lark"}
+    assert sent[-1]["json"]["timestamp"]
+    assert sent[-1]["json"]["sign"]
+
+    lark_challenge = client.post(
+        "/api/ai-robots/lark/webhook",
+        json={"type": "url_verification", "challenge": "challenge-token"},
+    )
+    assert lark_challenge.status_code == 200
+    assert lark_challenge.json() == {"challenge": "challenge-token"}
 
     body = b'{"text":"from platform"}'
     signature = hmac.new(b"sign-secret", body, hashlib.sha256).hexdigest()

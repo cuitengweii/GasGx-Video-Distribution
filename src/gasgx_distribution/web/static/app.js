@@ -1,4 +1,4 @@
-const PLATFORM_LABELS = {
+﻿const PLATFORM_LABELS = {
   wechat: "视频号",
   douyin: "抖音",
   kuaishou: "快手",
@@ -527,7 +527,21 @@ function aiRobotConfigFor(platform) {
 }
 
 function isAiRobotBound(config) {
-  return Boolean(config && config.enabled && config.webhook_url && config.target_id);
+  return Boolean(config && config.webhook_url);
+}
+
+function isWebhookOnlyAiRobot(platform) {
+  return ["wecom", "dingtalk", "lark"].includes(platform);
+}
+
+function aiRobotWebhookHint(platform) {
+  if (platform === "dingtalk") return "填写钉钉群机器人 Webhook 地址，保存后可独立开启或关闭通知。";
+  if (platform === "lark") return "填写飞书群机器人 Webhook 地址；下方回调地址用于飞书事件订阅 URL 验证。";
+  return "填写企业微信群机器人 Webhook 地址，保存后可独立开启或关闭通知。";
+}
+
+function aiRobotCallbackUrl(platform) {
+  return `${window.location.origin}/api/ai-robots/${encodeURIComponent(platform)}/webhook`;
 }
 
 function visibleAiRobotConfigs() {
@@ -538,11 +552,26 @@ function syncTelegramSetupVisibility() {
   const form = document.querySelector("#ai-robot-form");
   const card = document.querySelector("#telegram-setup-card");
   if (!form || !card) return;
-  const isTelegram = form.elements.platform.value === "telegram";
+  const platform = form.elements.platform.value;
+  const isTelegram = platform === "telegram";
+  const isWebhookOnly = isWebhookOnlyAiRobot(platform);
+  const modeTitle = document.querySelector("#ai-config-mode-title");
+  const modeDesc = document.querySelector("#ai-config-mode-desc");
+  const larkCallbackField = document.querySelector("#ai-lark-callback-field");
+  const larkCallbackInput = document.querySelector("#ai-lark-callback-url");
   card.hidden = !isTelegram;
   form.classList.toggle("telegram-simple-mode", isTelegram);
+  form.classList.toggle("webhook-simple-mode", isWebhookOnly);
+  form.classList.toggle("lark-callback-mode", platform === "lark");
+  if (larkCallbackField) larkCallbackField.hidden = platform !== "lark";
+  if (larkCallbackInput) larkCallbackInput.value = aiRobotCallbackUrl("lark");
+  if (modeTitle) modeTitle.textContent = isTelegram ? "Telegram 快速配置" : `${aiPlatformLabel(platform)} Webhook 配置`;
+  if (modeDesc) modeDesc.textContent = isTelegram ? "填写 Bot Token 并获取 Chat ID，保存后可独立开启或关闭通知。" : aiRobotWebhookHint(platform);
   if (isTelegram && !form.elements.bot_name.value) {
     form.elements.bot_name.value = "GasGx Telegram Bot";
+  }
+  if (isWebhookOnly && !form.elements.bot_name.value) {
+    form.elements.bot_name.value = `${aiPlatformLabel(form.elements.platform.value)}机器人`;
   }
 }
 
@@ -638,17 +667,24 @@ async function fetchTelegramChatId() {
 function renderAiRobot() {
   const form = document.querySelector("#ai-robot-form");
   if (!form) return;
+  const configPanel = document.querySelector("#ai-config-panel");
   const telegramConfig = state.aiRobotConfigs.find((item) => item.platform === "telegram") || { platform: "telegram" };
   const telegramBound = isAiRobotBound(telegramConfig);
   const editingPlatform = state.aiRobotEditingPlatform;
   const editingTelegram = editingPlatform === "telegram" || !telegramBound;
-  const config = editingPlatform ? aiRobotConfigFor(editingPlatform) : (telegramBound ? telegramConfig : selectedAiRobotConfig());
+  const configured = visibleAiRobotConfigs().filter(isAiRobotBound);
+  const config = editingPlatform ? aiRobotConfigFor(editingPlatform) : (configured.length ? configured[0] : selectedAiRobotConfig());
   const saveButton = document.querySelector("#ai-save-config");
   const sendTestButton = document.querySelector("#ai-send-test");
-  const formHidden = telegramBound && !editingPlatform;
+  const panelSaveButton = document.querySelector("#ai-save-config-panel");
+  const panelSendTestButton = document.querySelector("#ai-send-test-panel");
+  const formHidden = !editingPlatform;
+  if (configPanel) configPanel.hidden = formHidden;
   form.hidden = formHidden;
   saveButton.classList.toggle("hidden", formHidden);
   sendTestButton.classList.toggle("hidden", formHidden);
+  panelSaveButton?.classList.toggle("hidden", formHidden);
+  panelSendTestButton?.classList.toggle("hidden", formHidden);
   form.elements.platform.value = config.platform || "wecom";
   form.elements.bot_name.value = config.bot_name || "";
   form.elements.enabled.value = String(config.enabled === true);
@@ -659,14 +695,14 @@ function renderAiRobot() {
   if (form.elements.telegram_bot_token) form.elements.telegram_bot_token.value = "";
   if (form.elements.telegram_chat_id) form.elements.telegram_chat_id.value = config.platform === "telegram" ? (config.target_id || "") : "";
   syncTelegramSetupVisibility();
-  document.querySelector("#ai-config-state").textContent = telegramBound && !editingTelegram ? "已绑定" : (config.enabled ? "已启用" : "未启用");
+  document.querySelector("#ai-config-state").textContent = configured.length && !editingPlatform ? "已配置" : (config.enabled ? "已启用" : "未启用");
   renderBoundAiRobotPlatforms();
   document.querySelector("#ai-channel-grid").innerHTML = visibleAiRobotConfigs().map((item) => `
     <article class="bot-channel-card">
       <span class="bot-logo ${item.platform}">${aiPlatformLabel(item.platform).slice(0, 1)}</span>
       <div>
         <strong>${aiPlatformLabel(item.platform)}</strong>
-        <p>${item.enabled ? "已启用" : "未启用"} · ${item.webhook_url ? "Webhook 已保存" : "缺少 Webhook"} · ${item.has_signing_secret ? "验签密钥已保存" : "缺少验签密钥"}</p>
+        <p>${item.webhook_url ? "已配置" : "未配置"} · ${item.enabled ? "通知开启" : "通知关闭"} · ${item.has_signing_secret ? "验签密钥已保存" : "无需验签密钥"}</p>
       </div>
       <button class="btn secondary" type="button" data-ai-platform="${item.platform}">配置</button>
     </article>
@@ -697,17 +733,20 @@ function renderBoundAiRobotPlatforms() {
   if (!node) return;
   const bound = state.aiRobotConfigs.filter(isAiRobotBound);
   if (!bound.length) {
-    node.innerHTML = `<div class="bound-empty">还没有绑定消息机器人。先填写 Telegram Bot Token，保存后即可发送测试。</div>`;
+    node.innerHTML = `<div class="bound-empty">还没有配置消息机器人。企业微信、钉钉、飞书填 Webhook 地址；Telegram 填 Bot Token。</div>`;
     return;
   }
   node.innerHTML = bound.map((item) => `
     <article class="bound-platform-card">
       <span class="bot-logo ${item.platform}">${aiPlatformLabel(item.platform).slice(0, 1)}</span>
       <div>
-        <strong>${aiPlatformLabel(item.platform)} 已绑定</strong>
-        <p>${item.target_id ? `目标会话 ${item.target_id}` : "目标会话已保存"} · 可发送测试消息</p>
+        <strong>${aiPlatformLabel(item.platform)} 已配置</strong>
+        <p>${item.enabled ? "通知开启" : "通知关闭"} · ${item.target_id ? `目标会话 ${item.target_id}` : "Webhook 已保存"} · 可发送测试消息</p>
       </div>
       <div class="bound-platform-actions">
+        <button class="notify-switch ${item.enabled ? "enabled" : ""}" type="button" data-ai-toggle="${item.platform}" aria-pressed="${item.enabled ? "true" : "false"}">
+          <span></span><b>${item.enabled ? "通知开" : "通知关"}</b>
+        </button>
         <button class="btn secondary" type="button" data-ai-test="${item.platform}">发送测试</button>
         <button class="btn secondary" type="button" data-ai-edit="${item.platform}">修改</button>
         <button class="btn secondary danger" type="button" data-ai-delete="${item.platform}">删除</button>
@@ -717,6 +756,31 @@ function renderBoundAiRobotPlatforms() {
   node.querySelectorAll("[data-ai-test]").forEach((button) => {
     button.onclick = async () => {
       await sendAiRobotTest(button.dataset.aiTest, button);
+    };
+  });
+  node.querySelectorAll("[data-ai-toggle]").forEach((button) => {
+    button.onclick = async () => {
+      const platform = button.dataset.aiToggle;
+      const config = aiRobotConfigFor(platform);
+      const restoreButton = setButtonLoading(button, config.enabled ? "关闭中" : "开启中");
+      try {
+        await api(`/api/ai-robots/${platform}/config`, {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: !config.enabled,
+            bot_name: config.bot_name || `${aiPlatformLabel(platform)}机器人`,
+            webhook_url: config.webhook_url || "",
+            webhook_secret: "",
+            signing_secret: "",
+            target_id: config.target_id || "",
+          }),
+        });
+        state.aiRobotConfigs = await api("/api/ai-robots/configs");
+        state.aiRobotMessages = await api("/api/ai-robots/messages");
+        renderAiRobot();
+      } finally {
+        restoreButton();
+      }
     };
   });
   node.querySelectorAll("[data-ai-edit]").forEach((button) => {
@@ -1118,6 +1182,14 @@ document.querySelector("#ai-save-config").addEventListener("click", async (event
     }
     const data = Object.fromEntries(new FormData(form).entries());
     const platform = data.platform;
+    if (isWebhookOnlyAiRobot(platform)) {
+      const existing = aiRobotConfigFor(platform);
+      data.enabled = existing.webhook_url ? String(existing.enabled === true) : "true";
+      data.bot_name = data.bot_name || `${aiPlatformLabel(platform)}机器人`;
+      data.webhook_secret = "";
+      data.signing_secret = "";
+      data.target_id = "";
+    }
     delete data.platform;
     delete data.test_text;
     delete data.telegram_bot_token;
@@ -1138,6 +1210,27 @@ document.querySelector("#ai-save-config").addEventListener("click", async (event
     if (saved) {
       button.textContent = "已保存";
     }
+  }
+});
+
+document.querySelector("#ai-save-config-panel")?.addEventListener("click", () => {
+  document.querySelector("#ai-save-config")?.click();
+});
+
+document.querySelector("#ai-send-test-panel")?.addEventListener("click", () => {
+  document.querySelector("#ai-send-test")?.click();
+});
+
+document.querySelector("#ai-copy-lark-callback")?.addEventListener("click", async (event) => {
+  const input = document.querySelector("#ai-lark-callback-url");
+  if (!input) return;
+  try {
+    await navigator.clipboard.writeText(input.value);
+    event.currentTarget.textContent = "已复制";
+  } catch {
+    input.select();
+    document.execCommand("copy");
+    event.currentTarget.textContent = "已复制";
   }
 });
 

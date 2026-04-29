@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -8,6 +8,7 @@ import sys
 import hmac
 import hashlib
 import base64
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
 from contextlib import contextmanager
 from pathlib import Path
@@ -489,6 +490,8 @@ def _send_ai_robot_message(message: dict[str, Any]) -> None:
     payload = _message_payload(message)
     text = _message_text(payload)
     body, headers = _robot_http_request(platform, webhook_url, config, text, payload)
+    if platform == "dingtalk":
+        webhook_url = _signed_dingtalk_webhook_url(webhook_url, str(config.get("webhook_secret") or "").strip())
     response = requests.post(webhook_url, json=body, headers=headers, timeout=float(os.getenv("AI_ROBOT_SEND_TIMEOUT", "10") or 10))
     if response.status_code >= 400:
         raise RuntimeError(f"{platform} send failed: {response.status_code} {response.text[:500]}")
@@ -525,6 +528,24 @@ def _message_text(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _signed_dingtalk_webhook_url(webhook_url: str, secret: str) -> str:
+    if not secret:
+        return webhook_url
+    timestamp = str(now_ts() * 1000)
+    digest = hmac.new(secret.encode("utf-8"), f"{timestamp}\n{secret}".encode("utf-8"), hashlib.sha256).digest()
+    sign = base64.b64encode(digest).decode("ascii")
+    parsed = urlsplit(webhook_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update({"timestamp": timestamp, "sign": sign})
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def _lark_webhook_sign(timestamp: str, secret: str) -> str:
+    string_to_sign = f"{timestamp}\n{secret}"
+    digest = hmac.new(string_to_sign.encode("utf-8"), b"", hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
 def _robot_http_request(
     platform: str,
     webhook_url: str,
@@ -538,16 +559,13 @@ def _robot_http_request(
     if platform == "wecom":
         return {"msgtype": "text", "text": {"content": text}}, headers
     if platform == "dingtalk":
-        if secret:
-            timestamp = str(now_ts() * 1000)
-            digest = hmac.new(secret.encode("utf-8"), f"{timestamp}\n{secret}".encode("utf-8"), hashlib.sha256).digest()
-            headers["x-gasgx-dingtalk-timestamp"] = timestamp
-            headers["x-gasgx-dingtalk-sign"] = base64.b64encode(digest).decode("ascii")
         return {"msgtype": "text", "text": {"content": text}}, headers
     if platform == "lark":
         body: dict[str, Any] = {"msg_type": "text", "content": {"text": text}}
         if secret:
-            body["sign"] = hmac.new(secret.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest()
+            timestamp = str(now_ts())
+            body["timestamp"] = timestamp
+            body["sign"] = _lark_webhook_sign(timestamp, secret)
         return body, headers
     if platform == "telegram":
         body = {"text": text, "parse_mode": str(payload.get("parse_mode") or "")}

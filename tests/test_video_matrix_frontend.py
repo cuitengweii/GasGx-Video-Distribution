@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +53,41 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "position: fixed" in shell_css
     assert "margin-left: 0" in shell_css
     assert "height: 100vh" in shell_css
+    app_shell = ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js"
+    shell_app = app_shell.read_text(encoding="utf-8")
+    shell_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "function isWebhookOnlyAiRobot" in shell_app
+    assert '["wecom", "dingtalk", "lark"].includes(platform)' in shell_app
+    assert "function aiRobotWebhookHint" in shell_app
+    assert "function aiRobotCallbackUrl" in shell_app
+    assert "钉钉群机器人 Webhook 地址" in shell_app
+    assert "飞书事件订阅 URL 验证" in shell_app
+    assert "ai-lark-callback-url" in shell_app
+    assert "/api/ai-robots/" in shell_app
+    assert "webhook-simple-mode" in shell_app
+    assert "lark-callback-mode" in shell_app
+    assert 'const formHidden = !editingPlatform' in shell_app
+    assert 'configPanel.hidden = formHidden' in shell_app
+    assert "data-ai-toggle" in shell_app
+    assert "通知开启" in shell_app
+    assert "通知关闭" in shell_app
+    assert "已配置" in shell_app
+    assert "企业微信、钉钉、飞书填 Webhook 地址；Telegram 填 Bot Token" in shell_app
+    assert 'class="ai-webhook-url-field"' in shell_html
+    assert 'class="ai-test-message-field"' in shell_html
+    assert 'id="ai-config-mode-card"' in shell_html
+    assert 'id="ai-config-panel" hidden' in shell_html
+    assert 'id="ai-lark-callback-field"' in shell_html
+    assert 'id="ai-copy-lark-callback"' in shell_html
+    assert 'id="ai-save-config-panel"' in shell_html
+    assert 'id="ai-send-test-panel"' in shell_html
+    assert ".notify-switch" in shell_css
+    assert ".ai-config-mode-card" in shell_css
+    assert ".ai-config-panel[hidden]" in shell_css
+    assert ".ai-callback-field" in shell_css
+    assert ".ai-config-actions" in shell_css
+    assert ".ai-config-form.webhook-simple-mode .ai-advanced-field" in shell_css
+    assert ".ai-config-form.webhook-simple-mode .ai-test-message-field" in shell_css
     assert "body.video-matrix-active" in shell_css
     assert "overflow: hidden" in shell_css
     assert "flex-direction: column" in shell_css

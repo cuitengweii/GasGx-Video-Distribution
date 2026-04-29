@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -308,6 +309,13 @@ def create_app() -> FastAPI:
     @app.post("/api/ai-robots/{platform}/webhook")
     async def ai_robot_webhook(platform: str, request: Request, x_gasgx_signature: str = Header(default="")) -> dict[str, Any]:
         body = await request.body()
+        if platform.lower() in {"lark", "feishu"}:
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict) and payload.get("challenge"):
+                return {"challenge": payload["challenge"]}
         try:
             verification = service.verify_ai_robot_webhook(platform, body, x_gasgx_signature)
             message = service.enqueue_ai_robot_message(platform, {"message_type": "webhook", "body": body.decode("utf-8", errors="replace")})

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -301,7 +301,7 @@
             <div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>加载中...</span></div>
           </div>
         </section>
-        <section class="panel ai-config-panel" id="ai-config-panel">
+        <section class="panel ai-config-panel" id="ai-config-panel" hidden>
           <div class="panel-head">
             <div>
               <h2>平台配置</h2>
@@ -311,6 +311,10 @@
           </div>
           <div id="ai-bound-platforms" class="bound-platform-list"></div>
           <form id="ai-robot-form" class="ai-config-form">
+            <div class="ai-config-mode-card" id="ai-config-mode-card">
+              <strong id="ai-config-mode-title">Webhook 配置</strong>
+              <p id="ai-config-mode-desc" class="muted">填写机器人 Webhook 地址，保存后可在已配置列表里打开或关闭通知。</p>
+            </div>
             <label class="ai-platform-picker">平台
               <select name="platform" id="ai-platform-select">
                 <option value="wecom">企业微信</option>
@@ -360,9 +364,15 @@
               <div class="muted" id="telegram-chat-id-state"></div>
               <p class="muted">系统会自动获取 Chat ID，并把发送地址、密钥和目标会话保存到数据库。</p>
             </div>
-            <label class="ai-advanced-field">Webhook URL
+            <label class="ai-webhook-url-field">Webhook URL
               <input name="webhook_url" placeholder="https://...">
             </label>
+            <div class="ai-callback-field" id="ai-lark-callback-field">
+              <label>飞书回调地址
+                <input id="ai-lark-callback-url" readonly value="">
+              </label>
+              <button class="btn secondary" id="ai-copy-lark-callback" type="button">复制回调地址</button>
+            </div>
             <label class="ai-advanced-field">Webhook Secret
               <input name="webhook_secret" type="password" autocomplete="new-password" placeholder="发送侧密钥">
             </label>
@@ -372,9 +382,13 @@
             <label class="ai-advanced-field">目标会话 / 群组 ID
               <input name="target_id" placeholder="chat_id / open_conversation_id">
             </label>
-            <label>测试消息
+            <label class="ai-test-message-field">测试消息
               <textarea name="test_text" rows="4">GasGx AI robot test message</textarea>
             </label>
+            <div class="ai-config-actions">
+              <button class="btn primary" id="ai-save-config-panel" type="button">保存配置</button>
+              <button class="btn secondary" id="ai-send-test-panel" type="button">发送测试</button>
+            </div>
           </form>
         </section>
         <section class="panel">
