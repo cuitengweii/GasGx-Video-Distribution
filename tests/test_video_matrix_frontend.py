@@ -133,6 +133,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "composition_customized" in app
     assert "defaultCompositionSequence" in app
     assert "scheduleStateSave" in app
+    assert "scheduleVideoTemplateSave" in app
+    assert "scheduleCoverTemplateSave" in app
+    assert "saveTemplateSelection" in app
+    assert "renderCoverSelector(); renderCoverEditor(); await saveTemplateSelection(); await refreshAllPreviews();" in app
+    assert "renderVideoTemplateEditor();\n    await saveTemplateSelection();" in app
+    assert "正文模板自动保存失败" in app
+    assert "第一屏模板自动保存失败" in app
     assert "const recentLimits = state.recent_limits || {}" in app
     assert '$("transcriptText").value = state.transcript_text || ""' in app
     assert 'transcript_text: $("transcriptText").value' in app
@@ -171,3 +178,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "video_duration_max" in app
     assert "composition-rows" in css
     assert "composition-row" in css
+
+
+def test_video_matrix_preview_keeps_video_audio_available() -> None:
+    preview_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
+    preview_css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.css").read_text(encoding="utf-8")
+
+    video_tag = preview_html[preview_html.index("<video"):preview_html.index("</video>")]
+    assert "muted" not in video_tag
+    assert "video.muted = false" in preview_html
+    assert "video.volume = 1" in preview_html
+    assert "soundToggle.addEventListener" in preview_html
+    assert ".sound-toggle" in preview_css

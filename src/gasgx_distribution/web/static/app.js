@@ -66,12 +66,17 @@ const state = {
   matrixJobStatus: {},
   aiRobotConfigs: [],
   aiRobotMessages: [],
+  notificationRoutes: [],
+  loginQrBatches: [],
   aiRobotEditingPlatform: "",
   aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
   systemHealth: null,
   analytics: {},
 };
+
+const loadedViews = new Set();
+let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "overview";
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
@@ -124,6 +129,12 @@ function setViewHeader(view) {
   document.querySelector("#refresh").classList.toggle("hidden", view === "video-matrix");
 }
 
+function broadcastShellTheme(theme) {
+  document.querySelectorAll(".video-matrix-frame").forEach((frame) => {
+    frame.contentWindow?.postMessage({ type: "gasgx-shell-theme", theme }, window.location.origin);
+  });
+}
+
 function applyShellTheme(themeId) {
   const theme = SHELL_THEMES.find((item) => item.id === themeId) || SHELL_THEMES[0];
   document.documentElement.style.setProperty("--accent-aurora", theme.accent);
@@ -132,6 +143,7 @@ function applyShellTheme(themeId) {
   document.querySelectorAll(".theme-card").forEach((card) => {
     card.classList.toggle("active", card.dataset.themeId === theme.id);
   });
+  broadcastShellTheme(theme);
 }
 
 function renderThemePalette() {
@@ -297,6 +309,61 @@ function setButtonLoading(button, loadingText = "处理中") {
     button.disabled = previousDisabled;
     button.classList.remove("loading");
   };
+}
+
+function loadingInline(label = "加载中...") {
+  return `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
+}
+
+function setPageLoading(label = "加载中...") {
+  const targets = [
+    ["#summary", "加载概览..."],
+    ["#platforms", "加载平台..."],
+    ["#accounts-list", "加载账号..."],
+    ["#tasks-list", "加载任务..."],
+    ["#stats-overview", "加载统计..."],
+    ["#operation-progress", "加载进度..."],
+    ["#platform-settings-list", "加载设置..."],
+    ["#matrix-job-status", "加载作业..."],
+    ["#operation-notice-routes", "加载通知..."],
+    ["#login-qr-batches", "加载登录批次..."],
+    ["#supabase-health-list", "加载状态..."],
+  ];
+  targets.forEach(([selector, text]) => {
+    const node = document.querySelector(selector);
+    if (node) node.innerHTML = loadingInline(text || label);
+  });
+  renderAiRobotLoading();
+}
+
+function setViewLoading(view) {
+  const targets = {
+    overview: [
+      ["#summary", "加载概览..."],
+      ["#platforms", "加载平台..."],
+    ],
+    accounts: [["#accounts-list", "加载账号..."]],
+    settings: [
+      ["#platform-settings-list", "加载设置..."],
+      ["#matrix-job-status", "加载作业..."],
+    ],
+    tasks: [["#tasks-list", "加载任务..."]],
+    stats: [
+      ["#stats-overview", "加载统计..."],
+      ["#operation-progress", "加载进度..."],
+    ],
+    "ai-robot": [],
+    notifications: [
+      ["#operation-notice-routes", "加载通知..."],
+      ["#login-qr-batches", "加载登录批次..."],
+    ],
+    "system-settings": [["#supabase-health-list", "加载状态..."]],
+  };
+  if (view === "ai-robot") renderAiRobotLoading();
+  (targets[view] || []).forEach(([selector, text]) => {
+    const node = document.querySelector(selector);
+    if (node) node.innerHTML = loadingInline(text || label);
+  });
 }
 
 function platformLabel(key) {
@@ -580,7 +647,59 @@ function renderMatrixJobStatus() {
     ["上次完成", formatTime(status.last_finished_at)],
     ["上次结果", status.last_ok === true ? "成功" : status.last_ok === false ? "失败" : "-"],
     ["发布数量", lastResult.count ?? "-"],
+    ["上次巡检", formatTime(status.last_login_check_at)],
+    ["巡检结果", status.last_login_check_ok === true ? "正常" : status.last_login_check_ok === false ? "需扫码" : "-"],
   ].map(([label, value]) => `<div class="job-status-item"><span>${label}</span><strong>${value}</strong></div>`).join("");
+}
+
+function renderOperationNotifications() {
+  const routeNode = document.querySelector("#operation-notice-routes");
+  const batchNode = document.querySelector("#login-qr-batches");
+  if (routeNode) {
+    const routes = (state.notificationRoutes || []).filter((item) => item.event_type === "wechat_login_qr");
+    const byPlatform = Object.fromEntries(routes.map((item) => [item.platform, item]));
+    const routeButtons = ["telegram", "dingtalk", "wecom"].map((platform) => {
+      const enabled = Boolean(byPlatform[platform]?.enabled);
+      return `<button class="btn btn-sm ${enabled ? "primary" : "ghost"}" data-notice-route="wechat_login_qr" data-notice-platform="${platform}" data-notice-enabled="${enabled ? "0" : "1"}">${aiPlatformLabel(platform)} ${enabled ? "开启" : "关闭"}</button>`;
+    }).join("");
+    routeNode.innerHTML = `
+      <article class="notification-card info">
+        <span class="notification-dot"></span>
+        <div>
+          <strong>运营通知开关：视频号登录二维码</strong>
+          <p>${routes.map((item) => `${aiPlatformLabel(item.platform)} ${item.enabled ? "开启" : "关闭"}`).join(" / ") || "未配置"}</p>
+          <div class="inline-actions">${routeButtons}</div>
+        </div>
+        <time>实时</time>
+      </article>
+    `;
+  }
+  if (batchNode) {
+    const batches = state.loginQrBatches || [];
+    batchNode.innerHTML = batches.length ? batches.slice(0, 3).map((batch) => {
+      let payload = batch.payload_json || {};
+      if (typeof payload === "string") {
+        try { payload = JSON.parse(payload || "{}"); } catch (_error) { payload = {}; }
+      }
+      const items = payload.items || [];
+      return `
+        <article class="notification-card danger">
+          <span class="notification-dot"></span>
+          <div>
+            <strong>待扫码批次 ${batch.batch_id}</strong>
+            <p>${items.map((item) => `${item.display_name || item.account_key} / port ${item.debug_port}`).join("；") || "等待巡检结果"}</p>
+          </div>
+          <time>${formatTime(batch.created_at)}</time>
+        </article>
+      `;
+    }).join("") : `
+      <article class="notification-card success">
+        <span class="notification-dot"></span>
+        <div><strong>暂无待扫码视频号</strong><p>登录巡检没有发现需要运营扫码的账号。</p></div>
+        <time>实时</time>
+      </article>
+    `;
+  }
 }
 
 function aiPlatformLabel(platform) {
@@ -916,40 +1035,74 @@ function healthDetailText(details) {
 }
 
 async function refresh() {
-  renderAiRobotLoading();
-  const [brand, platforms, accounts, tasks, distributionSettings, matrixJobStatus, aiRobotConfigs, aiRobotMessages] = await Promise.all([
-    api("/api/brand"),
-    api("/api/platforms"),
-    api("/api/accounts"),
-    api("/api/tasks"),
-    api("/api/settings/distribution"),
-    api("/api/jobs/matrix-wechat/status"),
-    api("/api/ai-robots/configs"),
-    api("/api/ai-robots/messages"),
-  ]);
-  Object.assign(state, { brand, platforms, accounts, tasks, distributionSettings, matrixJobStatus, aiRobotConfigs, aiRobotMessages });
+  return loadViewData(currentView, { force: true });
+}
 
-  const optional = await Promise.allSettled([
-    api("/api/summary"),
-    api("/api/stats"),
-    api("/api/system/supabase-health"),
-    api("/api/stats/analytics"),
-  ]);
-  if (optional[0].status === "fulfilled") state.summary = optional[0].value;
-  if (optional[1].status === "fulfilled") state.stats = optional[1].value;
-  if (optional[2].status === "fulfilled") state.systemHealth = optional[2].value;
-  if (optional[3].status === "fulfilled") state.analytics = optional[3].value;
+async function loadShellData() {
+  const brand = await api("/api/brand");
+  state.brand = brand;
   applyServerBrand(brand);
-  renderSummary();
-  renderPlatforms();
-  renderTaskSelects();
-  renderDistributionSettings();
-  renderMatrixJobStatus();
-  renderAccounts();
-  renderTasks();
-  renderStats();
-  renderAiRobot();
-  renderSystemHealth();
+}
+
+async function loadPlatforms() {
+  state.platforms = await api("/api/platforms");
+}
+
+async function loadAccounts() {
+  state.accounts = await api("/api/accounts");
+}
+
+async function loadTasks() {
+  state.tasks = await api("/api/tasks");
+}
+
+async function loadViewData(view, { force = false } = {}) {
+  if (!force && loadedViews.has(view)) return;
+  setViewLoading(view);
+  await loadShellData();
+
+  if (view === "overview") {
+    await loadPlatforms();
+    state.summary = await api("/api/summary");
+    renderSummary();
+    renderPlatforms();
+  } else if (view === "accounts") {
+    await loadPlatforms();
+    await loadAccounts();
+    renderAccounts();
+  } else if (view === "settings") {
+    await loadPlatforms();
+    state.distributionSettings = await api("/api/settings/distribution");
+    state.matrixJobStatus = await api("/api/jobs/matrix-wechat/status");
+    renderDistributionSettings();
+    renderMatrixJobStatus();
+  } else if (view === "tasks") {
+    await loadPlatforms();
+    await loadAccounts();
+    await loadTasks();
+    renderTaskSelects();
+    renderTasks();
+  } else if (view === "stats") {
+    await loadAccounts();
+    state.summary = await api("/api/summary");
+    state.stats = await api("/api/stats");
+    state.analytics = await api("/api/stats/analytics");
+    renderStats();
+  } else if (view === "ai-robot") {
+    state.aiRobotConfigs = await api("/api/ai-robots/configs");
+    state.aiRobotMessages = await api("/api/ai-robots/messages");
+    renderAiRobot();
+  } else if (view === "notifications") {
+    state.notificationRoutes = await api("/api/notification-routes");
+    state.loginQrBatches = await api("/api/login-qr-batches");
+    renderOperationNotifications();
+  } else if (view === "system-settings") {
+    state.systemHealth = await api("/api/system/supabase-health");
+    renderSystemHealth();
+  } else if (view === "video-matrix") {
+    mountVideoMatrixWorkbench();
+  }
+  loadedViews.add(view);
 }
 
 function renderDistributionSettings() {
@@ -1113,10 +1266,16 @@ function activateView(view, updateHash = true) {
   document.querySelectorAll(".view").forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
   section.classList.add("active");
+  currentView = view;
   document.body.classList.toggle("video-matrix-active", view === "video-matrix");
   setViewHeader(view);
   if (view === "video-matrix") {
     mountVideoMatrixWorkbench();
+  } else {
+    loadViewData(view).catch((error) => {
+      const target = section.querySelector(".loading-inline") || section;
+      target.innerHTML = `<div class="muted">加载失败：${error.message}</div>`;
+    });
   }
   if (updateHash && window.location.hash !== `#${view}`) {
     window.history.replaceState(null, "", `#${view}`);
@@ -1392,15 +1551,35 @@ document.querySelector("#matrix-run-now").addEventListener("click", async (event
 });
 
 setInterval(() => {
+  if (!loadedViews.has("settings")) return;
   api("/api/jobs/matrix-wechat/status")
     .then((matrixJobStatus) => {
       state.matrixJobStatus = matrixJobStatus;
-      renderMatrixJobStatus();
+      if (currentView === "settings") renderMatrixJobStatus();
     })
     .catch(() => {});
 }, 15000);
 
 document.addEventListener("click", async (event) => {
+  const routeButton = event.target.closest("[data-notice-route]");
+  if (routeButton) {
+    const eventType = routeButton.dataset.noticeRoute;
+    const platform = routeButton.dataset.noticePlatform;
+    const enabled = routeButton.dataset.noticeEnabled === "1";
+    const restoreButton = setButtonLoading(routeButton, "保存中");
+    try {
+      await api(`/api/notification-routes/${eventType}/${platform}`, {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+      state.notificationRoutes = await api("/api/notification-routes");
+      renderOperationNotifications();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
   const deleteButton = event.target.closest("[data-delete-task]");
   if (deleteButton) {
     const taskId = deleteButton.dataset.deleteTask;
@@ -1687,6 +1866,10 @@ function mountVideoMatrixWorkbench() {
   if (!section || section.dataset.mounted === "true") return;
   section.dataset.mounted = "true";
   section.innerHTML = `<iframe class="video-matrix-frame" src="/static/video_matrix.html?embed=1" title="GasGx 视频生成工作台"></iframe>`;
+  section.querySelector(".video-matrix-frame")?.addEventListener("load", () => {
+    const theme = SHELL_THEMES.find((item) => item.id === localStorage.getItem(SHELL_THEME_KEY)) || SHELL_THEMES[0];
+    broadcastShellTheme(theme);
+  });
 }
 
 document.querySelector('[data-view="video-matrix"]').addEventListener("click", mountVideoMatrixWorkbench);

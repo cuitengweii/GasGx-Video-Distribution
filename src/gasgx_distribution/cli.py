@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import uvicorn
 
 from . import control_plane
-from .matrix_publish import run_wechat_publish
+from .matrix_publish import check_wechat_matrix_login_status, run_wechat_publish
 from .service import ensure_database, run_ai_robot_sender_worker
 
 
@@ -24,12 +25,16 @@ def build_parser() -> argparse.ArgumentParser:
     matrix_publish = sub.add_parser("matrix-publish-wechat")
     matrix_publish.add_argument("--limit", type=int, default=0)
     matrix_publish.add_argument("--dry-run", action="store_true")
+    matrix_login = sub.add_parser("matrix-wechat-login-check")
+    matrix_login.add_argument("--batch-size", type=int, default=5)
     ai_robot_worker = sub.add_parser("ai-robot-send-worker")
     ai_robot_worker.add_argument("--limit", type=int, default=10)
     return parser
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "init-db":
@@ -53,6 +58,11 @@ def main() -> int:
     if args.command == "matrix-publish-wechat":
         ensure_database()
         result = run_wechat_publish(limit=int(args.limit), dry_run=bool(args.dry_run))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if bool(result.get("ok")) else 1
+    if args.command == "matrix-wechat-login-check":
+        ensure_database()
+        result = check_wechat_matrix_login_status(batch_size=int(args.batch_size), notify=True)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if bool(result.get("ok")) else 1
     if args.command == "ai-robot-send-worker":

@@ -17,7 +17,8 @@
         <div class="device-button"></div>
         <div class="screen">
           <div class="dynamic-island"></div>
-          <video id="previewVideo" playsinline autoplay muted loop></video>
+          <video id="previewVideo" playsinline autoplay loop></video>
+          <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle preview audio">Sound on</button>
           <div class="channels-top">
             <strong>视频号</strong>
             <span>GasGx</span>
@@ -38,9 +39,21 @@
       const params = new URLSearchParams(window.location.search);
       const videoPath = params.get("path") || "";
       const video = document.getElementById("previewVideo");
+      const soundToggle = document.getElementById("soundToggle");
       if (videoPath) {
         video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(videoPath)}`;
       }
+      video.muted = false;
+      video.volume = 1;
+      video.play().catch(() => {
+        soundToggle.textContent = "Tap for sound";
+      });
+      soundToggle.addEventListener("click", async () => {
+        video.muted = false;
+        video.volume = 1;
+        await video.play();
+        soundToggle.textContent = "Sound on";
+      });
       video.addEventListener("click", () => {
         if (video.paused) video.play();
         else video.pause();

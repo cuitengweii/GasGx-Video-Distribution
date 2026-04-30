@@ -13,7 +13,7 @@ from typing import Any
 
 from .paths import get_paths
 from .public_settings import load_distribution_settings, load_wechat_publish_settings, resolve_material_dir
-from .service import list_accounts
+from . import service
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 
@@ -24,6 +24,8 @@ class PublishPlanItem:
     account_key: str
     display_name: str
     profile_dir: Path
+    debug_port: int
+    fingerprint: dict[str, Any]
     source_video: Path
     workspace: Path
     batch_index: int
@@ -44,10 +46,6 @@ def publish_lock_path() -> Path:
     path = get_paths().runtime_root / "matrix_publish.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def _account_debug_port(account_id: int) -> int:
-    return 9400 + max(1, int(account_id or 1))
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -142,13 +140,21 @@ def _wechat_profile(platforms: list[dict[str, Any]]) -> Path | None:
 
 
 def list_wechat_accounts() -> list[dict[str, Any]]:
-    accounts = [account for account in list_accounts() if str(account.get("status") or "") == "active"]
+    accounts = [account for account in service.list_accounts() if str(account.get("status") or "") == "active"]
     result: list[dict[str, Any]] = []
     for account in accounts:
         profile_dir = _wechat_profile(account.get("platforms") or [])
         if profile_dir is None:
             continue
-        result.append({**account, "wechat_profile_dir": str(profile_dir)})
+        platform = next((item for item in account.get("platforms") or [] if item.get("platform") == "wechat"), {})
+        result.append(
+            {
+                **account,
+                "wechat_profile_dir": str(profile_dir),
+                "wechat_debug_port": int(platform.get("debug_port") or 0),
+                "wechat_fingerprint": platform.get("fingerprint") or {},
+            }
+        )
     result.sort(key=lambda item: int(item.get("id") or 0))
     return result
 
@@ -236,6 +242,8 @@ def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
                 account_key=account_key,
                 display_name=str(account.get("display_name") or account_key),
                 profile_dir=Path(str(account["wechat_profile_dir"])),
+                debug_port=int(account.get("wechat_debug_port") or 0),
+                fingerprint=dict(account.get("wechat_fingerprint") or {}),
                 source_video=video,
                 workspace=workspace,
                 batch_index=batch_index,
@@ -312,6 +320,56 @@ def _has_wechat_publish_evidence(workspace: Path) -> bool:
     return evidence.exists() and evidence.stat().st_size > 0
 
 
+def check_wechat_matrix_login_status(
+    *,
+    batch_size: int = 5,
+    account_ids: list[int] | None = None,
+    notify: bool = True,
+) -> dict[str, Any]:
+    accounts = list_wechat_accounts()
+    if account_ids is not None:
+        wanted = {int(item) for item in account_ids}
+        accounts = [item for item in accounts if int(item.get("id") or 0) in wanted]
+    else:
+        accounts = sorted(
+            accounts,
+            key=lambda item: (
+                int(next((platform.get("last_checked_at") or 0 for platform in item.get("platforms", []) if platform.get("platform") == "wechat"), 0)),
+                int(item.get("id") or 0),
+            ),
+        )[: max(1, int(batch_size or 5))]
+    results: list[dict[str, Any]] = []
+    for account in accounts:
+        account_id = int(account.get("id") or 0)
+        try:
+            result = service.check_login_status(account_id, "wechat")
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "status": "unknown",
+                "account_id": account_id,
+                "account_key": account.get("account_key"),
+                "display_name": account.get("display_name"),
+                "error": str(exc),
+            }
+        results.append(result)
+    login_required = [
+        item
+        for item in results
+        if str(item.get("status") or "").lower() in {"login_required", "required"}
+        or bool(item.get("needs_login"))
+        or str(item.get("reason") or "").lower() == "login_url"
+    ]
+    batch = service.record_wechat_login_qr_batch(login_required, notify=notify) if login_required else None
+    return {
+        "ok": not login_required,
+        "checked": len(results),
+        "login_required_count": len(login_required),
+        "results": results,
+        "login_batch": batch,
+    }
+
+
 def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
     plan = build_publish_plan(limit=limit)
     job_settings = _matrix_wechat_job_settings()
@@ -330,6 +388,8 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                         "display_name": item.display_name,
                         "video": str(item.source_video),
                         "profile_dir": str(item.profile_dir),
+                        "debug_port": item.debug_port,
+                        "fingerprint": item.fingerprint,
                         "workspace": str(item.workspace),
                         "batch_index": item.batch_index,
                         "batch_position": item.batch_position,
@@ -345,6 +405,8 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                     "display_name": item.display_name,
                     "video": str(item.source_video),
                     "profile_dir": str(item.profile_dir),
+                    "debug_port": item.debug_port,
+                    "fingerprint": item.fingerprint,
                     "workspace": str(item.workspace),
                     "batch_index": item.batch_index,
                     "batch_position": item.batch_position,
@@ -362,8 +424,21 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
     runs = list(state.get("runs", [])) if isinstance(state.get("runs"), list) else []
     results: list[dict[str, Any]] = []
     try:
+        preflight = check_wechat_matrix_login_status(
+            account_ids=[item.account_id for item in plan],
+            notify=True,
+        )
+        if not preflight.get("ok"):
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "wechat_login_required",
+                "preflight": preflight,
+                "count": 0,
+                "results": [],
+            }
         for item in plan:
-            debug_port = _account_debug_port(item.account_id)
+            debug_port = int(item.debug_port)
             prepared = prepare_workspace(item)
             runtime_config = _runtime_config_for_wechat(settings, item.workspace)
             cmd = [
@@ -404,10 +479,14 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
             started = time.strftime("%Y-%m-%d %H:%M:%S")
             log_path = item.workspace / "matrix_wechat_publish.log"
             with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
+                env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
+                extra_args = service.browser_fingerprint_launch_args(item.fingerprint)
+                if extra_args:
+                    env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
                 completed = subprocess.run(
                     cmd,
                     cwd=str(get_paths().repo_root),
-                    env={**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"},
+                    env=env,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -426,6 +505,7 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                 "video": str(item.source_video),
                 "prepared_video": str(prepared),
                 "profile_dir": str(item.profile_dir),
+                "fingerprint": item.fingerprint,
                 "debug_port": debug_port,
                 "workspace": str(item.workspace),
                 "returncode": completed.returncode,

@@ -40,6 +40,8 @@ def run_pipeline(
     outro_seconds: float = 1.0,
     composition_sequence: list[dict[str, Any]] | None = None,
     existing_signatures: set[str] | None = None,
+    recent_clip_ids: set[str] | None = None,
+    recent_segment_keys: set[str] | None = None,
 ) -> list[RenderedAsset]:
     _notify(progress_callback, "ingestion", 0.05, "Collecting and normalizing source clips")
     clips = ingest_sources(settings, source_root=source_root, recent_limits=recent_limits, active_category_ids=active_category_ids)
@@ -68,6 +70,8 @@ def run_pipeline(
         composition_sequence=active_composition_sequence,
         max_attempts=settings.max_variant_attempts,
         existing_signatures=existing_signatures,
+        recent_clip_ids=recent_clip_ids,
+        recent_segment_keys=recent_segment_keys,
     )
     _apply_text_overrides(variants, text_overrides)
     template_copy = _copy_template_path().read_text(encoding="utf-8")

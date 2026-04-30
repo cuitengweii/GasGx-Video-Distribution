@@ -18,6 +18,8 @@ def test_brand_baseline_supabase_sql_parts_stay_under_editor_limit() -> None:
         "04_account_policies.sql",
         "05_settings_policies.sql",
         "06_video_seed_policies.sql",
+        "07_notifications.sql",
+        "08_video_generation_history.sql",
     ]
     for part in parts:
         assert len(part.read_text(encoding="utf-8").splitlines()) <= 100
@@ -41,6 +43,9 @@ def test_brand_baseline_supabase_sql_defines_role_based_rls() -> None:
         "matrix_accounts",
         "account_platforms",
         "browser_profiles",
+        "notification_routes",
+        "login_qr_batches",
+        "login_qr_items",
         "automation_tasks",
         "video_stats_snapshots",
         "ai_robot_configs",
@@ -51,6 +56,9 @@ def test_brand_baseline_supabase_sql_defines_role_based_rls() -> None:
         "analytics_items",
         "video_matrix_assets",
         "video_matrix_jobs",
+        "video_matrix_generation_runs",
+        "video_matrix_generation_assets",
+        "video_matrix_generation_segments",
         "app_seed_runs",
         "brand_members",
     ):
@@ -61,7 +69,16 @@ def test_brand_baseline_supabase_sql_defines_role_based_rls() -> None:
 
 def test_brand_baseline_supabase_sql_defines_database_initialization_tables() -> None:
     sql = _sql("brand_baseline.sql")
-    for table in ("app_settings", "analytics_items", "video_matrix_assets", "video_matrix_jobs", "app_seed_runs"):
+    for table in (
+        "app_settings",
+        "analytics_items",
+        "video_matrix_assets",
+        "video_matrix_jobs",
+        "video_matrix_generation_runs",
+        "video_matrix_generation_assets",
+        "video_matrix_generation_segments",
+        "app_seed_runs",
+    ):
         assert f"create table if not exists {table}" in sql
     assert "payload_json jsonb" in sql
     assert "assets_json jsonb" in sql

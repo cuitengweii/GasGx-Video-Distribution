@@ -1,5 +1,23 @@
 # GasGx Video Distribution State
 
+## 2026-04-30 WeChat Matrix Profile, Fingerprint, Login Check Update
+
+- Current repository path: `G:\GasGx Video Distribution`.
+- WeChat matrix accounts now resolve browser runtime from persisted `browser_profiles`: profile path, debug port, and `fingerprint_json`.
+- New profile records use `profiles/matrix/<account_key>/wechat`, a stable debug-port pool from `12000-32000`, and a built-in light fingerprint with UA, language, locale, timezone, window size, and reserved proxy slot.
+- Matrix publish dry-run and real publish no longer use the temporary `9400 + account_id` rule; they read `browser_profiles.debug_port` and pass fingerprint launch args into the CyberCar/Chrome execution path.
+- A matrix login-check command is available: `python -m gasgx_distribution matrix-wechat-login-check --batch-size 5`. The scheduler rotates small batches and skips scheduled login checks while publish is running.
+- Real publish now preflights only planned WeChat accounts. If any planned account is `login_required`, the publish round is skipped before workspace/material consumption.
+- Operation notification routing is separate from AI robot config through `notification_routes`. The UI exposes WeChat login QR notification switches for Telegram, DingTalk, and WeCom.
+- Login QR batches are persisted in `login_qr_batches` / `login_qr_items` when the schema is available; duplicate account/QR notifications are cooled down for 30 minutes.
+- Current live check on 2026-04-30 found `remote-smoke-01` on `https://channels.weixin.qq.com/login.html`; current Supabase project has not yet applied the new `login_qr_*` tables, so the app returns `storage_unavailable` instead of blocking the login check.
+
+## Current Open Work From This Update
+
+- Apply the updated `config/supabase/brand_baseline.sql` to the active Supabase brand database so `notification_routes`, `login_qr_batches`, and `login_qr_items` exist remotely.
+- Close or restart old Chrome instances that still hold the same profile on legacy port `9401`; Chrome may reuse the already-running process until the stale debug session is gone.
+- Telegram direct image upload for QR codes is still text/path based in this version; DingTalk/WeCom are intentionally text plus QR path/link first.
+
 ## 2026-04-29 AI Robot Sender Worker And Supabase Key Safety Update
 
 - Current repository path: `G:\GasGx Video Distribution`.

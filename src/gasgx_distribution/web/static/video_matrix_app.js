@@ -7,6 +7,7 @@ let selectedVideoTemplate = "";
 let settings = {};
 let lastPreviewPath = "";
 let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [] };
+let pendingTemplateSave = "";
 
 const jobStepLabels = [
   ["queued", "任务排队"],
@@ -68,7 +69,39 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function loadingInline(label = "加载中...") {
+  return `<div class="loading-inline"><span class="loading-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
+}
+
+function setPanelLoading(id, label = "加载中...") {
+  const node = $(id);
+  if (node) node.innerHTML = loadingInline(label);
+}
+
+function setImageLoading(id, label = "生成预览中...") {
+  const image = $(id);
+  if (!image) return;
+  const holder = image.closest(".preview-stage");
+  holder?.classList.add("is-loading");
+  holder?.setAttribute("data-loading-label", label);
+}
+
+function clearImageLoading(id) {
+  const holder = $(id)?.closest(".preview-stage");
+  holder?.classList.remove("is-loading");
+  holder?.removeAttribute("data-loading-label");
+}
+
+function setInitialLoading() {
+  ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateSelector", "videoTemplateForm", "coverSelector", "coverForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
+  setPanelLoading("videoTemplateGallery", "加载正文模板...");
+  setPanelLoading("coverGallery", "加载封面模板...");
+  setImageLoading("videoTemplatePreview", "加载正文预览...");
+  setImageLoading("coverPreview", "加载封面预览...");
+}
+
 async function init() {
+  setInitialLoading();
   const data = await api("/api/video-matrix/state");
   state = data.ui_state; templates = data.templates; coverTemplates = data.cover_templates; settings = data.settings;
   selectedCover = state.cover_template_id || Object.keys(coverTemplates)[0];
@@ -134,8 +167,15 @@ function renderSource(data) {
   });
   const recentLimits = state.recent_limits || {};
   $("recentLimits").innerHTML = categories.map((category) =>
-    `<label>${escapeHtml(category.label)}最新素材<input id="${category.id}" type="range" min="1" max="50" value="${recentLimits[category.id] || settings.recent_limits[category.id] || 8}"><output id="${category.id}Value"></output></label>`).join("");
-  categories.forEach((category) => syncRange(category.id));
+    rangeControlHtml({
+      id: category.id,
+      label: `${category.label}最新素材`,
+      min: 1,
+      max: 50,
+      value: recentLimits[category.id] || settings.recent_limits[category.id] || 8,
+      className: "limit-control",
+    })).join("");
+  categories.forEach((category) => bindRangeControl(category.id, scheduleStateSave));
   updateRecentLimitVisibility(categories);
   updateSourceMode();
 }
@@ -272,7 +312,7 @@ function renderCoverSelector() {
     `<button class="${id === selectedCover ? "active" : ""}" data-id="${id}">${item.name || id}</button>`).join("");
   $("coverSelector").querySelectorAll("button").forEach((btn) => btn.onclick = async () => {
     selectedCover = btn.dataset.id;
-    renderCoverSelector(); renderCoverEditor(); await refreshAllPreviews();
+    renderCoverSelector(); renderCoverEditor(); await saveTemplateSelection(); await refreshAllPreviews();
   });
 }
 
@@ -283,6 +323,7 @@ function renderVideoTemplateSelector() {
     selectedVideoTemplate = btn.dataset.id;
     renderVideoTemplateSelector();
     renderVideoTemplateEditor();
+    await saveTemplateSelection();
     await refreshVideoTemplatePreview();
   });
 }
@@ -307,6 +348,7 @@ function renderCoverEditor() {
       t[key] = input.type === "range" ? Number(input.value) : input.value;
       const out = input.parentElement.querySelector("output"); if (out) out.textContent = input.value;
       refreshAllPreviews();
+      scheduleCoverTemplateSave();
     };
   });
   $("saveCover").onclick = saveCoverTemplate;
@@ -329,21 +371,25 @@ function renderVideoTemplateEditor() {
     if (type === "checkbox") {
       html.push(`<label class="check-row"><input data-key="${key}" type="checkbox" ${value ? "checked" : ""}><span>${label}</span></label>`);
     } else if (type === "range") {
-      html.push(`<label>${label}<input data-key="${key}" type="range" min="${min}" max="${max}" value="${value}"><output>${value}</output></label>`);
+      html.push(rangeControlHtml({key, label, min, max, value, className: "template-control"}));
     } else if (type === "rangeFloat") {
-      html.push(`<label>${label}<input data-key="${key}" type="range" min="${min}" max="${max}" step="0.01" value="${value}"><output>${value}</output></label>`);
+      html.push(rangeControlHtml({key, label, min, max, step: 0.01, value, className: "template-control"}));
     } else {
       html.push(`<label>${label}<input data-key="${key}" type="${type}" value="${escapeHtml(value)}"></label>`);
     }
   }
   html.push(`<button type="button" id="saveVideoTemplate">保存当前正文模板</button>`);
   $("videoTemplateForm").innerHTML = html.join("");
-  $("videoTemplateForm").querySelectorAll("[data-key]").forEach((input) => {
+  $("videoTemplateForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
     const key = input.dataset.key;
     if (input.type === "checkbox") input.checked = Boolean(template[key]);
     else input.value = template[key] ?? input.value;
+    if (input.classList.contains("control-number")) return;
     input.oninput = () => updateVideoTemplateField(input);
     input.onchange = () => updateVideoTemplateField(input);
+  });
+  $("videoTemplateForm").querySelectorAll(".template-control[data-key]").forEach((control) => {
+    bindRangeControl(control.dataset.key, () => updateVideoTemplateField(control.querySelector('input[type="range"]')));
   });
   $("saveVideoTemplate").onclick = saveVideoTemplate;
 }
@@ -357,17 +403,24 @@ function updateVideoTemplateField(input) {
   const out = input.parentElement.querySelector("output");
   if (out) out.textContent = input.value;
   refreshVideoTemplatePreview();
+  scheduleVideoTemplateSave();
 }
 
 async function refreshVideoTemplatePreview() {
   const template = templates[selectedVideoTemplate];
   if (!template) return;
-  const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
-  $("videoTemplatePreview").src = data.data_url;
-  $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
+  setImageLoading("videoTemplatePreview", "生成正文预览...");
+  try {
+    const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
+    $("videoTemplatePreview").src = data.data_url;
+    $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
+  } finally {
+    clearImageLoading("videoTemplatePreview");
+  }
 }
 
 async function refreshVideoTemplateGallery() {
+  setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
   for (const [id, template] of Object.entries(templates)) {
     const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
@@ -378,6 +431,7 @@ async function refreshVideoTemplateGallery() {
     selectedVideoTemplate = card.dataset.id;
     renderVideoTemplateSelector();
     renderVideoTemplateEditor();
+    await saveTemplateSelection();
     await refreshVideoTemplatePreview();
     await refreshVideoTemplateGallery();
   });
@@ -395,17 +449,24 @@ function videoTemplatePreviewPayload(template) {
 async function saveVideoTemplate() {
   await api(`/api/video-matrix/templates/${selectedVideoTemplate}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[selectedVideoTemplate])});
   await saveState();
+  pendingTemplateSave = "";
   log(`已保存正文模板：${templates[selectedVideoTemplate].name || selectedVideoTemplate}`);
   renderVideoTemplateSelector();
   renderVideoTemplateEditor();
 }
 
 async function refreshMainPreview() {
-  const data = await api("/api/video-matrix/cover-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(previewPayload(coverTemplates[selectedCover]))});
-  $("coverPreview").src = data.data_url;
+  setImageLoading("coverPreview", "生成封面预览...");
+  try {
+    const data = await api("/api/video-matrix/cover-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(previewPayload(coverTemplates[selectedCover]))});
+    $("coverPreview").src = data.data_url;
+  } finally {
+    clearImageLoading("coverPreview");
+  }
 }
 
 async function refreshGallery() {
+  setPanelLoading("coverGallery", "生成封面模板列表...");
   const cards = [];
   for (const [id, t] of Object.entries(coverTemplates)) {
     const data = await api("/api/video-matrix/cover-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(previewPayload(t))});
@@ -413,7 +474,7 @@ async function refreshGallery() {
   }
   $("coverGallery").innerHTML = cards.join("");
   $("coverGallery").querySelectorAll(".cover-card").forEach((card) => card.onclick = async () => {
-    selectedCover = card.dataset.id; renderCoverSelector(); renderCoverEditor(); await refreshAllPreviews();
+    selectedCover = card.dataset.id; renderCoverSelector(); renderCoverEditor(); await saveTemplateSelection(); await refreshAllPreviews();
   });
 }
 
@@ -426,7 +487,39 @@ function previewPayload(template) {
 async function saveCoverTemplate() {
   await api(`/api/video-matrix/cover-templates/${selectedCover}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(coverTemplates[selectedCover])});
   await saveState();
+  pendingTemplateSave = "";
   log(`已保存第一屏模板：${coverTemplates[selectedCover].name || selectedCover}`);
+}
+
+const scheduleVideoTemplateSave = debounce(async () => {
+  if (!selectedVideoTemplate || !templates[selectedVideoTemplate]) return;
+  const templateId = selectedVideoTemplate;
+  pendingTemplateSave = `video:${templateId}`;
+  try {
+    await api(`/api/video-matrix/templates/${templateId}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[templateId])});
+    if (pendingTemplateSave === `video:${templateId}`) pendingTemplateSave = "";
+    renderVideoTemplateSelector();
+  } catch (error) {
+    log(`正文模板自动保存失败：${error.message}`);
+  }
+}, 700);
+
+const scheduleCoverTemplateSave = debounce(async () => {
+  if (!selectedCover || !coverTemplates[selectedCover]) return;
+  const templateId = selectedCover;
+  pendingTemplateSave = `cover:${templateId}`;
+  try {
+    await api(`/api/video-matrix/cover-templates/${templateId}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(coverTemplates[templateId])});
+    if (pendingTemplateSave === `cover:${templateId}`) pendingTemplateSave = "";
+    renderCoverSelector();
+  } catch (error) {
+    log(`第一屏模板自动保存失败：${error.message}`);
+  }
+}, 700);
+
+async function saveTemplateSelection() {
+  state = collectState();
+  await api("/api/video-matrix/state", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(state)});
 }
 
 async function saveState() {
@@ -709,7 +802,7 @@ function renderPixabayTracks() {
 }
 async function loadPixabayTracks() {
   const list = $("pixabayTrackList");
-  list.textContent = "正在抓取 Pixabay industry...";
+  list.innerHTML = loadingInline("正在抓取 Pixabay industry...");
   try {
     const data = await api("/api/video-matrix/pixabay/industry");
     bgmLibraryState.pixabay = data.tracks || [];
@@ -728,7 +821,7 @@ async function downloadBgmToLibrary() {
     status.textContent = "请先粘贴 MP3/WAV/M4A 音频直链。";
     return;
   }
-  status.textContent = "正在下载到本地曲库...";
+  status.innerHTML = loadingInline("正在下载到本地曲库...");
   try {
     const result = await api("/api/video-matrix/bgm/download", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({url})});
     status.textContent = `已下载：${result.filename}`;
@@ -750,7 +843,34 @@ function renderRadio(containerId, name, options, selected, onchange) {
 }
 function radioValue(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value || ""; }
 function syncNumber(id) { const el = $(id); if (!el) return; el.oninput = () => { let value = Number(el.value || 3); value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value)); if (String(value) !== el.value) el.value = value; if (id === "outputCount") $("metricCount").textContent = el.value; scheduleStateSave(); }; }
-function syncRange(id) { const el = $(id), out = $(`${id}Value`); if (!el || !out) return; out.textContent = el.value; el.oninput = () => { out.textContent = el.value; if (id === "outputCount") $("metricCount").textContent = el.value; if (id === "maxWorkers") $("metricWorkers").textContent = el.value; scheduleStateSave(); }; }
+function syncRange(id) { bindRangeControl(id, () => { if (id === "outputCount") $("metricCount").textContent = $(id).value; if (id === "maxWorkers") $("metricWorkers").textContent = $(id).value; scheduleStateSave(); }); }
+function rangeControlHtml({ id = "", key = "", label, min, max, step = 1, value, className = "" }) {
+  const attr = key ? `data-key="${escapeHtml(key)}"` : "";
+  const rangeId = id || `control-${key}`;
+  return `<label class="range-control ${className}" ${attr}><span>${escapeHtml(label)}</span><div><input id="${escapeHtml(rangeId)}" ${attr} type="range" min="${min}" max="${max}" step="${step}" value="${escapeHtml(value)}"><input class="control-number" ${attr} type="number" min="${min}" max="${max}" step="${step}" value="${escapeHtml(value)}"></div></label>`;
+}
+function bindRangeControl(idOrKey, onchange) {
+  const range = $(idOrKey) || document.querySelector(`.range-control[data-key="${CSS.escape(idOrKey)}"] input[type="range"]`);
+  if (!range) return;
+  const control = range.closest(".range-control");
+  const number = control?.querySelector(".control-number");
+  const sync = (source) => {
+    let value = Number(source.value || range.min || 0);
+    value = Math.max(Number(range.min || value), Math.min(Number(range.max || value), value));
+    const step = String(range.step || "1");
+    const next = step.includes(".") ? String(value) : String(Math.round(value));
+    range.value = next;
+    if (number) number.value = next;
+    onchange?.();
+  };
+  if (number) number.value = range.value;
+  range.oninput = () => sync(range);
+  range.onchange = () => sync(range);
+  if (number) {
+    number.oninput = () => sync(number);
+    number.onchange = () => sync(number);
+  }
+}
 function setMulti(select, values) { [...select.options].forEach(o => o.selected = values.includes(o.value)); }
 function openFolder(path) { return api("/api/video-matrix/open-folder", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path})}); }
 function updateJobStatus(job) {

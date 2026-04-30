@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from zlib import crc32
 
+DEBUG_PORT_START = 12000
+DEBUG_PORT_END = 32000
+
 
 @dataclass(frozen=True)
 class PlatformCapability:
@@ -49,4 +52,4 @@ def get_platform(platform: str) -> PlatformCapability | None:
 
 def stable_debug_port(account_key: str, platform: str) -> int:
     token = f"{account_key.strip().lower()}:{normalize_platform(platform)}"
-    return 12000 + (crc32(token.encode("utf-8")) % 20000)
+    return DEBUG_PORT_START + (crc32(token.encode("utf-8")) % (DEBUG_PORT_END - DEBUG_PORT_START + 1))

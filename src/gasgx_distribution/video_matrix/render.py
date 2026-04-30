@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -232,24 +233,108 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
             f"x=0:y={int(template['hud_bar_y'])}:w=iw:h={int(template['hud_bar_height'])}:"
             f"color={template['hud_bar_color']}@{float(template['hud_bar_opacity']):.2f}:t=fill"
         )
-        filters.append(
-            "drawtext="
-            f"{font_arg}fontcolor={template['secondary_color']}:"
-            f"fontsize={int(template['hud_font_size'])}:"
-            f"text='{hud_text}':x={int(template['hud_x'])}:y={int(template['hud_y'])}"
+        filters.extend(
+            _drawtext_lines(
+                template,
+                font_arg,
+                hud_text,
+                text_key="hud",
+                color_key="secondary_color",
+                max_lines=2,
+            )
         )
     if template.get("show_slogan", True):
-        filters.append(
-            "drawtext="
-            f"{font_arg}fontcolor={template['primary_color']}:"
-            f"fontsize={int(template['slogan_font_size'])}:"
-            f"text='{slogan}':x={int(template['slogan_x'])}:y={int(template['slogan_y'])}"
+        filters.extend(
+            _drawtext_lines(
+                template,
+                font_arg,
+                slogan,
+                text_key="slogan",
+                color_key="primary_color",
+                max_lines=3,
+            )
         )
     if template.get("show_title", True):
-        filters.append(
-            "drawtext="
-            f"{font_arg}fontcolor={template['secondary_color']}:"
-            f"fontsize={int(template['title_font_size'])}:"
-            f"text='{title}':x={int(template['title_x'])}:y={int(template['title_y'])}"
+        filters.extend(
+            _drawtext_lines(
+                template,
+                font_arg,
+                title,
+                text_key="title",
+                color_key="secondary_color",
+                max_lines=2,
+            )
         )
     return "," + ",".join(filters) if filters else ""
+
+
+def _drawtext_lines(
+    template: dict[str, Any],
+    font_arg: str,
+    text: str,
+    *,
+    text_key: str,
+    color_key: str,
+    max_lines: int,
+) -> list[str]:
+    font_size = int(template[f"{text_key}_font_size"])
+    anchor_x = int(template[f"{text_key}_x"])
+    anchor_y = int(template[f"{text_key}_y"])
+    max_width = _text_box_width(template, text_key, anchor_x)
+    lines = _wrap_text_for_drawtext(text, font_size, max_width)[:max_lines]
+    align = str(template.get("align", "left")).lower()
+    line_gap = max(1, int(font_size * 1.18))
+    filters: list[str] = []
+    for index, line in enumerate(lines):
+        if align == "center":
+            x_expr = "(w-text_w)/2"
+        else:
+            x_expr = str(anchor_x)
+        filters.append(
+            "drawtext="
+            f"{font_arg}fontcolor={template[color_key]}:"
+            f"fontsize={font_size}:"
+            f"text='{_escape_drawtext_text(line)}':x={x_expr}:y={anchor_y + index * line_gap}"
+        )
+    return filters
+
+
+def _text_box_width(template: dict[str, Any], text_key: str, anchor_x: int) -> int:
+    if text_key == "hud":
+        return max(120, 1080 - anchor_x * 2 if str(template.get("align", "left")).lower() == "center" else 1080 - anchor_x - 42)
+    return max(120, 1080 - anchor_x * 2 if str(template.get("align", "left")).lower() == "center" else 1080 - anchor_x - 42)
+
+
+def _wrap_text_for_drawtext(text: str, font_size: int, max_width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [""]
+    font = _load_drawtext_font(font_size)
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if _measure_text_width(draw, candidate, font) <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
+def _load_drawtext_font(size: int) -> ImageFont.ImageFont:
+    for candidate in FONT_CANDIDATES:
+        if candidate.exists():
+            return ImageFont.truetype(str(candidate), size)
+    return ImageFont.load_default()
+
+
+def _measure_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    box = draw.textbbox((0, 0), text, font=font)
+    return box[2] - box[0]
+
+
+def _escape_drawtext_text(text: str) -> str:
+    return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")

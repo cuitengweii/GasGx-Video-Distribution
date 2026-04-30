@@ -9,6 +9,7 @@ import hmac
 import hashlib
 import base64
 import sqlite3
+import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
 from contextlib import contextmanager
@@ -22,10 +23,10 @@ from cybercar.settings import apply_runtime_environment as apply_cybercar_enviro
 
 from .db import connect, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
-from .platforms import get_platform, normalize_platform, stable_debug_port
+from .platforms import DEBUG_PORT_END, DEBUG_PORT_START, get_platform, normalize_platform, stable_debug_port
 from .public_settings import load_distribution_settings, resolve_material_dir
 from .public_settings import save_distribution_settings as save_local_distribution_settings
-from .supabase_backend import SupabaseRestClient
+from .supabase_backend import SupabaseError, SupabaseRestClient
 from .video_matrix.cover_templates import load_cover_templates
 from .video_matrix.settings import ProjectSettings
 from .video_matrix.templates import load_templates
@@ -34,6 +35,9 @@ from .video_matrix.ui_state import load_ui_state
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 AI_ROBOT_PLATFORMS = {"wecom", "dingtalk", "lark", "telegram", "whatsapp"}
 AI_ROBOT_RETRY_LIMIT = 3
+NOTIFICATION_EVENT_TYPES = {"wechat_login_qr", "publish_result", "system_error"}
+NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
+LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
 _brand_runtime: ContextVar[dict[str, Any] | None] = ContextVar("gasgx_brand_runtime", default=None)
 
@@ -44,6 +48,74 @@ def _account_slug(account_key: str) -> str:
     if not token:
         raise ValueError("account_key is required")
     return token[:80]
+
+
+def _stable_int(seed: str, modulo: int) -> int:
+    return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], 16) % max(1, modulo)
+
+
+def build_browser_fingerprint(account_key: str, platform: str) -> dict[str, Any]:
+    token = f"{_account_slug(account_key)}:{normalize_platform(platform)}"
+    width = 1280 + (_stable_int(token + ":w", 4) * 80)
+    height = 820 + (_stable_int(token + ":h", 4) * 40)
+    languages = ["zh-CN,zh;q=0.9,en;q=0.8", "zh-CN,zh;q=0.9", "zh-CN,en-US;q=0.8,en;q=0.7"]
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    ]
+    language = languages[_stable_int(token + ":lang", len(languages))]
+    return {
+        "provider": "builtin-light",
+        "user_agent": user_agents[_stable_int(token + ":ua", len(user_agents))],
+        "language": language,
+        "locale": language.split(",")[0],
+        "timezone": "Asia/Shanghai",
+        "window_size": {"width": width, "height": height},
+        "proxy_slot": "",
+    }
+
+
+def browser_fingerprint_launch_args(fingerprint: dict[str, Any] | str | None) -> list[str]:
+    if isinstance(fingerprint, str):
+        fingerprint = _json_payload(fingerprint, {})
+    if not isinstance(fingerprint, dict):
+        return []
+    args: list[str] = []
+    user_agent = str(fingerprint.get("user_agent") or "").strip()
+    if user_agent:
+        args.append(f"--user-agent={user_agent}")
+    language = str(fingerprint.get("language") or fingerprint.get("locale") or "").strip()
+    if language:
+        args.append(f"--lang={language.split(',')[0]}")
+    size = fingerprint.get("window_size")
+    if isinstance(size, dict):
+        try:
+            width = int(size.get("width") or 0)
+            height = int(size.get("height") or 0)
+        except Exception:
+            width = height = 0
+        if width > 0 and height > 0:
+            args.append(f"--window-size={width},{height}")
+    proxy = str(fingerprint.get("proxy_slot") or "").strip()
+    if proxy:
+        args.append(f"--proxy-server={proxy}")
+    return args
+
+
+@contextmanager
+def _chrome_fingerprint_env(fingerprint: dict[str, Any] | str | None) -> Iterator[None]:
+    args = browser_fingerprint_launch_args(fingerprint)
+    previous = os.environ.get("CYBERCAR_CHROME_EXTRA_ARGS")
+    if args:
+        os.environ["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(args, ensure_ascii=False)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("CYBERCAR_CHROME_EXTRA_ARGS", None)
+        else:
+            os.environ["CYBERCAR_CHROME_EXTRA_ARGS"] = previous
 
 
 def ensure_database() -> None:
@@ -632,6 +704,261 @@ def send_ai_robot_message_now(message: dict[str, Any]) -> dict[str, Any]:
     return _mark_ai_robot_message_sent(claimed)
 
 
+def save_notification_route(event_type: str, platform: str, enabled: bool) -> dict[str, Any]:
+    event = str(event_type or "").strip()
+    if event not in NOTIFICATION_EVENT_TYPES:
+        raise ValueError("unsupported notification event_type")
+    token = _normalize_ai_platform(platform)
+    if token not in NOTIFICATION_PLATFORMS:
+        raise ValueError("notification platform must be telegram, dingtalk, or wecom")
+    ts = now_ts()
+    if brand_database_backend() == "supabase":
+        try:
+            return _brand_supabase().upsert(
+                "notification_routes",
+                {"event_type": event, "platform": token, "enabled": 1 if enabled else 0, "created_at": ts, "updated_at": ts},
+                on_conflict="event_type,platform",
+            )
+        except SupabaseError as exc:
+            return {"event_type": event, "platform": token, "enabled": bool(enabled), "ok": False, "storage_unavailable": True, "error": str(exc)}
+    ensure_database()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO notification_routes(event_type, platform, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(event_type, platform) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+            """,
+            (event, token, 1 if enabled else 0, ts, ts),
+        )
+    return {"event_type": event, "platform": token, "enabled": bool(enabled)}
+
+
+def list_notification_routes() -> list[dict[str, Any]]:
+    defaults = [
+        {"event_type": event, "platform": platform, "enabled": False}
+        for event in sorted(NOTIFICATION_EVENT_TYPES)
+        for platform in sorted(NOTIFICATION_PLATFORMS)
+    ]
+    if brand_database_backend() == "supabase":
+        try:
+            rows = {
+                (row["event_type"], row["platform"]): {**row, "enabled": bool(row.get("enabled"))}
+                for row in _brand_supabase().select("notification_routes", order="event_type.asc,platform.asc")
+            }
+        except SupabaseError:
+            rows = {}
+        return [{**item, **rows.get((item["event_type"], item["platform"]), {})} for item in defaults]
+    ensure_database()
+    with connect() as conn:
+        rows = {
+            (row["event_type"], row["platform"]): {**dict_from_row(row), "enabled": bool(row["enabled"])}
+            for row in conn.execute("SELECT * FROM notification_routes ORDER BY event_type, platform")
+        }
+    return [{**item, **rows.get((item["event_type"], item["platform"]), {})} for item in defaults]
+
+
+def _enabled_notification_platforms(event_type: str) -> list[str]:
+    routes = [item for item in list_notification_routes() if item["event_type"] == event_type and bool(item.get("enabled"))]
+    configs = {item["platform"]: item for item in list_ai_robot_configs()}
+    return [
+        str(item["platform"])
+        for item in routes
+        if bool(configs.get(str(item["platform"]), {}).get("enabled"))
+        and bool(configs.get(str(item["platform"]), {}).get("webhook_url"))
+    ]
+
+
+def _qr_fingerprint(item: dict[str, Any]) -> str:
+    source = "|".join(
+        [
+            str(item.get("account_id") or ""),
+            str(item.get("profile_dir") or ""),
+            str(item.get("reason") or ""),
+            str(item.get("url") or item.get("current_url") or ""),
+            str(item.get("qr_path") or ""),
+        ]
+    )
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
+
+
+def _login_qr_root() -> Path:
+    path = get_paths().runtime_root / "login_qr_batches"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _login_qr_text(batch_id: str, items: list[dict[str, Any]]) -> str:
+    lines = [f"视频号登录失效批次 {batch_id}", "请按账号逐个扫码，扫码后等待下一轮巡检恢复。"]
+    for index, item in enumerate(items, start=1):
+        lines.append(
+            f"{index}. {item.get('display_name') or item.get('account_key')} | port={item.get('debug_port')} | "
+            f"reason={item.get('reason') or 'login_required'} | profile={item.get('profile_dir')}"
+        )
+        if item.get("qr_path"):
+            lines.append(f"   QR: {item.get('qr_path')}")
+    return "\n".join(lines)
+
+
+def _send_notification_text(platform: str, text: str) -> dict[str, Any]:
+    message = enqueue_ai_robot_message(platform, {"text": text, "message_type": "wechat_login_qr"}, test=False)
+    if str(message.get("status") or "") == "unsupported":
+        return message
+    return send_ai_robot_message_now(message)
+
+
+def record_wechat_login_qr_batch(login_required: list[dict[str, Any]], *, notify: bool = True) -> dict[str, Any] | None:
+    if not login_required:
+        return None
+    ts = now_ts()
+    batch_id = time.strftime("wechat-login-%Y%m%d-%H%M%S")
+    batch_dir = _login_qr_root() / batch_id
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    items: list[dict[str, Any]] = []
+    for raw in login_required:
+        item = dict(raw)
+        item["account_id"] = int(item.get("account_id") or 0)
+        item["account_key"] = str(item.get("account_key") or f"account-{item['account_id']}")
+        item["display_name"] = str(item.get("display_name") or item["account_key"])
+        item["profile_dir"] = str(item.get("profile_dir") or "")
+        item["debug_port"] = int(item.get("debug_port") or 0)
+        item["reason"] = str(item.get("reason") or "login_required")
+        item["url"] = str(item.get("url") or item.get("current_url") or "")
+        qr_result = item.get("qr_result") if isinstance(item.get("qr_result"), dict) else {}
+        item["qr_path"] = str(item.get("qr_path") or qr_result.get("path") or qr_result.get("file") or "")
+        item["qr_fingerprint"] = _qr_fingerprint(item)
+        items.append(item)
+    cooldown_before = ts - LOGIN_QR_NOTIFY_COOLDOWN_SECONDS
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        try:
+            duplicate_rows: list[dict[str, Any]] = []
+            for item in items:
+                existing = client.select_one("login_qr_items", filters={"account_id": item["account_id"], "platform": "wechat", "qr_fingerprint": item["qr_fingerprint"]})
+                if existing and int(existing.get("updated_at") or 0) >= cooldown_before:
+                    duplicate_rows.append(existing)
+            if len(duplicate_rows) == len(items):
+                return {
+                    "batch_id": "",
+                    "items": items,
+                    "skipped": True,
+                    "reason": "duplicate_login_qr_cooldown",
+                    "notification_platforms": [],
+                    "notification_results": [],
+                }
+            client.insert(
+                "login_qr_batches",
+                {"batch_id": batch_id, "event_type": "wechat_login_qr", "status": "pending", "payload_json": {"items": items}, "created_at": ts, "updated_at": ts},
+            )
+            for item in items:
+                existing = client.select_one("login_qr_items", filters={"account_id": item["account_id"], "platform": "wechat", "qr_fingerprint": item["qr_fingerprint"]})
+                if existing is None:
+                    client.insert(
+                        "login_qr_items",
+                        {
+                            "batch_id": batch_id,
+                            "account_id": item["account_id"],
+                            "account_key": item["account_key"],
+                            "display_name": item["display_name"],
+                            "platform": "wechat",
+                            "profile_dir": item["profile_dir"],
+                            "debug_port": item["debug_port"],
+                            "reason": item["reason"],
+                            "url": item["url"],
+                            "qr_path": item["qr_path"],
+                            "qr_fingerprint": item["qr_fingerprint"],
+                            "status": "pending",
+                            "created_at": ts,
+                            "updated_at": ts,
+                        },
+                    )
+        except SupabaseError as exc:
+            return {
+                "batch_id": batch_id,
+                "items": items,
+                "storage_unavailable": True,
+                "error": str(exc),
+                "notification_platforms": [],
+                "notification_results": [],
+            }
+    else:
+        ensure_database()
+        with connect() as conn:
+            duplicate_count = 0
+            for item in items:
+                row = conn.execute(
+                    """
+                    SELECT id FROM login_qr_items
+                    WHERE account_id = ? AND platform = 'wechat' AND qr_fingerprint = ? AND updated_at >= ?
+                    LIMIT 1
+                    """,
+                    (item["account_id"], item["qr_fingerprint"], cooldown_before),
+                ).fetchone()
+                if row is not None:
+                    duplicate_count += 1
+            if duplicate_count == len(items):
+                return {
+                    "batch_id": "",
+                    "items": items,
+                    "skipped": True,
+                    "reason": "duplicate_login_qr_cooldown",
+                    "notification_platforms": [],
+                    "notification_results": [],
+                }
+            conn.execute(
+                "INSERT INTO login_qr_batches(batch_id, event_type, status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (batch_id, "wechat_login_qr", "pending", json.dumps({"items": items}, ensure_ascii=False), ts, ts),
+            )
+            for item in items:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO login_qr_items(
+                        batch_id, account_id, account_key, display_name, platform, profile_dir, debug_port,
+                        reason, url, qr_path, qr_fingerprint, status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, 'wechat', ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    """,
+                    (
+                        batch_id,
+                        item["account_id"],
+                        item["account_key"],
+                        item["display_name"],
+                        item["profile_dir"],
+                        item["debug_port"],
+                        item["reason"],
+                        item["url"],
+                        item["qr_path"],
+                        item["qr_fingerprint"],
+                        ts,
+                        ts,
+                    ),
+                )
+    notification_results: list[dict[str, Any]] = []
+    platforms = _enabled_notification_platforms("wechat_login_qr") if notify else []
+    text = _login_qr_text(batch_id, items)
+    if notify and platforms:
+        for platform in platforms:
+            try:
+                notification_results.append(_send_notification_text(platform, text))
+            except Exception as exc:
+                notification_results.append({"platform": platform, "ok": False, "error": str(exc)})
+    return {"batch_id": batch_id, "items": items, "notification_platforms": platforms, "notification_results": notification_results}
+
+
+def list_login_qr_batches(limit: int = 20) -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        try:
+            return _brand_supabase().select("login_qr_batches", order="id.desc")[:limit]
+        except SupabaseError:
+            return []
+    ensure_database()
+    with connect() as conn:
+        return [
+            dict_from_row(row)
+            for row in conn.execute("SELECT * FROM login_qr_batches ORDER BY id DESC LIMIT ?", (max(1, int(limit or 20)),))
+        ]
+
+
 def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
     if brand_database_backend() == "supabase":
         rows = _brand_supabase().select_where(
@@ -919,6 +1246,46 @@ def _matrix_publish_success_counts_for_backend() -> dict[int, int]:
     return _matrix_publish_success_counts()
 
 
+def _profile_debug_port_from_seed(conn, account_key: str, platform: str) -> int:
+    preferred = stable_debug_port(account_key, platform)
+    used = {
+        int(row["debug_port"])
+        for row in conn.execute("SELECT debug_port FROM browser_profiles")
+        if row["debug_port"] is not None
+    }
+    span = DEBUG_PORT_END - DEBUG_PORT_START + 1
+    for offset in range(span):
+        candidate = DEBUG_PORT_START + ((preferred - DEBUG_PORT_START + offset) % span)
+        if candidate not in used:
+            return candidate
+    raise RuntimeError("no free browser debug port is available")
+
+
+def _profile_debug_port_supabase(account_key: str, platform: str) -> int:
+    preferred = stable_debug_port(account_key, platform)
+    client = _brand_supabase()
+    used = {
+        int(row["debug_port"])
+        for row in client.select("browser_profiles")
+        if row.get("debug_port") is not None
+    }
+    span = DEBUG_PORT_END - DEBUG_PORT_START + 1
+    for offset in range(span):
+        candidate = DEBUG_PORT_START + ((preferred - DEBUG_PORT_START + offset) % span)
+        if candidate not in used:
+            return candidate
+    raise RuntimeError("no free browser debug port is available")
+
+
+def _decode_platform_profile(platform: dict[str, Any]) -> dict[str, Any]:
+    data = dict(platform)
+    fingerprint = _json_payload(data.get("fingerprint_json"), {})
+    if not fingerprint and data.get("account_key") and data.get("platform"):
+        fingerprint = build_browser_fingerprint(str(data["account_key"]), str(data["platform"]))
+    data["fingerprint"] = fingerprint
+    return data
+
+
 def _video_key(path: Path) -> str:
     stat = path.stat()
     return f"{path.name}|{stat.st_size}|{int(stat.st_mtime)}"
@@ -973,10 +1340,13 @@ def list_accounts() -> list[dict[str, Any]]:
             platforms = client.select("account_platforms", filters={"account_id": account["id"]}, order="platform.asc")
             profiles = {item["account_platform_id"]: item for item in client.select("browser_profiles")}
             for platform in platforms:
+                platform["account_key"] = account.get("account_key")
                 profile = profiles.get(platform.get("id"))
                 if profile:
                     platform["profile_dir"] = profile.get("profile_dir", "")
                     platform["debug_port"] = profile.get("debug_port")
+                    platform["fingerprint_json"] = profile.get("fingerprint_json", {})
+                platform.update(_decode_platform_profile(platform))
             account["platforms"] = platforms
             account["publish_success_count"] = publish_success_counts.get(int(account["id"]), 0)
         return accounts
@@ -987,7 +1357,7 @@ def list_accounts() -> list[dict[str, Any]]:
         for account in accounts:
             platforms = conn.execute(
                 """
-                SELECT ap.*, bp.profile_dir, bp.debug_port
+                SELECT ap.*, bp.profile_dir, bp.debug_port, bp.fingerprint_json
                 FROM account_platforms ap
                 LEFT JOIN browser_profiles bp ON bp.account_platform_id = ap.id
                 WHERE ap.account_id = ?
@@ -995,7 +1365,7 @@ def list_accounts() -> list[dict[str, Any]]:
                 """,
                 (account["id"],),
             ).fetchall()
-            account["platforms"] = [dict_from_row(row) for row in platforms]
+            account["platforms"] = [_decode_platform_profile(dict_from_row(row)) for row in platforms]
             account["publish_success_count"] = publish_success_counts.get(int(account["id"]), 0)
         return accounts
 
@@ -1009,10 +1379,13 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         platforms = client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc")
         profiles = {item["account_platform_id"]: item for item in client.select("browser_profiles")}
         for platform in platforms:
+            platform["account_key"] = account.get("account_key")
             profile = profiles.get(platform.get("id"))
             if profile:
                 platform["profile_dir"] = profile.get("profile_dir", "")
                 platform["debug_port"] = profile.get("debug_port")
+                platform["fingerprint_json"] = profile.get("fingerprint_json", {})
+            platform.update(_decode_platform_profile(platform))
         account["platforms"] = platforms
         account["publish_success_count"] = 0
         return account
@@ -1024,10 +1397,10 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         account = dict_from_row(row)
         account["publish_success_count"] = _matrix_publish_success_counts().get(int(account_id), 0)
         account["platforms"] = [
-            dict_from_row(item)
+            _decode_platform_profile(dict_from_row(item))
             for item in conn.execute(
                 """
-                SELECT ap.*, bp.profile_dir, bp.debug_port
+                SELECT ap.*, bp.profile_dir, bp.debug_port, bp.fingerprint_json
                 FROM account_platforms ap
                 LEFT JOIN browser_profiles bp ON bp.account_platform_id = ap.id
                 WHERE ap.account_id = ?
@@ -1151,17 +1524,22 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
             ap = existing
         profile_dir = profile_dir_for(str(account["account_key"]), token)
         profile_dir.mkdir(parents=True, exist_ok=True)
-        if client.select_one("browser_profiles", filters={"account_platform_id": ap["id"]}) is None:
+        profile = client.select_one("browser_profiles", filters={"account_platform_id": ap["id"]})
+        fingerprint = build_browser_fingerprint(str(account["account_key"]), token)
+        if profile is None:
             client.insert(
                 "browser_profiles",
                 {
                     "account_platform_id": ap["id"],
                     "profile_dir": str(profile_dir),
-                    "debug_port": stable_debug_port(str(account["account_key"]), token),
+                    "debug_port": _profile_debug_port_supabase(str(account["account_key"]), token),
+                    "fingerprint_json": fingerprint,
                     "created_at": ts,
                     "updated_at": ts,
                 },
             )
+        elif not _json_payload(profile.get("fingerprint_json"), {}):
+            client.update("browser_profiles", {"fingerprint_json": fingerprint, "updated_at": ts}, filters={"account_platform_id": ap["id"]})
         return ap
     conn.execute(
         """
@@ -1177,12 +1555,24 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
     if ap is None:
         raise RuntimeError("account platform was not created")
     profile_dir = profile_dir_for(str(ap["account_key"]), token)
+    fingerprint = build_browser_fingerprint(str(ap["account_key"]), token)
     conn.execute(
         """
-        INSERT OR IGNORE INTO browser_profiles(account_platform_id, profile_dir, debug_port, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO browser_profiles(account_platform_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (int(ap["id"]), str(profile_dir), stable_debug_port(str(ap["account_key"]), token), ts, ts),
+        (
+            int(ap["id"]),
+            str(profile_dir),
+            _profile_debug_port_from_seed(conn, str(ap["account_key"]), token),
+            json.dumps(fingerprint, ensure_ascii=False),
+            ts,
+            ts,
+        ),
+    )
+    conn.execute(
+        "UPDATE browser_profiles SET fingerprint_json = ? WHERE account_platform_id = ? AND (fingerprint_json IS NULL OR fingerprint_json = '' OR fingerprint_json = '{}')",
+        (json.dumps(fingerprint, ensure_ascii=False), int(ap["id"])),
     )
     profile_dir.mkdir(parents=True, exist_ok=True)
     return dict_from_row(ap)
@@ -1208,18 +1598,20 @@ def open_account_browser(account_id: int, platform: str) -> dict[str, Any]:
         raise RuntimeError("account platform missing")
     profile_dir = Path(str(ap["profile_dir"]))
     profile_dir.mkdir(parents=True, exist_ok=True)
-    engine._ensure_chrome_debug_port(
-        debug_port=int(ap["debug_port"]),
-        auto_open_chrome=True,
-        chrome_user_data_dir=str(profile_dir),
-        startup_url=capability.open_url,
-    )
+    with _chrome_fingerprint_env(ap.get("fingerprint")):
+        engine._ensure_chrome_debug_port(
+            debug_port=int(ap["debug_port"]),
+            auto_open_chrome=True,
+            chrome_user_data_dir=str(profile_dir),
+            startup_url=capability.open_url,
+        )
     return {
         "ok": True,
         "platform": token,
         "debug_port": int(ap["debug_port"]),
         "profile_dir": str(profile_dir),
         "open_url": capability.open_url,
+        "fingerprint": ap.get("fingerprint") or {},
     }
 
 
@@ -1239,14 +1631,21 @@ def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
         raise RuntimeError("account platform missing")
     profile_dir = Path(str(ap["profile_dir"]))
     apply_cybercar_environment()
-    result = engine.probe_platform_session_via_debug_port(
-        platform_name=token,
-        open_url=capability.open_url,
-        debug_port=int(ap["debug_port"]),
-        chrome_user_data_dir=str(profile_dir),
-        disconnect_after_probe=(token != "wechat"),
-        enable_wechat_keepalive=(token == "wechat"),
-    )
+    with _chrome_fingerprint_env(ap.get("fingerprint")):
+        result = engine.probe_platform_session_via_debug_port(
+            platform_name=token,
+            open_url=capability.open_url,
+            debug_port=int(ap["debug_port"]),
+            chrome_user_data_dir=str(profile_dir),
+            disconnect_after_probe=(token != "wechat"),
+            enable_wechat_keepalive=(token == "wechat"),
+        )
+    result.setdefault("account_id", account_id)
+    result.setdefault("account_key", account.get("account_key"))
+    result.setdefault("display_name", account.get("display_name"))
+    result.setdefault("debug_port", int(ap["debug_port"]))
+    result.setdefault("profile_dir", str(profile_dir))
+    result.setdefault("fingerprint", ap.get("fingerprint") or {})
     status = str(result.get("status") or ("ready" if result.get("ok") else "unknown"))
     with connect() as conn:
         conn.execute(

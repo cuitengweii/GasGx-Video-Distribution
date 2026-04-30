@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from . import control_plane, service
 from .platforms import SUPPORTED_PLATFORMS
-from .scheduler import scheduler_status, start_scheduler, trigger_matrix_wechat_job
+from .scheduler import scheduler_status, start_scheduler, trigger_matrix_wechat_job, trigger_matrix_wechat_login_check
 from .tenant import bind_tenant_database
 from .video_matrix_api import router as video_matrix_router
 
@@ -328,6 +328,25 @@ def create_app() -> FastAPI:
     @app.post("/api/jobs/matrix-wechat/run-now")
     def matrix_wechat_job_run_now() -> dict[str, Any]:
         return trigger_matrix_wechat_job()
+
+    @app.post("/api/jobs/matrix-wechat/login-check")
+    def matrix_wechat_login_check() -> dict[str, Any]:
+        return trigger_matrix_wechat_login_check()
+
+    @app.get("/api/login-qr-batches")
+    def login_qr_batches(limit: int = Query(default=20)) -> list[dict[str, Any]]:
+        return service.list_login_qr_batches(limit=limit)
+
+    @app.get("/api/notification-routes")
+    def notification_routes() -> list[dict[str, Any]]:
+        return service.list_notification_routes()
+
+    @app.post("/api/notification-routes/{event_type}/{platform}")
+    def save_notification_route(event_type: str, platform: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return service.save_notification_route(event_type, platform, bool(payload.get("enabled")))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/accounts")
     def accounts() -> list[dict[str, Any]]:

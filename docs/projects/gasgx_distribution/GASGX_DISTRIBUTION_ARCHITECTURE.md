@@ -1,6 +1,20 @@
 # GasGx Video Distribution Architecture
 
-Last updated: 2026-04-29
+Last updated: 2026-04-30
+
+## WeChat Matrix Browser Runtime
+
+- `browser_profiles` is the source of truth for WeChat account browser runtime: `profile_dir`, `debug_port`, and `fingerprint_json`.
+- Profile directories are stable under `profiles/matrix/<account_key>/wechat`.
+- Debug ports are allocated from the stable pool `12000-32000` and stored once. Publish and login-check flows must read the stored value instead of recomputing a temporary mapping.
+- Fingerprints are stored as JSON with provider `builtin-light`, UA, language, locale, timezone, window size, and reserved proxy slot. Launch code converts this payload into Chrome args through `CYBERCAR_CHROME_EXTRA_ARGS`.
+
+## Login Check And QR Queue
+
+- `matrix_publish.check_wechat_matrix_login_status()` owns matrix-level WeChat login rotation. Default execution checks only a small batch, serially.
+- `scheduler` runs the check every 30 minutes by default when the matrix scheduler is enabled, but skips it while publish is running.
+- `login_qr_batches` groups one login-required detection round, while `login_qr_items` stores account-level QR state and QR fingerprint. Duplicate account/QR notifications are cooled down before sending.
+- `notification_routes` separates operation notices from AI robot credentials. Enabled routes are only considered sendable when the matching AI robot platform is enabled and has a webhook/Bot target configured.
 
 ## Supabase Multi-Brand Runtime
 

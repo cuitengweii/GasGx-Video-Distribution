@@ -39,7 +39,8 @@
     "hud_bar_color": "#75b37b",
     "hud_bar_opacity": 0.44,
     "primary_color": "#5DD62C",
-    "secondary_color": "#FFFFFF"
+    "secondary_color": "#FFFFFF",
+    "align": "center"
   },
   "clean_data": {
     "name": "Clean Data",

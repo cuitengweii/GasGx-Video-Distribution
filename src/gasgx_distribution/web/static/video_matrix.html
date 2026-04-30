@@ -5,9 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GasGx Vibe-Matrix</title>
     <script>
+      function applyEmbeddedShellTheme(theme) {
+        if (!theme) return;
+        const root = document.documentElement;
+        root.style.setProperty("--accent-aurora", theme.accent);
+        root.style.setProperty("--accent-soft", theme.soft);
+        root.style.setProperty("--green", theme.accent);
+        root.style.setProperty("--line", theme.line || "color-mix(in srgb, " + theme.accent + " 34%, transparent)");
+      }
+      function syncEmbeddedShellTheme() {
+        try {
+          const parentStyle = window.parent && window.parent !== window
+            ? window.parent.getComputedStyle(window.parent.document.documentElement)
+            : null;
+          const accent = parentStyle?.getPropertyValue("--accent-aurora").trim();
+          const soft = parentStyle?.getPropertyValue("--accent-soft").trim();
+          if (accent) applyEmbeddedShellTheme({ accent, soft });
+        } catch {
+          applyEmbeddedShellTheme({ accent: "#5dd62c", soft: "rgba(93, 214, 44, 0.14)" });
+        }
+      }
       if (new URLSearchParams(window.location.search).get("embed") === "1") {
         document.documentElement.classList.add("embed-mode");
+        syncEmbeddedShellTheme();
       }
+      window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin || event.data?.type !== "gasgx-shell-theme") return;
+        applyEmbeddedShellTheme(event.data.theme);
+      });
     </script>
     <link rel="stylesheet" href="/static/video_matrix_styles.css" />
   </head>

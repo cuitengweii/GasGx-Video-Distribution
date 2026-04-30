@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from gasgx_distribution import service
 from gasgx_distribution import db as dist_db
+from gasgx_distribution import matrix_publish
 from gasgx_distribution.supabase_backend import SupabaseError, SupabaseRestClient
 from gasgx_distribution.video_matrix.ingestion import _select_source_files
 from gasgx_distribution.web import create_app
@@ -58,10 +59,105 @@ def test_account_crud_creates_independent_platform_profiles(monkeypatch, tmp_pat
         assert Path(item["profile_dir"]).exists()
         assert "profiles" in item["profile_dir"]
         assert isinstance(item["debug_port"], int)
+        assert 12000 <= int(item["debug_port"]) <= 32000
+        assert item["fingerprint"]["provider"] == "builtin-light"
 
     updated = service.update_account(int(account["id"]), {"notes": "phase-one"})
     assert updated is not None
     assert updated["notes"] == "phase-one"
+
+
+def test_creating_many_wechat_accounts_allocates_unique_profiles_ports_and_fingerprints(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    accounts = [
+        service.create_account({"account_key": f"gasgx-{index:02d}", "display_name": f"GasGx {index:02d}", "platforms": ["wechat"]})
+        for index in range(1, 51)
+    ]
+
+    profiles = []
+    ports = []
+    fingerprints = []
+    for account in accounts:
+        platform = account["platforms"][0]
+        profiles.append(platform["profile_dir"])
+        ports.append(platform["debug_port"])
+        fingerprints.append(json.dumps(platform["fingerprint"], sort_keys=True))
+    assert len(set(profiles)) == 50
+    assert len(set(ports)) == 50
+    assert len(set(fingerprints)) > 1
+    assert all(12000 <= int(port) <= 32000 for port in ports)
+
+
+def test_matrix_publish_dry_run_uses_persisted_browser_profile_port(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
+    material_dir = tmp_path / "runtime" / "materials" / "videos"
+    material_dir.mkdir(parents=True)
+    video = material_dir / "v1.mp4"
+    video.write_bytes(b"video")
+    monkeypatch.setattr(matrix_publish, "materials_video_dir", lambda: material_dir)
+
+    result = matrix_publish.run_wechat_publish(dry_run=True)
+
+    wechat = account["platforms"][0]
+    assert result["ok"] is True
+    assert result["items"][0]["profile_dir"] == wechat["profile_dir"]
+    assert result["items"][0]["debug_port"] == wechat["debug_port"]
+
+
+def test_matrix_publish_preflight_skips_when_planned_account_needs_login(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
+    material_dir = tmp_path / "runtime" / "materials" / "videos"
+    material_dir.mkdir(parents=True)
+    (material_dir / "v1.mp4").write_bytes(b"video")
+    monkeypatch.setattr(matrix_publish, "materials_video_dir", lambda: material_dir)
+    monkeypatch.setattr(
+        service,
+        "check_login_status",
+        lambda account_id, platform: {
+            "status": "login_required",
+            "reason": "login_url",
+            "account_id": account_id,
+            "account_key": "gasgx-01",
+            "display_name": "GasGx 01",
+            "profile_dir": str(tmp_path / "profiles" / "gasgx-01" / "wechat"),
+            "debug_port": 12001,
+        },
+    )
+
+    result = matrix_publish.run_wechat_publish()
+
+    assert result["skipped"] is True
+    assert result["reason"] == "wechat_login_required"
+    assert not (tmp_path / "runtime" / "matrix_publish_runs").exists()
+
+
+def test_login_qr_batch_deduplicates_and_does_not_require_configured_robot(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
+    platform = account["platforms"][0]
+    payload = {
+        "status": "login_required",
+        "reason": "login_url",
+        "account_id": account["id"],
+        "account_key": account["account_key"],
+        "display_name": account["display_name"],
+        "profile_dir": platform["profile_dir"],
+        "debug_port": platform["debug_port"],
+        "url": "https://channels.weixin.qq.com/login.html",
+    }
+
+    first = service.record_wechat_login_qr_batch([payload], notify=True)
+    second = service.record_wechat_login_qr_batch([payload], notify=True)
+
+    assert first and first["items"][0]["qr_fingerprint"] == second["items"][0]["qr_fingerprint"]
+    assert second["skipped"] is True
+    assert second["reason"] == "duplicate_login_qr_cooldown"
+    with dist_db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM login_qr_batches").fetchone()["c"] == 1
+        assert conn.execute("SELECT COUNT(*) AS c FROM login_qr_items").fetchone()["c"] == 1
 
 
 def test_accounts_include_matrix_publish_success_count(monkeypatch, tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .matrix_publish import run_wechat_publish
+from .matrix_publish import check_wechat_matrix_login_status, run_wechat_publish
 from .paths import get_paths
 from .public_settings import load_distribution_settings
 
@@ -79,6 +79,10 @@ def _next_run_at(settings: dict[str, Any], *, now: int | None = None) -> int:
     return _next_interval_run(settings, now=now)
 
 
+def _login_check_interval_seconds(settings: dict[str, Any]) -> int:
+    return max(300, int(settings.get("login_check_interval_minutes") or 30) * 60)
+
+
 def _base_status() -> dict[str, Any]:
     settings = _job_settings()
     state = _read_state()
@@ -94,6 +98,10 @@ def _base_status() -> dict[str, Any]:
         "last_error": state.get("last_error", ""),
         "last_result": state.get("last_result", {}),
         "next_run_at": state.get("next_run_at"),
+        "last_login_check_at": state.get("last_login_check_at"),
+        "last_login_check_ok": state.get("last_login_check_ok"),
+        "last_login_check_result": state.get("last_login_check_result", {}),
+        "pending_login_batch": state.get("pending_login_batch", {}),
     }
 
 
@@ -147,6 +155,29 @@ def _run_once(reason: str = "scheduled") -> dict[str, Any]:
         _RUNNING.clear()
 
 
+def _run_login_check_once(reason: str = "scheduled") -> dict[str, Any]:
+    if _RUNNING.is_set():
+        return {"ok": False, "skipped": True, "reason": "publish_running"}
+    settings = _job_settings()
+    batch_size = max(1, int(settings.get("login_check_batch_size") or 5))
+    state = _read_state()
+    try:
+        result = check_wechat_matrix_login_status(batch_size=batch_size, notify=True)
+    except Exception as exc:
+        result = {"ok": False, "error": f"{exc}\n{traceback.format_exc()}"}
+    state.update(
+        {
+            "last_login_check_at": _now(),
+            "last_login_check_reason": reason,
+            "last_login_check_ok": bool(result.get("ok")),
+            "last_login_check_result": result,
+            "pending_login_batch": result.get("login_batch") or {},
+        }
+    )
+    _write_state(state)
+    return result
+
+
 def trigger_matrix_wechat_job() -> dict[str, Any]:
     def _runner() -> None:
         _run_once(reason="manual")
@@ -165,13 +196,20 @@ def _scheduler_loop() -> None:
         enabled = bool(settings.get("enabled"))
         state = _read_state()
         next_run_at = int(state.get("next_run_at") or 0)
+        last_login_check_at = int(state.get("last_login_check_at") or 0)
         now = _now()
         if not next_run_at:
             state["next_run_at"] = _next_run_at(settings, now=now)
             _write_state(state)
         elif enabled and now >= next_run_at and not _RUNNING.is_set():
             _run_once(reason="scheduled")
+        elif enabled and (not last_login_check_at or now - last_login_check_at >= _login_check_interval_seconds(settings)):
+            _run_login_check_once(reason="scheduled")
         _STOP.wait(10)
+
+
+def trigger_matrix_wechat_login_check() -> dict[str, Any]:
+    return _run_login_check_once(reason="manual")
 
 
 def start_scheduler() -> None:

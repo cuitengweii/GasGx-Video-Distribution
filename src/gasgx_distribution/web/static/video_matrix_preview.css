@@ -97,6 +97,22 @@ video {
   object-fit: cover;
   background: #050505;
 }
+.sound-toggle {
+  position: absolute;
+  z-index: 7;
+  right: 18px;
+  top: 96px;
+  min-width: 88px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(0,0,0,.54);
+  font: 800 12px/1 Inter, "Segoe UI", Arial, sans-serif;
+  text-shadow: 0 2px 10px rgba(0,0,0,.8);
+  cursor: pointer;
+}
 .channels-top {
   position: absolute;
   z-index: 5;

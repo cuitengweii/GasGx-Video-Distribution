@@ -20,11 +20,15 @@ def plan_variants(
     composition_sequence: list[dict[str, Any]] | None = None,
     max_attempts: int | None = None,
     existing_signatures: set[str] | None = None,
+    recent_clip_ids: set[str] | None = None,
+    recent_segment_keys: set[str] | None = None,
 ) -> list[VideoVariant]:
     count = output_count or settings.output_count
     sequence = _resolve_sequence(composition_sequence or settings.composition_sequence)
     attempts_limit = max(1, int(max_attempts or settings.max_variant_attempts))
     historical_signatures = set(existing_signatures or set())
+    historical_clip_ids = set(recent_clip_ids or set())
+    historical_segment_keys = set(recent_segment_keys or set())
     buckets = defaultdict(list)
     for clip in clips:
         buckets[clip.category].append(clip)
@@ -44,7 +48,7 @@ def plan_variants(
         history_collision: VideoVariant | None = None
         while attempts < attempts_limit:
             attempts += 1
-            segments = _pick_segments(buckets, beat_grid, rng, sequence)
+            segments = _pick_segments(buckets, beat_grid, rng, sequence, historical_clip_ids)
             title = rng.choice(settings.titles)
             slogan = rng.choice(settings.slogans)
             lut_strength = round(1.0 + rng.uniform(-0.03, 0.03), 4)
@@ -68,7 +72,7 @@ def plan_variants(
                 segments=segments,
                 signature=signature,
             )
-            if signature in historical_signatures:
+            if signature in historical_signatures or _segments_touch_history(segments, historical_segment_keys):
                 history_collision = candidate
                 continue
             seen_signatures.add(signature)
@@ -88,6 +92,7 @@ def _pick_segments(
     beat_grid: list[float],
     rng: random.Random,
     sequence: list[tuple[str, float]],
+    recent_clip_ids: set[str],
 ) -> list[SegmentPlan]:
     beat_pairs = list(zip(beat_grid, beat_grid[1:]))
     if not beat_pairs:
@@ -95,7 +100,7 @@ def _pick_segments(
     selected: list[SegmentPlan] = []
     beat_index = 0
     for index, (category, target_window) in enumerate(sequence):
-        clip = rng.choice(buckets[category])
+        clip = _pick_clip(buckets[category], rng, recent_clip_ids)
         start_time = max(0.0, round(rng.uniform(0.0, max(clip.duration - target_window, 0.0)), 3))
         duration = _align_duration(target_window, beat_pairs, beat_index)
         beat_index = min(len(beat_pairs) - 1, beat_index + max(1, int(duration / 0.45)))
@@ -109,6 +114,19 @@ def _pick_segments(
             )
         )
     return selected
+
+
+def _pick_clip(clips: list[ClipMetadata], rng: random.Random, recent_clip_ids: set[str]) -> ClipMetadata:
+    fresh = [clip for clip in clips if clip.clip_id not in recent_clip_ids]
+    return rng.choice(fresh or clips)
+
+
+def _segments_touch_history(segments: list[SegmentPlan], recent_segment_keys: set[str]) -> bool:
+    return any(_segment_key(segment) in recent_segment_keys for segment in segments)
+
+
+def _segment_key(segment: SegmentPlan) -> str:
+    return f"{segment.clip.clip_id}:{segment.start_time}:{segment.duration}"
 
 
 def _resolve_sequence(raw: list[dict[str, Any]] | None) -> list[tuple[str, float]]:

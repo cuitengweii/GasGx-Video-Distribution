@@ -1,6 +1,15 @@
 # GasGx Video Distribution Decisions
 
-Last updated: 2026-04-29
+Last updated: 2026-04-30
+
+## 2026-04-30 WeChat Matrix Scale Decisions
+
+- WeChat matrix scale is account-record driven. Adding accounts must create or reuse a persisted `browser_profiles` row instead of deriving runtime values in publish code.
+- The stable default debug-port pool is `12000-32000`; account deletion or disabling must not reshuffle other account ports.
+- Built-in light fingerprinting is the first implementation stage. The schema keeps a provider/fingerprint payload so an external provider such as AdsPower or BitBrowser can be attached later without changing matrix publish planning.
+- Login checks must run in small batches by default, currently `batch_size=5` and serial execution, because future deployments may have dozens of accounts and should not open every browser at once.
+- Login QR notification is an operations-notice use case, separate from AI robot chat/customer-service behavior. Route switches live in `notification_routes`; AI robot config only supplies usable platform credentials.
+- A login-required publish preflight must skip the whole planned round before consuming material, because the material/account assignment is only valid when all planned accounts can publish.
 
 ## 2026-04-29 Supabase And Customer Install Decisions
 

@@ -43,9 +43,52 @@ CREATE TABLE IF NOT EXISTS browser_profiles (
     account_platform_id INTEGER NOT NULL UNIQUE,
     profile_dir TEXT NOT NULL,
     debug_port INTEGER NOT NULL UNIQUE,
+    fingerprint_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY(account_platform_id) REFERENCES account_platforms(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS notification_routes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(event_type, platform)
+);
+
+CREATE TABLE IF NOT EXISTS login_qr_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id TEXT NOT NULL UNIQUE,
+    event_type TEXT NOT NULL DEFAULT 'wechat_login_qr',
+    status TEXT NOT NULL DEFAULT 'pending',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    notified_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS login_qr_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    account_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'wechat',
+    profile_dir TEXT NOT NULL,
+    debug_port INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    qr_path TEXT NOT NULL DEFAULT '',
+    qr_fingerprint TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(account_id, platform, qr_fingerprint),
+    FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY(batch_id) REFERENCES login_qr_batches(batch_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS automation_tasks (
@@ -176,3 +219,6 @@ def init_db(path: Path | None = None) -> None:
             conn.execute("ALTER TABLE ai_robot_messages ADD COLUMN last_attempt_at INTEGER")
         if "sent_at" not in columns:
             conn.execute("ALTER TABLE ai_robot_messages ADD COLUMN sent_at INTEGER")
+        profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(browser_profiles)")}
+        if "fingerprint_json" not in profile_columns:
+            conn.execute("ALTER TABLE browser_profiles ADD COLUMN fingerprint_json TEXT NOT NULL DEFAULT '{}'")

@@ -109,7 +109,10 @@ def build_intro_cover_image(
         for line in headline_lines[:3]:
             _draw_centered(draw, (0, y), width, line, headline_font, primary)
             y += int(headline_font.size * 1.05)
-        _draw_centered(draw, (0, int(template["subhead_y"])), width, subhead, subhead_font, secondary)
+        y = int(template["subhead_y"])
+        for line in _wrap_text(draw, subhead, subhead_font, width - margin * 2)[:2]:
+            _draw_centered(draw, (0, y), width, line, subhead_font, secondary)
+            y += int(subhead_font.size * 1.2)
     else:
         draw.text((margin, int(template["brand_y"])), brand, fill=primary, font=brand_font)
         if eyebrow:
@@ -158,8 +161,14 @@ def _draw_panel(draw: ImageDraw.ImageDraw, width: int, y: int, hud_lines: list[s
     hud_text = "  |  ".join(hud_lines[:3])
     wrapped = _wrap_text(draw, hud_text, font, x1 - x0 - 56)
     text_y = y + 38
+    align = str(template.get("align", "left")).lower()
     for line in wrapped[:2]:
-        draw.text((x0 + 28, text_y), line, fill=str(template["secondary_color"]), font=font)
+        if align == "center":
+            text_width = _text_size(draw, line, font)[0]
+            text_x = x0 + max(28, (x1 - x0 - text_width) // 2)
+        else:
+            text_x = x0 + 28
+        draw.text((text_x, text_y), line, fill=str(template["secondary_color"]), font=font)
         text_y += int(font.size * 1.25)
 
 

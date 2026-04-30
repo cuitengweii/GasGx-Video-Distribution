@@ -14527,8 +14527,16 @@ def _launch_chrome_debug(
         f"--user-data-dir={user_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        startup_url,
     ]
+    extra_args_raw = str(os.getenv("CYBERCAR_CHROME_EXTRA_ARGS") or "").strip()
+    if extra_args_raw:
+        try:
+            extra_args = json.loads(extra_args_raw)
+        except Exception:
+            extra_args = []
+        if isinstance(extra_args, list):
+            cmd.extend(str(item) for item in extra_args if str(item).strip())
+    cmd.append(startup_url)
     _log(f"[Uploader] Auto launching Chrome: {chrome_exec}")
     process = subprocess.Popen(cmd, **_build_chrome_launch_popen_kwargs(window_mode_override=window_mode_override))
     _start_windows_chrome_minimize_guard(process, window_mode_override=window_mode_override)
