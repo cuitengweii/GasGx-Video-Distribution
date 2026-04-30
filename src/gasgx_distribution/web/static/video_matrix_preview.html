@@ -1,47 +1,427 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GasGx 视频号预览</title>
-    <link rel="stylesheet" href="/static/video_matrix_preview.css" />
-  </head>
-  <body>
-    <main class="preview-shell">
-      <section class="preview-copy">
-        <p>GASGX VIDEO PREVIEW</p>
-        <h1>视频号门板真实预览</h1>
-        <span>以 iPhone Air 轮廓展示首屏封面、竖屏比例和视频号观看界面的最终效果。</span>
-      </section>
-      <section class="iphone-air" aria-label="iPhone Air video preview">
-        <div class="device-button"></div>
-        <div class="screen">
-          <div class="dynamic-island"></div>
-          <video id="previewVideo" playsinline autoplay loop></video>
-          <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle preview audio">Sound on</button>
-          <div class="channels-top">
-            <strong>视频号</strong>
-            <span>GasGx</span>
-          </div>
-          <div class="channels-actions">
-            <button>赞</button>
-            <button>评</button>
-            <button>转</button>
-          </div>
-          <div class="channels-caption">
-            <strong>GasGx</strong>
-            <p>燃气发动机组现场能源案例</p>
-          </div>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模块化算力单元 - 视频界面复刻</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&display=swap');
+
+        html,
+        body {
+            width: 393px;
+            height: 852px;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background-color: #121212;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 852px;
+            margin: 0;
+            user-select: none;
+        }
+
+        .phone-mockup {
+            width: 393px;
+            height: 852px;
+            border-radius: 55px;
+            border: 14px solid #1a1a1a;
+            box-shadow: 0 0 0 2px #333, 0 20px 40px rgba(0,0,0,0.8);
+            position: relative;
+            overflow: hidden;
+            background-color: #2c2c2c;
+        }
+
+        #previewVideo {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1;
+            background: #000;
+        }
+
+        #templateBackgroundImage {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 0;
+            background: #000;
+        }
+
+        .vm-template-mask-bg {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            opacity: .72;
+            background:
+                linear-gradient(to bottom, rgba(5, 18, 14, .12), rgba(8, 52, 28, .38)),
+                repeating-linear-gradient(105deg, rgba(93, 214, 44, .1) 0 2px, transparent 2px 28px);
+        }
+
+        .vm-template-mask-bg::before {
+            content: "";
+            position: absolute;
+            inset: 34% 0 0;
+            background: rgba(93, 214, 44, .34);
+            clip-path: polygon(0 100%, 16% 38%, 28% 100%, 44% 34%, 56% 100%, 72% 32%, 84% 100%, 100% 36%, 100% 100%);
+        }
+
+        .bg-overlay {
+            background: linear-gradient(
+                to bottom,
+                rgba(0,0,0,0.4) 0%,
+                rgba(0,0,0,0.0) 25%,
+                rgba(0,0,0,0.0) 60%,
+                rgba(0,0,0,0.85) 100%
+            );
+            z-index: 3;
+        }
+
+        .text-stroke-yellow {
+            color: #FEE74B;
+            font-weight: 900;
+            text-shadow:
+                -2px -2px 0 #000,
+                 2px -2px 0 #000,
+                -2px  2px 0 #000,
+                 2px  2px 0 #000,
+                -3px  0   0 #000,
+                 3px  0   0 #000,
+                 0   -3px 0 #000,
+                 0    3px 0 #000,
+                 0    6px 10px rgba(0,0,0,0.6);
+            letter-spacing: 1px;
+            line-height: 1.25;
+        }
+
+        .dynamic-island {
+            width: 90px;
+            height: 26px;
+            background-color: #000;
+            border-radius: 15px;
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 50;
+        }
+
+        .sound-toggle {
+            position: absolute;
+            z-index: 60;
+            right: 16px;
+            top: 108px;
+            min-width: 44px;
+            min-height: 24px;
+            padding: 0 8px;
+            border: 1px solid rgba(255,255,255,.22);
+            border-radius: 999px;
+            color: #fff;
+            background: rgba(0,0,0,.42);
+            font: 800 11px/1 'Noto Sans SC', sans-serif;
+            text-shadow: 0 2px 10px rgba(0,0,0,.8);
+            cursor: pointer;
+        }
+
+        .status-scale {
+            transform: scale(0.75);
+            transform-origin: top center;
+            width: 133.333333%;
+            margin-left: -16.666667%;
+        }
+
+        .bottom-action-scale {
+            position: absolute;
+            left: 50%;
+            bottom: 0;
+            transform: translateX(-50%) scale(0.75);
+            transform-origin: bottom center;
+            width: 500px;
+            justify-content: space-between;
+            margin-left: 0;
+        }
+
+        .bottom-meta {
+            position: absolute;
+            left: 21px;
+            bottom: 64px;
+            width: 330px;
+            margin-bottom: 0;
+        }
+
+        .creator-group {
+            transform: translateX(-52px);
+        }
+
+        .back-control {
+            transform: translateY(-24px);
+        }
+
+        .vm-template-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 18;
+            overflow: hidden;
+        }
+
+        .vm-template-hud-bar {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            border-radius: 10px;
+            background: rgba(5, 17, 24, .68);
+            cursor: move;
+            user-select: text;
+        }
+
+        .vm-template-text:focus {
+            outline: 2px solid #ffffff;
+            outline-offset: 2px;
+            background: rgba(0,0,0,.24);
+        }
+
+        .vm-template-text {
+            position: absolute;
+            max-width: 340px;
+            color: #fff;
+            font-weight: 900;
+            line-height: 1.1;
+            text-shadow: 0 2px 10px rgba(0,0,0,.76);
+            white-space: pre-wrap;
+            cursor: move;
+            user-select: text;
+        }
+
+        .vm-template-editable.active {
+            outline: 2px solid #5dd62c;
+            outline-offset: 4px;
+        }
+
+        .vm-visual-toolbar {
+            position: absolute;
+            left: 14px;
+            bottom: 86px;
+            z-index: 70;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            padding: 7px;
+            border: 1px solid rgba(93, 214, 44, .5);
+            border-radius: 12px;
+            background: rgba(0, 0, 0, .72);
+            box-shadow: 0 12px 28px rgba(0,0,0,.42);
+        }
+
+        .vm-visual-toolbar.active {
+            display: flex;
+        }
+
+        .vm-visual-toolbar button,
+        .vm-visual-toolbar select,
+        .vm-visual-toolbar input {
+            height: 28px;
+            border: 1px solid rgba(255,255,255,.2);
+            border-radius: 7px;
+            color: #fff;
+            background: rgba(18,18,18,.92);
+            font: 800 12px/1 'Noto Sans SC', sans-serif;
+        }
+
+        .vm-visual-toolbar button {
+            min-width: 28px;
+            padding: 0 8px;
+        }
+
+        .vm-visual-toolbar select {
+            width: 92px;
+        }
+
+        .vm-visual-toolbar input[type="color"] {
+            width: 34px;
+            padding: 2px;
+        }
+
+        .vm-center-guides {
+            position: absolute;
+            inset: 0;
+            z-index: 69;
+            pointer-events: none;
+            display: none;
+        }
+
+        .vm-center-guides.active {
+            display: block;
+        }
+
+        .vm-center-guides::before,
+        .vm-center-guides::after {
+            content: "";
+            position: absolute;
+            background: rgba(93, 214, 44, .74);
+            box-shadow: 0 0 10px rgba(93,214,44,.45);
+        }
+
+        .vm-center-guides::before {
+            left: 50%;
+            top: 0;
+            width: 1px;
+            height: 100%;
+        }
+
+        .vm-center-guides::after {
+            left: 0;
+            top: 50%;
+            width: 100%;
+            height: 1px;
+        }
+
+        .vm-template-slogan {
+            font-weight: 700;
+        }
+
+        .vm-template-hud {
+            font-weight: 600;
+            line-height: 1.25;
+        }
+    </style>
+</head>
+<body>
+    <div class="relative w-[393px] h-[852px]">
+        <div class="absolute -left-[4px] top-[115px] w-[5px] h-[26px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
+        <div class="absolute -left-[4px] top-[165px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
+        <div class="absolute -left-[4px] top-[235px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
+        <div class="absolute -right-[4px] top-[195px] w-[5px] h-[75px] bg-[#444] rounded-r-[4px] border border-black shadow-sm z-0"></div>
+
+        <div class="phone-mockup flex flex-col text-white relative z-10 w-full h-full">
+            <video id="previewVideo" playsinline autoplay loop></video>
+            <img id="templateBackgroundImage" alt="">
+            <div id="templateMaskBg" class="vm-template-mask-bg"></div>
+            <div class="dynamic-island"></div>
+            <div class="bg-overlay absolute inset-0 pointer-events-none z-0"></div>
+            <div class="vm-template-layer" aria-hidden="true">
+                <div id="templateHudBar" class="vm-template-hud-bar vm-template-editable" data-template-target="hudBar"></div>
+                <div id="templateSlogan" class="vm-template-text vm-template-slogan vm-template-editable" data-template-target="slogan"></div>
+                <div id="templateTitle" class="vm-template-text vm-template-title vm-template-editable" data-template-target="title"></div>
+                <div id="templateHudText" class="vm-template-text vm-template-hud vm-template-editable" data-template-target="hud"></div>
+                <div id="centerGuides" class="vm-center-guides"></div>
+                <div id="visualToolbar" class="vm-visual-toolbar">
+                    <button id="sizeDown" type="button">-</button>
+                    <button id="sizeUp" type="button">+</button>
+                    <button id="editText" type="button">编辑</button>
+                    <select id="fontFamily">
+                        <option value="'Microsoft YaHei', 'Noto Sans SC', sans-serif">雅黑黑体</option>
+                        <option value="'Microsoft JhengHei', 'Microsoft YaHei', sans-serif">广告黑体</option>
+                        <option value="'Arial Black', Impact, sans-serif">重磅标题</option>
+                        <option value="Impact, 'Arial Black', sans-serif">冲击海报</option>
+                        <option value="'Bahnschrift Condensed', 'Arial Narrow', sans-serif">窄体工业</option>
+                        <option value="'Trebuchet MS', 'Microsoft YaHei', sans-serif">现代圆体</option>
+                        <option value="'Segoe UI Black', 'Arial Black', sans-serif">科技粗体</option>
+                        <option value="'Franklin Gothic Heavy', 'Arial Black', sans-serif">商业粗体</option>
+                        <option value="Georgia, 'Times New Roman', serif">高级衬线</option>
+                        <option value="'Courier New', Consolas, monospace">数据等宽</option>
+                    </select>
+                    <input id="visualColor" type="color" value="#ffffff" aria-label="颜色">
+                </div>
+            </div>
+
+            <div class="relative z-20 flex justify-between items-center px-6 pt-[18px] text-[15px] font-medium status-scale">
+                <span>16:38 <svg class="inline-block w-4 h-4 ml-0.5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14c-2.21 0-4-1.79-4-4h2c0 1.1.9 2 2 2s2-.9 2-2c0-1.38-2-1.5-2-3V7h2v1.5c2.21 0 4 1.79 4 4 0 2.21-1.79 4-4 4z"/></svg></span>
+                <div class="flex items-center gap-1.5">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M2 22h20V2L2 22z"/></svg>
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12.01 21.49L23.64 7c-.45-.34-4.93-4-11.64-4C5.28 3 .81 6.66.36 7l11.63 14.49.01.01.01-.01z"/></svg>
+                    <div class="relative flex items-center">
+                        <svg class="w-6 h-6 opacity-90" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2 10H5V8h10v8zm8-6v4c0 .55-.45 1-1 1h-1V9h1c.55 0 1 .45 1 1z"/></svg>
+                        <span class="absolute right-[8px] text-[10px] font-bold">26</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="relative z-20 flex justify-between items-center px-4 pt-6 back-control">
+                <button class="p-2">
+                    <svg class="w-6 h-6 text-white drop-shadow-md" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"></path></svg>
+                </button>
+            </div>
+
+            <button id="soundToggle" class="sound-toggle hidden" type="button" aria-label="Toggle preview audio">音量</button>
+
+            <div class="relative z-10 flex-1 flex flex-col justify-end pt-4 pb-0">
+                <div class="w-full">
+                    <div class="absolute right-4 bottom-[150px] text-[15px] font-medium drop-shadow-lg text-white/90">
+                        弹
+                    </div>
+
+                    <div class="bottom-meta">
+                        <p class="text-[15px] mb-1.5 drop-shadow-md">收益连续性行业标杆。</p>
+                        <p class="text-[14px] text-white/80 leading-snug drop-shadow-md pr-12">
+                            #天然气发电挖矿 #MinerPower #俄罗斯挖矿 #北美挖矿 #...
+                        </p>
+                        <p class="text-[13px] text-white/60 mt-1.5 drop-shadow-md">
+                            2025年 3月17日
+                        </p>
+                    </div>
+
+                    <div class="flex items-center gap-24 px-4 pb-6 w-full bottom-action-scale">
+                        <div class="flex items-center gap-2.5 shrink-0 creator-group">
+                            <div class="w-[42px] h-[42px] rounded-full bg-blue-900 border border-white/20 overflow-hidden flex-shrink-0 relative flex items-center justify-center">
+                                <div class="text-[11px] font-bold text-center leading-tight text-[#5dd62c]">GasGx</div>
+                                <div class="absolute bottom-0 right-0 bg-black/50 rounded-full w-4 h-4 flex items-center justify-center"><span class="text-[10px]">Gx</span></div>
+                            </div>
+                            <div class="flex flex-col shrink-0">
+                                <span class="text-[15px] font-bold tracking-wide drop-shadow-md whitespace-nowrap">GasGx小白</span>
+                                <span class="text-[12px] text-white/70 drop-shadow-md whitespace-nowrap">10个朋友关注</span>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-4 shrink-0">
+                            <div class="flex flex-col items-center gap-1">
+                                <svg class="w-7 h-7 drop-shadow-md" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.514"></path></svg>
+                                <span class="text-[12px] font-medium drop-shadow-md">3</span>
+                            </div>
+                            <div class="flex flex-col items-center gap-1">
+                                <svg class="w-7 h-7 drop-shadow-md" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6"></path></svg>
+                                <span class="text-[12px] font-medium drop-shadow-md">1</span>
+                            </div>
+                            <div class="flex flex-col items-center gap-1">
+                                <svg class="w-7 h-7 drop-shadow-md" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path></svg>
+                                <span class="text-[12px] font-medium drop-shadow-md">3</span>
+                            </div>
+                            <div class="flex flex-col items-center gap-1">
+                                <svg class="w-7 h-7 drop-shadow-md" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+                                <span class="text-[12px] font-medium drop-shadow-md">评论</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-      </section>
-    </main>
+    </div>
+
     <script>
       const params = new URLSearchParams(window.location.search);
       const videoPath = params.get("path") || "";
+      const templatePayload = decodeTemplatePayload(params.get("template"));
       const video = document.getElementById("previewVideo");
       const soundToggle = document.getElementById("soundToggle");
+      const phone = document.querySelector(".phone-mockup");
+      const backgroundImage = document.getElementById("templateBackgroundImage");
+      const templateMask = document.getElementById("templateMaskBg");
+      let currentPayload = templatePayload;
+      let activeTarget = "";
+      let dragging = null;
+      let editingTextNode = null;
       if (videoPath) {
         video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(videoPath)}`;
+      } else {
+        video.hidden = true;
       }
       video.muted = false;
       video.volume = 1;
@@ -54,10 +434,259 @@
         await video.play();
         soundToggle.textContent = "Sound on";
       });
-      video.addEventListener("click", () => {
+      function toggleVideoPlayback() {
         if (video.paused) video.play();
         else video.pause();
+      }
+      video.addEventListener("click", toggleVideoPlayback);
+      phone.addEventListener("click", (event) => {
+        if (event.target.closest(".vm-template-layer")) return;
+        if (event.target.closest("button")) return;
+        toggleVideoPlayback();
       });
+      document.addEventListener("click", (event) => {
+        if (event.target.closest(".vm-template-layer")) return;
+        exitTextEdit();
+      });
+      applyTemplatePayload(templatePayload);
+      initVisualEditor();
+
+      function decodeTemplatePayload(value) {
+        if (!value) return null;
+        try {
+          return JSON.parse(decodeURIComponent(escape(atob(value))));
+        } catch {
+          return null;
+        }
+      }
+
+      function designX(value) {
+        return `${Number(value || 0) * 393 / 1080}px`;
+      }
+
+      function designY(value) {
+        return `${Number(value || 0) * 852 / 1920}px`;
+      }
+
+      function designSize(value) {
+        return `${Math.max(8, Number(value || 24) * 393 / 1080)}px`;
+      }
+
+      function toDesignX(value) {
+        return Math.round(Number(value || 0) * 1080 / 393);
+      }
+
+      function toDesignY(value) {
+        return Math.round(Number(value || 0) * 1920 / 852);
+      }
+
+      function setLayerText(id, visible, value, x, y, size, color) {
+        const node = document.getElementById(id);
+        node.hidden = !visible;
+        if (!visible) return;
+        node.textContent = value || "";
+        node.style.left = designX(x);
+        node.style.top = designY(y);
+        node.style.fontSize = designSize(size);
+        node.style.color = color || "#ffffff";
+        node.style.fontFamily = (currentPayload?.template || {})[`${id === "templateTitle" ? "title" : id === "templateSlogan" ? "slogan" : "hud"}_font_family`] || "'Noto Sans SC', sans-serif";
+      }
+
+      function applyTemplatePayload(payload) {
+        if (!payload) return;
+        const template = payload.template || {};
+        backgroundImage.hidden = !payload.background_image_url;
+        if (payload.background_image_url) backgroundImage.src = payload.background_image_url;
+        templateMask.hidden = payload.show_template_mask === false;
+        const hudBar = document.getElementById("templateHudBar");
+        hudBar.hidden = !template.show_hud;
+        if (template.show_hud) {
+          hudBar.style.top = designY(template.hud_bar_y);
+          hudBar.style.height = designY(template.hud_bar_height || 120);
+          hudBar.style.background = template.hud_bar_color || "rgba(5, 17, 24, .68)";
+          hudBar.style.opacity = template.hud_bar_opacity ?? 0.68;
+        }
+        setLayerText("templateSlogan", template.show_slogan, payload.slogan, template.slogan_x, template.slogan_y, template.slogan_font_size, template.secondary_color);
+        setLayerText("templateTitle", template.show_title, payload.title, template.title_x, template.title_y, template.title_font_size, template.primary_color);
+        setLayerText("templateHudText", template.show_hud, payload.hud_text, template.hud_x, template.hud_y, template.hud_font_size, template.secondary_color);
+      }
+
+      function initVisualEditor() {
+        document.querySelectorAll(".vm-template-editable").forEach((node) => {
+          node.addEventListener("pointerdown", beginDrag);
+          node.addEventListener("click", (event) => {
+            event.stopPropagation();
+            selectTarget(node.dataset.templateTarget);
+          });
+        });
+        document.querySelectorAll(".vm-template-text").forEach((node) => {
+          node.contentEditable = "false";
+          node.spellcheck = false;
+          node.addEventListener("pointerdown", (event) => {
+            if (event.detail > 1) event.stopPropagation();
+          });
+          node.addEventListener("input", () => postTextUpdate(node.dataset.templateTarget, node.innerText));
+          node.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") exitTextEdit();
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") exitTextEdit();
+          });
+        });
+        document.getElementById("editText").addEventListener("click", (event) => {
+          event.stopPropagation();
+          enterTextEdit();
+        });
+        document.getElementById("sizeDown").addEventListener("click", () => adjustSize(-2));
+        document.getElementById("sizeUp").addEventListener("click", () => adjustSize(2));
+        document.getElementById("visualColor").addEventListener("input", (event) => setColor(event.target.value));
+        document.getElementById("fontFamily").addEventListener("change", (event) => setFontFamily(event.target.value));
+        document.addEventListener("keydown", handleKeyboardMove);
+      }
+
+      function selectTarget(target) {
+        activeTarget = target;
+        document.querySelectorAll(".vm-template-editable").forEach((node) => node.classList.toggle("active", node.dataset.templateTarget === target));
+        document.getElementById("visualToolbar").classList.add("active");
+        const template = currentPayload?.template || {};
+        document.getElementById("fontFamily").disabled = target === "hudBar";
+        document.getElementById("visualColor").value = normalizeColor(target === "hudBar" ? template.hud_bar_color : target === "title" ? template.primary_color : template.secondary_color);
+        document.getElementById("fontFamily").value = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
+        document.getElementById("editText").disabled = target === "hudBar";
+      }
+
+      function normalizeColor(value) {
+        if (!value || !String(value).startsWith("#")) return "#ffffff";
+        return String(value).slice(0, 7);
+      }
+
+      function beginDrag(event) {
+        if (editingTextNode) return;
+        if (event.target.closest("#visualToolbar")) return;
+        const target = event.currentTarget.dataset.templateTarget;
+        selectTarget(target);
+        const rect = event.currentTarget.getBoundingClientRect();
+        dragging = { target, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        event.currentTarget.addEventListener("pointermove", dragMove);
+        event.currentTarget.addEventListener("pointerup", endDrag, { once: true });
+        document.getElementById("centerGuides").classList.add("active");
+      }
+
+      function dragMove(event) {
+        if (!dragging) return;
+        const phoneRect = phone.getBoundingClientRect();
+        const rawX = Math.max(0, Math.min(393, event.clientX - phoneRect.left - dragging.dx));
+        const rawY = Math.max(0, Math.min(852, event.clientY - phoneRect.top - dragging.dy));
+        const snapped = snapToCenter(rawX, rawY, event.currentTarget);
+        const updates = dragging.target === "hudBar"
+          ? { hud_bar_y: toDesignY(snapped.y) }
+          : targetPositionUpdates(dragging.target, snapped.x, snapped.y);
+        postTemplateUpdates(updates);
+      }
+
+      function endDrag(event) {
+        event.currentTarget.removeEventListener("pointermove", dragMove);
+        dragging = null;
+        document.getElementById("centerGuides").classList.remove("active");
+      }
+
+      function targetPositionUpdates(target, x, y) {
+        if (target === "title") return { title_x: toDesignX(x), title_y: toDesignY(y) };
+        if (target === "slogan") return { slogan_x: toDesignX(x), slogan_y: toDesignY(y) };
+        return { hud_x: toDesignX(x), hud_y: toDesignY(y) };
+      }
+
+      function adjustSize(delta) {
+        if (!activeTarget) return;
+        const template = currentPayload?.template || {};
+        const key = activeTarget === "hudBar" ? "hud_bar_height" : `${activeTarget}_font_size`;
+        postTemplateUpdates({ [key]: Math.max(8, Number(template[key] || 24) + delta) });
+      }
+
+      function setColor(value) {
+        if (!activeTarget) return;
+        const key = activeTarget === "hudBar" ? "hud_bar_color" : activeTarget === "title" ? "primary_color" : "secondary_color";
+        postTemplateUpdates({ [key]: value });
+      }
+
+      function setFontFamily(value) {
+        if (!activeTarget || activeTarget === "hudBar") return;
+        postTemplateUpdates({ [`${activeTarget}_font_family`]: value });
+      }
+
+      function postTemplateUpdates(updates) {
+        currentPayload = { ...(currentPayload || {}), template: { ...((currentPayload || {}).template || {}), ...updates } };
+        applyTemplatePayload(currentPayload);
+        window.parent.postMessage({ type: "gasgx-video-template-update", updates }, window.location.origin);
+      }
+
+      function postTextUpdate(target, value) {
+        const key = target === "title" ? "title" : target === "slogan" ? "slogan" : "hud_text";
+        currentPayload = { ...(currentPayload || {}), [key]: value };
+        window.parent.postMessage({ type: "gasgx-video-template-text-update", text: { [key]: value } }, window.location.origin);
+      }
+
+      function enterTextEdit() {
+        const node = activeTextNode();
+        if (!node) return;
+        editingTextNode = node;
+        node.contentEditable = "true";
+        node.style.cursor = "text";
+        node.focus();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      function exitTextEdit() {
+        if (!editingTextNode) return;
+        editingTextNode.contentEditable = "false";
+        postTextUpdate(editingTextNode.dataset.templateTarget, editingTextNode.innerText);
+        editingTextNode.style.cursor = "move";
+        editingTextNode.blur();
+        editingTextNode = null;
+      }
+
+      function activeTextNode() {
+        if (!activeTarget || activeTarget === "hudBar") return null;
+        return document.querySelector(`[data-template-target="${activeTarget}"].vm-template-text`);
+      }
+
+      function snapToCenter(x, y, node) {
+        if (!node) return { x, y };
+        const width = node.offsetWidth || 0;
+        const height = node.offsetHeight || 0;
+        const centerX = 196.5 - width / 2;
+        const centerY = 426 - height / 2;
+        return {
+          x: Math.abs(x - centerX) < 8 ? centerX : x,
+          y: Math.abs(y - centerY) < 8 ? centerY : y,
+        };
+      }
+
+      function handleKeyboardMove(event) {
+        if (editingTextNode || !activeTarget || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const step = event.shiftKey ? 10 : 1;
+        const template = currentPayload?.template || {};
+        const deltaX = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
+        const deltaY = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
+        if (activeTarget === "hudBar") {
+          postTemplateUpdates({ hud_bar_y: clamp(Number(template.hud_bar_y || 0) + deltaY, 0, 1920) });
+          return;
+        }
+        const prefix = activeTarget === "title" ? "title" : activeTarget === "slogan" ? "slogan" : "hud";
+        postTemplateUpdates({
+          [`${prefix}_x`]: clamp(Number(template[`${prefix}_x`] || 0) + deltaX, 0, 1080),
+          [`${prefix}_y`]: clamp(Number(template[`${prefix}_y`] || 0) + deltaY, 0, 1920),
+        });
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
     </script>
-  </body>
+</body>
 </html>

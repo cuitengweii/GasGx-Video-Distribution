@@ -11,6 +11,8 @@
   --button-text: #0f0f0f;
   --red: #ff4053;
   --preview-phone-height: min(64vh, 640px);
+  --preview-phone-scale: calc(var(--preview-phone-height) / 852);
+  --preview-phone-width: calc(393px * var(--preview-phone-scale));
   --iphone-pro-max-aspect: 1320 / 2868;
 }
 * { box-sizing: border-box; }
@@ -718,7 +720,7 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 .template-preview-editor,
 .cover-editor {
   display:grid;
-  grid-template-columns:minmax(300px, 360px) minmax(460px, 1fr);
+  grid-template-columns:minmax(var(--preview-phone-width), 360px) minmax(460px, 1fr);
   gap:22px;
   align-items:start;
 }
@@ -757,6 +759,40 @@ input[type="color"]::-moz-color-swatch {
 .template-tabs { display:flex; flex-wrap:wrap; gap:10px; margin:12px 0 18px; }
 .template-tabs button { background:#151515; color:var(--text); border:1px solid #333333; box-shadow:none; padding:9px 12px; }
 .template-tabs button.active { background:var(--green); color:var(--button-text); border-color:var(--green); }
+.template-background-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 0 0 14px;
+  scrollbar-width: thin;
+}
+.model-image-chip {
+  flex: 0 0 116px;
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid #333333;
+  color: var(--muted);
+  background: #151515;
+  box-shadow: none;
+}
+.model-image-chip.active {
+  border-color: var(--green);
+  color: var(--green);
+}
+.model-image-chip img {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #080808;
+}
+.model-image-chip span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
 .preview-stage {
   min-height: calc(var(--preview-phone-height) + 72px);
   display:grid;
@@ -806,6 +842,15 @@ input[type="color"]::-moz-color-swatch {
   box-shadow:0 20px 48px rgba(0,0,0,.52), 0 0 0 1px rgba(93,214,44,.14);
 }
 .phone img { width:100%; height:100%; object-fit:contain; border-radius:24px; display:block; background:#050705; }
+.phone-preview-frame {
+  width: 393px;
+  height: 852px;
+  border: 0;
+  border-radius: 55px;
+  background: #121212;
+  zoom: var(--preview-phone-scale);
+  overflow: hidden;
+}
 .control-panel { max-height: calc(100vh - 210px); overflow:auto; padding-right:8px; min-width:0; }
 .side-editor { margin-top:18px; }
 .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }

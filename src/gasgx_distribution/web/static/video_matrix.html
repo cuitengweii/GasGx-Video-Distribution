@@ -94,9 +94,10 @@
       <section class="video-template-workbench">
         <div class="section-title"><span>VIDEO TEMPLATE</span><b>9:16 正文叠层模板</b></div>
         <div id="videoTemplateSelector" class="template-tabs"></div>
+        <div id="videoTemplateBackgrounds" class="template-background-strip"></div>
         <div class="template-preview-editor">
           <div class="preview-stage compact-preview">
-            <div class="phone"><img id="videoTemplatePreview" alt="video template preview" /></div>
+            <iframe id="videoTemplatePreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="video template preview" scrolling="no"></iframe>
             <small id="videoTemplateCaption"></small>
           </div>
           <form id="videoTemplateForm" class="control-panel"></form>
@@ -109,7 +110,7 @@
           <div class="section-title"><span>FIRST SCREEN</span><b>第一屏封面模板</b></div>
           <div id="coverSelector" class="template-tabs"></div>
           <div class="cover-editor">
-            <div class="preview-stage"><div class="phone"><img id="coverPreview" alt="cover preview" /></div><small id="previewCaption"></small></div>
+            <div class="preview-stage"><iframe id="coverPreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="cover preview" scrolling="no"></iframe><small id="previewCaption"></small></div>
             <form id="coverForm" class="control-panel"></form>
           </div>
           <div id="coverGallery" class="cover-gallery"></div>

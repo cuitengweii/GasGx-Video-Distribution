@@ -1331,6 +1331,18 @@ select option {
   gap: 10px;
 }
 
+.task-title-wrap {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.task-account-name {
+  color: var(--accent-aurora);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .task-delete {
   min-height: 30px;
   padding: 5px 9px;

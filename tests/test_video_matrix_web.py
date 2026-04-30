@@ -430,3 +430,19 @@ def test_video_matrix_pixabay_industry_tracks_endpoint() -> None:
     assert len(payload["tracks"]) == 10
     assert payload["tracks"][0]["title"] == "Corporate Industry"
     assert payload["tracks"][0]["source_url"].startswith("https://pixabay.com/music/")
+
+
+def test_video_matrix_model_images_endpoint(monkeypatch, tmp_path) -> None:
+    image_dir = tmp_path / "modelimg"
+    image_dir.mkdir()
+    (image_dir / "sample.png").write_bytes(b"png")
+    (image_dir / "skip.txt").write_text("no", encoding="utf-8")
+    monkeypatch.setattr(video_matrix_api, "MODEL_IMAGE_DIR", image_dir)
+    client = TestClient(create_app())
+
+    response = client.get("/api/video-matrix/model-images")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["directory"] == str(image_dir)
+    assert payload["images"] == [{"name": "sample.png", "url": "/api/video-matrix/model-images/sample.png"}]

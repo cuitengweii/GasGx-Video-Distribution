@@ -182,11 +182,63 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
 
 def test_video_matrix_preview_keeps_video_audio_available() -> None:
     preview_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
-    preview_css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.css").read_text(encoding="utf-8")
-
     video_tag = preview_html[preview_html.index("<video"):preview_html.index("</video>")]
     assert "muted" not in video_tag
     assert "video.muted = false" in preview_html
     assert "video.volume = 1" in preview_html
     assert "soundToggle.addEventListener" in preview_html
-    assert ".sound-toggle" in preview_css
+    assert ".sound-toggle" in preview_html
+    assert 'class="sound-toggle hidden"' in preview_html
+
+
+def test_video_matrix_preview_matches_wechat_phone_reference_shell() -> None:
+    preview_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
+    preview_css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.css").read_text(encoding="utf-8")
+
+    assert "phone-mockup" in preview_html
+    assert "dynamic-island" in preview_html
+    assert "bg-overlay" in preview_html
+    assert "https://cdn.tailwindcss.com" in preview_html
+    assert "w-[393px] h-[852px]" in preview_html
+    assert "text-stroke-yellow" in preview_html
+    assert "模块化算力单元即装即产" not in preview_html
+    assert "设备扩展零延迟" not in preview_html
+    assert "冗余电力系统智能切换" not in preview_html
+    assert "在线率维持95%以上" not in preview_html
+    assert "收益连续性行业标杆</h2>" not in preview_html
+    assert "GasGx小白" in preview_html
+    assert 'text-[#5dd62c]">GasGx' in preview_html
+    assert "headline-overlay" not in preview_html
+    assert "benefit-overlay" not in preview_html
+    assert "content-meta" not in preview_html
+    assert "iphone-air" not in preview_html
+    assert "phone-status" not in preview_html
+    assert "creator-bar" not in preview_html
+    assert "channels-nav" not in preview_html
+    assert "width: 393px" in preview_html
+    assert "height: 852px" in preview_html
+    assert "border: 14px solid #1a1a1a" in preview_html
+    assert "border-radius: 55px" in preview_html
+    assert "width: 90px" in preview_html
+    assert "height: 26px" in preview_html
+    assert "top: 10px" in preview_html
+    assert "bottom-action-scale" in preview_html
+    assert "transform: scale(0.75)" in preview_html
+    assert "status-scale" in preview_html
+    assert "gap-24" in preview_html
+    assert "pt-[18px]" in preview_html
+    assert "transform: translateX(-50%) scale(0.75)" in preview_html
+    assert "width: 500px" in preview_html
+    assert "justify-content: space-between" in preview_html
+    assert "bottom-meta" in preview_html
+    assert "left: 21px" in preview_html
+    assert "bottom: 64px" in preview_html
+    assert "creator-group" in preview_html
+    assert "transform: translateX(-52px)" in preview_html
+    assert "back-control" in preview_html
+    assert "transform: translateY(-24px)" in preview_html
+    assert 'aria-label="小窗"' not in preview_html
+    assert "phone.addEventListener" in preview_html
+    assert "toggleVideoPlayback" in preview_html
+    assert "rgba(0,0,0,0.4) 0%" in preview_html
+    assert "self-contained" in preview_css

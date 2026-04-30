@@ -493,9 +493,17 @@ function renderAccounts() {
 
 function renderTasks() {
   document.querySelector("#tasks-list").innerHTML = state.tasks.map((task) => {
+    const accountId = Number(task.account_id || 0);
+    const account = state.accounts.find((item) => Number(item.id) === accountId);
+    const accountLabel = account
+      ? `#${account.id} ${account.display_name || account.account_key || "未命名账号"}`
+      : (accountId ? `#${accountId} 未知账号` : "未指定账号");
     return `<article class="task-row">
       <div class="row-head">
-        <strong>#${task.id} ${task.task_type} ${platformName(task.platform)}</strong>
+        <div class="task-title-wrap">
+          <strong>#${task.id} ${platformName(task.platform)}</strong>
+          <span class="task-account-name">${accountLabel}</span>
+        </div>
         <span class="task-actions">
           <span class="status-${task.status}">${task.status}</span>
           <button class="btn secondary task-delete" data-delete-task="${task.id}" type="button">删除队列</button>

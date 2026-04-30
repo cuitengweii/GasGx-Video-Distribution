@@ -8,6 +8,8 @@ let settings = {};
 let lastPreviewPath = "";
 let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [] };
 let pendingTemplateSave = "";
+let modelImages = [];
+let selectedModelImageUrl = "";
 
 const jobStepLabels = [
   ["queued", "任务排队"],
@@ -92,6 +94,19 @@ function clearImageLoading(id) {
   holder?.removeAttribute("data-loading-label");
 }
 
+function encodePreviewPayload(payload) {
+  return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+}
+
+function refreshPhonePreviewFrame(id, payload = null) {
+  const frame = $(id);
+  if (!frame) return;
+  const url = payload
+    ? `/static/video_matrix_preview.html?template=${encodeURIComponent(encodePreviewPayload(payload))}`
+    : "/static/video_matrix_preview.html";
+  if (frame.getAttribute("src") !== url) frame.src = url;
+}
+
 function setInitialLoading() {
   ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateSelector", "videoTemplateForm", "coverSelector", "coverForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
   setPanelLoading("videoTemplateGallery", "加载正文模板...");
@@ -114,6 +129,7 @@ async function init() {
   renderVideoTemplateEditor();
   renderCoverSelector();
   renderCoverEditor();
+  await loadModelImages();
   await refreshAllPreviews();
 }
 
@@ -406,17 +422,69 @@ function updateVideoTemplateField(input) {
   scheduleVideoTemplateSave();
 }
 
+function applyVisualTemplateUpdates(updates) {
+  const template = templates[selectedVideoTemplate];
+  if (!template || !updates) return;
+  Object.assign(template, updates);
+  Object.entries(updates).forEach(([key, value]) => {
+    const input = $(`videoTemplateForm`)?.querySelector(`[data-key="${key}"]`);
+    if (!input) return;
+    input.value = value;
+    const out = input.parentElement.querySelector("output");
+    if (out) out.textContent = value;
+  });
+  scheduleVideoTemplateSave();
+}
+
+function applyVisualTextUpdates(text) {
+  if (!text) return;
+  const fieldMap = { slogan: "headline", title: "subhead", hud_text: "hudText" };
+  Object.entries(text).forEach(([key, value]) => {
+    const field = $(fieldMap[key]);
+    if (field) field.value = value;
+  });
+  scheduleStateSave();
+}
+
+async function loadModelImages() {
+  try {
+    const data = await api("/api/video-matrix/model-images");
+    modelImages = data.images || [];
+    selectedModelImageUrl = selectedModelImageUrl || modelImages[0]?.url || "";
+  } catch {
+    modelImages = [];
+  }
+  renderVideoTemplateBackgrounds();
+}
+
+function renderVideoTemplateBackgrounds() {
+  const node = $("videoTemplateBackgrounds");
+  if (!node) return;
+  if (!modelImages.length) {
+    node.innerHTML = `<span class="muted">modelimg 目录暂无可预览图片</span>`;
+    return;
+  }
+  node.innerHTML = modelImages.map((image) => `
+    <button class="model-image-chip ${image.url === selectedModelImageUrl ? "active" : ""}" type="button" data-model-image="${escapeHtml(image.url)}" title="${escapeHtml(image.name)}">
+      <img src="${escapeHtml(image.url)}" alt="">
+      <span>${escapeHtml(image.name)}</span>
+    </button>
+  `).join("");
+  node.querySelectorAll("[data-model-image]").forEach((button) => {
+    button.onclick = () => {
+      selectedModelImageUrl = button.dataset.modelImage || "";
+      renderVideoTemplateBackgrounds();
+      refreshVideoTemplatePreview();
+    };
+  });
+}
+
 async function refreshVideoTemplatePreview() {
   const template = templates[selectedVideoTemplate];
   if (!template) return;
-  setImageLoading("videoTemplatePreview", "生成正文预览...");
-  try {
-    const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
-    $("videoTemplatePreview").src = data.data_url;
-    $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
-  } finally {
-    clearImageLoading("videoTemplatePreview");
-  }
+  refreshPhonePreviewFrame("videoTemplatePreview", videoTemplatePreviewPayload(template));
+  $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
+  clearImageLoading("videoTemplatePreview");
 }
 
 async function refreshVideoTemplateGallery() {
@@ -443,6 +511,8 @@ function videoTemplatePreviewPayload(template) {
     slogan: $("headline").value,
     title: $("subhead").value,
     hud_text: $("hudText").value,
+    background_image_url: selectedModelImageUrl,
+    show_template_mask: true,
   };
 }
 
@@ -456,13 +526,8 @@ async function saveVideoTemplate() {
 }
 
 async function refreshMainPreview() {
-  setImageLoading("coverPreview", "生成封面预览...");
-  try {
-    const data = await api("/api/video-matrix/cover-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(previewPayload(coverTemplates[selectedCover]))});
-    $("coverPreview").src = data.data_url;
-  } finally {
-    clearImageLoading("coverPreview");
-  }
+  refreshPhonePreviewFrame("coverPreview");
+  clearImageLoading("coverPreview");
 }
 
 async function refreshGallery() {
@@ -893,5 +958,14 @@ function updateJobStatus(job) {
 function log(text) { updateJobStatus({ status: "running", stage: "queued", progress: 0, message: text }); }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch])); }
 function debounce(fn, ms) { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); }; }
+
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-update") return;
+  applyVisualTemplateUpdates(event.data.updates);
+});
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-text-update") return;
+  applyVisualTextUpdates(event.data.text);
+});
 
 init().catch((err) => log(err.message));

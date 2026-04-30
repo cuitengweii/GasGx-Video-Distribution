@@ -38,7 +38,9 @@ UI_STATE_PATH = CONFIG_DIR / "ui_state.json"
 BGM_LIBRARY_PATH = CONFIG_DIR / "bgm_library.json"
 TMP_DIR = ROOT / "runtime" / "video_matrix" / "web_uploads"
 BGM_DIR = ROOT / "runtime" / "video_matrix" / "bgm"
+MODEL_IMAGE_DIR = ROOT / "runtime" / "video_matrix" / "modelimg"
 SIGNATURE_HISTORY_PATH = ROOT / "runtime" / "video_matrix" / "signature_history.json"
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 PIXABAY_INDUSTRY_TRACKS = [
     {"title": "Corporate Industry", "artist": "Ivan_Luzan", "duration": "2:29", "source_url": "https://pixabay.com/music/upbeat-corporate-industry-408747/"},
     {"title": "Industry", "artist": "MomotMusic", "duration": "2:11", "source_url": "https://pixabay.com/music/search/industry/"},
@@ -304,6 +306,25 @@ def preview_file(path: str) -> FileResponse:
     if video_path.suffix.lower() not in VIDEO_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Unsupported preview file")
     return FileResponse(video_path, media_type="video/mp4", filename=video_path.name)
+
+
+@router.get("/model-images")
+def model_images() -> dict[str, Any]:
+    MODEL_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    images = [
+        {"name": path.name, "url": f"/api/video-matrix/model-images/{path.name}"}
+        for path in sorted(MODEL_IMAGE_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True)
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    ]
+    return {"directory": str(MODEL_IMAGE_DIR), "images": images}
+
+
+@router.get("/model-images/{filename}")
+def model_image_file(filename: str) -> FileResponse:
+    target = MODEL_IMAGE_DIR / Path(filename).name
+    if not target.exists() or target.suffix.lower() not in IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Model image not found")
+    return FileResponse(target, media_type=_image_media_type(target), filename=target.name)
 
 
 @router.get("/bgm/{filename}")
@@ -760,6 +781,15 @@ def _audio_media_type(path: Path) -> str:
         ".mp3": "audio/mpeg",
         ".wav": "audio/wav",
         ".m4a": "audio/mp4",
+    }.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _image_media_type(path: Path) -> str:
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
     }.get(path.suffix.lower(), "application/octet-stream")
 
 
