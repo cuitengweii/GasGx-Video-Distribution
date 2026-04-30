@@ -73,22 +73,39 @@
       </section>
 
       <section class="source-panel">
-        <div class="section-title"><span>SOURCE LIBRARY</span><b>视频碎片素材目录</b></div>
-        <div class="add-category-row">
-          <input id="newCategoryLabel" placeholder="输入新目录名称">
-          <button id="addCategory" type="button">添加目录</button>
+        <div class="source-panel-grid">
+          <div class="source-library-column">
+            <div class="section-title"><span>SOURCE LIBRARY</span><b>视频碎片素材目录</b></div>
+            <div class="add-category-row">
+              <input id="newCategoryLabel" placeholder="输入新目录名称">
+              <button id="addCategory" type="button">添加目录</button>
+            </div>
+            <div id="sourceDirs" class="dir-list"></div>
+            <p id="sourceCounts" class="muted"></p>
+            <div id="sourceModeGroup" class="hidden"></div>
+            <div id="recentLimits" class="hidden"></div>
+            <datalist id="recentLimitOptions">
+              <option value="1"></option>
+              <option value="2"></option>
+              <option value="3"></option>
+              <option value="4"></option>
+              <option value="5"></option>
+              <option value="6"></option>
+              <option value="7"></option>
+              <option value="8"></option>
+              <option value="9"></option>
+              <option value="10"></option>
+            </datalist>
+          </div>
+          <div class="source-config-group">
+            <div class="source-config-column source-composition-group">
+              <div class="subsection-title"><span>COMPOSITION</span><b>生成结构</b></div>
+              <p class="muted">按顺序选择素材分类和片段秒数，算法会继续按背景音乐节拍对齐。</p>
+              <div id="compositionRows" class="composition-rows"></div>
+              <button id="addCompositionRow" class="secondary" type="button">添加片段</button>
+            </div>
+          </div>
         </div>
-        <div id="sourceDirs" class="dir-list"></div>
-        <p id="sourceCounts" class="muted"></p>
-        <div class="radio-row" id="sourceModeGroup"></div>
-        <div id="recentLimits" class="compact-grid"></div>
-      </section>
-
-      <section class="composition-panel">
-        <div class="section-title"><span>COMPOSITION</span><b>生成结构</b></div>
-        <p class="muted">按顺序选择素材分类和片段秒数，算法会继续按背景音乐节拍对齐。</p>
-        <div id="compositionRows" class="composition-rows"></div>
-        <button id="addCompositionRow" class="secondary" type="button">添加片段</button>
       </section>
 
       <section class="video-template-workbench">
@@ -118,8 +135,8 @@
 
         <section class="side-editor">
           <div class="section-title"><span>TEXT</span><b>视频文字设置</b></div>
-          <label>主标题 / 视频口号<input id="headline" /></label>
-          <label>副标题 / 视频标题<input id="subhead" /></label>
+          <label>主标题 / 视频口号<textarea id="headline"></textarea></label>
+          <label>副标题 / 视频标题<textarea id="subhead"></textarea></label>
           <label>首屏 CTA<input id="cta" /></label>
           <label>结尾关注提醒<input id="followText" /></label>
           <label>视频 HUD 文本<textarea id="hudText"></textarea></label>

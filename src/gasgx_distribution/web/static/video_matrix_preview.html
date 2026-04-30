@@ -183,6 +183,10 @@
             user-select: text;
         }
 
+        .vm-template-editable.is-editing {
+            cursor: text;
+        }
+
         .vm-template-text:focus {
             outline: 2px solid #ffffff;
             outline-offset: 2px;
@@ -197,6 +201,7 @@
             line-height: 1.1;
             text-shadow: 0 2px 10px rgba(0,0,0,.76);
             white-space: pre-wrap;
+            overflow-wrap: break-word;
             cursor: move;
             user-select: text;
         }
@@ -208,46 +213,59 @@
 
         .vm-visual-toolbar {
             position: absolute;
-            left: 14px;
+            left: 50%;
             bottom: 86px;
+            transform: translateX(-50%);
             z-index: 70;
             display: none;
             align-items: center;
-            gap: 6px;
-            padding: 7px;
+            flex-wrap: nowrap;
+            gap: 4px;
+            max-width: calc(100% - 22px);
+            padding: 5px;
             border: 1px solid rgba(93, 214, 44, .5);
-            border-radius: 12px;
+            border-radius: 10px;
             background: rgba(0, 0, 0, .72);
             box-shadow: 0 12px 28px rgba(0,0,0,.42);
         }
 
         .vm-visual-toolbar.active {
-            display: flex;
+            display: none;
         }
 
         .vm-visual-toolbar button,
         .vm-visual-toolbar select,
         .vm-visual-toolbar input {
-            height: 28px;
+            height: 24px;
             border: 1px solid rgba(255,255,255,.2);
-            border-radius: 7px;
+            border-radius: 6px;
             color: #fff;
             background: rgba(18,18,18,.92);
-            font: 800 12px/1 'Noto Sans SC', sans-serif;
+            font: 800 10px/1 'Noto Sans SC', sans-serif;
         }
 
         .vm-visual-toolbar button {
-            min-width: 28px;
-            padding: 0 8px;
+            min-width: 24px;
+            padding: 0 6px;
         }
 
         .vm-visual-toolbar select {
-            width: 92px;
+            width: 82px;
         }
 
         .vm-visual-toolbar input[type="color"] {
-            width: 34px;
+            width: 28px;
             padding: 2px;
+        }
+
+        .vm-align-btn {
+            font-size: 11px;
+        }
+
+        .vm-align-btn.active {
+            border-color: #5dd62c;
+            color: #5dd62c;
+            background: rgba(93, 214, 44, .14);
         }
 
         .vm-center-guides {
@@ -317,6 +335,9 @@
                     <button id="sizeDown" type="button">-</button>
                     <button id="sizeUp" type="button">+</button>
                     <button id="editText" type="button">编辑</button>
+                    <button class="vm-align-btn" type="button" data-align="left" title="左对齐">左</button>
+                    <button class="vm-align-btn" type="button" data-align="center" title="居中">中</button>
+                    <button class="vm-align-btn" type="button" data-align="right" title="右对齐">右</button>
                     <select id="fontFamily">
                         <option value="'Microsoft YaHei', 'Noto Sans SC', sans-serif">雅黑黑体</option>
                         <option value="'Microsoft JhengHei', 'Microsoft YaHei', sans-serif">广告黑体</option>
@@ -490,6 +511,8 @@
         node.style.fontSize = designSize(size);
         node.style.color = color || "#ffffff";
         node.style.fontFamily = (currentPayload?.template || {})[`${id === "templateTitle" ? "title" : id === "templateSlogan" ? "slogan" : "hud"}_font_family`] || "'Noto Sans SC', sans-serif";
+        const alignKey = `${id === "templateTitle" ? "title" : id === "templateSlogan" ? "slogan" : "hud"}_text_align`;
+        node.style.textAlign = (currentPayload?.template || {})[alignKey] || "left";
       }
 
       function applyTemplatePayload(payload) {
@@ -525,7 +548,8 @@
           node.addEventListener("pointerdown", (event) => {
             if (event.detail > 1) event.stopPropagation();
           });
-          node.addEventListener("input", () => postTextUpdate(node.dataset.templateTarget, node.innerText));
+          node.addEventListener("input", () => postTextUpdate(node.dataset.templateTarget, editablePlainText(node)));
+          node.addEventListener("blur", exitTextEdit);
           node.addEventListener("keydown", (event) => {
             if (event.key === "Escape") exitTextEdit();
             if ((event.ctrlKey || event.metaKey) && event.key === "Enter") exitTextEdit();
@@ -539,8 +563,26 @@
         document.getElementById("sizeUp").addEventListener("click", () => adjustSize(2));
         document.getElementById("visualColor").addEventListener("input", (event) => setColor(event.target.value));
         document.getElementById("fontFamily").addEventListener("change", (event) => setFontFamily(event.target.value));
+        document.querySelectorAll(".vm-align-btn").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            setTextAlign(button.dataset.align);
+          });
+        });
         document.addEventListener("keydown", handleKeyboardMove);
       }
+
+      window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-command") return;
+        const { command, value } = event.data;
+        if (!activeTarget && command !== "edit") selectTarget("title");
+        if (command === "size-down") adjustSize(-2);
+        if (command === "size-up") adjustSize(2);
+        if (command === "edit") enterTextEdit();
+        if (command === "align") setTextAlign(value || "left");
+        if (command === "font-family") setFontFamily(value);
+        if (command === "color") setColor(value);
+      });
 
       function selectTarget(target) {
         activeTarget = target;
@@ -551,6 +593,7 @@
         document.getElementById("visualColor").value = normalizeColor(target === "hudBar" ? template.hud_bar_color : target === "title" ? template.primary_color : template.secondary_color);
         document.getElementById("fontFamily").value = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
         document.getElementById("editText").disabled = target === "hudBar";
+        updateAlignButtons(template[`${target}_text_align`] || "left");
       }
 
       function normalizeColor(value) {
@@ -560,6 +603,7 @@
 
       function beginDrag(event) {
         if (editingTextNode) return;
+        if (event.currentTarget.isContentEditable) return;
         if (event.target.closest("#visualToolbar")) return;
         const target = event.currentTarget.dataset.templateTarget;
         selectTarget(target);
@@ -613,6 +657,19 @@
         postTemplateUpdates({ [`${activeTarget}_font_family`]: value });
       }
 
+      function setTextAlign(value) {
+        if (!activeTarget || activeTarget === "hudBar") return;
+        postTemplateUpdates({ [`${activeTarget}_text_align`]: value || "left" });
+        updateAlignButtons(value || "left");
+      }
+
+      function updateAlignButtons(value) {
+        document.querySelectorAll(".vm-align-btn").forEach((button) => {
+          button.disabled = activeTarget === "hudBar";
+          button.classList.toggle("active", button.dataset.align === value && activeTarget !== "hudBar");
+        });
+      }
+
       function postTemplateUpdates(updates) {
         currentPayload = { ...(currentPayload || {}), template: { ...((currentPayload || {}).template || {}), ...updates } };
         applyTemplatePayload(currentPayload);
@@ -630,7 +687,7 @@
         if (!node) return;
         editingTextNode = node;
         node.contentEditable = "true";
-        node.style.cursor = "text";
+        node.classList.add("is-editing");
         node.focus();
         const selection = window.getSelection();
         const range = document.createRange();
@@ -643,10 +700,14 @@
       function exitTextEdit() {
         if (!editingTextNode) return;
         editingTextNode.contentEditable = "false";
-        postTextUpdate(editingTextNode.dataset.templateTarget, editingTextNode.innerText);
-        editingTextNode.style.cursor = "move";
+        postTextUpdate(editingTextNode.dataset.templateTarget, editablePlainText(editingTextNode));
+        editingTextNode.classList.remove("is-editing");
         editingTextNode.blur();
         editingTextNode = null;
+      }
+
+      function editablePlainText(node) {
+        return node.innerText.replace(/\u00a0/g, " ").replace(/\n$/, "");
       }
 
       function activeTextNode() {

@@ -48,21 +48,22 @@ const videoTemplateFields = [
   ["show_hud", "显示 HUD", "checkbox"],
   ["show_slogan", "显示口号", "checkbox"],
   ["show_title", "显示标题", "checkbox"],
-  ["hud_bar_y", "HUD 背景 Y", "range", 0, 1920],
+  ["slogan_bg_height", "主标题背景高度", "range", 24, 180],
+  ["slogan_bg_opacity", "主标题背景透明度", "rangeFloat", 0, 1],
   ["hud_bar_height", "HUD 背景高度", "range", 40, 320],
-  ["hud_x", "HUD 文本 X", "range", 0, 1080],
-  ["hud_y", "HUD 文本 Y", "range", 0, 1920],
-  ["hud_font_size", "HUD 字号", "range", 12, 72],
-  ["slogan_x", "口号 X", "range", 0, 1080],
-  ["slogan_y", "口号 Y", "range", 0, 1920],
-  ["slogan_font_size", "口号字号", "range", 18, 96],
-  ["title_x", "标题 X", "range", 0, 1080],
-  ["title_y", "标题 Y", "range", 0, 1920],
-  ["title_font_size", "标题字号", "range", 12, 72],
-  ["hud_bar_color", "HUD 背景色", "color"],
   ["hud_bar_opacity", "HUD 透明度", "rangeFloat", 0, 1],
-  ["primary_color", "主文字色", "color"],
-  ["secondary_color", "副文字色", "color"],
+];
+const visualFontOptions = [
+  ["'Microsoft YaHei', 'Noto Sans SC', sans-serif", "雅黑黑体"],
+  ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "广告黑体"],
+  ["'Arial Black', Impact, sans-serif", "重磅标题"],
+  ["Impact, 'Arial Black', sans-serif", "冲击海报"],
+  ["'Bahnschrift Condensed', 'Arial Narrow', sans-serif", "窄体工业"],
+  ["'Trebuchet MS', 'Microsoft YaHei', sans-serif", "现代圆体"],
+  ["'Segoe UI Black', 'Arial Black', sans-serif", "科技粗体"],
+  ["'Franklin Gothic Heavy', 'Arial Black', sans-serif", "商业粗体"],
+  ["Georgia, 'Times New Roman', serif", "高级衬线"],
+  ["'Courier New', Consolas, monospace", "数据等宽"],
 ];
 
 async function api(path, options = {}) {
@@ -181,17 +182,6 @@ function renderSource(data) {
     updateSourceMode();
     scheduleStateSave();
   });
-  const recentLimits = state.recent_limits || {};
-  $("recentLimits").innerHTML = categories.map((category) =>
-    rangeControlHtml({
-      id: category.id,
-      label: `${category.label}最新素材`,
-      min: 1,
-      max: 50,
-      value: recentLimits[category.id] || settings.recent_limits[category.id] || 8,
-      className: "limit-control",
-    })).join("");
-  categories.forEach((category) => bindRangeControl(category.id, scheduleStateSave));
   updateRecentLimitVisibility(categories);
   updateSourceMode();
 }
@@ -219,30 +209,53 @@ function renderComposition(data = { settings }) {
     : [];
   const rows = savedRows.length ? savedRows : defaultCompositionSequence(categories);
   state.composition_sequence = rows;
+  const recentLimits = state.recent_limits || settings.recent_limits || {};
   $("compositionRows").innerHTML = rows.map((row, index) => {
     const options = categories.map((category) =>
       `<option value="${escapeHtml(category.id)}" ${category.id === row.category_id ? "selected" : ""}>${escapeHtml(category.label)} / ${escapeHtml(category.id)}</option>`
     ).join("");
+    const limit = clamp(Number(recentLimits[row.category_id] || settings.recent_limits?.[row.category_id] || 8), 1, 10);
     return `
       <div class="composition-row" data-index="${index}">
         <span>${index + 1}</span>
         <select data-composition-category>${options}</select>
         <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" />
+        <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="最新素材数量" />
         <button type="button" data-composition-remove>删除</button>
       </div>`;
   }).join("");
   $("compositionRows").querySelectorAll(".composition-row").forEach((row) => {
     row.querySelector("[data-composition-category]").onchange = () => {
       updateCompositionState(true);
+      renderComposition(data);
       scheduleStateSave();
     };
     row.querySelector("[data-composition-duration]").oninput = () => {
       updateCompositionState(true);
       scheduleStateSave();
     };
+    row.querySelector("[data-composition-limit]").oninput = () => {
+      updateRecentLimitFromRow(row);
+      scheduleStateSave();
+    };
+    row.querySelector("[data-composition-limit]").onchange = () => {
+      updateRecentLimitFromRow(row);
+      renderComposition(data);
+      scheduleStateSave();
+    };
     row.querySelector("[data-composition-remove]").onclick = () => removeCompositionRow(Number(row.dataset.index));
   });
   $("addCompositionRow").onclick = addCompositionRow;
+}
+
+function updateRecentLimitFromRow(row) {
+  const categoryId = row.querySelector("[data-composition-category]")?.value;
+  const input = row.querySelector("[data-composition-limit]");
+  if (!categoryId || !input) return;
+  const value = clamp(Number(input.value || 1), 1, 10);
+  input.value = String(value);
+  state.recent_limits = { ...(state.recent_limits || {}) };
+  state.recent_limits[categoryId] = value;
 }
 
 function compositionSequence() {
@@ -381,11 +394,13 @@ function renderVideoTemplateEditor() {
   const template = templates[selectedVideoTemplate];
   if (!template) return;
   $("videoTemplateCaption").textContent = `${selectedVideoTemplate} / ${template.name || selectedVideoTemplate}`;
-  const html = [`<h3>当前正文模板调整</h3>`];
+  const html = [`<h3>模板调整区</h3>`, visualTemplateToolbarHtml(template)];
   for (const [key, label, type, min, max] of videoTemplateFields) {
     const value = template[key] ?? "";
     if (type === "checkbox") {
       html.push(`<label class="check-row"><input data-key="${key}" type="checkbox" ${value ? "checked" : ""}><span>${label}</span></label>`);
+    } else if (type === "select") {
+      html.push(`<label>${label}<select data-key="${key}"><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>`);
     } else if (type === "range") {
       html.push(rangeControlHtml({key, label, min, max, value, className: "template-control"}));
     } else if (type === "rangeFloat") {
@@ -407,7 +422,46 @@ function renderVideoTemplateEditor() {
   $("videoTemplateForm").querySelectorAll(".template-control[data-key]").forEach((control) => {
     bindRangeControl(control.dataset.key, () => updateVideoTemplateField(control.querySelector('input[type="range"]')));
   });
+  bindVisualTemplateToolbar();
   $("saveVideoTemplate").onclick = saveVideoTemplate;
+}
+
+function visualTemplateToolbarHtml(template) {
+  const fontValue = template.title_font_family || visualFontOptions[0][0];
+  const fontOptions = visualFontOptions.map(([value, label]) =>
+    `<option value="${escapeHtml(value)}" ${value === fontValue ? "selected" : ""}>${label}</option>`
+  ).join("");
+  return `
+    <div class="visual-toolbar-panel" aria-label="文字可视化工具">
+      <button type="button" data-visual-command="size-down">-</button>
+      <button type="button" data-visual-command="size-up">+</button>
+      <button type="button" data-visual-command="edit">编辑</button>
+      <button type="button" data-visual-command="align" data-value="left">左</button>
+      <button type="button" data-visual-command="align" data-value="center">中</button>
+      <button type="button" data-visual-command="align" data-value="right">右</button>
+      <select data-visual-command="font-family">${fontOptions}</select>
+      <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
+    </div>`;
+}
+
+function bindVisualTemplateToolbar() {
+  const toolbar = $("videoTemplateForm").querySelector(".visual-toolbar-panel");
+  if (!toolbar) return;
+  toolbar.querySelectorAll("button[data-visual-command]").forEach((button) => {
+    button.onclick = () => postVisualTemplateCommand(button.dataset.visualCommand, button.dataset.value || "");
+  });
+  toolbar.querySelectorAll("select[data-visual-command], input[data-visual-command]").forEach((input) => {
+    input.oninput = () => postVisualTemplateCommand(input.dataset.visualCommand, input.value);
+    input.onchange = () => postVisualTemplateCommand(input.dataset.visualCommand, input.value);
+  });
+}
+
+function postVisualTemplateCommand(command, value = "") {
+  $("videoTemplatePreview")?.contentWindow?.postMessage({
+    type: "gasgx-video-template-command",
+    command,
+    value,
+  }, window.location.origin);
 }
 
 function updateVideoTemplateField(input) {
@@ -713,7 +767,7 @@ function collectState() {
     video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 12),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: radioValue("copy_language"),
-    source_mode: radioValue("source_mode"), use_live_data: true,
+    source_mode: radioValue("source_mode") || "Category folders", use_live_data: true,
     headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value,
     follow_text: $("followText").value, hud_text: $("hudText").value,
     transcript_text: $("transcriptText").value,
@@ -721,7 +775,10 @@ function collectState() {
     composition_sequence: state.composition_sequence,
     composition_customized: Boolean(state.composition_customized),
     active_category_ids: selectedActiveCategoryIds(categories),
-    recent_limits: Object.fromEntries(categories.map((category) => [category.id, Number($(category.id)?.value || settings.recent_limits[category.id] || 8)]))
+    recent_limits: Object.fromEntries(categories.map((category) => [
+      category.id,
+      clamp(Number(state.recent_limits?.[category.id] || settings.recent_limits?.[category.id] || 8), 1, 10),
+    ]))
   };
 }
 
@@ -907,6 +964,7 @@ function renderRadio(containerId, name, options, selected, onchange) {
   document.querySelectorAll(`input[name="${name}"]`).forEach(r => r.onchange = onchange || (() => {}));
 }
 function radioValue(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value || ""; }
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function syncNumber(id) { const el = $(id); if (!el) return; el.oninput = () => { let value = Number(el.value || 3); value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value)); if (String(value) !== el.value) el.value = value; if (id === "outputCount") $("metricCount").textContent = el.value; scheduleStateSave(); }; }
 function syncRange(id) { bindRangeControl(id, () => { if (id === "outputCount") $("metricCount").textContent = $(id).value; if (id === "maxWorkers") $("metricWorkers").textContent = $(id).value; scheduleStateSave(); }); }
 function rangeControlHtml({ id = "", key = "", label, min, max, step = 1, value, className = "" }) {
