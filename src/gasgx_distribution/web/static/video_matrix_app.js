@@ -45,16 +45,9 @@ const coverFields = [
 ];
 const videoTemplateFields = [
   ["name", "模板名称", "text"],
-  ["show_hud", "显示 HUD", "checkbox"],
-  ["show_slogan", "显示口号", "checkbox"],
-  ["show_title", "显示标题", "checkbox"],
-  ["slogan_bg_height", "口号背景高度", "range", 24, 180],
-  ["slogan_bg_opacity", "口号背景透明度", "rangeFloat", 0, 1],
-  ["title_bg_height", "标题背景高度", "range", 24, 180],
-  ["title_bg_opacity", "标题背景透明度", "rangeFloat", 0, 1],
-  ["hud_bar_height", "HUD 背景高度", "range", 40, 320],
-  ["hud_bar_width", "HUD 背景宽度", "range", 120, 1080],
-  ["hud_bar_opacity", "HUD 透明度", "rangeFloat", 0, 1],
+  ["show_slogan", "显示上标题", "checkbox"],
+  ["show_title", "显示中标题", "checkbox"],
+  ["show_hud", "显示下标题", "checkbox"],
 ];
 const visualFontOptions = [
   ["'Microsoft YaHei', 'Noto Sans SC', sans-serif", "雅黑黑体"],
@@ -67,6 +60,37 @@ const visualFontOptions = [
   ["'Franklin Gothic Heavy', 'Arial Black', sans-serif", "商业粗体"],
   ["Georgia, 'Times New Roman', serif", "高级衬线"],
   ["'Courier New', Consolas, monospace", "数据等宽"],
+];
+const videoTextFontOptions = [
+  ["'Arial Black', Impact, 'Microsoft YaHei', sans-serif", "爆款粗黑"],
+  ["Impact, 'Arial Black', 'Microsoft YaHei', sans-serif", "冲击海报"],
+  ["'Segoe UI Black', 'Arial Black', 'Microsoft YaHei', sans-serif", "霓虹重磅"],
+  ["'Bahnschrift Condensed', 'Arial Narrow', 'Microsoft YaHei', sans-serif", "压缩工业"],
+  ["'Franklin Gothic Heavy', 'Arial Black', 'Microsoft YaHei', sans-serif", "硬核广告"],
+  ["'Cooper Black', Georgia, 'Microsoft YaHei', serif", "复古胖字"],
+  ["'Showcard Gothic', 'Arial Black', 'Microsoft YaHei', sans-serif", "招牌漫画"],
+  ["'Courier New', Consolas, 'Microsoft YaHei', monospace", "数据机甲"],
+  ["'Microsoft YaHei UI', 'Noto Sans SC', sans-serif", "中文雅黑海报"],
+  ["SimHei, 'Microsoft YaHei', sans-serif", "中文黑体冲击"],
+  ["SimSun, 'Microsoft YaHei', serif", "中文宋体刊头"],
+  ["'Noto Sans SC', 'Microsoft YaHei', sans-serif", "中文大屏粗体"],
+  ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "中文广告黑体"],
+  ["'Trebuchet MS', 'Microsoft YaHei', sans-serif", "英文圆体科技"],
+  ["'Arial Narrow', 'Bahnschrift Condensed', 'Microsoft YaHei', sans-serif", "English Condensed"],
+  ["'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "English Neon Bold"],
+  ["'Franklin Gothic Heavy', Impact, 'Microsoft YaHei', sans-serif", "English Ad Heavy"],
+  ["Georgia, 'Times New Roman', 'Microsoft YaHei', serif", "English Serif Luxe"],
+  ["'Lucida Console', 'Courier New', 'Microsoft YaHei', monospace", "English Data Mono"],
+  ["'Comic Sans MS', 'Arial Black', 'Microsoft YaHei', sans-serif", "English Pop Comic"],
+];
+const textEffectOptions = [
+  ["none", "无动效"],
+  ["pulse", "呼吸放大"],
+  ["glow", "霓虹闪光"],
+  ["slide-up", "上浮入场"],
+  ["shake", "轻微震动"],
+  ["typewriter", "打字机"],
+  ["pop", "弹跳强调"],
 ];
 const coverMaskModeOptions = [
   ["none", "无蒙版"],
@@ -83,6 +107,10 @@ async function api(path, options = {}) {
 
 function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="loading-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
+}
+
+function buttonLoadingInline(label) {
+  return `<span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
 }
 
 function setPanelLoading(id, label = "加载中...") {
@@ -527,32 +555,66 @@ function renderVideoTemplateEditor() {
 }
 
 function visualTemplateToolbarHtml(template) {
-  const fontValue = template.title_font_family || visualFontOptions[0][0];
-  const fontOptions = visualFontOptions.map(([value, label]) =>
+  const fontValue = template.title_font_family || videoTextFontOptions[0][0];
+  const effectValue = template.title_text_effect || "none";
+  const hudOpacity = Number(template.hud_bar_opacity ?? 0.68);
+  const hudRadius = Number(template.hud_bar_radius ?? 10);
+  const hudColor = template.hud_bar_color || "#0E1A10";
+  const fontOptions = videoTextFontOptions.map(([value, label]) =>
     `<option value="${escapeHtml(value)}" ${value === fontValue ? "selected" : ""}>${label}</option>`
+  ).join("");
+  const effectOptions = textEffectOptions.map(([value, label]) =>
+    `<option value="${escapeHtml(value)}" ${value === effectValue ? "selected" : ""}>${label}</option>`
   ).join("");
   return `
     <div class="visual-toolbar-panel" aria-label="文字可视化工具">
-      <button type="button" data-visual-command="size-down" title="缩小字号">A-</button>
-      <button type="button" data-visual-command="size-up" title="放大字号">A+</button>
-      <button type="button" data-visual-command="width-down" title="缩小背景宽度">W-</button>
-      <button type="button" data-visual-command="width-up" title="放大背景宽度">W+</button>
-      <button type="button" data-visual-command="edit" title="编辑文字">编辑</button>
-      <button type="button" data-visual-command="align" data-value="left" title="左对齐">左齐</button>
-      <button type="button" data-visual-command="align" data-value="center" title="居中对齐">居中</button>
-      <button type="button" data-visual-command="align" data-value="right" title="右对齐">右齐</button>
-      <select data-visual-command="font-family">${fontOptions}</select>
-      <label class="color-swatch-button" title="文字颜色">
-        <svg class="color-picker-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3a9 9 0 0 0 0 18h1.4a2 2 0 0 0 1.7-3l-.2-.4a1.7 1.7 0 0 1 1.5-2.6H18a6 6 0 0 0 0-12h-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-          <circle cx="7.5" cy="10" r="1.3" fill="currentColor"/>
-          <circle cx="10.5" cy="6.8" r="1.3" fill="currentColor"/>
-          <circle cx="15" cy="7.8" r="1.3" fill="currentColor"/>
-          <circle cx="16.8" cy="11.5" r="1.3" fill="currentColor"/>
-        </svg>
-        <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
-        <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
-      </label>
+      <div class="visual-control-section visual-text-controls" aria-label="文字调整区">
+        <div class="visual-section-title">文字调整区</div>
+        <div class="visual-target-tabs" aria-label="标题选择">
+          <button type="button" data-visual-command="select-target" data-value="slogan" title="选择上标题文字">上标题</button>
+          <button type="button" data-visual-command="select-target" data-value="title" title="选择中标题文字">中标题</button>
+          <button type="button" data-visual-command="select-target" data-value="hud" title="选择下标题文字">下标题</button>
+        </div>
+        <button type="button" data-visual-command="size-down" title="缩小字号">A-</button>
+        <button type="button" data-visual-command="size-up" title="放大字号">A+</button>
+        <button type="button" data-visual-command="edit" title="编辑文字">编辑</button>
+        <button type="button" data-visual-command="align" data-value="left" title="左对齐">左齐</button>
+        <button type="button" data-visual-command="align" data-value="center" title="居中对齐">居中</button>
+        <button type="button" data-visual-command="align" data-value="right" title="右对齐">右齐</button>
+        <select data-visual-command="font-family">${fontOptions}</select>
+        <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
+        <label class="color-swatch-button" title="文字颜色">
+          <svg class="color-picker-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a9 9 0 0 0 0 18h1.4a2 2 0 0 0 1.7-3l-.2-.4a1.7 1.7 0 0 1 1.5-2.6H18a6 6 0 0 0 0-12h-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            <circle cx="7.5" cy="10" r="1.3" fill="currentColor"/>
+            <circle cx="10.5" cy="6.8" r="1.3" fill="currentColor"/>
+            <circle cx="15" cy="7.8" r="1.3" fill="currentColor"/>
+            <circle cx="16.8" cy="11.5" r="1.3" fill="currentColor"/>
+          </svg>
+          <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
+          <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
+        </label>
+      </div>
+      <div class="visual-control-section visual-background-controls" aria-label="背景调整区">
+        <div class="visual-section-title">背景调整区</div>
+        <div class="visual-target-tabs" aria-label="背景选择">
+          <button type="button" data-visual-command="select-target" data-value="sloganBar" title="选择上标题背景">上背景</button>
+          <button type="button" data-visual-command="select-target" data-value="titleBar" title="选择中标题背景">中背景</button>
+          <button type="button" data-visual-command="select-target" data-value="hudBar" title="选择 HUD 背景">HUD背景</button>
+        </div>
+        <button type="button" data-visual-command="width-down" title="缩小背景宽度">W-</button>
+        <button type="button" data-visual-command="width-up" title="放大背景宽度">W+</button>
+        <label class="color-swatch-button" title="HUD 背景色">
+          <svg class="color-picker-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="7" width="16" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M8 12h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <span class="color-current-dot" style="background:${escapeHtml(hudColor)}"></span>
+          <input data-visual-command="hud-bg-color" type="color" value="${escapeHtml(hudColor)}" aria-label="HUD 背景色">
+        </label>
+        <label class="visual-opacity-control">HUD 透明度<input data-visual-command="opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(hudOpacity.toFixed(2))}"><output>${escapeHtml(hudOpacity.toFixed(2))}</output></label>
+        <label class="visual-opacity-control">HUD 圆角<input data-visual-command="hud-radius" type="range" min="0" max="80" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
+      </div>
     </div>`;
 }
 
@@ -565,17 +627,24 @@ function bindVisualTemplateToolbar() {
   toolbar.querySelectorAll("select[data-visual-command], input[data-visual-command]").forEach((input) => {
     input.oninput = () => {
       updateColorSwatch(input);
+      updateVisualOutput(input);
       postVisualTemplateCommand(input.dataset.visualCommand, input.value);
     };
     input.onchange = () => {
       updateColorSwatch(input);
+      updateVisualOutput(input);
       postVisualTemplateCommand(input.dataset.visualCommand, input.value);
     };
   });
 }
 
+function updateVisualOutput(input) {
+  const out = input.closest("label")?.querySelector("output");
+  if (out) out.textContent = input.value;
+}
+
 function updateColorSwatch(input) {
-  if (input?.dataset.visualCommand !== "color" && input?.dataset.coverCommand !== "color") return;
+  if (input?.dataset.visualCommand !== "color" && input?.dataset.visualCommand !== "hud-bg-color" && input?.dataset.coverCommand !== "color") return;
   const swatch = input.closest(".color-swatch-button")?.querySelector(".color-current-dot");
   if (swatch) swatch.style.background = input.value;
 }
@@ -730,6 +799,7 @@ async function saveVideoTemplate() {
     log(`已保存正文模板：${templates[selectedVideoTemplate].name || selectedVideoTemplate}`);
     renderVideoTemplateSelector();
     renderVideoTemplateEditor();
+    showTemplateActionStatus("保存成功");
   } catch (error) {
     if (button) {
       button.disabled = false;
@@ -740,20 +810,61 @@ async function saveVideoTemplate() {
 }
 
 async function cloneVideoTemplate() {
+  const button = $("cloneVideoTemplate");
+  const label = button?.textContent || "新建模板";
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.innerHTML = buttonLoadingInline("新建中...");
+  }
   const sourceTemplate = templates[selectedVideoTemplate];
-  if (!sourceTemplate) return;
+  if (!sourceTemplate) {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.textContent = label;
+    }
+    return;
+  }
   const nextId = nextTemplateCloneId(selectedVideoTemplate, templates);
   const nextName = `${sourceTemplate.name || selectedVideoTemplate} Copy`;
-  templates[nextId] = {...JSON.parse(JSON.stringify(sourceTemplate)), name: nextName};
-  selectedVideoTemplate = nextId;
-  state.template_id = nextId;
-  await api(`/api/video-matrix/templates/${nextId}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[nextId])});
-  await saveTemplateSelection();
-  renderVideoTemplateSelector();
-  renderVideoTemplateEditor();
-  await refreshVideoTemplatePreview();
-  await refreshVideoTemplateGallery();
-  log(`已基于当前正文模板新建：${nextName}`);
+  try {
+    templates[nextId] = {...JSON.parse(JSON.stringify(sourceTemplate)), name: nextName};
+    selectedVideoTemplate = nextId;
+    state.template_id = nextId;
+    await api(`/api/video-matrix/templates/${nextId}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[nextId])});
+    await saveTemplateSelection();
+    renderVideoTemplateSelector();
+    renderVideoTemplateEditor();
+    await refreshVideoTemplatePreview();
+    await refreshVideoTemplateGallery();
+    log(`已基于当前正文模板新建：${nextName}`);
+    showTemplateActionStatus("新建模板成功");
+  } catch (error) {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.textContent = label;
+    }
+    log(`正文模板新建失败：${error.message}`);
+  }
+}
+
+function showTemplateActionStatus(message) {
+  const actions = $("videoTemplateForm")?.querySelector(".template-actions");
+  if (!actions) return;
+  let status = actions.querySelector(".template-action-status");
+  if (!status) {
+    status = document.createElement("div");
+    status.className = "template-action-status";
+    actions.appendChild(status);
+  }
+  status.textContent = message;
+  status.hidden = false;
+  window.clearTimeout(showTemplateActionStatus.timer);
+  showTemplateActionStatus.timer = window.setTimeout(() => {
+    status.hidden = true;
+  }, 2200);
 }
 
 function nextTemplateCloneId(sourceId, templateMap) {

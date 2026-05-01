@@ -8,6 +8,8 @@ from gasgx_distribution.video_matrix.composition import plan_variants
 from gasgx_distribution.video_matrix.hud import HudPayload
 from gasgx_distribution.video_matrix.models import ClipMetadata
 from gasgx_distribution.video_matrix.pipeline import _beat_duration_hint
+from gasgx_distribution.video_matrix import cover as cover_renderer
+from gasgx_distribution.video_matrix import render as video_renderer
 from gasgx_distribution.video_matrix.render import _build_filter_complex
 from gasgx_distribution.video_matrix.settings import ProjectSettings
 
@@ -175,6 +177,7 @@ def test_center_aligned_video_template_wraps_drawtext_inside_canvas() -> None:
         "show_title": True,
         "hud_bar_y": 1714,
         "hud_bar_height": 162,
+        "hud_bar_x": 110,
         "hud_x": 70,
         "hud_y": 1762,
         "hud_font_size": 30,
@@ -188,6 +191,9 @@ def test_center_aligned_video_template_wraps_drawtext_inside_canvas() -> None:
         "hud_bar_opacity": 0.44,
         "primary_color": "#5DD62C",
         "secondary_color": "#FFFFFF",
+        "slogan_color": "#33FF66",
+        "title_color": "#FF3366",
+        "hud_color": "#66CCFF",
         "align": "center",
     }
 
@@ -195,5 +201,28 @@ def test_center_aligned_video_template_wraps_drawtext_inside_canvas() -> None:
 
     assert "Gas Engines That Turn" in filter_complex
     assert "Gas Engines That Turn Field Gas Into Power':x=92" not in filter_complex
+    assert "drawbox=x=110:y=1714" in filter_complex
+    assert "fontcolor=#33FF66" in filter_complex
+    assert "fontcolor=#FF3366" in filter_complex
+    assert "fontcolor=#66CCFF" in filter_complex
     assert filter_complex.count("fontsize=64") >= 2
     assert filter_complex.count("x=(w-text_w)/2") >= 3
+
+
+def test_video_renderer_prefers_cjk_fonts_for_chinese_text() -> None:
+    font_names = [candidate.name for candidate in video_renderer.FONT_CANDIDATES[:6]]
+
+    assert "msyh.ttc" in font_names
+    assert "simhei.ttf" in font_names
+    assert "simsun.ttc" in font_names
+    assert font_names.index("msyh.ttc") < font_names.index("simhei.ttf")
+
+
+def test_cover_renderer_prefers_cjk_fonts_for_chinese_text() -> None:
+    regular_names = [candidate.name for candidate in cover_renderer.FONT_CANDIDATES[:6]]
+    bold_names = [candidate.name for candidate in cover_renderer.BOLD_FONT_CANDIDATES[:6]]
+
+    assert "msyh.ttc" in regular_names
+    assert "simhei.ttf" in regular_names
+    assert "msyhbd.ttc" in bold_names
+    assert "simhei.ttf" in bold_names

@@ -40,8 +40,12 @@ def default_template() -> dict[str, Any]:
         "title_font_size": 26,
         "hud_bar_color": "#0E1A10",
         "hud_bar_opacity": 0.38,
+        "hud_bar_radius": 10,
         "primary_color": "#5DD62C",
         "secondary_color": "#FFFFFF",
+        "slogan_color": "#FFFFFF",
+        "title_color": "#5DD62C",
+        "hud_color": "#FFFFFF",
     }
 
 

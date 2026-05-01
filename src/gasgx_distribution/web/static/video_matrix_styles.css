@@ -951,6 +951,30 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   border-radius: 8px;
   background: rgba(3, 12, 12, .52);
 }
+.visual-control-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px;
+  border: 1px solid rgba(93,214,44,.18);
+  border-radius: 7px;
+  background: rgba(5, 18, 10, .34);
+}
+.visual-section-title {
+  width: 100%;
+  color: #dfffd7;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+.visual-target-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+}
 .visual-toolbar-panel button {
   width: auto;
   min-width: 38px;
@@ -968,6 +992,20 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   min-height: 30px;
   padding: 4px 8px;
   font-size: 12px;
+}
+.visual-effect-control {
+  display: grid;
+  grid-template-columns: auto minmax(118px, 1fr);
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  margin: 0;
+  color: #f6fff3;
+  font-size: 12px;
+  font-weight: 900;
+}
+.visual-effect-control select {
+  width: 100%;
 }
 .visual-toolbar-panel .color-swatch-button {
   position: relative;
@@ -1012,6 +1050,28 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   min-width: 34px;
   height: 30px;
   padding: 2px;
+}
+.visual-opacity-control {
+  display: grid;
+  grid-template-columns: auto minmax(96px, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  flex: 1 1 220px;
+  margin: 0;
+  color: #f6fff3;
+  font-size: 12px;
+  font-weight: 900;
+}
+.visual-opacity-control input[type="range"] {
+  width: 100%;
+}
+.visual-opacity-control output {
+  padding: 5px 6px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 6px;
+  background: rgba(18,18,18,.92);
+  text-align: center;
 }
 .compact-preview { min-height: calc(var(--preview-phone-height) + 36px); }
 .check-row {
@@ -1073,6 +1133,22 @@ input[type="color"]::-moz-color-swatch {
 .template-actions button {
   min-height: 48px;
   padding: 11px 12px;
+}
+.template-actions button.is-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: wait;
+}
+.template-action-status {
+  grid-column: 1 / -1;
+  min-height: 22px;
+  padding: 3px 6px;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
 }
 .template-actions .secondary {
   color: var(--text);

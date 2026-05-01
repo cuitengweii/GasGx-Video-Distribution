@@ -157,11 +157,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "cover_template_${serial}" in app
     assert "第一屏封面模板 ${serial}" in app
     assert "selectVideoTemplate" in app
-    assert "title_bg_height" in app
-    assert "title_bg_opacity" in app
+    assert "title_bg_height" in preview
+    assert "title_bg_opacity" in preview
     assert 'id="cloneVideoTemplate"' in app
     assert '<button type="button" id="saveVideoTemplate">保存当前</button>' in app
     assert 'button.textContent = "保存中..."' in app
+    assert 'showTemplateActionStatus("保存成功")' in app
+    assert 'button.innerHTML = buttonLoadingInline("新建中...")' in app
+    assert 'showTemplateActionStatus("新建模板成功")' in app
+    assert ".template-action-status" in css
+    assert ".template-actions button.is-loading" in css
     assert "切换正文模板..." in app
     assert "selectCoverTemplate" in app
     assert "切换第一屏模板..." in app
@@ -239,7 +244,84 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "minmax(360px, 1fr)" in css
     assert "justify-content:stretch" in css
     assert "max-width: none" in css
-    assert "hud_bar_width" in app
+    assert "hud_bar_width" in preview
+    assert "hud_bar_x" in preview
+    assert "slogan_bg_x" in preview
+    assert "slogan_bg_y" in preview
+    assert "slogan_bg_width" in preview
+    assert "title_bg_x" in preview
+    assert "title_bg_y" in preview
+    assert "title_bg_width" in preview
+    assert "hudBar.style.left = designX(template.hud_bar_x || 0)" in preview
+    assert "template.slogan_bg_x || 0" in preview
+    assert "template.title_bg_x || 0" in preview
+    assert "template.slogan_bg_y ?? template.slogan_y" in preview
+    assert "template.title_bg_y ?? template.title_y" in preview
+    assert "hud_bar_x: toDesignX(x)" in preview
+    assert "slogan_bg_x: toDesignX(x)" in preview
+    assert "title_bg_x: toDesignX(x)" in preview
+    assert "slogan_bg_y: toDesignY(y)" in preview
+    assert "title_bg_y: toDesignY(y)" in preview
+    assert "slogan_bg_width || 1080" in preview
+    assert "title_bg_width || 1080" in preview
+    assert 'if (target === "hudBar") return "hud"' in preview
+    assert 'if (target === "sloganBar") return "slogan"' in preview
+    assert 'if (target === "titleBar") return "title"' in preview
+    assert "textTargetForAlignment(activeTarget)" in preview
+    assert 'target === "hud" && template[alignKey] ? "0px" : designX(x)' in preview
+    assert 'target === "hud" && template[alignKey] ? "100%" : ""' in preview
+    assert "文字调整区" in app
+    assert "背景调整区" in app
+    assert 'data-value="hudBar" title="选择 HUD 背景">HUD背景' in app
+    assert 'data-visual-command="opacity"' in app
+    assert "videoTextFontOptions" in app
+    assert "爆款粗黑" in app
+    assert "招牌漫画" in app
+    assert "数据机甲" in app
+    assert "中文黑体冲击" in app
+    assert "English Neon Bold" in app
+    assert "English Pop Comic" in app
+    assert "textEffectOptions" in app
+    assert 'data-visual-command="text-effect"' in app
+    assert "文字动效" in app
+    assert 'data-visual-command="hud-bg-color"' in app
+    assert 'aria-label="HUD 背景色"' in app
+    assert 'data-visual-command="hud-radius"' in app
+    assert "setBackgroundOpacity(value)" in preview
+    assert "setHudBackgroundColor(value)" in preview
+    assert "setHudRadius(value)" in preview
+    assert "hudBar.style.borderRadius = designSize(template.hud_bar_radius ?? 10)" in preview
+    assert "setTextEffect(value)" in preview
+    assert "applyTextEffect(node" in preview
+    assert "textColorValue(\"slogan\", template)" in preview
+    assert "textColorValue(\"title\", template)" in preview
+    assert "textColorValue(\"hud\", template)" in preview
+    assert 'postTemplateUpdates({ [`${target}_color`]: value })' in preview
+    assert "text-effect-glow" in preview
+    assert "@keyframes vmTextGlow" in preview
+    assert "@keyframes vmTextType" in preview
+    assert ".visual-effect-control" in css
+    assert "backgroundTargetForControl(activeTarget)" in preview
+    assert 'const key = `${target}_font_size`' in preview
+    assert 'if (!activeTarget && command === "align") selectTarget("hud")' in preview
+    assert "updates.hud_x = hudScreenAlignX(align)" in preview
+    assert 'updates.hud_bar_x = hudBarScreenAlignX(align, Number(template.hud_bar_width || 1080))' in preview
+    assert 'if (value === "center") return 540' in preview
+    assert 'return Math.round((1080 - safeWidth) / 2)' in preview
+    assert "显示上标题" in app
+    assert "显示中标题" in app
+    assert "显示下标题" in app
+    assert "上标题背景 X" not in app
+    assert "中标题背景 X" not in app
+    assert "下标题背景 X" not in app
+    assert "上标题背景高度" not in app
+    assert "中标题背景高度" not in app
+    assert "下标题背景高度" not in app
+    assert 'data-visual-command="select-target" data-value="slogan"' in app
+    assert 'data-visual-command="select-target" data-value="title"' in app
+    assert 'data-visual-command="select-target" data-value="hud"' in app
+    assert 'command === "select-target"' in preview
+    assert ".visual-target-tabs" in css
     assert 'data-visual-command="width-down"' in app
     assert 'data-visual-command="width-up"' in app
     assert "grid-template-columns: repeat(auto-fill, 154px)" in css

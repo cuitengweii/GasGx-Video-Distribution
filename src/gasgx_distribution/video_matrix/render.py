@@ -15,6 +15,12 @@ from .spark_text import build_marketing_copy
 from .templates import coerce_template
 
 FONT_CANDIDATES = (
+    Path(r"C:\Windows\Fonts\msyh.ttc"),
+    Path(r"C:\Windows\Fonts\msyhbd.ttc"),
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path(r"C:\Windows\Fonts\simsun.ttc"),
+    Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
+    Path(r"C:\Windows\Fonts\Noto Sans SC (TrueType).otf"),
     Path(r"C:\Windows\Fonts\arial.ttf"),
     Path(r"C:\Windows\Fonts\segoeui.ttf"),
     Path(r"C:\Windows\Fonts\arialbd.ttf"),
@@ -211,7 +217,7 @@ def _decorate_cover(source_path: Path, target_path: Path, title: str) -> None:
         draw.line([(0, step), (width, step)], fill=color)
     base = Image.alpha_composite(image, overlay)
     text_draw = ImageDraw.Draw(base)
-    font = ImageFont.load_default()
+    font = _load_drawtext_font(40)
     text_draw.rounded_rectangle((120, height // 2 - 56, width - 120, height // 2 + 56), radius=24, fill=(6, 14, 8, 190))
     text_draw.text((160, height // 2 - 8), title, fill=(255, 255, 255, 255), font=font)
     base.convert("RGB").save(target_path)
@@ -230,7 +236,7 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
     if template.get("show_hud", True):
         filters.append(
             "drawbox="
-            f"x=0:y={int(template['hud_bar_y'])}:w={int(template.get('hud_bar_width', 1080))}:h={int(template['hud_bar_height'])}:"
+            f"x={int(template.get('hud_bar_x', 0))}:y={int(template['hud_bar_y'])}:w={int(template.get('hud_bar_width', 1080))}:h={int(template['hud_bar_height'])}:"
             f"color={template['hud_bar_color']}@{float(template['hud_bar_opacity']):.2f}:t=fill"
         )
         filters.extend(
@@ -239,7 +245,7 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
                 font_arg,
                 hud_text,
                 text_key="hud",
-                color_key="secondary_color",
+                color_key="hud_color",
                 max_lines=2,
             )
         )
@@ -250,7 +256,7 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
                 font_arg,
                 slogan,
                 text_key="slogan",
-                color_key="primary_color",
+                color_key="slogan_color",
                 max_lines=3,
             )
         )
@@ -261,7 +267,7 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
                 font_arg,
                 title,
                 text_key="title",
-                color_key="secondary_color",
+                color_key="title_color",
                 max_lines=2,
             )
         )
@@ -292,11 +298,19 @@ def _drawtext_lines(
             x_expr = str(anchor_x)
         filters.append(
             "drawtext="
-            f"{font_arg}fontcolor={template[color_key]}:"
+            f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key)}:"
             f"fontsize={font_size}:"
             f"text='{_escape_drawtext_text(line)}':x={x_expr}:y={anchor_y + index * line_gap}"
         )
     return filters
+
+
+def _template_text_color(template: dict[str, Any], text_key: str, color_key: str) -> str:
+    if template.get(color_key):
+        return str(template[color_key])
+    if text_key == "title":
+        return str(template.get("primary_color") or "#ffffff")
+    return str(template.get("secondary_color") or "#ffffff")
 
 
 def _text_box_width(template: dict[str, Any], text_key: str, anchor_x: int) -> int:

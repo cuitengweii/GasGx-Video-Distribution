@@ -10,10 +10,20 @@ from .settings import ProjectSettings
 
 
 FONT_CANDIDATES = (
+    Path(r"C:\Windows\Fonts\msyh.ttc"),
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path(r"C:\Windows\Fonts\simsun.ttc"),
+    Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
+    Path(r"C:\Windows\Fonts\Noto Sans SC (TrueType).otf"),
     Path(r"C:\Windows\Fonts\arial.ttf"),
     Path(r"C:\Windows\Fonts\segoeui.ttf"),
 )
 BOLD_FONT_CANDIDATES = (
+    Path(r"C:\Windows\Fonts\msyhbd.ttc"),
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path(r"C:\Windows\Fonts\simsunb.ttf"),
+    Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf"),
+    Path(r"C:\Windows\Fonts\Noto Sans SC Medium (TrueType).otf"),
     Path(r"C:\Windows\Fonts\arialbd.ttf"),
     Path(r"C:\Windows\Fonts\segoeuib.ttf"),
 )

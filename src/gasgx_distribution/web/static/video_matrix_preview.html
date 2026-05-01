@@ -228,6 +228,72 @@
             user-select: text;
         }
 
+        .vm-template-text.text-effect-pulse {
+            transform-origin: center;
+            animation: vmTextPulse 1.8s ease-in-out infinite;
+        }
+
+        .vm-template-text.text-effect-glow {
+            animation: vmTextGlow 1.4s ease-in-out infinite alternate;
+        }
+
+        .vm-template-text.text-effect-slide-up {
+            animation: vmTextSlideUp .72s ease-out both;
+        }
+
+        .vm-template-text.text-effect-shake {
+            animation: vmTextShake .72s ease-in-out infinite;
+        }
+
+        .vm-template-text.text-effect-typewriter {
+            overflow: hidden;
+            border-right: 2px solid currentColor;
+            animation: vmTextType 1.35s steps(var(--text-effect-steps, 24), end) both, vmTextCaret .7s step-end infinite;
+        }
+
+        .vm-template-text.text-effect-pop {
+            transform-origin: center;
+            animation: vmTextPop .82s cubic-bezier(.2, 1.45, .42, 1) both;
+        }
+
+        @keyframes vmTextPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.045); }
+        }
+
+        @keyframes vmTextGlow {
+            0% { text-shadow: 0 2px 10px rgba(0,0,0,.76), 0 0 0 rgba(93,214,44,0); }
+            100% { text-shadow: 0 2px 10px rgba(0,0,0,.76), 0 0 16px rgba(93,214,44,.92); }
+        }
+
+        @keyframes vmTextSlideUp {
+            0% { opacity: 0; transform: translateY(18px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes vmTextShake {
+            0%, 100% { transform: translateX(0); }
+            22% { transform: translateX(-2px); }
+            44% { transform: translateX(2px); }
+            66% { transform: translateX(-1px); }
+            88% { transform: translateX(1px); }
+        }
+
+        @keyframes vmTextType {
+            from { clip-path: inset(0 100% 0 0); }
+            to { clip-path: inset(0 0 0 0); }
+        }
+
+        @keyframes vmTextCaret {
+            50% { border-color: transparent; }
+        }
+
+        @keyframes vmTextPop {
+            0% { opacity: 0; transform: scale(.84); }
+            70% { opacity: 1; transform: scale(1.08); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
         .vm-template-editable.active {
             outline: 2px solid #5dd62c;
             outline-offset: 4px;
@@ -823,14 +889,29 @@
         const node = document.getElementById(id);
         node.hidden = !visible;
         if (!visible) return;
+        const target = id === "templateTitle" ? "title" : id === "templateSlogan" ? "slogan" : "hud";
+        const template = currentPayload?.template || {};
+        const alignKey = `${target}_text_align`;
         node.textContent = value || "";
-        node.style.left = designX(x);
+        node.style.left = target === "hud" && template[alignKey] ? "0px" : designX(x);
         node.style.top = designY(y);
+        node.style.width = target === "hud" && template[alignKey] ? "100%" : "";
+        node.style.maxWidth = target === "hud" && template[alignKey] ? "100%" : "";
         node.style.fontSize = designSize(size);
         node.style.color = color || "#ffffff";
-        node.style.fontFamily = (currentPayload?.template || {})[`${id === "templateTitle" ? "title" : id === "templateSlogan" ? "slogan" : "hud"}_font_family`] || "'Noto Sans SC', sans-serif";
-        const alignKey = `${id === "templateTitle" ? "title" : id === "templateSlogan" ? "slogan" : "hud"}_text_align`;
-        node.style.textAlign = (currentPayload?.template || {})[alignKey] || "left";
+        node.style.fontFamily = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
+        node.style.textAlign = template[alignKey] || "left";
+        applyTextEffect(node, template[`${target}_text_effect`] || "none", value);
+      }
+
+      function applyTextEffect(node, effect, text) {
+        const effectClasses = ["text-effect-pulse", "text-effect-glow", "text-effect-slide-up", "text-effect-shake", "text-effect-typewriter", "text-effect-pop"];
+        node.classList.remove(...effectClasses);
+        node.style.removeProperty("--text-effect-steps");
+        const normalized = effect || "none";
+        if (normalized === "none") return;
+        node.classList.add(`text-effect-${normalized}`);
+        node.style.setProperty("--text-effect-steps", Math.max(8, String(text || "").length));
       }
 
       function applyTemplatePayload(payload) {
@@ -848,17 +929,19 @@
         const hudBar = document.getElementById("templateHudBar");
         hudBar.hidden = !template.show_hud;
         if (template.show_hud) {
+          hudBar.style.left = designX(template.hud_bar_x || 0);
           hudBar.style.top = designY(template.hud_bar_y);
           hudBar.style.height = designY(template.hud_bar_height || 120);
           hudBar.style.width = designX(template.hud_bar_width || 1080);
           hudBar.style.background = template.hud_bar_color || "rgba(5, 17, 24, .68)";
           hudBar.style.opacity = template.hud_bar_opacity ?? 0.68;
+          hudBar.style.borderRadius = designSize(template.hud_bar_radius ?? 10);
         }
-        setTextBar("templateSloganBar", template.show_slogan, template.slogan_y, template.slogan_bg_height || 80, template.slogan_bg_color || template.hud_bar_color, template.slogan_bg_opacity ?? 0.62);
-        setTextBar("templateTitleBar", template.show_title, template.title_y, template.title_bg_height || template.slogan_bg_height || 92, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62);
-        setLayerText("templateSlogan", template.show_slogan, payload.slogan, template.slogan_x, template.slogan_y, template.slogan_font_size, template.secondary_color);
-        setLayerText("templateTitle", template.show_title, payload.title, template.title_x, template.title_y, template.title_font_size, template.primary_color);
-        setLayerText("templateHudText", template.show_hud, payload.hud_text, template.hud_x, template.hud_y, template.hud_font_size, template.secondary_color);
+        setTextBar("templateSloganBar", template.show_slogan, template.slogan_bg_x || 0, template.slogan_bg_y ?? template.slogan_y, template.slogan_bg_height || 80, template.slogan_bg_width || 1080, template.slogan_bg_color || template.hud_bar_color, template.slogan_bg_opacity ?? 0.62);
+        setTextBar("templateTitleBar", template.show_title, template.title_bg_x || 0, template.title_bg_y ?? template.title_y, template.title_bg_height || template.slogan_bg_height || 92, template.title_bg_width || 1080, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62);
+        setLayerText("templateSlogan", template.show_slogan, payload.slogan, template.slogan_x, template.slogan_y, template.slogan_font_size, textColorValue("slogan", template));
+        setLayerText("templateTitle", template.show_title, payload.title, template.title_x, template.title_y, template.title_font_size, textColorValue("title", template));
+        setLayerText("templateHudText", template.show_hud, payload.hud_text, template.hud_x, template.hud_y, template.hud_font_size, textColorValue("hud", template));
       }
 
       function applyCoverProfilePayload(payload) {
@@ -999,12 +1082,14 @@
         return lines.length ? lines : fallback;
       }
 
-      function setTextBar(id, visible, y, height, color, opacity) {
+      function setTextBar(id, visible, x, y, height, width, color, opacity) {
         const node = document.getElementById(id);
         node.hidden = !visible;
         if (!visible) return;
+        node.style.left = designX(x || 0);
         node.style.top = designY(y);
         node.style.height = designY(height);
+        node.style.width = designX(width || 1080);
         node.style.background = color || "rgba(5, 17, 24, .68)";
         node.style.opacity = opacity;
       }
@@ -1070,7 +1155,9 @@
       window.addEventListener("message", (event) => {
         if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-command") return;
         const { command, value } = event.data;
-        if (!activeTarget && command !== "edit") selectTarget("title");
+        if (!activeTarget && command !== "edit" && command !== "align") selectTarget("title");
+        if (!activeTarget && command === "align") selectTarget("hud");
+        if (command === "select-target") selectTarget(value || "title");
         if (command === "size-down") adjustSize(-2);
         if (command === "size-up") adjustSize(2);
         if (command === "width-down") adjustWidth(-24);
@@ -1078,7 +1165,11 @@
         if (command === "edit") enterTextEdit();
         if (command === "align") setTextAlign(value || "left");
         if (command === "font-family") setFontFamily(value);
+        if (command === "text-effect") setTextEffect(value);
         if (command === "color") setColor(value);
+        if (command === "hud-bg-color") setHudBackgroundColor(value);
+        if (command === "opacity") setBackgroundOpacity(value);
+        if (command === "hud-radius") setHudRadius(value);
       });
 
       window.addEventListener("message", (event) => {
@@ -1099,7 +1190,7 @@
         document.getElementById("visualToolbar").classList.add("active");
         const template = currentPayload?.template || {};
         document.getElementById("fontFamily").disabled = isBackgroundTarget(target);
-        document.getElementById("visualColor").value = normalizeColor(backgroundColorValue(target, template) || (target === "title" ? template.primary_color : template.secondary_color));
+        document.getElementById("visualColor").value = normalizeColor(backgroundColorValue(target, template) || textColorValue(textTargetForAlignment(target) || "title", template));
         document.getElementById("fontFamily").value = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
         document.getElementById("editText").disabled = isBackgroundTarget(target);
         updateAlignButtons(template[`${target}_text_align`] || "left");
@@ -1114,6 +1205,13 @@
         if (target === "sloganBar") return template.slogan_bg_color || template.hud_bar_color;
         if (target === "titleBar") return template.title_bg_color || template.hud_bar_color;
         return "";
+      }
+
+      function textColorValue(target, template) {
+        if (target === "title") return template.title_color || template.primary_color || "#ffffff";
+        if (target === "slogan") return template.slogan_color || template.secondary_color || "#ffffff";
+        if (target === "hud") return template.hud_color || template.secondary_color || "#ffffff";
+        return template.primary_color || "#ffffff";
       }
 
       function normalizeColor(value) {
@@ -1150,7 +1248,7 @@
         const rawY = Math.max(0, Math.min(852, event.clientY - phoneRect.top - dragging.dy));
         const snapped = snapToCenter(rawX, rawY, event.currentTarget);
         const updates = isBackgroundTarget(dragging.target)
-          ? barPositionUpdates(dragging.target, snapped.y)
+          ? barPositionUpdates(dragging.target, snapped.x, snapped.y)
           : targetPositionUpdates(dragging.target, snapped.x, snapped.y);
         postTemplateUpdates(updates);
       }
@@ -1167,47 +1265,110 @@
         return { hud_x: toDesignX(x), hud_y: toDesignY(y) };
       }
 
-      function barPositionUpdates(target, y) {
-        if (target === "sloganBar") return { slogan_y: toDesignY(y) };
-        if (target === "titleBar") return { title_y: toDesignY(y) };
-        return { hud_bar_y: toDesignY(y) };
+      function barPositionUpdates(target, x, y) {
+        if (target === "sloganBar") return { slogan_bg_x: toDesignX(x), slogan_bg_y: toDesignY(y) };
+        if (target === "titleBar") return { title_bg_x: toDesignX(x), title_bg_y: toDesignY(y) };
+        return { hud_bar_x: toDesignX(x), hud_bar_y: toDesignY(y) };
       }
 
       function adjustSize(delta) {
-        if (!activeTarget) return;
+        const target = textTargetForAlignment(activeTarget);
+        if (!target) return;
         const template = currentPayload?.template || {};
-        const key = activeTarget === "hudBar" ? "hud_bar_height" : activeTarget === "sloganBar" ? "slogan_bg_height" : activeTarget === "titleBar" ? "title_bg_height" : `${activeTarget}_font_size`;
+        const key = `${target}_font_size`;
         postTemplateUpdates({ [key]: Math.max(8, Number(template[key] || 24) + delta) });
       }
 
       function adjustWidth(delta) {
-        if (activeTarget !== "hudBar") return;
+        const backgroundTarget = backgroundTargetForControl(activeTarget);
         const template = currentPayload?.template || {};
-        postTemplateUpdates({ hud_bar_width: clamp(Number(template.hud_bar_width || 1080) + delta, 120, 1080) });
+        const key = backgroundTarget === "hudBar" ? "hud_bar_width" : backgroundTarget === "sloganBar" ? "slogan_bg_width" : "title_bg_width";
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [key]: clamp(Number(template[key] || 1080) + delta, 120, 1080) });
       }
 
       function setColor(value) {
-        if (!activeTarget) return;
-        const key = activeTarget === "hudBar" ? "hud_bar_color" : activeTarget === "sloganBar" ? "slogan_bg_color" : activeTarget === "titleBar" ? "title_bg_color" : activeTarget === "title" ? "primary_color" : "secondary_color";
-        postTemplateUpdates({ [key]: value });
+        const target = textTargetForAlignment(activeTarget);
+        if (!target) return;
+        postTemplateUpdates({ [`${target}_color`]: value });
       }
 
       function setFontFamily(value) {
-        if (!activeTarget || isBackgroundTarget(activeTarget)) return;
-        postTemplateUpdates({ [`${activeTarget}_font_family`]: value });
+        const target = textTargetForAlignment(activeTarget);
+        if (!target) return;
+        postTemplateUpdates({ [`${target}_font_family`]: value });
+      }
+
+      function setTextEffect(value) {
+        const target = textTargetForAlignment(activeTarget);
+        if (!target) return;
+        postTemplateUpdates({ [`${target}_text_effect`]: value || "none" });
       }
 
       function setTextAlign(value) {
-        if (!activeTarget || isBackgroundTarget(activeTarget)) return;
-        postTemplateUpdates({ [`${activeTarget}_text_align`]: value || "left" });
-        updateAlignButtons(value || "left");
+        const target = textTargetForAlignment(activeTarget);
+        if (!target) return;
+        const align = value || "left";
+        const template = currentPayload?.template || {};
+        const updates = { [`${target}_text_align`]: align };
+        if (target === "hud") {
+          updates.hud_x = hudScreenAlignX(align);
+          updates.hud_bar_x = hudBarScreenAlignX(align, Number(template.hud_bar_width || 1080));
+        }
+        postTemplateUpdates(updates);
+        updateAlignButtons(align);
       }
 
       function updateAlignButtons(value) {
         document.querySelectorAll(".vm-align-btn").forEach((button) => {
-          button.disabled = isBackgroundTarget(activeTarget);
-          button.classList.toggle("active", button.dataset.align === value && !isBackgroundTarget(activeTarget));
+          button.disabled = !textTargetForAlignment(activeTarget);
+          button.classList.toggle("active", button.dataset.align === value && Boolean(textTargetForAlignment(activeTarget)));
         });
+      }
+
+      function textTargetForAlignment(target) {
+        if (target === "hudBar") return "hud";
+        if (target === "sloganBar") return "slogan";
+        if (target === "titleBar") return "title";
+        return target && !isBackgroundTarget(target) ? target : "";
+      }
+
+      function backgroundTargetForControl(target) {
+        if (isBackgroundTarget(target)) return target;
+        if (target === "slogan") return "sloganBar";
+        if (target === "title") return "titleBar";
+        return "hudBar";
+      }
+
+      function setBackgroundOpacity(value) {
+        const backgroundTarget = backgroundTargetForControl(activeTarget);
+        const opacity = clamp(Number(value), 0, 1);
+        const key = backgroundTarget === "hudBar" ? "hud_bar_opacity" : backgroundTarget === "sloganBar" ? "slogan_bg_opacity" : "title_bg_opacity";
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [key]: opacity });
+      }
+
+      function setHudBackgroundColor(value) {
+        selectTarget("hudBar");
+        postTemplateUpdates({ hud_bar_color: value || "#0E1A10" });
+      }
+
+      function setHudRadius(value) {
+        selectTarget("hudBar");
+        postTemplateUpdates({ hud_bar_radius: clamp(Number(value), 0, 80) });
+      }
+
+      function hudScreenAlignX(value) {
+        if (value === "right") return 1080;
+        if (value === "center") return 540;
+        return 0;
+      }
+
+      function hudBarScreenAlignX(value, width) {
+        const safeWidth = clamp(Number(width || 1080), 120, 1080);
+        if (value === "right") return 1080 - safeWidth;
+        if (value === "center") return Math.round((1080 - safeWidth) / 2);
+        return 0;
       }
 
       function postTemplateUpdates(updates) {
@@ -1275,8 +1436,11 @@
         const deltaX = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
         const deltaY = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
         if (isBackgroundTarget(activeTarget)) {
-          const key = activeTarget === "hudBar" ? "hud_bar_y" : activeTarget === "sloganBar" ? "slogan_y" : "title_y";
-          postTemplateUpdates({ [key]: clamp(Number(template[key] || 0) + deltaY, 0, 1920) });
+          const prefix = activeTarget === "hudBar" ? "hud_bar" : activeTarget === "sloganBar" ? "slogan_bg" : "title_bg";
+          postTemplateUpdates({
+            [`${prefix}_x`]: clamp(Number(template[`${prefix}_x`] || 0) + deltaX, 0, 1080),
+            [`${prefix}_y`]: clamp(Number(template[`${prefix}_y`] || 0) + deltaY, 0, 1920),
+          });
           return;
         }
         const prefix = activeTarget === "title" ? "title" : activeTarget === "slogan" ? "slogan" : "hud";
