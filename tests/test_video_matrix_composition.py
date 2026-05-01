@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from gasgx_distribution.video_matrix.composition import plan_variants
 from gasgx_distribution.video_matrix.hud import HudPayload
@@ -226,3 +227,25 @@ def test_cover_renderer_prefers_cjk_fonts_for_chinese_text() -> None:
     assert "simhei.ttf" in regular_names
     assert "msyhbd.ttc" in bold_names
     assert "simhei.ttf" in bold_names
+
+
+def test_single_video_cover_renders_reference_layout_scale() -> None:
+    settings = _settings()
+    background = Image.new("RGB", (1080, 1920), "#223322")
+
+    image = cover_renderer.render_cover_preview_image(
+        settings,
+        {
+            "cover_layout": "single_video",
+            "single_cover_logo_text": "GasGx",
+            "single_cover_slogan_text": "终结废气 | 重塑能源 | 就地变现",
+            "single_cover_title_text": "全球领先的搁浅天然气算力变现引擎",
+            "single_cover_logo_font_size": 92,
+            "single_cover_slogan_font_size": 64,
+            "single_cover_title_font_size": 48,
+        },
+        background=background,
+    )
+
+    assert image.size == (1080, 1920)
+    assert image.getpixel((90, 260)) != image.getpixel((540, 1500))

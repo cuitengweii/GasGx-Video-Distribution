@@ -299,6 +299,11 @@
             outline-offset: 4px;
         }
 
+        .vm-template-text.active {
+            border-radius: 3px;
+            box-shadow: 0 0 0 2px #5dd62c;
+        }
+
         .vm-visual-toolbar {
             position: absolute;
             left: 50%;
@@ -420,6 +425,79 @@
             color: #fff;
             font-family: 'Noto Sans SC', sans-serif;
             overflow: hidden;
+        }
+
+        .single-cover-shell {
+            position: absolute;
+            inset: 0;
+            z-index: 31;
+            overflow: hidden;
+            background: #000;
+            color: #fff;
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+
+        .single-cover-bg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center top;
+            z-index: 1;
+        }
+
+        .single-cover-gradient {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            background:
+                linear-gradient(to bottom, rgba(0,0,0,.96) 0%, rgba(0,0,0,.92) 18%, rgba(0,0,0,.62) 30%, rgba(0,0,0,.12) 48%, rgba(0,0,0,0) 70%),
+                linear-gradient(to right, rgba(0,0,0,.38), rgba(0,0,0,0) 62%);
+        }
+
+        .single-cover-logo {
+            position: absolute;
+            left: 7%;
+            top: 13%;
+            z-index: 3;
+            max-width: 86%;
+            color: #fff;
+            font-size: 31px;
+            font-weight: 900;
+            line-height: 1.05;
+            letter-spacing: 0;
+            text-shadow: 0 3px 16px rgba(0,0,0,.72);
+        }
+
+        .single-cover-slogan {
+            position: absolute;
+            left: 6.8%;
+            top: 22%;
+            z-index: 3;
+            max-width: 86%;
+            color: #fff;
+            font-size: 23px;
+            font-weight: 900;
+            line-height: 1.14;
+            letter-spacing: 0;
+            text-shadow: 0 3px 16px rgba(0,0,0,.72);
+            white-space: pre-line;
+        }
+
+        .single-cover-title {
+            position: absolute;
+            left: 6.8%;
+            top: 26.6%;
+            z-index: 3;
+            max-width: 88%;
+            color: #fff;
+            font-size: 22px;
+            font-weight: 700;
+            line-height: 1.16;
+            letter-spacing: 0;
+            text-shadow: 0 3px 16px rgba(0,0,0,.76);
+            white-space: pre-line;
         }
 
         .cover-status-bar {
@@ -585,7 +663,7 @@
 
         .cover-profile-tile {
             position: relative;
-            aspect-ratio: 3 / 4;
+            aspect-ratio: 9 / 16;
             overflow: hidden;
             background: #222;
         }
@@ -600,41 +678,43 @@
 
         .cover-tile-shade {
             position: absolute;
-            inset: 0 0 auto;
-            height: 84px;
+            inset: 0;
+            z-index: 2;
             background: linear-gradient(to bottom, rgba(0,0,0,.85), rgba(0,0,0,.32), transparent);
         }
 
-        .cover-tile-copy {
+        .cover-tile-logo,
+        .cover-tile-slogan,
+        .cover-tile-title {
             position: absolute;
-            inset: 8px 8px auto;
-            z-index: 2;
+            left: 6.8%;
+            z-index: 3;
+            max-width: 88%;
+            color: #fff;
+            text-shadow: 0 2px 10px rgba(0,0,0,.82);
         }
 
-        .cover-tile-copy strong {
+        .cover-tile-logo {
             display: block;
-            color: #5dd62c;
-            font-size: 12px;
+            top: 13%;
+            font-size: 10px;
             font-weight: 900;
-            line-height: 1;
+            line-height: 1.05;
         }
 
-        .cover-tile-copy span {
+        .cover-tile-slogan {
             display: block;
-            margin-top: 4px;
-            color: #5dd62c;
-            font-size: 8px;
-            line-height: 1.1;
-            white-space: nowrap;
-            transform: scale(.94);
-            transform-origin: left top;
+            top: 22%;
+            font-size: 7px;
+            font-weight: 800;
+            line-height: 1.12;
+            white-space: pre-line;
         }
 
         .cover-tile-title {
-            margin-top: 8px;
-            color: #fff;
-            font-size: 12px;
-            font-weight: 600;
+            top: 26.6%;
+            font-size: 7px;
+            font-weight: 700;
             line-height: 1.15;
         }
 
@@ -668,7 +748,7 @@
         <div class="phone-mockup flex flex-col text-white relative z-10 w-full h-full">
             <video id="previewVideo" playsinline autoplay loop></video>
             <img id="templateBackgroundImage" alt="">
-            <div id="templateMaskBg" class="vm-template-mask-bg"></div>
+            <div id="templateMaskBg" class="vm-template-mask-bg" hidden></div>
             <div class="dynamic-island"></div>
             <div class="bg-overlay absolute inset-0 pointer-events-none z-0"></div>
             <div class="vm-template-layer" aria-hidden="true">
@@ -732,6 +812,14 @@
                     </div>
                     <div id="coverProfileGrid" class="cover-profile-grid"></div>
                 </div>
+            </div>
+
+            <div id="singleCoverShell" class="single-cover-shell" hidden>
+                <img id="singleCoverBackground" class="single-cover-bg" alt="">
+                <div class="single-cover-gradient"></div>
+                <div id="singleCoverLogo" class="single-cover-logo cover-profile-editable" data-cover-target="singleLogo">GasGx</div>
+                <div id="singleCoverSlogan" class="single-cover-slogan cover-profile-editable" data-cover-target="singleSlogan">终结废气 | 重塑能源 | 就地变现</div>
+                <div id="singleCoverTitle" class="single-cover-title cover-profile-editable" data-cover-target="singleTitle">全球领先的搁浅天然气算力变现引擎</div>
             </div>
 
             <div class="relative z-20 flex justify-between items-center px-6 pt-[18px] text-[15px] font-medium status-scale">
@@ -922,6 +1010,9 @@
           return;
         }
         document.body.classList.remove("cover-profile-mode");
+        document.body.classList.remove("cover-single-mode");
+        document.getElementById("coverProfileShell").hidden = true;
+        document.getElementById("singleCoverShell").hidden = true;
         const template = payload.template || {};
         backgroundImage.hidden = !payload.background_image_url;
         if (payload.background_image_url) backgroundImage.src = payload.background_image_url;
@@ -937,8 +1028,8 @@
           hudBar.style.opacity = template.hud_bar_opacity ?? 0.68;
           hudBar.style.borderRadius = designSize(template.hud_bar_radius ?? 10);
         }
-        setTextBar("templateSloganBar", template.show_slogan, template.slogan_bg_x || 0, template.slogan_bg_y ?? template.slogan_y, template.slogan_bg_height || 80, template.slogan_bg_width || 1080, template.slogan_bg_color || template.hud_bar_color, template.slogan_bg_opacity ?? 0.62);
-        setTextBar("templateTitleBar", template.show_title, template.title_bg_x || 0, template.title_bg_y ?? template.title_y, template.title_bg_height || template.slogan_bg_height || 92, template.title_bg_width || 1080, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62);
+        setTextBar("templateSloganBar", template.show_slogan, template.slogan_bg_x || 0, template.slogan_bg_y ?? template.slogan_y, template.slogan_bg_height || 80, template.slogan_bg_width || 1080, template.slogan_bg_color || template.hud_bar_color, template.slogan_bg_opacity ?? 0.62, template.slogan_bg_radius ?? template.hud_bar_radius ?? 10);
+        setTextBar("templateTitleBar", template.show_title, template.title_bg_x || 0, template.title_bg_y ?? template.title_y, template.title_bg_height || template.slogan_bg_height || 92, template.title_bg_width || 1080, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62, template.title_bg_radius ?? template.hud_bar_radius ?? 10);
         setLayerText("templateSlogan", template.show_slogan, payload.slogan, template.slogan_x, template.slogan_y, template.slogan_font_size, textColorValue("slogan", template));
         setLayerText("templateTitle", template.show_title, payload.title, template.title_x, template.title_y, template.title_font_size, textColorValue("title", template));
         setLayerText("templateHudText", template.show_hud, payload.hud_text, template.hud_x, template.hud_y, template.hud_font_size, textColorValue("hud", template));
@@ -948,6 +1039,15 @@
         currentPayload = payload;
         const template = payload.template || {};
         const shell = document.getElementById("coverProfileShell");
+        const singleShell = document.getElementById("singleCoverShell");
+        if ((template.cover_layout || "profile") === "single_video") {
+          document.body.classList.add("cover-single-mode");
+          shell.hidden = true;
+          renderSingleVideoCover(payload);
+          return;
+        }
+        document.body.classList.remove("cover-single-mode");
+        singleShell.hidden = true;
         shell.hidden = false;
         setCoverText("coverProfileBrand", payload.brand || template.profile_brand_text || "GasGx | 燃气发电解决方案", template.brand_font_size || 52, template.primary_color, "brand");
         setCoverText("coverProfileLocation", payload.eyebrow || template.profile_eyebrow_text || "山西 大同", template.eyebrow_font_size || 30, template.secondary_color || "#888888", "eyebrow");
@@ -955,6 +1055,30 @@
         setCoverText("coverProfileSubhead", template.profile_subhead_text || "162 条原创内容", template.subhead_font_size || 28, template.secondary_color || "#666666", "subhead");
         setCoverText("coverProfileCta", template.profile_cta_text || "关注", template.cta_font_size || 42, "#000000", "cta");
         renderCoverProfileGrid(payload.background_image_url);
+      }
+
+      function renderSingleVideoCover(payload) {
+        const template = payload.template || {};
+        const shell = document.getElementById("singleCoverShell");
+        const background = document.getElementById("singleCoverBackground");
+        const imageUrl = payload.background_image_url || (Array.isArray(payload.background_image_urls) ? payload.background_image_urls[0] : "") || "";
+        shell.hidden = false;
+        background.hidden = !imageUrl;
+        if (imageUrl) background.src = imageUrl;
+        document.querySelector(".single-cover-gradient").style.background = singleCoverMaskStyle(template);
+        setSingleCoverText("singleCoverLogo", template.single_cover_logo_text || "GasGx", template.single_cover_logo_font_size || 84, "singleLogo");
+        setSingleCoverText("singleCoverSlogan", template.single_cover_slogan_text || "终结废气 | 重塑能源 | 就地变现", template.single_cover_slogan_font_size || 60, "singleSlogan");
+        setSingleCoverText("singleCoverTitle", template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎", template.single_cover_title_font_size || 54, "singleTitle");
+      }
+
+      function setSingleCoverText(id, text, size, target) {
+        const node = document.getElementById(id);
+        node.textContent = text || "";
+        node.style.fontSize = designSize(size || 54);
+        node.style.fontFamily = (currentPayload?.template || {})[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
+        node.style.textAlign = (currentPayload?.template || {})[`${target}_text_align`] || "left";
+        node.style.color = (currentPayload?.template || {})[`${target}_color`] || "#ffffff";
+        node.style.transform = `translateY(${Number((currentPayload?.template || {})[coverTargetOffsetKey(target)] || 0)}px)`;
       }
 
       function applyTemplateMask(node, template, visible) {
@@ -968,6 +1092,8 @@
         node.style.opacity = "1";
         if (mode === "top_gradient") {
           node.style.background = `linear-gradient(to bottom, ${alphaColor}, rgba(0,0,0,0))`;
+        } else if (mode === "dual_gradient") {
+          node.style.background = `linear-gradient(to bottom, ${alphaColor}, rgba(0,0,0,0) 48%, ${alphaColor})`;
         } else if (mode === "full") {
           node.style.background = alphaColor;
         } else {
@@ -1017,6 +1143,7 @@
       }
 
       function coverTargetOffsetKey(target) {
+        if (target === "singleLogo" || target === "singleSlogan" || target === "singleTitle") return `${target}_offset_y`;
         return `profile_${target}_offset_y`;
       }
 
@@ -1036,27 +1163,46 @@
           "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=500&q=80",
           "https://images.unsplash.com/photo-1605810230434-7631ac76ec81?w=500&q=80",
         ].filter(Boolean).filter((src, index, list) => list.indexOf(src) === index);
-        const tileBrand = template.tile_brand_text || "GasGx";
-        const tileTagline = template.tile_tagline_text || "终结废气 | 重塑能源 | 就地变现";
-        const titles = coverTileTitles(template.tile_titles_text);
+        const tileBrand = template.single_cover_logo_text || "GasGx";
+        const tileTagline = template.single_cover_slogan_text || "终结废气 | 重塑能源 | 就地变现";
+        const title = template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎";
         const likes = [128, 1097, 45, 888, 260, 410, 188, 332, 76];
-        const maskStyle = coverTileMaskStyle(template);
-        const copyStyle = coverTileCopyStyle(template);
+        const maskStyle = `background:${singleCoverMaskStyle(template)}`;
+        const logoStyle = `font-size:${tileCoverFontSize(template.single_cover_logo_font_size, 84)};color:${template.singleLogo_color || template.singleLogoColor || template.primary_color || "#ffffff"}`;
+        const sloganStyle = `font-size:${tileCoverFontSize(template.single_cover_slogan_font_size, 60)};color:${template.singleSlogan_color || template.singleSloganColor || template.primary_color || "#ffffff"}`;
+        const titleStyle = `font-size:${tileCoverFontSize(template.single_cover_title_font_size, 54)};color:${template.singleTitle_color || template.singleTitleColor || template.primary_color || "#ffffff"}`;
         grid.innerHTML = images.slice(0, 9).map((src, index) => `
           <div class="cover-profile-tile">
             <img src="${src}" alt="">
             <div class="cover-tile-shade" style="${maskStyle}"></div>
-            <div class="cover-tile-copy" style="${copyStyle}">
-              <strong>${escapeHtmlText(tileBrand)}</strong>
-              <span>${escapeHtmlText(tileTagline)}</span>
-              <div class="cover-tile-title" style="font-size:${Number(template.tile_title_font_size || 12)}px">${escapeHtmlText(titles[index] || titles[0])}</div>
-            </div>
+            <strong class="cover-tile-logo" style="${logoStyle}">${escapeHtmlText(tileBrand)}</strong>
+            <span class="cover-tile-slogan" style="${sloganStyle}">${escapeHtmlText(tileTagline)}</span>
+            <div class="cover-tile-title" style="${titleStyle}">${escapeHtmlText(title)}</div>
             <div class="cover-tile-like">
               <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" /></svg>
               <span>${likes[index] || 0}</span>
             </div>
           </div>
         `).join("");
+      }
+
+      function tileCoverFontSize(value, fallback) {
+        return `${Math.max(7, Number(value || fallback) * 0.12)}px`;
+      }
+
+      function singleCoverMaskStyle(template) {
+        const base = "linear-gradient(to right, rgba(0,0,0,.38), rgba(0,0,0,0) 62%)";
+        const mode = template.mask_mode || "bottom_gradient";
+        if (mode === "none") {
+          return `linear-gradient(to bottom, rgba(0,0,0,.96) 0%, rgba(0,0,0,.88) 20%, rgba(0,0,0,.18) 48%, rgba(0,0,0,0) 70%), ${base}`;
+        }
+        const color = normalizeColor(template.mask_color || template.gradient_color || template.tint_color || "#071015");
+        const opacity = Math.max(0, Math.min(1, Number(template.mask_opacity ?? template.gradient_opacity ?? template.tint_opacity ?? 0.35)));
+        const alphaColor = hexToRgba(color, opacity);
+        if (mode === "full") return `linear-gradient(to bottom, rgba(0,0,0,.56), rgba(0,0,0,.08)), linear-gradient(${alphaColor}, ${alphaColor}), ${base}`;
+        if (mode === "top_gradient") return `linear-gradient(to bottom, ${alphaColor} 0%, rgba(0,0,0,.62) 28%, rgba(0,0,0,.12) 48%, rgba(0,0,0,0) 70%), ${base}`;
+        if (mode === "dual_gradient") return `linear-gradient(to bottom, ${alphaColor} 0%, rgba(0,0,0,.38) 22%, rgba(0,0,0,0) 48%, rgba(0,0,0,.30) 74%, ${alphaColor} 100%), ${base}`;
+        return `linear-gradient(to top, ${alphaColor} 0%, rgba(0,0,0,.16) 36%, rgba(0,0,0,0) 70%), linear-gradient(to bottom, rgba(0,0,0,.82), rgba(0,0,0,0) 44%), ${base}`;
       }
 
       function coverTileMaskStyle(template) {
@@ -1067,6 +1213,7 @@
         const alphaColor = hexToRgba(color, opacity);
         if (mode === "full") return `inset:0;height:auto;background:${alphaColor}`;
         if (mode === "top_gradient") return `inset:0;height:auto;background:linear-gradient(to bottom, ${alphaColor}, rgba(0,0,0,0))`;
+        if (mode === "dual_gradient") return `inset:0;height:auto;background:linear-gradient(to bottom, ${alphaColor}, rgba(0,0,0,0) 48%, ${alphaColor})`;
         return `inset:0;height:auto;background:linear-gradient(to top, ${alphaColor}, rgba(0,0,0,0))`;
       }
 
@@ -1082,7 +1229,7 @@
         return lines.length ? lines : fallback;
       }
 
-      function setTextBar(id, visible, x, y, height, width, color, opacity) {
+      function setTextBar(id, visible, x, y, height, width, color, opacity, radius = 10) {
         const node = document.getElementById(id);
         node.hidden = !visible;
         if (!visible) return;
@@ -1092,6 +1239,7 @@
         node.style.width = designX(width || 1080);
         node.style.background = color || "rgba(5, 17, 24, .68)";
         node.style.opacity = opacity;
+        node.style.borderRadius = designSize(radius);
       }
 
       function initVisualEditor() {
@@ -1154,14 +1302,18 @@
 
       window.addEventListener("message", (event) => {
         if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-command") return;
-        const { command, value } = event.data;
+        const { command, value, scope } = event.data;
+        if (scope === "text") ensureTextTarget();
+        if (scope === "hud") ensureHudTarget(command);
         if (!activeTarget && command !== "edit" && command !== "align") selectTarget("title");
-        if (!activeTarget && command === "align") selectTarget("hud");
+        if (!activeTarget && command === "align") selectTarget("title");
         if (command === "select-target") selectTarget(value || "title");
         if (command === "size-down") adjustSize(-2);
         if (command === "size-up") adjustSize(2);
         if (command === "width-down") adjustWidth(-24);
         if (command === "width-up") adjustWidth(24);
+        if (command === "height-down") adjustHeight(-12);
+        if (command === "height-up") adjustHeight(12);
         if (command === "edit") enterTextEdit();
         if (command === "align") setTextAlign(value || "left");
         if (command === "font-family") setFontFamily(value);
@@ -1194,6 +1346,14 @@
         document.getElementById("fontFamily").value = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
         document.getElementById("editText").disabled = isBackgroundTarget(target);
         updateAlignButtons(template[`${target}_text_align`] || "left");
+      }
+
+      function ensureTextTarget() {
+        if (activeTarget !== "slogan" && activeTarget !== "title") selectTarget("title");
+      }
+
+      function ensureHudTarget(command) {
+        if (!activeTarget) selectTarget("title");
       }
 
       function isBackgroundTarget(target) {
@@ -1280,11 +1440,19 @@
       }
 
       function adjustWidth(delta) {
-        const backgroundTarget = backgroundTargetForControl(activeTarget);
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
         const template = currentPayload?.template || {};
-        const key = backgroundTarget === "hudBar" ? "hud_bar_width" : backgroundTarget === "sloganBar" ? "slogan_bg_width" : "title_bg_width";
+        const key = backgroundTargetWidthKey(backgroundTarget);
         selectTarget(backgroundTarget);
         postTemplateUpdates({ [key]: clamp(Number(template[key] || 1080) + delta, 120, 1080) });
+      }
+
+      function adjustHeight(delta) {
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
+        const template = currentPayload?.template || {};
+        const key = backgroundTargetHeightKey(backgroundTarget);
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [key]: clamp(Number(template[key] || defaultBackgroundHeight(backgroundTarget)) + delta, 32, 360) });
       }
 
       function setColor(value) {
@@ -1327,9 +1495,6 @@
       }
 
       function textTargetForAlignment(target) {
-        if (target === "hudBar") return "hud";
-        if (target === "sloganBar") return "slogan";
-        if (target === "titleBar") return "title";
         return target && !isBackgroundTarget(target) ? target : "";
       }
 
@@ -1340,22 +1505,59 @@
         return "hudBar";
       }
 
+      function backgroundTargetWidthKey(target) {
+        if (target === "sloganBar") return "slogan_bg_width";
+        if (target === "titleBar") return "title_bg_width";
+        return "hud_bar_width";
+      }
+
+      function backgroundTargetHeightKey(target) {
+        if (target === "sloganBar") return "slogan_bg_height";
+        if (target === "titleBar") return "title_bg_height";
+        return "hud_bar_height";
+      }
+
+      function defaultBackgroundHeight(target) {
+        if (target === "sloganBar") return 80;
+        if (target === "titleBar") return 92;
+        return 120;
+      }
+
+      function backgroundTargetOpacityKey(target) {
+        if (target === "sloganBar") return "slogan_bg_opacity";
+        if (target === "titleBar") return "title_bg_opacity";
+        return "hud_bar_opacity";
+      }
+
+      function backgroundTargetColorKey(target) {
+        if (target === "sloganBar") return "slogan_bg_color";
+        if (target === "titleBar") return "title_bg_color";
+        return "hud_bar_color";
+      }
+
+      function backgroundTargetRadiusKey(target) {
+        if (target === "sloganBar") return "slogan_bg_radius";
+        if (target === "titleBar") return "title_bg_radius";
+        return "hud_bar_radius";
+      }
+
       function setBackgroundOpacity(value) {
-        const backgroundTarget = backgroundTargetForControl(activeTarget);
         const opacity = clamp(Number(value), 0, 1);
-        const key = backgroundTarget === "hudBar" ? "hud_bar_opacity" : backgroundTarget === "sloganBar" ? "slogan_bg_opacity" : "title_bg_opacity";
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
         selectTarget(backgroundTarget);
-        postTemplateUpdates({ [key]: opacity });
+        postTemplateUpdates({ [backgroundTargetOpacityKey(backgroundTarget)]: opacity });
       }
 
       function setHudBackgroundColor(value) {
-        selectTarget("hudBar");
-        postTemplateUpdates({ hud_bar_color: value || "#0E1A10" });
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [backgroundTargetColorKey(backgroundTarget)]: value || "#0E1A10" });
       }
 
       function setHudRadius(value) {
-        selectTarget("hudBar");
-        postTemplateUpdates({ hud_bar_radius: clamp(Number(value), 0, 80) });
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [backgroundTargetRadiusKey(backgroundTarget)]: clamp(Number(value), 0, 100) });
       }
 
       function hudScreenAlignX(value) {
@@ -1486,6 +1688,9 @@
       }
 
       function coverTargetSizeKey(target) {
+        if (target === "singleLogo") return "single_cover_logo_font_size";
+        if (target === "singleSlogan") return "single_cover_slogan_font_size";
+        if (target === "singleTitle") return "single_cover_title_font_size";
         if (target === "brand") return "brand_font_size";
         if (target === "eyebrow") return "eyebrow_font_size";
         if (target === "subhead") return "subhead_font_size";
@@ -1502,6 +1707,10 @@
 
       function setCoverColor(value) {
         if (!activeCoverTarget) return;
+        if (activeCoverTarget === "singleLogo" || activeCoverTarget === "singleSlogan" || activeCoverTarget === "singleTitle") {
+          postCoverTemplateUpdates({ [`${activeCoverTarget}_color`]: value });
+          return;
+        }
         const key = activeCoverTarget === "subhead" || activeCoverTarget === "eyebrow" ? "secondary_color" : "primary_color";
         postCoverTemplateUpdates({ [key]: value });
       }
@@ -1524,6 +1733,17 @@
 
       function postCoverTextUpdate(target, value) {
         currentPayload = { ...(currentPayload || {}), [target]: value };
+        if (target === "singleLogo" || target === "singleSlogan" || target === "singleTitle") {
+          const templateKey = {
+            singleLogo: "single_cover_logo_text",
+            singleSlogan: "single_cover_slogan_text",
+            singleTitle: "single_cover_title_text",
+          }[target];
+          currentPayload = {
+            ...(currentPayload || {}),
+            template: { ...((currentPayload || {}).template || {}), [templateKey]: value },
+          };
+        }
         window.parent.postMessage({ type: "gasgx-cover-template-text-update", text: { [target]: value } }, window.location.origin);
       }
 

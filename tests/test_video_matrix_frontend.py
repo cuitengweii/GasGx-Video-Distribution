@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -149,7 +149,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "nextTemplateCloneId" in app
     assert "saveCoverAsNewTemplate" in app
     assert "nextCoverTemplateMeta" in app
-    assert '<button type="button" id="saveCover">保存并重建模板库</button>' in app
+    assert '<button type="button" id="saveCover">保存当前模板</button>' in app
+    assert "saveCurrentCoverTemplate" in app
+    assert 'showTemplateActionStatus("保存成功", "coverForm")' in app
     assert 'await api("/api/video-matrix/cover-templates"' in app
     assert "state.cover_templates = coverTemplates" in app
     assert "buildCoverTemplateVariants(sourceTemplate)" in app
@@ -179,7 +181,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "applyCoverTemplateUpdates" in app
     assert "applyCoverTextUpdates" in app
     assert "body.cover-profile-mode .vm-template-mask-bg" in preview
-    assert "coverTileMaskStyle(template)" in preview
+    assert 'id="templateMaskBg" class="vm-template-mask-bg" hidden' in preview
+    assert "singleCoverMaskStyle(template)" in preview
+    assert 'mode === "dual_gradient"' in preview
+    assert "tileCoverFontSize" in preview
     assert 'style="${maskStyle}"' in preview
     assert "box-sizing: border-box" in preview
     assert ".device-side-button" in preview
@@ -196,16 +201,34 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "coverMaskModeOptions" in app
     assert "上渐变蒙版" in app
     assert "下渐变蒙版" in app
+    assert "上下渐变蒙版" in app
+    assert "dual_gradient" in app
     assert "全蒙版" in app
     assert 'data-key="mask_color"' in app
-    assert 'data-key="tile_titles_text"' in app
+    assert 'data-key="tile_titles_text"' not in app
+    assert 'data-key="single_cover_logo_text"' in app
+    assert 'data-key="single_cover_slogan_text"' in app
+    assert 'data-key="single_cover_title_text"' in app
     assert "selectedCoverModelImageUrl" not in app
     assert "切换封面背景..." not in app
     assert "background_image_urls: modelImages.map" in app
-    assert "background_image_url: modelImages[0]?.url || \"\"" in app
+    assert "background_image_url: selectedModelImageUrl || modelImages[0]?.url || \"\"" in app
+    assert "sourcePreviewVideos = Array.isArray(data.source_videos) ? data.source_videos : []" in app
+    assert "videoTemplatePreviewVideos" in app
+    assert "/api/video-matrix/preview-file?path=" in app
+    assert "toggleTemplateCardVideo" in app
+    assert "coverGallery" not in html
+    assert "setPanelLoading(\"coverGallery\"" not in app
+    assert "refreshGallery" not in app
     assert "await selectVideoTemplate(card.dataset.id)" in app
     assert "正文模板自动保存失败" in app
     assert "第一屏模板自动保存失败" in app
+    assert "pulseImageLoading(\"coverPreview\"" in app
+    assert "pulseImageLoading(\"videoTemplatePreview\"" in app
+    assert "应用封面参数..." in app
+    assert "应用模板参数..." in app
+    assert "background: transparent" in css
+    assert "box-shadow: none" in css
     assert "const recentLimits = state.recent_limits || settings.recent_limits || {}" in app
     assert '$("transcriptText").value = state.transcript_text || ""' in app
     assert 'transcript_text: $("transcriptText").value' in app
@@ -264,15 +287,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "title_bg_y: toDesignY(y)" in preview
     assert "slogan_bg_width || 1080" in preview
     assert "title_bg_width || 1080" in preview
-    assert 'if (target === "hudBar") return "hud"' in preview
-    assert 'if (target === "sloganBar") return "slogan"' in preview
-    assert 'if (target === "titleBar") return "title"' in preview
+    assert "ensureTextTarget()" in preview
+    assert "ensureHudTarget(command)" in preview
+    assert 'if (activeTarget !== "slogan" && activeTarget !== "title") selectTarget("title")' in preview
     assert "textTargetForAlignment(activeTarget)" in preview
     assert 'target === "hud" && template[alignKey] ? "0px" : designX(x)' in preview
     assert 'target === "hud" && template[alignKey] ? "100%" : ""' in preview
     assert "文字调整区" in app
-    assert "背景调整区" in app
-    assert 'data-value="hudBar" title="选择 HUD 背景">HUD背景' in app
+    assert "HUD调整区" in app
+    assert 'data-value="hudBar" title="选择 HUD 背景">HUD背景' not in app
     assert 'data-visual-command="opacity"' in app
     assert "videoTextFontOptions" in app
     assert "爆款粗黑" in app
@@ -287,9 +310,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'data-visual-command="hud-bg-color"' in app
     assert 'aria-label="HUD 背景色"' in app
     assert 'data-visual-command="hud-radius"' in app
+    assert 'data-visual-command="hud-radius" type="range" min="0" max="100"' in app
     assert "setBackgroundOpacity(value)" in preview
     assert "setHudBackgroundColor(value)" in preview
     assert "setHudRadius(value)" in preview
+    assert "clamp(Number(value), 0, 100)" in preview
     assert "hudBar.style.borderRadius = designSize(template.hud_bar_radius ?? 10)" in preview
     assert "setTextEffect(value)" in preview
     assert "applyTextEffect(node" in preview
@@ -301,9 +326,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "@keyframes vmTextGlow" in preview
     assert "@keyframes vmTextType" in preview
     assert ".visual-effect-control" in css
-    assert "backgroundTargetForControl(activeTarget)" in preview
+    assert "backgroundTargetForControl(activeTarget)" not in preview
     assert 'const key = `${target}_font_size`' in preview
-    assert 'if (!activeTarget && command === "align") selectTarget("hud")' in preview
+    assert 'if (!activeTarget && command === "align") selectTarget("title")' in preview
     assert "updates.hud_x = hudScreenAlignX(align)" in preview
     assert 'updates.hud_bar_x = hudBarScreenAlignX(align, Number(template.hud_bar_width || 1080))' in preview
     assert 'if (value === "center") return 540' in preview
@@ -317,20 +342,26 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "上标题背景高度" not in app
     assert "中标题背景高度" not in app
     assert "下标题背景高度" not in app
-    assert 'data-visual-command="select-target" data-value="slogan"' in app
-    assert 'data-visual-command="select-target" data-value="title"' in app
-    assert 'data-visual-command="select-target" data-value="hud"' in app
+    assert 'data-visual-command="select-target" data-value="slogan"' not in app
+    assert 'data-visual-command="select-target" data-value="title"' not in app
+    assert 'data-visual-command="select-target" data-value="hud"' not in app
     assert 'command === "select-target"' in preview
     assert ".visual-target-tabs" in css
     assert 'data-visual-command="width-down"' in app
     assert 'data-visual-command="width-up"' in app
+    assert 'data-visual-command="height-down"' in app
+    assert 'data-visual-command="height-up"' in app
+    assert "adjustHeight" in preview
+    assert "backgroundTargetHeightKey" in preview
+    assert "defaultBackgroundHeight" in preview
     assert "grid-template-columns: repeat(auto-fill, 154px)" in css
     assert "justify-self: center" in css
     assert "font-size: 13px" in css
     assert ".color-swatch-button" in css
     assert ".color-picker-icon" in css
     assert ".color-current-dot" in css
-    assert "#coverGallery .cover-card img" in css
+    assert ".cover-card img," in css
+    assert ".cover-card video" in css
     assert "aspect-ratio: 9 / 16" in css
     assert "margin: 8px 0 14px" in css
     assert "inset: 0" in css
@@ -390,9 +421,13 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "padding: 8px 20px 0" in preview_html
     assert "applyTemplateMask" in preview_html
     assert "hexToRgba" in preview_html
-    assert "coverTileTitles" in preview_html
-    assert "tile_brand_text" in preview_html
-    assert "tile_tagline_text" in preview_html
+    assert "singleCoverMaskStyle" in preview_html
+    assert "template.single_cover_logo_text" in preview_html
+    assert "template.single_cover_slogan_text" in preview_html
+    assert "template.single_cover_title_text" in preview_html
+    assert "cover-tile-logo" in preview_html
+    assert "cover-tile-slogan" in preview_html
+    assert "aspect-ratio: 9 / 16" in preview_html
     assert 'class="sound-toggle hidden"' in preview_html
 
 

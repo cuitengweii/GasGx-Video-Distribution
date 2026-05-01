@@ -112,10 +112,15 @@
         <section class="cover-workbench">
           <div class="section-title"><span>FIRST SCREEN</span><b>第一屏封面模板</b></div>
           <div class="cover-editor">
-            <div class="preview-stage"><iframe id="coverPreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="cover preview" scrolling="no"></iframe><small id="previewCaption"></small></div>
+            <div class="preview-stage">
+              <iframe id="coverPreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="cover preview" scrolling="no"></iframe>
+              <div class="preview-caption-row">
+                <small id="previewCaption"></small>
+                <button id="coverLayoutToggle" class="secondary compact-toggle" type="button">独立视频封面</button>
+              </div>
+            </div>
             <form id="coverForm" class="control-panel"></form>
           </div>
-          <div id="coverGallery" class="cover-gallery"></div>
         </section>
 
         <section class="video-template-workbench">

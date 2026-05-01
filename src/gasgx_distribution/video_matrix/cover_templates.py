@@ -244,6 +244,13 @@ def coerce_cover_template(template: dict[str, Any] | None) -> dict[str, Any]:
     merged.setdefault("mask_mode", "bottom_gradient")
     merged.setdefault("mask_color", merged.get("gradient_color") or merged.get("tint_color") or "#071015")
     merged.setdefault("mask_opacity", merged.get("gradient_opacity", merged.get("tint_opacity", 0.35)))
+    merged.setdefault("cover_layout", "profile")
+    merged.setdefault("single_cover_logo_text", "GasGx")
+    merged.setdefault("single_cover_slogan_text", "终结废气 | 重塑能源 | 就地变现")
+    merged.setdefault("single_cover_title_text", "全球领先的搁浅天然气算力变现引擎")
+    merged.setdefault("single_cover_logo_font_size", 84)
+    merged.setdefault("single_cover_slogan_font_size", 60)
+    merged.setdefault("single_cover_title_font_size", 54)
     merged.setdefault("tile_brand_text", "GasGx")
     merged.setdefault("tile_tagline_text", "终结废气 | 重塑能源 | 就地变现")
     merged.setdefault(

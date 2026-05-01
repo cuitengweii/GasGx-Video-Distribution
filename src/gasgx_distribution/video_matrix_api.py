@@ -145,6 +145,7 @@ def get_state() -> dict[str, Any]:
             "local_bgm": [path.name for path in _list_local_bgm_files(BGM_DIR)],
             "category_counts": _count_category_files(source_root, categories),
             "source_dirs": {category["id"]: str(source_root / category["id"]) for category in categories},
+            "source_videos": _list_source_preview_videos(source_root, categories),
         }
     settings = _settings()
     ensure_category_dirs(settings.source_root, settings.material_categories)
@@ -162,6 +163,7 @@ def get_state() -> dict[str, Any]:
             category["id"]: str(settings.source_root / category["id"])
             for category in settings.material_categories
         },
+        "source_videos": _list_source_preview_videos(settings.source_root, settings.material_categories),
     }
 
 
@@ -789,6 +791,17 @@ def _count_category_files(root: Path, categories: list[dict[str, str]]) -> dict[
         category["id"]: len([path for path in (root / category["id"]).glob("*") if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS])
         for category in categories
     }
+
+
+def _list_source_preview_videos(root: Path, categories: list[dict[str, str]], limit: int = 12) -> list[dict[str, str]]:
+    videos: list[Path] = []
+    for category in categories:
+        folder = root / category["id"]
+        if not folder.exists():
+            continue
+        videos.extend(path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS)
+    videos = sorted(videos, key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+    return [{"name": path.name, "path": str(path)} for path in videos]
 
 
 def _list_local_bgm_files(folder: Path) -> list[Path]:

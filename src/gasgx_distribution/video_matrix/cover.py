@@ -71,10 +71,21 @@ def render_cover_preview_image(
     hud_lines: list[str] | None = None,
     background: Image.Image | None = None,
 ) -> Image.Image:
+    template = coerce_cover_template(template_config)
+    if str(template.get("cover_layout") or "profile") == "single_video":
+        return build_single_video_cover_image(settings, template, background, headline, subhead, hud_lines or [])
     return build_cover_tile_preview_image(settings, template_config, background=background)
 
 
 def build_cover_tile_preview_image(
+    settings: ProjectSettings,
+    template_config: dict | None,
+    background: Image.Image | None = None,
+) -> Image.Image:
+    return build_single_video_cover_image(settings, template_config, background=background)
+
+
+def build_legacy_cover_tile_preview_image(
     settings: ProjectSettings,
     template_config: dict | None,
     background: Image.Image | None = None,
@@ -119,6 +130,8 @@ def build_intro_cover_image(
     hud_lines: list[str],
 ) -> Image.Image:
     template = coerce_cover_template(template_config)
+    if str(template.get("cover_layout") or "profile") == "single_video":
+        return build_single_video_cover_image(settings, template, background, headline, subhead, hud_lines)
     base = _cover_crop(background, settings.target_width, settings.target_height).convert("RGBA")
     base = _apply_tint_and_gradient(base, template)
     draw = ImageDraw.Draw(base)
@@ -157,6 +170,46 @@ def build_intro_cover_image(
     return base.convert("RGB")
 
 
+def build_single_video_cover_image(
+    settings: ProjectSettings,
+    template_config: dict | None,
+    background: Image.Image | None = None,
+    headline: str = "",
+    subhead: str = "",
+    hud_lines: list[str] | None = None,
+) -> Image.Image:
+    template = coerce_cover_template(template_config)
+    width = int(settings.target_width)
+    height = int(settings.target_height)
+    source = background if background is not None else _placeholder_background(width, height)
+    base = _cover_crop(source, width, height).convert("RGBA")
+    base = _apply_single_cover_mask(base, template)
+    draw = ImageDraw.Draw(base)
+
+    logo_text = str(template.get("single_cover_logo_text") or "GasGx")
+    slogan = str(template.get("single_cover_slogan_text") or "终结废气 | 重塑能源 | 就地变现")
+    title = str(template.get("single_cover_title_text") or headline or subhead or "全球领先的搁浅天然气算力变现引擎")
+    title = title.replace("\\n", "\n")
+
+    text_x = int(width * 0.068)
+    logo_y = int(height * 0.13)
+    slogan_y = int(height * 0.22)
+    title_y = int(height * 0.266)
+    logo_font = _load_font(max(24, int(float(template.get("single_cover_logo_font_size", 84)))), bold=True)
+    slogan_font = _load_font(max(20, int(float(template.get("single_cover_slogan_font_size", 60)))), bold=True)
+    title_font = _load_font(max(18, int(float(template.get("single_cover_title_font_size", 54)))), bold=True)
+    _draw_text_shadow(draw, (text_x, logo_y), logo_text, logo_font, "#ffffff")
+    _draw_text_shadow(draw, (text_x, slogan_y), slogan, slogan_font, "#ffffff")
+    y = title_y
+    max_text_width = width - text_x - int(width * 0.06)
+    lines = _wrap_multiline_text(draw, title, title_font, max_text_width)[:4]
+    for line in lines:
+        _draw_text_shadow(draw, (text_x, y), line, title_font, "#ffffff")
+        y += int(title_font.size * 1.16)
+
+    return base.convert("RGB")
+
+
 def _cover_crop(image: Image.Image, width: int, height: int) -> Image.Image:
     image = image.convert("RGB")
     source_width, source_height = image.size
@@ -184,6 +237,8 @@ def _apply_tint_and_gradient(image: Image.Image, template: dict) -> Image.Image:
             ratio = y / max(height - 1, 1)
             if mode == "top_gradient":
                 ratio = 1 - ratio
+            elif mode == "dual_gradient":
+                ratio = abs(ratio - 0.5) * 2
             alpha = int(max_alpha * ratio)
             draw.line([(0, y), (width, y)], fill=(*color, alpha))
     return Image.alpha_composite(image, mask)
@@ -206,8 +261,42 @@ def _apply_tile_mask(image: Image.Image, template: dict) -> Image.Image:
             ratio = y / max(height - 1, 1)
             if mode == "top_gradient":
                 ratio = 1 - ratio
+            elif mode == "dual_gradient":
+                ratio = abs(ratio - 0.5) * 2
             alpha = int(max_alpha * ratio)
             draw.line([(0, y), (width, y)], fill=(*color, alpha))
+    return Image.alpha_composite(image, mask)
+
+
+def _apply_single_cover_mask(image: Image.Image, template: dict) -> Image.Image:
+    width, height = image.size
+    mask = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(mask)
+    draw.rectangle((0, 0, width, int(height * 0.18)), fill=(0, 0, 0, 220))
+    for y in range(int(height * 0.18), int(height * 0.52)):
+        ratio = (y - height * 0.18) / max(height * 0.34, 1)
+        alpha = int(220 * (1 - ratio))
+        draw.line([(0, y), (width, y)], fill=(0, 0, 0, max(0, alpha)))
+    for x in range(width):
+        ratio = x / max(width - 1, 1)
+        alpha = int(72 * (1 - ratio))
+        draw.line([(x, 0), (x, height)], fill=(0, 0, 0, max(0, alpha)))
+    mode = str(template.get("mask_mode") or "bottom_gradient")
+    if mode != "none":
+        color = _hex_to_rgb(str(template.get("mask_color") or template.get("gradient_color") or template.get("tint_color")))
+        max_alpha = int(255 * float(template.get("mask_opacity", template.get("gradient_opacity", template.get("tint_opacity", 0.35)))))
+        max_alpha = max(0, min(255, max_alpha))
+        if mode == "full":
+            draw.rectangle((0, 0, width, height), fill=(*color, max_alpha))
+        else:
+            for y in range(height):
+                ratio = y / max(height - 1, 1)
+                if mode == "top_gradient":
+                    ratio = 1 - ratio
+                elif mode == "dual_gradient":
+                    ratio = abs(ratio - 0.5) * 2
+                alpha = int(max_alpha * ratio)
+                draw.line([(0, y), (width, y)], fill=(*color, alpha))
     return Image.alpha_composite(image, mask)
 
 
@@ -264,6 +353,28 @@ def _draw_centered(
 ) -> None:
     text_width = _text_size(draw, text, font)[0]
     draw.text(((width - text_width) // 2, point[1]), text, fill=fill, font=font)
+
+
+def _draw_text_shadow(
+    draw: ImageDraw.ImageDraw,
+    point: tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: str,
+) -> None:
+    x, y = point
+    draw.text((x + 4, y + 5), text, fill=(0, 0, 0, 170), font=font)
+    draw.text((x, y), text, fill=fill, font=font)
+
+
+def _wrap_multiline_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    lines: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lines.extend(_wrap_text(draw, line, font, max_width))
+    return lines or [""]
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:

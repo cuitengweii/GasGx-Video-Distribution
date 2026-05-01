@@ -10,6 +10,7 @@ let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [] };
 let pendingTemplateSave = "";
 let modelImages = [];
 let selectedModelImageUrl = "";
+let sourcePreviewVideos = [];
 
 const jobStepLabels = [
   ["queued", "任务排队"],
@@ -96,6 +97,7 @@ const coverMaskModeOptions = [
   ["none", "无蒙版"],
   ["top_gradient", "上渐变蒙版"],
   ["bottom_gradient", "下渐变蒙版"],
+  ["dual_gradient", "上下渐变蒙版"],
   ["full", "全蒙版"],
 ];
 
@@ -132,6 +134,13 @@ function clearImageLoading(id) {
   holder?.removeAttribute("data-loading-label");
 }
 
+function pulseImageLoading(id, label = "应用中...") {
+  setImageLoading(id, label);
+  window.clearTimeout(pulseImageLoading.timers?.[id]);
+  pulseImageLoading.timers = pulseImageLoading.timers || {};
+  pulseImageLoading.timers[id] = window.setTimeout(() => clearImageLoading(id), 650);
+}
+
 function encodePreviewPayload(payload) {
   return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
 }
@@ -148,7 +157,6 @@ function refreshPhonePreviewFrame(id, payload = null) {
 function setInitialLoading() {
   ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateSelector", "videoTemplateForm", "coverForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
   setPanelLoading("videoTemplateGallery", "加载正文模板...");
-  setPanelLoading("coverGallery", "加载封面模板...");
   setImageLoading("videoTemplatePreview", "加载正文预览...");
   setImageLoading("coverPreview", "加载封面预览...");
 }
@@ -157,6 +165,7 @@ async function init() {
   setInitialLoading();
   const data = await api("/api/video-matrix/state");
   state = data.ui_state; templates = data.templates; coverTemplates = data.cover_templates; settings = data.settings;
+  sourcePreviewVideos = Array.isArray(data.source_videos) ? data.source_videos : [];
   selectedCover = state.cover_template_id || Object.keys(coverTemplates)[0];
   selectedVideoTemplate = state.template_id || Object.keys(templates)[0];
   renderSidebar(data);
@@ -201,26 +210,76 @@ function renderSource(data) {
   $("metricWorkers").textContent = $("maxWorkers").value;
   const categories = materialCategories(data);
   const activeCategoryIds = activeCategories(categories);
-  $("sourceDirs").innerHTML = categories.map((category) =>
-    `<div class="dir-row"><label class="category-toggle"><input type="checkbox" data-category-id="${escapeHtml(category.id)}" ${activeCategoryIds.includes(category.id) ? "checked" : ""}><span class="badge">${escapeHtml(category.label)}</span></label><code title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(shortPath(data.source_dirs[category.id] || ""))}</code><button data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开</button></div>`).join("");
-  $("sourceDirs").querySelectorAll("button").forEach((btn) => btn.onclick = () => openFolder(btn.dataset.path));
+  const rows = compositionRowsByCategory(data, categories);
+  const recentLimits = state.recent_limits || settings.recent_limits || {};
+  $("sourceDirs").innerHTML = categories.map((category, index) => {
+    const row = rows.get(category.id) || { category_id: category.id, duration: defaultDurationForCategory(category.id) };
+    const limit = clamp(Number(recentLimits[category.id] || settings.recent_limits?.[category.id] || 8), 1, 10);
+    const checked = activeCategoryIds.includes(category.id);
+    return `<div class="dir-row source-composition-row composition-row" data-index="${index}" data-source-category="${escapeHtml(category.id)}">
+      <label class="category-toggle">
+        <input type="checkbox" data-category-id="${escapeHtml(category.id)}" ${checked ? "checked" : ""}>
+        <span class="badge">${escapeHtml(category.label)}</span>
+      </label>
+      <input type="hidden" data-composition-category value="${escapeHtml(category.id)}">
+      <code title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(shortPath(data.source_dirs[category.id] || ""))}</code>
+      <label class="composition-unit-field">
+        <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" aria-label="${escapeHtml(category.label)}片段秒数" ${checked ? "" : "disabled"}>
+        <span>s</span>
+      </label>
+      <label class="composition-unit-field composition-material-count">
+        <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="${escapeHtml(category.label)}最新素材数量" ${checked ? "" : "disabled"}>
+        <span>条素材</span>
+      </label>
+      <button type="button" data-source-open data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开</button>
+    </div>`;
+  }).join("");
+  $("sourceDirs").querySelectorAll("[data-source-open]").forEach((btn) => btn.onclick = () => openFolder(btn.dataset.path));
   $("sourceDirs").querySelectorAll("[data-category-id]").forEach((input) => input.onchange = () => {
     state.active_category_ids = selectedActiveCategoryIds(categories);
-    if (!state.composition_customized) {
-      state.composition_sequence = defaultCompositionSequence(categories);
-      renderComposition(data);
-    }
+    updateCompositionState(true);
+    renderSource(data);
+    renderComposition(data);
     updateRecentLimitVisibility(categories);
     saveState();
   });
+  $("sourceDirs").querySelectorAll("[data-composition-duration]").forEach((input) => {
+    input.oninput = () => {
+      updateCompositionState(true);
+      scheduleStateSave();
+    };
+  });
+  $("sourceDirs").querySelectorAll("[data-composition-limit]").forEach((input) => {
+    input.oninput = () => {
+      updateRecentLimitFromRow(input.closest(".composition-row"));
+      scheduleStateSave();
+    };
+    input.onchange = () => {
+      updateRecentLimitFromRow(input.closest(".composition-row"));
+      renderSource(data);
+      renderComposition(data);
+      scheduleStateSave();
+    };
+  });
   $("addCategory").onclick = addMaterialCategory;
-  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材，优先取每类最新文件，再按节奏窗口自动组合混剪。";
+  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；勾选素材目录后，直接在对应行设置片段秒数和最新素材数量，系统按行顺序自动组合混剪。";
   renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], state.source_mode || "Category folders", () => {
     updateSourceMode();
     scheduleStateSave();
   });
   updateRecentLimitVisibility(categories);
   updateSourceMode();
+}
+
+function compositionRowsByCategory(data, categories) {
+  const rows = compositionSequence();
+  const defaults = defaultCompositionSequence(categories);
+  return new Map(categories.map((category) => {
+    const row = rows.find((item) => item.category_id === category.id)
+      || defaults.find((item) => item.category_id === category.id)
+      || { category_id: category.id, duration: defaultDurationForCategory(category.id) };
+    return [category.id, row];
+  }));
 }
 
 async function addMaterialCategory() {
@@ -240,6 +299,9 @@ async function addMaterialCategory() {
 }
 
 function renderComposition(data = { settings }) {
+  if ($("compositionRows")) $("compositionRows").innerHTML = "";
+  if ($("addCompositionRow")) $("addCompositionRow").onclick = addCompositionRow;
+  return;
   const categories = materialCategories(data);
   const savedRows = Array.isArray(state.composition_sequence) && state.composition_sequence.length
     ? normalizeCompositionSequence(state.composition_sequence)
@@ -256,8 +318,14 @@ function renderComposition(data = { settings }) {
       <div class="composition-row" data-index="${index}">
         <span>${index + 1}</span>
         <select data-composition-category>${options}</select>
-        <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" />
-        <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="最新素材数量" />
+        <label class="composition-unit-field">
+          <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" aria-label="片段秒数" />
+          <span>s</span>
+        </label>
+        <label class="composition-unit-field composition-material-count">
+          <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="最新素材数量" />
+          <span>条素材</span>
+        </label>
         <button type="button" data-composition-remove>删除</button>
       </div>`;
   }).join("");
@@ -331,10 +399,12 @@ function normalizeCompositionSequence(source) {
 
 function updateCompositionState(markCustomized = false) {
   if (markCustomized) state.composition_customized = true;
-  state.composition_sequence = [...document.querySelectorAll(".composition-row")].map((row) => ({
-    category_id: row.querySelector("[data-composition-category]").value,
-    duration: Number(row.querySelector("[data-composition-duration]").value || 1),
-  })).filter((row) => row.category_id && row.duration > 0);
+  state.composition_sequence = [...document.querySelectorAll(".composition-row")]
+    .filter((row) => row.querySelector("[data-category-id]")?.checked !== false)
+    .map((row) => ({
+      category_id: row.querySelector("[data-composition-category]").value,
+      duration: Number(row.querySelector("[data-composition-duration]").value || 1),
+    })).filter((row) => row.category_id && row.duration > 0);
 }
 
 function addCompositionRow() {
@@ -387,40 +457,51 @@ function renderVideoTemplateSelector() {
   $("videoTemplateSelector").innerHTML = Object.entries(templates).map(([id, item]) =>
     `<button class="${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${item.name || id}</button>`).join("");
   $("videoTemplateSelector").querySelectorAll("button").forEach((btn) => btn.onclick = async () => {
-    await selectVideoTemplate(btn.dataset.id, { refreshGallery: false });
+    await selectVideoTemplate(btn.dataset.id, { refreshTemplateGallery: false });
   });
 }
 
 async function selectVideoTemplate(templateId, options = {}) {
   if (!templateId || !templates[templateId]) return;
-  const refreshGallery = options.refreshGallery !== false;
+  const refreshTemplateGallery = options.refreshTemplateGallery !== false;
   selectedVideoTemplate = templateId;
   setImageLoading("videoTemplatePreview", "切换正文模板...");
-  if (refreshGallery) setPanelLoading("videoTemplateGallery", "切换正文模板...");
+  if (refreshTemplateGallery) setPanelLoading("videoTemplateGallery", "切换正文模板...");
   renderVideoTemplateSelector();
   renderVideoTemplateEditor();
   await saveTemplateSelection();
   await refreshVideoTemplatePreview();
-  if (refreshGallery) await refreshVideoTemplateGallery();
+  if (refreshTemplateGallery) await refreshVideoTemplateGallery();
 }
 
 function renderCoverEditor() {
   const t = coverTemplates[selectedCover];
-  $("previewCaption").textContent = `${selectedCover} / ${t.name || selectedCover}`;
+  applyIndependentCoverDefaults(t);
+  const independentCover = isIndependentCover(t);
+  $("previewCaption").textContent = `${selectedCover} / ${t.name || selectedCover}${independentCover ? " / 独立视频封面" : ""}`;
+  const toggle = $("coverLayoutToggle");
+  if (toggle) {
+    toggle.textContent = independentCover ? "列表效果预览" : "独立封面预览";
+    toggle.classList.toggle("active", independentCover);
+    toggle.onclick = toggleCoverLayout;
+  }
   const maskModeOptions = coverMaskModeOptions.map(([value, label]) =>
     `<option value="${value}" ${value === coverTemplateValue(t, "mask_mode", "bottom_gradient") ? "selected" : ""}>${label}</option>`
   ).join("");
-  const html = [`<h3>可视化调整</h3>`, coverVisualToolbarHtml(t), `
-    <p class="visual-editor-hint">点击预览里的文字或按钮后拖动定位；工具栏可调整字号、颜色、对齐和文字内容。</p>
+  const html = [`<h3>可视化调整</h3>`, `
     <label>模板名称<input data-key="name" type="text" value="${escapeHtml(t.name || "")}"></label>
+    <div class="cover-section-title">蒙版编辑区</div>
     <label>蒙版类型<select data-key="mask_mode">${maskModeOptions}</select></label>
     <label>蒙版颜色<input data-key="mask_color" type="color" value="${escapeHtml(coverTemplateValue(t, "mask_color", t.gradient_color || t.tint_color || "#071015"))}"></label>
     ${rangeControlHtml({key: "mask_opacity", label: "蒙版透明度", min: 0, max: 1, step: 0.01, value: coverTemplateValue(t, "mask_opacity", t.gradient_opacity ?? t.tint_opacity ?? 0.35), className: "cover-template-control"})}
-    <label>九宫格 Logo文字<input data-key="tile_brand_text" type="text" value="${escapeHtml(coverTemplateValue(t, "tile_brand_text", "GasGx"))}"></label>
-    <label>九宫格 Slogan文字<input data-key="tile_tagline_text" type="text" value="${escapeHtml(coverTemplateValue(t, "tile_tagline_text", "终结废气 | 重塑能源 | 就地变现"))}"></label>
-    <label>九宫格 一句话视频描述<textarea data-key="tile_titles_text" rows="5">${escapeHtml(coverTemplateValue(t, "tile_titles_text", defaultCoverTileTitles().join("\n")))}</textarea></label>
+    <div class="cover-section-title">独立封面文字</div>
+    <label>Logo文字<input data-key="single_cover_logo_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_logo_text", "GasGx"))}"></label>
+    <label>Slogan文字<input data-key="single_cover_slogan_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_slogan_text", defaultSingleCoverSlogan()))}"></label>
+    <label>一句话视频描述<textarea data-key="single_cover_title_text" rows="3">${escapeHtml(coverTemplateValue(t, "single_cover_title_text", defaultSingleCoverTitle()))}</textarea></label>
+    ${coverVisualToolbarHtml(t)}
+    <p class="visual-editor-hint">点击预览里的文字或按钮后拖动定位；工具栏可调整字号、颜色、对齐和文字内容。</p>
     <div class="template-actions cover-template-actions">
-      <button type="button" id="saveCover">保存并重建模板库</button>
+      <button type="button" id="saveCover">保存当前模板</button>
     </div>`];
   $("coverForm").innerHTML = html.join("");
   $("coverForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
@@ -433,7 +514,44 @@ function renderCoverEditor() {
     bindRangeControl(control.dataset.key, () => updateCoverTemplateField(control.querySelector('input[type="range"]')));
   });
   bindCoverVisualToolbar();
-  $("saveCover").onclick = saveCoverAsNewTemplate;
+  $("saveCover").onclick = saveCurrentCoverTemplate;
+}
+
+function isIndependentCover(template) {
+  return (template?.cover_layout || "profile") === "single_video";
+}
+
+function defaultSingleCoverTitle() {
+  return "全球领先的搁浅天然气算力变现引擎";
+}
+
+function defaultSingleCoverSlogan() {
+  return "终结废气 | 重塑能源 | 就地变现";
+}
+
+function applyIndependentCoverDefaults(template) {
+  if (!template) return;
+  if (!template.cover_layout) template.cover_layout = "profile";
+  if (!template.single_cover_logo_text) template.single_cover_logo_text = "GasGx";
+  if (!template.single_cover_slogan_text) template.single_cover_slogan_text = defaultSingleCoverSlogan();
+  if (!template.single_cover_title_text) template.single_cover_title_text = defaultSingleCoverTitle();
+  if (!template.single_cover_logo_font_size) template.single_cover_logo_font_size = 84;
+  if (!template.single_cover_slogan_font_size) template.single_cover_slogan_font_size = 60;
+  if (!template.single_cover_title_font_size) template.single_cover_title_font_size = 54;
+  template.tile_brand_text = template.single_cover_logo_text;
+  template.tile_tagline_text = template.single_cover_slogan_text;
+  template.tile_titles_text = template.single_cover_title_text;
+}
+
+async function toggleCoverLayout() {
+  const template = coverTemplates[selectedCover];
+  if (!template) return;
+  applyIndependentCoverDefaults(template);
+  template.cover_layout = isIndependentCover(template) ? "profile" : "single_video";
+  renderCoverEditor();
+  setImageLoading("coverPreview", "切换封面布局...");
+  await refreshMainPreview();
+  scheduleCoverTemplateSave();
 }
 
 function coverTemplateValue(template, key, fallback = "") {
@@ -449,6 +567,7 @@ function updateCoverTemplateField(input) {
   if (!template || !input) return;
   const key = input.dataset.key;
   template[key] = input.type === "range" || input.type === "number" ? Number(input.value) : input.value;
+  setImageLoading("coverPreview", "应用封面参数...");
   refreshAllPreviews();
   scheduleCoverTemplateSave();
 }
@@ -500,6 +619,7 @@ function bindCoverVisualToolbar() {
 }
 
 function postCoverTemplateCommand(command, value = "") {
+  pulseImageLoading("coverPreview", "应用封面参数...");
   $("coverPreview")?.contentWindow?.postMessage({
     type: "gasgx-cover-template-command",
     command,
@@ -511,7 +631,6 @@ async function refreshAllPreviews() {
   await refreshVideoTemplatePreview();
   await refreshVideoTemplateGallery();
   await refreshMainPreview();
-  await refreshGallery();
 }
 
 function renderVideoTemplateEditor() {
@@ -570,11 +689,6 @@ function visualTemplateToolbarHtml(template) {
     <div class="visual-toolbar-panel" aria-label="文字可视化工具">
       <div class="visual-control-section visual-text-controls" aria-label="文字调整区">
         <div class="visual-section-title">文字调整区</div>
-        <div class="visual-target-tabs" aria-label="标题选择">
-          <button type="button" data-visual-command="select-target" data-value="slogan" title="选择上标题文字">上标题</button>
-          <button type="button" data-visual-command="select-target" data-value="title" title="选择中标题文字">中标题</button>
-          <button type="button" data-visual-command="select-target" data-value="hud" title="选择下标题文字">下标题</button>
-        </div>
         <button type="button" data-visual-command="size-down" title="缩小字号">A-</button>
         <button type="button" data-visual-command="size-up" title="放大字号">A+</button>
         <button type="button" data-visual-command="edit" title="编辑文字">编辑</button>
@@ -584,58 +698,60 @@ function visualTemplateToolbarHtml(template) {
         <select data-visual-command="font-family">${fontOptions}</select>
         <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
         <label class="color-swatch-button" title="文字颜色">
-          <svg class="color-picker-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3a9 9 0 0 0 0 18h1.4a2 2 0 0 0 1.7-3l-.2-.4a1.7 1.7 0 0 1 1.5-2.6H18a6 6 0 0 0 0-12h-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-            <circle cx="7.5" cy="10" r="1.3" fill="currentColor"/>
-            <circle cx="10.5" cy="6.8" r="1.3" fill="currentColor"/>
-            <circle cx="15" cy="7.8" r="1.3" fill="currentColor"/>
-            <circle cx="16.8" cy="11.5" r="1.3" fill="currentColor"/>
-          </svg>
+          ${colorPickerIconSvg()}
           <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
           <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
         </label>
       </div>
-      <div class="visual-control-section visual-background-controls" aria-label="背景调整区">
-        <div class="visual-section-title">背景调整区</div>
-        <div class="visual-target-tabs" aria-label="背景选择">
-          <button type="button" data-visual-command="select-target" data-value="sloganBar" title="选择上标题背景">上背景</button>
-          <button type="button" data-visual-command="select-target" data-value="titleBar" title="选择中标题背景">中背景</button>
-          <button type="button" data-visual-command="select-target" data-value="hudBar" title="选择 HUD 背景">HUD背景</button>
-        </div>
+      <div class="visual-control-section visual-hud-controls" aria-label="HUD调整区">
+        <div class="visual-section-title">HUD调整区</div>
         <button type="button" data-visual-command="width-down" title="缩小背景宽度">W-</button>
         <button type="button" data-visual-command="width-up" title="放大背景宽度">W+</button>
+        <button type="button" data-visual-command="height-down" title="缩小背景高度">H-</button>
+        <button type="button" data-visual-command="height-up" title="放大背景高度">H+</button>
         <label class="color-swatch-button" title="HUD 背景色">
-          <svg class="color-picker-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="7" width="16" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/>
-            <path d="M8 12h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          </svg>
+          ${colorPickerIconSvg()}
           <span class="color-current-dot" style="background:${escapeHtml(hudColor)}"></span>
           <input data-visual-command="hud-bg-color" type="color" value="${escapeHtml(hudColor)}" aria-label="HUD 背景色">
         </label>
         <label class="visual-opacity-control">HUD 透明度<input data-visual-command="opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(hudOpacity.toFixed(2))}"><output>${escapeHtml(hudOpacity.toFixed(2))}</output></label>
-        <label class="visual-opacity-control">HUD 圆角<input data-visual-command="hud-radius" type="range" min="0" max="80" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
+        <label class="visual-opacity-control">HUD 圆角<input data-visual-command="hud-radius" type="range" min="0" max="100" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
       </div>
     </div>`;
+}
+
+function colorPickerIconSvg() {
+  return `<svg class="color-picker-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M12 3a9 9 0 0 0 0 18h1.4a2 2 0 0 0 1.7-3l-.2-.4a1.7 1.7 0 0 1 1.5-2.6H18a6 6 0 0 0 0-12h-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    <circle cx="7.5" cy="10" r="1.3" fill="currentColor"/>
+    <circle cx="10.5" cy="6.8" r="1.3" fill="currentColor"/>
+    <circle cx="15" cy="7.8" r="1.3" fill="currentColor"/>
+    <circle cx="16.8" cy="11.5" r="1.3" fill="currentColor"/>
+  </svg>`;
 }
 
 function bindVisualTemplateToolbar() {
   const toolbar = $("videoTemplateForm").querySelector(".visual-toolbar-panel");
   if (!toolbar) return;
   toolbar.querySelectorAll("button[data-visual-command]").forEach((button) => {
-    button.onclick = () => postVisualTemplateCommand(button.dataset.visualCommand, button.dataset.value || "");
+    button.onclick = () => postVisualTemplateCommand(button.dataset.visualCommand, button.dataset.value || "", visualCommandScope(button));
   });
   toolbar.querySelectorAll("select[data-visual-command], input[data-visual-command]").forEach((input) => {
     input.oninput = () => {
       updateColorSwatch(input);
       updateVisualOutput(input);
-      postVisualTemplateCommand(input.dataset.visualCommand, input.value);
+      postVisualTemplateCommand(input.dataset.visualCommand, input.value, visualCommandScope(input));
     };
     input.onchange = () => {
       updateColorSwatch(input);
       updateVisualOutput(input);
-      postVisualTemplateCommand(input.dataset.visualCommand, input.value);
+      postVisualTemplateCommand(input.dataset.visualCommand, input.value, visualCommandScope(input));
     };
   });
+}
+
+function visualCommandScope(node) {
+  return node.closest(".visual-hud-controls") ? "hud" : "text";
 }
 
 function updateVisualOutput(input) {
@@ -649,11 +765,13 @@ function updateColorSwatch(input) {
   if (swatch) swatch.style.background = input.value;
 }
 
-function postVisualTemplateCommand(command, value = "") {
+function postVisualTemplateCommand(command, value = "", scope = "") {
+  pulseImageLoading("videoTemplatePreview", "应用模板参数...");
   $("videoTemplatePreview")?.contentWindow?.postMessage({
     type: "gasgx-video-template-command",
     command,
     value,
+    scope,
   }, window.location.origin);
 }
 
@@ -665,6 +783,7 @@ function updateVideoTemplateField(input) {
   else template[key] = input.value;
   const out = input.parentElement.querySelector("output");
   if (out) out.textContent = input.value;
+  setImageLoading("videoTemplatePreview", "应用模板参数...");
   refreshVideoTemplatePreview();
   scheduleVideoTemplateSave();
 }
@@ -709,6 +828,19 @@ function applyCoverTextUpdates(text) {
   const template = coverTemplates[selectedCover];
   const fieldMap = { headline: "headline" };
   Object.entries(text).forEach(([key, value]) => {
+    if (key === "singleLogo" || key === "singleSlogan" || key === "singleTitle") {
+      const templateKey = {
+        singleLogo: "single_cover_logo_text",
+        singleSlogan: "single_cover_slogan_text",
+        singleTitle: "single_cover_title_text",
+      }[key];
+      if (template) {
+        template[templateKey] = value;
+        const input = $("coverForm")?.querySelector(`[data-key="${templateKey}"]`);
+        if (input) input.value = value;
+      }
+      return;
+    }
     if (key === "brand" || key === "eyebrow" || key === "subhead" || key === "cta") {
       if (template) template[`profile_${key}_text`] = value;
       return;
@@ -749,7 +881,7 @@ function renderVideoTemplateBackgrounds() {
       selectedModelImageUrl = button.dataset.modelImage || "";
       renderVideoTemplateBackgrounds();
       refreshVideoTemplatePreview();
-      refreshGallery();
+      refreshMainPreview();
     };
   });
 }
@@ -764,14 +896,46 @@ async function refreshVideoTemplatePreview() {
 async function refreshVideoTemplateGallery() {
   setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
+  const videos = videoTemplatePreviewVideos();
   for (const [id, template] of Object.entries(templates)) {
     const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
-    cards.push(`<div class="cover-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}"><img src="${data.data_url}"><span>${id} / ${template.name || id}</span></div>`);
+    const video = videos[cards.length % Math.max(1, videos.length)];
+    const videoSrc = video?.path ? `/api/video-matrix/preview-file?path=${encodeURIComponent(video.path)}` : "";
+    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoSrc ? `<video src="${escapeHtml(videoSrc)}" poster="${data.data_url}" muted playsinline preload="metadata"></video>` : `<img src="${data.data_url}" alt="">`}<span>${id} / ${template.name || id}</span></div>`);
   }
   $("videoTemplateGallery").innerHTML = cards.join("");
-  $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => card.onclick = async () => {
-    await selectVideoTemplate(card.dataset.id);
+  $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => {
+    card.onclick = async (event) => {
+      if (event.target?.tagName === "VIDEO") {
+        toggleTemplateCardVideo(event.target);
+        return;
+      }
+      await selectVideoTemplate(card.dataset.id);
+    };
   });
+}
+
+function videoTemplatePreviewVideos() {
+  return sourcePreviewVideos.filter((item) => item?.path);
+}
+
+function toggleTemplateCardVideo(video) {
+  if (!video) return;
+  document.querySelectorAll("#videoTemplateGallery video").forEach((item) => {
+    if (item !== video) {
+      item.pause();
+      item.currentTime = 0;
+      item.closest(".cover-card")?.classList.remove("is-playing");
+    }
+  });
+  if (video.paused) {
+    video.play();
+    video.closest(".cover-card")?.classList.add("is-playing");
+  } else {
+    video.pause();
+    video.currentTime = 0;
+    video.closest(".cover-card")?.classList.remove("is-playing");
+  }
 }
 
 function videoTemplatePreviewPayload(template) {
@@ -850,8 +1014,8 @@ async function cloneVideoTemplate() {
   }
 }
 
-function showTemplateActionStatus(message) {
-  const actions = $("videoTemplateForm")?.querySelector(".template-actions");
+function showTemplateActionStatus(message, formId = "videoTemplateForm") {
+  const actions = $(formId)?.querySelector(".template-actions");
   if (!actions) return;
   let status = actions.querySelector(".template-action-status");
   if (!status) {
@@ -890,6 +1054,7 @@ function nextCoverTemplateMeta(templateMap) {
 async function refreshMainPreview() {
   const template = coverTemplates[selectedCover];
   if (!template) return;
+  applyIndependentCoverDefaults(template);
   refreshPhonePreviewFrame("coverPreview", {
     template,
     cover_mode: true,
@@ -899,24 +1064,11 @@ async function refreshMainPreview() {
     subhead: $("subhead").value,
     cta: $("cta").value || template.cta,
     hud_text: $("hudText").value,
-    background_image_url: modelImages[0]?.url || "",
+    background_image_url: selectedModelImageUrl || modelImages[0]?.url || "",
     background_image_urls: modelImages.map((image) => image.url).filter(Boolean),
     show_template_mask: true,
   });
   clearImageLoading("coverPreview");
-}
-
-async function refreshGallery() {
-  setPanelLoading("coverGallery", "生成封面模板列表...");
-  const cards = [];
-  for (const [id, t] of Object.entries(coverTemplates)) {
-    const data = await api("/api/video-matrix/cover-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(previewPayload(t))});
-    cards.push(`<div class="cover-card ${id === selectedCover ? "active" : ""}" data-id="${id}"><img src="${data.data_url}"><span>${id} / ${t.name || id}</span></div>`);
-  }
-  $("coverGallery").innerHTML = cards.join("");
-  $("coverGallery").querySelectorAll(".cover-card").forEach((card) => card.onclick = async () => {
-    await selectCoverTemplate(card.dataset.id);
-  });
 }
 
 async function selectCoverTemplate(templateId) {
@@ -927,11 +1079,11 @@ async function selectCoverTemplate(templateId) {
   renderCoverEditor();
   await saveTemplateSelection();
   await refreshMainPreview();
-  await refreshGallery();
 }
 
 function previewPayload(template) {
   const payload = {...template};
+  applyIndependentCoverDefaults(payload);
   if ($("cta").value) payload.cta = $("cta").value;
   return {template: payload, cover_mode: true, slogan: $("headline").value, title: $("subhead").value, headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value || payload.cta, hud_text: $("hudText").value, background_image_url: selectedModelImageUrl || modelImages[0]?.url || "", background_image_urls: modelImages.map((image) => image.url).filter(Boolean)};
 }
@@ -942,7 +1094,7 @@ async function saveCoverAsNewTemplate() {
   const previousCover = selectedCover;
   const previousTemplates = {...coverTemplates};
   const button = $("saveCover");
-  const label = button?.textContent || "保存并重建模板库";
+  const label = button?.textContent || "保存当前模板";
   if (button) {
     button.disabled = true;
     button.textContent = "保存中...";
@@ -958,7 +1110,6 @@ async function saveCoverAsNewTemplate() {
     renderCoverSelector();
     renderCoverEditor();
     await refreshMainPreview();
-    await refreshGallery();
     log("已自动生成 9 组九宫格图片模板");
   } catch (error) {
     coverTemplates = previousTemplates;
@@ -970,6 +1121,36 @@ async function saveCoverAsNewTemplate() {
       button.textContent = label;
     }
     log(`第一屏新模板保存失败：${error.message}`);
+  }
+}
+
+async function saveCurrentCoverTemplate() {
+  const template = coverTemplates[selectedCover];
+  if (!template) return;
+  const button = $("saveCover");
+  const label = button?.textContent || "保存当前模板";
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.innerHTML = buttonLoadingInline("保存中...");
+  }
+  try {
+    applyIndependentCoverDefaults(template);
+    await api(`/api/video-matrix/cover-templates/${selectedCover}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(template)});
+    await saveTemplateSelection();
+    pendingTemplateSave = "";
+    log(`已保存第一屏模板：${template.name || selectedCover}`);
+    renderCoverSelector();
+    renderCoverEditor();
+    await refreshMainPreview();
+    showTemplateActionStatus("保存成功", "coverForm");
+  } catch (error) {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.textContent = label;
+    }
+    log(`第一屏模板保存失败：${error.message}`);
   }
 }
 
@@ -991,6 +1172,7 @@ function buildCoverTemplateVariants(sourceTemplate) {
     return [`cover_template_${serial}`, {
       ...source,
       name: `九宫格图片模板 ${serial}`,
+      cover_layout: "profile",
       mask_mode: maskMode,
       mask_color: maskColor,
       mask_opacity: maskOpacity,
