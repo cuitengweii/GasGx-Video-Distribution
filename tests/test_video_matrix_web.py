@@ -419,6 +419,141 @@ def test_video_matrix_local_bgm_file_endpoint(monkeypatch, tmp_path) -> None:
     assert response.content == b"audio"
 
 
+def test_video_matrix_state_lists_ending_templates(monkeypatch, tmp_path) -> None:
+    ending_dir = tmp_path / "ending_template"
+    ending_dir.mkdir()
+    (ending_dir / "tail.mp4").write_bytes(b"video")
+    (ending_dir / "tail.png").write_bytes(b"png")
+    (ending_dir / "skip.txt").write_text("no", encoding="utf-8")
+    monkeypatch.setattr(video_matrix_api, "ENDING_TEMPLATE_DIR", ending_dir)
+    client = TestClient(create_app())
+
+    response = client.get("/api/video-matrix/state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ending_template_dir"] == str(ending_dir)
+    names = {item["name"] for item in payload["ending_templates"]}
+    assert names == {"tail.mp4", "tail.png"}
+    assert {item["type"] for item in payload["ending_templates"]} == {"video", "image"}
+    assert any(item["url"] == "/api/video-matrix/ending-templates/tail.mp4" for item in payload["ending_templates"])
+
+    file_response = client.get("/api/video-matrix/ending-templates/tail.mp4")
+    assert file_response.status_code == 200
+    assert file_response.content == b"video"
+
+
+def test_video_matrix_generate_passes_specific_ending_template(monkeypatch, tmp_path) -> None:
+    ending_dir = tmp_path / "ending_template"
+    ending_dir.mkdir()
+    selected = ending_dir / "brand_tail.mp4"
+    selected.write_bytes(b"video")
+    captured = {}
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(video_matrix_api, "ENDING_TEMPLATE_DIR", ending_dir)
+    monkeypatch.setattr(video_matrix_api, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    video_matrix_api._jobs["ending-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    request = {
+        "output_count": 1,
+        "output_options": ["mp4"],
+        "copy_language": "zh",
+        "source_mode": "Category folders",
+        "ending_template_mode": "specific",
+        "ending_template_id": selected.name,
+    }
+
+    video_matrix_api._run_generate_job("ending-job", request, tmp_path / "bgm.mp3", None)
+
+    assert video_matrix_api._jobs["ending-job"]["status"] == "complete"
+    assert captured["ending_template_path"] == selected.resolve()
+    state = video_matrix_api.load_ui_state(tmp_path / "ui_state.json")
+    assert state["ending_template_mode"] == "specific"
+    assert state["ending_template_id"] == selected.name
+
+
+def test_video_matrix_generate_random_ending_template_uses_checked_names(monkeypatch, tmp_path) -> None:
+    ending_dir = tmp_path / "ending_template"
+    ending_dir.mkdir()
+    selected = ending_dir / "selected_tail.mp4"
+    skipped = ending_dir / "skipped_tail.mp4"
+    selected.write_bytes(b"video")
+    skipped.write_bytes(b"video")
+    captured = {}
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(video_matrix_api, "ENDING_TEMPLATE_DIR", ending_dir)
+    monkeypatch.setattr(video_matrix_api, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    video_matrix_api._jobs["ending-random-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    request = {
+        "output_count": 1,
+        "output_options": ["mp4"],
+        "copy_language": "zh",
+        "source_mode": "Category folders",
+        "ending_template_mode": "random",
+        "ending_template_ids": [selected.name],
+    }
+
+    video_matrix_api._run_generate_job("ending-random-job", request, tmp_path / "bgm.mp3", None)
+
+    assert video_matrix_api._jobs["ending-random-job"]["status"] == "complete"
+    assert captured["ending_template_path"] == selected.resolve()
+    state = video_matrix_api.load_ui_state(tmp_path / "ui_state.json")
+    assert state["ending_template_mode"] == "random"
+    assert state["ending_template_ids"] == [selected.name]
+
+
+def test_video_matrix_generate_persists_and_passes_dynamic_ending_cover_template(monkeypatch, tmp_path) -> None:
+    captured = {}
+    ending_cover = {
+        "name": "Tail Card",
+        "single_cover_logo_text": "Tail Logo",
+        "single_cover_logo_y": 240,
+        "mask_mode": "full",
+        "mask_opacity": 0.55,
+    }
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(video_matrix_api, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    video_matrix_api._jobs["ending-cover-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    request = {
+        "output_count": 1,
+        "output_options": ["mp4"],
+        "copy_language": "zh",
+        "source_mode": "Category folders",
+        "ending_template_mode": "dynamic",
+        "ending_template_dir": str(tmp_path / "ending_template"),
+        "ending_template_ids": ["tail-a.mp4", "tail-b.png"],
+        "ending_cover_template": ending_cover,
+    }
+
+    video_matrix_api._run_generate_job("ending-cover-job", request, tmp_path / "bgm.mp3", None)
+
+    assert video_matrix_api._jobs["ending-cover-job"]["status"] == "complete"
+    assert captured["ending_cover_template_config"] == ending_cover
+    assert captured["ending_template_path"] is None
+    state = video_matrix_api.load_ui_state(tmp_path / "ui_state.json")
+    assert state["ending_template_mode"] == "dynamic"
+    assert state["ending_template_dir"] == str(tmp_path / "ending_template")
+    assert state["ending_template_ids"] == ["tail-a.mp4", "tail-b.png"]
+    assert state["ending_cover_template"] == ending_cover
+
+
 def test_video_matrix_pixabay_industry_tracks_endpoint() -> None:
     client = TestClient(create_app())
 

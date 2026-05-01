@@ -35,6 +35,7 @@ def run_pipeline(
     template_config: dict | None = None,
     cover_template_id: str = DEFAULT_COVER_TEMPLATE_ID,
     cover_template_config: dict | None = None,
+    ending_cover_template_config: dict | None = None,
     cover_intro_seconds: float = 1.0,
     text_overrides: dict[str, str] | None = None,
     outro_seconds: float = 1.0,
@@ -42,6 +43,7 @@ def run_pipeline(
     existing_signatures: set[str] | None = None,
     recent_clip_ids: set[str] | None = None,
     recent_segment_keys: set[str] | None = None,
+    ending_template_path: Path | None = None,
 ) -> list[RenderedAsset]:
     _notify(progress_callback, "ingestion", 0.05, "Collecting and normalizing source clips")
     clips = ingest_sources(settings, source_root=source_root, recent_limits=recent_limits, active_category_ids=active_category_ids)
@@ -76,6 +78,7 @@ def run_pipeline(
     _apply_text_overrides(variants, text_overrides)
     template_copy = _copy_template_path().read_text(encoding="utf-8")
     active_cover_template = _resolve_cover_template_config(cover_template_id, cover_template_config)
+    active_ending_cover_template = ending_cover_template_config or active_cover_template
     active_output_root = _resolve_output_root(settings, output_root)
     batch_dir = active_output_root
     filename_prefix = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
@@ -101,9 +104,11 @@ def run_pipeline(
                 template_config,
                 cover_template_id,
                 active_cover_template,
+                active_ending_cover_template,
                 cover_intro_seconds,
                 (text_overrides or {}).get("follow_text", ""),
                 outro_seconds,
+                ending_template_path,
             ): variant.sequence_number
             for variant in variants
         }

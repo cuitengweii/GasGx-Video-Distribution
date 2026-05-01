@@ -7,7 +7,10 @@ let selectedVideoTemplate = "";
 let settings = {};
 let lastPreviewPath = "";
 let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [] };
+let endingTemplateState = { local: [], directory: "" };
+let endingPreviewOverrideName = "";
 let pendingTemplateSave = "";
+let coverEditingContext = "cover";
 let modelImages = [];
 let selectedModelImageUrl = "";
 let sourcePreviewVideos = [];
@@ -111,6 +114,10 @@ const coverMaskModeOptions = [
   ["dual_gradient", "上下渐变蒙版"],
   ["full", "全蒙版"],
 ];
+const endingTemplateModeOptions = [
+  ["dynamic", "动态封面"],
+  ["random", "随机素材"],
+];
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -166,10 +173,11 @@ function refreshPhonePreviewFrame(id, payload = null) {
 }
 
 function setInitialLoading() {
-  ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateSelector", "videoTemplateForm", "coverForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
+  ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateSelector", "videoTemplateForm", "coverForm", "endingTemplateForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
   setPanelLoading("videoTemplateGallery", "加载正文模板...");
   setImageLoading("videoTemplatePreview", "加载正文预览...");
   setImageLoading("coverPreview", "加载封面预览...");
+  setImageLoading("endingTemplatePreview", "加载片尾预览...");
 }
 
 async function init() {
@@ -187,6 +195,7 @@ async function init() {
   renderVideoTemplateEditor();
   renderCoverSelector();
   renderCoverEditor();
+  renderEndingTemplatePanel(data);
   await loadModelImages();
   await refreshAllPreviews();
 }
@@ -528,6 +537,239 @@ function renderCoverEditor() {
   $("saveCover").onclick = saveCurrentCoverTemplate;
 }
 
+function renderEndingTemplatePanel(data) {
+  const localTemplates = Array.isArray(data.ending_templates) ? data.ending_templates : [];
+  endingTemplateState = {
+    local: localTemplates,
+    directory: data.ending_template_dir || "runtime/video_matrix/ending_template",
+  };
+  if (!state.ending_template_mode) state.ending_template_mode = "dynamic";
+  if (state.ending_template_mode === "specific") state.ending_template_mode = "random";
+  if (!state.ending_template_id && localTemplates.length) state.ending_template_id = localTemplates[0].name;
+  if (!Array.isArray(state.ending_template_ids) && localTemplates.length) {
+    state.ending_template_ids = localTemplates.map((item) => item.name);
+  }
+  const mode = state.ending_template_mode || "dynamic";
+  const selected = endingTemplateSelectedName();
+  const modeButtons = endingTemplateModeOptions.map(([value, label]) =>
+    `<button type="button" class="${mode === value ? "active" : ""}" data-ending-mode="${value}">${label}</button>`
+  ).join("");
+  const options = localTemplates.length
+    ? localTemplates.map((item) => `<option value="${escapeHtml(item.name)}" ${selected === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")
+    : `<option value="">目录内暂无片尾素材</option>`;
+  $("endingTemplateForm").innerHTML = `
+    <h3>片尾模板调整区</h3>
+    <div class="template-tabs ending-mode-tabs">${modeButtons}</div>
+    ${mode === "dynamic" ? endingCoverEditorHtml() : ""}
+    ${mode === "random" ? endingRandomMaterialHtml(localTemplates) : ""}
+    <div class="ending-template-dir-row ${mode === "random" ? "" : "hidden"}">
+      <code title="${escapeHtml(endingTemplateState.directory)}">${escapeHtml(shortPath(endingTemplateState.directory))}</code>
+      <span class="badge">${localTemplates.length} 个素材</span>
+      <button id="openEndingTemplateDirInline" class="secondary" type="button">打开</button>
+    </div>
+  `;
+  $("endingTemplateForm").querySelectorAll("[data-ending-mode]").forEach((button) => {
+    button.onclick = async () => {
+      state.ending_template_mode = button.dataset.endingMode;
+      if (state.ending_template_mode === "specific" && !state.ending_template_id && endingTemplateState.local.length) {
+        state.ending_template_id = endingTemplateState.local[0].name;
+      }
+      renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
+      await saveTemplateSelection();
+      await refreshEndingTemplatePreview();
+    };
+  });
+  if (mode === "dynamic") bindEndingCoverEditor();
+  if (mode === "random") bindEndingRandomMaterials();
+  const selector = $("endingTemplateSelect");
+  if (selector) {
+    selector.onchange = () => {
+      state.ending_template_id = selector.value;
+      scheduleStateSave();
+      refreshEndingTemplatePreview();
+    };
+  }
+  $("openEndingTemplateDir").onclick = () => openFolder(endingTemplateState.directory);
+  $("openEndingTemplateDirInline").onclick = () => openFolder(endingTemplateState.directory);
+}
+
+function selectedEndingTemplateNames(localTemplates = endingTemplateState.local || []) {
+  const availableNames = localTemplates.map((item) => item.name);
+  const selected = Array.isArray(state.ending_template_ids)
+    ? state.ending_template_ids.filter((name) => availableNames.includes(name))
+    : availableNames;
+  return selected.length ? selected : availableNames;
+}
+
+function endingRandomMaterialHtml(localTemplates) {
+  const selected = new Set(selectedEndingTemplateNames(localTemplates));
+  const rows = localTemplates.length
+    ? localTemplates.map((item) => `
+      <label class="ending-material-row">
+        <input data-ending-template-choice type="checkbox" value="${escapeHtml(item.name)}" ${selected.has(item.name) ? "checked" : ""}>
+        <span>${escapeHtml(item.name)}</span>
+        <small>${item.type === "video" ? "视频" : "图片"}</small>
+        ${item.type === "video" ? endingPreviewToggleButtonHtml(item.name) : ""}
+      </label>`).join("")
+    : `<div class="ending-template-empty compact">暂无片尾素材，请先上传到目录。</div>`;
+  return `
+    <div class="cover-section-title">随机素材选择</div>
+    <div class="ending-material-list">${rows}</div>
+    <p class="visual-editor-hint">从 video_matrix\\ending_template 勾选备用片尾素材；生成时会从已勾选素材里随机取一个。</p>`;
+}
+
+function bindEndingRandomMaterials() {
+  $("endingTemplateForm").querySelectorAll("[data-ending-template-choice]").forEach((input) => {
+    input.onchange = () => {
+      const selected = [...$("endingTemplateForm").querySelectorAll("[data-ending-template-choice]:checked")].map((node) => node.value);
+      state.ending_template_ids = selected.length ? selected : selectedEndingTemplateNames();
+      endingPreviewOverrideName = "";
+      scheduleStateSave();
+      refreshEndingTemplatePreview();
+    };
+  });
+  $("endingTemplateForm").querySelectorAll("[data-ending-preview-toggle]").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.endingPreviewToggle || "";
+      endingPreviewOverrideName = endingPreviewOverrideName === name ? "" : name;
+      refreshEndingTemplatePreview();
+    };
+  });
+}
+
+function endingPreviewToggleButtonHtml(name) {
+  const active = endingPreviewOverrideName === name;
+  const icon = active
+    ? `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="6" width="3.8" height="12" rx="1"></rect><rect x="13.2" y="6" width="3.8" height="12" rx="1"></rect></svg>`
+    : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5-10-6.5Z"></path></svg>`;
+  return `<button class="ending-preview-toggle ${active ? "active" : ""}" type="button" data-ending-preview-toggle="${escapeHtml(name)}" title="${active ? "停止预览" : "播放预览"}" aria-label="${active ? "停止预览" : "播放预览"}">${icon}</button>`;
+}
+
+function endingCoverTemplate() {
+  const base = state.ending_cover_template || JSON.parse(JSON.stringify(coverTemplates[selectedCover] || {}));
+  state.ending_cover_template = base;
+  applyIndependentCoverDefaults(base);
+  base.cover_layout = "single_video";
+  return base;
+}
+
+function endingCoverEditorHtml() {
+  const t = endingCoverTemplate();
+  const maskModeOptions = coverMaskModeOptions.map(([value, label]) =>
+    `<option value="${value}" ${value === coverTemplateValue(t, "mask_mode", "bottom_gradient") ? "selected" : ""}>${label}</option>`
+  ).join("");
+  return `
+    <label>模板名称<input data-ending-cover-key="name" type="text" value="${escapeHtml(t.name || "Ending Cover")}"></label>
+    <div class="cover-section-title">蒙版编辑区</div>
+    <label>蒙版类型<select data-ending-cover-key="mask_mode">${maskModeOptions}</select></label>
+    <label>蒙版颜色<input data-ending-cover-key="mask_color" type="color" value="${escapeHtml(coverTemplateValue(t, "mask_color", t.gradient_color || t.tint_color || "#071015"))}"></label>
+    ${rangeControlHtml({key: "ending-mask-opacity", label: "蒙版透明度", min: 0, max: 1, step: 0.01, value: coverTemplateValue(t, "mask_opacity", t.gradient_opacity ?? t.tint_opacity ?? 0.35), className: "ending-cover-control"})}
+    <div class="cover-section-title">独立封面文字</div>
+    <label>Logo文字<input data-ending-cover-key="single_cover_logo_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_logo_text", "GasGx"))}"></label>
+    <label>Slogan文字<input data-ending-cover-key="single_cover_slogan_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_slogan_text", defaultSingleCoverSlogan()))}"></label>
+    <label>片尾文案<textarea data-ending-cover-key="single_cover_title_text" rows="3">${escapeHtml(coverTemplateValue(t, "single_cover_title_text", $("followText").value || state.follow_text || defaultSingleCoverTitle()))}</textarea></label>
+    ${coverVisualToolbarHtml(t, "ending-cover-visual-toolbar")}
+    <p class="visual-editor-hint">点击片尾预览里的文字后拖动定位；这组设置只影响片尾动态封面。</p>`;
+}
+
+function bindEndingCoverEditor() {
+  $("endingTemplateForm").querySelectorAll("input[data-ending-cover-key], select[data-ending-cover-key], textarea[data-ending-cover-key]").forEach((input) => {
+    input.oninput = () => updateEndingCoverTemplateField(input);
+    input.onchange = () => updateEndingCoverTemplateField(input);
+  });
+  $("endingTemplateForm").querySelectorAll(".ending-cover-control[data-key]").forEach((control) => {
+    bindRangeControl(control.dataset.key, () => updateEndingCoverTemplateField(control.querySelector('input[type="range"]')));
+  });
+  bindCoverVisualToolbar("endingTemplateForm", "endingTemplatePreview");
+}
+
+function updateEndingCoverTemplateField(input) {
+  const template = endingCoverTemplate();
+  const key = input.dataset.endingCoverKey || (input.dataset.key === "ending-mask-opacity" ? "mask_opacity" : input.dataset.key);
+  if (!template || !key) return;
+  template[key] = input.type === "range" || input.type === "number" ? Number(input.value) : input.value;
+  if (key === "single_cover_title_text") {
+    $("followText").value = input.value;
+    state.follow_text = input.value;
+  }
+  setImageLoading("endingTemplatePreview", "应用片尾封面参数...");
+  refreshEndingTemplatePreview();
+  scheduleStateSave();
+}
+
+function endingTemplateMode() {
+  return state.ending_template_mode || $("endingTemplateForm")?.querySelector("[data-ending-mode].active")?.dataset.endingMode || "dynamic";
+}
+
+function endingTemplateSelectedName() {
+  return $("endingTemplateSelect")?.value || state.ending_template_id || "";
+}
+
+function selectedEndingTemplateAsset() {
+  const localTemplates = endingTemplateState.local || [];
+  if (!localTemplates.length) return null;
+  const mode = endingTemplateMode();
+  if (mode === "specific") {
+    const selected = endingTemplateSelectedName();
+    return localTemplates.find((item) => item.name === selected) || localTemplates[0];
+  }
+  if (mode === "random") {
+    const selected = new Set(selectedEndingTemplateNames(localTemplates));
+    if (endingPreviewOverrideName) {
+      const override = localTemplates.find((item) => item.name === endingPreviewOverrideName);
+      if (override) return override;
+    }
+    return localTemplates.find((item) => selected.has(item.name)) || localTemplates[0];
+  }
+  return null;
+}
+
+async function refreshEndingTemplatePreview() {
+  const mode = endingTemplateMode();
+  const asset = selectedEndingTemplateAsset();
+  const frame = $("endingTemplatePreview");
+  const assetBox = $("endingAssetPreview");
+  const caption = $("endingTemplateCaption");
+  if (!frame || !assetBox || !caption) return;
+  if (mode === "random" || mode === "specific") {
+    frame.classList.toggle("hidden", Boolean(asset));
+    assetBox.classList.toggle("hidden", !asset);
+    if (asset) {
+      assetBox.innerHTML = asset.type === "video"
+        ? `<video src="${escapeHtml(asset.url)}" muted loop controls playsinline></video>`
+        : `<img src="${escapeHtml(asset.url)}" alt="">`;
+      caption.textContent = `${mode === "random" ? "随机片尾素材预览" : "指定片尾素材"} / ${asset.name}`;
+    } else {
+      assetBox.innerHTML = `<div class="ending-template-empty">暂无片尾素材</div>`;
+      assetBox.classList.remove("hidden");
+      caption.textContent = `${shortPath(endingTemplateState.directory)} / 0 个素材`;
+    }
+    clearImageLoading("endingTemplatePreview");
+    return;
+  }
+  frame.classList.remove("hidden");
+  assetBox.classList.add("hidden");
+  assetBox.innerHTML = "";
+  const template = endingCoverTemplate();
+  if (template) {
+    refreshPhonePreviewFrame("endingTemplatePreview", {
+      template,
+      cover_mode: true,
+      ending_cover_mode: true,
+      slogan: $("followText").value,
+      title: "Follow GasGx for more gas engine and generator set cases",
+      headline: $("followText").value,
+      subhead: "Follow GasGx for more gas engine and generator set cases",
+      cta: template.cta,
+      hud_text: $("hudText").value,
+      background_image_url: selectedModelImageUrl || modelImages[0]?.url || "",
+      background_image_urls: modelImages.map((image) => image.url).filter(Boolean),
+    });
+  }
+  caption.textContent = `动态片尾封面 / ${template.name || "Ending Cover"}`;
+  clearImageLoading("endingTemplatePreview");
+}
+
 function isIndependentCover(template) {
   return (template?.cover_layout || "profile") === "single_video";
 }
@@ -583,13 +825,13 @@ function updateCoverTemplateField(input) {
   scheduleCoverTemplateSave();
 }
 
-function coverVisualToolbarHtml(template) {
+function coverVisualToolbarHtml(template, extraClass = "") {
   const fontValue = template.title_font_family || visualFontOptions[0][0];
   const fontOptions = visualFontOptions.map(([value, label]) =>
     `<option value="${escapeHtml(value)}" ${value === fontValue ? "selected" : ""}>${label}</option>`
   ).join("");
   return `
-    <div class="visual-toolbar-panel cover-visual-toolbar" aria-label="第一屏封面可视化工具">
+    <div class="visual-toolbar-panel cover-visual-toolbar ${extraClass}" aria-label="封面可视化工具">
       <button type="button" data-cover-command="size-down" title="缩小字号">A-</button>
       <button type="button" data-cover-command="size-up" title="放大字号">A+</button>
       <button type="button" data-cover-command="edit" title="编辑文字">编辑</button>
@@ -611,27 +853,32 @@ function coverVisualToolbarHtml(template) {
     </div>`;
 }
 
-function bindCoverVisualToolbar() {
-  const toolbar = $("coverForm").querySelector(".cover-visual-toolbar");
+function bindCoverVisualToolbar(formId = "coverForm", previewId = "coverPreview") {
+  const toolbar = $(formId).querySelector(".cover-visual-toolbar");
   if (!toolbar) return;
   toolbar.querySelectorAll("button[data-cover-command]").forEach((button) => {
-    button.onclick = () => postCoverTemplateCommand(button.dataset.coverCommand, button.dataset.value || "");
+    button.onclick = () => postCoverTemplateCommand(button.dataset.coverCommand, button.dataset.value || "", previewId);
   });
   toolbar.querySelectorAll("select[data-cover-command], input[data-cover-command]").forEach((input) => {
     input.oninput = () => {
       updateColorSwatch(input);
-      postCoverTemplateCommand(input.dataset.coverCommand, input.value);
+      postCoverTemplateCommand(input.dataset.coverCommand, input.value, previewId);
     };
     input.onchange = () => {
       updateColorSwatch(input);
-      postCoverTemplateCommand(input.dataset.coverCommand, input.value);
+      postCoverTemplateCommand(input.dataset.coverCommand, input.value, previewId);
     };
   });
 }
 
-function postCoverTemplateCommand(command, value = "") {
-  pulseImageLoading("coverPreview", "应用封面参数...");
-  $("coverPreview")?.contentWindow?.postMessage({
+function postCoverTemplateCommand(command, value = "", previewId = "coverPreview") {
+  coverEditingContext = previewId === "endingTemplatePreview" ? "ending" : "cover";
+  if (previewId === "endingTemplatePreview") {
+    pulseImageLoading("endingTemplatePreview", "应用片尾封面参数...");
+  } else {
+    pulseImageLoading("coverPreview", "应用封面参数...");
+  }
+  $(previewId)?.contentWindow?.postMessage({
     type: "gasgx-cover-template-command",
     command,
     value,
@@ -642,6 +889,7 @@ async function refreshAllPreviews() {
   await refreshVideoTemplatePreview();
   await refreshVideoTemplateGallery();
   await refreshMainPreview();
+  await refreshEndingTemplatePreview();
 }
 
 function renderVideoTemplateEditor() {
@@ -829,6 +1077,10 @@ function applyVisualTextUpdates(text) {
 }
 
 function applyCoverTemplateUpdates(updates) {
+  if (coverEditingContext === "ending") {
+    applyEndingCoverTemplateUpdates(updates);
+    return;
+  }
   const template = coverTemplates[selectedCover];
   if (!template || !updates) return;
   Object.assign(template, updates);
@@ -839,7 +1091,22 @@ function applyCoverTemplateUpdates(updates) {
   scheduleCoverTemplateSave();
 }
 
+function applyEndingCoverTemplateUpdates(updates) {
+  const template = endingCoverTemplate();
+  if (!template || !updates) return;
+  Object.assign(template, updates);
+  Object.entries(updates).forEach(([key, value]) => {
+    const input = $("endingTemplateForm")?.querySelector(`[data-ending-cover-key="${key}"]`);
+    if (input) input.value = value;
+  });
+  scheduleStateSave();
+}
+
 function applyCoverTextUpdates(text) {
+  if (coverEditingContext === "ending") {
+    applyEndingCoverTextUpdates(text);
+    return;
+  }
   if (!text) return;
   const template = coverTemplates[selectedCover];
   const fieldMap = { headline: "headline" };
@@ -865,6 +1132,28 @@ function applyCoverTextUpdates(text) {
     if (field) field.value = value;
   });
   scheduleCoverTemplateSave();
+  scheduleStateSave();
+}
+
+function applyEndingCoverTextUpdates(text) {
+  if (!text) return;
+  const template = endingCoverTemplate();
+  Object.entries(text).forEach(([key, value]) => {
+    if (key === "singleLogo" || key === "singleSlogan" || key === "singleTitle") {
+      const templateKey = {
+        singleLogo: "single_cover_logo_text",
+        singleSlogan: "single_cover_slogan_text",
+        singleTitle: "single_cover_title_text",
+      }[key];
+      template[templateKey] = value;
+      const input = $("endingTemplateForm")?.querySelector(`[data-ending-cover-key="${templateKey}"]`);
+      if (input) input.value = value;
+      if (templateKey === "single_cover_title_text") {
+        $("followText").value = value;
+        state.follow_text = value;
+      }
+    }
+  });
   scheduleStateSave();
 }
 
@@ -1446,6 +1735,11 @@ function collectState() {
     headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value,
     follow_text: $("followText").value, hud_text: $("hudText").value,
     transcript_text: $("transcriptText").value,
+    ending_template_mode: endingTemplateMode(),
+    ending_template_id: endingTemplateSelectedName(),
+    ending_template_ids: selectedEndingTemplateNames(),
+    ending_template_dir: endingTemplateState.directory,
+    ending_cover_template: state.ending_cover_template,
     bgm_source: "Local library", bgm_library_id: "",
     composition_sequence: state.composition_sequence,
     composition_customized: Boolean(state.composition_customized),
@@ -1724,10 +2018,12 @@ window.addEventListener("message", (event) => {
 });
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin || event.data?.type !== "gasgx-cover-template-update") return;
+  coverEditingContext = event.source === $("endingTemplatePreview")?.contentWindow ? "ending" : "cover";
   applyCoverTemplateUpdates(event.data.updates);
 });
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin || event.data?.type !== "gasgx-cover-template-text-update") return;
+  coverEditingContext = event.source === $("endingTemplatePreview")?.contentWindow ? "ending" : "cover";
   applyCoverTextUpdates(event.data.text);
 });
 

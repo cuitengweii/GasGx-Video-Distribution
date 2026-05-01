@@ -25,9 +25,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "文案参考资料" not in html
     assert '<input id="headline" type="hidden" />' in html
     assert html.index('class="cover-workbench"') < html.index('class="video-template-workbench"') < html.index('class="side-editor"')
+    assert html.index('class="video-template-workbench"') < html.index('class="ending-workbench cover-workbench"') < html.index('class="side-editor"')
     assert "transcriptFile" not in html
     assert "transcriptText" in html
     assert "generationConfirmModal" in html
+    assert "片尾封面模板" in html
+    assert "endingTemplatePreview" in html
+    assert "endingAssetPreview" in html
+    assert "endingTemplateForm" in html
+    assert "openEndingTemplateDir" in html
     assert "点击查看" in html
     assert "openBgmDir" in html
     assert "bgmLibraryPopover" in html
@@ -145,6 +151,39 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "scheduleVideoTemplateSave" in app
     assert "scheduleCoverTemplateSave" in app
     assert "saveTemplateSelection" in app
+    assert "renderEndingTemplatePanel" in app
+    assert "endingTemplateModeOptions" in app
+    assert "ending_template_dir" in app
+    assert "ending_templates" in app
+    assert "ending_template_mode" in app
+    assert "ending_template_id" in app
+    assert "ending_template_ids" in app
+    assert "ending_template_dir" in app
+    assert "endingRandomMaterialHtml" in app
+    assert "data-ending-template-choice" in app
+    assert "data-ending-play" not in app
+    assert "data-ending-stop" not in app
+    assert "data-ending-preview-toggle" in app
+    assert "endingPreviewToggleButtonHtml" in app
+    assert "endingPreviewOverrideName" in app
+    assert "endingFollowText" not in app
+    ending_panel_source = app[app.index("function renderEndingTemplatePanel"):app.index("function isIndependentCover")]
+    assert "一句话视频描述" not in ending_panel_source
+    assert '片尾文案<textarea data-ending-cover-key="single_cover_title_text"' in app
+    assert 'if (key === "single_cover_title_text")' in app
+    assert 'event.source === $("endingTemplatePreview")?.contentWindow ? "ending" : "cover"' in app
+    assert "从 video_matrix\\\\ending_template 勾选备用片尾素材" in app
+    assert ".ending-material-list" in css
+    assert ".ending-material-row" in css
+    assert ".ending-material-row button" in css
+    assert ".ending-preview-toggle svg" in css
+    assert ".ending-preview-toggle.active" in css
+    assert "grid-template-columns: minmax(0, 1fr) auto auto" in css
+    assert "openEndingTemplateDirInline" in app
+    assert 'ending-template-dir-row ${mode === "random" ? "" : "hidden"}' in app
+    assert '"specific") state.ending_template_mode = "random"' in app
+    assert '["specific", "指定素材"]' not in app
+    assert "endingAssetPreview" in app
     assert "cloneVideoTemplate" in app
     assert "nextTemplateCloneId" in app
     assert "saveCoverAsNewTemplate" in app
@@ -169,6 +208,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'showTemplateActionStatus("新建模板成功")' in app
     assert ".template-action-status" in css
     assert ".template-actions button.is-loading" in css
+    assert ".ending-editor" in css
+    assert ".ending-asset-preview" in css
+    assert ".ending-template-dir-row" in css
     assert "切换正文模板..." in app
     assert "selectCoverTemplate" in app
     assert "切换第一屏模板..." in app
@@ -183,6 +225,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "body.cover-profile-mode .vm-template-mask-bg" in preview
     assert 'id="templateMaskBg" class="vm-template-mask-bg" hidden' in preview
     assert "singleCoverMaskStyle(template)" in preview
+    assert 'node.style.left = align === "center" ? "50%"' in preview
+    assert 'translateX(-50%)' in preview
+    assert 'node.style.right = ""' in preview
     assert 'mode === "dual_gradient"' in preview
     assert "tileCoverFontSize" in preview
     assert 'style="${maskStyle}"' in preview
@@ -227,6 +272,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "await refreshVideoTemplateGallery();" in app
     api = (ROOT / "src" / "gasgx_distribution" / "video_matrix_api.py").read_text(encoding="utf-8")
     template_preview = (ROOT / "src" / "gasgx_distribution" / "video_matrix" / "template_preview.py").read_text(encoding="utf-8")
+    assert "ENDING_TEMPLATE_DIR" in api
+    assert '"/ending-templates/{filename}"' in api
     assert 'payload.get("background_image_url")' in api
     assert "background=background" in api
     assert "background: Image.Image | None = None" in template_preview

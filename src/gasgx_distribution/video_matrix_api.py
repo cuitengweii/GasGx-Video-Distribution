@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
@@ -40,8 +40,10 @@ BGM_LIBRARY_PATH = CONFIG_DIR / "bgm_library.json"
 TMP_DIR = ROOT / "runtime" / "video_matrix" / "web_uploads"
 BGM_DIR = ROOT / "runtime" / "video_matrix" / "bgm"
 MODEL_IMAGE_DIR = ROOT / "runtime" / "video_matrix" / "modelimg"
+ENDING_TEMPLATE_DIR = ROOT / "runtime" / "video_matrix" / "ending_template"
 SIGNATURE_HISTORY_PATH = ROOT / "runtime" / "video_matrix" / "signature_history.json"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+ENDING_TEMPLATE_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 PIXABAY_INDUSTRY_TRACKS = [
     {"title": "Corporate Industry", "artist": "Ivan_Luzan", "duration": "2:29", "source_url": "https://pixabay.com/music/upbeat-corporate-industry-408747/"},
     {"title": "Industry", "artist": "MomotMusic", "duration": "2:11", "source_url": "https://pixabay.com/music/search/industry/"},
@@ -135,6 +137,7 @@ def get_state() -> dict[str, Any]:
         source_root = Path(settings_payload.get("source_root") or _settings().source_root)
         categories = settings_payload.get("material_categories") or []
         BGM_DIR.mkdir(parents=True, exist_ok=True)
+        ENDING_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
         return {
             "settings": settings_payload,
             "ui_state": stored.get("ui_state") or {},
@@ -143,6 +146,8 @@ def get_state() -> dict[str, Any]:
             "bgm_library": stored.get("bgm_library") or {},
             "local_bgm_dir": str(BGM_DIR),
             "local_bgm": [path.name for path in _list_local_bgm_files(BGM_DIR)],
+            "ending_template_dir": str(ENDING_TEMPLATE_DIR),
+            "ending_templates": _list_ending_templates(),
             "category_counts": _count_category_files(source_root, categories),
             "source_dirs": {category["id"]: str(source_root / category["id"]) for category in categories},
             "source_videos": _list_source_preview_videos(source_root, categories),
@@ -150,6 +155,7 @@ def get_state() -> dict[str, Any]:
     settings = _settings()
     ensure_category_dirs(settings.source_root, settings.material_categories)
     BGM_DIR.mkdir(parents=True, exist_ok=True)
+    ENDING_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "settings": _settings_payload(settings),
         "ui_state": load_ui_state(UI_STATE_PATH),
@@ -158,6 +164,8 @@ def get_state() -> dict[str, Any]:
         "bgm_library": _load_json(BGM_LIBRARY_PATH, {}),
         "local_bgm_dir": str(BGM_DIR),
         "local_bgm": [path.name for path in _list_local_bgm_files(BGM_DIR)],
+        "ending_template_dir": str(ENDING_TEMPLATE_DIR),
+        "ending_templates": _list_ending_templates(),
         "category_counts": _count_category_files(settings.source_root, settings.material_categories),
         "source_dirs": {
             category["id"]: str(settings.source_root / category["id"])
@@ -363,6 +371,15 @@ def model_image_file(filename: str) -> FileResponse:
     return FileResponse(target, media_type=_image_media_type(target), filename=target.name)
 
 
+@router.get("/ending-templates/{filename}")
+def ending_template_file(filename: str) -> FileResponse:
+    target = ENDING_TEMPLATE_DIR / Path(filename).name
+    if not target.exists() or target.suffix.lower() not in ENDING_TEMPLATE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Ending template not found")
+    media_type = "video/mp4" if target.suffix.lower() in VIDEO_EXTENSIONS else _image_media_type(target)
+    return FileResponse(target, media_type=media_type, filename=target.name)
+
+
 @router.get("/bgm/{filename}")
 def local_bgm_file(filename: str) -> FileResponse:
     target = BGM_DIR / Path(filename).name
@@ -459,6 +476,8 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
         cover_template_id = str(request.get("cover_template_id") or DEFAULT_COVER_TEMPLATE_ID)
         template_config = templates.get(template_id) or next(iter(templates.values()))
         cover_template_config = require_cover_template(cover_templates, cover_template_id)
+        ending_cover_template_config = request.get("ending_cover_template") if isinstance(request.get("ending_cover_template"), dict) else None
+        ending_template_path = _resolve_ending_template_path(request)
         recent_limits = request.get("recent_limits") if request.get("source_mode") == "Category folders" else None
         active_category_ids = request.get("active_category_ids") if request.get("source_mode") == "Category folders" else None
 
@@ -483,10 +502,12 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
             template_config=template_config,
             cover_template_id=cover_template_id,
             cover_template_config=cover_template_config,
+            ending_cover_template_config=ending_cover_template_config,
             composition_sequence=_request_composition_sequence(request, settings),
             existing_signatures=existing_signatures if settings.variant_history_enabled else None,
             recent_clip_ids=set(generation_history["clip_ids"]),
             recent_segment_keys=set(generation_history["segment_keys"]),
+            ending_template_path=ending_template_path,
             text_overrides={
                 "headline": str(request.get("headline") or ""),
                 "subhead": str(request.get("subhead") or ""),
@@ -806,6 +827,52 @@ def _list_source_preview_videos(root: Path, categories: list[dict[str, str]], li
     return [{"name": path.name, "path": str(path)} for path in videos]
 
 
+def _list_ending_template_files() -> list[Path]:
+    if not ENDING_TEMPLATE_DIR.exists():
+        return []
+    return [
+        path
+        for path in sorted(ENDING_TEMPLATE_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True)
+        if path.is_file() and path.suffix.lower() in ENDING_TEMPLATE_EXTENSIONS
+    ]
+
+
+def _list_ending_templates() -> list[dict[str, str]]:
+    return [
+        {
+            "name": path.name,
+            "path": str(path),
+            "type": "video" if path.suffix.lower() in VIDEO_EXTENSIONS else "image",
+            "url": f"/api/video-matrix/ending-templates/{quote(path.name)}",
+        }
+        for path in _list_ending_template_files()
+    ]
+
+
+def _resolve_ending_template_path(request: dict[str, Any]) -> Path | None:
+    mode = str(request.get("ending_template_mode") or "dynamic").strip().lower()
+    if mode not in {"random", "specific"}:
+        return None
+    candidates = _list_ending_template_files()
+    if not candidates:
+        return None
+    if mode == "random":
+        requested_names = {
+            Path(str(name)).name
+            for name in request.get("ending_template_ids") or []
+            if str(name).strip()
+        }
+        selected_candidates = [candidate for candidate in candidates if not requested_names or candidate.name in requested_names]
+        return random.choice(selected_candidates or candidates).resolve()
+    filename = Path(str(request.get("ending_template_id") or "")).name
+    if not filename:
+        raise ValueError("Ending template is required when specific mode is selected")
+    for candidate in candidates:
+        if candidate.name == filename:
+            return candidate.resolve()
+    raise ValueError(f"Selected ending template was not found: {filename}")
+
+
 def _list_local_bgm_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
@@ -874,6 +941,11 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "follow_text",
         "hud_text",
         "transcript_text",
+        "ending_template_mode",
+        "ending_template_id",
+        "ending_template_ids",
+        "ending_template_dir",
+        "ending_cover_template",
         "bgm_source",
         "bgm_library_id",
         "composition_sequence",

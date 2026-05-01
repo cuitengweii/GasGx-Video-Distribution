@@ -1099,12 +1099,19 @@
 
       function setSingleCoverText(id, text, size, target) {
         const node = document.getElementById(id);
+        const template = currentPayload?.template || {};
+        const align = template[`${target}_text_align`] || "left";
+        const offsetY = Number(template[coverTargetOffsetKey(target)] || 0);
         node.textContent = text || "";
         node.style.fontSize = designSize(size || 54);
-        node.style.fontFamily = (currentPayload?.template || {})[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
-        node.style.textAlign = (currentPayload?.template || {})[`${target}_text_align`] || "left";
-        node.style.color = (currentPayload?.template || {})[`${target}_color`] || "#ffffff";
-        node.style.transform = `translateY(${Number((currentPayload?.template || {})[coverTargetOffsetKey(target)] || 0)}px)`;
+        node.style.fontFamily = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
+        node.style.textAlign = align;
+        node.style.color = template[`${target}_color`] || "#ffffff";
+        node.style.right = "";
+        node.style.left = align === "center" ? "50%" : align === "right" ? "auto" : "6.8%";
+        if (target === "singleLogo" && align === "left") node.style.left = "7%";
+        if (align === "right") node.style.right = "6.8%";
+        node.style.transform = `${align === "center" ? "translateX(-50%) " : ""}translateY(${offsetY}px)`;
       }
 
       function applyTemplateMask(node, template, visible) {
@@ -1776,7 +1783,8 @@
 
       function setCoverTextAlign(value) {
         if (!activeCoverTarget) return;
-        postCoverTemplateUpdates({ [`${activeCoverTarget}_text_align`]: value || "left" });
+        const align = value || "left";
+        postCoverTemplateUpdates({ [`${activeCoverTarget}_text_align`]: align });
       }
 
       function postCoverTemplateUpdates(updates) {

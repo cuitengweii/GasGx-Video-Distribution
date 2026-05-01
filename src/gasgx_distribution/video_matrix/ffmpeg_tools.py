@@ -29,10 +29,14 @@ def run_command(args: Iterable[str]) -> subprocess.CompletedProcess[str]:
         list(args),
         check=False,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
     )
     if process.returncode != 0:
-        raise FFmpegError(process.stderr.strip() or "FFmpeg command failed")
+        stderr = process.stderr or ""
+        stdout = process.stdout or ""
+        raise FFmpegError(stderr.strip() or stdout.strip() or "FFmpeg command failed")
     return process
 
 
@@ -154,6 +158,8 @@ def _probe_with_ffmpeg(path: Path) -> dict:
         [ffmpeg, "-hide_banner", "-i", str(path)],
         check=False,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
     )
     stderr = process.stderr or ""

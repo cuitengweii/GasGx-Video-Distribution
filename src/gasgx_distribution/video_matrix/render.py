@@ -25,6 +25,7 @@ FONT_CANDIDATES = (
     Path(r"C:\Windows\Fonts\segoeui.ttf"),
     Path(r"C:\Windows\Fonts\arialbd.ttf"),
 )
+ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def render_variant(
@@ -40,102 +41,109 @@ def render_variant(
     template_config: dict | None = None,
     cover_template_id: str | None = None,
     cover_template_config: dict | None = None,
+    ending_cover_template_config: dict | None = None,
     cover_intro_seconds: float = 1.0,
     outro_text: str = "",
     outro_seconds: float = 1.0,
+    ending_template_path: Path | None = None,
 ) -> RenderedAsset:
     batch_dir.mkdir(parents=True, exist_ok=True)
     output_types = output_types or {"mp4"}
     base_name = f"{filename_prefix}vibe_{variant.sequence_number:02d}"
     video_path = batch_dir / f"{base_name}.mp4"
-    cover_frame = batch_dir / f"{base_name}_raw_cover.png"
-    intro_frame = batch_dir / f"{base_name}_intro_frame.png"
-    intro_cover = batch_dir / f"{base_name}_intro_cover.png"
-    outro_frame = batch_dir / f"{base_name}_outro_frame.png"
-    outro_cover = batch_dir / f"{base_name}_outro_cover.png"
+    scratch_dir = batch_dir / ".render_tmp" / base_name
+    cover_frame = scratch_dir / f"{base_name}_raw_cover.png"
+    intro_frame = scratch_dir / f"{base_name}_intro_frame.png"
+    intro_cover = scratch_dir / f"{base_name}_intro_cover.png"
+    outro_frame = scratch_dir / f"{base_name}_outro_frame.png"
+    outro_cover = scratch_dir / f"{base_name}_outro_cover.png"
     cover_path = batch_dir / f"{base_name}_cover.png" if "png" in output_types else None
     copy_path = batch_dir / f"{base_name}_copy.txt" if "txt" in output_types else None
     manifest_path = batch_dir / f"{base_name}_manifest.json" if "json" in output_types else None
 
-    intro_cover_path = None
-    if cover_template_config is not None and cover_intro_seconds > 0:
-        first_segment = variant.segments[0]
-        _extract_frame_or_fallback(first_segment.clip.normalized_path, intro_frame, timestamp=first_segment.start_time)
-        render_intro_cover(intro_frame, intro_cover, variant, settings, cover_template_config)
-        intro_frame.unlink(missing_ok=True)
-        intro_cover_path = intro_cover
-    outro_cover_path = None
-    if cover_template_config is not None and outro_text.strip() and outro_seconds > 0:
-        last_segment = variant.segments[-1]
-        timestamp = last_segment.start_time + max(0.0, last_segment.duration - 0.2)
-        _extract_frame_or_fallback(last_segment.clip.normalized_path, outro_frame, timestamp=timestamp)
-        render_outro_cover(outro_frame, outro_cover, settings, cover_template_config, outro_text.strip(), variant.hud_lines)
-        outro_frame.unlink(missing_ok=True)
-        outro_cover_path = outro_cover
+    try:
+        intro_cover_path = None
+        if cover_template_config is not None and cover_intro_seconds > 0:
+            first_segment = variant.segments[0]
+            _extract_frame_or_fallback(first_segment.clip.normalized_path, intro_frame, timestamp=first_segment.start_time)
+            render_intro_cover(intro_frame, intro_cover, variant, settings, cover_template_config)
+            intro_cover_path = intro_cover
+        outro_cover_path = None
+        if ending_template_path is None and ending_cover_template_config is not None and outro_text.strip() and outro_seconds > 0:
+            last_segment = variant.segments[-1]
+            timestamp = last_segment.start_time + max(0.0, last_segment.duration - 0.2)
+            _extract_frame_or_fallback(last_segment.clip.normalized_path, outro_frame, timestamp=timestamp)
+            render_outro_cover(outro_frame, outro_cover, settings, ending_cover_template_config, outro_text.strip(), variant.hud_lines)
+            outro_cover_path = outro_cover
 
-    filter_complex, inputs = _build_filter_complex(
-        variant,
-        settings,
-        template_config=template_config,
-        intro_cover_path=intro_cover_path,
-        cover_intro_seconds=cover_intro_seconds,
-        outro_cover_path=outro_cover_path,
-        outro_seconds=outro_seconds,
-    )
-    concat_video(filter_complex, inputs, video_path, bgm_path=bgm_path)
-    if cover_path is not None:
-        if intro_cover_path is not None:
-            shutil.copyfile(intro_cover_path, cover_path)
-        else:
-            extract_frame(video_path, cover_frame, timestamp=1.0)
-            _decorate_cover(cover_frame, cover_path, variant.title)
-            cover_frame.unlink(missing_ok=True)
-    if intro_cover_path is not None:
-        intro_cover_path.unlink(missing_ok=True)
-    if outro_cover_path is not None:
-        outro_cover_path.unlink(missing_ok=True)
-
-    if copy_path is not None:
-        copy_path.write_text(
-            build_marketing_copy(variant, settings, transcript_text, copy_language, template_copy),
-            encoding="utf-8",
+        filter_complex, inputs = _build_filter_complex(
+            variant,
+            settings,
+            template_config=template_config,
+            intro_cover_path=intro_cover_path,
+            cover_intro_seconds=cover_intro_seconds,
+            outro_cover_path=outro_cover_path,
+            outro_seconds=outro_seconds,
+            ending_template_path=ending_template_path,
         )
+        concat_video(filter_complex, inputs, video_path, bgm_path=bgm_path)
+        if cover_path is not None:
+            if intro_cover_path is not None:
+                shutil.copyfile(intro_cover_path, cover_path)
+            else:
+                extract_frame(video_path, cover_frame, timestamp=1.0)
+                _decorate_cover(cover_frame, cover_path, variant.title)
 
-    if manifest_path is not None:
-        manifest_path.write_text(
-            json.dumps(
-                {
-                    "sequence_number": variant.sequence_number,
-                    "title": variant.title,
-                    "slogan": variant.slogan,
-                    "signature": variant.signature,
-                    "video_path": str(video_path),
-                    "cover_path": str(cover_path) if cover_path else None,
-                    "cover_template_id": cover_template_id,
-                    "cover_intro_seconds": cover_intro_seconds if intro_cover_path is not None else 0,
-                    "outro_text": outro_text,
-                    "outro_seconds": outro_seconds if outro_cover_path is not None else 0,
-                    "copy_path": str(copy_path) if copy_path else None,
-                    "copy_language": copy_language,
-                    "hud_lines": variant.hud_lines,
-                    "segments": [
-                        {
-                            "clip_id": segment.clip.clip_id,
-                            "category": segment.category,
-                            "source_path": str(segment.clip.source_path),
-                            "normalized_path": str(segment.clip.normalized_path),
-                            "start_time": segment.start_time,
-                            "duration": segment.duration,
-                        }
-                        for segment in variant.segments
-                    ],
-                },
-                indent=2,
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-    return RenderedAsset(variant, video_path, cover_path, copy_path, manifest_path)
+        if copy_path is not None:
+            copy_path.write_text(
+                build_marketing_copy(variant, settings, transcript_text, copy_language, template_copy),
+                encoding="utf-8",
+            )
+
+        if manifest_path is not None:
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "sequence_number": variant.sequence_number,
+                        "title": variant.title,
+                        "slogan": variant.slogan,
+                        "signature": variant.signature,
+                        "video_path": str(video_path),
+                        "cover_path": str(cover_path) if cover_path else None,
+                        "cover_template_id": cover_template_id,
+                        "cover_intro_seconds": cover_intro_seconds if intro_cover_path is not None else 0,
+                        "outro_text": outro_text,
+                        "outro_seconds": outro_seconds if outro_cover_path is not None else 0,
+                        "copy_path": str(copy_path) if copy_path else None,
+                        "copy_language": copy_language,
+                        "hud_lines": variant.hud_lines,
+                        "segments": [
+                            {
+                                "clip_id": segment.clip.clip_id,
+                                "category": segment.category,
+                                "source_path": str(segment.clip.source_path),
+                                "normalized_path": str(segment.clip.normalized_path),
+                                "start_time": segment.start_time,
+                                "duration": segment.duration,
+                            }
+                            for segment in variant.segments
+                        ],
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        return RenderedAsset(variant, video_path, cover_path, copy_path, manifest_path)
+    finally:
+        for temp_path in (cover_frame, intro_frame, intro_cover, outro_frame, outro_cover):
+            temp_path.unlink(missing_ok=True)
+        if scratch_dir.exists():
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+        try:
+            scratch_dir.parent.rmdir()
+        except OSError:
+            pass
 
 
 def _extract_frame_or_fallback(video_path: Path, output_path: Path, timestamp: float) -> None:
@@ -155,6 +163,7 @@ def _build_filter_complex(
     cover_intro_seconds: float = 1.0,
     outro_cover_path: Path | None = None,
     outro_seconds: float = 1.0,
+    ending_template_path: Path | None = None,
 ) -> tuple[str, list[Path]]:
     inputs = [segment.clip.normalized_path for segment in variant.segments]
     chains: list[str] = []
@@ -172,9 +181,9 @@ def _build_filter_complex(
         labels.append("[intro]")
     font_arg = _resolve_drawtext_font_arg()
     template = coerce_template(template_config)
-    hud_text = " | ".join(line.replace(":", "\\:") for line in variant.hud_lines)
-    slogan = variant.slogan.replace(":", "\\:")
-    title = variant.title.replace(":", "\\:")
+    hud_text = " | ".join(variant.hud_lines)
+    slogan = variant.slogan
+    title = variant.title
     for idx, segment in enumerate(variant.segments):
         crop_x = max(0, (settings.target_width * variant.zoom - settings.target_width) / 2 + variant.x_offset)
         crop_y = max(0, (settings.target_height * variant.zoom - settings.target_height) / 2 + variant.y_offset)
@@ -202,6 +211,24 @@ def _build_filter_complex(
             f"trim=duration={outro_seconds:.3f},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[outro]"
         )
         labels.append("[outro]")
+    if ending_template_path is not None:
+        inputs = [*inputs, ending_template_path]
+        ending_index = len(inputs) - 1
+        if ending_template_path.suffix.lower() in ENDING_IMAGE_EXTENSIONS:
+            ending_frames = max(1, int(settings.target_fps * outro_seconds))
+            chains.append(
+                f"[{ending_index}:v]loop=loop={ending_frames}:size=1:start=0,"
+                f"fps={settings.target_fps},scale={settings.target_width}:{settings.target_height}:force_original_aspect_ratio=increase,"
+                f"crop={settings.target_width}:{settings.target_height},"
+                f"trim=duration={outro_seconds:.3f},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[ending]"
+            )
+        else:
+            chains.append(
+                f"[{ending_index}:v]"
+                f"fps={settings.target_fps},scale={settings.target_width}:{settings.target_height}:force_original_aspect_ratio=increase,"
+                f"crop={settings.target_width}:{settings.target_height},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[ending]"
+            )
+        labels.append("[ending]")
     chains.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vout]")
     return ";".join(chains), inputs
 
@@ -300,7 +327,7 @@ def _drawtext_lines(
             "drawtext="
             f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key)}:"
             f"fontsize={font_size}:"
-            f"text='{_escape_drawtext_text(line)}':x={x_expr}:y={anchor_y + index * line_gap}"
+            f"text={_escape_drawtext_text(line)}:x={x_expr}:y={anchor_y + index * line_gap}"
         )
     return filters
 
@@ -351,4 +378,14 @@ def _measure_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Im
 
 
 def _escape_drawtext_text(text: str) -> str:
-    return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    replacements = {
+        "\\": "\\\\",
+        ":": "\\:",
+        ",": "\\,",
+        ";": "\\;",
+        "[": "\\[",
+        "]": "\\]",
+        "'": "\\'",
+        "%": "\\%",
+    }
+    return "".join(replacements.get(char, char) for char in text)
