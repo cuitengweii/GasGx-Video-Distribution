@@ -13,14 +13,17 @@ let selectedModelImageUrl = "";
 let sourcePreviewVideos = [];
 
 const jobStepLabels = [
-  ["queued", "任务排队"],
-  ["ingestion", "整理素材"],
-  ["hud", "准备数据字幕"],
-  ["beat", "分析音乐节奏"],
-  ["planning", "规划混剪方案"],
-  ["render", "生成视频"],
-  ["finalizing", "整理导出文件"],
-  ["complete", "完成"],
+  ["queued", "任务提交", 0, ["queued"]],
+  ["ingest_scan", "扫描素材", 5, ["ingestion"]],
+  ["ingestion", "整理素材", 12, ["ingestion"]],
+  ["hud", "准备数据字幕", 20, ["hud"]],
+  ["beat", "分析音乐节奏", 30, ["beat"]],
+  ["planning", "规划混剪方案", 42, ["planning"]],
+  ["render_start", "启动渲染", 45, ["render"]],
+  ["render", "生成视频", 56, ["render"]],
+  ["render_wait", "等待导出", 82, ["render"]],
+  ["finalizing", "整理导出文件", 97, ["finalizing"]],
+  ["complete", "完成", 100, ["complete"]],
 ];
 
 const jobMessages = {
@@ -33,6 +36,14 @@ const jobMessages = {
   finalizing: "正在整理导出的 MP4、封面和文案文件。",
   complete: "生成完成，可以到输出目录查看文件。",
   error: "生成失败，请按下方提示处理后重试。",
+};
+
+const backendJobMessageMap = {
+  "Collecting and normalizing source clips": "正在扫描并整理素材视频，按分类目录读取可用片段。",
+  "Preparing GasGx data HUD": "正在准备视频里的 HUD 数据、标题和字幕字段。",
+  "Analyzing BGM beat grid": "正在分析背景音乐节拍网格，用于后续卡点混剪。",
+  "Planning de-duplicated video variants": "正在规划每条视频的素材组合，避免重复使用同一片段。",
+  "Finalizing preview assets and manifests": "正在整理导出的 MP4、预览文件和清单。",
 };
 
 const coverFields = [
@@ -636,8 +647,13 @@ async function refreshAllPreviews() {
 function renderVideoTemplateEditor() {
   const template = templates[selectedVideoTemplate];
   if (!template) return;
-  const html = [`<h3>模板调整区</h3>`, visualTemplateToolbarHtml(template)];
+  const html = [
+    `<h3>模板调整区</h3>`,
+    `<label>模板名称<input data-key="name" type="text" value="${escapeHtml(template.name || "")}"></label>`,
+    visualTemplateToolbarHtml(template),
+  ];
   for (const [key, label, type, min, max] of videoTemplateFields) {
+    if (key === "name") continue;
     const value = template[key] ?? "";
     if (type === "checkbox") {
       html.push(`<label class="check-row"><input data-key="${key}" type="checkbox" ${value ? "checked" : ""}><span>${label}</span></label>`);
@@ -896,12 +912,9 @@ async function refreshVideoTemplatePreview() {
 async function refreshVideoTemplateGallery() {
   setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
-  const videos = videoTemplatePreviewVideos();
   for (const [id, template] of Object.entries(templates)) {
     const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
-    const video = videos[cards.length % Math.max(1, videos.length)];
-    const videoSrc = video?.path ? `/api/video-matrix/preview-file?path=${encodeURIComponent(video.path)}` : "";
-    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoSrc ? `<video src="${escapeHtml(videoSrc)}" poster="${data.data_url}" muted playsinline preload="metadata"></video>` : `<img src="${data.data_url}" alt="">`}<span>${id} / ${template.name || id}</span></div>`);
+    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}"><img src="${data.data_url}" alt=""><span>${id} / ${template.name || id}</span></div>`);
   }
   $("videoTemplateGallery").innerHTML = cards.join("");
   $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => {
@@ -960,7 +973,7 @@ async function saveVideoTemplate() {
     await api(`/api/video-matrix/templates/${selectedVideoTemplate}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[selectedVideoTemplate])});
     await saveState();
     pendingTemplateSave = "";
-    log(`已保存正文模板：${templates[selectedVideoTemplate].name || selectedVideoTemplate}`);
+    log(`已保存正文模板：${displayTemplateName(templates[selectedVideoTemplate].name || selectedVideoTemplate)}`);
     renderVideoTemplateSelector();
     renderVideoTemplateEditor();
     showTemplateActionStatus("保存成功");
@@ -1576,17 +1589,39 @@ function updateJobStatus(job) {
   $("jobStatusTitle").textContent = job.status === "error" ? "生成失败" : job.status === "complete" ? "生成完成" : `正在${jobMessages[stage] ? jobMessages[stage].replace(/^正在/, "").replace(/。$/, "") : "处理"}`;
   $("jobPercent").textContent = `${percent}%`;
   $("jobProgressFill").style.width = `${percent}%`;
-  $("jobMessage").textContent = job.error || job.message || jobMessages[stage] || "正在处理，请稍等。";
+  $("jobMessage").textContent = localizedJobMessage(job, stage);
   $("jobLog").classList.toggle("error", isError);
   $("jobMessage").classList.toggle("error-message", isError);
-  $("jobSteps").innerHTML = jobStepLabels.map(([key, label]) => {
-    const stepPercent = key === "queued" ? 0 : key === "ingestion" ? 5 : key === "hud" ? 20 : key === "beat" ? 30 : key === "planning" ? 42 : key === "render" ? 45 : key === "finalizing" ? 97 : 100;
+  $("jobSteps").innerHTML = jobStepLabels.map(([key, label, stepPercent, stageKeys]) => {
     const done = percent >= stepPercent || job.status === "complete";
-    const active = key === stage || (key === "render" && stage === "render");
+    const active = stageKeys.includes(stage) && percent >= stepPercent && !done || key === stage || (stage === "render" && stageKeys.includes("render") && percent >= stepPercent && percent < 97);
     return `<li class="${done ? "done" : ""} ${active ? "active" : ""}"><span></span>${label}</li>`;
   }).join("");
 }
 function log(text) { updateJobStatus({ status: "running", stage: "queued", progress: 0, message: text }); }
+function localizedJobMessage(job, stage) {
+  if (job.error) return job.error;
+  const message = String(job.message || "").trim();
+  if (!message) return jobMessages[stage] || "正在处理，请稍等。";
+  if (backendJobMessageMap[message]) return backendJobMessageMap[message];
+  const rendered = message.match(/^Rendered video (\d+)\/(\d+)$/);
+  if (rendered) return `正在生成视频：已完成 ${rendered[1]} / ${rendered[2]} 条。`;
+  const rendering = message.match(/^Rendering (\d+) videos with (\d+) workers$/);
+  if (rendering) return `正在启动视频生成：共 ${rendering[1]} 条，并行线程 ${rendering[2]} 个。`;
+  const completed = message.match(/^Completed (\d+) exports$/);
+  if (completed) return `生成完成，已导出 ${completed[1]} 条视频。`;
+  return displayTemplateName(message);
+}
+function displayTemplateName(value) {
+  return String(value || "")
+    .replace(/\bCopy\b/g, "副本")
+    .replace(/\bMode\b/g, "模式")
+    .replace(/\bCenter\b/g, "居中")
+    .replace(/\bBrand\b/g, "品牌")
+    .replace(/\bClean Data\b/g, "清爽数据")
+    .replace(/\bImpact Hud\b/g, "冲击 HUD")
+    .replace(/_/g, " ");
+}
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch])); }
 function debounce(fn, ms) { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); }; }
 

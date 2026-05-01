@@ -242,12 +242,14 @@ def save_video_template(template_id: str, payload: dict[str, Any]) -> dict[str, 
 
 @router.post("/template-preview")
 def template_preview(payload: dict[str, Any]) -> dict[str, str]:
+    background = _cover_preview_background(str(payload.get("background_image_url") or ""))
     image = render_video_template_preview_image(
         _settings(),
         payload.get("template") or {},
         hud_text=str(payload.get("hud_text") or ""),
         slogan=str(payload.get("slogan") or ""),
         title=str(payload.get("title") or ""),
+        background=background,
     )
     buffer = BytesIO()
     image.save(buffer, format="PNG")

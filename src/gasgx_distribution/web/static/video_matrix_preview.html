@@ -299,11 +299,6 @@
             outline-offset: 4px;
         }
 
-        .vm-template-text.active {
-            border-radius: 3px;
-            box-shadow: 0 0 0 2px #5dd62c;
-        }
-
         .vm-visual-toolbar {
             position: absolute;
             left: 50%;
@@ -413,6 +408,19 @@
         body.cover-profile-mode .sound-toggle,
         body.cover-profile-mode .phone-mockup > .relative.z-10 {
             display: none !important;
+        }
+
+        body.cover-profile-mode .phone-mockup,
+        body.cover-single-mode .phone-mockup {
+            border: 0;
+            border-radius: 0;
+            background: #000;
+            box-shadow: none;
+        }
+
+        body.cover-profile-mode .device-side-button,
+        body.cover-single-mode .device-side-button {
+            display: none;
         }
 
         .cover-profile-shell {
@@ -860,9 +868,8 @@
 
                     <div class="flex items-center gap-24 px-4 pb-6 w-full bottom-action-scale">
                         <div class="flex items-center gap-2.5 shrink-0 creator-group">
-                            <div class="w-[42px] h-[42px] rounded-full bg-blue-900 border border-white/20 overflow-hidden flex-shrink-0 relative flex items-center justify-center">
-                                <div class="text-[11px] font-bold text-center leading-tight text-[#5dd62c]">GasGx</div>
-                                <div class="absolute bottom-0 right-0 bg-black/50 rounded-full w-4 h-4 flex items-center justify-center"><span class="text-[10px]">Gx</span></div>
+                            <div class="w-[42px] h-[42px] rounded-full bg-black border border-[#5dd62c] overflow-hidden flex-shrink-0 relative flex items-center justify-center">
+                                <div class="text-[11px] font-black text-center leading-tight text-[#5dd62c]">GasGx</div>
                             </div>
                             <div class="flex flex-col shrink-0">
                                 <span class="text-[15px] font-bold tracking-wide drop-shadow-md whitespace-nowrap">GasGx小白</span>
@@ -965,6 +972,10 @@
         return `${Math.max(8, Number(value || 24) * 393 / 1080)}px`;
       }
 
+      function designRadius(value) {
+        return `${Math.max(0, Number(value ?? 0) * 393 / 1080)}px`;
+      }
+
       function toDesignX(value) {
         return Math.round(Number(value || 0) * 1080 / 393);
       }
@@ -1026,7 +1037,7 @@
           hudBar.style.width = designX(template.hud_bar_width || 1080);
           hudBar.style.background = template.hud_bar_color || "rgba(5, 17, 24, .68)";
           hudBar.style.opacity = template.hud_bar_opacity ?? 0.68;
-          hudBar.style.borderRadius = designSize(template.hud_bar_radius ?? 10);
+          hudBar.style.borderRadius = designRadius(template.hud_bar_radius ?? 10);
         }
         setTextBar("templateSloganBar", template.show_slogan, template.slogan_bg_x || 0, template.slogan_bg_y ?? template.slogan_y, template.slogan_bg_height || 80, template.slogan_bg_width || 1080, template.slogan_bg_color || template.hud_bar_color, template.slogan_bg_opacity ?? 0.62, template.slogan_bg_radius ?? template.hud_bar_radius ?? 10);
         setTextBar("templateTitleBar", template.show_title, template.title_bg_x || 0, template.title_bg_y ?? template.title_y, template.title_bg_height || template.slogan_bg_height || 92, template.title_bg_width || 1080, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62, template.title_bg_radius ?? template.hud_bar_radius ?? 10);
@@ -1239,7 +1250,7 @@
         node.style.width = designX(width || 1080);
         node.style.background = color || "rgba(5, 17, 24, .68)";
         node.style.opacity = opacity;
-        node.style.borderRadius = designSize(radius);
+        node.style.borderRadius = designRadius(radius);
       }
 
       function initVisualEditor() {
@@ -1338,7 +1349,8 @@
 
       function selectTarget(target) {
         activeTarget = target;
-        document.querySelectorAll(".vm-template-editable").forEach((node) => node.classList.toggle("active", node.dataset.templateTarget === target));
+        const frameTarget = selectionFrameTarget(target);
+        document.querySelectorAll(".vm-template-editable").forEach((node) => node.classList.toggle("active", node.dataset.templateTarget === frameTarget));
         document.getElementById("visualToolbar").classList.add("active");
         const template = currentPayload?.template || {};
         document.getElementById("fontFamily").disabled = isBackgroundTarget(target);
@@ -1346,6 +1358,10 @@
         document.getElementById("fontFamily").value = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
         document.getElementById("editText").disabled = isBackgroundTarget(target);
         updateAlignButtons(template[`${target}_text_align`] || "left");
+      }
+
+      function selectionFrameTarget(target) {
+        return isBackgroundTarget(target) ? target : backgroundTargetForControl(target);
       }
 
       function ensureTextTarget() {

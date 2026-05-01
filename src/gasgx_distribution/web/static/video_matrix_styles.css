@@ -736,7 +736,7 @@ select:disabled {
   width: min(1040px, calc(100vw - 56px));
   height: min(690px, calc(100vh - 64px));
   transform: translate(-50%, -50%);
-  z-index: 30;
+  z-index: 80;
   max-height: none;
   grid-template-columns: minmax(280px, .9fr) minmax(340px, 1.1fr);
   align-content: start;
@@ -1072,12 +1072,16 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   padding: 4px 8px;
   font-size: 12px;
 }
+.visual-text-controls > select[data-visual-command="font-family"] {
+  flex: 0 1 186px;
+  max-width: 186px;
+}
 .visual-effect-control {
   display: grid;
-  grid-template-columns: auto minmax(118px, 1fr);
+  grid-template-columns: auto minmax(118px, 186px);
   align-items: center;
   gap: 8px;
-  flex: 1 1 220px;
+  flex: 0 1 236px;
   margin: 0;
   color: #f6fff3;
   font-size: 12px;
@@ -1085,6 +1089,7 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 }
 .visual-effect-control select {
   width: 100%;
+  max-width: 186px;
 }
 .visual-toolbar-panel .color-swatch-button {
   position: relative;
@@ -1496,9 +1501,9 @@ button.compact-toggle.active {
 }
 .job-steps {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0 0 12px;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px 8px;
+  margin: 0 0 10px;
   padding: 0;
   list-style: none;
 }
@@ -1521,6 +1526,17 @@ button.compact-toggle.active {
 }
 .job-steps li.active {
   color: var(--green);
+}
+.job-warning {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 202, 78, .38);
+  border-radius: 6px;
+  color: #ffd66b;
+  background: rgba(76, 52, 0, .22);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
 }
 #jobMessage {
   margin: 0;

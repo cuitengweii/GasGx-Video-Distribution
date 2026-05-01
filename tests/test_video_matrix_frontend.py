@@ -213,9 +213,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "切换封面背景..." not in app
     assert "background_image_urls: modelImages.map" in app
     assert "background_image_url: selectedModelImageUrl || modelImages[0]?.url || \"\"" in app
+    api = (ROOT / "src" / "gasgx_distribution" / "video_matrix_api.py").read_text(encoding="utf-8")
+    template_preview = (ROOT / "src" / "gasgx_distribution" / "video_matrix" / "template_preview.py").read_text(encoding="utf-8")
+    assert 'payload.get("background_image_url")' in api
+    assert "background=background" in api
+    assert "background: Image.Image | None = None" in template_preview
+    assert "_fit_background(background, width, height)" in template_preview
     assert "sourcePreviewVideos = Array.isArray(data.source_videos) ? data.source_videos : []" in app
     assert "videoTemplatePreviewVideos" in app
-    assert "/api/video-matrix/preview-file?path=" in app
+    assert '<img src="${data.data_url}" alt="">' in app
+    assert "/api/video-matrix/preview-file?path=" not in app
     assert "toggleTemplateCardVideo" in app
     assert "coverGallery" not in html
     assert "setPanelLoading(\"coverGallery\"" not in app
@@ -248,6 +255,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".pixabay-track-list" in css
     assert ".pixabay-track" in css
     assert ".bgm-library-popover.modal" in css
+    assert "z-index: 80" in css
     assert "100vmax rgba(0, 0, 0, .64)" in css
     assert ".bgm-popover-head" in css
     assert ".bgm-local-section" in css
@@ -315,7 +323,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "setHudBackgroundColor(value)" in preview
     assert "setHudRadius(value)" in preview
     assert "clamp(Number(value), 0, 100)" in preview
-    assert "hudBar.style.borderRadius = designSize(template.hud_bar_radius ?? 10)" in preview
+    assert "hudBar.style.borderRadius = designRadius(template.hud_bar_radius ?? 10)" in preview
+    assert "function designRadius(value)" in preview
     assert "setTextEffect(value)" in preview
     assert "applyTextEffect(node" in preview
     assert "textColorValue(\"slogan\", template)" in preview
@@ -363,6 +372,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".cover-card img," in css
     assert ".cover-card video" in css
     assert "aspect-ratio: 9 / 16" in css
+    assert '<img src="${data.data_url}" alt="">' in app
+    assert '<video src="${escapeHtml(videoSrc)}" poster="${data.data_url}"' not in app
     assert "margin: 8px 0 14px" in css
     assert "inset: 0" in css
     assert "pointer-events: auto" in css
@@ -376,7 +387,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "#videoTemplateForm .range-control" in css
     assert "padding: 6px 10px" in css
     assert "min-height: 28px" in css
+    assert app.index("模板名称<input data-key=\"name\"") < app.index("visualTemplateToolbarHtml(template)")
     assert 'classList.toggle("error-message", isError)' in app
+    assert '["render_wait", "等待导出", 82, ["render"]]' in app
+    assert "backendJobMessageMap" in app
+    assert "displayTemplateName" in app
+    assert "已保存正文模板：${displayTemplateName" in app
+    assert "警示：视频生成期间不可以关闭页面，否则会影响视频生成" in html
+    assert ".job-warning" in css
+    assert "repeat(auto-fit, minmax(96px, 1fr))" in css
     assert ".job-status-card.error" in css
     assert "#jobMessage.error-message" in css
     assert ".confirm-modal" in css
@@ -400,11 +419,19 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "templateSloganBar" in preview_html
     assert "templateTitleBar" in preview_html
     assert "vm-template-text-bar" in preview_html
+    assert "selectionFrameTarget(target)" in preview_html
+    assert "node.dataset.templateTarget === frameTarget" in preview_html
+    assert ".vm-template-text.active" not in preview_html
     assert "slogan_bg_height" in preview_html
     assert "title_bg_height" in preview_html
     assert "isBackgroundTarget" in preview_html
     assert "coverProfileShell" in preview_html
     assert "cover-profile-mode" in preview_html
+    assert "body.cover-profile-mode .phone-mockup" in preview_html
+    assert "body.cover-single-mode .phone-mockup" in preview_html
+    assert "border: 0" in preview_html
+    assert "border-radius: 0" in preview_html
+    assert "body.cover-profile-mode .device-side-button" in preview_html
     assert "cover-profile-grid" in preview_html
     assert "GasGx | 燃气发电解决方案" in preview_html
     assert "gasgx-cover-template-command" in preview_html
@@ -447,7 +474,9 @@ def test_video_matrix_preview_matches_wechat_phone_reference_shell() -> None:
     assert "在线率维持95%以上" not in preview_html
     assert "收益连续性行业标杆</h2>" not in preview_html
     assert "GasGx小白" in preview_html
+    assert 'bg-black border border-[#5dd62c]' in preview_html
     assert 'text-[#5dd62c]">GasGx' in preview_html
+    assert '<span class="text-[10px]">Gx</span>' not in preview_html
     assert "headline-overlay" not in preview_html
     assert "benefit-overlay" not in preview_html
     assert "content-meta" not in preview_html

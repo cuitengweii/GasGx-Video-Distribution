@@ -24,11 +24,12 @@ def render_video_template_preview_image(
     hud_text: str = "",
     slogan: str = "",
     title: str = "",
+    background: Image.Image | None = None,
 ) -> Image.Image:
     template = coerce_template(template_config)
     width = int(settings.target_width)
     height = int(settings.target_height)
-    base = _placeholder_background(width, height).convert("RGBA")
+    base = _fit_background(background, width, height).convert("RGBA") if background else _placeholder_background(width, height).convert("RGBA")
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
@@ -78,6 +79,16 @@ def render_video_template_preview_image(
         )
 
     return Image.alpha_composite(base, overlay).convert("RGB")
+
+
+def _fit_background(background: Image.Image, width: int, height: int) -> Image.Image:
+    source = background.convert("RGB")
+    src_width, src_height = source.size
+    scale = max(width / max(src_width, 1), height / max(src_height, 1))
+    resized = source.resize((max(1, int(src_width * scale)), max(1, int(src_height * scale))), Image.LANCZOS)
+    left = max(0, (resized.width - width) // 2)
+    top = max(0, (resized.height - height) // 2)
+    return resized.crop((left, top, left + width, top + height))
 
 
 def _placeholder_background(width: int, height: int) -> Image.Image:
