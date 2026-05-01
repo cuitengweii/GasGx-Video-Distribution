@@ -1,83 +1,87 @@
-{
-  "follow_text": "Follow GasGx for more field power cases",
-  "subhead": "Generator sets for onsite Bitcoin and industrial load",
-  "composition_sequence": [
-    {
-      "category_id": "category_A",
-      "duration": 2
-    },
-    {
-      "category_id": "category_B",
-      "duration": 1.5
-    },
-    {
-      "category_id": "category_C",
-      "duration": 2
-    },
-    {
-      "category_id": "category_D",
-      "duration": 1.5
-    },
-    {
-      "category_id": "category_E",
-      "duration": 2
-    },
-    {
-      "category_id": "category_F",
-      "duration": 1.5
-    },
-    {
-      "category_id": "category_G",
-      "duration": 2
-    },
-    {
-      "category_id": "category_H",
-      "duration": 1.5
-    },
-    {
-      "category_id": "category_custom_1",
-      "duration": 2
-    }
-  ],
-  "copy_language": "zh",
-  "recent_limits": {
-    "category_A": 8,
-    "category_B": 8,
-    "category_C": 6,
-    "category_D": 6,
-    "category_E": 6,
-    "category_F": 8,
-    "category_G": 6,
-    "category_H": 6,
-    "category_custom_1": 6
-  },
-  "source_mode": "Category folders",
-  "video_duration_max": 12,
-  "template_id": "center_brand",
-  "bgm_library_id": "",
-  "transcript_text": "文案参考资料1\n文案参考资料2\n文案参考资料3",
-  "bgm_source": "Local library",
-  "headline": "Gas Engines That Turn Field Gas Into Power",
-  "output_count": 3,
-  "output_options": [
-    "mp4"
-  ],
-  "cover_template_id": "generator_set_roi",
-  "cta": "Learn more at gasgx.com/roi",
-  "output_root": "G:\\GasGx Video Distribution\\runtime\\materials\\videos",
-  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
-  "active_category_ids": [
-    "category_A",
-    "category_B",
-    "category_C",
-    "category_D",
-    "category_E",
-    "category_F",
-    "category_G",
-    "category_H",
-    "category_custom_1"
-  ],
-  "composition_customized": true,
-  "max_workers": 3,
-  "use_live_data": true
+﻿{
+    "follow_text":  "Follow GasGx for more field power cases",
+    "subhead":  "Generator sets for onsite Bitcoin and industrial load",
+    "composition_sequence":  [
+                                 {
+                                     "category_id":  "category_A",
+                                     "duration":  2
+                                 },
+                                 {
+                                     "category_id":  "category_B",
+                                     "duration":  1.5
+                                 },
+                                 {
+                                     "category_id":  "category_C",
+                                     "duration":  2
+                                 },
+                                 {
+                                     "category_id":  "category_D",
+                                     "duration":  1.5
+                                 },
+                                 {
+                                     "category_id":  "category_E",
+                                     "duration":  2
+                                 },
+                                 {
+                                     "category_id":  "category_F",
+                                     "duration":  1.5
+                                 },
+                                 {
+                                     "category_id":  "category_G",
+                                     "duration":  2
+                                 },
+                                 {
+                                     "category_id":  "category_H",
+                                     "duration":  1.5
+                                 },
+                                 {
+                                     "category_id":  "category_I",
+                                     "duration":  2
+                                 },
+                                 {
+                                     "category_id":  "category_J",
+                                     "duration":  2
+                                 }
+                             ],
+    "copy_language":  "zh",
+    "recent_limits":  {
+                          "category_A":  8,
+                          "category_B":  8,
+                          "category_C":  6,
+                          "category_D":  6,
+                          "category_E":  6,
+                          "category_F":  8,
+                          "category_G":  6,
+                          "category_H":  6,
+                          "category_I":  6,
+                          "category_J":  5
+                      },
+    "source_mode":  "Category folders",
+    "video_duration_max":  12,
+    "template_id":  "center_brand",
+    "bgm_library_id":  "",
+    "bgm_source":  "Local library",
+    "headline":  "Gas Engines That Turn Field Gas Into Power",
+    "output_count":  3,
+    "output_options":  [
+                           "mp4"
+                       ],
+    "cover_template_id":  "generator_set_roi",
+    "output_root":  "G:\\GasGx Video Distribution\\runtime\\materials\\videos",
+    "hud_text":  "Gas Engine -\u003e Generator Set -\u003e Power Output\nField Gas -\u003e Stable Load -\u003e Hashrate",
+    "active_category_ids":  [
+                                "category_A",
+                                "category_B",
+                                "category_C",
+                                "category_D",
+                                "category_E",
+                                "category_F",
+                                "category_G",
+                                "category_H",
+                                "category_I",
+                                "category_J"
+                            ],
+    "composition_customized":  true,
+    "max_workers":  3,
+    "video_duration_min":  8
 }

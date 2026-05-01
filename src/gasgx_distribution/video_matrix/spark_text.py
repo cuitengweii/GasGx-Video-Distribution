@@ -21,20 +21,20 @@ SPARK_BASE = ["python", "-m", "Collection.other.xfyun_spark_cli_module.cli"]
 def build_marketing_copy(
     variant: VideoVariant,
     settings: ProjectSettings,
-    transcript_text: str,
     language: str,
     template_copy: str,
+    ending_follow_text: str = "",
 ) -> str:
-    local_copy = _local_copy(variant, settings, transcript_text, template_copy)
-    spark_copy = _try_spark_copy(variant, settings, transcript_text, language)
+    local_copy = _local_copy(variant, settings, template_copy, ending_follow_text)
+    spark_copy = _try_spark_copy(variant, settings, language, ending_follow_text)
     return spark_copy or local_copy
 
 
 def _try_spark_copy(
     variant: VideoVariant,
     settings: ProjectSettings,
-    transcript_text: str,
     language: str,
+    ending_follow_text: str = "",
 ) -> str | None:
     if not PYTHON_WORKSPACE.exists():
         return None
@@ -46,10 +46,9 @@ def _try_spark_copy(
         "Brand: GasGx.\n"
         f"Title: {variant.title}\n"
         f"Slogan: {variant.slogan}\n"
-        f"ROI link: {settings.website_url}\n"
-        f"HUD data: {' | '.join(variant.hud_lines)}\n"
-        f"Transcript:\n{transcript_text.strip() or 'No uploaded transcript.'}\n\n"
-        "Return only the final copy. Keep it suitable for overseas short-video publishing."
+        f"Ending follow copy: {ending_follow_text.strip()}\n"
+        f"HUD text: {' | '.join(variant.hud_lines)}\n"
+        "Return only the final copy. Do not include a CTA label or ROI link. Keep it suitable for overseas short-video publishing."
     )
     code, payload = _call_spark(["chat", "--prompt", prompt, "--json", "--retry", "1"])
     if code != 0 or not payload.get("ok"):
@@ -85,14 +84,13 @@ def _call_spark(args: list[str]) -> tuple[int, dict]:
 def _local_copy(
     variant: VideoVariant,
     settings: ProjectSettings,
-    transcript_text: str,
     template_copy: str,
+    ending_follow_text: str = "",
 ) -> str:
     return template_copy.format(
         title=variant.title,
         slogan=variant.slogan,
         sequence_number=f"{variant.sequence_number:02d}",
-        website_url=settings.website_url,
+        ending_follow_text=ending_follow_text.strip(),
         hud_summary="\n".join(variant.hud_lines),
-        transcript=(transcript_text.strip() or "No uploaded transcript."),
     )

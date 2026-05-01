@@ -103,7 +103,7 @@ def test_video_matrix_api_state_and_preview() -> None:
             "template_id": "industrial_engine_hook",
             "headline": "Gas Engines That Turn Field Gas Into Power",
             "subhead": "Generator sets for onsite Bitcoin and industrial load",
-            "cta": "Learn more at gasgx.com/roi",
+            "cta": "",
             "hud_text": "Gas Engine -> Generator Set -> Power Output",
         },
     )
@@ -187,14 +187,18 @@ def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path
         "output_options": ["mp4"],
         "copy_language": "zh",
         "source_mode": "Category folders",
+        "video_duration_min": 8,
         "video_duration_max": 24,
+        "target_fps": 30,
         "composition_sequence": [{"category_id": "category_D", "duration": 2.2}],
     }
 
     video_matrix_api._run_generate_job("test-job", request, tmp_path / "bgm.mp3", None)
 
     assert captured["composition_sequence"] == [{"category_id": "category_D", "duration": 2.2}]
+    assert captured["settings"].video_duration_min == 8
     assert captured["settings"].video_duration_max == 24
+    assert captured["settings"].target_fps == 30
     assert isinstance(captured["existing_signatures"], set)
 
 
@@ -214,8 +218,10 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
         "source_mode": "Category folders",
         "recent_limits": {"category_A": 12},
         "active_category_ids": ["category_A"],
+        "video_duration_min": 7,
         "video_duration_max": 18,
-        "transcript_text": "field gas project notes",
+        "target_fps": 30,
+        "bgm_library_id": "selected.mp3",
     }
 
     video_matrix_api._run_generate_job("persist-job", request, tmp_path / "bgm.mp3", None)
@@ -223,8 +229,11 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
     state = video_matrix_api.load_ui_state(tmp_path / "ui_state.json")
     assert state["output_root"].endswith("exports")
     assert state["recent_limits"] == {"category_A": 12}
+    assert state["video_duration_min"] == 7
     assert state["video_duration_max"] == 18
-    assert state["transcript_text"] == "field gas project notes"
+    assert state["target_fps"] == 30
+    assert state["bgm_library_id"] == "selected.mp3"
+    assert "transcript_text" not in state
 
 
 def test_video_matrix_generate_falls_back_to_active_categories(monkeypatch, tmp_path) -> None:
@@ -340,6 +349,20 @@ def test_video_matrix_random_bgm_prefers_unused_local_track(monkeypatch, tmp_pat
     assert selected == fresh.resolve()
 
 
+def test_video_matrix_selected_bgm_uses_requested_local_track(monkeypatch, tmp_path) -> None:
+    bgm_dir = tmp_path / "bgm"
+    bgm_dir.mkdir()
+    selected_file = bgm_dir / "selected.mp3"
+    selected_file.write_bytes(b"selected")
+    (bgm_dir / "other.mp3").write_bytes(b"other")
+    monkeypatch.setattr(video_matrix_api, "BGM_DIR", bgm_dir)
+    monkeypatch.setattr(video_matrix_api, "_recent_bgm_names", lambda: set())
+
+    selected = asyncio.run(video_matrix_api._resolve_bgm_path({"bgm_source": "Local library", "bgm_library_id": "selected.mp3"}, tmp_path, None))
+
+    assert selected == selected_file.resolve()
+
+
 def test_video_matrix_static_entry_exists() -> None:
     client = TestClient(create_app())
 
@@ -382,7 +405,90 @@ def test_video_matrix_can_add_named_material_category(monkeypatch, tmp_path) -> 
     assert response.status_code == 200
     state = client.get("/api/video-matrix/state").json()
     assert any(item["label"] == "泵站细节" for item in state["settings"]["material_categories"])
-    assert "category_custom_1" in state["source_dirs"]
+    assert "category_custom_1" not in state["source_dirs"]
+    assert "category_I" in state["source_dirs"]
+    assert "category_J" in state["source_dirs"]
+    assert "category_K" in state["source_dirs"]
+
+
+def test_video_matrix_state_migrates_legacy_custom_category_refs(monkeypatch) -> None:
+    stored = {
+        "settings": {
+            "material_categories": [
+                {"id": "category_I", "label": "测试"},
+                {"id": "category_J", "label": "电控"},
+            ],
+            "recent_limits": {"category_custom_1": 6, "category_custom_2": 5},
+            "composition_sequence": [{"category_id": "category_custom_1", "duration": 2.0}],
+        },
+        "ui_state": {
+            "active_category_ids": ["category_custom_1", "category_custom_2"],
+            "recent_limits": {"category_custom_1": 6},
+            "composition_sequence": [{"category_id": "category_custom_2", "duration": 1.5}],
+        },
+    }
+    saved = {}
+    monkeypatch.setattr(video_matrix_api.service, "brand_database_backend", lambda: "supabase")
+    monkeypatch.setattr(video_matrix_api, "_video_matrix_app_setting", lambda default=None: stored)
+    monkeypatch.setattr(video_matrix_api, "_save_video_matrix_app_setting", lambda payload: saved.update(payload) or True)
+
+    client = TestClient(create_app())
+    response = client.get("/api/video-matrix/state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "category_custom_1" not in str(payload["ui_state"])
+    assert "category_custom_2" not in str(payload["ui_state"])
+    assert payload["ui_state"]["active_category_ids"] == ["category_I", "category_J"]
+    assert payload["ui_state"]["composition_sequence"] == [{"category_id": "category_J", "duration": 1.5}]
+    assert payload["ui_state"]["recent_limits"] == {"category_I": 6}
+    assert saved["ui_state"]["active_category_ids"] == ["category_I", "category_J"]
+
+
+def test_video_matrix_generate_normalizes_legacy_custom_category_refs(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(video_matrix_api, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    video_matrix_api._jobs["legacy-category-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    request = {
+        "output_count": 1,
+        "output_options": ["mp4"],
+        "source_mode": "Category folders",
+        "active_category_ids": ["category_custom_1", "category_custom_2"],
+        "recent_limits": {"category_custom_1": 6, "category_custom_2": 5},
+        "composition_sequence": [{"category_id": "category_custom_2", "duration": 1.5}],
+    }
+
+    video_matrix_api._run_generate_job("legacy-category-job", request, tmp_path / "bgm.mp3", None)
+
+    assert captured["active_category_ids"] == ["category_I", "category_J"]
+    assert captured["recent_limits"] == {"category_I": 6, "category_J": 5}
+    assert captured["composition_sequence"] == [{"category_id": "category_J", "duration": 1.5}]
+    state = video_matrix_api.load_ui_state(tmp_path / "ui_state.json")
+    assert "category_custom" not in str(state)
+
+
+def test_video_matrix_can_rename_material_category(monkeypatch, tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "defaults.json"
+    config_path.write_text(video_matrix_api.CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(video_matrix_api, "CONFIG_PATH", config_path)
+
+    client = TestClient(create_app())
+
+    response = client.post("/api/video-matrix/material-categories/category_A", json={"label": "矿机改名"})
+
+    assert response.status_code == 200
+    state = client.get("/api/video-matrix/state").json()
+    categories = state["settings"]["material_categories"]
+    assert any(item["id"] == "category_A" and item["label"] == "矿机改名" for item in categories)
 
 
 def test_video_matrix_uses_random_local_bgm_when_no_track_is_selected(monkeypatch, tmp_path) -> None:

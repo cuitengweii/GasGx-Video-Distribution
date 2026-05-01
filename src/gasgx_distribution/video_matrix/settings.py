@@ -34,12 +34,8 @@ class ProjectSettings:
     video_duration_min: float
     video_duration_max: float
     default_title_prefix: str
-    website_url: str
-    hud_enable_live_data: bool
-    hud_fixed_formulas: list[str]
     slogans: list[str]
     titles: list[str]
-    hud_sources: dict[str, str]
     composition_sequence: list[dict[str, object]]
     beat_detection: dict[str, object]
     max_variant_attempts: int
@@ -66,12 +62,8 @@ class ProjectSettings:
             video_duration_min=float(payload["video_duration_min"]),
             video_duration_max=float(payload["video_duration_max"]),
             default_title_prefix=str(payload["default_title_prefix"]),
-            website_url=str(payload["website_url"]),
-            hud_enable_live_data=bool(payload["hud_enable_live_data"]),
-            hud_fixed_formulas=list(payload["hud_fixed_formulas"]),
             slogans=list(payload["slogans"]),
             titles=list(payload["titles"]),
-            hud_sources=dict(payload["hud_sources"]),
             composition_sequence=_composition_sequence(payload.get("composition_sequence")),
             beat_detection=_beat_detection(payload.get("beat_detection")),
             max_variant_attempts=max(1, int(payload.get("max_variant_attempts", 20) or 20)),

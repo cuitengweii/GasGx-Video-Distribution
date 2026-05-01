@@ -1809,7 +1809,7 @@ async function saveVideoMatrixState() {
 
 async function generateVideoMatrix() {
   const form = new FormData();
-  form.append("payload", JSON.stringify({ ...collectVideoMatrixState(), transcript_text: vmNode("vm-transcript-text").value }));
+  form.append("payload", JSON.stringify(collectVideoMatrixState()));
   const bgm = vmNode("vm-bgm-upload")?.files?.[0];
   if (bgm) form.append("bgm_file", bgm);
   [...(vmNode("vm-source-files").files || [])].forEach((file) => form.append("source_files", file));
@@ -1833,8 +1833,8 @@ function collectVideoMatrixState() {
     output_count: Number(vmNode("vm-output-count").value), max_workers: Number(vmNode("vm-max-workers").value),
     output_options: [...vmNode("vm-output-options").selectedOptions].map((item) => item.value), output_root: vmNode("vm-output-root").value,
     template_id: vm.selectedVideoTemplate, cover_template_id: vm.selectedCover, copy_language: vmRadioValue("vm_copy_language"),
-    source_mode: vmRadioValue("vm_source_mode"), use_live_data: true, headline: vmNode("vm-headline").value, subhead: vmNode("vm-subhead").value,
-    cta: vmNode("vm-cta").value, follow_text: vmNode("vm-follow-text").value, hud_text: vmNode("vm-hud-text").value,
+    source_mode: vmRadioValue("vm_source_mode"), headline: vmNode("vm-headline").value, subhead: vmNode("vm-subhead").value,
+    follow_text: vmNode("vm-follow-text").value, hud_text: vmNode("vm-hud-text").value,
     bgm_source: vmRadioValue("vm_bgm_source"), bgm_library_id: vmNode("vm-bgm-library")?.value || "",
     recent_limits: Object.fromEntries(categories.map((category) => [category.id, Number(vmNode(`vm-${category.id}`)?.value || vm.settings.recent_limits[category.id] || 8)])),
   };

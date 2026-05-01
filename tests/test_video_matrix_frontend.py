@@ -27,7 +27,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert html.index('class="cover-workbench"') < html.index('class="video-template-workbench"') < html.index('class="side-editor"')
     assert html.index('class="video-template-workbench"') < html.index('class="ending-workbench cover-workbench"') < html.index('class="side-editor"')
     assert "transcriptFile" not in html
-    assert "transcriptText" in html
+    assert "transcriptText" not in html
     assert "generationConfirmModal" in html
     assert "片尾封面模板" in html
     assert "endingTemplatePreview" in html
@@ -40,7 +40,17 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "materialCategories(data)" in app
     assert "settings.material_categories" in app
     assert "addMaterialCategory" in app
-    assert "shortPath(data.source_dirs[category.id]" in app
+    assert "renameMaterialCategory" in app
+    assert "data-category-rename" not in app
+    assert "class=\"category-edit-icon\"" not in app
+    assert "按原文修改" not in app
+    assert "已保存素材目录名称" in app
+    assert "<span>秒</span>" in app
+    assert "<span>采用最新前</span>" in app
+    assert "<span>条</span>" in app
+    assert "source-total-count" in app
+    assert "素材总数：" in app
+    assert "/api/video-matrix/material-categories/${encodeURIComponent(categoryId)}" in app
     assert "const outputRoot = state.output_root || settings.output_root" in app
     assert '$("outputRoot").dataset.fullPath = outputRoot' in app
     assert "output_root: outputRootPath()" in app
@@ -61,13 +71,24 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "音频地址" in app
     assert "bgm-local-section" in app
     assert "bgm-pixabay-section" in app
-    assert "生成时每次随机取 1 首" in app
+    assert "未选中时生成会随机取 1 首" in app
+    assert "selectedBgmLibraryId()" in app
+    assert "data-bgm-select" in app
+    assert "bgm_library_id: selectedBgmLibraryId()" in app
+    assert "bgm-popover-links" not in app
     shell_css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
     assert ".add-category-row" in css
+    assert "[data-category-label]" in css
+    assert ".category-edit-icon" not in css
+    assert ".source-total-count" in css
     assert ".bgm-library-popover" in css
     assert ".dir-row code" in css
     assert ".embed-mode .sidebar" in css
     assert "overflow: hidden" in css
+    assert "font-size: 12px" in css
+    assert ".embed-mode .sidebar-radio-field .radio-row" in css
+    assert ".embed-mode .library-action" in css
+    assert "min-height: clamp(28px, 3.5vh, 34px)" in css
     assert "body.video-matrix-active" in shell_css
     assert "body.video-matrix-active .sidebar" in shell_css
     assert "position: fixed" in shell_css
@@ -142,7 +163,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "bgmUpload" not in app
     assert "上传文件" not in app
     assert "bgmLibraryHint" in app
-    assert 'bgm_library_id: ""' in app
+    assert "bgm_library_id: selectedBgmLibraryId()" in app
     assert "renderComposition" in app
     assert "composition_sequence" in app
     assert "composition_customized" in app
@@ -153,6 +174,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "saveTemplateSelection" in app
     assert "renderEndingTemplatePanel" in app
     assert "endingTemplateModeOptions" in app
+    assert "endingModeLoading" in app
+    assert 'buttonLoadingInline("切换中...")' in app
+    assert 'item.disabled = true' in app
     assert "ending_template_dir" in app
     assert "ending_templates" in app
     assert "ending_template_mode" in app
@@ -165,19 +189,30 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "data-ending-stop" not in app
     assert "data-ending-preview-toggle" in app
     assert "endingPreviewToggleButtonHtml" in app
+    assert 'M8 5.8v12.4L18 12 8 5.8Z' in app
     assert "endingPreviewOverrideName" in app
+    assert "data-ending-preview-video" in app
+    assert "video?.play?.().catch(() => {})" in app
+    assert "renderEndingTemplatePanel({ ending_templates: endingTemplateState.local" in app
     assert "endingFollowText" not in app
     ending_panel_source = app[app.index("function renderEndingTemplatePanel"):app.index("function isIndependentCover")]
     assert "一句话视频描述" not in ending_panel_source
     assert '片尾文案<textarea data-ending-cover-key="single_cover_title_text"' in app
     assert 'if (key === "single_cover_title_text")' in app
+    assert "function endingCopyTextValue()" in app
+    assert 'follow_text: endingCopyText' in app
+    assert 'cta: ""' not in app
     assert 'event.source === $("endingTemplatePreview")?.contentWindow ? "ending" : "cover"' in app
     assert "从 video_matrix\\\\ending_template 勾选备用片尾素材" in app
     assert ".ending-material-list" in css
     assert ".ending-material-row" in css
     assert ".ending-material-row button" in css
     assert ".ending-preview-toggle svg" in css
+    assert ".ending-preview-toggle:hover" in css
     assert ".ending-preview-toggle.active" in css
+    assert ".template-tabs button.is-loading" in css
+    assert "border-radius: 999px" in css
+    assert "background: var(--green)" in css
     assert "grid-template-columns: minmax(0, 1fr) auto auto" in css
     assert "openEndingTemplateDirInline" in app
     assert 'ending-template-dir-row ${mode === "random" ? "" : "hidden"}' in app
@@ -301,8 +336,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "background: transparent" in css
     assert "box-shadow: none" in css
     assert "const recentLimits = state.recent_limits || settings.recent_limits || {}" in app
-    assert '$("transcriptText").value = state.transcript_text || ""' in app
-    assert 'transcript_text: $("transcriptText").value' in app
+    assert "transcript_text" not in app
     assert "confirmGeneration(statePayload)" in app
     assert "generationConfirmHtml" in app
     assert "启用素材分类" in app
@@ -476,8 +510,27 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".confirm-panel" in css
     assert ".confirm-algorithm" in css
     assert "composition-panel" in css
+    assert "videoDurationMin" in html
     assert "videoDurationMax" in html
+    assert "sidebarCoverTemplate" in html
+    assert "sidebarVideoTemplate" in html
+    assert "sidebarEndingTemplateMode" in html
+    assert '<option value="dynamic">动态封面</option>' in html
+    assert '<option value="random">随机素材</option>' in html
+    assert "renderSidebarTemplateSelectors" in app
+    assert "selectCoverTemplate(coverSelect.value)" in app
+    assert "selectVideoTemplate(videoSelect.value)" in app
+    assert "switchEndingTemplateMode(endingSelect.value)" in app
+    assert "video_duration_min" in app
+    assert "targetFpsGroup" in html
     assert "video_duration_max" in app
+    assert 'renderRadio("targetFpsGroup", "target_fps"' in app
+    assert 'target_fps: Number(radioValue("target_fps") || settings.target_fps || 60)' in app
+    assert "目标帧率" in app
+    assert "${statePayload.target_fps}fps" in app
+    assert ".sidebar-radio-field" in css
+    assert ".sidebar-radio-field .radio-row label:has(input:checked)" in css
+    assert "background: var(--green)" in css
     assert "composition-rows" in css
     assert "composition-row" in css
 

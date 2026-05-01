@@ -70,6 +70,10 @@ class MaterialCategoryPayload(BaseModel):
     label: str = ""
 
 
+class MaterialCategoryRenamePayload(BaseModel):
+    label: str = ""
+
+
 class BgmDownloadPayload(BaseModel):
     url: str = ""
     filename: str = ""
@@ -114,6 +118,165 @@ def _local_video_matrix_state() -> dict[str, Any]:
     }
 
 
+def _next_material_category_id(categories: list[dict[str, Any]]) -> str:
+    used = {str(item.get("id") or "") for item in categories if isinstance(item, dict)}
+    for code in range(ord("A"), ord("Z") + 1):
+        category_id = f"category_{chr(code)}"
+        if category_id not in used:
+            return category_id
+    raise HTTPException(status_code=400, detail="No category ids are available")
+
+
+def _rename_category_dir(source_root: Path, old_id: str, new_id: str) -> None:
+    old_path = source_root / old_id
+    new_path = source_root / new_id
+    if old_path == new_path or not old_path.exists() or new_path.exists():
+        return
+    old_path.rename(new_path)
+
+
+def _apply_category_id_map(payload: dict[str, Any], id_map: dict[str, str]) -> None:
+    if not id_map:
+        return
+    recent_limits = dict(payload.get("recent_limits") or {})
+    for old_id, new_id in id_map.items():
+        if old_id in recent_limits and new_id not in recent_limits:
+            recent_limits[new_id] = recent_limits.pop(old_id)
+        elif old_id in recent_limits:
+            recent_limits.pop(old_id, None)
+    payload["recent_limits"] = recent_limits
+    sequence = []
+    for item in payload.get("composition_sequence") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row["category_id"] = id_map.get(str(row.get("category_id") or ""), row.get("category_id"))
+        sequence.append(row)
+    if sequence:
+        payload["composition_sequence"] = sequence
+
+
+def _legacy_material_category_id_map(categories: list[dict[str, Any]]) -> dict[str, str]:
+    category_ids = {str(item.get("id") or "") for item in categories if isinstance(item, dict)}
+    id_map: dict[str, str] = {}
+    for index, letter in enumerate(("I", "J"), start=1):
+        legacy_id = f"category_custom_{index}"
+        target_id = f"category_{letter}"
+        if target_id in category_ids:
+            id_map[legacy_id] = target_id
+    return id_map
+
+
+def _has_legacy_category_ids(payload: dict[str, Any], id_map: dict[str, str]) -> bool:
+    if not id_map:
+        return False
+    if any(key in dict(payload.get("recent_limits") or {}) for key in id_map):
+        return True
+    if any(str(item) in id_map for item in payload.get("active_category_ids") or []):
+        return True
+    return any(
+        isinstance(item, dict) and str(item.get("category_id") or "") in id_map
+        for item in payload.get("composition_sequence") or []
+    )
+
+
+def _remove_website_url_state(current: dict[str, Any]) -> bool:
+    changed = False
+    settings_payload = dict(current.get("settings") or {})
+    if "website_url" in settings_payload:
+        settings_payload.pop("website_url", None)
+        current["settings"] = settings_payload
+        changed = True
+    ui_state = dict(current.get("ui_state") or {})
+    if "gasgx.com/roi" in str(ui_state.get("cta") or ""):
+        ui_state["cta"] = ""
+        current["ui_state"] = ui_state
+        changed = True
+    templates = current.get("cover_templates")
+    if isinstance(templates, dict):
+        next_templates = {}
+        for template_id, template in templates.items():
+            if isinstance(template, dict):
+                item = dict(template)
+                if str(item.get("cta") or "").strip().lower() in {"www.gasgx.com/roi", "https://www.gasgx.com/roi"}:
+                    item["cta"] = ""
+                    changed = True
+                next_templates[template_id] = item
+            else:
+                next_templates[template_id] = template
+        if changed:
+            current["cover_templates"] = next_templates
+    return changed
+
+
+def _remove_retired_video_matrix_state(current: dict[str, Any]) -> bool:
+    changed = False
+    settings_payload = dict(current.get("settings") or {})
+    for key in ("website_url", "hud_enable_live_data", "hud_fixed_formulas", "hud_sources"):
+        if key in settings_payload:
+            settings_payload.pop(key, None)
+            changed = True
+    if changed:
+        current["settings"] = settings_payload
+    ui_state = dict(current.get("ui_state") or {})
+    for key in ("cta", "transcript_text", "use_live_data"):
+        if key in ui_state:
+            ui_state.pop(key, None)
+            changed = True
+    if changed:
+        current["ui_state"] = ui_state
+    return changed
+
+
+def _normalize_material_category_ids(current: dict[str, Any]) -> bool:
+    settings_payload = dict(current.get("settings") or {})
+    categories = [dict(item) for item in settings_payload.get("material_categories") or [] if isinstance(item, dict)]
+    if not categories:
+        return False
+    changed = False
+    id_map: dict[str, str] = {}
+    used = {str(item.get("id") or "") for item in categories if isinstance(item, dict) and not str(item.get("id") or "").startswith("category_custom_")}
+    for category in categories:
+        old_id = str(category.get("id") or "").strip()
+        if not old_id.startswith("category_custom_"):
+            continue
+        new_id = _next_material_category_id([{"id": item} for item in used])
+        used.add(new_id)
+        category["id"] = new_id
+        id_map[old_id] = new_id
+        changed = True
+    ui_state = dict(current.get("ui_state") or {})
+    legacy_map = _legacy_material_category_id_map(categories)
+    if legacy_map and (_has_legacy_category_ids(settings_payload, legacy_map) or _has_legacy_category_ids(ui_state, legacy_map)):
+        id_map.update({key: value for key, value in legacy_map.items() if key not in id_map})
+        changed = True
+    if not changed:
+        return False
+    settings_payload["material_categories"] = categories
+    _apply_category_id_map(settings_payload, id_map)
+    _apply_category_id_map(ui_state, id_map)
+    if isinstance(settings_payload.get("active_category_ids"), list):
+        settings_payload["active_category_ids"] = [id_map.get(str(item), str(item)) for item in settings_payload["active_category_ids"]]
+    if isinstance(ui_state.get("active_category_ids"), list):
+        ui_state["active_category_ids"] = [id_map.get(str(item), str(item)) for item in ui_state["active_category_ids"]]
+    source_root = Path(str(settings_payload.get("source_root") or _settings().source_root)).expanduser()
+    for old_id, new_id in id_map.items():
+        _rename_category_dir(source_root, old_id, new_id)
+    current["settings"] = settings_payload
+    current["ui_state"] = ui_state
+    return True
+
+
+def _rename_material_category_in_settings(settings_payload: dict[str, Any], category_id: str, label: str) -> dict[str, str]:
+    categories = [dict(item) for item in settings_payload.get("material_categories") or [] if isinstance(item, dict)]
+    for category in categories:
+        if str(category.get("id") or "") == category_id:
+            category["label"] = label
+            settings_payload["material_categories"] = categories
+            return {"id": category_id, "label": label}
+    raise HTTPException(status_code=404, detail="Unknown category")
+
+
 def _complete_video_matrix_state(stored: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
     current = dict(stored or {})
     defaults = _local_video_matrix_state()
@@ -123,6 +286,9 @@ def _complete_video_matrix_state(stored: dict[str, Any] | None) -> tuple[dict[st
             current[key] = value
             changed = True
     current["settings"] = _merge_settings_payload(dict(current.get("settings") or {}))
+    changed = _remove_website_url_state(current) or changed
+    changed = _remove_retired_video_matrix_state(current) or changed
+    changed = _normalize_material_category_ids(current) or changed
     return current, changed
 
 
@@ -152,7 +318,11 @@ def get_state() -> dict[str, Any]:
             "source_dirs": {category["id"]: str(source_root / category["id"]) for category in categories},
             "source_videos": _list_source_preview_videos(source_root, categories),
         }
-    settings = _settings()
+    local_state = _local_video_matrix_state()
+    if _normalize_material_category_ids(local_state):
+        CONFIG_PATH.write_text(json.dumps(local_state["settings"], indent=2, ensure_ascii=False), encoding="utf-8")
+        save_ui_state(UI_STATE_PATH, local_state.get("ui_state") or {})
+    settings = _settings_from_payload(local_state["settings"])
     ensure_category_dirs(settings.source_root, settings.material_categories)
     BGM_DIR.mkdir(parents=True, exist_ok=True)
     ENDING_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -201,11 +371,7 @@ def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
         current, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
         settings_payload = dict(current.get("settings") or _settings_payload(_settings()))
         categories = list(settings_payload.get("material_categories") or [])
-        existing_ids = {str(item.get("id") or "") for item in categories if isinstance(item, dict)}
-        next_index = 1
-        while f"category_custom_{next_index}" in existing_ids:
-            next_index += 1
-        category = {"id": f"category_custom_{next_index}", "label": label}
+        category = {"id": _next_material_category_id(categories), "label": label}
         categories.append(category)
         settings_payload["material_categories"] = categories
         recent_limits = dict(settings_payload.get("recent_limits") or {})
@@ -216,12 +382,12 @@ def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
         ensure_category_dirs(Path(settings_payload["source_root"]), categories)
         return {"ok": True, "category": category}
     config = _load_json(CONFIG_PATH, {})
+    local_state = {"settings": config, "ui_state": load_ui_state(UI_STATE_PATH)}
+    if _normalize_material_category_ids(local_state):
+        config = local_state["settings"]
+        save_ui_state(UI_STATE_PATH, local_state.get("ui_state") or {})
     categories = list(config.get("material_categories") or [])
-    existing_ids = {str(item.get("id") or "") for item in categories if isinstance(item, dict)}
-    next_index = 1
-    while f"category_custom_{next_index}" in existing_ids:
-        next_index += 1
-    category_id = f"category_custom_{next_index}"
+    category_id = _next_material_category_id(categories)
     categories.append({"id": category_id, "label": label})
     config["material_categories"] = categories
     recent_limits = dict(config.get("recent_limits") or {})
@@ -231,6 +397,24 @@ def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
     settings = ProjectSettings.from_file(CONFIG_PATH)
     ensure_category_dirs(settings.source_root, settings.material_categories)
     return {"ok": True, "category": {"id": category_id, "label": label}}
+
+
+@router.post("/material-categories/{category_id}")
+def rename_material_category(category_id: str, payload: MaterialCategoryRenamePayload) -> dict[str, Any]:
+    label = payload.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required")
+    if service.brand_database_backend() == "supabase":
+        current, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
+        settings_payload = dict(current.get("settings") or _settings_payload(_settings()))
+        category = _rename_material_category_in_settings(settings_payload, category_id, label)
+        current["settings"] = settings_payload
+        _persist_video_matrix_state(current)
+        return {"ok": True, "category": category, "storage": "database"}
+    config = _load_json(CONFIG_PATH, {})
+    category = _rename_material_category_in_settings(config, category_id, label)
+    CONFIG_PATH.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "category": category, "storage": "file"}
 
 
 @router.post("/templates/{template_id}")
@@ -461,12 +645,19 @@ def job_status(job_id: str) -> dict[str, Any]:
 def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, source_root: Path | None) -> None:
     try:
         settings = _settings()
-        settings.hud_enable_live_data = bool(request.get("use_live_data", True))
+        if request.get("video_duration_min") is not None:
+            settings.video_duration_min = max(
+                1.0,
+                float(request.get("video_duration_min") or settings.video_duration_min),
+            )
         if request.get("video_duration_max") is not None:
             settings.video_duration_max = max(
                 settings.video_duration_min,
                 float(request.get("video_duration_max") or settings.video_duration_max),
             )
+        if request.get("target_fps") is not None:
+            settings.target_fps = 60 if int(request.get("target_fps") or settings.target_fps) == 60 else 30
+        request = _normalize_request_category_ids(request, settings)
         generation_history = _load_generation_history(settings.variant_history_limit)
         existing_signatures = _load_signature_history(settings) | set(generation_history["signatures"])
         video_state, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
@@ -493,7 +684,6 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
             source_root=source_root,
             output_root=Path(request["output_root"]).expanduser().resolve() if request.get("output_root") else None,
             progress_callback=progress,
-            transcript_text=str(request.get("transcript_text") or ""),
             output_types=set(request.get("output_options") or ["mp4"]),
             copy_language=str(request.get("copy_language") or "zh"),
             max_workers=int(request.get("max_workers") or 3),
@@ -511,7 +701,6 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
             text_overrides={
                 "headline": str(request.get("headline") or ""),
                 "subhead": str(request.get("subhead") or ""),
-                "cta": str(request.get("cta") or ""),
                 "hud_text": str(request.get("hud_text") or ""),
                 "follow_text": str(request.get("follow_text") or ""),
             },
@@ -601,14 +790,10 @@ def _settings_payload(settings: ProjectSettings) -> dict[str, Any]:
         "video_duration_min": settings.video_duration_min,
         "video_duration_max": settings.video_duration_max,
         "default_title_prefix": settings.default_title_prefix,
-        "website_url": settings.website_url,
         "recent_limits": settings.recent_limits,
         "material_categories": settings.material_categories,
-        "hud_enable_live_data": settings.hud_enable_live_data,
-        "hud_fixed_formulas": settings.hud_fixed_formulas,
         "slogans": settings.slogans,
         "titles": settings.titles,
-        "hud_sources": settings.hud_sources,
         "composition_sequence": settings.composition_sequence,
         "beat_detection": settings.beat_detection,
         "max_variant_attempts": settings.max_variant_attempts,
@@ -621,6 +806,10 @@ def _settings_payload(settings: ProjectSettings) -> dict[str, Any]:
 
 def _merge_settings_payload(payload: dict[str, Any]) -> dict[str, Any]:
     merged = _settings_payload(_local_settings())
+    payload.pop("website_url", None)
+    payload.pop("hud_enable_live_data", None)
+    payload.pop("hud_fixed_formulas", None)
+    payload.pop("hud_sources", None)
     merged.update(payload)
     return merged
 
@@ -640,12 +829,8 @@ def _settings_from_payload(payload: dict[str, Any]) -> ProjectSettings:
     settings.video_duration_min = float(payload.get("video_duration_min") or settings.video_duration_min)
     settings.video_duration_max = float(payload.get("video_duration_max") or settings.video_duration_max)
     settings.default_title_prefix = str(payload.get("default_title_prefix") or settings.default_title_prefix)
-    settings.website_url = str(payload.get("website_url") or settings.website_url)
-    settings.hud_enable_live_data = bool(payload.get("hud_enable_live_data", settings.hud_enable_live_data))
-    settings.hud_fixed_formulas = list(payload.get("hud_fixed_formulas") or settings.hud_fixed_formulas)
     settings.slogans = list(payload.get("slogans") or settings.slogans)
     settings.titles = list(payload.get("titles") or settings.titles)
-    settings.hud_sources = dict(payload.get("hud_sources") or settings.hud_sources)
     settings.composition_sequence = list(payload.get("composition_sequence") or settings.composition_sequence)
     settings.beat_detection = dict(payload.get("beat_detection") or settings.beat_detection)
     settings.max_variant_attempts = int(payload.get("max_variant_attempts") or settings.max_variant_attempts)
@@ -917,8 +1102,7 @@ def _load_json(path: Path, default: Any) -> Any:
 
 
 def _hud_lines(value: str) -> list[str]:
-    lines = [line.strip() for line in value.splitlines() if line.strip()]
-    return lines or ["BTC/USD -> ONSITE VALUE", "GAS INPUT -> HASH OUTPUT"]
+    return [line.strip() for line in value.splitlines() if line.strip()]
 
 
 def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -933,14 +1117,13 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "source_mode",
         "active_category_ids",
         "recent_limits",
+        "video_duration_min",
         "video_duration_max",
-        "use_live_data",
+        "target_fps",
         "headline",
         "subhead",
-        "cta",
         "follow_text",
         "hud_text",
-        "transcript_text",
         "ending_template_mode",
         "ending_template_id",
         "ending_template_ids",
@@ -955,6 +1138,7 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _request_composition_sequence(request: dict[str, Any], settings: ProjectSettings) -> list[dict[str, Any]]:
+    request = _normalize_request_category_ids(request, settings)
     sequence = request.get("composition_sequence")
     if isinstance(sequence, list) and sequence:
         return sequence
@@ -971,3 +1155,14 @@ def _request_composition_sequence(request: dict[str, Any], settings: ProjectSett
             if str(category_id).strip()
         ]
     return settings.composition_sequence
+
+
+def _normalize_request_category_ids(request: dict[str, Any], settings: ProjectSettings) -> dict[str, Any]:
+    id_map = _legacy_material_category_id_map(settings.material_categories)
+    if not id_map or not _has_legacy_category_ids(request, id_map):
+        return request
+    normalized = dict(request)
+    _apply_category_id_map(normalized, id_map)
+    if isinstance(normalized.get("active_category_ids"), list):
+        normalized["active_category_ids"] = [id_map.get(str(item), str(item)) for item in normalized["active_category_ids"]]
+    return normalized

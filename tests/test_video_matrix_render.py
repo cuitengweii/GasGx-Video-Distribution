@@ -25,12 +25,8 @@ def _settings(output_root: Path) -> ProjectSettings:
         video_duration_min=1,
         video_duration_max=3,
         default_title_prefix="GasGx",
-        website_url="https://example.test",
-        hud_enable_live_data=False,
-        hud_fixed_formulas=[],
         slogans=[],
         titles=[],
-        hud_sources={},
         composition_sequence=[],
         beat_detection={},
         max_variant_attempts=1,
@@ -132,6 +128,32 @@ def test_render_variant_appends_prebuilt_ending_template(monkeypatch, tmp_path: 
     assert ending in captured["inputs"]
     assert "[ending]" in captured["filter_complex"]
     assert "concat=n=2" in captured["filter_complex"]
+
+
+def test_render_variant_copy_uses_ending_follow_text_without_cta(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    variant = _variant(source)
+
+    def fake_concat(_filter_complex, _inputs, output, bgm_path=None) -> None:
+        output.write_bytes(b"mp4")
+
+    monkeypatch.setattr(render, "concat_video", fake_concat)
+
+    asset = render.render_variant(
+        variant,
+        _settings(tmp_path),
+        template_copy="{title}\n\n片尾文案:\n{ending_follow_text}\n\nHUD:\n{hud_summary}\n",
+        batch_dir=tmp_path,
+        cover_template_config=None,
+        output_types={"mp4", "txt"},
+        outro_text="界面录入的片尾文案",
+    )
+
+    copy_text = asset.copy_path.read_text(encoding="utf-8")
+    assert "界面录入的片尾文案" in copy_text
+    assert "https://example.test" not in copy_text
+    assert "CTA" not in copy_text
 
 
 def test_render_variant_uses_independent_ending_cover_template(monkeypatch, tmp_path: Path) -> None:

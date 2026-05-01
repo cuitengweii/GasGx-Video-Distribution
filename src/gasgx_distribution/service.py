@@ -319,7 +319,6 @@ def initialize_system() -> dict[str, Any]:
             "target_height": settings.target_height,
             "recent_limits": settings.recent_limits,
             "material_categories": settings.material_categories,
-            "hud_enable_live_data": settings.hud_enable_live_data,
         },
         "ui_state": load_ui_state(config_dir / "ui_state.json"),
         "templates": load_templates(config_dir / "templates.json"),

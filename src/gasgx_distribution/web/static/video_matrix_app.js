@@ -14,6 +14,7 @@ let coverEditingContext = "cover";
 let modelImages = [];
 let selectedModelImageUrl = "";
 let sourcePreviewVideos = [];
+let endingModeLoading = "";
 
 const jobStepLabels = [
   ["queued", "任务提交", 0, ["queued"]],
@@ -203,10 +204,13 @@ async function init() {
 function renderSidebar(data) {
   $("outputCount").value = state.output_count || 3;
   $("maxWorkers").value = state.max_workers || 3;
+  $("videoDurationMin").value = state.video_duration_min || settings.video_duration_min || 8;
   $("videoDurationMax").value = state.video_duration_max || settings.video_duration_max || 12;
   syncNumber("outputCount");
+  syncNumber("videoDurationMin");
   syncNumber("videoDurationMax");
   syncRange("maxWorkers");
+  renderSidebarTemplateSelectors();
   const outputRoot = state.output_root || settings.output_root;
   $("outputRoot").dataset.fullPath = outputRoot;
   $("outputRoot").title = outputRoot;
@@ -214,6 +218,7 @@ function renderSidebar(data) {
   $("outputOptions").value = (state.output_options || ["mp4"])[0] || "mp4";
   $("outputOptions").onchange = scheduleStateSave;
   $("openOutput").onclick = () => openFolder(outputRootPath());
+  renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 60), scheduleStateSave);
   renderRadio("languageGroup", "copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], state.copy_language || "zh", scheduleStateSave);
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
@@ -222,6 +227,28 @@ function renderSidebar(data) {
     event.preventDefault();
     toggleBgmLibraryPopover();
   });
+}
+
+function renderSidebarTemplateSelectors() {
+  const coverSelect = $("sidebarCoverTemplate");
+  if (coverSelect) {
+    coverSelect.innerHTML = Object.entries(coverTemplates).map(([id, item]) =>
+      `<option value="${escapeHtml(id)}" ${id === selectedCover ? "selected" : ""}>${escapeHtml(item.name || id)}</option>`
+    ).join("");
+    coverSelect.onchange = () => selectCoverTemplate(coverSelect.value);
+  }
+  const videoSelect = $("sidebarVideoTemplate");
+  if (videoSelect) {
+    videoSelect.innerHTML = Object.entries(templates).map(([id, item]) =>
+      `<option value="${escapeHtml(id)}" ${id === selectedVideoTemplate ? "selected" : ""}>${escapeHtml(item.name || id)}</option>`
+    ).join("");
+    videoSelect.onchange = () => selectVideoTemplate(videoSelect.value);
+  }
+  const endingSelect = $("sidebarEndingTemplateMode");
+  if (endingSelect) {
+    endingSelect.value = state.ending_template_mode === "random" ? "random" : "dynamic";
+    endingSelect.onchange = () => switchEndingTemplateMode(endingSelect.value);
+  }
 }
 
 function renderSource(data) {
@@ -236,25 +263,38 @@ function renderSource(data) {
     const row = rows.get(category.id) || { category_id: category.id, duration: defaultDurationForCategory(category.id) };
     const limit = clamp(Number(recentLimits[category.id] || settings.recent_limits?.[category.id] || 8), 1, 10);
     const checked = activeCategoryIds.includes(category.id);
+    const totalCount = Number(data.category_counts?.[category.id] || 0);
     return `<div class="dir-row source-composition-row composition-row" data-index="${index}" data-source-category="${escapeHtml(category.id)}">
       <label class="category-toggle">
         <input type="checkbox" data-category-id="${escapeHtml(category.id)}" ${checked ? "checked" : ""}>
-        <span class="badge">${escapeHtml(category.label)}</span>
+        <span class="badge" title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(category.id)}</span>
       </label>
       <input type="hidden" data-composition-category value="${escapeHtml(category.id)}">
-      <code title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(shortPath(data.source_dirs[category.id] || ""))}</code>
+      <input data-category-label value="${escapeHtml(category.label || category.id)}" aria-label="${escapeHtml(category.id)}目录名称" ${checked ? "" : "disabled"}>
       <label class="composition-unit-field">
         <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" aria-label="${escapeHtml(category.label)}片段秒数" ${checked ? "" : "disabled"}>
-        <span>s</span>
+        <span>秒</span>
       </label>
       <label class="composition-unit-field composition-material-count">
+        <span>采用最新前</span>
         <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="${escapeHtml(category.label)}最新素材数量" ${checked ? "" : "disabled"}>
-        <span>条素材</span>
+        <span>条</span>
       </label>
-      <button type="button" data-source-open data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开</button>
+      <span class="source-total-count">素材总数：<b>${totalCount}</b></span>
+      <button type="button" data-source-open data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开目录</button>
     </div>`;
   }).join("");
   $("sourceDirs").querySelectorAll("[data-source-open]").forEach((btn) => btn.onclick = () => openFolder(btn.dataset.path));
+  $("sourceDirs").querySelectorAll("[data-category-label]").forEach((input) => {
+    input.dataset.savedValue = input.value;
+    input.onchange = () => renameMaterialCategory(input, data);
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        input.blur();
+      }
+    };
+  });
   $("sourceDirs").querySelectorAll("[data-category-id]").forEach((input) => input.onchange = () => {
     state.active_category_ids = selectedActiveCategoryIds(categories);
     updateCompositionState(true);
@@ -282,7 +322,7 @@ function renderSource(data) {
     };
   });
   $("addCategory").onclick = addMaterialCategory;
-  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；勾选素材目录后，直接在对应行设置片段秒数和最新素材数量，系统按行顺序自动组合混剪。";
+  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；每次按照目录把最新拍摄的短视频上传进对应的目录；勾选素材目录后，直接在对应行设置片段秒数和最新素材数量，系统按行顺序自动组合混剪。";
   renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], state.source_mode || "Category folders", () => {
     updateSourceMode();
     scheduleStateSave();
@@ -316,6 +356,33 @@ async function addMaterialCategory() {
   renderSource(data);
   renderComposition(data);
   log(`已添加素材目录：${label}`);
+}
+
+async function renameMaterialCategory(button, data) {
+  const row = button.closest(".composition-row");
+  const categoryId = button.dataset.categoryId || row?.dataset.sourceCategory || "";
+  const input = row?.querySelector("[data-category-label]");
+  const label = input?.value.trim() || "";
+  if (!categoryId || !label) {
+    log("请先输入目录名称。");
+    return;
+  }
+  if (input?.dataset.savedValue === label) return;
+  button.disabled = true;
+  try {
+    await api(`/api/video-matrix/material-categories/${encodeURIComponent(categoryId)}`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({label}),
+    });
+    const nextData = await api("/api/video-matrix/state");
+    state = nextData.ui_state; settings = nextData.settings;
+    renderSource(nextData);
+    renderComposition(nextData);
+    log(`已保存素材目录名称：${label}`);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderComposition(data = { settings }) {
@@ -452,14 +519,12 @@ function removeCompositionRow(index) {
 function renderTextSettings() {
   $("headline").value = state.headline || "";
   $("subhead").value = state.subhead || "";
-  $("cta").value = state.cta || "";
   $("followText").value = state.follow_text || "";
   $("hudText").value = state.hud_text || "";
-  $("transcriptText").value = state.transcript_text || "";
-  ["headline", "subhead", "cta", "followText", "hudText", "transcriptText"].forEach((id) => {
+  ["headline", "subhead", "followText", "hudText"].forEach((id) => {
     $(id).addEventListener("input", scheduleStateSave);
   });
-  ["headline", "subhead", "cta", "hudText"].forEach((id) => $(id).addEventListener("input", debounce(refreshAllPreviews, 250)));
+  ["headline", "subhead", "hudText"].forEach((id) => $(id).addEventListener("input", debounce(refreshAllPreviews, 250)));
   $("generateBtn").onclick = generate;
 }
 
@@ -487,6 +552,7 @@ async function selectVideoTemplate(templateId, options = {}) {
   selectedVideoTemplate = templateId;
   setImageLoading("videoTemplatePreview", "切换正文模板...");
   if (refreshTemplateGallery) setPanelLoading("videoTemplateGallery", "切换正文模板...");
+  if ($("sidebarVideoTemplate")) $("sidebarVideoTemplate").value = templateId;
   renderVideoTemplateSelector();
   renderVideoTemplateEditor();
   await saveTemplateSelection();
@@ -552,7 +618,7 @@ function renderEndingTemplatePanel(data) {
   const mode = state.ending_template_mode || "dynamic";
   const selected = endingTemplateSelectedName();
   const modeButtons = endingTemplateModeOptions.map(([value, label]) =>
-    `<button type="button" class="${mode === value ? "active" : ""}" data-ending-mode="${value}">${label}</button>`
+    `<button type="button" class="${mode === value ? "active" : ""} ${endingModeLoading === value ? "is-loading" : ""}" data-ending-mode="${value}" ${endingModeLoading ? "disabled" : ""}>${endingModeLoading === value ? buttonLoadingInline("切换中...") : label}</button>`
   ).join("");
   const options = localTemplates.length
     ? localTemplates.map((item) => `<option value="${escapeHtml(item.name)}" ${selected === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")
@@ -569,15 +635,7 @@ function renderEndingTemplatePanel(data) {
     </div>
   `;
   $("endingTemplateForm").querySelectorAll("[data-ending-mode]").forEach((button) => {
-    button.onclick = async () => {
-      state.ending_template_mode = button.dataset.endingMode;
-      if (state.ending_template_mode === "specific" && !state.ending_template_id && endingTemplateState.local.length) {
-        state.ending_template_id = endingTemplateState.local[0].name;
-      }
-      renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
-      await saveTemplateSelection();
-      await refreshEndingTemplatePreview();
-    };
+    button.onclick = () => switchEndingTemplateMode(button.dataset.endingMode, button);
   });
   if (mode === "dynamic") bindEndingCoverEditor();
   if (mode === "random") bindEndingRandomMaterials();
@@ -591,6 +649,31 @@ function renderEndingTemplatePanel(data) {
   }
   $("openEndingTemplateDir").onclick = () => openFolder(endingTemplateState.directory);
   $("openEndingTemplateDirInline").onclick = () => openFolder(endingTemplateState.directory);
+}
+
+async function switchEndingTemplateMode(mode, sourceButton = null) {
+  if (!mode) return;
+  endingModeLoading = mode;
+  if (sourceButton) {
+    sourceButton.classList.add("is-loading");
+    sourceButton.innerHTML = buttonLoadingInline("切换中...");
+  }
+  $("endingTemplateForm")?.querySelectorAll("[data-ending-mode]").forEach((item) => item.disabled = true);
+  state.ending_template_mode = mode;
+  if (state.ending_template_mode === "specific" && !state.ending_template_id && endingTemplateState.local.length) {
+    state.ending_template_id = endingTemplateState.local[0].name;
+  }
+  try {
+    renderSidebarTemplateSelectors();
+    renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
+    await saveTemplateSelection();
+    await refreshEndingTemplatePreview();
+  } finally {
+    endingModeLoading = "";
+    renderSidebarTemplateSelectors();
+    renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
+    refreshEndingTemplatePreview();
+  }
 }
 
 function selectedEndingTemplateNames(localTemplates = endingTemplateState.local || []) {
@@ -632,6 +715,7 @@ function bindEndingRandomMaterials() {
     button.onclick = () => {
       const name = button.dataset.endingPreviewToggle || "";
       endingPreviewOverrideName = endingPreviewOverrideName === name ? "" : name;
+      renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
       refreshEndingTemplatePreview();
     };
   });
@@ -640,8 +724,8 @@ function bindEndingRandomMaterials() {
 function endingPreviewToggleButtonHtml(name) {
   const active = endingPreviewOverrideName === name;
   const icon = active
-    ? `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="6" width="3.8" height="12" rx="1"></rect><rect x="13.2" y="6" width="3.8" height="12" rx="1"></rect></svg>`
-    : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5-10-6.5Z"></path></svg>`;
+    ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6.5h4v11H7zM13 6.5h4v11h-4z"></path></svg>`
+    : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4L18 12 8 5.8Z"></path></svg>`;
   return `<button class="ending-preview-toggle ${active ? "active" : ""}" type="button" data-ending-preview-toggle="${escapeHtml(name)}" title="${active ? "停止预览" : "播放预览"}" aria-label="${active ? "停止预览" : "播放预览"}">${icon}</button>`;
 }
 
@@ -736,9 +820,13 @@ async function refreshEndingTemplatePreview() {
     assetBox.classList.toggle("hidden", !asset);
     if (asset) {
       assetBox.innerHTML = asset.type === "video"
-        ? `<video src="${escapeHtml(asset.url)}" muted loop controls playsinline></video>`
+        ? `<video data-ending-preview-video src="${escapeHtml(asset.url)}" muted loop controls playsinline ${endingPreviewOverrideName ? "autoplay" : ""}></video>`
         : `<img src="${escapeHtml(asset.url)}" alt="">`;
       caption.textContent = `${mode === "random" ? "随机片尾素材预览" : "指定片尾素材"} / ${asset.name}`;
+      if (asset.type === "video" && endingPreviewOverrideName) {
+        const video = assetBox.querySelector("[data-ending-preview-video]");
+        video?.play?.().catch(() => {});
+      }
     } else {
       assetBox.innerHTML = `<div class="ending-template-empty">暂无片尾素材</div>`;
       assetBox.classList.remove("hidden");
@@ -1453,7 +1541,6 @@ async function refreshMainPreview() {
     title: $("subhead").value,
     headline: $("headline").value,
     subhead: $("subhead").value,
-    cta: $("cta").value || template.cta,
     hud_text: $("hudText").value,
     background_image_url: selectedModelImageUrl || modelImages[0]?.url || "",
     background_image_urls: modelImages.map((image) => image.url).filter(Boolean),
@@ -1466,6 +1553,7 @@ async function selectCoverTemplate(templateId) {
   if (!templateId || !coverTemplates[templateId]) return;
   selectedCover = templateId;
   setImageLoading("coverPreview", "切换第一屏模板...");
+  if ($("sidebarCoverTemplate")) $("sidebarCoverTemplate").value = templateId;
   renderCoverSelector();
   renderCoverEditor();
   await saveTemplateSelection();
@@ -1475,8 +1563,8 @@ async function selectCoverTemplate(templateId) {
 function previewPayload(template) {
   const payload = {...template};
   applyIndependentCoverDefaults(payload);
-  if ($("cta").value) payload.cta = $("cta").value;
-  return {template: payload, cover_mode: true, slogan: $("headline").value, title: $("subhead").value, headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value || payload.cta, hud_text: $("hudText").value, background_image_url: selectedModelImageUrl || modelImages[0]?.url || "", background_image_urls: modelImages.map((image) => image.url).filter(Boolean)};
+  payload.cta = "";
+  return {template: payload, cover_mode: true, slogan: $("headline").value, title: $("subhead").value, headline: $("headline").value, subhead: $("subhead").value, hud_text: $("hudText").value, background_image_url: selectedModelImageUrl || modelImages[0]?.url || "", background_image_urls: modelImages.map((image) => image.url).filter(Boolean)};
 }
 
 async function saveCoverAsNewTemplate() {
@@ -1695,7 +1783,9 @@ function generationConfirmHtml(statePayload) {
     <div class="confirm-summary">
       <div><span>生成数量</span><strong>${statePayload.output_count}</strong></div>
       <div><span>并行线程</span><strong>${statePayload.max_workers}</strong></div>
+      <div><span>最小节拍分析</span><strong>${statePayload.video_duration_min} 秒</strong></div>
       <div><span>最大节拍分析</span><strong>${statePayload.video_duration_max} 秒</strong></div>
+      <div><span>目标帧率</span><strong>${statePayload.target_fps} fps</strong></div>
       <div><span>输出格式</span><strong>${escapeHtml((statePayload.output_options || []).join(", "))}</strong></div>
     </div>
     <section>
@@ -1714,10 +1804,10 @@ function generationConfirmHtml(statePayload) {
       <h4>本次算法框架</h4>
       <ol>
         <li>按启用分类读取素材目录，每类最多取“最近素材”数量对应的新文件。</li>
-        <li>将候选素材归一化为 1080:1920、60fps 的短视频片段库。</li>
+        <li>将候选素材归一化为 1080:1920、${statePayload.target_fps}fps 的短视频片段库。</li>
         <li>按“生成结构”的分类顺序和片段秒数，为每条视频抽取不同素材片段。</li>
         <li>分析本地背景音乐节拍，把片段切换点尽量对齐节奏窗口。</li>
-        <li>按当前模板、HUD 文本和文案参考资料并行渲染，导出到最终视频目录。</li>
+        <li>按当前模板、HUD 文本和片尾文案并行渲染，导出到最终视频目录。</li>
       </ol>
     </section>
   `;
@@ -1726,21 +1816,23 @@ function generationConfirmHtml(statePayload) {
 function collectState() {
   const categories = Array.isArray(settings.material_categories) ? settings.material_categories : [];
   updateCompositionState();
+  const endingCopyText = endingCopyTextValue();
   return {
     output_count: Number($("outputCount").value), max_workers: Number($("maxWorkers").value),
+    video_duration_min: Number($("videoDurationMin").value || settings.video_duration_min || 8),
     video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 12),
+    target_fps: Number(radioValue("target_fps") || settings.target_fps || 60),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: radioValue("copy_language"),
-    source_mode: radioValue("source_mode") || "Category folders", use_live_data: true,
-    headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value,
-    follow_text: $("followText").value, hud_text: $("hudText").value,
-    transcript_text: $("transcriptText").value,
+    source_mode: radioValue("source_mode") || "Category folders",
+    headline: $("headline").value, subhead: $("subhead").value,
+    follow_text: endingCopyText, hud_text: $("hudText").value,
     ending_template_mode: endingTemplateMode(),
     ending_template_id: endingTemplateSelectedName(),
     ending_template_ids: selectedEndingTemplateNames(),
     ending_template_dir: endingTemplateState.directory,
     ending_cover_template: state.ending_cover_template,
-    bgm_source: "Local library", bgm_library_id: "",
+    bgm_source: "Local library", bgm_library_id: selectedBgmLibraryId(),
     composition_sequence: state.composition_sequence,
     composition_customized: Boolean(state.composition_customized),
     active_category_ids: selectedActiveCategoryIds(categories),
@@ -1749,6 +1841,12 @@ function collectState() {
       clamp(Number(state.recent_limits?.[category.id] || settings.recent_limits?.[category.id] || 8), 1, 10),
     ]))
   };
+}
+
+function endingCopyTextValue() {
+  const input = document.querySelector('[data-ending-cover-key="single_cover_title_text"]');
+  const value = input?.value ?? state.ending_cover_template?.single_cover_title_text ?? $("followText").value ?? state.follow_text ?? "";
+  return String(value).trim();
 }
 
 function activeCategories(categories) {
@@ -1794,6 +1892,7 @@ function outputRootPath() {
 function renderBgm(data) {
   const localBgm = Array.isArray(data.local_bgm) ? data.local_bgm : [];
   const localBgmDir = data.local_bgm_dir || "runtime/video_matrix/bgm";
+  state.bgm_library_id = localBgm.includes(state.bgm_library_id) ? state.bgm_library_id : "";
   bgmLibraryState = {
     local: localBgm,
     directory: localBgmDir,
@@ -1808,7 +1907,9 @@ function renderBgm(data) {
     <p id="bgmLibraryHint" class="bgm-library-hint"></p>
     <div class="links bgm-links"></div>`;
   $("bgmLibraryHint").textContent = localBgm.length
-    ? `已找到 ${localBgm.length} 首本地音频，生成时每次随机取 1 首：${localBgmDir}`
+    ? (state.bgm_library_id
+      ? `已选中唯一背景音乐：${state.bgm_library_id}`
+      : `已找到 ${localBgm.length} 首本地音频，未选中时生成会随机取 1 首：${localBgmDir}`)
     : `请把 MP3 文件放入：${localBgmDir}，然后刷新页面。`;
   document.querySelector("#bgmPanel .links").innerHTML = Object.values(data.bgm_library || {}).map(item => `<a href="${item.download_page}" target="_blank" rel="noopener">${item.name}</a>`).join("");
 }
@@ -1821,17 +1922,17 @@ function toggleBgmLibraryPopover() {
   if (isHidden) return;
   const localList = bgmLibraryState.local.length
     ? bgmLibraryState.local.map((name) => `
-      <li class="bgm-local-item">
-        <span>${escapeHtml(name)}</span>
+      <li class="bgm-local-item ${name === selectedBgmLibraryId() ? "is-selected" : ""}" data-bgm-name="${escapeHtml(name)}">
+        <button type="button" class="bgm-local-select" data-bgm-select="${escapeHtml(name)}" aria-pressed="${name === selectedBgmLibraryId() ? "true" : "false"}" title="设为本次唯一背景音乐">
+          <span class="bgm-select-dot"></span>
+          <span>${escapeHtml(name)}</span>
+        </button>
         <audio controls preload="none" src="/api/video-matrix/bgm/${encodeURIComponent(name)}"></audio>
       </li>`).join("")
     : "<li>暂无本地 MP3 文件</li>";
-  const linkList = bgmLibraryState.links.length
-    ? bgmLibraryState.links.map((item) => `<a href="${escapeHtml(item.download_page || "#")}" target="_blank" rel="noopener">${escapeHtml(item.name || "曲库来源")} / 打开试听来源</a>`).join("")
-    : "<span>暂无外部曲库链接</span>";
   const pixabayList = bgmLibraryState.pixabay.length
     ? renderPixabayTracks()
-    : `<button id="loadPixabayTracks" type="button">抓取 Pixabay industry 前 10 首</button>`;
+    : `<span class="pixabay-empty">点击下方按钮抓取试听列表。</span>`;
   panel.innerHTML = `
     <div class="bgm-popover-head">
       <div>
@@ -1848,24 +1949,43 @@ function toggleBgmLibraryPopover() {
       <div id="pixabayTrackList" class="pixabay-track-list">${pixabayList}</div>
     </section>
     <div class="bgm-download-box">
+      <div class="bgm-download-actions">
+        <button id="loadPixabayTracksInline" type="button">抓取 Pixabay industry 前 10 首</button>
+      </div>
       <strong>音频直链试听 / 下载</strong>
       <label><span>音频地址</span><input id="bgmDownloadUrl" placeholder="https://.../music.mp3"></label>
       <audio id="bgmUrlPreview" controls preload="none"></audio>
       <button id="downloadBgm" type="button">下载到本地曲库</button>
       <small id="bgmDownloadStatus"></small>
     </div>
-    <div class="bgm-popover-links">${linkList}</div>
   `;
   $("bgmDownloadUrl").oninput = () => {
     $("bgmUrlPreview").src = $("bgmDownloadUrl").value.trim();
   };
   $("downloadBgm").onclick = downloadBgmToLibrary;
   $("toggleBgmLibrarySize").onclick = toggleBgmLibrarySize;
-  $("loadPixabayTracks")?.addEventListener("click", loadPixabayTracks);
+  $("loadPixabayTracksInline")?.addEventListener("click", loadPixabayTracks);
+  panel.querySelectorAll("[data-bgm-select]").forEach((button) => {
+    button.onclick = () => selectBgmLibraryId(button.dataset.bgmSelect || "");
+  });
   panel.querySelectorAll("[data-pixabay-open]").forEach((button) => {
     button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
   });
   bindExclusiveBgmAudioPlayback(panel);
+}
+function selectedBgmLibraryId() {
+  return bgmLibraryState.local.includes(state.bgm_library_id) ? state.bgm_library_id : "";
+}
+function selectBgmLibraryId(name) {
+  state.bgm_library_id = selectedBgmLibraryId() === name ? "" : name;
+  scheduleStateSave();
+  renderBgm({ local_bgm: bgmLibraryState.local, local_bgm_dir: bgmLibraryState.directory, bgm_library: {} });
+  const panel = $("bgmLibraryPopover");
+  panel.classList.remove("hidden");
+  panel.classList.add("modal");
+  document.body.classList.add("bgm-modal-open");
+  toggleBgmLibraryPopover();
+  toggleBgmLibraryPopover();
 }
 function bindExclusiveBgmAudioPlayback(panel) {
   panel.querySelectorAll("audio").forEach((audio) => {

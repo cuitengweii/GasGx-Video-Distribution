@@ -14,7 +14,7 @@ def default_cover_templates() -> dict[str, dict[str, Any]]:
             "name": "Gas Engine Hook",
             "brand": "GasGx",
             "eyebrow": "GAS ENGINE / GENERATOR SET",
-            "cta": "www.gasgx.com/roi",
+        "cta": "",
             "tint_color": "#08120A",
             "tint_opacity": 0.58,
             "gradient_color": "#5DD62C",

@@ -35,7 +35,6 @@ def render_variant(
     batch_dir: Path,
     filename_prefix: str = "",
     bgm_path: Path | None = None,
-    transcript_text: str = "",
     output_types: set[str] | None = None,
     copy_language: str = "zh",
     template_config: dict | None = None,
@@ -96,7 +95,7 @@ def render_variant(
 
         if copy_path is not None:
             copy_path.write_text(
-                build_marketing_copy(variant, settings, transcript_text, copy_language, template_copy),
+                build_marketing_copy(variant, settings, copy_language, template_copy, outro_text),
                 encoding="utf-8",
             )
 

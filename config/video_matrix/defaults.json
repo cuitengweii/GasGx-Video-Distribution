@@ -16,7 +16,8 @@
     "category_F": 8,
     "category_G": 6,
     "category_H": 6,
-    "category_custom_1": 6
+    "category_I": 6,
+    "category_J": 5
   },
   "material_categories": [
     {
@@ -52,8 +53,12 @@
       "label": "工厂全貌"
     },
     {
-      "id": "category_custom_1",
+      "id": "category_I",
       "label": "测试"
+    },
+    {
+      "id": "category_J",
+      "label": "电控"
     }
   ],
   "video_duration_min": 8.0,
@@ -91,13 +96,6 @@
   },
   "copy_mode": "spark_then_template",
   "default_title_prefix": "GasGx",
-  "website_url": "https://www.gasgx.com/roi",
-  "hud_enable_live_data": true,
-  "hud_fixed_formulas": [
-    "Flare_Gas_Input -> Hash_Output",
-    "Captured_Gas -> Power -> ASIC_Throughput",
-    "Onsite_Gas_Value -> BTC_Revenue"
-  ],
   "slogans": [
     "Stop Flaring. Start Hashing.",
     "Monetize On-site.",
@@ -109,9 +107,5 @@
     "Gas To Compute",
     "Monetized On-site",
     "Hashrate In Motion"
-  ],
-  "hud_sources": {
-    "btc_usd": "https://api.coinbase.com/v2/prices/spot?currency=USD",
-    "hashrate": "https://api.blockchain.info/q/hashrate"
-  }
+  ]
 }

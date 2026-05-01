@@ -30,12 +30,8 @@ def _settings(**overrides) -> ProjectSettings:
         "video_duration_min": 8,
         "video_duration_max": 12,
         "default_title_prefix": "GasGx",
-        "website_url": "https://www.gasgx.com/roi",
-        "hud_enable_live_data": False,
-        "hud_fixed_formulas": ["A", "B", "C"],
         "slogans": ["Stop Flaring. Start Hashing."],
         "titles": ["Gas To Compute"],
-        "hud_sources": {},
         "composition_sequence": [
             {"category_id": "category_A", "duration": 1.5},
             {"category_id": "category_B", "duration": 3.4},
