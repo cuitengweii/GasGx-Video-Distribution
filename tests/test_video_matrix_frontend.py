@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> None:
     app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_app.js").read_text(encoding="utf-8")
     css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_styles.css").read_text(encoding="utf-8")
+    preview = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
 
     assert "本地背景音乐" in app
     assert "暂无本地 MP3 文件" in app
@@ -148,7 +149,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "nextTemplateCloneId" in app
     assert "saveCoverAsNewTemplate" in app
     assert "nextCoverTemplateMeta" in app
-    assert '<button type="button" id="saveCover">保存为新模板</button>' in app
+    assert '<button type="button" id="saveCover">保存并重建模板库</button>' in app
+    assert 'await api("/api/video-matrix/cover-templates"' in app
+    assert "state.cover_templates = coverTemplates" in app
+    assert "buildCoverTemplateVariants(sourceTemplate)" in app
+    assert "九宫格图片模板 ${serial}" in app
     assert "cover_template_${serial}" in app
     assert "第一屏封面模板 ${serial}" in app
     assert "selectVideoTemplate" in app
@@ -168,6 +173,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "gasgx-cover-template-text-update" in app
     assert "applyCoverTemplateUpdates" in app
     assert "applyCoverTextUpdates" in app
+    assert "body.cover-profile-mode .vm-template-mask-bg" in preview
+    assert "coverTileMaskStyle(template)" in preview
+    assert 'style="${maskStyle}"' in preview
+    assert "box-sizing: border-box" in preview
+    assert ".device-side-button" in preview
     assert "可视化调整" in app
     assert "当前模板调整" not in app
     assert "color-swatch-button" in app
@@ -226,14 +236,20 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert html.index('id="videoTemplateBackgrounds"') < html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"') < html.index('id="videoTemplateSelector"')
     assert ".video-template-picker" in css
     assert "height: calc(var(--preview-phone-height) + 36px)" in css
-    assert "minmax(340px, 380px)" in css
-    assert "width: min(100%, 380px)" in css
+    assert "minmax(360px, 1fr)" in css
+    assert "justify-content:stretch" in css
+    assert "max-width: none" in css
+    assert "hud_bar_width" in app
+    assert 'data-visual-command="width-down"' in app
+    assert 'data-visual-command="width-up"' in app
     assert "grid-template-columns: repeat(auto-fill, 154px)" in css
     assert "justify-self: center" in css
     assert "font-size: 13px" in css
     assert ".color-swatch-button" in css
     assert ".color-picker-icon" in css
     assert ".color-current-dot" in css
+    assert "#coverGallery .cover-card img" in css
+    assert "aspect-ratio: 9 / 16" in css
     assert "margin: 8px 0 14px" in css
     assert "inset: 0" in css
     assert "pointer-events: auto" in css

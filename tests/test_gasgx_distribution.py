@@ -315,6 +315,7 @@ def test_video_matrix_template_preview_returns_png(monkeypatch, tmp_path: Path) 
                 "show_title": True,
                 "hud_bar_y": 1700,
                 "hud_bar_height": 140,
+                "hud_bar_width": 760,
                 "hud_x": 60,
                 "hud_y": 1760,
                 "hud_font_size": 30,
@@ -337,6 +338,38 @@ def test_video_matrix_template_preview_returns_png(monkeypatch, tmp_path: Path) 
 
     assert response.status_code == 200
     assert response.json()["data_url"].startswith("data:image/png;base64,")
+
+
+def test_video_matrix_cover_template_library_can_be_rebuilt(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("gasgx_distribution.video_matrix_api.COVER_TEMPLATES_PATH", tmp_path / "cover_templates.json")
+    client = TestClient(create_app())
+
+    response = client.put(
+        "/api/video-matrix/cover-templates",
+        json={
+            "selected_cover": "cover_template_01",
+            "templates": {
+                "cover_template_01": {
+                    "name": "Edited Cover",
+                    "mask_mode": "top_gradient",
+                    "mask_color": "#5DD62C",
+                    "mask_opacity": 0.8,
+                    "profile_brand_text": "GasGx Custom",
+                    "brand_font_size": 64,
+                    "profile_brand_offset_y": 22,
+                    "primary_color": "#FFFFFF",
+                    "secondary_color": "#D6DED2",
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert list(data["cover_templates"]) == ["cover_template_01"]
+    assert data["cover_templates"]["cover_template_01"]["mask_mode"] == "top_gradient"
+    assert data["cover_templates"]["cover_template_01"]["profile_brand_text"] == "GasGx Custom"
 
 
 def test_video_matrix_source_selection_respects_active_categories(tmp_path: Path) -> None:

@@ -40,8 +40,9 @@ def render_video_template_preview_image(
     if template.get("show_hud", True):
         y = int(template["hud_bar_y"])
         bar_height = int(template["hud_bar_height"])
+        bar_width = int(template.get("hud_bar_width", width))
         draw.rectangle(
-            (0, y, width, y + bar_height),
+            (0, y, bar_width, y + bar_height),
             fill=_hex_to_rgba(str(template["hud_bar_color"]), float(template["hud_bar_opacity"])),
         )
         _draw_wrapped(

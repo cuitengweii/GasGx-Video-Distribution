@@ -16,6 +16,7 @@ from urllib.request import urlopen
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from PIL import Image
 from pydantic import BaseModel
 
 from . import service
@@ -267,23 +268,54 @@ def save_cover_template(template_id: str, payload: dict[str, Any]) -> dict[str, 
     return {"ok": True, "template_id": template_id, "template": payload, "storage": "local"}
 
 
+@router.put("/cover-templates")
+def replace_cover_templates(payload: dict[str, Any]) -> dict[str, Any]:
+    templates = payload.get("templates") or {}
+    if not isinstance(templates, dict) or not templates:
+        raise HTTPException(status_code=400, detail="templates must be a non-empty object")
+    selected_cover = str(payload.get("selected_cover") or next(iter(templates)))
+    if selected_cover not in templates:
+        selected_cover = next(iter(templates))
+    templates = {str(key): dict(value) for key, value in templates.items()}
+    if service.brand_database_backend() == "supabase":
+        current, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
+        current["cover_templates"] = templates
+        current.setdefault("ui_state", {})["cover_template_id"] = selected_cover
+        _persist_video_matrix_state(current)
+        return {"ok": True, "cover_templates": templates, "selected_cover": selected_cover, "storage": "database"}
+    COVER_TEMPLATES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    COVER_TEMPLATES_PATH.write_text(json.dumps(templates, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "cover_templates": templates, "selected_cover": selected_cover, "storage": "local"}
+
+
 @router.post("/cover-preview")
 def cover_preview(payload: dict[str, Any]) -> dict[str, str]:
     settings = _settings()
     template = payload.get("template") or {}
     headline = str(payload.get("headline") or "Gas Engines That Turn Field Gas Into Power")
     subhead = str(payload.get("subhead") or "Generator sets for onsite industrial load")
+    background = _cover_preview_background(str(payload.get("background_image_url") or ""))
     image = render_cover_preview_image(
         settings,
         template,
         headline=headline,
         subhead=subhead,
         hud_lines=_hud_lines(str(payload.get("hud_text") or "")),
+        background=background,
     )
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return {"data_url": f"data:image/png;base64,{encoded}"}
+
+
+def _cover_preview_background(url: str) -> Image.Image | None:
+    parsed = urlparse(url or "")
+    if parsed.path.startswith("/api/video-matrix/model-images/"):
+        target = MODEL_IMAGE_DIR / Path(unquote(parsed.path).rsplit("/", 1)[-1]).name
+        if target.exists() and target.suffix.lower() in IMAGE_EXTENSIONS:
+            return Image.open(target).convert("RGB")
+    return None
 
 
 @router.post("/open-folder")

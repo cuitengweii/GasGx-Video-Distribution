@@ -53,6 +53,7 @@ const videoTemplateFields = [
   ["title_bg_height", "标题背景高度", "range", 24, 180],
   ["title_bg_opacity", "标题背景透明度", "rangeFloat", 0, 1],
   ["hud_bar_height", "HUD 背景高度", "range", 40, 320],
+  ["hud_bar_width", "HUD 背景宽度", "range", 120, 1080],
   ["hud_bar_opacity", "HUD 透明度", "rangeFloat", 0, 1],
 ];
 const visualFontOptions = [
@@ -391,7 +392,7 @@ function renderCoverEditor() {
     <label>九宫格 Slogan文字<input data-key="tile_tagline_text" type="text" value="${escapeHtml(coverTemplateValue(t, "tile_tagline_text", "终结废气 | 重塑能源 | 就地变现"))}"></label>
     <label>九宫格 一句话视频描述<textarea data-key="tile_titles_text" rows="5">${escapeHtml(coverTemplateValue(t, "tile_titles_text", defaultCoverTileTitles().join("\n")))}</textarea></label>
     <div class="template-actions cover-template-actions">
-      <button type="button" id="saveCover">保存为新模板</button>
+      <button type="button" id="saveCover">保存并重建模板库</button>
     </div>`];
   $("coverForm").innerHTML = html.join("");
   $("coverForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
@@ -534,6 +535,8 @@ function visualTemplateToolbarHtml(template) {
     <div class="visual-toolbar-panel" aria-label="文字可视化工具">
       <button type="button" data-visual-command="size-down" title="缩小字号">A-</button>
       <button type="button" data-visual-command="size-up" title="放大字号">A+</button>
+      <button type="button" data-visual-command="width-down" title="缩小背景宽度">W-</button>
+      <button type="button" data-visual-command="width-up" title="放大背景宽度">W+</button>
       <button type="button" data-visual-command="edit" title="编辑文字">编辑</button>
       <button type="button" data-visual-command="align" data-value="left" title="左对齐">左齐</button>
       <button type="button" data-visual-command="align" data-value="center" title="居中对齐">居中</button>
@@ -677,6 +680,7 @@ function renderVideoTemplateBackgrounds() {
       selectedModelImageUrl = button.dataset.modelImage || "";
       renderVideoTemplateBackgrounds();
       refreshVideoTemplatePreview();
+      refreshGallery();
     };
   });
 }
@@ -818,42 +822,72 @@ async function selectCoverTemplate(templateId) {
 function previewPayload(template) {
   const payload = {...template};
   if ($("cta").value) payload.cta = $("cta").value;
-  return {template: payload, cover_mode: true, slogan: $("headline").value, title: $("subhead").value, headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value || payload.cta, hud_text: $("hudText").value, background_image_url: modelImages[0]?.url || "", background_image_urls: modelImages.map((image) => image.url).filter(Boolean)};
+  return {template: payload, cover_mode: true, slogan: $("headline").value, title: $("subhead").value, headline: $("headline").value, subhead: $("subhead").value, cta: $("cta").value || payload.cta, hud_text: $("hudText").value, background_image_url: selectedModelImageUrl || modelImages[0]?.url || "", background_image_urls: modelImages.map((image) => image.url).filter(Boolean)};
 }
 
 async function saveCoverAsNewTemplate() {
   const sourceTemplate = coverTemplates[selectedCover];
   if (!sourceTemplate) return;
   const previousCover = selectedCover;
+  const previousTemplates = {...coverTemplates};
   const button = $("saveCover");
-  const label = button?.textContent || "保存为新模板";
+  const label = button?.textContent || "保存并重建模板库";
   if (button) {
     button.disabled = true;
     button.textContent = "保存中...";
   }
-  const next = nextCoverTemplateMeta(coverTemplates);
-  coverTemplates[next.id] = {...JSON.parse(JSON.stringify(sourceTemplate)), name: next.name};
-  selectedCover = next.id;
-  state.cover_template_id = next.id;
+  coverTemplates = buildCoverTemplateVariants(sourceTemplate);
+  selectedCover = "cover_template_01";
+  state.cover_template_id = selectedCover;
+  state.cover_templates = coverTemplates;
   try {
-    await api(`/api/video-matrix/cover-templates/${next.id}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(coverTemplates[next.id])});
+    await api("/api/video-matrix/cover-templates", {method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify({templates: coverTemplates, selected_cover: selectedCover})});
     await saveTemplateSelection();
     pendingTemplateSave = "";
     renderCoverSelector();
     renderCoverEditor();
     await refreshMainPreview();
     await refreshGallery();
-    log(`已保存为第一屏新模板：${next.name}`);
+    log("已自动生成 9 组九宫格图片模板");
   } catch (error) {
-    delete coverTemplates[next.id];
+    coverTemplates = previousTemplates;
     selectedCover = previousCover;
     state.cover_template_id = previousCover;
+    state.cover_templates = previousTemplates;
     if (button) {
       button.disabled = false;
       button.textContent = label;
     }
     log(`第一屏新模板保存失败：${error.message}`);
   }
+}
+
+function buildCoverTemplateVariants(sourceTemplate) {
+  const source = JSON.parse(JSON.stringify(sourceTemplate || {}));
+  const variants = [
+    ["none", "#000000", 0, "left", 8, 12],
+    ["top_gradient", "#071015", 0.42, "center", 8, 12],
+    ["bottom_gradient", "#0E1A10", 0.52, "left", 64, 14],
+    ["full", "#143E72", 0.32, "center", 72, 14],
+    ["top_gradient", "#5DD62C", 0.28, "right", 10, 12],
+    ["bottom_gradient", "#071015", 0.62, "center", 104, 13],
+    ["full", "#10130D", 0.46, "left", 34, 15],
+    ["top_gradient", "#00A3FF", 0.24, "left", 96, 13],
+    ["bottom_gradient", "#FF9900", 0.28, "right", 72, 14],
+  ];
+  return Object.fromEntries(variants.map(([maskMode, maskColor, maskOpacity, textAlign, copyY, titleSize], index) => {
+    const serial = String(index + 1).padStart(2, "0");
+    return [`cover_template_${serial}`, {
+      ...source,
+      name: `九宫格图片模板 ${serial}`,
+      mask_mode: maskMode,
+      mask_color: maskColor,
+      mask_opacity: maskOpacity,
+      tile_text_align: textAlign,
+      tile_copy_y: copyY,
+      tile_title_font_size: titleSize,
+    }];
+  }));
 }
 
 const scheduleVideoTemplateSave = debounce(async () => {

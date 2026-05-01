@@ -59,15 +59,45 @@ def render_cover_preview_image(
     headline: str = "Stop Flaring. Start Hashing.",
     subhead: str = "Gas To Compute",
     hud_lines: list[str] | None = None,
+    background: Image.Image | None = None,
 ) -> Image.Image:
-    return build_intro_cover_image(
-        background=_placeholder_background(settings.target_width, settings.target_height),
-        settings=settings,
-        template_config=template_config,
-        headline=headline,
-        subhead=subhead,
-        hud_lines=hud_lines or ["BTC/USD -> ONSITE VALUE", "GAS INPUT -> HASH OUTPUT"],
-    )
+    return build_cover_tile_preview_image(settings, template_config, background=background)
+
+
+def build_cover_tile_preview_image(
+    settings: ProjectSettings,
+    template_config: dict | None,
+    background: Image.Image | None = None,
+) -> Image.Image:
+    template = coerce_cover_template(template_config)
+    width = int(settings.target_width)
+    height = int(settings.target_height)
+    source = background if background is not None else _placeholder_background(width, height)
+    base = _cover_crop(source, width, height).convert("RGBA")
+    base = _apply_tile_mask(base, template)
+    draw = ImageDraw.Draw(base)
+
+    accent = str(template["accent_color"])
+    align = str(template.get("tile_text_align", "left")).lower()
+    x = 56 if align != "right" else width - 56
+    anchor = "ra" if align == "right" else "la"
+    brand_font = _load_font(48, bold=True)
+    tagline_font = _load_font(26, bold=True)
+    title_font = _load_font(int(template.get("tile_title_font_size", 14)) * 5, bold=True)
+    titles = _tile_titles(str(template.get("tile_titles_text") or ""))
+
+    copy_y = int(template.get("tile_copy_y", 8)) * 8
+    draw.text((x, copy_y), str(template.get("tile_brand_text") or "GasGx"), fill=accent, font=brand_font, anchor=anchor)
+    draw.text((x, copy_y + 62), str(template.get("tile_tagline_text") or "终结废气 | 重塑能源 | 就地变现"), fill=accent, font=tagline_font, anchor=anchor)
+    text_y = copy_y + 150
+    for line in _wrap_text(draw, titles[0], title_font, width - 96)[:4]:
+        draw.text((x, text_y), line, fill="#ffffff", font=title_font, anchor=anchor)
+        text_y += int(title_font.size * 1.15)
+
+    like_font = _load_font(42, bold=True)
+    draw.text((width - 220, height - 92), "♡ 128", fill="#ffffff", font=like_font)
+
+    return base.convert("RGB")
 
 
 def build_intro_cover_image(
@@ -86,32 +116,33 @@ def build_intro_cover_image(
     align = str(template.get("align", "left"))
     margin = 72
 
-    brand_font = _load_font(52, bold=True)
-    headline_font = _load_font(84, bold=True)
-    subhead_font = _load_font(38)
+    brand_font = _load_font(int(template.get("brand_font_size", 52)), bold=True)
+    headline_font = _load_font(int(template.get("headline_font_size", 84)), bold=True)
+    subhead_font = _load_font(int(template.get("subhead_font_size", 38)))
 
-    brand = str(template.get("brand", "GasGx"))
+    brand = str(template.get("profile_brand_text") or template.get("brand", "GasGx"))
+    subhead = str(template.get("profile_subhead_text") or subhead)
     primary = str(template["primary_color"])
     secondary = str(template["secondary_color"])
 
     if align == "center":
-        _draw_centered(draw, (0, int(template["brand_y"])), width, brand, brand_font, primary)
+        _draw_centered(draw, (0, int(template["brand_y"]) + int(template.get("profile_brand_offset_y", 0))), width, brand, brand_font, primary)
         headline_lines = _wrap_text(draw, headline, headline_font, width - margin * 2)
-        y = int(template["headline_y"])
+        y = int(template["headline_y"]) + int(template.get("profile_headline_offset_y", 0))
         for line in headline_lines[:3]:
             _draw_centered(draw, (0, y), width, line, headline_font, primary)
             y += int(headline_font.size * 1.05)
-        y = int(template["subhead_y"])
+        y = int(template["subhead_y"]) + int(template.get("profile_subhead_offset_y", 0))
         for line in _wrap_text(draw, subhead, subhead_font, width - margin * 2)[:2]:
             _draw_centered(draw, (0, y), width, line, subhead_font, secondary)
             y += int(subhead_font.size * 1.2)
     else:
-        draw.text((margin, int(template["brand_y"])), brand, fill=primary, font=brand_font)
-        y = int(template["headline_y"])
+        draw.text((margin, int(template["brand_y"]) + int(template.get("profile_brand_offset_y", 0))), brand, fill=primary, font=brand_font)
+        y = int(template["headline_y"]) + int(template.get("profile_headline_offset_y", 0))
         for line in _wrap_text(draw, headline, headline_font, width - margin * 2)[:3]:
             draw.text((margin, y), line, fill=primary, font=headline_font)
             y += int(headline_font.size * 1.05)
-        draw.text((margin, int(template["subhead_y"])), subhead, fill=secondary, font=subhead_font)
+        draw.text((margin, int(template["subhead_y"]) + int(template.get("profile_subhead_offset_y", 0))), subhead, fill=secondary, font=subhead_font)
 
     return base.convert("RGB")
 
@@ -146,6 +177,43 @@ def _apply_tint_and_gradient(image: Image.Image, template: dict) -> Image.Image:
             alpha = int(max_alpha * ratio)
             draw.line([(0, y), (width, y)], fill=(*color, alpha))
     return Image.alpha_composite(image, mask)
+
+
+def _apply_tile_mask(image: Image.Image, template: dict) -> Image.Image:
+    mode = str(template.get("mask_mode") or "bottom_gradient")
+    if mode == "none":
+        return image
+    width, height = image.size
+    color = _hex_to_rgb(str(template.get("mask_color") or template.get("gradient_color") or template.get("tint_color")))
+    max_alpha = int(255 * float(template.get("mask_opacity", template.get("gradient_opacity", template.get("tint_opacity", 0.35)))))
+    max_alpha = max(0, min(255, max_alpha))
+    mask = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(mask)
+    if mode == "full":
+        draw.rectangle((0, 0, width, height), fill=(*color, max_alpha))
+    else:
+        for y in range(height):
+            ratio = y / max(height - 1, 1)
+            if mode == "top_gradient":
+                ratio = 1 - ratio
+            alpha = int(max_alpha * ratio)
+            draw.line([(0, y), (width, y)], fill=(*color, alpha))
+    return Image.alpha_composite(image, mask)
+
+
+def _tile_titles(value: str) -> list[str]:
+    titles = [line.strip() for line in value.splitlines() if line.strip()]
+    return titles or [
+        "燃气发电机组并网测试",
+        "油田伴生气资源再利用",
+        "移动式算力中心部署",
+        "野外发电设备日常维护",
+        "零燃除：变废为宝",
+        "集装箱数据中心内景",
+        "高效燃气轮机运行状态",
+        "夜间井场持续发电作业",
+        "极寒环境设备启动测试",
+    ]
 
 
 def _draw_panel(draw: ImageDraw.ImageDraw, width: int, y: int, hud_lines: list[str], font: ImageFont.ImageFont, template: dict) -> None:

@@ -8,6 +8,10 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&display=swap');
 
+        * {
+            box-sizing: border-box;
+        }
+
         html,
         body {
             width: 393px;
@@ -34,7 +38,11 @@
             box-shadow: 0 0 0 2px #333, 0 20px 40px rgba(0,0,0,0.8);
             position: relative;
             overflow: hidden;
-            background-color: #2c2c2c;
+            background-color: #050505;
+        }
+
+        .device-side-button {
+            display: none;
         }
 
         #previewVideo {
@@ -586,10 +594,10 @@
 </head>
 <body>
     <div class="relative w-[393px] h-[852px]">
-        <div class="absolute -left-[4px] top-[115px] w-[5px] h-[26px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
-        <div class="absolute -left-[4px] top-[165px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
-        <div class="absolute -left-[4px] top-[235px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
-        <div class="absolute -right-[4px] top-[195px] w-[5px] h-[75px] bg-[#444] rounded-r-[4px] border border-black shadow-sm z-0"></div>
+        <div class="device-side-button absolute -left-[4px] top-[115px] w-[5px] h-[26px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
+        <div class="device-side-button absolute -left-[4px] top-[165px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
+        <div class="device-side-button absolute -left-[4px] top-[235px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
+        <div class="device-side-button absolute -right-[4px] top-[195px] w-[5px] h-[75px] bg-[#444] rounded-r-[4px] border border-black shadow-sm z-0"></div>
 
         <div class="phone-mockup flex flex-col text-white relative z-10 w-full h-full">
             <video id="previewVideo" playsinline autoplay loop></video>
@@ -608,6 +616,8 @@
                 <div id="visualToolbar" class="vm-visual-toolbar">
                     <button id="sizeDown" type="button">-</button>
                     <button id="sizeUp" type="button">+</button>
+                    <button id="widthDown" type="button">W-</button>
+                    <button id="widthUp" type="button">W+</button>
                     <button id="editText" type="button">编辑</button>
                     <button class="vm-align-btn" type="button" data-align="left" title="左对齐">左</button>
                     <button class="vm-align-btn" type="button" data-align="center" title="居中">中</button>
@@ -840,6 +850,7 @@
         if (template.show_hud) {
           hudBar.style.top = designY(template.hud_bar_y);
           hudBar.style.height = designY(template.hud_bar_height || 120);
+          hudBar.style.width = designX(template.hud_bar_width || 1080);
           hudBar.style.background = template.hud_bar_color || "rgba(5, 17, 24, .68)";
           hudBar.style.opacity = template.hud_bar_opacity ?? 0.68;
         }
@@ -946,14 +957,16 @@
         const tileTagline = template.tile_tagline_text || "终结废气 | 重塑能源 | 就地变现";
         const titles = coverTileTitles(template.tile_titles_text);
         const likes = [128, 1097, 45, 888, 260, 410, 188, 332, 76];
+        const maskStyle = coverTileMaskStyle(template);
+        const copyStyle = coverTileCopyStyle(template);
         grid.innerHTML = images.slice(0, 9).map((src, index) => `
           <div class="cover-profile-tile">
             <img src="${src}" alt="">
-            <div class="cover-tile-shade"></div>
-            <div class="cover-tile-copy">
+            <div class="cover-tile-shade" style="${maskStyle}"></div>
+            <div class="cover-tile-copy" style="${copyStyle}">
               <strong>${escapeHtmlText(tileBrand)}</strong>
               <span>${escapeHtmlText(tileTagline)}</span>
-              <div class="cover-tile-title">${escapeHtmlText(titles[index] || titles[0])}</div>
+              <div class="cover-tile-title" style="font-size:${Number(template.tile_title_font_size || 12)}px">${escapeHtmlText(titles[index] || titles[0])}</div>
             </div>
             <div class="cover-tile-like">
               <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" /></svg>
@@ -961,6 +974,23 @@
             </div>
           </div>
         `).join("");
+      }
+
+      function coverTileMaskStyle(template) {
+        const mode = template.mask_mode || "bottom_gradient";
+        if (mode === "none") return "display:none";
+        const color = normalizeColor(template.mask_color || template.gradient_color || template.tint_color || "#071015");
+        const opacity = Math.max(0, Math.min(1, Number(template.mask_opacity ?? template.gradient_opacity ?? template.tint_opacity ?? 0.35)));
+        const alphaColor = hexToRgba(color, opacity);
+        if (mode === "full") return `inset:0;height:auto;background:${alphaColor}`;
+        if (mode === "top_gradient") return `inset:0;height:auto;background:linear-gradient(to bottom, ${alphaColor}, rgba(0,0,0,0))`;
+        return `inset:0;height:auto;background:linear-gradient(to top, ${alphaColor}, rgba(0,0,0,0))`;
+      }
+
+      function coverTileCopyStyle(template) {
+        const y = Math.max(0, Math.min(108, Number(template.tile_copy_y ?? 8)));
+        const align = template.tile_text_align || "left";
+        return `top:${y}px;text-align:${align}`;
       }
 
       function coverTileTitles(value) {
@@ -1006,6 +1036,8 @@
         });
         document.getElementById("sizeDown").addEventListener("click", () => adjustSize(-2));
         document.getElementById("sizeUp").addEventListener("click", () => adjustSize(2));
+        document.getElementById("widthDown").addEventListener("click", () => adjustWidth(-24));
+        document.getElementById("widthUp").addEventListener("click", () => adjustWidth(24));
         document.getElementById("visualColor").addEventListener("input", (event) => setColor(event.target.value));
         document.getElementById("fontFamily").addEventListener("change", (event) => setFontFamily(event.target.value));
         document.querySelectorAll(".vm-align-btn").forEach((button) => {
@@ -1041,6 +1073,8 @@
         if (!activeTarget && command !== "edit") selectTarget("title");
         if (command === "size-down") adjustSize(-2);
         if (command === "size-up") adjustSize(2);
+        if (command === "width-down") adjustWidth(-24);
+        if (command === "width-up") adjustWidth(24);
         if (command === "edit") enterTextEdit();
         if (command === "align") setTextAlign(value || "left");
         if (command === "font-family") setFontFamily(value);
@@ -1144,6 +1178,12 @@
         const template = currentPayload?.template || {};
         const key = activeTarget === "hudBar" ? "hud_bar_height" : activeTarget === "sloganBar" ? "slogan_bg_height" : activeTarget === "titleBar" ? "title_bg_height" : `${activeTarget}_font_size`;
         postTemplateUpdates({ [key]: Math.max(8, Number(template[key] || 24) + delta) });
+      }
+
+      function adjustWidth(delta) {
+        if (activeTarget !== "hudBar") return;
+        const template = currentPayload?.template || {};
+        postTemplateUpdates({ hud_bar_width: clamp(Number(template.hud_bar_width || 1080) + delta, 120, 1080) });
       }
 
       function setColor(value) {

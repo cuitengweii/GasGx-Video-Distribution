@@ -28,6 +28,7 @@ def default_template() -> dict[str, Any]:
         "show_title": True,
         "hud_bar_y": 1804,
         "hud_bar_height": 116,
+        "hud_bar_width": 1080,
         "hud_x": 42,
         "hud_y": 1842,
         "hud_font_size": 32,

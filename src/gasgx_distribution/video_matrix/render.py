@@ -230,7 +230,7 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
     if template.get("show_hud", True):
         filters.append(
             "drawbox="
-            f"x=0:y={int(template['hud_bar_y'])}:w=iw:h={int(template['hud_bar_height'])}:"
+            f"x=0:y={int(template['hud_bar_y'])}:w={int(template.get('hud_bar_width', 1080))}:h={int(template['hud_bar_height'])}:"
             f"color={template['hud_bar_color']}@{float(template['hud_bar_opacity']):.2f}:t=fill"
         )
         filters.extend(

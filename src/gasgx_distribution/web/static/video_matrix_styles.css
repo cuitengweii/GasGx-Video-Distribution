@@ -877,9 +877,9 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 
 .template-preview-editor {
   display:grid;
-  grid-template-columns:minmax(var(--preview-phone-width), max-content) minmax(340px, 380px);
-  justify-content:center;
-  gap:clamp(36px, 5vw, 76px);
+  grid-template-columns:minmax(var(--preview-phone-width), max-content) minmax(360px, 1fr);
+  justify-content:stretch;
+  gap:22px;
   align-items:start;
   margin-top: 10px;
   padding: 18px;
@@ -899,9 +899,9 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 }
 
 #videoTemplateForm {
-  width: min(100%, 380px);
-  min-width: 340px;
-  max-width: 380px;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
   align-self: start;
   height: calc(var(--preview-phone-height) + 36px);
   max-height: calc(var(--preview-phone-height) + 36px);
@@ -910,7 +910,7 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   border: 1px solid rgba(93,214,44,.22);
   border-radius: 8px;
   background: rgba(7, 13, 9, .42);
-  justify-self:end;
+  justify-self:stretch;
   scrollbar-width: thin;
 }
 
@@ -1236,6 +1236,10 @@ input[type="color"]::-moz-color-swatch {
 .cover-card { flex:0 0 154px; color:var(--muted); font-size:12px; cursor:pointer; }
 .cover-card img { width:154px; aspect-ratio:9/16; object-fit:cover; border-radius:18px; border:1px solid #333; padding:6px; background:#080808; }
 .cover-card.active img { border-color:var(--green); box-shadow:0 0 18px rgba(93,214,44,.36); }
+#coverGallery .cover-card img {
+  aspect-ratio: 9 / 16;
+  border-radius: 18px;
+}
 .progress { height:10px; background:#242824; border-radius:99px; overflow:hidden; margin-top:14px; }
 #progressBar { height:100%; width:0%; background:var(--green); transition:width .2s; }
 .job-status-card {
