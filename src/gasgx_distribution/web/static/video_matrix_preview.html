@@ -75,6 +75,10 @@
             clip-path: polygon(0 100%, 16% 38%, 28% 100%, 44% 34%, 56% 100%, 72% 32%, 84% 100%, 100% 36%, 100% 100%);
         }
 
+        .vm-template-mask-bg.is-simple-mask::before {
+            display: none;
+        }
+
         .bg-overlay {
             background: linear-gradient(
                 to bottom,
@@ -181,6 +185,16 @@
             background: rgba(5, 17, 24, .68);
             cursor: move;
             user-select: text;
+        }
+
+        .vm-template-text-bar {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            border-radius: 10px;
+            background: rgba(5, 17, 24, .68);
+            cursor: move;
+            user-select: none;
         }
 
         .vm-template-editable.is-editing {
@@ -310,6 +324,264 @@
             font-weight: 600;
             line-height: 1.25;
         }
+
+        body.cover-profile-mode #previewVideo,
+        body.cover-profile-mode .vm-template-mask-bg,
+        body.cover-profile-mode .bg-overlay,
+        body.cover-profile-mode .vm-template-layer,
+        body.cover-profile-mode .status-scale,
+        body.cover-profile-mode .back-control,
+        body.cover-profile-mode .sound-toggle,
+        body.cover-profile-mode .phone-mockup > .relative.z-10 {
+            display: none !important;
+        }
+
+        .cover-profile-shell {
+            position: absolute;
+            inset: 0;
+            z-index: 30;
+            display: flex;
+            flex-direction: column;
+            background: #101010;
+            color: #fff;
+            font-family: 'Noto Sans SC', sans-serif;
+            overflow: hidden;
+        }
+
+        .cover-status-bar {
+            position: relative;
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 24px 8px;
+            color: #fff;
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .cover-status-icons {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            opacity: .92;
+        }
+
+        .cover-status-icons svg {
+            display: block;
+            color: #fff;
+        }
+
+        .cover-island {
+            position: absolute;
+            left: 50%;
+            top: 8px;
+            width: 110px;
+            height: 30px;
+            transform: translateX(-50%);
+            border-radius: 999px;
+            background: #000;
+        }
+
+        .cover-profile-scroll {
+            flex: 1;
+            overflow: hidden;
+            background: #101010;
+        }
+
+        .cover-profile-head {
+            display: grid;
+            grid-template-columns: 76px minmax(0, 1fr);
+            gap: 16px;
+            padding: 8px 20px 0;
+        }
+
+        .cover-avatar {
+            width: 76px;
+            height: 76px;
+            display: grid;
+            place-items: center;
+            border: 1px solid rgba(255,255,255,.1);
+            border-radius: 50%;
+            background: #1c1c1e;
+            box-shadow: inset 0 0 18px rgba(0,0,0,.45);
+            color: #5dd62c;
+            font-size: 20px;
+            font-weight: 900;
+            font-style: italic;
+            text-shadow: 0 0 10px rgba(93, 214, 44, .45);
+        }
+
+        .cover-profile-copy {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-width: 0;
+        }
+
+        .cover-profile-editable {
+            cursor: move;
+            user-select: text;
+        }
+
+        .cover-profile-editable.active {
+            outline: 2px solid #5dd62c;
+            outline-offset: 4px;
+            border-radius: 6px;
+        }
+
+        .cover-profile-editable.is-editing {
+            cursor: text;
+        }
+
+        .cover-brand-name {
+            color: #fff;
+            font-size: 19px;
+            font-weight: 500;
+            line-height: 1.25;
+            letter-spacing: 0;
+        }
+
+        .cover-location {
+            margin-top: 8px;
+            color: #888;
+            font-size: 13px;
+        }
+
+        .cover-bio {
+            position: relative;
+            padding: 18px 20px 0;
+            color: #ccc;
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        #coverProfileHeadline {
+            display: block;
+            min-height: 4.8em;
+            white-space: pre-line;
+            line-height: 1.2;
+        }
+
+        .cover-expand {
+            color: #888;
+        }
+
+        .cover-count {
+            margin-top: 8px;
+            color: #666;
+            font-size: 13px;
+        }
+
+        .cover-action-row {
+            display: flex;
+            gap: 12px;
+            padding: 18px 20px 18px;
+        }
+
+        .cover-action-row button {
+            flex: 1;
+            display: grid;
+            place-items: center;
+            min-height: 40px;
+            border: 0;
+            border-radius: 8px;
+            box-shadow: none;
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .cover-follow-button {
+            color: #000;
+            background: #5dd62c;
+            text-align: center;
+        }
+
+        .cover-message-button {
+            color: #fff;
+            background: #262628;
+        }
+
+        .cover-profile-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2px;
+            background: #000;
+        }
+
+        .cover-profile-tile {
+            position: relative;
+            aspect-ratio: 3 / 4;
+            overflow: hidden;
+            background: #222;
+        }
+
+        .cover-profile-tile img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .cover-tile-shade {
+            position: absolute;
+            inset: 0 0 auto;
+            height: 84px;
+            background: linear-gradient(to bottom, rgba(0,0,0,.85), rgba(0,0,0,.32), transparent);
+        }
+
+        .cover-tile-copy {
+            position: absolute;
+            inset: 8px 8px auto;
+            z-index: 2;
+        }
+
+        .cover-tile-copy strong {
+            display: block;
+            color: #5dd62c;
+            font-size: 12px;
+            font-weight: 900;
+            line-height: 1;
+        }
+
+        .cover-tile-copy span {
+            display: block;
+            margin-top: 4px;
+            color: #5dd62c;
+            font-size: 8px;
+            line-height: 1.1;
+            white-space: nowrap;
+            transform: scale(.94);
+            transform-origin: left top;
+        }
+
+        .cover-tile-title {
+            margin-top: 8px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.15;
+        }
+
+        .cover-tile-like {
+            position: absolute;
+            right: 9px;
+            bottom: 10px;
+            z-index: 3;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            color: rgba(255,255,255,.9);
+            font-size: 12px;
+            font-weight: 600;
+            text-shadow: 0 2px 8px rgba(0,0,0,.75);
+        }
+
+        .cover-tile-like svg {
+            width: 14px;
+            height: 14px;
+        }
     </style>
 </head>
 <body>
@@ -327,6 +599,8 @@
             <div class="bg-overlay absolute inset-0 pointer-events-none z-0"></div>
             <div class="vm-template-layer" aria-hidden="true">
                 <div id="templateHudBar" class="vm-template-hud-bar vm-template-editable" data-template-target="hudBar"></div>
+                <div id="templateSloganBar" class="vm-template-text-bar vm-template-editable" data-template-target="sloganBar"></div>
+                <div id="templateTitleBar" class="vm-template-text-bar vm-template-editable" data-template-target="titleBar"></div>
                 <div id="templateSlogan" class="vm-template-text vm-template-slogan vm-template-editable" data-template-target="slogan"></div>
                 <div id="templateTitle" class="vm-template-text vm-template-title vm-template-editable" data-template-target="title"></div>
                 <div id="templateHudText" class="vm-template-text vm-template-hud vm-template-editable" data-template-target="hud"></div>
@@ -351,6 +625,36 @@
                         <option value="'Courier New', Consolas, monospace">数据等宽</option>
                     </select>
                     <input id="visualColor" type="color" value="#ffffff" aria-label="颜色">
+                </div>
+            </div>
+
+            <div id="coverProfileShell" class="cover-profile-shell" hidden>
+                <div class="cover-status-bar">
+                    <span>06:41</span>
+                    <div class="cover-island"></div>
+                    <div class="cover-status-icons" aria-hidden="true">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2 22h2V12H2v10zm5 0h2V8H7v14zm5 0h2V4h-2v18zm5 0h2V0h-2v22z"/></svg>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3C7.8 3 3.9 4.4 1 6.8l11 14.1 11-14.1C20.1 4.4 16.2 3 12 3zm0 2.5c3.3 0 6.4 1.1 8.9 3L12 18 3.1 8.5c2.5-1.9 5.6-3 8.9-3z"/></svg>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="18" height="10" rx="2" fill="currentColor"/><path d="M22 10v4" stroke-width="2" stroke-linecap="round"/></svg>
+                    </div>
+                </div>
+                <div class="cover-profile-scroll">
+                    <div class="cover-profile-head">
+                        <div class="cover-avatar">GasGx</div>
+                        <div class="cover-profile-copy">
+                            <div id="coverProfileBrand" class="cover-brand-name cover-profile-editable" data-cover-target="brand">GasGx | 燃气发电解决方案</div>
+                            <div id="coverProfileLocation" class="cover-location cover-profile-editable" data-cover-target="eyebrow">山西 大同</div>
+                        </div>
+                    </div>
+                    <div class="cover-bio">
+                        <div id="coverProfileHeadline" class="cover-profile-editable" data-cover-target="headline">全球领先的搁浅天然气算力变现引擎，解锁搁浅燃气能源驱动能源就地变现...<span class="cover-expand">展开</span></div>
+                        <div id="coverProfileSubhead" class="cover-count cover-profile-editable" data-cover-target="subhead">162 条原创内容</div>
+                    </div>
+                    <div class="cover-action-row">
+                        <button id="coverProfileCta" class="cover-follow-button cover-profile-editable" data-cover-target="cta" type="button">关注</button>
+                        <button class="cover-message-button" type="button">私信</button>
+                    </div>
+                    <div id="coverProfileGrid" class="cover-profile-grid"></div>
                 </div>
             </div>
 
@@ -437,8 +741,11 @@
       const templateMask = document.getElementById("templateMaskBg");
       let currentPayload = templatePayload;
       let activeTarget = "";
+      let activeCoverTarget = "";
       let dragging = null;
+      let coverDragging = null;
       let editingTextNode = null;
+      let editingCoverNode = null;
       if (videoPath) {
         video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(videoPath)}`;
       } else {
@@ -471,6 +778,7 @@
       });
       applyTemplatePayload(templatePayload);
       initVisualEditor();
+      initCoverVisualEditor();
 
       function decodeTemplatePayload(value) {
         if (!value) return null;
@@ -517,10 +825,16 @@
 
       function applyTemplatePayload(payload) {
         if (!payload) return;
+        if (payload.cover_mode) {
+          document.body.classList.add("cover-profile-mode");
+          applyCoverProfilePayload(payload);
+          return;
+        }
+        document.body.classList.remove("cover-profile-mode");
         const template = payload.template || {};
         backgroundImage.hidden = !payload.background_image_url;
         if (payload.background_image_url) backgroundImage.src = payload.background_image_url;
-        templateMask.hidden = payload.show_template_mask === false;
+        applyTemplateMask(templateMask, template, payload.show_template_mask !== false);
         const hudBar = document.getElementById("templateHudBar");
         hudBar.hidden = !template.show_hud;
         if (template.show_hud) {
@@ -529,9 +843,140 @@
           hudBar.style.background = template.hud_bar_color || "rgba(5, 17, 24, .68)";
           hudBar.style.opacity = template.hud_bar_opacity ?? 0.68;
         }
+        setTextBar("templateSloganBar", template.show_slogan, template.slogan_y, template.slogan_bg_height || 80, template.slogan_bg_color || template.hud_bar_color, template.slogan_bg_opacity ?? 0.62);
+        setTextBar("templateTitleBar", template.show_title, template.title_y, template.title_bg_height || template.slogan_bg_height || 92, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62);
         setLayerText("templateSlogan", template.show_slogan, payload.slogan, template.slogan_x, template.slogan_y, template.slogan_font_size, template.secondary_color);
         setLayerText("templateTitle", template.show_title, payload.title, template.title_x, template.title_y, template.title_font_size, template.primary_color);
         setLayerText("templateHudText", template.show_hud, payload.hud_text, template.hud_x, template.hud_y, template.hud_font_size, template.secondary_color);
+      }
+
+      function applyCoverProfilePayload(payload) {
+        currentPayload = payload;
+        const template = payload.template || {};
+        const shell = document.getElementById("coverProfileShell");
+        shell.hidden = false;
+        setCoverText("coverProfileBrand", payload.brand || template.profile_brand_text || "GasGx | 燃气发电解决方案", template.brand_font_size || 52, template.primary_color, "brand");
+        setCoverText("coverProfileLocation", payload.eyebrow || template.profile_eyebrow_text || "山西 大同", template.eyebrow_font_size || 30, template.secondary_color || "#888888", "eyebrow");
+        setCoverText("coverProfileHeadline", formatCoverHeadline(payload.headline || payload.slogan || "全球领先的搁浅天然气算力变现引擎，解锁搁浅燃气能源驱动能源就地变现..."), template.headline_font_size || 38, template.primary_color, "headline");
+        setCoverText("coverProfileSubhead", template.profile_subhead_text || "162 条原创内容", template.subhead_font_size || 28, template.secondary_color || "#666666", "subhead");
+        setCoverText("coverProfileCta", template.profile_cta_text || "关注", template.cta_font_size || 42, "#000000", "cta");
+        renderCoverProfileGrid(payload.background_image_url);
+      }
+
+      function applyTemplateMask(node, template, visible) {
+        const mode = template.mask_mode || "bottom_gradient";
+        node.hidden = !visible || mode === "none";
+        if (node.hidden) return;
+        const color = normalizeColor(template.mask_color || template.gradient_color || template.tint_color || "#071015");
+        const opacity = Math.max(0, Math.min(1, Number(template.mask_opacity ?? template.gradient_opacity ?? template.tint_opacity ?? 0.35)));
+        const alphaColor = hexToRgba(color, opacity);
+        node.classList.add("is-simple-mask");
+        node.style.opacity = "1";
+        if (mode === "top_gradient") {
+          node.style.background = `linear-gradient(to bottom, ${alphaColor}, rgba(0,0,0,0))`;
+        } else if (mode === "full") {
+          node.style.background = alphaColor;
+        } else {
+          node.style.background = `linear-gradient(to top, ${alphaColor}, rgba(0,0,0,0))`;
+        }
+      }
+
+      function setCoverText(id, text, size, color, target, withExpand = false) {
+        const node = document.getElementById(id);
+        node.innerHTML = `${escapeHtmlText(text || "")}${withExpand ? '<span class="cover-expand">展开</span>' : ""}`;
+        node.style.transform = `translateY(${Number((currentPayload?.template || {})[coverTargetOffsetKey(target)] || 0)}px)`;
+        node.style.fontSize = designSize(size || 32);
+        node.style.color = color || "#ffffff";
+        node.style.fontFamily = (currentPayload?.template || {})[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
+        node.style.textAlign = (currentPayload?.template || {})[`${target}_text_align`] || "left";
+      }
+
+      function formatCoverHeadline(value, lineCount = 4) {
+        const raw = String(value || "").replace(/\s*展开\s*$/u, "").trim();
+        if (!raw) return "";
+        const existingLines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        if (existingLines.length >= lineCount) {
+          return existingLines.slice(0, lineCount).join("\n");
+        }
+        const normalized = existingLines.join(" ").replace(/\s+/g, " ").trim();
+        const words = normalized.split(/\s+/).filter(Boolean);
+        if (words.length >= lineCount) {
+          const lines = Array.from({ length: lineCount }, () => []);
+          words.forEach((word, index) => {
+            const targetLine = Math.min(lineCount - 1, Math.floor(index * lineCount / words.length));
+            lines[targetLine].push(word);
+          });
+          return lines.map((line) => line.join(" ")).join("\n");
+        }
+        const chars = Array.from(normalized.replace(/\s+/g, ""));
+        if (chars.length >= lineCount) {
+          const chunkSize = Math.ceil(chars.length / lineCount);
+          return Array.from({ length: lineCount }, (_, index) => chars.slice(index * chunkSize, (index + 1) * chunkSize).join(""))
+            .filter(Boolean)
+            .join("\n");
+        }
+        return existingLines.concat(Array(lineCount - existingLines.length).fill("")).join("\n");
+      }
+
+      function escapeHtmlText(value) {
+        return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+      }
+
+      function coverTargetOffsetKey(target) {
+        return `profile_${target}_offset_y`;
+      }
+
+      function renderCoverProfileGrid(primaryImageUrl) {
+        const grid = document.getElementById("coverProfileGrid");
+        const template = currentPayload?.template || {};
+        const payloadImages = Array.isArray(currentPayload?.background_image_urls) ? currentPayload.background_image_urls.filter(Boolean) : [];
+        const images = [
+          ...payloadImages,
+          primaryImageUrl,
+          "https://images.unsplash.com/photo-1581092918056-0c4c3acd3789?w=500&q=80",
+          "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=500&q=80",
+          "https://images.unsplash.com/photo-1621905251189-08b45d6a269e?w=500&q=80",
+          "https://images.unsplash.com/photo-1504917595217-d4dc5ebe6122?w=500&q=80",
+          "https://images.unsplash.com/photo-1534398079543-7ae6d016b86a?w=500&q=80",
+          "https://images.unsplash.com/photo-1563986768494-4dee2763ff0f?w=500&q=80",
+          "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=500&q=80",
+          "https://images.unsplash.com/photo-1605810230434-7631ac76ec81?w=500&q=80",
+        ].filter(Boolean).filter((src, index, list) => list.indexOf(src) === index);
+        const tileBrand = template.tile_brand_text || "GasGx";
+        const tileTagline = template.tile_tagline_text || "终结废气 | 重塑能源 | 就地变现";
+        const titles = coverTileTitles(template.tile_titles_text);
+        const likes = [128, 1097, 45, 888, 260, 410, 188, 332, 76];
+        grid.innerHTML = images.slice(0, 9).map((src, index) => `
+          <div class="cover-profile-tile">
+            <img src="${src}" alt="">
+            <div class="cover-tile-shade"></div>
+            <div class="cover-tile-copy">
+              <strong>${escapeHtmlText(tileBrand)}</strong>
+              <span>${escapeHtmlText(tileTagline)}</span>
+              <div class="cover-tile-title">${escapeHtmlText(titles[index] || titles[0])}</div>
+            </div>
+            <div class="cover-tile-like">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" /></svg>
+              <span>${likes[index] || 0}</span>
+            </div>
+          </div>
+        `).join("");
+      }
+
+      function coverTileTitles(value) {
+        const fallback = ["燃气发电机组并网测试", "油田伴生气资源再利用", "移动式算力中心部署", "野外发电设备日常维护", "零燃除：变废为宝", "集装箱数据中心内景", "高效燃气轮机运行状态", "夜间井场持续发电作业", "极寒环境设备启动测试"];
+        const lines = String(value || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        return lines.length ? lines : fallback;
+      }
+
+      function setTextBar(id, visible, y, height, color, opacity) {
+        const node = document.getElementById(id);
+        node.hidden = !visible;
+        if (!visible) return;
+        node.style.top = designY(y);
+        node.style.height = designY(height);
+        node.style.background = color || "rgba(5, 17, 24, .68)";
+        node.style.opacity = opacity;
       }
 
       function initVisualEditor() {
@@ -572,6 +1017,24 @@
         document.addEventListener("keydown", handleKeyboardMove);
       }
 
+      function initCoverVisualEditor() {
+        document.querySelectorAll(".cover-profile-editable").forEach((node) => {
+          node.addEventListener("pointerdown", beginCoverDrag);
+          node.addEventListener("click", (event) => {
+            event.stopPropagation();
+            selectCoverTarget(node.dataset.coverTarget);
+          });
+          node.contentEditable = "false";
+          node.spellcheck = false;
+          node.addEventListener("input", () => postCoverTextUpdate(node.dataset.coverTarget, editablePlainText(node)));
+          node.addEventListener("blur", exitCoverTextEdit);
+          node.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") exitCoverTextEdit();
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") exitCoverTextEdit();
+          });
+        });
+      }
+
       window.addEventListener("message", (event) => {
         if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-command") return;
         const { command, value } = event.data;
@@ -584,21 +1047,52 @@
         if (command === "color") setColor(value);
       });
 
+      window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin || event.data?.type !== "gasgx-cover-template-command") return;
+        const { command, value } = event.data;
+        if (!activeCoverTarget && command !== "edit") selectCoverTarget("headline");
+        if (command === "size-down") adjustCoverSize(-2);
+        if (command === "size-up") adjustCoverSize(2);
+        if (command === "edit") enterCoverTextEdit();
+        if (command === "align") setCoverTextAlign(value || "left");
+        if (command === "font-family") setCoverFontFamily(value);
+        if (command === "color") setCoverColor(value);
+      });
+
       function selectTarget(target) {
         activeTarget = target;
         document.querySelectorAll(".vm-template-editable").forEach((node) => node.classList.toggle("active", node.dataset.templateTarget === target));
         document.getElementById("visualToolbar").classList.add("active");
         const template = currentPayload?.template || {};
-        document.getElementById("fontFamily").disabled = target === "hudBar";
-        document.getElementById("visualColor").value = normalizeColor(target === "hudBar" ? template.hud_bar_color : target === "title" ? template.primary_color : template.secondary_color);
+        document.getElementById("fontFamily").disabled = isBackgroundTarget(target);
+        document.getElementById("visualColor").value = normalizeColor(backgroundColorValue(target, template) || (target === "title" ? template.primary_color : template.secondary_color));
         document.getElementById("fontFamily").value = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
-        document.getElementById("editText").disabled = target === "hudBar";
+        document.getElementById("editText").disabled = isBackgroundTarget(target);
         updateAlignButtons(template[`${target}_text_align`] || "left");
+      }
+
+      function isBackgroundTarget(target) {
+        return target === "hudBar" || target === "sloganBar" || target === "titleBar";
+      }
+
+      function backgroundColorValue(target, template) {
+        if (target === "hudBar") return template.hud_bar_color;
+        if (target === "sloganBar") return template.slogan_bg_color || template.hud_bar_color;
+        if (target === "titleBar") return template.title_bg_color || template.hud_bar_color;
+        return "";
       }
 
       function normalizeColor(value) {
         if (!value || !String(value).startsWith("#")) return "#ffffff";
         return String(value).slice(0, 7);
+      }
+
+      function hexToRgba(value, opacity) {
+        const clean = normalizeColor(value).replace("#", "");
+        const red = parseInt(clean.slice(0, 2), 16);
+        const green = parseInt(clean.slice(2, 4), 16);
+        const blue = parseInt(clean.slice(4, 6), 16);
+        return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
       }
 
       function beginDrag(event) {
@@ -621,8 +1115,8 @@
         const rawX = Math.max(0, Math.min(393, event.clientX - phoneRect.left - dragging.dx));
         const rawY = Math.max(0, Math.min(852, event.clientY - phoneRect.top - dragging.dy));
         const snapped = snapToCenter(rawX, rawY, event.currentTarget);
-        const updates = dragging.target === "hudBar"
-          ? { hud_bar_y: toDesignY(snapped.y) }
+        const updates = isBackgroundTarget(dragging.target)
+          ? barPositionUpdates(dragging.target, snapped.y)
           : targetPositionUpdates(dragging.target, snapped.x, snapped.y);
         postTemplateUpdates(updates);
       }
@@ -639,34 +1133,40 @@
         return { hud_x: toDesignX(x), hud_y: toDesignY(y) };
       }
 
+      function barPositionUpdates(target, y) {
+        if (target === "sloganBar") return { slogan_y: toDesignY(y) };
+        if (target === "titleBar") return { title_y: toDesignY(y) };
+        return { hud_bar_y: toDesignY(y) };
+      }
+
       function adjustSize(delta) {
         if (!activeTarget) return;
         const template = currentPayload?.template || {};
-        const key = activeTarget === "hudBar" ? "hud_bar_height" : `${activeTarget}_font_size`;
+        const key = activeTarget === "hudBar" ? "hud_bar_height" : activeTarget === "sloganBar" ? "slogan_bg_height" : activeTarget === "titleBar" ? "title_bg_height" : `${activeTarget}_font_size`;
         postTemplateUpdates({ [key]: Math.max(8, Number(template[key] || 24) + delta) });
       }
 
       function setColor(value) {
         if (!activeTarget) return;
-        const key = activeTarget === "hudBar" ? "hud_bar_color" : activeTarget === "title" ? "primary_color" : "secondary_color";
+        const key = activeTarget === "hudBar" ? "hud_bar_color" : activeTarget === "sloganBar" ? "slogan_bg_color" : activeTarget === "titleBar" ? "title_bg_color" : activeTarget === "title" ? "primary_color" : "secondary_color";
         postTemplateUpdates({ [key]: value });
       }
 
       function setFontFamily(value) {
-        if (!activeTarget || activeTarget === "hudBar") return;
+        if (!activeTarget || isBackgroundTarget(activeTarget)) return;
         postTemplateUpdates({ [`${activeTarget}_font_family`]: value });
       }
 
       function setTextAlign(value) {
-        if (!activeTarget || activeTarget === "hudBar") return;
+        if (!activeTarget || isBackgroundTarget(activeTarget)) return;
         postTemplateUpdates({ [`${activeTarget}_text_align`]: value || "left" });
         updateAlignButtons(value || "left");
       }
 
       function updateAlignButtons(value) {
         document.querySelectorAll(".vm-align-btn").forEach((button) => {
-          button.disabled = activeTarget === "hudBar";
-          button.classList.toggle("active", button.dataset.align === value && activeTarget !== "hudBar");
+          button.disabled = isBackgroundTarget(activeTarget);
+          button.classList.toggle("active", button.dataset.align === value && !isBackgroundTarget(activeTarget));
         });
       }
 
@@ -711,7 +1211,7 @@
       }
 
       function activeTextNode() {
-        if (!activeTarget || activeTarget === "hudBar") return null;
+        if (!activeTarget || isBackgroundTarget(activeTarget)) return null;
         return document.querySelector(`[data-template-target="${activeTarget}"].vm-template-text`);
       }
 
@@ -734,8 +1234,9 @@
         const template = currentPayload?.template || {};
         const deltaX = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
         const deltaY = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
-        if (activeTarget === "hudBar") {
-          postTemplateUpdates({ hud_bar_y: clamp(Number(template.hud_bar_y || 0) + deltaY, 0, 1920) });
+        if (isBackgroundTarget(activeTarget)) {
+          const key = activeTarget === "hudBar" ? "hud_bar_y" : activeTarget === "sloganBar" ? "slogan_y" : "title_y";
+          postTemplateUpdates({ [key]: clamp(Number(template[key] || 0) + deltaY, 0, 1920) });
           return;
         }
         const prefix = activeTarget === "title" ? "title" : activeTarget === "slogan" ? "slogan" : "hud";
@@ -743,6 +1244,107 @@
           [`${prefix}_x`]: clamp(Number(template[`${prefix}_x`] || 0) + deltaX, 0, 1080),
           [`${prefix}_y`]: clamp(Number(template[`${prefix}_y`] || 0) + deltaY, 0, 1920),
         });
+      }
+
+      function selectCoverTarget(target) {
+        activeCoverTarget = target;
+        document.querySelectorAll(".cover-profile-editable").forEach((node) => node.classList.toggle("active", node.dataset.coverTarget === target));
+      }
+
+      function beginCoverDrag(event) {
+        if (editingCoverNode) return;
+        if (event.target.closest("button") && event.currentTarget.id !== "coverProfileCta") return;
+        const target = event.currentTarget.dataset.coverTarget;
+        selectCoverTarget(target);
+        const template = currentPayload?.template || {};
+        coverDragging = { target, startY: event.clientY, startOffset: Number(template[coverTargetOffsetKey(target)] || 0) };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        event.currentTarget.addEventListener("pointermove", coverDragMove);
+        event.currentTarget.addEventListener("pointerup", endCoverDrag, { once: true });
+      }
+
+      function coverDragMove(event) {
+        if (!coverDragging) return;
+        const nextOffset = clamp(coverDragging.startOffset + event.clientY - coverDragging.startY, -180, 420);
+        postCoverTemplateUpdates({ [coverTargetOffsetKey(coverDragging.target)]: Math.round(nextOffset) });
+      }
+
+      function endCoverDrag(event) {
+        event.currentTarget.removeEventListener("pointermove", coverDragMove);
+        coverDragging = null;
+      }
+
+      function coverTargetYKey(target) {
+        if (target === "brand" || target === "eyebrow") return "brand_y";
+        if (target === "subhead") return "subhead_y";
+        if (target === "cta") return "cta_y";
+        return "headline_y";
+      }
+
+      function coverTargetSizeKey(target) {
+        if (target === "brand") return "brand_font_size";
+        if (target === "eyebrow") return "eyebrow_font_size";
+        if (target === "subhead") return "subhead_font_size";
+        if (target === "cta") return "cta_font_size";
+        return "headline_font_size";
+      }
+
+      function adjustCoverSize(delta) {
+        if (!activeCoverTarget) return;
+        const template = currentPayload?.template || {};
+        const key = coverTargetSizeKey(activeCoverTarget);
+        postCoverTemplateUpdates({ [key]: Math.max(8, Number(template[key] || 32) + delta) });
+      }
+
+      function setCoverColor(value) {
+        if (!activeCoverTarget) return;
+        const key = activeCoverTarget === "subhead" || activeCoverTarget === "eyebrow" ? "secondary_color" : "primary_color";
+        postCoverTemplateUpdates({ [key]: value });
+      }
+
+      function setCoverFontFamily(value) {
+        if (!activeCoverTarget) return;
+        postCoverTemplateUpdates({ [`${activeCoverTarget}_font_family`]: value });
+      }
+
+      function setCoverTextAlign(value) {
+        if (!activeCoverTarget) return;
+        postCoverTemplateUpdates({ [`${activeCoverTarget}_text_align`]: value || "left" });
+      }
+
+      function postCoverTemplateUpdates(updates) {
+        currentPayload = { ...(currentPayload || {}), template: { ...((currentPayload || {}).template || {}), ...updates } };
+        applyCoverProfilePayload(currentPayload);
+        window.parent.postMessage({ type: "gasgx-cover-template-update", updates }, window.location.origin);
+      }
+
+      function postCoverTextUpdate(target, value) {
+        currentPayload = { ...(currentPayload || {}), [target]: value };
+        window.parent.postMessage({ type: "gasgx-cover-template-text-update", text: { [target]: value } }, window.location.origin);
+      }
+
+      function enterCoverTextEdit() {
+        const node = document.querySelector(`[data-cover-target="${activeCoverTarget}"].cover-profile-editable`);
+        if (!node) return;
+        editingCoverNode = node;
+        node.contentEditable = "true";
+        node.classList.add("is-editing");
+        node.focus();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      function exitCoverTextEdit() {
+        if (!editingCoverNode) return;
+        editingCoverNode.contentEditable = "false";
+        postCoverTextUpdate(editingCoverNode.dataset.coverTarget, editablePlainText(editingCoverNode));
+        editingCoverNode.classList.remove("is-editing");
+        editingCoverNode.blur();
+        editingCoverNode = null;
       }
 
       function clamp(value, min, max) {

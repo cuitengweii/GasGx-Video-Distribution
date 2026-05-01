@@ -241,4 +241,25 @@ def coerce_cover_template(template: dict[str, Any] | None) -> dict[str, Any]:
     merged = default_cover_templates()[DEFAULT_COVER_TEMPLATE_ID].copy()
     if template:
         merged.update(template)
+    merged.setdefault("mask_mode", "bottom_gradient")
+    merged.setdefault("mask_color", merged.get("gradient_color") or merged.get("tint_color") or "#071015")
+    merged.setdefault("mask_opacity", merged.get("gradient_opacity", merged.get("tint_opacity", 0.35)))
+    merged.setdefault("tile_brand_text", "GasGx")
+    merged.setdefault("tile_tagline_text", "终结废气 | 重塑能源 | 就地变现")
+    merged.setdefault(
+        "tile_titles_text",
+        "\n".join(
+            [
+                "燃气发电机组并网测试",
+                "油田伴生气资源再利用",
+                "移动式算力中心部署",
+                "野外发电设备日常维护",
+                "零燃除：变废为宝",
+                "集装箱数据中心内景",
+                "高效燃气轮机运行状态",
+                "夜间井场持续发电作业",
+                "极寒环境设备启动测试",
+            ]
+        ),
+    )
     return merged

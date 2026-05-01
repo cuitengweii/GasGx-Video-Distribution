@@ -108,24 +108,9 @@
         </div>
       </section>
 
-      <section class="video-template-workbench">
-        <div class="section-title"><span>VIDEO TEMPLATE</span><b>9:16 正文叠层模板</b></div>
-        <div id="videoTemplateSelector" class="template-tabs"></div>
-        <div id="videoTemplateBackgrounds" class="template-background-strip"></div>
-        <div class="template-preview-editor">
-          <div class="preview-stage compact-preview">
-            <iframe id="videoTemplatePreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="video template preview" scrolling="no"></iframe>
-            <small id="videoTemplateCaption"></small>
-          </div>
-          <form id="videoTemplateForm" class="control-panel"></form>
-        </div>
-        <div id="videoTemplateGallery" class="cover-gallery"></div>
-      </section>
-
       <section class="editor-grid">
         <section class="cover-workbench">
           <div class="section-title"><span>FIRST SCREEN</span><b>第一屏封面模板</b></div>
-          <div id="coverSelector" class="template-tabs"></div>
           <div class="cover-editor">
             <div class="preview-stage"><iframe id="coverPreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="cover preview" scrolling="no"></iframe><small id="previewCaption"></small></div>
             <form id="coverForm" class="control-panel"></form>
@@ -133,14 +118,28 @@
           <div id="coverGallery" class="cover-gallery"></div>
         </section>
 
+        <section class="video-template-workbench">
+          <div class="section-title"><span>VIDEO TEMPLATE</span><b>9:16 正文叠层模板</b></div>
+          <div id="videoTemplateBackgrounds" class="template-background-strip"></div>
+          <div class="template-preview-editor">
+            <div class="preview-stage compact-preview">
+              <iframe id="videoTemplatePreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="video template preview" scrolling="no"></iframe>
+            </div>
+            <form id="videoTemplateForm" class="control-panel"></form>
+          </div>
+          <div class="video-template-picker">
+            <div id="videoTemplateGallery" class="cover-gallery"></div>
+            <div id="videoTemplateSelector" class="template-tabs"></div>
+          </div>
+        </section>
+
         <section class="side-editor">
-          <div class="section-title"><span>TEXT</span><b>视频文字设置</b></div>
-          <label>主标题 / 视频口号<textarea id="headline"></textarea></label>
-          <label>副标题 / 视频标题<textarea id="subhead"></textarea></label>
-          <label>首屏 CTA<input id="cta" /></label>
-          <label>结尾关注提醒<input id="followText" /></label>
-          <label>视频 HUD 文本<textarea id="hudText"></textarea></label>
-          <label>文案参考资料<textarea id="transcriptText"></textarea></label>
+          <input id="headline" type="hidden" />
+          <input id="subhead" type="hidden" />
+          <input id="cta" type="hidden" />
+          <input id="followText" type="hidden" />
+          <input id="hudText" type="hidden" />
+          <input id="transcriptText" type="hidden" />
           <div id="jobLog" class="job-status-card">
             <div class="job-status-head">
               <strong id="jobStatusTitle">等待生成</strong>

@@ -15,7 +15,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "视频碎片素材目录" in html
     assert "手动上传素材" not in html
     assert "上传文字稿" not in html
-    assert "文案参考资料" in html
+    assert "TEXT视频文字设置" not in html
+    assert "主标题 / 视频口号" not in html
+    assert "副标题 / 视频标题" not in html
+    assert "首屏 CTA" not in html
+    assert "结尾关注提醒" not in html
+    assert "视频 HUD 文本" not in html
+    assert "文案参考资料" not in html
+    assert '<input id="headline" type="hidden" />' in html
+    assert html.index('class="cover-workbench"') < html.index('class="video-template-workbench"') < html.index('class="side-editor"')
     assert "transcriptFile" not in html
     assert "transcriptText" in html
     assert "generationConfirmModal" in html
@@ -136,11 +144,54 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "scheduleVideoTemplateSave" in app
     assert "scheduleCoverTemplateSave" in app
     assert "saveTemplateSelection" in app
-    assert "renderCoverSelector(); renderCoverEditor(); await saveTemplateSelection(); await refreshAllPreviews();" in app
-    assert "renderVideoTemplateEditor();\n    await saveTemplateSelection();" in app
+    assert "cloneVideoTemplate" in app
+    assert "nextTemplateCloneId" in app
+    assert "saveCoverAsNewTemplate" in app
+    assert "nextCoverTemplateMeta" in app
+    assert '<button type="button" id="saveCover">保存为新模板</button>' in app
+    assert "cover_template_${serial}" in app
+    assert "第一屏封面模板 ${serial}" in app
+    assert "selectVideoTemplate" in app
+    assert "title_bg_height" in app
+    assert "title_bg_opacity" in app
+    assert 'id="cloneVideoTemplate"' in app
+    assert '<button type="button" id="saveVideoTemplate">保存当前</button>' in app
+    assert 'button.textContent = "保存中..."' in app
+    assert "切换正文模板..." in app
+    assert "selectCoverTemplate" in app
+    assert "切换第一屏模板..." in app
+    assert "coverTemplateBackgrounds" not in html
+    assert "renderCoverTemplateBackgrounds" not in app
+    assert "coverVisualToolbarHtml" in app
+    assert "gasgx-cover-template-command" in app
+    assert "gasgx-cover-template-update" in app
+    assert "gasgx-cover-template-text-update" in app
+    assert "applyCoverTemplateUpdates" in app
+    assert "applyCoverTextUpdates" in app
+    assert "可视化调整" in app
+    assert "当前模板调整" not in app
+    assert "color-swatch-button" in app
+    assert "color-picker-icon" in app
+    assert "color-current-dot" in app
+    assert 'data-value="left" title="左对齐">左齐' in app
+    assert 'data-value="center" title="居中对齐">居中' in app
+    assert 'data-value="right" title="右对齐">右齐' in app
+    assert "show_template_mask: false" in app
+    assert "show_template_mask: true" in app
+    assert "coverMaskModeOptions" in app
+    assert "上渐变蒙版" in app
+    assert "下渐变蒙版" in app
+    assert "全蒙版" in app
+    assert 'data-key="mask_color"' in app
+    assert 'data-key="tile_titles_text"' in app
+    assert "selectedCoverModelImageUrl" not in app
+    assert "切换封面背景..." not in app
+    assert "background_image_urls: modelImages.map" in app
+    assert "background_image_url: modelImages[0]?.url || \"\"" in app
+    assert "await selectVideoTemplate(card.dataset.id)" in app
     assert "正文模板自动保存失败" in app
     assert "第一屏模板自动保存失败" in app
-    assert "const recentLimits = state.recent_limits || {}" in app
+    assert "const recentLimits = state.recent_limits || settings.recent_limits || {}" in app
     assert '$("transcriptText").value = state.transcript_text || ""' in app
     assert 'transcript_text: $("transcriptText").value' in app
     assert "confirmGeneration(statePayload)" in app
@@ -167,13 +218,42 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "::-webkit-scrollbar-thumb" in css
     assert "#saveState" in css
     assert "#openBgmDir" in css
+    assert ".template-actions" in css
+    assert "grid-template-columns: minmax(0, 1fr) 124px" in css
+    assert "cursor:pointer" in css
+    assert "videoTemplateCaption" not in html
+    assert "videoTemplateCaption" not in app
+    assert html.index('id="videoTemplateBackgrounds"') < html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"') < html.index('id="videoTemplateSelector"')
+    assert ".video-template-picker" in css
+    assert "height: calc(var(--preview-phone-height) + 36px)" in css
+    assert "minmax(340px, 380px)" in css
+    assert "width: min(100%, 380px)" in css
+    assert "grid-template-columns: repeat(auto-fill, 154px)" in css
+    assert "justify-self: center" in css
+    assert "font-size: 13px" in css
+    assert ".color-swatch-button" in css
+    assert ".color-picker-icon" in css
+    assert ".color-current-dot" in css
+    assert "margin: 8px 0 14px" in css
+    assert "inset: 0" in css
+    assert "pointer-events: auto" in css
+    assert "coverSelector" not in html
+    assert "#coverForm" in css
+    assert ".visual-editor-hint" in css
+    assert ".cover-template-actions" in css
+    assert "max-height: none" in css
+    assert "overflow: visible" in css
+    assert "background: rgba(7, 13, 9, .42)" in css
+    assert "#videoTemplateForm .range-control" in css
+    assert "padding: 6px 10px" in css
+    assert "min-height: 28px" in css
     assert 'classList.toggle("error-message", isError)' in app
     assert ".job-status-card.error" in css
     assert "#jobMessage.error-message" in css
     assert ".confirm-modal" in css
     assert ".confirm-panel" in css
     assert ".confirm-algorithm" in css
-    assert "composition-panel" in html
+    assert "composition-panel" in css
     assert "videoDurationMax" in html
     assert "video_duration_max" in app
     assert "composition-rows" in css
@@ -188,6 +268,33 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "video.volume = 1" in preview_html
     assert "soundToggle.addEventListener" in preview_html
     assert ".sound-toggle" in preview_html
+    assert "templateSloganBar" in preview_html
+    assert "templateTitleBar" in preview_html
+    assert "vm-template-text-bar" in preview_html
+    assert "slogan_bg_height" in preview_html
+    assert "title_bg_height" in preview_html
+    assert "isBackgroundTarget" in preview_html
+    assert "coverProfileShell" in preview_html
+    assert "cover-profile-mode" in preview_html
+    assert "cover-profile-grid" in preview_html
+    assert "GasGx | 燃气发电解决方案" in preview_html
+    assert "gasgx-cover-template-command" in preview_html
+    assert "postCoverTemplateUpdates" in preview_html
+    assert "coverTargetOffsetKey" in preview_html
+    assert "profile_cta_text" in preview_html
+    assert "cover-tile-like" in preview_html
+    assert "1097" in preview_html
+    assert "background_image_urls" in preview_html
+    assert "payloadImages" in preview_html
+    assert "place-items: center" in preview_html
+    assert "formatCoverHeadline" in preview_html
+    assert "min-height: 4.8em" in preview_html
+    assert "padding: 8px 20px 0" in preview_html
+    assert "applyTemplateMask" in preview_html
+    assert "hexToRgba" in preview_html
+    assert "coverTileTitles" in preview_html
+    assert "tile_brand_text" in preview_html
+    assert "tile_tagline_text" in preview_html
     assert 'class="sound-toggle hidden"' in preview_html
 
 

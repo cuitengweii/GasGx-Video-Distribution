@@ -87,23 +87,15 @@ def build_intro_cover_image(
     margin = 72
 
     brand_font = _load_font(52, bold=True)
-    eyebrow_font = _load_font(24)
     headline_font = _load_font(84, bold=True)
     subhead_font = _load_font(38)
-    hud_font = _load_font(28)
-    cta_font = _load_font(28, bold=True)
 
     brand = str(template.get("brand", "GasGx"))
-    eyebrow = str(template.get("eyebrow", ""))
-    cta = str(template.get("cta", settings.website_url))
     primary = str(template["primary_color"])
     secondary = str(template["secondary_color"])
-    accent = str(template["accent_color"])
 
     if align == "center":
         _draw_centered(draw, (0, int(template["brand_y"])), width, brand, brand_font, primary)
-        if eyebrow:
-            _draw_centered(draw, (0, int(template["brand_y"]) + 70), width, eyebrow, eyebrow_font, accent)
         headline_lines = _wrap_text(draw, headline, headline_font, width - margin * 2)
         y = int(template["headline_y"])
         for line in headline_lines[:3]:
@@ -115,16 +107,12 @@ def build_intro_cover_image(
             y += int(subhead_font.size * 1.2)
     else:
         draw.text((margin, int(template["brand_y"])), brand, fill=primary, font=brand_font)
-        if eyebrow:
-            draw.text((margin, int(template["brand_y"]) + 70), eyebrow, fill=accent, font=eyebrow_font)
         y = int(template["headline_y"])
         for line in _wrap_text(draw, headline, headline_font, width - margin * 2)[:3]:
             draw.text((margin, y), line, fill=primary, font=headline_font)
             y += int(headline_font.size * 1.05)
         draw.text((margin, int(template["subhead_y"])), subhead, fill=secondary, font=subhead_font)
 
-    _draw_panel(draw, width, int(template["hud_y"]), hud_lines, hud_font, template)
-    _draw_cta(draw, width, int(template["cta_y"]), cta, cta_font, template)
     return base.convert("RGB")
 
 
@@ -140,16 +128,24 @@ def _cover_crop(image: Image.Image, width: int, height: int) -> Image.Image:
 
 def _apply_tint_and_gradient(image: Image.Image, template: dict) -> Image.Image:
     width, height = image.size
-    tint = Image.new("RGBA", image.size, _hex_to_rgba(str(template["tint_color"]), float(template["tint_opacity"])))
-    base = Image.alpha_composite(image, tint)
-    gradient = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(gradient)
-    color = _hex_to_rgb(str(template["gradient_color"]))
-    max_alpha = int(255 * float(template["gradient_opacity"]))
-    for y in range(height):
-        alpha = int(max_alpha * (y / max(height - 1, 1)))
-        draw.line([(0, y), (width, y)], fill=(*color, alpha))
-    return Image.alpha_composite(base, gradient)
+    mode = str(template.get("mask_mode") or "bottom_gradient")
+    if mode == "none":
+        return image
+    color = _hex_to_rgb(str(template.get("mask_color") or template.get("gradient_color") or template.get("tint_color")))
+    max_alpha = int(255 * float(template.get("mask_opacity", template.get("gradient_opacity", template.get("tint_opacity", 0.35)))))
+    max_alpha = max(0, min(255, max_alpha))
+    mask = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(mask)
+    if mode == "full":
+        draw.rectangle((0, 0, width, height), fill=(*color, max_alpha))
+    else:
+        for y in range(height):
+            ratio = y / max(height - 1, 1)
+            if mode == "top_gradient":
+                ratio = 1 - ratio
+            alpha = int(max_alpha * ratio)
+            draw.line([(0, y), (width, y)], fill=(*color, alpha))
+    return Image.alpha_composite(image, mask)
 
 
 def _draw_panel(draw: ImageDraw.ImageDraw, width: int, y: int, hud_lines: list[str], font: ImageFont.ImageFont, template: dict) -> None:
