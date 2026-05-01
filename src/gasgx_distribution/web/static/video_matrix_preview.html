@@ -299,6 +299,14 @@
             outline-offset: 4px;
         }
 
+        .vm-template-editable.active[data-template-target="sloganBar"],
+        .vm-template-editable.active[data-template-target="titleBar"],
+        .vm-template-editable.active[data-template-target="hud"],
+        .vm-template-editable.active[data-template-target="hudBar"] {
+            outline-color: #ff4053;
+            box-shadow: 0 0 0 2px rgba(255, 64, 83, .35);
+        }
+
         .vm-visual-toolbar {
             position: absolute;
             left: 50%;
@@ -412,10 +420,16 @@
 
         body.cover-profile-mode .phone-mockup,
         body.cover-single-mode .phone-mockup {
-            border: 0;
-            border-radius: 0;
-            background: #000;
-            box-shadow: none;
+            border: 14px solid #1a1a1a;
+            border-radius: 55px;
+            background: #050505;
+            box-shadow: 0 0 0 2px #333, 0 20px 40px rgba(0,0,0,0.8);
+        }
+
+        body.cover-profile-mode .cover-profile-shell,
+        body.cover-single-mode .single-cover-shell {
+            border-radius: 41px;
+            overflow: hidden;
         }
 
         body.cover-profile-mode .device-side-button,
@@ -917,6 +931,7 @@
       let coverDragging = null;
       let editingTextNode = null;
       let editingCoverNode = null;
+      const DRAG_START_THRESHOLD = 5;
       if (videoPath) {
         video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(videoPath)}`;
       } else {
@@ -1361,19 +1376,37 @@
       }
 
       function selectionFrameTarget(target) {
-        return isBackgroundTarget(target) ? target : backgroundTargetForControl(target);
+        return target;
       }
 
       function ensureTextTarget() {
-        if (activeTarget !== "slogan" && activeTarget !== "title") selectTarget("title");
+        const target = pairedTextTarget(activeTarget);
+        if (activeTarget !== target) selectTarget(target);
       }
 
       function ensureHudTarget(command) {
-        if (!activeTarget) selectTarget("title");
+        const target = pairedHudTarget(activeTarget);
+        if (activeTarget !== target) selectTarget(target);
       }
 
       function isBackgroundTarget(target) {
         return target === "hudBar" || target === "sloganBar" || target === "titleBar";
+      }
+
+      function pairedTextTarget(target) {
+        if (target === "sloganBar") return "slogan";
+        if (target === "titleBar") return "title";
+        if (target === "hudBar") return "hud";
+        if (target === "slogan" || target === "title" || target === "hud") return target;
+        return "title";
+      }
+
+      function pairedHudTarget(target) {
+        if (isBackgroundTarget(target)) return target;
+        if (target === "slogan") return "sloganBar";
+        if (target === "title") return "titleBar";
+        if (target === "hud") return "hudBar";
+        return "hudBar";
       }
 
       function backgroundColorValue(target, template) {
@@ -1386,7 +1419,7 @@
       function textColorValue(target, template) {
         if (target === "title") return template.title_color || template.primary_color || "#ffffff";
         if (target === "slogan") return template.slogan_color || template.secondary_color || "#ffffff";
-        if (target === "hud") return template.hud_color || template.secondary_color || "#ffffff";
+        if (target === "hud") return template.hud_color || template.primary_color || "#ffffff";
         return template.primary_color || "#ffffff";
       }
 
@@ -1410,15 +1443,20 @@
         const target = event.currentTarget.dataset.templateTarget;
         selectTarget(target);
         const rect = event.currentTarget.getBoundingClientRect();
-        dragging = { target, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+        dragging = { target, dx: event.clientX - rect.left, dy: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, active: false };
         event.currentTarget.setPointerCapture(event.pointerId);
         event.currentTarget.addEventListener("pointermove", dragMove);
         event.currentTarget.addEventListener("pointerup", endDrag, { once: true });
-        document.getElementById("centerGuides").classList.add("active");
       }
 
       function dragMove(event) {
         if (!dragging) return;
+        if (!dragging.active) {
+          const moved = Math.hypot(event.clientX - dragging.startX, event.clientY - dragging.startY);
+          if (moved < DRAG_START_THRESHOLD) return;
+          dragging.active = true;
+          document.getElementById("centerGuides").classList.add("active");
+        }
         const phoneRect = phone.getBoundingClientRect();
         const rawX = Math.max(0, Math.min(393, event.clientX - phoneRect.left - dragging.dx));
         const rawY = Math.max(0, Math.min(852, event.clientY - phoneRect.top - dragging.dy));

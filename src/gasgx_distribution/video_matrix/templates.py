@@ -51,6 +51,9 @@ def default_template() -> dict[str, Any]:
 
 def coerce_template(template: dict[str, Any] | None) -> dict[str, Any]:
     merged = default_template()
-    if template:
-        merged.update(template)
+    explicit = template or {}
+    if explicit:
+        merged.update(explicit)
+    if "hud_color" not in explicit:
+        merged["hud_color"] = merged.get("primary_color") or "#ffffff"
     return merged

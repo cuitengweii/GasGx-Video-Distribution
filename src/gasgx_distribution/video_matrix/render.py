@@ -308,7 +308,7 @@ def _drawtext_lines(
 def _template_text_color(template: dict[str, Any], text_key: str, color_key: str) -> str:
     if template.get(color_key):
         return str(template[color_key])
-    if text_key == "title":
+    if text_key in {"title", "hud"}:
         return str(template.get("primary_color") or "#ffffff")
     return str(template.get("secondary_color") or "#ffffff")
 

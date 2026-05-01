@@ -711,13 +711,13 @@ function visualTemplateToolbarHtml(template) {
         <button type="button" data-visual-command="align" data-value="left" title="左对齐">左齐</button>
         <button type="button" data-visual-command="align" data-value="center" title="居中对齐">居中</button>
         <button type="button" data-visual-command="align" data-value="right" title="右对齐">右齐</button>
-        <select data-visual-command="font-family">${fontOptions}</select>
-        <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
         <label class="color-swatch-button" title="文字颜色">
           ${colorPickerIconSvg()}
           <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
           <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
         </label>
+        <select data-visual-command="font-family">${fontOptions}</select>
+        <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
       </div>
       <div class="visual-control-section visual-hud-controls" aria-label="HUD调整区">
         <div class="visual-section-title">HUD调整区</div>
@@ -893,10 +893,11 @@ function renderVideoTemplateBackgrounds() {
     </button>
   `).join("");
   node.querySelectorAll("[data-model-image]").forEach((button) => {
-    button.onclick = () => {
+    button.onclick = async () => {
       selectedModelImageUrl = button.dataset.modelImage || "";
       renderVideoTemplateBackgrounds();
       refreshVideoTemplatePreview();
+      await refreshVideoTemplateGallery();
       refreshMainPreview();
     };
   });
@@ -913,8 +914,7 @@ async function refreshVideoTemplateGallery() {
   setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
   for (const [id, template] of Object.entries(templates)) {
-    const data = await api("/api/video-matrix/template-preview", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(videoTemplatePreviewPayload(template))});
-    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}"><img src="${data.data_url}" alt=""><span>${id} / ${template.name || id}</span></div>`);
+    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(template)}<span>${id} / ${template.name || id}</span></div>`);
   }
   $("videoTemplateGallery").innerHTML = cards.join("");
   $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => {
@@ -926,6 +926,95 @@ async function refreshVideoTemplateGallery() {
       await selectVideoTemplate(card.dataset.id);
     };
   });
+}
+
+function videoTemplateCardPreviewHtml(template) {
+  const imageUrl = selectedModelImageUrl || modelImages[0]?.url || "";
+  if (!imageUrl) return `<div class="video-template-thumb empty"><span>暂无背景图</span></div>`;
+  return `
+    <div class="video-template-thumb">
+      <img src="${escapeHtml(imageUrl)}" alt="">
+      <div class="video-template-thumb-mask"></div>
+      ${videoTemplateCardBarHtml(template, "slogan")}
+      ${videoTemplateCardBarHtml(template, "title")}
+      ${videoTemplateCardBarHtml(template, "hud")}
+      ${videoTemplateCardTextHtml(template, "slogan", $("headline").value)}
+      ${videoTemplateCardTextHtml(template, "title", $("subhead").value)}
+      ${videoTemplateCardHudHtml(template)}
+    </div>`;
+}
+
+function videoTemplateCardBarHtml(template, target) {
+  if (target === "slogan" && !template?.show_slogan) return "";
+  if (target === "title" && !template?.show_title) return "";
+  if (target === "hud" && !template?.show_hud) return "";
+  const x = target === "slogan" ? Number(template.slogan_bg_x ?? 0)
+    : target === "title" ? Number(template.title_bg_x ?? 0)
+    : Number(template.hud_bar_x ?? 0);
+  const y = target === "slogan" ? Number(template.slogan_bg_y ?? template.slogan_y ?? 0)
+    : target === "title" ? Number(template.title_bg_y ?? template.title_y ?? 0)
+    : Number(template.hud_bar_y ?? 0);
+  const width = target === "slogan" ? Number(template.slogan_bg_width ?? 1080)
+    : target === "title" ? Number(template.title_bg_width ?? 1080)
+    : Number(template.hud_bar_width ?? 1080);
+  const height = target === "slogan" ? Number(template.slogan_bg_height ?? 80)
+    : target === "title" ? Number(template.title_bg_height ?? template.slogan_bg_height ?? 92)
+    : Number(template.hud_bar_height ?? 120);
+  const color = target === "slogan" ? (template.slogan_bg_color || template.hud_bar_color || "#0E1A10")
+    : target === "title" ? (template.title_bg_color || template.hud_bar_color || "#0E1A10")
+    : (template.hud_bar_color || "#0E1A10");
+  const opacity = target === "slogan" ? Number(template.slogan_bg_opacity ?? 0.62)
+    : target === "title" ? Number(template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62)
+    : Number(template.hud_bar_opacity ?? 0.68);
+  const radius = target === "slogan" ? Number(template.slogan_bg_radius ?? template.hud_bar_radius ?? 10)
+    : target === "title" ? Number(template.title_bg_radius ?? template.hud_bar_radius ?? 10)
+    : Number(template.hud_bar_radius ?? 10);
+  return `<div class="video-template-thumb-bar" style="${videoTemplateCardBarStyle(x, y, width, height, color, opacity, radius)}"></div>`;
+}
+
+function videoTemplateCardTextHtml(template, target, value) {
+  const visibleKey = target === "slogan" ? "show_slogan" : "show_title";
+  if (!template?.[visibleKey]) return "";
+  const x = Number(template[`${target}_x`] ?? 0);
+  const y = Number(template[`${target}_y`] ?? 0);
+  const size = Number(template[`${target}_font_size`] ?? 36);
+  const color = template[`${target}_color`] || (target === "slogan" ? template.primary_color : template.secondary_color) || "#ffffff";
+  return `<div class="video-template-thumb-text" style="${videoTemplateCardTextStyle(x, y, size, color)}">${escapeHtml(value || "")}</div>`;
+}
+
+function videoTemplateCardHudHtml(template) {
+  if (!template?.show_hud) return "";
+  const x = Number(template.hud_x ?? 0);
+  const y = Number(template.hud_y ?? 0);
+  const size = Number(template.hud_font_size ?? 30);
+  const color = template.hud_color || template.primary_color || "#ffffff";
+  return `<div class="video-template-thumb-hud" style="${videoTemplateCardTextStyle(x, y, size, color)}">${escapeHtml($("hudText").value || "")}</div>`;
+}
+
+function videoTemplateCardTextStyle(x, y, size, color) {
+  const left = Math.max(0, Math.min(100, x / 1080 * 100));
+  const top = Math.max(0, Math.min(100, y / 1920 * 100));
+  const fontSize = Math.max(6, Math.min(14, size / 1920 * 154));
+  return `left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;font-size:${fontSize.toFixed(1)}px;color:${escapeHtml(color)};`;
+}
+
+function videoTemplateCardBarStyle(x, y, width, height, color, opacity, radius) {
+  const left = Math.max(0, Math.min(100, x / 1080 * 100));
+  const top = Math.max(0, Math.min(100, y / 1920 * 100));
+  const barWidth = Math.max(8, Math.min(100, width / 1080 * 100));
+  const barHeight = Math.max(3, Math.min(100, height / 1920 * 100));
+  const alpha = Math.max(0, Math.min(1, opacity));
+  const corner = Math.max(0, Math.min(10, radius / 1920 * 154));
+  return `left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${barWidth.toFixed(2)}%;height:${barHeight.toFixed(2)}%;background:${hexToRgba(color, alpha)};border-radius:${corner.toFixed(1)}px;`;
+}
+
+function hexToRgba(value, opacity) {
+  const hex = String(value || "#0E1A10").trim().replace("#", "");
+  const normalized = hex.length === 3 ? hex.split("").map((char) => char + char).join("") : hex.padEnd(6, "0").slice(0, 6);
+  const red = parseInt(normalized.slice(0, 2), 16) || 0;
+  const green = parseInt(normalized.slice(2, 4), 16) || 0;
+  const blue = parseInt(normalized.slice(4, 6), 16) || 0;
+  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, Number(opacity)))})`;
 }
 
 function videoTemplatePreviewVideos() {

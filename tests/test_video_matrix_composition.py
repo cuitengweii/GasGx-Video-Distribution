@@ -210,6 +210,36 @@ def test_center_aligned_video_template_wraps_drawtext_inside_canvas() -> None:
     assert filter_complex.count("x=(w-text_w)/2") >= 3
 
 
+def test_hud_text_defaults_to_primary_color_when_not_overridden() -> None:
+    variant = plan_variants(
+        [_clip("category_A", "a"), _clip("category_B", "b"), _clip("category_C", "c")],
+        _settings(),
+        HudPayload(["Gas Input -> Power"], False),
+        [0, 0.5, 1, 1.5],
+    )[0]
+    template = {
+        "show_hud": True,
+        "show_slogan": False,
+        "show_title": False,
+        "hud_bar_x": 0,
+        "hud_bar_y": 1714,
+        "hud_bar_width": 1080,
+        "hud_bar_height": 162,
+        "hud_x": 70,
+        "hud_y": 1762,
+        "hud_font_size": 30,
+        "hud_bar_color": "#75b37b",
+        "hud_bar_opacity": 0.44,
+        "primary_color": "#5DD62C",
+        "secondary_color": "#FFFFFF",
+    }
+
+    filter_complex, _inputs = _build_filter_complex(variant, _settings(), template_config=template)
+
+    assert "fontcolor=#5DD62C" in filter_complex
+    assert "fontcolor=#FFFFFF" not in filter_complex
+
+
 def test_video_renderer_prefers_cjk_fonts_for_chinese_text() -> None:
     font_names = [candidate.name for candidate in video_renderer.FONT_CANDIDATES[:6]]
 

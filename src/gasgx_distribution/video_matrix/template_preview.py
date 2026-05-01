@@ -51,7 +51,7 @@ def render_video_template_preview_image(
             hud,
             (int(template["hud_x"]), int(template["hud_y"])),
             _load_font(int(template["hud_font_size"])),
-            str(template["secondary_color"]),
+            str(template.get("hud_color") or template["primary_color"]),
             max_width=width - int(template["hud_x"]) - 42,
             max_lines=2,
         )

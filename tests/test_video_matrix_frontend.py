@@ -193,6 +193,17 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "color-swatch-button" in app
     assert "color-picker-icon" in app
     assert "color-current-dot" in app
+    assert app.index('data-value="right" title="右对齐">右齐') < app.index('title="文字颜色"') < app.index('data-visual-command="font-family"')
+    assert '.vm-template-editable.active[data-template-target="sloganBar"]' in preview
+    assert '.vm-template-editable.active[data-template-target="titleBar"]' in preview
+    assert '.vm-template-editable.active[data-template-target="hud"]' in preview
+    assert '.vm-template-editable.active[data-template-target="hudBar"]' in preview
+    assert 'outline-color: #ff4053' in preview
+    assert "pairedTextTarget(activeTarget)" in preview
+    assert "pairedHudTarget(activeTarget)" in preview
+    assert "const DRAG_START_THRESHOLD = 5" in preview
+    assert "Math.hypot(event.clientX - dragging.startX, event.clientY - dragging.startY)" in preview
+    assert "if (moved < DRAG_START_THRESHOLD) return" in preview
     assert 'data-value="left" title="左对齐">左齐' in app
     assert 'data-value="center" title="居中对齐">居中' in app
     assert 'data-value="right" title="右对齐">右齐' in app
@@ -213,15 +224,21 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "切换封面背景..." not in app
     assert "background_image_urls: modelImages.map" in app
     assert "background_image_url: selectedModelImageUrl || modelImages[0]?.url || \"\"" in app
+    assert "await refreshVideoTemplateGallery();" in app
     api = (ROOT / "src" / "gasgx_distribution" / "video_matrix_api.py").read_text(encoding="utf-8")
     template_preview = (ROOT / "src" / "gasgx_distribution" / "video_matrix" / "template_preview.py").read_text(encoding="utf-8")
     assert 'payload.get("background_image_url")' in api
     assert "background=background" in api
     assert "background: Image.Image | None = None" in template_preview
     assert "_fit_background(background, width, height)" in template_preview
+    assert 'str(template.get("hud_color") or template["primary_color"])' in template_preview
     assert "sourcePreviewVideos = Array.isArray(data.source_videos) ? data.source_videos : []" in app
     assert "videoTemplatePreviewVideos" in app
-    assert '<img src="${data.data_url}" alt="">' in app
+    assert "videoTemplateCardPreviewHtml(template)" in app
+    assert "videoTemplateCardBarHtml(template, \"hud\")" in app
+    assert "function videoTemplateCardBarStyle" in app
+    assert "selectedModelImageUrl || modelImages[0]?.url || \"\"" in app
+    assert "video-template-thumb-mask" in app
     assert "/api/video-matrix/preview-file?path=" not in app
     assert "toggleTemplateCardVideo" in app
     assert "coverGallery" not in html
@@ -256,6 +273,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".pixabay-track" in css
     assert ".bgm-library-popover.modal" in css
     assert "z-index: 80" in css
+    assert "body.bgm-modal-open .sidebar {\n  z-index: 120;\n}" in css
     assert "100vmax rgba(0, 0, 0, .64)" in css
     assert ".bgm-popover-head" in css
     assert ".bgm-local-section" in css
@@ -297,7 +315,12 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "title_bg_width || 1080" in preview
     assert "ensureTextTarget()" in preview
     assert "ensureHudTarget(command)" in preview
-    assert 'if (activeTarget !== "slogan" && activeTarget !== "title") selectTarget("title")' in preview
+    assert 'if (target === "sloganBar") return "slogan"' in preview
+    assert 'if (target === "titleBar") return "title"' in preview
+    assert 'if (target === "hudBar") return "hud"' in preview
+    assert 'if (target === "slogan") return "sloganBar"' in preview
+    assert 'if (target === "title") return "titleBar"' in preview
+    assert 'if (target === "hud") return "hudBar"' in preview
     assert "textTargetForAlignment(activeTarget)" in preview
     assert 'target === "hud" && template[alignKey] ? "0px" : designX(x)' in preview
     assert 'target === "hud" && template[alignKey] ? "100%" : ""' in preview
@@ -330,6 +353,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "textColorValue(\"slogan\", template)" in preview
     assert "textColorValue(\"title\", template)" in preview
     assert "textColorValue(\"hud\", template)" in preview
+    assert 'if (target === "hud") return template.hud_color || template.primary_color || "#ffffff"' in preview
+    assert 'const color = template.hud_color || template.primary_color || "#ffffff"' in app
     assert 'postTemplateUpdates({ [`${target}_color`]: value })' in preview
     assert "text-effect-glow" in preview
     assert "@keyframes vmTextGlow" in preview
@@ -372,7 +397,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".cover-card img," in css
     assert ".cover-card video" in css
     assert "aspect-ratio: 9 / 16" in css
-    assert '<img src="${data.data_url}" alt="">' in app
+    assert "video-template-thumb" in css
+    assert "video-template-thumb-bar" in css
+    assert ".video-template-thumb img" in css
     assert '<video src="${escapeHtml(videoSrc)}" poster="${data.data_url}"' not in app
     assert "margin: 8px 0 14px" in css
     assert "inset: 0" in css
@@ -420,6 +447,7 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "templateTitleBar" in preview_html
     assert "vm-template-text-bar" in preview_html
     assert "selectionFrameTarget(target)" in preview_html
+    assert "return target;" in preview_html
     assert "node.dataset.templateTarget === frameTarget" in preview_html
     assert ".vm-template-text.active" not in preview_html
     assert "slogan_bg_height" in preview_html
@@ -429,8 +457,10 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "cover-profile-mode" in preview_html
     assert "body.cover-profile-mode .phone-mockup" in preview_html
     assert "body.cover-single-mode .phone-mockup" in preview_html
-    assert "border: 0" in preview_html
-    assert "border-radius: 0" in preview_html
+    assert "border: 14px solid #1a1a1a" in preview_html
+    assert "border-radius: 55px" in preview_html
+    assert "body.cover-profile-mode .cover-profile-shell" in preview_html
+    assert "border-radius: 41px" in preview_html
     assert "body.cover-profile-mode .device-side-button" in preview_html
     assert "cover-profile-grid" in preview_html
     assert "GasGx | 燃气发电解决方案" in preview_html
