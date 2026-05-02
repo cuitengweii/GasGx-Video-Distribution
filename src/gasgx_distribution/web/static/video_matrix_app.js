@@ -43,6 +43,7 @@ const jobMessages = {
 };
 
 const backendJobMessageMap = {
+  "Queued": "任务已提交，正在排队准备。请保持当前页面打开，系统会自动开始处理。",
   "Collecting and normalizing source clips": "正在扫描并整理素材视频，按分类目录读取可用片段。",
   "Preparing GasGx data HUD": "正在准备视频里的 HUD 数据、标题和字幕字段。",
   "Analyzing BGM beat grid": "正在分析背景音乐节拍网格，用于后续卡点混剪。",
@@ -2381,7 +2382,7 @@ function updateJobStatus(job) {
   const stage = job.stage || job.status || "queued";
   const percent = Math.max(0, Math.min(100, Math.round((job.progress || 0) * 100)));
   const isError = job.status === "error";
-  $("jobStatusTitle").textContent = job.status === "error" ? "生成失败" : job.status === "complete" ? "生成完成" : `正在${jobMessages[stage] ? jobMessages[stage].replace(/^正在/, "").replace(/。$/, "") : "处理"}`;
+  $("jobStatusTitle").textContent = localizedJobTitle(job, stage);
   $("jobPercent").textContent = `${percent}%`;
   $("jobProgressFill").style.width = `${percent}%`;
   $("jobMessage").textContent = localizedJobMessage(job, stage);
@@ -2394,6 +2395,20 @@ function updateJobStatus(job) {
   }).join("");
 }
 function log(text) { updateJobStatus({ status: "running", stage: "queued", progress: 0, message: text }); }
+function localizedJobTitle(job, stage) {
+  if (job.status === "error") return "生成失败，请查看下方提示";
+  if (job.status === "complete") return "生成完成，视频已导出";
+  const titles = {
+    queued: "任务已提交，正在等待开始",
+    ingestion: "正在扫描并整理素材",
+    hud: "正在准备视频数据和字幕",
+    beat: "正在分析背景音乐节奏",
+    planning: "正在规划混剪方案",
+    render: "正在生成视频，请耐心等待",
+    finalizing: "正在整理导出文件",
+  };
+  return titles[stage] || "正在处理，请稍等";
+}
 function localizedJobMessage(job, stage) {
   if (job.error) return job.error;
   const message = String(job.message || "").trim();

@@ -32,6 +32,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "generationPreflightModal" in html
     assert "generationPreflightBody" in html
     assert "preflightClose" in html
+    assert '"Queued": "任务已提交，正在排队准备。请保持当前页面打开，系统会自动开始处理。"' in app
+    assert 'queued: "任务已提交，正在等待开始"' in app
+    assert "function localizedJobTitle" in app
     assert "片尾封面模板" in html
     assert "endingTemplatePreview" in html
     assert "endingAssetPreview" in html
