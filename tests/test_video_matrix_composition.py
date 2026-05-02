@@ -486,6 +486,22 @@ def test_video_renderer_maps_ad_font_families_to_ffmpeg_candidates() -> None:
     assert video_renderer._font_candidates_for_family("YouSheBiaoTiHei, sans-serif")[0].name == "YouSheBiaoTiHei.ttf"
 
 
+def test_video_renderer_title_background_height_does_not_inherit_slogan_height() -> None:
+    template = {
+        "title_bg_y": 100,
+        "title_y": 120,
+        "title_bg_width": 900,
+        "slogan_bg_height": 260,
+        "title_bg_color": "#111111",
+        "title_bg_opacity": 0.6,
+    }
+
+    spec = video_renderer._background_box_spec(template, "title")
+
+    assert spec is not None
+    assert spec[3] == 92
+
+
 def test_video_renderer_prefers_cjk_fonts_for_chinese_text() -> None:
     font_names = [candidate.name for candidate in video_renderer.FONT_CANDIDATES[:6]]
 

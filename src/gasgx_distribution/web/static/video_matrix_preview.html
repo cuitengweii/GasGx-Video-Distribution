@@ -1124,10 +1124,11 @@
         const template = currentPayload?.template || {};
         const alignKey = `${target}_text_align`;
         node.textContent = value || "";
-        node.style.left = target === "hud" && template[alignKey] ? "0px" : designX(x);
+        const useHudAlignBox = target === "hud" && template[alignKey];
+        node.style.left = useHudAlignBox ? designX(template.hud_bar_x ?? x) : designX(x);
         node.style.top = designY(y);
-        node.style.width = target === "hud" && template[alignKey] ? "100%" : "";
-        node.style.maxWidth = target === "hud" && template[alignKey] ? "100%" : "";
+        node.style.width = useHudAlignBox ? designX(template.hud_bar_width || 1080) : "";
+        node.style.maxWidth = useHudAlignBox ? designX(template.hud_bar_width || 1080) : "";
         node.style.fontSize = designSize(size);
         node.style.color = color || "#ffffff";
         node.style.fontFamily = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
@@ -1179,7 +1180,7 @@
           hudBar.style.borderRadius = designRadius(template.hud_bar_radius ?? 10);
         }
         setTextBar("templateSloganBar", template.show_slogan, template.slogan_bg_x || 0, template.slogan_bg_y ?? template.slogan_y, template.slogan_bg_height || 80, template.slogan_bg_width || 1080, template.slogan_bg_color || template.hud_bar_color, template.slogan_bg_opacity ?? 0.62, template.slogan_bg_radius ?? template.hud_bar_radius ?? 10);
-        setTextBar("templateTitleBar", template.show_title, template.title_bg_x || 0, template.title_bg_y ?? template.title_y, template.title_bg_height || template.slogan_bg_height || 92, template.title_bg_width || 1080, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62, template.title_bg_radius ?? template.hud_bar_radius ?? 10);
+        setTextBar("templateTitleBar", template.show_title, template.title_bg_x || 0, template.title_bg_y ?? template.title_y, template.title_bg_height || 92, template.title_bg_width || 1080, template.title_bg_color || template.hud_bar_color, template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62, template.title_bg_radius ?? template.hud_bar_radius ?? 10);
         setLayerText("templateSlogan", template.show_slogan, payload.slogan, template.slogan_x, template.slogan_y, template.slogan_font_size, textColorValue("slogan", template));
         setLayerText("templateTitle", template.show_title, payload.title, template.title_x, template.title_y, template.title_font_size, textColorValue("title", template));
         setLayerText("templateHudText", template.show_hud, payload.hud_text, template.hud_x, template.hud_y, template.hud_font_size, textColorValue("hud", template));

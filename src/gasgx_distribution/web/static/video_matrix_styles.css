@@ -100,6 +100,9 @@ body {
   padding: clamp(5px, .65vh, 8px) 10px;
   font-size: 12px;
 }
+.embed-mode .sidebar .input-with-unit input {
+  min-height: 100%;
+}
 
 .embed-mode .sidebar button {
   min-height: clamp(30px, 3.7vh, 36px);
@@ -149,17 +152,6 @@ body {
   justify-content: center;
   min-height: clamp(30px, 3.7vh, 36px);
   padding: 6px 8px;
-}
-.embed-mode #languageGroup {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  margin: 5px 0;
-}
-.embed-mode #languageGroup label {
-  justify-content: center;
-  min-height: 24px;
-  font-size: 12px;
 }
 .embed-mode .library-action {
   display: grid;
@@ -831,7 +823,7 @@ body.bgm-modal-open .sidebar {
   padding: 5px 6px;
 }
 .source-panel .source-composition-row {
-  grid-template-columns: minmax(88px, .9fr) minmax(100px, 1fr) minmax(60px, 74px) minmax(96px, 124px) minmax(56px, 70px) minmax(54px, 58px);
+  grid-template-columns: minmax(88px, .9fr) minmax(100px, 1fr) minmax(116px, 148px) minmax(56px, 70px) minmax(54px, 58px);
   gap: 5px;
   width: 100%;
   min-height: 0;
@@ -905,6 +897,29 @@ code, input, select, textarea {
 textarea { min-height: 96px; resize: vertical; }
 label { display:block; margin:14px 0; font-weight:700; font-size:14px; }
 label > input, label > select, label > textarea { margin-top:8px; }
+.input-with-unit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--muted);
+  background: #101010;
+  border: 1px solid #333333;
+  border-radius: 7px;
+}
+.input-with-unit input {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.input-with-unit span {
+  padding-right: 10px;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: right;
+}
 .number-field {
   font-size: 18px;
   font-weight: 900;
@@ -1589,24 +1604,24 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 }
 .font-sample-picker {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
   width: 100%;
-  max-height: 390px;
-  padding: 6px;
-  overflow-y: auto;
+  padding: 5px;
+  overflow: visible;
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 7px;
   background: rgba(0,0,0,.24);
 }
 .font-sample-option {
   display: grid !important;
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: 1fr;
+  align-content: center;
+  gap: 3px;
   width: 100% !important;
-  min-height: 82px !important;
-  padding: 9px 10px !important;
+  min-width: 0 !important;
+  min-height: 48px !important;
+  padding: 6px 7px !important;
   border: 1px solid rgba(255,255,255,.13) !important;
   border-radius: 7px !important;
   background: rgba(10, 15, 14, .9) !important;
@@ -1621,11 +1636,14 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 }
 .font-sample-name {
   color: #bdf7a9;
-  font: 900 12px/1.2 Inter, "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+  font: 900 10px/1.12 Inter, "Microsoft YaHei", sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .font-sample-lines {
   display: grid;
-  gap: 4px;
+  gap: 1px;
   min-width: 0;
   color: #fff;
   text-shadow: 0 2px 0 rgba(0,0,0,.55);
@@ -1638,12 +1656,12 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   white-space: nowrap;
 }
 .font-sample-en {
-  font-size: 24px;
+  font-size: 19px;
   font-weight: 900;
   line-height: 1.05;
 }
 .font-sample-cn {
-  font-size: 21px;
+  font-size: 17px;
   font-weight: 900;
   line-height: 1.12;
 }

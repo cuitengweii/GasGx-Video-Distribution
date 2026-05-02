@@ -106,8 +106,20 @@ const videoTextFontOptions = [
   ["'Lucida Console', 'Courier New', 'Microsoft YaHei', monospace", "English Data Mono"],
   ["'Comic Sans MS', 'Arial Black', 'Microsoft YaHei', sans-serif", "English Pop Comic"],
 ];
-const fontPreviewEnglish = "gasgx";
+const fontPreviewEnglish = "GasGx";
 const fontPreviewChinese = "盖斯基克斯";
+function fontSamplePreviewHtml(label) {
+  const normalized = String(label || "");
+  const chineseOnly = /中文|阿里|思源|鸿蒙|优设/.test(normalized);
+  const englishOnly = /英文|English|DIN|硬核|复古|招牌/.test(normalized);
+  if (chineseOnly && !/中英/.test(normalized)) {
+    return `<span class="font-sample-cn">${escapeHtml(fontPreviewChinese)}</span>`;
+  }
+  if (englishOnly) {
+    return `<span class="font-sample-en">${escapeHtml(fontPreviewEnglish)}</span>`;
+  }
+  return `<span class="font-sample-en">${escapeHtml(fontPreviewEnglish)}</span><span class="font-sample-cn">${escapeHtml(fontPreviewChinese)}</span>`;
+}
 const textEffectOptions = [
   ["none", "无动效"],
   ["fade-in", "淡入"],
@@ -241,14 +253,9 @@ function renderSidebar(data) {
   $("outputOptions").onchange = scheduleStateSave;
   $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 60), scheduleStateSave);
-  renderRadio("languageGroup", "copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], state.copy_language || "zh", scheduleStateSave);
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
   $("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory);
-  document.querySelector(".sidebar details summary")?.addEventListener("click", (event) => {
-    event.preventDefault();
-    toggleBgmLibraryPopover();
-  });
 }
 
 function renderSidebarTemplateSelectors() {
@@ -282,7 +289,6 @@ function renderSource(data) {
   const rows = compositionRowsByCategory(data, categories);
   const recentLimits = state.recent_limits || settings.recent_limits || {};
   $("sourceDirs").innerHTML = categories.map((category, index) => {
-    const row = rows.get(category.id) || { category_id: category.id, duration: defaultDurationForCategory(category.id) };
     const limit = clamp(Number(recentLimits[category.id] || settings.recent_limits?.[category.id] || 8), 1, 10);
     const checked = activeCategoryIds.includes(category.id);
     const totalCount = Number(data.category_counts?.[category.id] || 0);
@@ -293,10 +299,6 @@ function renderSource(data) {
       </label>
       <input type="hidden" data-composition-category value="${escapeHtml(category.id)}">
       <input data-category-label value="${escapeHtml(category.label || category.id)}" aria-label="${escapeHtml(category.id)}目录名称" ${checked ? "" : "disabled"}>
-      <label class="composition-unit-field">
-        <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" aria-label="${escapeHtml(category.label)}片段秒数" ${checked ? "" : "disabled"}>
-        <span>秒</span>
-      </label>
       <label class="composition-unit-field composition-material-count">
         <span>采用最新前</span>
         <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="${escapeHtml(category.label)}最新素材数量" ${checked ? "" : "disabled"}>
@@ -325,12 +327,6 @@ function renderSource(data) {
     updateRecentLimitVisibility(categories);
     saveState();
   });
-  $("sourceDirs").querySelectorAll("[data-composition-duration]").forEach((input) => {
-    input.oninput = () => {
-      updateCompositionState(true);
-      scheduleStateSave();
-    };
-  });
   $("sourceDirs").querySelectorAll("[data-composition-limit]").forEach((input) => {
     input.oninput = () => {
       updateRecentLimitFromRow(input.closest(".composition-row"));
@@ -344,7 +340,7 @@ function renderSource(data) {
     };
   });
   $("addCategory").onclick = addMaterialCategory;
-  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；每次按照目录把最新拍摄的短视频上传进对应的目录；勾选素材目录后，直接在对应行设置片段秒数和最新素材数量，系统按行顺序自动组合混剪。";
+  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；每次按照目录把最新拍摄的短视频上传进对应的目录；勾选素材目录并设置最新素材数量后，系统会自动计算片段时长并按行顺序组合混剪。";
   renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], state.source_mode || "Category folders", () => {
     updateSourceMode();
     scheduleStateSave();
@@ -427,10 +423,6 @@ function renderComposition(data = { settings }) {
       <div class="composition-row" data-index="${index}">
         <span>${index + 1}</span>
         <select data-composition-category>${options}</select>
-        <label class="composition-unit-field">
-          <input data-composition-duration type="number" min="0.2" max="12" step="0.1" value="${Number(row.duration || 1).toFixed(1)}" aria-label="片段秒数" />
-          <span>s</span>
-        </label>
         <label class="composition-unit-field composition-material-count">
           <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="最新素材数量" />
           <span>条素材</span>
@@ -442,10 +434,6 @@ function renderComposition(data = { settings }) {
     row.querySelector("[data-composition-category]").onchange = () => {
       updateCompositionState(true);
       renderComposition(data);
-      scheduleStateSave();
-    };
-    row.querySelector("[data-composition-duration]").oninput = () => {
-      updateCompositionState(true);
       scheduleStateSave();
     };
     row.querySelector("[data-composition-limit]").oninput = () => {
@@ -512,7 +500,7 @@ function updateCompositionState(markCustomized = false) {
     .filter((row) => row.querySelector("[data-category-id]")?.checked !== false)
     .map((row) => ({
       category_id: row.querySelector("[data-composition-category]").value,
-      duration: Number(row.querySelector("[data-composition-duration]").value || 1),
+      duration: defaultDurationForCategory(row.querySelector("[data-composition-category]").value),
     })).filter((row) => row.category_id && row.duration > 0);
 }
 
@@ -1265,8 +1253,7 @@ function visualTemplateToolbarHtml(template) {
           <button type="button" class="font-sample-option ${value === fontValue ? "active" : ""}" data-visual-command="font-family" data-value="${escapeHtml(value)}" title="${escapeHtml(label)}">
             <span class="font-sample-name">${escapeHtml(label)}</span>
             <span class="font-sample-lines" style="font-family:${escapeHtml(value)}">
-              <span class="font-sample-en">${escapeHtml(fontPreviewEnglish)}</span>
-              <span class="font-sample-cn">${escapeHtml(fontPreviewChinese)}</span>
+              ${fontSamplePreviewHtml(label)}
             </span>
           </button>`).join("");
   const effectOptions = textEffectOptions.map(([value, label]) =>
@@ -2220,16 +2207,16 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
     },
     {
       title: "生成结构",
-      pendingText: "检查每个片段分类和片段秒数。",
+      pendingText: "检查片段分类和算法时长配置。",
       readyText: "生成结构可用。",
       configText: `结构 ${composition.length} 段 / 合计约 ${compositionSeconds.toFixed(1)}s / ${compositionSummary}`,
       run: async (index) => {
         const live = getLiveData() || {};
         const counts = live.category_counts || {};
         if (!composition.length) return { status: "fail", detail: "生成结构不能为空。" };
-        await animatePreflightProgress(index, 12, "检查片段秒数...");
+        await animatePreflightProgress(index, 12, "检查算法片段时长...");
         const invalidDuration = composition.find((row) => !Number.isFinite(Number(row.duration)) || Number(row.duration) <= 0);
-        if (invalidDuration) return { status: "fail", detail: "生成结构里存在无效片段秒数。" };
+        if (invalidDuration) return { status: "fail", detail: "生成结构里存在无效算法片段时长。" };
         for (let rowIndex = 0; rowIndex < composition.length; rowIndex += 1) {
           const row = composition[rowIndex];
           const percent = 18 + Math.round(((rowIndex + 1) / composition.length) * 58);
@@ -2280,12 +2267,10 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
     },
     {
       title: "生成文案",
-      pendingText: "检查字幕背板、片尾文案和语言设置。",
+      pendingText: "检查字幕背板和片尾文案。",
       readyText: "文案字段可用。",
-      configText: `语言 ${statePayload.copy_language || "未设置"} / 字幕背板 ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"}`,
+      configText: `字幕背板 ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"}`,
       run: async (index) => {
-        await animatePreflightProgress(index, 20, "检查语言设置...");
-        if (!["zh", "en", "ru"].includes(statePayload.copy_language || "")) return { status: "fail", detail: "文案语言配置无效。" };
         await animatePreflightProgress(index, 55, "检查字幕背板和片尾文案...");
         const emptyFields = [
           ["字幕背板文本", statePayload.hud_text],
@@ -2470,7 +2455,7 @@ function collectState() {
     video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 12),
     target_fps: Number(radioValue("target_fps") || settings.target_fps || 60),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
-    template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: radioValue("copy_language"),
+    template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: state.copy_language || settings.copy_language || "zh",
     template_config: activeVideoTemplateSnapshot(),
     cover_template_config: activeCoverTemplateSnapshot(),
     source_mode: radioValue("source_mode") || "Category folders",

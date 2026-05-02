@@ -42,21 +42,19 @@
       <a class="back-link" href="/">返回 Distribution 控制台</a>
       <label>生成数量<input id="outputCount" class="number-field" type="number" min="1" max="100" step="1" value="3" /></label>
       <label>并行线程<div class="range-with-value"><input id="maxWorkers" type="range" min="1" max="6" /><output id="maxWorkersValue"></output></div></label>
-      <label>最小节拍分析时长<input id="videoDurationMin" class="number-field" type="number" min="1" max="120" step="0.5" value="8" /></label>
-      <label>最大节拍分析时长<input id="videoDurationMax" class="number-field" type="number" min="4" max="120" step="0.5" value="12" /></label>
+      <label>最小节拍分析时长<div class="input-with-unit"><input id="videoDurationMin" class="number-field" type="number" min="1" max="120" step="0.5" value="8" /><span>秒</span></div></label>
+      <label>最大节拍分析时长<div class="input-with-unit"><input id="videoDurationMax" class="number-field" type="number" min="4" max="120" step="0.5" value="12" /><span>秒</span></div></label>
       <label>第一屏封面模板<select id="sidebarCoverTemplate"></select></label>
       <label>视频叠层模板<select id="sidebarVideoTemplate"></select></label>
         <label>片尾封面模板<select id="sidebarEndingTemplateMode"><option value="dynamic">文字片尾</option><option value="random">视频片尾</option></select></label>
       <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
-      <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option><option value="png">png</option><option value="txt">txt</option><option value="json">json</option></select></label>
+      <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option></select></label>
       <label>最终视频生成目录<input id="outputRoot" /></label>
       <button id="openOutput">打开输出目录</button>
-      <div class="radio-row" id="languageGroup"></div>
-      <details><summary>背景音乐库</summary><div id="bgmPanel"></div></details>
       <div class="library-action">
         <div id="bgmLibraryPopover" class="bgm-library-popover hidden"></div>
-        <button id="saveState" type="button">点击查看</button>
-        <button id="openBgmDir" type="button">打开目录</button>
+        <button id="saveState" type="button">背景音乐库</button>
+        <button id="openBgmDir" type="button">打开音乐目录</button>
       </div>
     </aside>
 

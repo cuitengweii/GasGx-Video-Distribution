@@ -14,6 +14,12 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "local_bgm_dir" in app
     html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix.html").read_text(encoding="utf-8")
     assert "视频碎片素材目录" in html
+    assert "languageGroup" not in html
+    assert "languageGroup" not in app
+    assert "#languageGroup" not in css
+    assert 'radioValue("copy_language")' not in app
+    assert "检查字幕背板、片尾文案和语言设置。" not in app
+    assert "文案语言配置无效" not in app
     assert "手动上传素材" not in html
     assert "上传文字稿" not in html
     assert "TEXT视频文字设置" not in html
@@ -51,12 +57,23 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "endingTemplateSwitch" in html
     assert "endingTemplateMenu" in html
     assert "openEndingTemplateDirInline" in app
-    assert "点击查看" in html
+    assert "点击查看" not in html
+    assert '<button id="saveState" type="button">背景音乐库</button>' in html
+    assert '<button id="openBgmDir" type="button">打开音乐目录</button>' in html
+    assert "<details><summary>背景音乐库</summary>" not in html
     assert "coverTemplateSwitch" in html
     assert "coverTemplateMenu" in html
     assert "模板切换" in html
     assert "openBgmDir" in html
     assert "bgmLibraryPopover" in html
+    assert '<label>输出文件<select id="outputOptions"><option value="mp4">mp4</option></select></label>' in html
+    assert '<option value="png">png</option>' not in html
+    assert '<option value="txt">txt</option>' not in html
+    assert '<option value="json">json</option>' not in html
+    assert 'id="videoDurationMin" class="number-field"' in html
+    assert 'id="videoDurationMax" class="number-field"' in html
+    assert 'class="input-with-unit"><input id="videoDurationMin"' in html
+    assert 'class="input-with-unit"><input id="videoDurationMax"' in html
     assert "materialCategories(data)" in app
     assert "settings.material_categories" in app
     assert "addMaterialCategory" in app
@@ -65,7 +82,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "class=\"category-edit-icon\"" not in app
     assert "按原文修改" not in app
     assert "已保存素材目录名称" in app
-    assert "<span>秒</span>" in app
+    assert "<span>秒</span>" not in app
+    assert "<span>秒</span>" in html
     assert "<span>采用最新前</span>" in app
     assert "<span>条</span>" in app
     assert "source-total-count" in app
@@ -76,6 +94,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "output_root: outputRootPath()" in app
     assert "toggleBgmLibraryPopover" in app
     assert '$("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory)' in app
+    assert 'document.querySelector(".sidebar details summary")' not in app
     assert "本地曲库列表" in app
     assert "本地曲库</strong>" in app
     assert "网络曲库" not in app
@@ -100,7 +119,6 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'panel.classList.toggle("modal", !isHidden)' in app
     assert "bgm-modal-open" in app
     assert 'panel.classList.add("hidden")' in app
-    assert 'document.querySelector(".sidebar details summary")' in app
     assert "downloadBgmToLibrary" not in app
     assert "downloadBgm" not in app
     assert "bgmDownloadUrl" not in app
@@ -436,7 +454,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "本次算法框架" in app
     assert "分析本地背景音乐节拍" in app
     assert "data-composition-category" in app
-    assert "data-composition-duration" in app
+    assert "data-composition-duration" not in app
     assert "data-composition-remove" in app
     assert "/api/video-matrix/bgm/" in app
     assert ".help-dot" in css
@@ -467,6 +485,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "::-webkit-scrollbar-thumb" in css
     assert "#saveState" in css
     assert "#openBgmDir" in css
+    assert ".input-with-unit" in css
     assert ".template-actions" in css
     assert "grid-template-columns: minmax(0, 1fr) 124px" in css
     assert "cursor:pointer" in css
@@ -479,7 +498,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".model-image-workbench" in css
     assert ".preview-caption-actions" in css
     assert ".button-icon" in css
-    assert "grid-template-columns: minmax(88px, .9fr) minmax(100px, 1fr) minmax(60px, 74px) minmax(96px, 124px) minmax(56px, 70px) minmax(54px, 58px)" in css
+    assert "grid-template-columns: minmax(88px, .9fr) minmax(100px, 1fr) minmax(116px, 148px) minmax(56px, 70px) minmax(54px, 58px)" in css
     assert ".source-panel .source-composition-row button {\n  width: 100%;" in css
     assert "left: 0;\n  right: auto;" in css
     assert "@media (max-width: 1180px)" in css
@@ -526,8 +545,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'if (target === "title") return "titleBar"' in preview
     assert 'if (target === "hud") return "hudBar"' in preview
     assert "textTargetForAlignment(activeTarget)" in preview
-    assert 'target === "hud" && template[alignKey] ? "0px" : designX(x)' in preview
-    assert 'target === "hud" && template[alignKey] ? "100%" : ""' in preview
+    assert 'const useHudAlignBox = target === "hud" && template[alignKey]' in preview
+    assert "node.style.left = useHudAlignBox ? designX(template.hud_bar_x ?? x) : designX(x)" in preview
+    assert "node.style.width = useHudAlignBox ? designX(template.hud_bar_width || 1080) : \"\"" in preview
     assert "文字调整区" in app
     assert 'data-visual-command="bar-align" data-value="left" title="字幕背板左对齐">左齐' in app
     assert 'data-visual-command="bar-align" data-value="center" title="字幕背板居中对齐">居中' in app
@@ -541,7 +561,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "videoTextFontOptions" in app
     assert "fontPreviewEnglish" in app
     assert "fontPreviewChinese" in app
-    assert "gasgx" in app
+    assert "function fontSamplePreviewHtml(label)" in app
+    assert "const chineseOnly = /中文|阿里|思源|鸿蒙|优设/.test(normalized)" in app
+    assert "const englishOnly = /英文|English|DIN|硬核|复古|招牌/.test(normalized)" in app
+    assert "if (chineseOnly && !/中英/.test(normalized))" in app
+    assert "GasGx" in app
     assert "盖斯基克斯" in app
     assert "中文主标题" in app
     assert "英文主标题 DIN" in app
@@ -554,6 +578,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "font-sample-option" in app
     assert "font-sample-en" in app
     assert "font-sample-cn" in app
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css
+    assert "overflow: visible" in css
+    assert "max-height: 390px" not in css
+    font_sample_css = css[css.index(".font-sample-picker {"):css.index(".font-sample-option {")]
+    assert "overflow-y: auto" not in font_sample_css
     assert "style=\"font-family:" in app
     assert "中英混排粗黑" in app
     assert "数据机甲" in app
@@ -734,6 +763,8 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert ".vm-template-text.active" not in preview_html
     assert "slogan_bg_height" in preview_html
     assert "title_bg_height" in preview_html
+    assert "template.title_bg_height || template.slogan_bg_height" not in preview_html
+    assert "template.title_bg_height || 92" in preview_html
     assert "isBackgroundTarget" in preview_html
     assert "coverProfileShell" in preview_html
     assert "cover-profile-mode" in preview_html

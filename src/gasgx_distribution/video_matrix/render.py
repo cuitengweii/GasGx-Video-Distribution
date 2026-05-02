@@ -466,7 +466,7 @@ def _background_box_spec(template: dict[str, Any], target: str) -> tuple[int, in
         x = int(template.get(f"{target}_bg_x", 0))
         y = int(template.get(f"{target}_bg_y", template[f"{target}_y"]))
         width = int(template.get(f"{target}_bg_width", 1080))
-        default_height = 80 if target == "slogan" else int(template.get("slogan_bg_height", 92))
+        default_height = 80 if target == "slogan" else 92
         height = int(template.get(f"{target}_bg_height", default_height))
         color = str(template.get(f"{target}_bg_color") or template.get("hud_bar_color") or "#0E1A10")
         opacity = float(template.get(f"{target}_bg_opacity", template.get("slogan_bg_opacity", 0.62)))
