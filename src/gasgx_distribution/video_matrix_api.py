@@ -32,6 +32,7 @@ from .video_matrix.ingestion import VIDEO_EXTENSIONS, ensure_category_dirs
 from .video_matrix.pipeline import run_pipeline
 from .video_matrix.settings import ProjectSettings
 from .video_matrix.template_preview import render_video_template_preview_image
+from .video_matrix.telemetry import GenerationTrace
 from .video_matrix.templates import DEFAULT_TEMPLATE_ID, load_templates, save_templates
 from .video_matrix.ui_state import load_ui_state, save_ui_state
 
@@ -48,6 +49,7 @@ BGM_DIR = ROOT / "runtime" / "video_matrix" / "bgm"
 MODEL_IMAGE_DIR = ROOT / "runtime" / "video_matrix" / "modelimg"
 ENDING_TEMPLATE_DIR = ROOT / "runtime" / "video_matrix" / "ending_template"
 SIGNATURE_HISTORY_PATH = ROOT / "runtime" / "video_matrix" / "signature_history.json"
+TELEMETRY_LOG_ROOT = ROOT / "runtime" / "video_matrix" / "logs"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 ENDING_TEMPLATE_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 PIXABAY_INDUSTRY_TRACKS = [
@@ -64,10 +66,9 @@ PIXABAY_INDUSTRY_TRACKS = [
 ]
 PIXABAY_AUDIO_PATTERN = re.compile(r"https://cdn\.pixabay\.com/download/audio/[^\"'\\<>\s]+")
 PIXABAY_API_AUDIO_ENDPOINT = "https://pixabay.com/api/audio/"
-MOCK_AUDIO_URLS = [
-    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+CDN_AUDIO_STREAMS = [
+    "https://cdn.jsdelivr.net/gh/mdn/webaudio-examples@master/audio-analyser/viper.mp3",
+    "https://cdn.jsdelivr.net/gh/mdn/webaudio-examples@master/step-sequencer/parsley/kick.mp3",
 ]
 
 if load_dotenv is not None:
@@ -620,9 +621,9 @@ def pixabay_industry_tracks(q: str = "industry") -> dict[str, Any]:
         if not item.get("audio_url"):
             item["audio_url"] = _resolve_pixabay_audio_url(str(item.get("source_url") or ""))
         if not item.get("audio_url"):
-            item["audio_url"] = MOCK_AUDIO_URLS[index % len(MOCK_AUDIO_URLS)]
-            item["is_mock_audio"] = True
-            item["audio_error"] = "Pixabay 音频暂不可直连，已切换模拟试听源"
+            item["audio_url"] = CDN_AUDIO_STREAMS[index % len(CDN_AUDIO_STREAMS)]
+            item["is_cdn_audio"] = True
+            item["audio_error"] = "Pixabay 音频暂不可直连，已切换 JSDelivr 开源音频流"
         tracks.append(item)
     return {
         "tracks": tracks,
@@ -716,7 +717,8 @@ def download_bgm(payload: BgmDownloadPayload) -> dict[str, Any]:
     request = UrlRequest(url, headers={"User-Agent": "GasGx Video Distribution/0.1"})
     try:
         with urlopen(request, timeout=30) as response:
-            content_type = response.headers.get("Content-Type", "")
+            headers = getattr(response, "headers", {})
+            content_type = headers.get("Content-Type", "") if hasattr(headers, "get") else ""
             if content_type and not content_type.lower().startswith(("audio/", "application/octet-stream")):
                 raise HTTPException(status_code=400, detail="The URL did not return an audio file")
             target.write_bytes(response.read(80 * 1024 * 1024))
@@ -756,7 +758,8 @@ async def generate(
     temp_root.mkdir(parents=True, exist_ok=True)
     bgm_path = await _resolve_bgm_path(request, temp_root, bgm_file)
     source_root = await _resolve_source_root(request, temp_root, source_files or [])
-    _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
+    trace = GenerationTrace(job_id, TELEMETRY_LOG_ROOT, _request_telemetry_summary(request, bgm_path, source_root))
+    _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": "", "report_path": str(trace.run_dir / "run_report.md")}
     if service.brand_database_backend() == "supabase":
         try:
             service._brand_supabase().insert(
@@ -765,7 +768,7 @@ async def generate(
             )
         except Exception:
             pass
-    _executor.submit(_run_generate_job, job_id, request, bgm_path, source_root)
+    _executor.submit(_run_generate_job, job_id, request, bgm_path, source_root, trace)
     return {"job_id": job_id}
 
 
@@ -790,7 +793,39 @@ def job_status(job_id: str) -> dict[str, Any]:
     raise HTTPException(status_code=404, detail="Unknown job")
 
 
-def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, source_root: Path | None) -> None:
+def _request_telemetry_summary(request: dict[str, Any], bgm_path: Path, source_root: Path | None) -> dict[str, Any]:
+    composition = _request_composition_sequence(request, _settings())
+    return {
+        "output_count": int(request.get("output_count") or 0),
+        "max_workers": int(request.get("max_workers") or 3),
+        "target_fps": int(request.get("target_fps") or 0),
+        "output_options": list(request.get("output_options") or ["mp4"]),
+        "output_root": request.get("output_root") or "",
+        "template_id": request.get("template_id") or DEFAULT_TEMPLATE_ID,
+        "cover_template_id": request.get("cover_template_id") or DEFAULT_COVER_TEMPLATE_ID,
+        "ending_template_mode": request.get("ending_template_mode") or "dynamic",
+        "bgm_source": request.get("bgm_source") or "Local library",
+        "bgm_filename": bgm_path.name,
+        "bgm_path": bgm_path,
+        "source_mode": request.get("source_mode") or "",
+        "source_root": source_root,
+        "active_category_ids": request.get("active_category_ids") or [],
+        "category_count": len(request.get("active_category_ids") or []),
+        "composition_segments": len(composition),
+        "composition_duration": round(sum(float(item.get("duration") or 0) for item in composition), 3),
+        "video_duration_min": request.get("video_duration_min"),
+        "video_duration_max": request.get("video_duration_max"),
+    }
+
+
+def _run_generate_job(
+    job_id: str,
+    request: dict[str, Any],
+    bgm_path: Path,
+    source_root: Path | None,
+    trace: GenerationTrace | None = None,
+) -> None:
+    trace = trace or GenerationTrace(job_id, TELEMETRY_LOG_ROOT, _request_telemetry_summary(request, bgm_path, source_root))
     try:
         settings = _settings()
         if request.get("video_duration_min") is not None:
@@ -806,9 +841,12 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
         if request.get("target_fps") is not None:
             settings.target_fps = 60 if int(request.get("target_fps") or settings.target_fps) == 60 else 30
         request = _normalize_request_category_ids(request, settings)
-        generation_history = _load_generation_history(settings.variant_history_limit)
-        existing_signatures = _load_signature_history(settings) | set(generation_history["signatures"])
-        video_state, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
+        with trace.span("history", "load_generation_history", {"limit": settings.variant_history_limit}):
+            generation_history = _load_generation_history(settings.variant_history_limit)
+        with trace.span("history", "load_signature_history", {"variant_history_enabled": settings.variant_history_enabled}):
+            existing_signatures = _load_signature_history(settings) | set(generation_history["signatures"])
+        with trace.span("state", "load_video_matrix_state"):
+            video_state, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
         templates = video_state.get("templates") or load_templates(TEMPLATES_PATH)
         cover_templates = video_state.get("cover_templates") or load_cover_templates(COVER_TEMPLATES_PATH)
         template_id = str(request.get("template_id") or DEFAULT_TEMPLATE_ID)
@@ -828,36 +866,50 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
 
         def progress(stage: str, value: float, message: str) -> None:
             _jobs[job_id].update({"status": "running", "stage": stage, "progress": value, "message": message})
+            trace.event("progress", stage, {"progress": value, "message": message})
             _sync_video_matrix_job(job_id, {"status": "running", "stage": stage, "progress": value, "message": message})
 
-        assets = run_pipeline(
-            settings=settings,
-            bgm_path=bgm_path,
-            output_count=int(request.get("output_count") or settings.output_count),
-            source_root=source_root,
-            output_root=Path(request["output_root"]).expanduser().resolve() if request.get("output_root") else None,
-            progress_callback=progress,
-            output_types=set(request.get("output_options") or ["mp4"]),
-            copy_language=str(request.get("copy_language") or "zh"),
-            max_workers=int(request.get("max_workers") or 3),
-            recent_limits=recent_limits,
-            active_category_ids=active_category_ids,
-            template_config=template_config,
-            cover_template_id=cover_template_id,
-            cover_template_config=cover_template_config,
-            ending_cover_template_config=ending_cover_template_config,
-            composition_sequence=_request_composition_sequence(request, settings),
-            existing_signatures=existing_signatures if settings.variant_history_enabled else None,
-            recent_clip_ids=set(generation_history["clip_ids"]),
-            recent_segment_keys=set(generation_history["segment_keys"]),
-            ending_template_path=ending_template_path,
-            text_overrides={
-                "headline": str(request.get("headline") or ""),
-                "subhead": str(request.get("subhead") or ""),
-                "hud_text": str(request.get("hud_text") or ""),
-                "follow_text": str(request.get("follow_text") or ""),
-            },
-        )
+        with trace.span("pipeline", "run_pipeline"):
+            assets = run_pipeline(
+                settings=settings,
+                bgm_path=bgm_path,
+                output_count=int(request.get("output_count") or settings.output_count),
+                source_root=source_root,
+                output_root=Path(request["output_root"]).expanduser().resolve() if request.get("output_root") else None,
+                progress_callback=progress,
+                output_types=set(request.get("output_options") or ["mp4"]),
+                copy_language=str(request.get("copy_language") or "zh"),
+                max_workers=int(request.get("max_workers") or 3),
+                recent_limits=recent_limits,
+                active_category_ids=active_category_ids,
+                template_config=template_config,
+                cover_template_id=cover_template_id,
+                cover_template_config=cover_template_config,
+                ending_cover_template_config=ending_cover_template_config,
+                composition_sequence=_request_composition_sequence(request, settings),
+                existing_signatures=existing_signatures if settings.variant_history_enabled else None,
+                recent_clip_ids=set(generation_history["clip_ids"]),
+                recent_segment_keys=set(generation_history["segment_keys"]),
+                ending_template_path=ending_template_path,
+                telemetry=trace,
+                text_overrides={
+                    "headline": str(request.get("headline") or ""),
+                    "subhead": str(request.get("subhead") or ""),
+                    "hud_text": str(request.get("hud_text") or ""),
+                    "follow_text": str(request.get("follow_text") or ""),
+                },
+            )
+        try:
+            with trace.span("history", "save_generation_history", {"asset_count": len(assets)}):
+                _save_generation_history(job_id, request, bgm_path, assets, settings, template_id, cover_template_id)
+            with trace.span("history", "save_signature_history", {"signature_count": len(existing_signatures) + len(assets)}):
+                _save_signature_history(settings, existing_signatures | {asset.variant.signature for asset in assets})
+            with trace.span("state", "save_ui_state"):
+                _save_ui_state(_ui_state_from_request(request))
+        except Exception as exc:
+            trace.event("history", "history_sync_warning", {"warning": str(exc)})
+            _jobs[job_id]["warning"] = f"Generated videos are complete, but history sync failed: {exc}"
+        metrics_summary = trace.finish("complete", assets)
         complete_payload = {
             "status": "complete",
             "progress": 1.0,
@@ -871,17 +923,14 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
                 }
                 for asset in assets
             ],
+            "metrics_summary": metrics_summary,
+            "report_path": metrics_summary.get("report_path", ""),
         }
         _jobs[job_id].update(complete_payload)
         _sync_video_matrix_job(job_id, {"status": "complete", "progress": 1, "message": complete_payload["message"], "assets_json": complete_payload["assets"]})
-        try:
-            _save_generation_history(job_id, request, bgm_path, assets, settings, template_id, cover_template_id)
-            _save_signature_history(settings, existing_signatures | {asset.variant.signature for asset in assets})
-            _save_ui_state(_ui_state_from_request(request))
-        except Exception as exc:
-            _jobs[job_id]["warning"] = f"Generated videos are complete, but history sync failed: {exc}"
     except Exception as exc:  # pragma: no cover - surfaced through job endpoint
-        _jobs[job_id].update({"status": "error", "error": str(exc), "message": str(exc)})
+        metrics_summary = trace.finish("error", error=exc)
+        _jobs[job_id].update({"status": "error", "error": str(exc), "message": str(exc), "metrics_summary": metrics_summary, "report_path": metrics_summary.get("report_path", "")})
         _sync_video_matrix_job(job_id, {"status": "error", "error": str(exc), "message": str(exc)})
 
 

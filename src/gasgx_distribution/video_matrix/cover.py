@@ -191,23 +191,116 @@ def build_single_video_cover_image(
     title = str(template.get("single_cover_title_text") or headline or subhead or "全球领先的搁浅天然气算力变现引擎")
     title = title.replace("\\n", "\n")
 
-    text_x = int(width * 0.068)
-    logo_y = int(height * 0.13)
-    slogan_y = int(height * 0.22)
-    title_y = int(height * 0.266)
     logo_font = _load_font(max(24, int(float(template.get("single_cover_logo_font_size", 84)))), bold=True)
     slogan_font = _load_font(max(20, int(float(template.get("single_cover_slogan_font_size", 60)))), bold=True)
     title_font = _load_font(max(18, int(float(template.get("single_cover_title_font_size", 54)))), bold=True)
-    _draw_text_shadow(draw, (text_x, logo_y), logo_text, logo_font, "#ffffff")
-    _draw_text_shadow(draw, (text_x, slogan_y), slogan, slogan_font, "#ffffff")
-    y = title_y
-    max_text_width = width - text_x - int(width * 0.06)
-    lines = _wrap_multiline_text(draw, title, title_font, max_text_width)[:4]
-    for line in lines:
-        _draw_text_shadow(draw, (text_x, y), line, title_font, "#ffffff")
-        y += int(title_font.size * 1.16)
+    _draw_single_cover_text(
+        draw,
+        template,
+        "singleLogo",
+        logo_text,
+        logo_font,
+        width,
+        height,
+        y_ratio=0.13,
+        left_ratio=0.07,
+        max_width_ratio=0.86,
+        line_limit=1,
+    )
+    _draw_single_cover_text(
+        draw,
+        template,
+        "singleSlogan",
+        slogan,
+        slogan_font,
+        width,
+        height,
+        y_ratio=0.22,
+        left_ratio=0.068,
+        max_width_ratio=0.86,
+        line_limit=2,
+    )
+    _draw_single_cover_text(
+        draw,
+        template,
+        "singleTitle",
+        title,
+        title_font,
+        width,
+        height,
+        y_ratio=0.266,
+        left_ratio=0.068,
+        max_width_ratio=0.88,
+        line_limit=4,
+    )
 
     return base.convert("RGB")
+
+
+def _draw_single_cover_text(
+    draw: ImageDraw.ImageDraw,
+    template: dict,
+    target: str,
+    text: str,
+    font: ImageFont.ImageFont,
+    width: int,
+    height: int,
+    *,
+    y_ratio: float,
+    left_ratio: float,
+    max_width_ratio: float,
+    line_limit: int,
+) -> None:
+    align = _template_text_align(template, target)
+    max_width = int(width * max_width_ratio)
+    anchor_x = _single_cover_anchor_x(width, align, left_ratio)
+    y = _single_cover_y(template, target, height, y_ratio)
+    fill = str(template.get(f"{target}_color") or "#ffffff")
+    lines = _wrap_multiline_text(draw, str(text or ""), font, max_width)[:line_limit]
+    for line in lines:
+        x = _aligned_text_x(draw, line, font, anchor_x, align)
+        _draw_text_shadow(draw, (x, y), line, font, fill)
+        y += int(font.size * 1.16)
+
+
+def _template_text_align(template: dict, target: str) -> str:
+    align = str(template.get(f"{target}_text_align") or "left").lower()
+    return align if align in {"left", "center", "right"} else "left"
+
+
+def _single_cover_anchor_x(width: int, align: str, left_ratio: float) -> int:
+    if align == "center":
+        return width // 2
+    if align == "right":
+        return width - int(width * 0.068)
+    return int(width * left_ratio)
+
+
+def _single_cover_y(template: dict, target: str, height: int, y_ratio: float) -> int:
+    legacy_y_keys = {
+        "singleLogo": "single_cover_logo_y",
+        "singleSlogan": "single_cover_slogan_y",
+        "singleTitle": "single_cover_title_y",
+    }
+    base_y = _coerce_float(template.get(legacy_y_keys[target]), height * y_ratio)
+    offset_y = _coerce_float(template.get(f"{target}_offset_y"), 0)
+    return int(base_y + offset_y * height / 852)
+
+
+def _aligned_text_x(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, anchor_x: int, align: str) -> int:
+    text_width = _text_size(draw, text, font)[0]
+    if align == "center":
+        return int(anchor_x - text_width / 2)
+    if align == "right":
+        return int(anchor_x - text_width)
+    return anchor_x
+
+
+def _coerce_float(value: object, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _cover_crop(image: Image.Image, width: int, height: int) -> Image.Image:

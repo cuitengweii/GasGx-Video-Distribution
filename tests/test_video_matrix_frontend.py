@@ -80,10 +80,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "selectPixabayTrack" in app
     assert "syncPixabayPlayer" in app
     assert "track.audio_error" in app
-    assert "/api/video-matrix/bgm/mock-download" in app
-    assert "模拟下载到本地" in app
-    assert "模拟下载当前到本地" in app
-    assert "track.is_mock_audio" in app
+    assert "/api/video-matrix/bgm/mock-download" not in app
+    assert "模拟下载到本地" not in app
+    assert "track.is_cdn_audio" in app
     assert "点击曲目载入播放器试听" in app
     assert "loadPixabayTracks" in app
     assert 'loadPixabayTracks(bgmLibraryState.pixabayQuery || "industry")' in app
@@ -438,7 +437,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".pixabay-search-row" in css
     assert ".pixabay-player-card" in css
     assert ".pixabay-track.is-selected" in css
-    assert ".pixabay-track.is-mock-audio button" in css
+    assert ".pixabay-track.is-cdn-audio button" in css
     assert "border: 1px dashed rgba(93, 214, 44, .48)" in css
     assert ".bgm-download-box" not in css
     assert ".pixabay-refresh-button" in css
@@ -647,8 +646,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'target_fps: Number(radioValue("target_fps") || settings.target_fps || 60)' in app
     assert "template_config: activeVideoTemplateSnapshot()" in app
     assert "cover_template_config: activeCoverTemplateSnapshot()" in app
+    assert "ending_cover_template: endingCoverTemplate" in app
     assert "function activeVideoTemplateSnapshot()" in app
     assert "function activeCoverTemplateSnapshot()" in app
+    assert "function activeEndingCoverTemplateSnapshot" in app
+    assert "snapshot.cover_layout = \"single_video\"" in app
     assert "目标帧率" in app
     assert "${statePayload.target_fps}fps" in app
     assert ".sidebar-radio-field" in css

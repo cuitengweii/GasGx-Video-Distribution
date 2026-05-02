@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from .ffmpeg_tools import normalize_clip, probe_media
 from .models import ClipMetadata
@@ -67,24 +68,73 @@ def ingest_sources(
     source_root: Path | None = None,
     recent_limits: dict[str, int] | None = None,
     active_category_ids: list[str] | None = None,
+    telemetry: Any | None = None,
 ) -> list[ClipMetadata]:
     root = source_root or settings.source_root
     root.mkdir(parents=True, exist_ok=True)
     metadata_items: list[ClipMetadata] = []
-    for source_path in _select_source_files(root, recent_limits, settings.material_categories, active_category_ids):
+    selected_files = _select_source_files(root, recent_limits, settings.material_categories, active_category_ids)
+    if telemetry is not None:
+        telemetry.event(
+            "ingestion",
+            "source_files_selected",
+            {
+                "source_root": root,
+                "selected_count": len(selected_files),
+                "active_category_ids": active_category_ids or [],
+                "recent_limits": recent_limits or {},
+            },
+        )
+    for source_path in selected_files:
         category = infer_category(source_path, settings.material_categories) or "uncategorized"
         clip_id = hashlib.sha1(str(source_path).encode("utf-8")).hexdigest()[:12]
         normalized_path = settings.library_root / category / f"{clip_id}.mp4"
-        normalize_clip(
-            source=source_path,
-            target=normalized_path,
-            width=settings.target_width,
-            height=settings.target_height,
-            fps=settings.target_fps,
-        )
-        raw_metadata = probe_media(normalized_path)
+        payload = {
+            "source_path": source_path,
+            "category": category,
+            "clip_id": clip_id,
+            "source_bytes": _file_size(source_path),
+            "target_path": normalized_path,
+        }
+        if telemetry is not None:
+            with telemetry.span("ingestion", "normalize_clip", payload):
+                normalize_clip(
+                    source=source_path,
+                    target=normalized_path,
+                    width=settings.target_width,
+                    height=settings.target_height,
+                    fps=settings.target_fps,
+                )
+        else:
+            normalize_clip(
+                source=source_path,
+                target=normalized_path,
+                width=settings.target_width,
+                height=settings.target_height,
+                fps=settings.target_fps,
+            )
+        if telemetry is not None:
+            with telemetry.span("ingestion", "probe_normalized_clip", {"clip_id": clip_id, "normalized_path": normalized_path}):
+                raw_metadata = probe_media(normalized_path)
+        else:
+            raw_metadata = probe_media(normalized_path)
         duration, width, height, fps = _parse_video_info(raw_metadata)
         brightness, contrast = _compute_visual_scores(raw_metadata)
+        if telemetry is not None:
+            telemetry.event(
+                "ingestion",
+                "clip_ready",
+                {
+                    **payload,
+                    "normalized_bytes": _file_size(normalized_path),
+                    "duration": duration,
+                    "width": width,
+                    "height": height,
+                    "fps": fps,
+                    "brightness_score": brightness,
+                    "contrast_score": contrast,
+                },
+            )
         metadata_items.append(
             ClipMetadata(
                 clip_id=clip_id,
@@ -100,13 +150,26 @@ def ingest_sources(
                 tags=[category],
             )
         )
-    metadata_items = rebalance_categories(metadata_items, settings.material_categories)
+    if telemetry is not None:
+        with telemetry.span("ingestion", "rebalance_categories", {"clip_count": len(metadata_items)}):
+            metadata_items = rebalance_categories(metadata_items, settings.material_categories)
+    else:
+        metadata_items = rebalance_categories(metadata_items, settings.material_categories)
     index_path = settings.library_root / "metadata_index.json"
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(
-        json.dumps([item.as_dict() for item in metadata_items], indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    if telemetry is not None:
+        telemetry.event("ingestion", "category_distribution", {"categories": dict(Counter(item.category for item in metadata_items))})
+        with telemetry.span("ingestion", "write_metadata_index", {"index_path": index_path, "clip_count": len(metadata_items)}):
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            index_path.write_text(
+                json.dumps([item.as_dict() for item in metadata_items], indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+    else:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(
+            json.dumps([item.as_dict() for item in metadata_items], indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
     return metadata_items
 
 
@@ -186,3 +249,10 @@ def _move_clip_to_category(clip: ClipMetadata, target: str, distributed: bool = 
     clip.normalized_path.parent.mkdir(parents=True, exist_ok=True)
     if old_path.exists():
         old_path.replace(clip.normalized_path)
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0

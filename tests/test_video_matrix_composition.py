@@ -356,3 +356,39 @@ def test_single_video_cover_renders_reference_layout_scale() -> None:
 
     assert image.size == (1080, 1920)
     assert image.getpixel((90, 260)) != image.getpixel((540, 1500))
+
+
+def test_single_video_cover_honors_visual_template_alignment_color_and_offset() -> None:
+    settings = _settings()
+    background = Image.new("RGB", (1080, 1920), "#111111")
+
+    image = cover_renderer.render_cover_preview_image(
+        settings,
+        {
+            "cover_layout": "single_video",
+            "mask_mode": "none",
+            "single_cover_logo_text": "TAIL",
+            "single_cover_slogan_text": " ",
+            "single_cover_title_text": " ",
+            "single_cover_logo_font_size": 120,
+            "singleLogo_color": "#5DD62C",
+            "singleLogo_text_align": "center",
+            "singleLogo_offset_y": 100,
+        },
+        background=background,
+    )
+
+    def green_pixels(box: tuple[int, int, int, int]) -> int:
+        crop = image.crop(box)
+        pixels = crop.load()
+        return sum(
+            1
+            for x in range(crop.width)
+            for y in range(crop.height)
+            for red, green, blue in [pixels[x, y]]
+            if green > 140 and red < 130 and blue < 130
+        )
+
+    assert green_pixels((360, 440, 720, 640)) > 500
+    assert green_pixels((40, 440, 260, 640)) < 40
+    assert green_pixels((360, 300, 720, 410)) < 40

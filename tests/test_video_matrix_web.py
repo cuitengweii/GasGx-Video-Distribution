@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -42,6 +43,16 @@ class FailingJobSupabase:
 
     def select_one(self, table: str, *, filters: dict) -> dict | None:
         raise RuntimeError("supabase timeout")
+
+
+class FakeAudioResponse(BytesIO):
+    headers = {"Content-Type": "audio/mpeg"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
 
 
 def _fake_rendered_asset(signature: str = "sig-1") -> RenderedAsset:
@@ -205,6 +216,7 @@ def test_video_matrix_progress_sync_failure_does_not_abort_render(monkeypatch, t
     monkeypatch.setattr(video_matrix_api.service, "_brand_supabase", lambda: FailingJobSupabase())
     monkeypatch.setattr(video_matrix_api, "SIGNATURE_HISTORY_PATH", tmp_path / "signature_history.json")
     monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", tmp_path / "ui_state.json")
+    monkeypatch.setattr(video_matrix_api, "TELEMETRY_LOG_ROOT", tmp_path / "logs")
 
     def fake_run_pipeline(**kwargs):
         kwargs["progress_callback"]("ingestion", 0.05, "Scanning source assets")
@@ -227,6 +239,8 @@ def test_video_matrix_progress_sync_failure_does_not_abort_render(monkeypatch, t
     assert response["status"] == "complete"
     assert response["progress"] == 1.0
     assert response["assets"][0]["video_path"] == "video.mp4"
+    assert response["metrics_summary"]["status"] == "complete"
+    assert Path(response["report_path"]).exists()
 
 
 def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path) -> None:
@@ -424,11 +438,14 @@ def test_video_matrix_generation_failure_does_not_write_history(monkeypatch, tmp
     monkeypatch.setattr(video_matrix_api, "_video_matrix_app_setting", lambda default=None: {})
     monkeypatch.setattr(video_matrix_api, "_save_video_matrix_app_setting", lambda payload: True)
     monkeypatch.setattr(video_matrix_api, "run_pipeline", fail_pipeline)
+    monkeypatch.setattr(video_matrix_api, "TELEMETRY_LOG_ROOT", tmp_path / "logs")
     video_matrix_api._jobs["failed-history-job"] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
 
     video_matrix_api._run_generate_job("failed-history-job", {"output_count": 1, "output_options": ["mp4"]}, tmp_path / "bgm.mp3", None)
 
     assert "video_matrix_generation_runs" not in fake.tables
+    assert video_matrix_api._jobs["failed-history-job"]["status"] == "error"
+    assert Path(video_matrix_api._jobs["failed-history-job"]["report_path"]).exists()
 
 
 def test_video_matrix_random_bgm_prefers_unused_local_track(monkeypatch, tmp_path) -> None:
@@ -758,7 +775,9 @@ def test_video_matrix_generate_persists_and_passes_dynamic_ending_cover_template
     assert state["ending_cover_template"] == ending_cover
 
 
-def test_video_matrix_pixabay_industry_tracks_endpoint() -> None:
+def test_video_matrix_pixabay_industry_tracks_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(video_matrix_api, "_pixabay_audio_api_tracks", lambda query: ([], "Pixabay API blocked"))
+    monkeypatch.setattr(video_matrix_api, "_resolve_pixabay_audio_url", lambda source_url: "")
     client = TestClient(create_app())
 
     response = client.get("/api/video-matrix/pixabay/industry")
@@ -772,6 +791,8 @@ def test_video_matrix_pixabay_industry_tracks_endpoint() -> None:
     assert payload["tracks"][0]["title"] == "Corporate Industry"
     assert payload["tracks"][0]["source_url"].startswith("https://pixabay.com/music/")
     assert payload["tracks"][0]["audio_url"]
+    assert payload["tracks"][0]["audio_url"].startswith("https://cdn.jsdelivr.net/gh/mdn/webaudio-examples")
+    assert payload["tracks"][0]["is_cdn_audio"] is True
 
     filtered = client.get("/api/video-matrix/pixabay/industry?q=corporate").json()
     assert filtered["source_url"] == "https://pixabay.com/music/search/corporate/"
@@ -781,23 +802,27 @@ def test_video_matrix_pixabay_industry_tracks_endpoint() -> None:
     assert filtered["tracks"][0]["audio_url"]
 
 
-def test_video_matrix_mock_bgm_download_writes_library_file(monkeypatch, tmp_path) -> None:
+def test_video_matrix_cdn_bgm_download_writes_playable_library_file(monkeypatch, tmp_path) -> None:
     bgm_dir = tmp_path / "bgm"
     monkeypatch.setattr(video_matrix_api, "BGM_DIR", bgm_dir)
+    monkeypatch.setattr(
+        video_matrix_api,
+        "urlopen",
+        lambda request, timeout=30: FakeAudioResponse(b"ID3\x04\x00\x00\x00\x00\x00\x21real-mp3-bytes"),
+    )
     client = TestClient(create_app())
 
     response = client.post(
-        "/api/video-matrix/bgm/mock-download",
-        json={"filename": "Corporate Industry.mp3", "title": "Corporate Industry", "artist": "Ivan_Luzan"},
+        "/api/video-matrix/bgm/download",
+        json={"url": "https://cdn.jsdelivr.net/gh/mdn/webaudio-examples@master/audio-analyser/viper.mp3", "filename": "Corporate Industry.mp3"},
     )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["mock"] is True
     assert payload["filename"] == "Corporate_Industry.mp3"
     target = bgm_dir / "Corporate_Industry.mp3"
     assert target.exists()
-    assert b"GasGx simulated MP3 download" in target.read_bytes()
+    assert target.read_bytes().startswith(b"ID3")
 
 
 def test_video_matrix_model_images_endpoint(monkeypatch, tmp_path) -> None:

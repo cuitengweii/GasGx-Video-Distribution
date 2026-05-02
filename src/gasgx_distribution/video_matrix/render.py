@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +47,7 @@ def render_variant(
     outro_text: str = "",
     outro_seconds: float = 1.0,
     ending_template_path: Path | None = None,
+    telemetry: Any | None = None,
 ) -> RenderedAsset:
     batch_dir.mkdir(parents=True, exist_ok=True)
     output_types = output_types or {"mp4"}
@@ -61,89 +64,135 @@ def render_variant(
     manifest_path = batch_dir / f"{base_name}_manifest.json" if "json" in output_types else None
 
     try:
+        if telemetry is not None:
+            telemetry.event(
+                "render",
+                "variant_started",
+                {
+                    "base_name": base_name,
+                    "segment_count": len(variant.segments),
+                    "target_duration": sum(segment.duration for segment in variant.segments) + max(0.0, cover_intro_seconds) + max(0.0, outro_seconds),
+                    "output_types": sorted(output_types),
+                },
+            )
         intro_cover_path = None
         if cover_template_config is not None and cover_intro_seconds > 0:
             first_segment = variant.segments[0]
-            _extract_frame_or_fallback(first_segment.clip.normalized_path, intro_frame, timestamp=first_segment.start_time)
-            render_intro_cover(intro_frame, intro_cover, variant, settings, cover_template_config)
+            with _span(telemetry, "render", "intro_extract_frame", {"source": first_segment.clip.normalized_path, "timestamp": first_segment.start_time}):
+                _extract_frame_or_fallback(first_segment.clip.normalized_path, intro_frame, timestamp=first_segment.start_time)
+            with _span(telemetry, "render", "intro_cover_render", {"cover_template": cover_template_config.get("name", "") if isinstance(cover_template_config, dict) else ""}):
+                render_intro_cover(intro_frame, intro_cover, variant, settings, cover_template_config)
             intro_cover_path = intro_cover
         outro_cover_path = None
         if ending_template_path is None and ending_cover_template_config is not None and outro_text.strip() and outro_seconds > 0:
             last_segment = variant.segments[-1]
             timestamp = last_segment.start_time + max(0.0, last_segment.duration - 0.2)
-            _extract_frame_or_fallback(last_segment.clip.normalized_path, outro_frame, timestamp=timestamp)
-            render_outro_cover(outro_frame, outro_cover, settings, ending_cover_template_config, outro_text.strip(), variant.hud_lines)
+            with _span(telemetry, "render", "outro_extract_frame", {"source": last_segment.clip.normalized_path, "timestamp": timestamp}):
+                _extract_frame_or_fallback(last_segment.clip.normalized_path, outro_frame, timestamp=timestamp)
+            with _span(telemetry, "render", "outro_cover_render", {"ending_template": ending_cover_template_config.get("name", "") if isinstance(ending_cover_template_config, dict) else ""}):
+                render_outro_cover(outro_frame, outro_cover, settings, ending_cover_template_config, outro_text.strip(), variant.hud_lines)
             outro_cover_path = outro_cover
 
-        filter_complex, inputs = _build_filter_complex(
-            variant,
-            settings,
-            template_config=template_config,
-            intro_cover_path=intro_cover_path,
-            cover_intro_seconds=cover_intro_seconds,
-            outro_cover_path=outro_cover_path,
-            outro_seconds=outro_seconds,
-            ending_template_path=ending_template_path,
-            text_dir=scratch_dir / "text_layers",
-        )
-        concat_video(filter_complex, inputs, video_path, bgm_path=bgm_path)
+        with _span(telemetry, "render", "filter_build", _overlay_complexity(template_config, variant)):
+            filter_complex, inputs = _build_filter_complex(
+                variant,
+                settings,
+                template_config=template_config,
+                intro_cover_path=intro_cover_path,
+                cover_intro_seconds=cover_intro_seconds,
+                outro_cover_path=outro_cover_path,
+                outro_seconds=outro_seconds,
+                ending_template_path=ending_template_path,
+                text_dir=scratch_dir / "text_layers",
+            )
+        if telemetry is not None:
+            telemetry.event(
+                "render",
+                "ffmpeg_filter_ready",
+                {
+                    "input_count": len(inputs),
+                    "filter_hash": hashlib.sha1(filter_complex.encode("utf-8", errors="replace")).hexdigest()[:16],
+                    "filter_preview": filter_complex[:800],
+                    **_overlay_complexity(template_config, variant),
+                },
+            )
+        with _span(
+            telemetry,
+            "render",
+            "ffmpeg_concat",
+            {
+                "input_count": len(inputs),
+                "bgm_path": bgm_path,
+                "output_path": video_path,
+                "segment_duration": sum(segment.duration for segment in variant.segments),
+            },
+        ):
+            concat_video(filter_complex, inputs, video_path, bgm_path=bgm_path)
+        if telemetry is not None:
+            telemetry.event("render", "video_output_ready", {"video_path": video_path, "video_bytes": _file_size(video_path)})
         if cover_path is not None:
             if intro_cover_path is not None:
-                shutil.copyfile(intro_cover_path, cover_path)
+                with _span(telemetry, "render", "cover_copy", {"cover_path": cover_path}):
+                    shutil.copyfile(intro_cover_path, cover_path)
             else:
-                extract_frame(video_path, cover_frame, timestamp=1.0)
-                _decorate_cover(cover_frame, cover_path, variant.title)
+                with _span(telemetry, "render", "cover_extract_frame", {"video_path": video_path, "timestamp": 1.0}):
+                    extract_frame(video_path, cover_frame, timestamp=1.0)
+                with _span(telemetry, "render", "cover_decorate", {"cover_path": cover_path}):
+                    _decorate_cover(cover_frame, cover_path, variant.title)
 
         if copy_path is not None:
-            copy_path.write_text(
-                build_marketing_copy(variant, settings, copy_language, template_copy, outro_text),
-                encoding="utf-8",
-            )
+            with _span(telemetry, "render", "copy_write", {"copy_path": copy_path, "copy_language": copy_language}):
+                copy_path.write_text(
+                    build_marketing_copy(variant, settings, copy_language, template_copy, outro_text),
+                    encoding="utf-8",
+                )
 
         if manifest_path is not None:
-            manifest_path.write_text(
-                json.dumps(
-                    {
-                        "sequence_number": variant.sequence_number,
-                        "title": variant.title,
-                        "slogan": variant.slogan,
-                        "signature": variant.signature,
-                        "video_path": str(video_path),
-                        "cover_path": str(cover_path) if cover_path else None,
-                        "cover_template_id": cover_template_id,
-                        "cover_intro_seconds": cover_intro_seconds if intro_cover_path is not None else 0,
-                        "outro_text": outro_text,
-                        "outro_seconds": outro_seconds if outro_cover_path is not None else 0,
-                        "copy_path": str(copy_path) if copy_path else None,
-                        "copy_language": copy_language,
-                        "hud_lines": variant.hud_lines,
-                        "segments": [
-                            {
-                                "clip_id": segment.clip.clip_id,
-                                "category": segment.category,
-                                "source_path": str(segment.clip.source_path),
-                                "normalized_path": str(segment.clip.normalized_path),
-                                "start_time": segment.start_time,
-                                "duration": segment.duration,
-                            }
-                            for segment in variant.segments
-                        ],
-                    },
-                    indent=2,
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
+            with _span(telemetry, "render", "manifest_write", {"manifest_path": manifest_path}):
+                manifest_path.write_text(
+                    json.dumps(
+                        {
+                            "sequence_number": variant.sequence_number,
+                            "title": variant.title,
+                            "slogan": variant.slogan,
+                            "signature": variant.signature,
+                            "video_path": str(video_path),
+                            "cover_path": str(cover_path) if cover_path else None,
+                            "cover_template_id": cover_template_id,
+                            "cover_intro_seconds": cover_intro_seconds if intro_cover_path is not None else 0,
+                            "outro_text": outro_text,
+                            "outro_seconds": outro_seconds if outro_cover_path is not None else 0,
+                            "copy_path": str(copy_path) if copy_path else None,
+                            "copy_language": copy_language,
+                            "hud_lines": variant.hud_lines,
+                            "segments": [
+                                {
+                                    "clip_id": segment.clip.clip_id,
+                                    "category": segment.category,
+                                    "source_path": str(segment.clip.source_path),
+                                    "normalized_path": str(segment.clip.normalized_path),
+                                    "start_time": segment.start_time,
+                                    "duration": segment.duration,
+                                }
+                                for segment in variant.segments
+                            ],
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
         return RenderedAsset(variant, video_path, cover_path, copy_path, manifest_path)
     finally:
-        for temp_path in (cover_frame, intro_frame, intro_cover, outro_frame, outro_cover):
-            temp_path.unlink(missing_ok=True)
-        if scratch_dir.exists():
-            shutil.rmtree(scratch_dir, ignore_errors=True)
-        try:
-            scratch_dir.parent.rmdir()
-        except OSError:
-            pass
+        with _span(telemetry, "render", "cleanup", {"scratch_dir": scratch_dir}):
+            for temp_path in (cover_frame, intro_frame, intro_cover, outro_frame, outro_cover):
+                temp_path.unlink(missing_ok=True)
+            if scratch_dir.exists():
+                shutil.rmtree(scratch_dir, ignore_errors=True)
+            try:
+                scratch_dir.parent.rmdir()
+            except OSError:
+                pass
 
 
 def _extract_frame_or_fallback(video_path: Path, output_path: Path, timestamp: float) -> None:
@@ -483,3 +532,55 @@ def _escape_drawtext_text(text: str) -> str:
 
 def _escape_filter_path(path: Path) -> str:
     return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
+@contextmanager
+def _span(telemetry: Any | None, stage: str, name: str, payload: dict[str, Any] | None = None):
+    if telemetry is None:
+        yield
+        return
+    with telemetry.span(stage, name, payload):
+        yield
+
+
+def _overlay_complexity(template_config: dict | None, variant: VideoVariant) -> dict[str, Any]:
+    template = coerce_template(template_config)
+    enabled = {
+        "hud": bool(template.get("show_hud", True)),
+        "slogan": bool(template.get("show_slogan", True)),
+        "title": bool(template.get("show_title", True)),
+    }
+    drawbox_count = sum(1 for key, value in enabled.items() if value and _drawbox_filter(template, key) is not None)
+    text_inputs = {
+        "hud": " | ".join(variant.hud_lines),
+        "slogan": variant.slogan,
+        "title": variant.title,
+    }
+    drawtext_count = 0
+    for key, value in enabled.items():
+        if value:
+            max_lines = 3 if key == "slogan" else 2
+            wrapped_lines = _wrap_text_for_drawtext(
+                text_inputs[key],
+                int(template[f"{key}_font_size"]),
+                _text_box_width(template, key, int(template[f"{key}_x"])),
+            )
+            drawtext_count += min(max_lines, len(wrapped_lines) or 1)
+    return {
+        "show_hud": enabled["hud"],
+        "show_slogan": enabled["slogan"],
+        "show_title": enabled["title"],
+        "drawbox_count": drawbox_count,
+        "drawtext_count": drawtext_count,
+        "hud_lines": len(variant.hud_lines),
+        "slogan_effect": str(template.get("slogan_text_effect") or "none"),
+        "title_effect": str(template.get("title_text_effect") or "none"),
+        "hud_effect": str(template.get("hud_text_effect") or "none"),
+    }
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0

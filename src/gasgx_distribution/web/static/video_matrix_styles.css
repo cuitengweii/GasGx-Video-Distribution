@@ -2364,7 +2364,7 @@ button.compact-toggle.active {
   justify-content: center;
   gap: 6px;
 }
-.pixabay-track.is-mock-audio button {
+.pixabay-track.is-cdn-audio button {
   border: 1px dashed rgba(93, 214, 44, .48);
   background: rgba(93, 214, 44, .18);
 }
