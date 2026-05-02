@@ -422,25 +422,47 @@ def _drawtext_lines(
             f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key, explicit_template_keys or set())}:"
             f"fontsize={font_size}:"
             f"{text_source}"
-            f"{_text_effect_options(effect, x_expr, y_expr, line_index=index)}"
+            f"{_text_effect_options(effect, x_expr, y_expr, line_index=index, font_size=font_size)}"
         )
     return filters
 
 
-def _text_effect_options(effect: str, x_expr: str, y_expr: str, *, line_index: int) -> str:
+def _text_effect_options(effect: str, x_expr: str, y_expr: str, *, line_index: int, font_size: int) -> str:
     delay = line_index * 0.08
+    if effect == "fade-in":
+        return f":x={x_expr}:y={y_expr}:enable='gte(t\\,{delay:.2f})':alpha='1-exp(-5*(t-{delay:.2f}))'"
+    if effect == "fade-out":
+        return f":x={x_expr}:y={y_expr}:enable='gte(t\\,{delay:.2f})':alpha='exp(-0.35*(t-{delay:.2f}))'"
+    if effect == "fade-in-out":
+        return f":x={x_expr}:y={y_expr}:enable='gte(t\\,{delay:.2f})':alpha='0.55+0.45*sin(1.7*(t-{delay:.2f}))'"
     if effect == "pulse":
         return f":x={x_expr}:y={y_expr}:alpha='0.80+0.20*sin(5*(t-{delay:.2f}))'"
     if effect == "glow":
-        return f":x={x_expr}:y={y_expr}:alpha='0.70+0.30*sin(7*(t-{delay:.2f}))'"
+        return f":x={x_expr}:y={y_expr}:alpha='0.70+0.30*sin(7*(t-{delay:.2f}))':shadowcolor=0x5dd62c@0.72:shadowx=0:shadowy=0"
     if effect == "slide-up":
         return f":x={x_expr}:y={y_expr}+44*exp(-4*(t-{delay:.2f}))"
+    if effect == "slide-down":
+        return f":x={x_expr}:y={y_expr}-44*exp(-4*(t-{delay:.2f}))"
+    if effect == "slide-left":
+        return f":x={x_expr}+64*exp(-4*(t-{delay:.2f})):y={y_expr}"
+    if effect == "slide-right":
+        return f":x={x_expr}-64*exp(-4*(t-{delay:.2f})):y={y_expr}"
     if effect == "shake":
         return f":x={x_expr}+8*sin(38*(t-{delay:.2f})):y={y_expr}"
     if effect == "typewriter":
         return f":x={x_expr}:y={y_expr}:enable='gte(t\\,{delay:.2f})'"
     if effect == "pop":
         return f":x={x_expr}:y={y_expr}:alpha='0.65+0.35*exp(-5*(t-{delay:.2f}))*sin(22*(t-{delay:.2f}))'"
+    if effect == "blink":
+        return f":x={x_expr}:y={y_expr}:alpha='0.35+0.65*gt(sin(10*(t-{delay:.2f}))\\,0)'"
+    if effect == "wave":
+        return f":x={x_expr}:y={y_expr}+10*sin(4*(t-{delay:.2f})+{line_index})"
+    if effect == "jitter":
+        return f":x={x_expr}+3*sin(90*(t-{delay:.2f})):y={y_expr}+2*sin(110*(t-{delay:.2f}))"
+    if effect == "zoom-in":
+        return f":x={x_expr}:y={y_expr}:fontsize='{font_size}*(1-0.16*exp(-5*(t-{delay:.2f})))'"
+    if effect == "shadow-pop":
+        return f":x={x_expr}:y={y_expr}:alpha='0.70+0.30*exp(-5*(t-{delay:.2f}))*sin(20*(t-{delay:.2f}))':shadowcolor=0x000000@0.80:shadowx='6*exp(-4*(t-{delay:.2f}))':shadowy='6*exp(-4*(t-{delay:.2f}))'"
     return f":x={x_expr}:y={y_expr}"
 
 

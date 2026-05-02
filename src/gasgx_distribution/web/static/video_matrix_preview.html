@@ -236,6 +236,18 @@
             animation: vmTextPulse 1.8s ease-in-out infinite;
         }
 
+        .vm-template-text.text-effect-fade-in {
+            animation: vmTextFadeIn .72s ease-out both;
+        }
+
+        .vm-template-text.text-effect-fade-out {
+            animation: vmTextFadeOut 2.6s ease-in both;
+        }
+
+        .vm-template-text.text-effect-fade-in-out {
+            animation: vmTextFadeInOut 2.2s ease-in-out infinite;
+        }
+
         .vm-template-text.text-effect-glow {
             animation: vmTextGlow 1.4s ease-in-out infinite alternate;
         }
@@ -244,8 +256,37 @@
             animation: vmTextSlideUp .72s ease-out both;
         }
 
+        .vm-template-text.text-effect-slide-down {
+            animation: vmTextSlideDown .72s ease-out both;
+        }
+
+        .vm-template-text.text-effect-slide-left {
+            animation: vmTextSlideLeft .72s ease-out both;
+        }
+
+        .vm-template-text.text-effect-slide-right {
+            animation: vmTextSlideRight .72s ease-out both;
+        }
+
         .vm-template-text.text-effect-shake {
             animation: vmTextShake .72s ease-in-out infinite;
+        }
+
+        .vm-template-text.text-effect-blink {
+            animation: vmTextBlink .78s steps(2, end) infinite;
+        }
+
+        .vm-template-text.text-effect-wave {
+            animation: vmTextWave 1.6s ease-in-out infinite;
+        }
+
+        .vm-template-text.text-effect-jitter {
+            animation: vmTextJitter .22s linear infinite;
+        }
+
+        .vm-template-text.text-effect-zoom-in {
+            transform-origin: center;
+            animation: vmTextZoomIn .74s ease-out both;
         }
 
         .vm-template-text.text-effect-typewriter {
@@ -265,6 +306,26 @@
             animation: vmTextPop .82s cubic-bezier(.2, 1.45, .42, 1) both;
         }
 
+        .vm-template-text.text-effect-shadow-pop {
+            transform-origin: center;
+            animation: vmTextShadowPop .82s cubic-bezier(.2, 1.35, .42, 1) both;
+        }
+
+        @keyframes vmTextFadeIn {
+            0% { opacity: 0; }
+            100% { opacity: 1; }
+        }
+
+        @keyframes vmTextFadeOut {
+            0%, 35% { opacity: 1; }
+            100% { opacity: .12; }
+        }
+
+        @keyframes vmTextFadeInOut {
+            0%, 100% { opacity: .22; }
+            45%, 65% { opacity: 1; }
+        }
+
         @keyframes vmTextPulse {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.045); }
@@ -280,12 +341,48 @@
             100% { opacity: 1; transform: translateY(0); }
         }
 
+        @keyframes vmTextSlideDown {
+            0% { opacity: 0; transform: translateY(-18px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes vmTextSlideLeft {
+            0% { opacity: 0; transform: translateX(28px); }
+            100% { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes vmTextSlideRight {
+            0% { opacity: 0; transform: translateX(-28px); }
+            100% { opacity: 1; transform: translateX(0); }
+        }
+
         @keyframes vmTextShake {
             0%, 100% { transform: translateX(0); }
             22% { transform: translateX(-2px); }
             44% { transform: translateX(2px); }
             66% { transform: translateX(-1px); }
             88% { transform: translateX(1px); }
+        }
+
+        @keyframes vmTextBlink {
+            50% { opacity: .2; }
+        }
+
+        @keyframes vmTextWave {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
+        @keyframes vmTextJitter {
+            0%, 100% { transform: translate(0, 0); }
+            25% { transform: translate(1px, -1px); }
+            50% { transform: translate(-1px, 1px); }
+            75% { transform: translate(2px, 0); }
+        }
+
+        @keyframes vmTextZoomIn {
+            0% { opacity: 0; transform: scale(.86); }
+            100% { opacity: 1; transform: scale(1); }
         }
 
         @keyframes vmTextType {
@@ -301,6 +398,12 @@
             0% { opacity: 0; transform: scale(.84); }
             70% { opacity: 1; transform: scale(1.08); }
             100% { opacity: 1; transform: scale(1); }
+        }
+
+        @keyframes vmTextShadowPop {
+            0% { opacity: 0; transform: scale(.88); text-shadow: 0 2px 10px rgba(0,0,0,.76), 8px 8px 0 rgba(0,0,0,.55); }
+            70% { opacity: 1; transform: scale(1.06); text-shadow: 0 2px 10px rgba(0,0,0,.76), 3px 3px 0 rgba(0,0,0,.42); }
+            100% { opacity: 1; transform: scale(1); text-shadow: 0 2px 10px rgba(0,0,0,.76); }
         }
 
         .vm-template-editable.active {
@@ -512,7 +615,9 @@
             line-height: 1.14;
             letter-spacing: 0;
             text-shadow: 0 3px 16px rgba(0,0,0,.72);
-            white-space: pre-line;
+            white-space: pre;
+            overflow-wrap: normal;
+            word-break: keep-all;
         }
 
         .single-cover-title {
@@ -527,7 +632,9 @@
             line-height: 1.16;
             letter-spacing: 0;
             text-shadow: 0 3px 16px rgba(0,0,0,.76);
-            white-space: pre-line;
+            white-space: pre;
+            overflow-wrap: normal;
+            word-break: keep-all;
         }
 
         .cover-status-bar {
@@ -1027,7 +1134,14 @@
       }
 
       function applyTextEffect(node, effect, text) {
-        const effectClasses = ["text-effect-pulse", "text-effect-glow", "text-effect-slide-up", "text-effect-shake", "text-effect-typewriter", "text-effect-pop"];
+        const effectClasses = [
+          "text-effect-fade-in", "text-effect-fade-out", "text-effect-fade-in-out",
+          "text-effect-pulse", "text-effect-glow", "text-effect-slide-up",
+          "text-effect-slide-down", "text-effect-slide-left", "text-effect-slide-right",
+          "text-effect-shake", "text-effect-typewriter", "text-effect-pop",
+          "text-effect-blink", "text-effect-wave", "text-effect-jitter",
+          "text-effect-zoom-in", "text-effect-shadow-pop",
+        ];
         node.classList.remove(...effectClasses);
         node.style.removeProperty("--text-effect-steps");
         const normalized = effect || "none";
@@ -1119,6 +1233,10 @@
         node.style.left = align === "center" ? "50%" : align === "right" ? "auto" : "6.8%";
         if (target === "singleLogo" && align === "left") node.style.left = "7%";
         if (align === "right") node.style.right = "6.8%";
+        if (target === "singleSlogan" || target === "singleTitle") {
+          node.style.width = "";
+          node.style.maxWidth = "none";
+        }
         node.style.transform = `${align === "center" ? "translateX(-50%) " : ""}translateY(${offsetY}px)`;
       }
 

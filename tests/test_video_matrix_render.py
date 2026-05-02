@@ -285,3 +285,21 @@ def test_overlay_filters_match_selected_template_layer_rules(tmp_path: Path) -> 
     assert (tmp_path / "slogan_0.txt").read_text(encoding="utf-8").startswith("The World's leading engine")
     assert (tmp_path / "title_0.txt").read_text(encoding="utf-8") == "GasGx天然气发电机组"
     assert (tmp_path / "title_1.txt").read_text(encoding="utf-8") == "搁浅天然气首选"
+
+def test_text_effect_options_cover_template_dropdown_values() -> None:
+    expected_fragments = {
+        "fade-in": "enable='gte(t\\,0.00)'",
+        "fade-out": "alpha='exp(-0.35*(t-0.00))'",
+        "fade-in-out": "sin(1.7*(t-0.00))",
+        "slide-down": "-44*exp",
+        "slide-left": "+64*exp",
+        "slide-right": "-64*exp",
+        "blink": "gt(sin(10*(t-0.00))\\,0)",
+        "wave": "+10*sin",
+        "jitter": "+3*sin",
+        "zoom-in": "fontsize='48*(1-0.16*exp",
+        "shadow-pop": "shadowcolor=0x000000@0.80",
+    }
+
+    for effect, fragment in expected_fragments.items():
+        assert fragment in render._text_effect_options(effect, "100", "200", line_index=0, font_size=48)

@@ -102,12 +102,23 @@ const videoTextFontOptions = [
 ];
 const textEffectOptions = [
   ["none", "无动效"],
+  ["fade-in", "淡入"],
+  ["fade-out", "淡出"],
+  ["fade-in-out", "淡入后淡出"],
   ["pulse", "呼吸放大"],
   ["glow", "霓虹闪光"],
   ["slide-up", "上浮入场"],
+  ["slide-down", "下滑入场"],
+  ["slide-left", "左滑入场"],
+  ["slide-right", "右滑入场"],
   ["shake", "轻微震动"],
   ["typewriter", "打字机"],
   ["pop", "弹跳强调"],
+  ["blink", "闪烁"],
+  ["wave", "波浪摆动"],
+  ["jitter", "高频轻微抖动"],
+  ["zoom-in", "放大入场"],
+  ["shadow-pop", "阴影冲击"],
 ];
 const coverMaskModeOptions = [
   ["none", "无蒙版"],

@@ -525,6 +525,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "English Neon Bold" in app
     assert "English Pop Comic" in app
     assert "textEffectOptions" in app
+    assert app.index('["none", "无动效"]') < app.index('["fade-in", "淡入"]')
+    for effect in [
+        "fade-in", "fade-out", "fade-in-out",
+        "slide-down", "slide-left", "slide-right",
+        "blink", "wave", "jitter", "zoom-in", "shadow-pop",
+    ]:
+        assert effect in app
     assert 'data-visual-command="text-effect"' in app
     assert "文字动效" in app
     assert 'data-visual-command="hud-bg-color"' in app
@@ -546,7 +553,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'const color = template.hud_color || template.primary_color || "#ffffff"' in app
     assert 'postTemplateUpdates({ [`${target}_color`]: value })' in preview
     assert "text-effect-glow" in preview
+    assert "text-effect-fade-in" in preview
+    assert "text-effect-slide-left" in preview
+    assert "text-effect-shadow-pop" in preview
+    assert "white-space: pre;" in preview
+    assert "word-break: keep-all" in preview
+    assert 'if (target === "singleSlogan" || target === "singleTitle")' in preview
+    assert 'node.style.maxWidth = "none"' in preview
     assert "@keyframes vmTextGlow" in preview
+    assert "@keyframes vmTextFadeIn" in preview
+    assert "@keyframes vmTextShadowPop" in preview
     assert "@keyframes vmTextType" in preview
     assert ".visual-effect-control" in css
     assert "backgroundTargetForControl(activeTarget)" not in preview
