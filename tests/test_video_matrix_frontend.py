@@ -539,11 +539,26 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "const newX = clamp(Math.round(centerX - newWidth / 2), 0, 1080 - newWidth)" in preview
     assert "postTemplateUpdates({ [widthKey]: newWidth, [xKey]: newX })" in preview
     assert "videoTextFontOptions" in app
-    assert "爆款粗黑" in app
-    assert "招牌漫画" in app
+    assert "fontPreviewEnglish" in app
+    assert "fontPreviewChinese" in app
+    assert "gasgx" in app
+    assert "盖斯基克斯" in app
+    assert "中文主标题" in app
+    assert "英文主标题 DIN" in app
+    assert "阿里普惠重黑" in app
+    assert "思源重黑" in app
+    assert "鸿蒙粗黑" in app
+    assert "优设标题黑" in app
+    assert "DIN 压缩广告" in app
+    assert "font-sample-picker" in app
+    assert "font-sample-option" in app
+    assert "font-sample-en" in app
+    assert "font-sample-cn" in app
+    assert "style=\"font-family:" in app
+    assert "中英混排粗黑" in app
     assert "数据机甲" in app
     assert "中文黑体冲击" in app
-    assert "English Neon Bold" in app
+    assert "English Data Mono" in app
     assert "English Pop Comic" in app
     assert "textEffectOptions" in app
     assert app.index('["none", "无动效"]') < app.index('["fade-in", "淡入"]')

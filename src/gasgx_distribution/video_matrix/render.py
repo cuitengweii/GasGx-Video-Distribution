@@ -27,6 +27,34 @@ FONT_CANDIDATES = (
     Path(r"C:\Windows\Fonts\segoeui.ttf"),
     Path(r"C:\Windows\Fonts\arialbd.ttf"),
 )
+FONT_FAMILY_CANDIDATES = {
+    "microsoft yahei": (Path(r"C:\Windows\Fonts\msyh.ttc"), Path(r"C:\Windows\Fonts\msyhbd.ttc")),
+    "microsoft yahei bold": (Path(r"C:\Windows\Fonts\msyhbd.ttc"), Path(r"C:\Windows\Fonts\msyh.ttc")),
+    "microsoft jhenghei": (Path(r"C:\Windows\Fonts\msjh.ttc"), Path(r"C:\Windows\Fonts\msjhbd.ttc")),
+    "noto sans sc": (Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"), Path(r"C:\Windows\Fonts\Noto Sans SC (TrueType).otf")),
+    "noto sans sc bold": (Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf"), Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf")),
+    "arial black": (Path(r"C:\Windows\Fonts\ariblk.ttf"), Path(r"C:\Windows\Fonts\arialbd.ttf")),
+    "impact": (Path(r"C:\Windows\Fonts\impact.ttf"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
+    "dinnextltpro-bold": (Path(r"C:\Windows\Fonts\DINNextLTPro-Bold.ttf"), Path(r"C:\Windows\Fonts\bahnschrift.ttf")),
+    "din condensed": (Path(r"C:\Windows\Fonts\DINNextLTPro-Bold.ttf"), Path(r"C:\Windows\Fonts\bahnschrift.ttf")),
+    "dinnextltpro-medium": (Path(r"C:\Windows\Fonts\DINNextLTPro-Medium.ttf"), Path(r"C:\Windows\Fonts\bahnschrift.ttf")),
+    "bahnschrift": (Path(r"C:\Windows\Fonts\bahnschrift.ttf"),),
+    "bahnschrift condensed": (Path(r"C:\Windows\Fonts\bahnschrift.ttf"),),
+    "arial narrow": (Path(r"C:\Windows\Fonts\arialn.ttf"), Path(r"C:\Windows\Fonts\arial.ttf")),
+    "trebuchet ms": (Path(r"C:\Windows\Fonts\trebuc.ttf"),),
+    "segoe ui black": (Path(r"C:\Windows\Fonts\seguibl.ttf"), Path(r"C:\Windows\Fonts\segoeuib.ttf")),
+    "franklin gothic heavy": (Path(r"C:\Windows\Fonts\FRAHV.TTF"), Path(r"C:\Windows\Fonts\framd.ttf")),
+    "georgia": (Path(r"C:\Windows\Fonts\georgia.ttf"),),
+    "times new roman": (Path(r"C:\Windows\Fonts\times.ttf"),),
+    "courier new": (Path(r"C:\Windows\Fonts\cour.ttf"),),
+    "consolas": (Path(r"C:\Windows\Fonts\consola.ttf"),),
+    "simhei": (Path(r"C:\Windows\Fonts\simhei.ttf"),),
+    "simsun": (Path(r"C:\Windows\Fonts\simsun.ttc"),),
+    "alibaba puhuiti heavy": (Path(r"C:\Windows\Fonts\AlibabaPuHuiTi-Heavy.ttf"), Path(r"C:\Windows\Fonts\Alibaba-PuHuiTi-Heavy.ttf"), Path(r"C:\Windows\Fonts\msyhbd.ttc")),
+    "source han sans heavy": (Path(r"C:\Windows\Fonts\SourceHanSansSC-Heavy.otf"), Path(r"C:\Windows\Fonts\Source Han Sans SC Heavy.otf"), Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf")),
+    "harmonyos sans sc bold": (Path(r"C:\Windows\Fonts\HarmonyOS_Sans_SC_Bold.ttf"), Path(r"C:\Windows\Fonts\HarmonyOS Sans SC Bold.ttf"), Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf")),
+    "youshebiaotihei": (Path(r"C:\Windows\Fonts\YouSheBiaoTiHei.ttf"), Path(r"C:\Windows\Fonts\YouSheBiaoTiHei-2.ttf"), Path(r"C:\Windows\Fonts\simhei.ttf")),
+}
 ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -234,10 +262,15 @@ def _build_filter_complex(
     hud_text = " | ".join(variant.hud_lines)
     slogan = variant.slogan
     title = variant.title
+    background_overlay_index: int | None = None
+    background_overlay_path = _render_background_overlay(template, text_dir.parent / "template_background_overlay.png" if text_dir else None)
+    if background_overlay_path is not None:
+        inputs = [*inputs, background_overlay_path]
+        background_overlay_index = len(inputs) - 1
     for idx, segment in enumerate(variant.segments):
         crop_x = max(0, (settings.target_width * variant.zoom - settings.target_width) / 2 + variant.x_offset)
         crop_y = max(0, (settings.target_height * variant.zoom - settings.target_height) / 2 + variant.y_offset)
-        chain = (
+        base_chain = (
             f"[{idx + input_offset}:v]"
             f"trim=start={segment.start_time}:duration={segment.duration},setpts=PTS-STARTPTS,"
             f"scale={int(settings.target_width * variant.zoom)}:{int(settings.target_height * variant.zoom)},"
@@ -246,9 +279,24 @@ def _build_filter_complex(
             f"colorbalance=rs=-0.05:gs=0.10:bs=-0.04:rh=0.02:gh=0.01:bh=0.03,"
             f"eq=contrast={round(1.18 * variant.lut_strength, 3)}:brightness=-0.02:saturation=1.12,"
             f"setsar=1"
-            f"{_overlay_filters(template, hud_text, slogan, title, explicit_template_keys, text_dir=text_dir)}"
-            f"[v{idx}]"
         )
+        text_filters = _overlay_filters(
+            template,
+            hud_text,
+            slogan,
+            title,
+            explicit_template_keys,
+            text_dir=text_dir,
+            include_boxes=background_overlay_index is None,
+        )
+        if background_overlay_index is not None:
+            chain = (
+                f"{base_chain},format=rgba[seg{idx}base];"
+                f"[seg{idx}base][{background_overlay_index}:v]overlay=0:0:format=auto"
+                f"{text_filters},format=yuv420p[v{idx}]"
+            )
+        else:
+            chain = f"{base_chain}{text_filters}[v{idx}]"
         chains.append(chain)
         labels.append(f"[v{idx}]")
     if outro_cover_path is not None and outro_seconds > 0:
@@ -300,12 +348,38 @@ def _decorate_cover(source_path: Path, target_path: Path, title: str) -> None:
     base.convert("RGB").save(target_path)
 
 
-def _resolve_drawtext_font_arg() -> str:
-    for candidate in FONT_CANDIDATES:
+def _resolve_drawtext_font_arg(font_family: str | None = None) -> str:
+    for candidate in _font_candidates_for_family(font_family):
         if candidate.exists():
             escaped = str(candidate).replace("\\", "/").replace(":", "\\:")
             return f"fontfile='{escaped}':"
     return ""
+
+
+def _font_candidates_for_family(font_family: str | None = None) -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    for family in _font_family_names(font_family):
+        candidates.extend(FONT_FAMILY_CANDIDATES.get(family, ()))
+    candidates.extend(FONT_CANDIDATES)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return tuple(unique)
+
+
+def _font_family_names(font_family: str | None) -> list[str]:
+    if not font_family:
+        return []
+    names: list[str] = []
+    for item in str(font_family).split(","):
+        name = item.strip().strip("'\"").strip().lower()
+        if name and name not in {"sans-serif", "serif", "monospace"}:
+            names.append(name)
+    return names
 
 
 def _overlay_filters(
@@ -316,13 +390,15 @@ def _overlay_filters(
     explicit_template_keys: set[str] | None = None,
     *,
     text_dir: Path | None = None,
+    include_boxes: bool = True,
 ) -> str:
     filters: list[str] = []
     explicit_template_keys = explicit_template_keys or set()
     if template.get("show_hud", True):
-        box = _drawbox_filter(template, "hud")
-        if box:
-            filters.append(box)
+        if include_boxes:
+            box = _drawbox_filter(template, "hud")
+            if box:
+                filters.append(box)
         filters.extend(
             _drawtext_lines(
                 template,
@@ -335,9 +411,10 @@ def _overlay_filters(
             )
         )
     if template.get("show_slogan", True):
-        box = _drawbox_filter(template, "slogan")
-        if box:
-            filters.append(box)
+        if include_boxes:
+            box = _drawbox_filter(template, "slogan")
+            if box:
+                filters.append(box)
         filters.extend(
             _drawtext_lines(
                 template,
@@ -350,9 +427,10 @@ def _overlay_filters(
             )
         )
     if template.get("show_title", True):
-        box = _drawbox_filter(template, "title")
-        if box:
-            filters.append(box)
+        if include_boxes:
+            box = _drawbox_filter(template, "title")
+            if box:
+                filters.append(box)
         filters.extend(
             _drawtext_lines(
                 template,
@@ -368,6 +446,14 @@ def _overlay_filters(
 
 
 def _drawbox_filter(template: dict[str, Any], target: str) -> str | None:
+    spec = _background_box_spec(template, target)
+    if spec is None:
+        return None
+    x, y, width, height, color, opacity, _radius = spec
+    return f"drawbox=x={x}:y={y}:w={width}:h={height}:color={color}@{opacity:.2f}:t=fill"
+
+
+def _background_box_spec(template: dict[str, Any], target: str) -> tuple[int, int, int, int, str, float, int] | None:
     if target == "hud":
         x = int(template.get("hud_bar_x", 0))
         y = int(template["hud_bar_y"])
@@ -375,6 +461,7 @@ def _drawbox_filter(template: dict[str, Any], target: str) -> str | None:
         height = int(template["hud_bar_height"])
         color = str(template["hud_bar_color"])
         opacity = float(template["hud_bar_opacity"])
+        radius = int(template.get("hud_bar_radius", 0))
     else:
         x = int(template.get(f"{target}_bg_x", 0))
         y = int(template.get(f"{target}_bg_y", template[f"{target}_y"]))
@@ -383,9 +470,49 @@ def _drawbox_filter(template: dict[str, Any], target: str) -> str | None:
         height = int(template.get(f"{target}_bg_height", default_height))
         color = str(template.get(f"{target}_bg_color") or template.get("hud_bar_color") or "#0E1A10")
         opacity = float(template.get(f"{target}_bg_opacity", template.get("slogan_bg_opacity", 0.62)))
+        radius = int(template.get(f"{target}_bg_radius", template.get("hud_bar_radius", 0)))
     if opacity <= 0:
         return None
-    return f"drawbox=x={x}:y={y}:w={width}:h={height}:color={color}@{opacity:.2f}:t=fill"
+    return x, y, width, height, color, opacity, radius
+
+
+def _render_background_overlay(template: dict[str, Any], target_path: Path | None) -> Path | None:
+    if target_path is None:
+        return None
+    specs: list[tuple[int, int, int, int, str, float, int]] = []
+    for key in ("hud", "slogan", "title"):
+        if not template.get(f"show_{key}", True):
+            continue
+        spec = _background_box_spec(template, key)
+        if spec is not None:
+            specs.append(spec)
+    if not specs:
+        return None
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    for x, y, width, height, color, opacity, radius in specs:
+        red, green, blue = _hex_to_rgb(color)
+        alpha = max(0, min(255, int(round(opacity * 255))))
+        box = (x, y, x + width, y + height)
+        if radius > 0:
+            draw.rounded_rectangle(box, radius=radius, fill=(red, green, blue, alpha))
+        else:
+            draw.rectangle(box, fill=(red, green, blue, alpha))
+    overlay.save(target_path)
+    return target_path
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    raw = str(value or "#000000").strip()
+    if raw.startswith("#"):
+        raw = raw[1:]
+    if len(raw) == 3:
+        raw = "".join(ch * 2 for ch in raw)
+    try:
+        return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+    except (ValueError, IndexError):
+        return 0, 0, 0
 
 
 def _drawtext_lines(
@@ -402,11 +529,12 @@ def _drawtext_lines(
     anchor_x = int(template[f"{text_key}_x"])
     anchor_y = int(template[f"{text_key}_y"])
     max_width = _text_box_width(template, text_key, anchor_x)
-    lines = _wrap_text_for_drawtext(text, font_size, max_width)[:max_lines]
+    font_family = str(template.get(f"{text_key}_font_family") or "")
+    lines = _wrap_text_for_drawtext(text, font_size, max_width, font_family=font_family)[:max_lines]
     align = _target_text_align(template, text_key)
     line_gap = max(1, int(font_size * 1.18))
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
-    font_arg = _resolve_drawtext_font_arg()
+    font_arg = _resolve_drawtext_font_arg(font_family)
     filters: list[str] = []
     for index, line in enumerate(lines):
         if align == "center":
@@ -505,11 +633,11 @@ def _drawtext_text_source(line: str, text_key: str, line_index: int, text_dir: P
     return f"textfile='{_escape_filter_path(text_path)}'"
 
 
-def _wrap_text_for_drawtext(text: str, font_size: int, max_width: int) -> list[str]:
+def _wrap_text_for_drawtext(text: str, font_size: int, max_width: int, *, font_family: str | None = None) -> list[str]:
     paragraphs = [line.strip() for line in str(text).replace("\\n", "\n").splitlines()]
     if not paragraphs:
         return [""]
-    font = _load_drawtext_font(font_size)
+    font = _load_drawtext_font(font_size, font_family=font_family)
     draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     lines: list[str] = []
     for paragraph in paragraphs:
@@ -528,8 +656,8 @@ def _wrap_text_for_drawtext(text: str, font_size: int, max_width: int) -> list[s
     return lines or [""]
 
 
-def _load_drawtext_font(size: int) -> ImageFont.ImageFont:
-    for candidate in FONT_CANDIDATES:
+def _load_drawtext_font(size: int, font_family: str | None = None) -> ImageFont.ImageFont:
+    for candidate in _font_candidates_for_family(font_family):
         if candidate.exists():
             return ImageFont.truetype(str(candidate), size)
     return ImageFont.load_default()
@@ -588,6 +716,7 @@ def _overlay_complexity(template_config: dict | None, variant: VideoVariant) -> 
                 text_inputs[key],
                 int(template[f"{key}_font_size"]),
                 _text_box_width(template, key, int(template[f"{key}_x"])),
+                font_family=str(template.get(f"{key}_font_family") or ""),
             )
             drawtext_count += min(max_lines, len(wrapped_lines) or 1)
     return {

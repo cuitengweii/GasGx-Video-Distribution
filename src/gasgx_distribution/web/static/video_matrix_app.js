@@ -82,27 +82,32 @@ const visualFontOptions = [
   ["'Courier New', Consolas, monospace", "数据等宽"],
 ];
 const videoTextFontOptions = [
-  ["'Arial Black', Impact, 'Microsoft YaHei', sans-serif", "爆款粗黑"],
-  ["Impact, 'Arial Black', 'Microsoft YaHei', sans-serif", "冲击海报"],
-  ["'Segoe UI Black', 'Arial Black', 'Microsoft YaHei', sans-serif", "霓虹重磅"],
-  ["'Bahnschrift Condensed', 'Arial Narrow', 'Microsoft YaHei', sans-serif", "压缩工业"],
+  ["'Microsoft YaHei Bold', 'Microsoft YaHei', 'Noto Sans SC', sans-serif", "中文主标题"],
+  ["'Noto Sans SC Bold', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "中文大屏粗体"],
+  ["SimHei, 'Microsoft YaHei', sans-serif", "中文黑体冲击"],
+  ["DINNextLTPro-Bold, 'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "英文主标题 DIN"],
+  ["'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "英文主标题 Black"],
+  ["Impact, 'Arial Black', 'Microsoft YaHei', sans-serif", "英文主标题 Impact"],
+  ["'Arial Black', Impact, 'Microsoft YaHei', sans-serif", "中英混排粗黑"],
+  ["Bahnschrift, 'Bahnschrift Condensed', 'Microsoft YaHei', sans-serif", "工业科技风"],
+  ["Consolas, 'Courier New', 'Microsoft YaHei', monospace", "数据机甲风"],
+  ["'Alibaba PuHuiTi Heavy', 'Microsoft YaHei', 'Noto Sans SC', sans-serif", "阿里普惠重黑"],
+  ["'Source Han Sans Heavy', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "思源重黑"],
+  ["'HarmonyOS Sans SC Bold', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "鸿蒙粗黑"],
+  ["YouSheBiaoTiHei, SimHei, 'Microsoft YaHei', sans-serif", "优设标题黑"],
+  ["'DIN Condensed', DINNextLTPro-Bold, Bahnschrift, 'Microsoft YaHei', sans-serif", "DIN 压缩广告"],
   ["'Franklin Gothic Heavy', 'Arial Black', 'Microsoft YaHei', sans-serif", "硬核广告"],
   ["'Cooper Black', Georgia, 'Microsoft YaHei', serif", "复古胖字"],
   ["'Showcard Gothic', 'Arial Black', 'Microsoft YaHei', sans-serif", "招牌漫画"],
-  ["'Courier New', Consolas, 'Microsoft YaHei', monospace", "数据机甲"],
-  ["'Microsoft YaHei UI', 'Noto Sans SC', sans-serif", "中文雅黑海报"],
-  ["SimHei, 'Microsoft YaHei', sans-serif", "中文黑体冲击"],
   ["SimSun, 'Microsoft YaHei', serif", "中文宋体刊头"],
-  ["'Noto Sans SC', 'Microsoft YaHei', sans-serif", "中文大屏粗体"],
   ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "中文广告黑体"],
   ["'Trebuchet MS', 'Microsoft YaHei', sans-serif", "英文圆体科技"],
-  ["'Arial Narrow', 'Bahnschrift Condensed', 'Microsoft YaHei', sans-serif", "English Condensed"],
-  ["'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "English Neon Bold"],
-  ["'Franklin Gothic Heavy', Impact, 'Microsoft YaHei', sans-serif", "English Ad Heavy"],
   ["Georgia, 'Times New Roman', 'Microsoft YaHei', serif", "English Serif Luxe"],
   ["'Lucida Console', 'Courier New', 'Microsoft YaHei', monospace", "English Data Mono"],
   ["'Comic Sans MS', 'Arial Black', 'Microsoft YaHei', sans-serif", "English Pop Comic"],
 ];
+const fontPreviewEnglish = "gasgx";
+const fontPreviewChinese = "盖斯基克斯";
 const textEffectOptions = [
   ["none", "无动效"],
   ["fade-in", "淡入"],
@@ -1256,9 +1261,14 @@ function visualTemplateToolbarHtml(template) {
   const hudOpacity = Number(template.hud_bar_opacity ?? 0.68);
   const hudRadius = Number(template.hud_bar_radius ?? 10);
   const hudColor = template.hud_bar_color || "#0E1A10";
-  const fontOptions = videoTextFontOptions.map(([value, label]) =>
-    `<option value="${escapeHtml(value)}" ${value === fontValue ? "selected" : ""}>${label}</option>`
-  ).join("");
+  const fontSamples = videoTextFontOptions.map(([value, label]) => `
+          <button type="button" class="font-sample-option ${value === fontValue ? "active" : ""}" data-visual-command="font-family" data-value="${escapeHtml(value)}" title="${escapeHtml(label)}">
+            <span class="font-sample-name">${escapeHtml(label)}</span>
+            <span class="font-sample-lines" style="font-family:${escapeHtml(value)}">
+              <span class="font-sample-en">${escapeHtml(fontPreviewEnglish)}</span>
+              <span class="font-sample-cn">${escapeHtml(fontPreviewChinese)}</span>
+            </span>
+          </button>`).join("");
   const effectOptions = textEffectOptions.map(([value, label]) =>
     `<option value="${escapeHtml(value)}" ${value === effectValue ? "selected" : ""}>${label}</option>`
   ).join("");
@@ -1277,7 +1287,9 @@ function visualTemplateToolbarHtml(template) {
           <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
           <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
         </label>
-        <select data-visual-command="font-family">${fontOptions}</select>
+        <div class="font-sample-picker" role="listbox" aria-label="字体样张选择">
+          ${fontSamples}
+        </div>
         <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
       </div>
       <div class="visual-control-section visual-hud-controls" aria-label="字幕背板调整区">
@@ -1314,7 +1326,13 @@ function bindVisualTemplateToolbar() {
   const toolbar = $("videoTemplateForm").querySelector(".visual-toolbar-panel");
   if (!toolbar) return;
   toolbar.querySelectorAll("button[data-visual-command]").forEach((button) => {
-    button.onclick = () => postVisualTemplateCommand(button.dataset.visualCommand, button.dataset.value || "", visualCommandScope(button));
+    button.onclick = () => {
+      if (button.dataset.visualCommand === "font-family") {
+        toolbar.querySelectorAll(".font-sample-option.active").forEach((node) => node.classList.remove("active"));
+        button.classList.add("active");
+      }
+      postVisualTemplateCommand(button.dataset.visualCommand, button.dataset.value || "", visualCommandScope(button));
+    };
   });
   toolbar.querySelectorAll("select[data-visual-command], input[data-visual-command]").forEach((input) => {
     input.oninput = () => {

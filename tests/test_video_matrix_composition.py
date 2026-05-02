@@ -378,6 +378,114 @@ def test_hud_text_alignment_uses_hud_specific_template_value() -> None:
     assert ":x=0:y=1762" not in filter_complex
 
 
+def test_video_template_background_overlay_uses_rounded_image_in_render_path(tmp_path: Path) -> None:
+    variant = plan_variants(
+        [_clip("category_A", "a1")],
+        _settings(
+            composition_sequence=[{"category_id": "category_A", "duration": 0.5}],
+            titles=["GasGx title"],
+            slogans=["Slogan text"],
+        ),
+        HudPayload(["Gas Input -> Power"], False),
+        [0, 0.5, 1],
+    )[0]
+    template = {
+        "show_hud": True,
+        "show_slogan": True,
+        "show_title": True,
+        "hud_bar_x": 252,
+        "hud_bar_y": 1202,
+        "hud_bar_width": 576,
+        "hud_bar_height": 168,
+        "hud_bar_radius": 37,
+        "hud_bar_color": "#2c302d",
+        "hud_bar_opacity": 0.53,
+        "slogan_bg_x": 96,
+        "slogan_bg_y": 906,
+        "slogan_bg_width": 888,
+        "slogan_bg_height": 207,
+        "slogan_bg_radius": 37,
+        "slogan_bg_color": "#363a37",
+        "slogan_bg_opacity": 0.62,
+        "title_bg_x": 108,
+        "title_bg_y": 635,
+        "title_bg_width": 864,
+        "title_bg_height": 207,
+        "title_bg_radius": 37,
+        "title_bg_color": "#3e4740",
+        "title_bg_opacity": 0.89,
+        "hud_x": 0,
+        "hud_y": 1260,
+        "hud_font_size": 40,
+        "slogan_x": 24,
+        "slogan_y": 927,
+        "slogan_font_size": 52,
+        "title_x": 60,
+        "title_y": 687,
+        "title_font_size": 50,
+        "primary_color": "#1e1f20",
+        "secondary_color": "#6710ea",
+    }
+
+    filter_complex, inputs = _build_filter_complex(variant, _settings(), template_config=template, text_dir=tmp_path / "text_layers")
+
+    overlay_path = tmp_path / "template_background_overlay.png"
+    assert overlay_path in inputs
+    assert overlay_path.exists()
+    assert "template_background_overlay.png" not in filter_complex
+    assert "overlay=0:0:format=auto" in filter_complex
+    assert "drawbox=" not in filter_complex
+    image = Image.open(overlay_path).convert("RGBA")
+    assert image.getpixel((108, 635))[3] == 0
+    assert image.getpixel((145, 672))[3] > 0
+
+
+def test_video_template_render_uses_template_font_family_for_drawtext() -> None:
+    variant = plan_variants(
+        [_clip("category_A", "a1")],
+        _settings(
+            composition_sequence=[{"category_id": "category_A", "duration": 0.5}],
+            titles=["Industrial gas power"],
+            slogans=["Monetize stranded gas"],
+        ),
+        HudPayload(["Gas Input -> Power"], False),
+        [0, 0.5, 1],
+    )[0]
+    template = {
+        "show_hud": False,
+        "show_slogan": True,
+        "show_title": True,
+        "slogan_x": 92,
+        "slogan_y": 820,
+        "slogan_font_size": 64,
+        "slogan_font_family": "'Segoe UI Black', 'Arial Black', sans-serif",
+        "title_x": 116,
+        "title_y": 627,
+        "title_font_size": 50,
+        "title_font_family": "Impact, 'Arial Black', sans-serif",
+        "hud_bar_y": 1714,
+        "hud_bar_height": 162,
+        "hud_bar_color": "#75b37b",
+        "hud_bar_opacity": 0,
+        "primary_color": "#FF2FAC",
+        "secondary_color": "#FFFFFF",
+    }
+
+    filter_complex, _inputs = _build_filter_complex(variant, _settings(), template_config=template)
+
+    assert "seguibl.ttf" in filter_complex or "segoeuib.ttf" in filter_complex or "ariblk.ttf" in filter_complex
+    assert "impact.ttf" in filter_complex or "ariblk.ttf" in filter_complex
+    assert "msyh.ttc" not in filter_complex
+
+
+def test_video_renderer_maps_ad_font_families_to_ffmpeg_candidates() -> None:
+    assert video_renderer._font_candidates_for_family("DINNextLTPro-Bold")[0].name == "DINNextLTPro-Bold.ttf"
+    assert video_renderer._font_candidates_for_family("'Microsoft YaHei Bold', sans-serif")[0].name == "msyhbd.ttc"
+    assert video_renderer._font_candidates_for_family("'Noto Sans SC Bold', sans-serif")[0].name == "Noto Sans SC Bold (TrueType).otf"
+    assert video_renderer._font_candidates_for_family("'Alibaba PuHuiTi Heavy', sans-serif")[0].name == "AlibabaPuHuiTi-Heavy.ttf"
+    assert video_renderer._font_candidates_for_family("YouSheBiaoTiHei, sans-serif")[0].name == "YouSheBiaoTiHei.ttf"
+
+
 def test_video_renderer_prefers_cjk_fonts_for_chinese_text() -> None:
     font_names = [candidate.name for candidate in video_renderer.FONT_CANDIDATES[:6]]
 

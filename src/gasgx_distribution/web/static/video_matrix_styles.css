@@ -1587,6 +1587,66 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   flex: 0 1 186px;
   max-width: 186px;
 }
+.font-sample-picker {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  width: 100%;
+  max-height: 390px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 7px;
+  background: rgba(0,0,0,.24);
+}
+.font-sample-option {
+  display: grid !important;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100% !important;
+  min-height: 82px !important;
+  padding: 9px 10px !important;
+  border: 1px solid rgba(255,255,255,.13) !important;
+  border-radius: 7px !important;
+  background: rgba(10, 15, 14, .9) !important;
+  color: #f6fff3 !important;
+  text-align: left;
+}
+.font-sample-option:hover,
+.font-sample-option.active {
+  border-color: var(--green) !important;
+  background: rgba(31, 55, 28, .92) !important;
+  box-shadow: 0 0 0 2px rgba(93,214,44,.16);
+}
+.font-sample-name {
+  color: #bdf7a9;
+  font: 900 12px/1.2 Inter, "Microsoft YaHei", sans-serif;
+}
+.font-sample-lines {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #fff;
+  text-shadow: 0 2px 0 rgba(0,0,0,.55);
+}
+.font-sample-en,
+.font-sample-cn {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.font-sample-en {
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 1.05;
+}
+.font-sample-cn {
+  font-size: 21px;
+  font-weight: 900;
+  line-height: 1.12;
+}
 .visual-effect-control {
   display: grid;
   grid-template-columns: auto minmax(118px, 186px);
