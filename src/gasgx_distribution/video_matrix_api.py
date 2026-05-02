@@ -574,6 +574,26 @@ def preview_file(path: str) -> FileResponse:
     return FileResponse(video_path, media_type="video/mp4", filename=video_path.name)
 
 
+@router.get("/preview-files")
+def preview_files(path: str) -> dict[str, Any]:
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+    video_path = Path(path).expanduser().resolve()
+    directory = video_path.parent if video_path.suffix else video_path
+    if not directory.exists() or not directory.is_dir():
+        raise HTTPException(status_code=404, detail="Preview directory not found")
+    videos = [
+        item
+        for item in sorted(directory.iterdir(), key=lambda target: target.stat().st_mtime, reverse=True)
+        if item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS
+    ]
+    return {
+        "directory": str(directory),
+        "current": str(video_path) if video_path.exists() else "",
+        "videos": [{"name": item.name, "path": str(item)} for item in videos[:36]],
+    }
+
+
 @router.get("/model-images")
 def model_images() -> dict[str, Any]:
     MODEL_IMAGE_DIR.mkdir(parents=True, exist_ok=True)

@@ -4,6 +4,7 @@ import json
 import os
 import hmac
 import hashlib
+import sqlite3
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -65,6 +66,51 @@ def test_account_crud_creates_independent_platform_profiles(monkeypatch, tmp_pat
     updated = service.update_account(int(account["id"]), {"notes": "phase-one"})
     assert updated is not None
     assert updated["notes"] == "phase-one"
+
+
+def test_operator_auth_seed_uses_database_and_super_admin_password(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.ensure_database()
+
+    state = service.operator_auth_state()
+    assert state["roles"]["super_admin"]["name"] == "超级管理员"
+    assert set(state["roles"]["super_admin"]["permissions"]) >= {"overview", "video-matrix", "system-settings"}
+    assert any(user["id"] == "allen" and user["roleId"] == "super_admin" for user in state["users"])
+
+    with sqlite3.connect(tmp_path / "runtime" / "gasgx_distribution.db") as conn:
+        conn.row_factory = sqlite3.Row
+        user = conn.execute("SELECT password_hash FROM operator_users WHERE id = 'allen'").fetchone()
+    assert user is not None
+    assert user["password_hash"]
+    assert user["password_hash"] != "cuitengwei123"
+
+    assert service.login_operator_user("allen", "cuitengwei123")["currentUserId"] == "allen"
+    try:
+        service.login_operator_user("allen", "wrong")
+    except ValueError as exc:
+        assert "invalid password" in str(exc)
+    else:
+        raise AssertionError("wrong password should fail")
+
+
+def test_operator_auth_api_persists_roles_users_and_permissions(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    login = client.post("/api/auth/login", json={"user_id": "allen", "password": "cuitengwei123"})
+    assert login.status_code == 200
+    assert login.json()["currentUserId"] == "allen"
+
+    role = client.post("/api/auth/roles", json={"name": "审核员"})
+    assert role.status_code == 200
+    role_id = role.json()["editingRoleId"]
+    permissions = client.put(f"/api/auth/roles/{role_id}/permissions", json={"permissions": ["overview", "stats", "help-center"]})
+    assert permissions.status_code == 200
+    assert set(permissions.json()["roles"][role_id]["permissions"]) == {"overview", "stats", "help-center"}
+
+    created = client.post("/api/auth/users", json={"name": "Mia", "role_id": role_id, "password": "mia123"})
+    assert created.status_code == 200
+    assert any(user["name"] == "Mia" and user["roleId"] == role_id for user in created.json()["users"])
 
 
 def test_creating_many_wechat_accounts_allocates_unique_profiles_ports_and_fingerprints(monkeypatch, tmp_path: Path) -> None:

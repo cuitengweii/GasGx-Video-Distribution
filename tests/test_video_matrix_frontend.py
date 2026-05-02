@@ -160,6 +160,14 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     shell_app = app_shell.read_text(encoding="utf-8")
     shell_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert "6 条未读" in shell_html
+    assert "matrixRunConfirmModal" in shell_html
+    assert "确认立即启动矩阵发布作业" in shell_html
+    assert "确认启动" in shell_html
+    assert 'data-permission="video-matrix"' in shell_html
+    assert 'id="local-login-form"' in shell_html
+    assert "仅超级管理员分配账号" in shell_html
+    assert 'id="operator-account-form"' in shell_html
+    assert 'id="permission-grid"' in shell_html
     assert "视频生成完成" in shell_html
     assert "视频号发布失败" in shell_html
     assert "素材分类不足" in shell_html
@@ -181,6 +189,21 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "lark-callback-mode" in shell_app
     assert 'const formHidden = !editingPlatform' in shell_app
     assert 'configPanel.hidden = formHidden' in shell_app
+    assert "function confirmMatrixRunNow()" in shell_app
+    assert "await confirmMatrixRunNow()" in shell_app
+    assert 'window.confirm("确认立即启动一次矩阵发布作业' not in shell_app
+    assert "const DEFAULT_AUTH_STATE" in shell_app
+    assert "超级管理员" in shell_app
+    assert "发布员" in shell_app
+    assert "素材维护员" in shell_app
+    assert "数据监控员" in shell_app
+    assert "function applyPermissions()" in shell_app
+    assert "/api/auth/state" in shell_app
+    assert "/api/auth/login" in shell_app
+    assert "/api/auth/roles" in shell_app
+    assert "/api/auth/users" in shell_app
+    assert "data-role-permission" in shell_app
+    assert "permission-hidden" in shell_app
     assert "data-ai-toggle" in shell_app
     assert "通知开启" in shell_app
     assert "通知关闭" in shell_app
@@ -212,6 +235,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".help-hero-panel" in shell_css
     assert ".help-doc-grid" in shell_css
     assert ".help-doc-card" in shell_css
+    assert ".confirm-modal" in shell_css
+    assert ".confirm-panel" in shell_css
+    assert ".confirm-message" in shell_css
+    assert ".permission-grid" in shell_css
+    assert ".operator-account-row" in shell_css
+    assert ".role-tab.active" in shell_css
+    assert ".permission-hidden" in shell_css
     assert "body.video-matrix-active" in shell_css
     assert "overflow: hidden" in shell_css
     assert "flex-direction: column" in shell_css
@@ -426,9 +456,18 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "正文模板自动保存失败" in app
     assert "第一屏模板自动保存失败" in app
     assert "pulseImageLoading(\"coverPreview\"" in app
+    assert "PREVIEW_FRAME_PLACEHOLDER" in app
+    assert "frame.src = PREVIEW_FRAME_PLACEHOLDER" in app
+    assert "window.requestAnimationFrame" in app
+    assert "background%3A%23050505" in app
     assert "pulseImageLoading(\"videoTemplatePreview\"" in app
     assert "应用封面参数..." in app
     assert "应用模板参数..." in app
+    assert "min-width: 188px" in css
+    assert "padding: 10px 18px 10px 70px" in css
+    assert "border-radius: 999px" in css
+    assert "left: calc(50% - 70px)" in css
+    assert ".cover-template-switcher .loading-spinner" in css
     assert "background: transparent" in css
     assert "box-shadow: none" in css
     assert "const recentLimits = state.recent_limits || settings.recent_limits || {}" in app
@@ -788,6 +827,8 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "cover-profile-mode" in preview_html
     assert "body.cover-profile-mode .phone-mockup" in preview_html
     assert "body.cover-single-mode .phone-mockup" in preview_html
+    assert "body.cover-single-mode #previewVideo" in preview_html
+    assert "body.cover-single-mode .vm-template-layer" in preview_html
     assert "border: 0" in preview_html
     assert "box-shadow: 0 0 0 14px #1a1a1a, 0 0 0 16px #333" in preview_html
     assert "border-radius: 55px" in preview_html
@@ -818,6 +859,47 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "cover-tile-slogan" in preview_html
     assert "aspect-ratio: 9 / 16" in preview_html
     assert 'class="sound-toggle hidden"' in preview_html
+    assert "preview-browser-mode" in preview_html
+    assert "preview-browser-root" in preview_html
+    assert "生成视频预览" in preview_html
+    assert "同步播放" in preview_html
+    assert "同步停止" in preview_html
+    assert "展示数量" in preview_html
+    assert "手机模型选择" in preview_html
+    assert "视频选择" in preview_html
+    assert "previewPlay" in preview_html
+    assert "previewStop" in preview_html
+    assert "gridMode" not in preview_html
+    assert "九宫格查看" not in preview_html
+    assert "previewGridStage" in preview_html
+    assert "九宫格手机模拟查看" in preview_html
+    assert "/api/video-matrix/preview-files?path=" in preview_html
+    assert "setPreviewVideo" in preview_html
+    assert "setPreviewMode" in preview_html
+    assert "DEVICE_PRESETS" in preview_html
+    assert "deviceIconSvg" in preview_html
+    assert "device-icon" in preview_html
+    assert "iPhone 15 Pro Max" in preview_html
+    assert "Galaxy S24 Ultra" in preview_html
+    assert "Huawei Mate 60 Pro" not in preview_html
+    assert "Mate 60 Pro" in preview_html
+    assert "data-grid-count=\"3\"" in preview_html
+    assert "data-grid-count=\"6\"" in preview_html
+    assert "data-grid-count=\"9\"" in preview_html
+    assert "previewGridCount = 3" in preview_html
+    assert "sourceItems.slice(0, previewGridCount)" in preview_html
+    assert "playAllPreviewVideos" in preview_html
+    assert "stopAllPreviewVideos" in preview_html
+    assert "node.muted = true" in preview_html
+    assert "button.querySelector(\"video\")" in preview_html
+    assert "node.paused" in preview_html
+    assert "is-playing" in preview_html
+    assert "grid-template-rows: auto auto auto auto auto auto auto auto minmax(0, 1fr)" in preview_html
+    preview_video_css = preview_html[preview_html.index("#previewVideo {"):preview_html.index("#templateBackgroundImage {")]
+    assert "object-fit: contain" in preview_video_css
+    grid_video_css = preview_html[preview_html.index(".preview-grid-phone video {"):preview_html.index(".preview-grid-phone span {")]
+    assert "object-fit: contain" in grid_video_css
+    assert "background: #000" in grid_video_css
 
 
 def test_video_matrix_preview_matches_wechat_phone_reference_shell() -> None:

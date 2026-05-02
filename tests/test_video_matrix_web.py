@@ -640,6 +640,25 @@ def test_video_matrix_local_bgm_file_endpoint(monkeypatch, tmp_path) -> None:
     assert response.content == b"audio"
 
 
+def test_video_matrix_preview_files_lists_sibling_videos(tmp_path: Path) -> None:
+    first = tmp_path / "20260503_044046_vibe_01.mp4"
+    second = tmp_path / "20260503_044046_vibe_02.mp4"
+    ignored = tmp_path / "notes.txt"
+    first.write_bytes(b"video-1")
+    second.write_bytes(b"video-2")
+    ignored.write_text("skip", encoding="utf-8")
+
+    client = TestClient(create_app())
+    response = client.get("/api/video-matrix/preview-files", params={"path": str(first)})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["directory"] == str(tmp_path)
+    assert payload["current"] == str(first)
+    assert {item["name"] for item in payload["videos"]} == {first.name, second.name}
+    assert all(item["name"] != ignored.name for item in payload["videos"])
+
+
 def test_video_matrix_state_lists_ending_templates(monkeypatch, tmp_path) -> None:
     ending_dir = tmp_path / "ending_template"
     ending_dir.mkdir()

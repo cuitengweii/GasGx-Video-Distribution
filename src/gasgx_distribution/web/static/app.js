@@ -80,6 +80,50 @@ let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "ov
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
+const SHELL_AUTH_KEY = "gasgx-shell-auth";
+
+const FEATURE_ENTRIES = [
+  { id: "overview", label: "总览", group: "业务工作台" },
+  { id: "accounts", label: "账号矩阵", group: "业务工作台" },
+  { id: "settings", label: "公共设置", group: "业务工作台" },
+  { id: "tasks", label: "任务中心", group: "业务工作台" },
+  { id: "stats", label: "数据统计", group: "业务工作台" },
+  { id: "ai-robot", label: "AI机器人", group: "业务工作台" },
+  { id: "video-matrix", label: "视频生成", group: "业务工作台" },
+  { id: "user-center", label: "用户中心", group: "系统管理" },
+  { id: "notifications", label: "通知中心", group: "系统管理" },
+  { id: "system-settings", label: "系统设置", group: "系统管理" },
+  { id: "help-center", label: "帮助文档", group: "系统管理" },
+];
+
+const DEFAULT_AUTH_STATE = {
+  currentUserId: "allen",
+  roles: {
+    super_admin: {
+      name: "超级管理员",
+      permissions: FEATURE_ENTRIES.map((item) => item.id),
+    },
+    publisher: {
+      name: "发布员",
+      permissions: ["overview", "accounts", "settings", "tasks", "video-matrix", "user-center", "notifications", "help-center"],
+    },
+    material_manager: {
+      name: "素材维护员",
+      permissions: ["overview", "accounts", "video-matrix", "user-center", "notifications", "help-center"],
+    },
+    data_monitor: {
+      name: "数据监控员",
+      permissions: ["overview", "stats", "user-center", "notifications", "help-center"],
+    },
+  },
+  users: [
+    { id: "allen", name: "Allen", roleId: "super_admin" },
+    { id: "publisher", name: "发布员", roleId: "publisher" },
+    { id: "material", name: "素材维护员", roleId: "material_manager" },
+    { id: "analyst", name: "数据监控员", roleId: "data_monitor" },
+  ],
+  editingRoleId: "super_admin",
+};
 
 const SHELL_THEMES = [
   { id: "gasgx-green", name: "GasGx Green", accent: "#5dd62c", soft: "rgba(93, 214, 44, 0.14)" },
@@ -242,6 +286,204 @@ function applyServerBrand(brand) {
   if (settings.theme_id) applyShellTheme(settings.theme_id);
   const prefix = document.querySelector('input[name="brand_prefix"]');
   if (prefix) prefix.value = settings.default_account_prefix || settings.name || "GasGx";
+}
+
+let authState = { ...DEFAULT_AUTH_STATE, features: FEATURE_ENTRIES };
+
+function readStoredAuthSession() {
+  try {
+    return JSON.parse(localStorage.getItem(SHELL_AUTH_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveAuthSession(nextSession) {
+  localStorage.setItem(SHELL_AUTH_KEY, JSON.stringify(nextSession));
+}
+
+function currentAuthUser(statePayload = authState) {
+  return statePayload.users.find((user) => user.id === statePayload.currentUserId) || statePayload.users[0];
+}
+
+function currentPermissions(statePayload = authState) {
+  const user = currentAuthUser(statePayload);
+  const role = statePayload.roles[user?.roleId] || statePayload.roles.publisher;
+  return new Set(role?.permissions || []);
+}
+
+function applyPermissions() {
+  const authState = readAuthState();
+  const user = currentAuthUser(authState);
+  const role = authState.roles[user?.roleId] || authState.roles.publisher;
+  const permissions = currentPermissions(authState);
+  document.querySelector("#signed-user-name").textContent = user?.name || "未登录";
+  document.querySelector(".signed-user-badge")?.setAttribute("aria-label", `当前登录用户 ${user?.name || "未登录"}`);
+  document.querySelector("#session-user-name").textContent = user?.name || "未登录";
+  document.querySelector("#session-user-desc").textContent = `${role?.name || "未分配角色"} / ${user?.roleId === "super_admin" ? "可分配账号与角色权限" : "按角色显示功能入口"}`;
+  document.querySelector("#session-role-badge").textContent = role?.name || "未分配";
+  document.querySelector("#session-avatar").textContent = (user?.name || "G").slice(0, 1).toUpperCase();
+  document.querySelectorAll("[data-permission]").forEach((node) => {
+    const allowed = permissions.has(node.dataset.permission) || user?.roleId === "super_admin";
+    node.classList.toggle("permission-hidden", !allowed);
+  });
+  document.querySelectorAll("[data-admin-only]").forEach((node) => {
+    node.classList.toggle("permission-hidden", user?.roleId !== "super_admin");
+  });
+  if (!permissions.has(currentView) && user?.roleId !== "super_admin") {
+    const fallback = FEATURE_ENTRIES.find((entry) => permissions.has(entry.id))?.id || "overview";
+    activateView(fallback);
+  }
+}
+
+function renderLoginOptions(statePayload = authState) {
+  const loginSelect = document.querySelector("#login-user-select");
+  const roleSelect = document.querySelector("#operator-role-select");
+  if (loginSelect) {
+    loginSelect.innerHTML = statePayload.users.map((user) => {
+      const role = statePayload.roles[user.roleId];
+      return `<option value="${user.id}">${user.name} · ${role?.name || "未分配"}</option>`;
+    }).join("");
+    loginSelect.value = statePayload.currentUserId;
+  }
+  if (roleSelect) {
+    roleSelect.innerHTML = Object.entries(statePayload.roles).map(([roleId, role]) => `<option value="${roleId}">${role.name}</option>`).join("");
+  }
+}
+
+function renderOperatorAccounts(statePayload = authState) {
+  const list = document.querySelector("#operator-account-list");
+  if (!list) return;
+  list.innerHTML = statePayload.users.map((user) => {
+    const role = statePayload.roles[user.roleId];
+    return `
+      <article class="operator-account-row">
+        <strong>${user.name}</strong>
+        <select data-user-role="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>
+          ${Object.entries(statePayload.roles).map(([roleId, item]) => `<option value="${roleId}" ${roleId === user.roleId ? "selected" : ""}>${item.name}</option>`).join("")}
+        </select>
+        <span>${role?.name || "未分配"}</span>
+      </article>
+    `;
+  }).join("");
+  list.querySelectorAll("[data-user-role]").forEach((select) => {
+    select.addEventListener("change", async () => {
+      authState = await api(`/api/auth/users/${encodeURIComponent(select.dataset.userRole)}/role`, {
+        method: "PATCH",
+        body: JSON.stringify({ role_id: select.value }),
+      });
+      renderAuthCenter();
+    });
+  });
+}
+
+function renderRoleTabs(statePayload = authState) {
+  const tabs = document.querySelector("#role-tabs");
+  if (!tabs) return;
+  tabs.innerHTML = Object.entries(statePayload.roles).map(([roleId, role]) => `
+    <button class="role-tab ${roleId === statePayload.editingRoleId ? "active" : ""}" type="button" data-role-tab="${roleId}">
+      ${role.name}
+    </button>
+  `).join("");
+  tabs.querySelectorAll("[data-role-tab]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const session = readStoredAuthSession();
+      session.editingRoleId = button.dataset.roleTab;
+      saveAuthSession(session);
+      authState = await api(`/api/auth/state?current_user_id=${encodeURIComponent(authState.currentUserId)}&editing_role_id=${encodeURIComponent(session.editingRoleId)}`);
+      renderAuthCenter();
+    });
+  });
+}
+
+function renderPermissionGrid(statePayload = authState) {
+  const grid = document.querySelector("#permission-grid");
+  const badge = document.querySelector("#permission-role-badge");
+  if (!grid) return;
+  const roleId = statePayload.editingRoleId || "super_admin";
+  const role = statePayload.roles[roleId] || statePayload.roles.super_admin;
+  const permissionSet = new Set(role.permissions || []);
+  if (badge) badge.textContent = role.name;
+  grid.innerHTML = statePayload.features.map((entry) => `
+    <label class="permission-item">
+      <input type="checkbox" data-role-permission="${entry.id}" ${permissionSet.has(entry.id) ? "checked" : ""} ${roleId === "super_admin" ? "disabled" : ""}>
+      <span><strong>${entry.label}</strong><small>${entry.group}</small></span>
+    </label>
+  `).join("");
+  grid.querySelectorAll("[data-role-permission]").forEach((checkbox) => {
+    checkbox.addEventListener("change", async () => {
+      const nextRole = authState.roles[authState.editingRoleId];
+      if (!nextRole || authState.editingRoleId === "super_admin") return;
+      const nextPermissions = new Set(nextRole.permissions || []);
+      if (checkbox.checked) nextPermissions.add(checkbox.dataset.rolePermission);
+      else nextPermissions.delete(checkbox.dataset.rolePermission);
+      authState = await api(`/api/auth/roles/${encodeURIComponent(authState.editingRoleId)}/permissions`, {
+        method: "PUT",
+        body: JSON.stringify({ permissions: Array.from(nextPermissions) }),
+      });
+      renderAuthCenter();
+    });
+  });
+}
+
+function renderAuthCenter() {
+  renderLoginOptions(authState);
+  renderOperatorAccounts(authState);
+  renderRoleTabs(authState);
+  renderPermissionGrid(authState);
+  applyPermissions();
+}
+
+async function loadAuthCenter() {
+  const session = readStoredAuthSession();
+  authState = await api(`/api/auth/state?current_user_id=${encodeURIComponent(session.currentUserId || "allen")}&editing_role_id=${encodeURIComponent(session.editingRoleId || "super_admin")}`);
+  renderAuthCenter();
+}
+
+function initAuthCenter() {
+  loadAuthCenter().catch(() => renderAuthCenter());
+  document.querySelector("#local-login-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = document.querySelector("#login-password").value.trim();
+    if (!password) return;
+    authState = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ user_id: document.querySelector("#login-user-select").value, password }),
+    });
+    saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId });
+    document.querySelector("#login-password").value = "";
+    renderAuthCenter();
+  });
+  document.querySelector("#operator-account-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const nameInput = document.querySelector("#operator-name-input");
+    const name = nameInput.value.trim();
+    if (!name) return;
+    authState = await api("/api/auth/users", {
+      method: "POST",
+      body: JSON.stringify({ name, role_id: document.querySelector("#operator-role-select").value || "publisher" }),
+    });
+    nameInput.value = "";
+    renderAuthCenter();
+  });
+  document.querySelector("#role-create-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = document.querySelector("#role-name-input");
+    const name = input.value.trim();
+    if (!name) return;
+    authState = await api("/api/auth/roles", { method: "POST", body: JSON.stringify({ name }) });
+    saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId });
+    input.value = "";
+    renderAuthCenter();
+  });
+  document.querySelectorAll("[data-logout]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      saveAuthSession({ currentUserId: "publisher", editingRoleId: "super_admin" });
+      authState = await api("/api/auth/state?current_user_id=publisher&editing_role_id=super_admin");
+      renderAuthCenter();
+      activateView("user-center");
+    });
+  });
 }
 
 function initUserMenu() {
@@ -1545,9 +1787,30 @@ document.querySelector("#open-material-dir").addEventListener("click", async (ev
   }
 });
 
+function confirmMatrixRunNow() {
+  const modal = document.querySelector("#matrixRunConfirmModal");
+  if (!modal) return Promise.resolve(true);
+  modal.classList.remove("hidden");
+  const submit = document.querySelector("#matrixRunConfirmSubmit");
+  const cancel = document.querySelector("#matrixRunConfirmCancel");
+  const closeButton = document.querySelector("#matrixRunConfirmClose");
+  return new Promise((resolve) => {
+    const close = (confirmed) => {
+      modal.classList.add("hidden");
+      if (submit) submit.onclick = null;
+      if (cancel) cancel.onclick = null;
+      if (closeButton) closeButton.onclick = null;
+      resolve(confirmed);
+    };
+    if (submit) submit.onclick = () => close(true);
+    if (cancel) cancel.onclick = () => close(false);
+    if (closeButton) closeButton.onclick = () => close(false);
+  });
+}
+
 document.querySelector("#matrix-run-now").addEventListener("click", async (event) => {
   const button = event.currentTarget;
-  const confirmed = window.confirm("确认立即启动一次矩阵发布作业？系统会按当前设置为可用账号分配素材并执行发布。");
+  const confirmed = await confirmMatrixRunNow();
   if (!confirmed) return;
   const restoreButton = setButtonLoading(button, "启动中");
   try {
@@ -1636,6 +1899,7 @@ renderThemePalette();
 initBrandSettings();
 initSystemInitialize();
 initUserMenu();
+initAuthCenter();
 
 
 /*

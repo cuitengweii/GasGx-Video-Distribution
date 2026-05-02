@@ -18,18 +18,18 @@
     </div>
     <nav>
       <span class="nav-group-label">业务工作台</span>
-      <button class="nav-btn active" data-view="overview">总览</button>
-      <button class="nav-btn" data-view="accounts">账号矩阵</button>
-      <button class="nav-btn" data-view="settings">公共设置</button>
-      <button class="nav-btn" data-view="tasks">任务中心</button>
-      <button class="nav-btn" data-view="stats">数据统计</button>
-      <button class="nav-btn" data-view="ai-robot">AI机器人</button>
-      <button class="nav-btn" data-view="video-matrix">视频生成</button>
+      <button class="nav-btn active" data-view="overview" data-permission="overview">总览</button>
+      <button class="nav-btn" data-view="accounts" data-permission="accounts">账号矩阵</button>
+      <button class="nav-btn" data-view="settings" data-permission="settings">公共设置</button>
+      <button class="nav-btn" data-view="tasks" data-permission="tasks">任务中心</button>
+      <button class="nav-btn" data-view="stats" data-permission="stats">数据统计</button>
+      <button class="nav-btn" data-view="ai-robot" data-permission="ai-robot">AI机器人</button>
+      <button class="nav-btn" data-view="video-matrix" data-permission="video-matrix">视频生成</button>
       <span class="nav-group-label">系统管理</span>
-      <button class="nav-btn" data-view="user-center">用户中心</button>
-      <button class="nav-btn" data-view="notifications">通知中心</button>
-      <button class="nav-btn" data-view="system-settings">系统设置</button>
-      <button class="nav-btn" data-view="help-center">帮助文档</button>
+      <button class="nav-btn" data-view="user-center" data-permission="user-center">用户中心</button>
+      <button class="nav-btn" data-view="notifications" data-permission="notifications">通知中心</button>
+      <button class="nav-btn" data-view="system-settings" data-permission="system-settings">系统设置</button>
+      <button class="nav-btn" data-view="help-center" data-permission="help-center">帮助文档</button>
     </nav>
     <section class="sidebar-user-panel">
       <button class="mini-user" id="user-menu-toggle" type="button" aria-expanded="false">
@@ -39,11 +39,11 @@
         </div>
       </button>
       <div class="sidebar-user-actions hidden" id="sidebar-user-actions">
-        <button class="btn secondary" type="button" data-quick-view="user-center">用户中心</button>
-        <button class="btn secondary" type="button" data-quick-view="notifications">通知中心</button>
-        <button class="btn secondary" type="button" data-quick-view="system-settings">系统设置</button>
-        <button class="btn secondary" type="button" data-quick-view="help-center">帮助文档</button>
-        <button class="btn secondary" type="button">退出登录</button>
+        <button class="btn secondary" type="button" data-quick-view="user-center" data-permission="user-center">用户中心</button>
+        <button class="btn secondary" type="button" data-quick-view="notifications" data-permission="notifications">通知中心</button>
+        <button class="btn secondary" type="button" data-quick-view="system-settings" data-permission="system-settings">系统设置</button>
+        <button class="btn secondary" type="button" data-quick-view="help-center" data-permission="help-center">帮助文档</button>
+        <button class="btn secondary" type="button" data-logout>退出登录</button>
       </div>
     </section>
   </aside>
@@ -60,26 +60,71 @@
         <div class="signed-user-wrap">
           <div class="signed-user-badge" aria-label="当前登录用户 Allen">
             <span class="operator-avatar" aria-hidden="true"></span>
-            <strong>Allen</strong>
+            <strong id="signed-user-name">Allen</strong>
           </div>
           <div class="top-user-menu">
-            <button class="btn secondary" type="button" data-quick-view="user-center">用户中心</button>
-            <button class="btn secondary" type="button">退出登录</button>
+            <button class="btn secondary" type="button" data-quick-view="user-center" data-permission="user-center">用户中心</button>
+            <button class="btn secondary" type="button" data-logout>退出登录</button>
           </div>
         </div>
       </div>
     </header>
     <div class="page-toolbar">
       <button id="refresh" class="btn secondary">刷新当前数据</button>
+      <button class="btn secondary" type="button" data-quick-view="notifications" data-permission="notifications">查看提醒</button>
+      <button class="btn secondary" type="button" data-quick-view="tasks" data-permission="tasks">任务队列</button>
+      <button class="btn primary" type="button" data-quick-view="video-matrix" data-permission="video-matrix">生成视频</button>
     </div>
 
     <section id="overview" class="view active">
       <div id="summary" class="metric-grid"></div>
-      <div class="panel">
-        <div class="panel-head">
-          <h2>平台能力</h2>
-        </div>
-        <div id="platforms" class="platform-groups"></div>
+      <div class="operator-layout">
+        <section class="panel operation-focus-panel">
+          <div class="panel-head">
+            <div>
+              <h2>今日运营重点</h2>
+              <p class="muted">把生成、发布、提醒和复盘入口集中在首页，减少运营人员在侧边栏来回切换。</p>
+            </div>
+            <span class="system-status">运营工作台</span>
+          </div>
+          <div class="operation-focus-grid">
+            <button class="operation-focus-card warning" type="button" data-quick-view="notifications" data-permission="notifications">
+              <span>待处理提醒</span>
+              <strong>登录 / 素材 / 发布异常</strong>
+              <small>先处理会阻断发布的事项</small>
+            </button>
+            <button class="operation-focus-card success" type="button" data-quick-view="video-matrix" data-permission="video-matrix">
+              <span>视频生成</span>
+              <strong>进入批量生成工作台</strong>
+              <small>封面、正文模板和片尾统一处理</small>
+            </button>
+            <button class="operation-focus-card info" type="button" data-quick-view="tasks" data-permission="tasks">
+              <span>执行队列</span>
+              <strong>查看发布任务进度</strong>
+              <small>确认运行中、失败和待重试任务</small>
+            </button>
+          </div>
+        </section>
+        <section class="panel operation-route-panel">
+          <div class="panel-head">
+            <div>
+              <h2>常用入口</h2>
+              <p class="muted">按运营动线排列：账号、配置、数据、帮助。</p>
+            </div>
+          </div>
+          <div class="operation-route-grid">
+            <button class="operation-route-card" type="button" data-quick-view="accounts" data-permission="accounts"><strong>账号矩阵</strong><span>维护账号与登录状态</span></button>
+            <button class="operation-route-card" type="button" data-quick-view="settings" data-permission="settings"><strong>公共设置</strong><span>检查素材目录和发布策略</span></button>
+            <button class="operation-route-card" type="button" data-quick-view="stats" data-permission="stats"><strong>数据统计</strong><span>复盘播放、互动和转化</span></button>
+            <button class="operation-route-card" type="button" data-quick-view="help-center" data-permission="help-center"><strong>帮助文档</strong><span>查找操作说明和流程</span></button>
+          </div>
+        </section>
+        <section class="panel platform-capability-panel">
+          <div class="panel-head">
+            <h2>平台能力</h2>
+          </div>
+          <div id="platforms" class="platform-groups"></div>
+        </section>
       </div>
     </section>
 
@@ -529,33 +574,69 @@
 
     <section id="user-center" class="view">
       <div class="system-grid">
-        <section class="panel system-card">
+        <section class="panel system-card login-card">
           <div class="panel-head">
             <div>
-              <h2>个人资料</h2>
-              <p class="muted">预留操作者信息、头像、角色权限和工作偏好。</p>
+              <h2>登录入口</h2>
+              <p class="muted">仅超级管理员分配账号；没有注册入口，账号和权限先保存在本机浏览器。</p>
             </div>
-            <span class="system-status">预留</span>
+            <span class="system-status" id="session-role-badge">超级管理员</span>
           </div>
+          <form class="login-form" id="local-login-form">
+            <label>账号
+              <select id="login-user-select"></select>
+            </label>
+            <label>口令
+              <input id="login-password" type="password" placeholder="超级管理员口令">
+            </label>
+            <button class="btn primary" type="submit">登录</button>
+          </form>
           <div class="profile-row">
-            <div class="avatar">GX</div>
+            <div class="avatar" id="session-avatar">A</div>
             <div>
-              <strong>GasGx Operator</strong>
-              <p class="muted">本地部署管理员 / 视频矩阵运营</p>
+              <strong id="session-user-name">Allen</strong>
+              <p class="muted" id="session-user-desc">超级管理员 / 可分配账号与角色权限</p>
             </div>
           </div>
         </section>
-        <section class="panel system-card">
-          <div class="panel-head"><h2>权限角色</h2><span class="system-status">待接入</span></div>
-          <div class="system-list">
-            <span>管理员</span><span>发布员</span><span>数据查看</span><span>素材维护</span>
+        <section class="panel system-card account-admin-card" data-admin-only>
+          <div class="panel-head">
+            <div>
+              <h2>账号分配</h2>
+              <p class="muted">超级管理员创建本地账号，并给账号分配角色。</p>
+            </div>
+            <span class="system-status">无注册</span>
           </div>
+          <form class="account-assign-form" id="operator-account-form">
+            <label>姓名<input id="operator-name-input" placeholder="例如：Mia"></label>
+            <label>角色<select id="operator-role-select"></select></label>
+            <button class="btn primary" type="submit">添加账号</button>
+          </form>
+          <div class="operator-account-list" id="operator-account-list"></div>
         </section>
-        <section class="panel system-card">
-          <div class="panel-head"><h2>操作偏好</h2><span class="system-status">本地</span></div>
-          <div class="system-list">
-            <span>深色模式</span><span>GasGx 绿色高亮</span><span>本地文件优先</span>
+        <section class="panel system-card role-admin-card" data-admin-only>
+          <div class="panel-head">
+            <div>
+              <h2>角色权限</h2>
+              <p class="muted">角色可添加；每个角色可以点选分配功能入口。</p>
+            </div>
+            <span class="system-status">可配置</span>
           </div>
+          <form class="role-create-form" id="role-create-form">
+            <input id="role-name-input" maxlength="16" placeholder="新增角色名称">
+            <button class="btn secondary" type="submit">添加角色</button>
+          </form>
+          <div class="role-tabs" id="role-tabs"></div>
+        </section>
+        <section class="panel system-card wide-system-card permission-card" data-admin-only>
+          <div class="panel-head">
+            <div>
+              <h2>功能入口权限</h2>
+              <p class="muted">已罗列当前控制台所有功能入口。取消勾选后，对应导航和快捷入口会隐藏。</p>
+            </div>
+            <span class="system-status" id="permission-role-badge">超级管理员</span>
+          </div>
+          <div class="permission-grid" id="permission-grid"></div>
         </section>
         <section class="panel system-card wide-system-card">
           <div class="panel-head">
@@ -832,6 +913,27 @@
       <iframe class="video-matrix-frame" src="/static/video_matrix.html?embed=1" title="GasGx 视频生成工作台"></iframe>
     </section>
   </main>
+  <div id="matrixRunConfirmModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="matrixRunConfirmTitle">
+    <div class="confirm-panel">
+      <div class="confirm-head">
+        <div>
+          <span>JOB CONFIRM</span>
+          <strong id="matrixRunConfirmTitle">确认立即启动矩阵发布作业</strong>
+        </div>
+        <button id="matrixRunConfirmClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="confirm-body">
+        <div class="confirm-message">
+          <strong>即将按当前公共设置执行一次矩阵发布。</strong>
+          <p>系统会为可用账号分配素材并开始发布流程。请确认当前账号批次、轮换顺序和失败补跑策略已经保存。</p>
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button id="matrixRunConfirmCancel" class="btn secondary" type="button">取消</button>
+        <button id="matrixRunConfirmSubmit" class="btn primary" type="button">确认启动</button>
+      </div>
+    </div>
+  </div>
   <script src="/static/app.js?v=20260429-ai-queue-closed"></script>
 </body>
 </html>

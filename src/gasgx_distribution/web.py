@@ -98,6 +98,29 @@ class BrandSettingsPayload(BaseModel):
     default_account_prefix: str = ""
 
 
+class OperatorLoginPayload(BaseModel):
+    user_id: str
+    password: str = ""
+
+
+class OperatorUserPayload(BaseModel):
+    name: str
+    role_id: str
+    password: str = ""
+
+
+class OperatorUserRolePayload(BaseModel):
+    role_id: str
+
+
+class OperatorRolePayload(BaseModel):
+    name: str
+
+
+class OperatorPermissionsPayload(BaseModel):
+    permissions: list[str] = Field(default_factory=list)
+
+
 def create_app() -> FastAPI:
     control_plane.ensure_control_database()
     service.ensure_database()
@@ -195,6 +218,45 @@ def create_app() -> FastAPI:
     @app.patch("/api/brand")
     def update_brand(payload: BrandSettingsPayload) -> dict[str, Any]:
         return service.save_brand_settings(_model_payload(payload, exclude_unset=True))
+
+    @app.get("/api/auth/state")
+    def auth_state(current_user_id: str = Query(default="allen"), editing_role_id: str = Query(default="super_admin")) -> dict[str, Any]:
+        return service.operator_auth_state(current_user_id=current_user_id, editing_role_id=editing_role_id)
+
+    @app.post("/api/auth/login")
+    def auth_login(payload: OperatorLoginPayload) -> dict[str, Any]:
+        try:
+            return service.login_operator_user(payload.user_id, payload.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    @app.post("/api/auth/users")
+    def auth_create_user(payload: OperatorUserPayload) -> dict[str, Any]:
+        try:
+            return service.create_operator_user(payload.name, payload.role_id, payload.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/auth/users/{user_id}/role")
+    def auth_update_user_role(user_id: str, payload: OperatorUserRolePayload) -> dict[str, Any]:
+        try:
+            return service.update_operator_user_role(user_id, payload.role_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/auth/roles")
+    def auth_create_role(payload: OperatorRolePayload) -> dict[str, Any]:
+        try:
+            return service.create_operator_role(payload.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/auth/roles/{role_id}/permissions")
+    def auth_save_permissions(role_id: str, payload: OperatorPermissionsPayload) -> dict[str, Any]:
+        try:
+            return service.save_operator_role_permissions(role_id, payload.permissions)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/control/brands")
     def control_brands() -> list[dict[str, Any]]:

@@ -162,6 +162,7 @@ const endingTemplateModeOptions = [
   ["dynamic", "文字片尾"],
   ["random", "视频片尾"],
 ];
+const PREVIEW_FRAME_PLACEHOLDER = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bwidth%3A100%25%3Bheight%3A100%25%3Boverflow%3Ahidden%3Bbackground%3A%23050505%3Bcolor-scheme%3Adark%3B%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E";
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -216,7 +217,11 @@ function refreshPhonePreviewFrame(id, payload = null) {
   const url = payload
     ? `/static/video_matrix_preview.html?template=${encodeURIComponent(encodePreviewPayload(payload))}`
     : "/static/video_matrix_preview.html";
-  if (frame.getAttribute("src") !== url) frame.src = url;
+  if (frame.getAttribute("src") === url) return;
+  frame.src = PREVIEW_FRAME_PLACEHOLDER;
+  window.requestAnimationFrame(() => {
+    frame.src = url;
+  });
 }
 
 function setInitialLoading() {

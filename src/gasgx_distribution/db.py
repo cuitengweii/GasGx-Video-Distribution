@@ -160,6 +160,31 @@ CREATE TABLE IF NOT EXISTS brand_settings (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS operator_roles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS operator_users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    role_id TEXT NOT NULL,
+    password_hash TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(role_id) REFERENCES operator_roles(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS operator_role_permissions (
+    role_id TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(role_id, permission),
+    FOREIGN KEY(role_id) REFERENCES operator_roles(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version TEXT PRIMARY KEY,
     app_version TEXT NOT NULL DEFAULT '',

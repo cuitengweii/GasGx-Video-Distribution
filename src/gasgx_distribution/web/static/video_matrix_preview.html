@@ -58,7 +58,7 @@
             inset: 0;
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
             z-index: 1;
             background: #000;
         }
@@ -584,7 +584,15 @@
         body.cover-profile-mode .status-scale,
         body.cover-profile-mode .back-control,
         body.cover-profile-mode .sound-toggle,
-        body.cover-profile-mode .phone-mockup > .relative.z-10 {
+        body.cover-profile-mode .phone-mockup > .relative.z-10,
+        body.cover-single-mode #previewVideo,
+        body.cover-single-mode .vm-template-mask-bg,
+        body.cover-single-mode .bg-overlay,
+        body.cover-single-mode .vm-template-layer,
+        body.cover-single-mode .status-scale,
+        body.cover-single-mode .back-control,
+        body.cover-single-mode .sound-toggle,
+        body.cover-single-mode .phone-mockup > .relative.z-10 {
             display: none !important;
         }
 
@@ -932,10 +940,292 @@
             width: 14px;
             height: 14px;
         }
+
+        html.preview-browser-root,
+        body.preview-browser-mode {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        html.preview-browser-root {
+            overflow: hidden;
+        }
+
+        body.preview-browser-mode {
+            min-height: 100vh;
+            align-items: stretch;
+            justify-content: stretch;
+            background:
+                radial-gradient(circle at 72% 18%, rgba(93, 214, 44, .08), transparent 26%),
+                #050505;
+            overflow: hidden;
+        }
+
+        body.preview-browser-mode .preview-workbench {
+            width: 100vw;
+            height: 100vh;
+            display: grid;
+            grid-template-columns: minmax(560px, 1fr) 320px;
+            gap: 22px;
+            align-items: center;
+            padding: 24px 28px;
+        }
+
+        body.preview-browser-mode .preview-stage {
+            min-width: 0;
+            height: 100%;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+        }
+
+        body.preview-browser-mode .preview-device-wrap {
+            width: var(--device-width, 479.25px) !important;
+            height: var(--device-height, 852px) !important;
+            transform-origin: center;
+            transform: scale(min(calc((100vw - 420px) / var(--device-scale-width, 560)), calc((100vh - 48px) / var(--device-scale-height, 900)), 1));
+        }
+
+        .preview-side-panel {
+            display: none;
+        }
+
+        body.preview-browser-mode .preview-side-panel {
+            align-self: stretch;
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto auto auto auto auto auto auto auto minmax(0, 1fr);
+            gap: 14px;
+            border: 1px solid rgba(93, 214, 44, .18);
+            border-radius: 8px;
+            background: rgba(16, 16, 16, .92);
+            padding: 16px;
+            box-shadow: 0 22px 46px rgba(0,0,0,.38);
+        }
+
+        .preview-side-panel h1 {
+            margin: 0;
+            color: #f5f5f5;
+            font-size: 18px;
+            line-height: 1.3;
+        }
+
+        .preview-side-panel p {
+            margin: 6px 0 0;
+            color: rgba(255,255,255,.54);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .preview-control-row,
+        .preview-mode-row,
+        .preview-count-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .preview-count-row {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .preview-mode-row.single-only {
+            grid-template-columns: 1fr;
+        }
+
+        .preview-section-title {
+            color: rgba(255,255,255,.76);
+            font: 800 12px/1.2 'Noto Sans SC', sans-serif;
+        }
+
+        .preview-device-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            max-height: 132px;
+            overflow: auto;
+            padding-right: 2px;
+        }
+
+        .preview-control-row button,
+        .preview-mode-row button,
+        .preview-count-row button,
+        .preview-device-row button,
+        .preview-video-item {
+            min-height: 36px;
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 6px;
+            color: #f3f3f3;
+            background: #111;
+            font: 800 12px/1.2 'Noto Sans SC', sans-serif;
+            cursor: pointer;
+        }
+
+        .preview-control-row button,
+        .preview-mode-row button,
+        .preview-count-row button,
+        .preview-device-row button {
+            height: 36px;
+        }
+
+        .preview-device-row button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-width: 0;
+        }
+
+        .device-icon {
+            width: calc(16px * var(--device-icon-ratio, .46) / .46);
+            height: 18px;
+            flex: 0 0 auto;
+        }
+
+        .preview-control-row button.primary,
+        .preview-mode-row button.active,
+        .preview-count-row button.active,
+        .preview-device-row button.active,
+        .preview-video-item.active {
+            color: #071006;
+            border-color: #5dd62c;
+            background: #5dd62c;
+        }
+
+        .preview-video-list {
+            min-height: 0;
+            display: grid;
+            align-content: start;
+            gap: 8px;
+            overflow: auto;
+            padding-right: 2px;
+        }
+
+        .preview-video-item {
+            display: grid;
+            gap: 4px;
+            padding: 10px;
+            text-align: left;
+        }
+
+        .preview-video-item small {
+            color: rgba(255,255,255,.5);
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .preview-video-item.active small {
+            color: rgba(7,16,6,.72);
+        }
+
+        .preview-grid-stage {
+            display: none;
+            width: min(92vw, 920px);
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .preview-grid-stage.grid-count-3 {
+            width: min(92vw, 1040px);
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .preview-grid-stage.grid-count-6 {
+            width: min(92vw, 920px);
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .preview-grid-stage.grid-count-9 {
+            width: min(92vw, 920px);
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        body.preview-browser-mode.grid-preview-mode .preview-grid-stage {
+            display: grid;
+        }
+
+        body.preview-browser-mode.grid-preview-mode .preview-device-wrap {
+            display: none;
+        }
+
+        .preview-grid-phone {
+            position: relative;
+            aspect-ratio: 9 / 16;
+            overflow: hidden;
+            border: 1px solid rgba(93,214,44,.28);
+            border-radius: 22px;
+            background: #000;
+            box-shadow: 0 10px 26px rgba(0,0,0,.42);
+        }
+
+        .preview-grid-phone.is-playing {
+            border-color: rgba(33, 150, 243, .95);
+        }
+
+        .preview-grid-stage.grid-count-3 .preview-grid-phone {
+            max-height: calc(100vh - 72px);
+        }
+
+        .preview-grid-stage.grid-count-6 .preview-grid-phone,
+        .preview-grid-stage.grid-count-9 .preview-grid-phone {
+            max-height: calc((100vh - 72px) / 2);
+        }
+
+        .preview-grid-phone video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+
+        .preview-grid-phone span {
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: 8px;
+            overflow: hidden;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 800;
+            text-overflow: ellipsis;
+            text-shadow: 0 2px 8px #000;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 900px) {
+            body.preview-browser-mode {
+                overflow: auto;
+            }
+
+            body.preview-browser-mode .preview-workbench {
+                height: auto;
+                min-height: 100vh;
+                grid-template-columns: 1fr;
+                padding: 18px 14px;
+            }
+
+            body.preview-browser-mode .preview-stage {
+                min-height: 720px;
+            }
+
+            body.preview-browser-mode .preview-device-wrap {
+                transform: scale(min(calc((100vw - 42px) / 520), .86));
+            }
+
+            body.preview-browser-mode .preview-side-panel {
+                min-height: 360px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="relative w-[479.25px] h-[852px]">
+    <main class="preview-workbench">
+      <section class="preview-stage">
+        <div class="preview-grid-stage" id="previewGridStage" aria-label="九宫格手机模拟查看"></div>
+    <div class="preview-device-wrap relative w-[479.25px] h-[852px]">
         <div class="device-side-button absolute -left-[4px] top-[115px] w-[5px] h-[26px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
         <div class="device-side-button absolute -left-[4px] top-[165px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
         <div class="device-side-button absolute -left-[4px] top-[235px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
@@ -1088,6 +1378,31 @@
             </div>
         </div>
     </div>
+      </section>
+      <aside class="preview-side-panel" aria-label="生成视频预览控制">
+        <div>
+          <h1>生成视频预览</h1>
+          <p>切换查看同目录生成视频，单屏可点击画面播放/暂停，也可使用九宫格手机模拟查看。</p>
+        </div>
+        <div class="preview-control-row">
+          <button id="previewPlay" class="primary" type="button">同步播放</button>
+          <button id="previewStop" type="button">同步停止</button>
+        </div>
+        <div class="preview-mode-row single-only">
+          <button id="singleMode" class="active" type="button">单屏查看</button>
+        </div>
+        <div class="preview-section-title">展示数量</div>
+        <div class="preview-count-row" aria-label="网格数量">
+          <button class="active" type="button" data-grid-count="3">3 个</button>
+          <button type="button" data-grid-count="6">6 个</button>
+          <button type="button" data-grid-count="9">9 个</button>
+        </div>
+        <div class="preview-section-title">手机模型选择</div>
+        <div id="previewDeviceRow" class="preview-device-row" aria-label="单屏手机比例"></div>
+        <div class="preview-section-title">视频选择</div>
+        <div id="previewVideoList" class="preview-video-list"></div>
+      </aside>
+    </main>
 
     <script>
       const params = new URLSearchParams(window.location.search);
@@ -1098,8 +1413,31 @@
       const phone = document.querySelector(".phone-mockup");
       const backgroundImage = document.getElementById("templateBackgroundImage");
       const templateMask = document.getElementById("templateMaskBg");
+      const previewPlay = document.getElementById("previewPlay");
+      const previewStop = document.getElementById("previewStop");
+      const singleMode = document.getElementById("singleMode");
+      const previewVideoList = document.getElementById("previewVideoList");
+      const previewGridStage = document.getElementById("previewGridStage");
+      const previewDeviceRow = document.getElementById("previewDeviceRow");
       const PREVIEW_WIDTH = 479.25;
       const PREVIEW_HEIGHT = 852;
+      const GRID_COUNTS = [3, 6, 9];
+      const DEVICE_PRESETS = [
+        { id: "iphone-15-pro-max", name: "iPhone 15 Pro Max", width: 430, height: 932 },
+        { id: "iphone-15", name: "iPhone 15", width: 393, height: 852 },
+        { id: "iphone-se", name: "iPhone SE", width: 375, height: 667 },
+        { id: "galaxy-s24-ultra", name: "Galaxy S24 Ultra", width: 412, height: 915 },
+        { id: "galaxy-s24", name: "Galaxy S24", width: 384, height: 832 },
+        { id: "pixel-8-pro", name: "Pixel 8 Pro", width: 448, height: 998 },
+        { id: "pixel-8", name: "Pixel 8", width: 412, height: 915 },
+        { id: "xiaomi-14", name: "Xiaomi 14", width: 393, height: 873 },
+        { id: "huawei-mate-60-pro", name: "Mate 60 Pro", width: 440, height: 956 },
+        { id: "oppo-find-x7", name: "OPPO Find X7", width: 412, height: 915 },
+      ];
+      let activeVideoPath = videoPath;
+      let previewVideos = [];
+      let previewGridCount = 3;
+      let activeDeviceId = DEVICE_PRESETS[0].id;
       let currentPayload = templatePayload;
       let activeTarget = "";
       let activeCoverTarget = "";
@@ -1109,7 +1447,12 @@
       let editingCoverNode = null;
       const DRAG_START_THRESHOLD = 5;
       if (videoPath) {
-        video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(videoPath)}`;
+        document.documentElement.classList.add("preview-browser-root");
+        document.body.classList.add("preview-browser-mode");
+        renderDevicePresets();
+        applyDevicePreset(activeDeviceId);
+        setPreviewVideo(videoPath);
+        loadPreviewVideos(videoPath);
       } else {
         video.hidden = true;
       }
@@ -1127,6 +1470,156 @@
       function toggleVideoPlayback() {
         if (video.paused) video.play();
         else video.pause();
+      }
+      function setPreviewVideo(path) {
+        activeVideoPath = path || "";
+        if (!activeVideoPath) return;
+        video.hidden = false;
+        video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(activeVideoPath)}`;
+        video.load();
+        video.play().catch(() => {});
+        renderPreviewVideoList();
+        renderPreviewGrid();
+      }
+      async function loadPreviewVideos(path) {
+        try {
+          const response = await fetch(`/api/video-matrix/preview-files?path=${encodeURIComponent(path)}`);
+          if (!response.ok) throw new Error(response.statusText);
+          const payload = await response.json();
+          previewVideos = Array.isArray(payload.videos) ? payload.videos : [];
+        } catch {
+          previewVideos = path ? [{ name: path.split(/[\\/]/).pop() || "当前视频", path }] : [];
+        }
+        if (!previewVideos.some((item) => item.path === activeVideoPath) && activeVideoPath) {
+          previewVideos.unshift({ name: activeVideoPath.split(/[\\/]/).pop() || "当前视频", path: activeVideoPath });
+        }
+        renderPreviewVideoList();
+        renderPreviewGrid();
+      }
+      function renderPreviewVideoList() {
+        if (!previewVideoList) return;
+        previewVideoList.innerHTML = previewVideos.map((item, index) => `
+          <button class="preview-video-item ${item.path === activeVideoPath ? "active" : ""}" type="button" data-preview-path="${encodeURIComponent(item.path)}">
+            <strong>${index + 1}. ${escapeHtml(item.name || "生成视频")}</strong>
+            <small>${escapeHtml(item.path || "")}</small>
+          </button>
+        `).join("") || `<div class="preview-video-item"><strong>暂无可切换视频</strong><small>当前目录没有其他视频文件</small></div>`;
+      }
+      function renderPreviewGrid() {
+        if (!previewGridStage) return;
+        const sourceItems = previewVideos.length ? previewVideos : [{ name: "当前视频", path: activeVideoPath }];
+        const items = sourceItems.slice(0, previewGridCount).filter((item) => item?.path);
+        previewGridStage.classList.remove(...GRID_COUNTS.map((count) => `grid-count-${count}`));
+        previewGridStage.classList.add(`grid-count-${previewGridCount}`);
+        previewGridStage.innerHTML = items.map((item, index) => `
+          <button class="preview-grid-phone" type="button" data-preview-path="${encodeURIComponent(item.path || "")}">
+            <video src="/api/video-matrix/preview-file?path=${encodeURIComponent(item.path || activeVideoPath)}" playsinline muted loop></video>
+            <span>${index + 1}. ${escapeHtml(item.name || "生成视频")}</span>
+          </button>
+        `).join("");
+      }
+      function setPreviewMode(mode) {
+        const grid = mode === "grid";
+        document.body.classList.toggle("grid-preview-mode", grid);
+        singleMode?.classList.toggle("active", !grid);
+      }
+      function deviceIconSvg(device) {
+        const ratio = Math.max(.42, Math.min(.62, Number(device.width) / Number(device.height) || .46));
+        return `
+          <svg class="device-icon" style="--device-icon-ratio: ${ratio.toFixed(3)}" viewBox="0 0 24 36" aria-hidden="true" focusable="false">
+            <rect x="5" y="2" width="14" height="32" rx="4" fill="none" stroke="currentColor" stroke-width="2"/>
+            <rect x="10" y="5" width="4" height="1.6" rx=".8" fill="currentColor"/>
+            <circle cx="12" cy="30" r="1.1" fill="currentColor"/>
+          </svg>
+        `;
+      }
+      function renderDevicePresets() {
+        if (!previewDeviceRow) return;
+        previewDeviceRow.innerHTML = DEVICE_PRESETS.map((device) => `
+          <button type="button" class="${device.id === activeDeviceId ? "active" : ""}" data-device-id="${device.id}">
+            ${deviceIconSvg(device)}
+            <span>${escapeHtml(device.name)}</span>
+          </button>
+        `).join("");
+      }
+      function applyDevicePreset(deviceId) {
+        const device = DEVICE_PRESETS.find((item) => item.id === deviceId) || DEVICE_PRESETS[0];
+        activeDeviceId = device.id;
+        const wrap = document.querySelector(".preview-device-wrap");
+        if (!wrap) return;
+        wrap.style.setProperty("--device-width", `${device.width}px`);
+        wrap.style.setProperty("--device-height", `${device.height}px`);
+        wrap.style.setProperty("--device-scale-width", `${device.width + 96}`);
+        wrap.style.setProperty("--device-scale-height", `${device.height + 48}`);
+        renderDevicePresets();
+      }
+      function allPreviewVideos() {
+        return [video, ...document.querySelectorAll("#previewGridStage video")].filter(Boolean);
+      }
+      async function playAllPreviewVideos() {
+        const nodes = allPreviewVideos();
+        nodes.forEach((node) => {
+          node.pause();
+          node.currentTime = 0;
+          node.muted = node !== video;
+          node.volume = node === video ? 1 : 0;
+        });
+        await Promise.allSettled(nodes.map((node) => node.play()));
+        document.querySelectorAll(".preview-grid-phone").forEach((item) => item.classList.add("is-playing"));
+      }
+      function stopAllPreviewVideos() {
+        allPreviewVideos().forEach((node) => {
+          node.pause();
+          node.currentTime = 0;
+          node.muted = true;
+          node.volume = 0;
+        });
+        document.querySelectorAll(".preview-grid-phone").forEach((item) => item.classList.remove("is-playing"));
+      }
+      previewPlay?.addEventListener("click", async () => {
+        await playAllPreviewVideos();
+      });
+      previewStop?.addEventListener("click", () => {
+        stopAllPreviewVideos();
+      });
+      singleMode?.addEventListener("click", () => setPreviewMode("single"));
+      document.querySelectorAll("[data-grid-count]").forEach((button) => {
+        button.addEventListener("click", () => {
+          previewGridCount = Number(button.dataset.gridCount || 3);
+          document.querySelectorAll("[data-grid-count]").forEach((item) => item.classList.toggle("active", item === button));
+          renderPreviewGrid();
+          setPreviewMode("grid");
+        });
+      });
+      previewDeviceRow?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-device-id]");
+        if (!button) return;
+        applyDevicePreset(button.dataset.deviceId);
+        setPreviewMode("single");
+      });
+      previewVideoList?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-preview-path]");
+        if (!button) return;
+        setPreviewVideo(decodeURIComponent(button.dataset.previewPath || ""));
+        setPreviewMode("single");
+      });
+      previewGridStage?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-preview-path]");
+        if (!button) return;
+        const node = button.querySelector("video");
+        if (!node) return;
+        if (node.paused) {
+          node.muted = true;
+          node.volume = 0;
+          button.classList.add("is-playing");
+          node.play().catch(() => button.classList.remove("is-playing"));
+        } else {
+          node.pause();
+          button.classList.remove("is-playing");
+        }
+      });
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
       }
       video.addEventListener("click", toggleVideoPlayback);
       phone.addEventListener("click", (event) => {

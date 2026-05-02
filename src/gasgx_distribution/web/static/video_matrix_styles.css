@@ -1237,13 +1237,15 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 .loading-inline {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 12px;
   min-height: 36px;
   color: var(--muted);
+  line-height: 1.25;
 }
 .loading-spinner {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   border: 2px solid rgba(226, 239, 221, 0.22);
   border-top-color: var(--green);
   border-radius: 50%;
@@ -1971,24 +1973,27 @@ button.compact-toggle.active {
   transform: translate(-50%, -50%);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 0 0 28px;
-  border: 0;
-  border-radius: 0;
+  justify-content: center;
+  min-height: 42px;
+  min-width: 188px;
+  padding: 10px 18px 10px 70px;
+  border: 1px solid rgba(93, 214, 44, .22);
+  border-radius: 999px;
   color: var(--green);
-  background: transparent;
-  box-shadow: none;
+  background: rgba(5, 5, 5, .72);
+  box-shadow: 0 14px 34px rgba(0,0,0,.38), inset 0 0 0 1px rgba(255,255,255,.04);
   text-shadow: 0 2px 10px rgba(0,0,0,.95);
+  white-space: nowrap;
   z-index: 3;
   pointer-events: none;
 }
 .preview-stage.is-loading::before {
   content: "";
   position: absolute;
-  left: calc(50% - 56px);
-  top: calc(var(--preview-phone-height) / 2 - 7px);
-  width: 14px;
-  height: 14px;
+  left: calc(50% - 70px);
+  top: calc(var(--preview-phone-height) / 2 - 8px);
+  width: 16px;
+  height: 16px;
   border: 2px solid rgba(226, 239, 221, 0.22);
   border-top-color: var(--green);
   border-radius: 50%;
@@ -2004,7 +2009,12 @@ button.compact-toggle.active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 10px;
+}
+button .loading-spinner,
+.cover-template-switcher .loading-spinner {
+  width: 16px;
+  height: 16px;
 }
 .cover-template-menu {
   position: absolute;
@@ -2057,10 +2067,11 @@ button.compact-toggle.active {
   border: 0;
   border-radius: 55px;
   display: block;
-  background: #000;
+  background: #050505;
   color-scheme: dark;
   zoom: var(--preview-phone-scale);
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px #050505;
 }
 
 .control-panel { max-height: calc(100vh - 210px); overflow:auto; padding-right:8px; min-width:0; }

@@ -39,6 +39,32 @@ NOTIFICATION_EVENT_TYPES = {"wechat_login_qr", "publish_result", "system_error"}
 NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
+SUPER_ADMIN_PASSWORD = "cuitengwei123"
+FEATURE_ENTRIES = [
+    {"id": "overview", "label": "总览", "group": "业务工作台"},
+    {"id": "accounts", "label": "账号矩阵", "group": "业务工作台"},
+    {"id": "settings", "label": "公共设置", "group": "业务工作台"},
+    {"id": "tasks", "label": "任务中心", "group": "业务工作台"},
+    {"id": "stats", "label": "数据统计", "group": "业务工作台"},
+    {"id": "ai-robot", "label": "AI机器人", "group": "业务工作台"},
+    {"id": "video-matrix", "label": "视频生成", "group": "业务工作台"},
+    {"id": "user-center", "label": "用户中心", "group": "系统管理"},
+    {"id": "notifications", "label": "通知中心", "group": "系统管理"},
+    {"id": "system-settings", "label": "系统设置", "group": "系统管理"},
+    {"id": "help-center", "label": "帮助文档", "group": "系统管理"},
+]
+DEFAULT_ROLE_PERMISSIONS = {
+    "super_admin": [item["id"] for item in FEATURE_ENTRIES],
+    "publisher": ["overview", "accounts", "settings", "tasks", "video-matrix", "user-center", "notifications", "help-center"],
+    "material_manager": ["overview", "accounts", "video-matrix", "user-center", "notifications", "help-center"],
+    "data_monitor": ["overview", "stats", "user-center", "notifications", "help-center"],
+}
+DEFAULT_ROLE_NAMES = {
+    "super_admin": "超级管理员",
+    "publisher": "发布员",
+    "material_manager": "素材维护员",
+    "data_monitor": "数据监控员",
+}
 _brand_runtime: ContextVar[dict[str, Any] | None] = ContextVar("gasgx_brand_runtime", default=None)
 
 
@@ -120,6 +146,7 @@ def _chrome_fingerprint_env(fingerprint: dict[str, Any] | str | None) -> Iterato
 
 def ensure_database() -> None:
     init_db()
+    ensure_operator_auth_seed()
 
 
 def use_brand_database(path: Path):
@@ -161,6 +188,149 @@ def _json_payload(value: Any, default: Any = None) -> Any:
         except json.JSONDecodeError:
             return default
     return value
+
+
+def _password_hash(password: str) -> str:
+    return hashlib.sha256(f"gasgx-operator-auth:{password}".encode("utf-8")).hexdigest()
+
+
+def ensure_operator_auth_seed() -> None:
+    init_db()
+    ts = now_ts()
+    with connect() as conn:
+        for role_id, name in DEFAULT_ROLE_NAMES.items():
+            conn.execute(
+                """
+                INSERT INTO operator_roles(id, name, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at
+                """,
+                (role_id, name, ts, ts),
+            )
+            for permission in DEFAULT_ROLE_PERMISSIONS[role_id]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO operator_role_permissions(role_id, permission, created_at) VALUES (?, ?, ?)",
+                    (role_id, permission, ts),
+                )
+        conn.execute(
+            """
+            INSERT INTO operator_users(id, name, role_id, password_hash, created_at, updated_at)
+            VALUES ('allen', 'Allen', 'super_admin', ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET role_id='super_admin', password_hash=excluded.password_hash, updated_at=excluded.updated_at
+            """,
+            (_password_hash(SUPER_ADMIN_PASSWORD), ts, ts),
+        )
+        default_users = [
+            ("publisher", "发布员", "publisher"),
+            ("material", "素材维护员", "material_manager"),
+            ("analyst", "数据监控员", "data_monitor"),
+        ]
+        for user_id, name, role_id in default_users:
+            conn.execute(
+                """
+                INSERT INTO operator_users(id, name, role_id, password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, '', ?, ?)
+                ON CONFLICT(id) DO NOTHING
+                """,
+                (user_id, name, role_id, ts, ts),
+            )
+
+
+def operator_auth_state(current_user_id: str = "allen", editing_role_id: str = "super_admin") -> dict[str, Any]:
+    ensure_operator_auth_seed()
+    with connect() as conn:
+        roles = {
+            row["id"]: {"name": row["name"], "permissions": []}
+            for row in conn.execute("SELECT id, name FROM operator_roles ORDER BY created_at, id")
+        }
+        for row in conn.execute("SELECT role_id, permission FROM operator_role_permissions ORDER BY permission"):
+            if row["role_id"] in roles:
+                roles[row["role_id"]]["permissions"].append(row["permission"])
+        users = [
+            {"id": row["id"], "name": row["name"], "roleId": row["role_id"]}
+            for row in conn.execute("SELECT id, name, role_id FROM operator_users ORDER BY created_at, id")
+        ]
+    if not any(user["id"] == current_user_id for user in users):
+        current_user_id = "allen"
+    if editing_role_id not in roles:
+        editing_role_id = "super_admin"
+    return {
+        "currentUserId": current_user_id,
+        "editingRoleId": editing_role_id,
+        "roles": roles,
+        "users": users,
+        "features": FEATURE_ENTRIES,
+    }
+
+
+def login_operator_user(user_id: str, password: str) -> dict[str, Any]:
+    ensure_operator_auth_seed()
+    with connect() as conn:
+        row = conn.execute("SELECT id, password_hash FROM operator_users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise ValueError("operator user not found")
+    expected = str(row["password_hash"] or "")
+    if expected and not hmac.compare_digest(expected, _password_hash(password)):
+        raise ValueError("invalid password")
+    if not expected and not str(password or "").strip():
+        raise ValueError("password is required")
+    return operator_auth_state(current_user_id=user_id)
+
+
+def create_operator_user(name: str, role_id: str, password: str = "") -> dict[str, Any]:
+    name = str(name or "").strip()
+    role_id = str(role_id or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    ts = now_ts()
+    user_id = f"user-{ts}"
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM operator_roles WHERE id = ?", (role_id,)).fetchone() is None:
+            raise ValueError("role not found")
+        conn.execute(
+            "INSERT INTO operator_users(id, name, role_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, name, role_id, _password_hash(password) if password else "", ts, ts),
+        )
+    return operator_auth_state(current_user_id="allen")
+
+
+def update_operator_user_role(user_id: str, role_id: str) -> dict[str, Any]:
+    if user_id == "allen":
+        raise ValueError("super admin role cannot be changed")
+    ts = now_ts()
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM operator_roles WHERE id = ?", (role_id,)).fetchone() is None:
+            raise ValueError("role not found")
+        conn.execute("UPDATE operator_users SET role_id = ?, updated_at = ? WHERE id = ?", (role_id, ts, user_id))
+    return operator_auth_state(current_user_id="allen")
+
+
+def create_operator_role(name: str) -> dict[str, Any]:
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("role name is required")
+    ts = now_ts()
+    role_id = f"role-{ts}"
+    with connect() as conn:
+        conn.execute("INSERT INTO operator_roles(id, name, created_at, updated_at) VALUES (?, ?, ?, ?)", (role_id, name, ts, ts))
+        for permission in ["overview", "help-center"]:
+            conn.execute("INSERT INTO operator_role_permissions(role_id, permission, created_at) VALUES (?, ?, ?)", (role_id, permission, ts))
+    return operator_auth_state(editing_role_id=role_id)
+
+
+def save_operator_role_permissions(role_id: str, permissions: list[str]) -> dict[str, Any]:
+    if role_id == "super_admin":
+        permissions = [item["id"] for item in FEATURE_ENTRIES]
+    allowed = {item["id"] for item in FEATURE_ENTRIES}
+    next_permissions = [item for item in permissions if item in allowed]
+    ts = now_ts()
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM operator_roles WHERE id = ?", (role_id,)).fetchone() is None:
+            raise ValueError("role not found")
+        conn.execute("DELETE FROM operator_role_permissions WHERE role_id = ?", (role_id,))
+        for permission in next_permissions:
+            conn.execute("INSERT INTO operator_role_permissions(role_id, permission, created_at) VALUES (?, ?, ?)", (role_id, permission, ts))
+    return operator_auth_state(editing_role_id=role_id)
 
 
 def _config_root() -> Path:

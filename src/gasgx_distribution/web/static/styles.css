@@ -410,13 +410,19 @@ nav {
 
 .page-toolbar {
   display: flex;
-  justify-content: flex-start;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
   margin-bottom: 18px;
 }
 
 .page-toolbar .btn {
   min-height: 34px;
   padding: 7px 12px;
+}
+
+.page-toolbar #refresh {
+  margin-right: auto;
 }
 
 h1,
@@ -457,6 +463,117 @@ h2 {
 .platform-groups {
   display: grid;
   gap: 18px;
+}
+
+.operator-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+  gap: 18px;
+}
+
+.operation-focus-panel,
+.operation-route-panel,
+.platform-capability-panel {
+  align-content: start;
+}
+
+.operation-focus-panel {
+  border-color: rgba(93, 214, 44, 0.28);
+  background: linear-gradient(145deg, rgba(32, 32, 32, 0.96), rgba(18, 32, 21, 0.9));
+}
+
+.operation-focus-panel .panel-head {
+  align-items: flex-start;
+}
+
+.operation-focus-panel .muted,
+.operation-route-panel .muted {
+  margin-top: 6px;
+  line-height: 1.55;
+}
+
+.operation-focus-grid,
+.operation-route-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.operation-focus-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.operation-focus-card,
+.operation-route-card {
+  width: 100%;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: #101010;
+  cursor: pointer;
+  text-align: left;
+}
+
+.operation-focus-card {
+  display: grid;
+  gap: 7px;
+  min-height: 146px;
+  padding: 16px;
+}
+
+.operation-focus-card:hover,
+.operation-route-card:hover {
+  border-color: rgba(93, 214, 44, 0.38);
+  background: rgba(21, 31, 20, 0.82);
+}
+
+.operation-focus-card span {
+  width: fit-content;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: var(--accent-aurora);
+  background: rgba(93, 214, 44, 0.12);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.operation-focus-card.warning span {
+  color: #ffc257;
+  background: rgba(255, 194, 87, 0.12);
+}
+
+.operation-focus-card.info span {
+  color: #66b9ff;
+  background: rgba(102, 185, 255, 0.12);
+}
+
+.operation-focus-card strong {
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.operation-focus-card small,
+.operation-route-card span {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.operation-route-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.operation-route-card {
+  display: grid;
+  gap: 5px;
+  min-height: 92px;
+  padding: 14px;
+}
+
+.operation-route-card strong {
+  font-size: 16px;
+}
+
+.platform-capability-panel {
+  grid-column: 1 / -1;
 }
 
 .platform-region {
@@ -1358,6 +1475,7 @@ select option {
     position: sticky;
     top: 0;
     z-index: 10;
+    height: auto;
     min-height: 0;
   }
 
@@ -1371,9 +1489,27 @@ select option {
   }
 
   .split,
+  .operator-layout,
   .topbar {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .page-toolbar {
+    justify-content: stretch;
+  }
+
+  .page-toolbar #refresh {
+    margin-right: 0;
+  }
+
+  .page-toolbar .btn {
+    flex: 1 1 150px;
+  }
+
+  .operation-focus-grid,
+  .operation-route-grid {
+    grid-template-columns: 1fr;
   }
 
   .topbar-actions,
@@ -1769,6 +1905,82 @@ select option {
   display: none !important;
 }
 
+.permission-hidden {
+  display: none !important;
+}
+
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, 0.68);
+}
+
+.confirm-panel {
+  width: min(560px, 94vw);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  border: 1px solid rgba(93, 214, 44, 0.24);
+  border-radius: 8px;
+  background: #202020;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58);
+}
+
+.confirm-head,
+.confirm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.confirm-head {
+  border-bottom: 1px solid var(--border-line);
+}
+
+.confirm-head span {
+  display: block;
+  color: var(--accent-aurora);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.confirm-head strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.confirm-body {
+  padding: 18px 20px;
+}
+
+.confirm-message {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(93, 214, 44, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.confirm-message p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.confirm-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-line);
+}
+
 .system-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -1899,8 +2111,106 @@ select option {
   text-align: center;
 }
 
+.login-form,
+.account-assign-form,
+.role-create-form {
+  display: grid;
+  gap: 10px;
+}
+
+.account-assign-form {
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.7fr) auto;
+  align-items: end;
+}
+
+.role-create-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.operator-account-list,
+.role-tabs,
+.permission-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.operator-account-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.8fr) minmax(130px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  background: #101010;
+}
+
+.operator-account-row span {
+  color: var(--accent-aurora);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.role-tabs {
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+}
+
+.role-tab {
+  min-height: 38px;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: #101010;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.role-tab.active {
+  color: var(--accent-aurora);
+  border-color: rgba(93, 214, 44, 0.4);
+  background: var(--accent-soft);
+}
+
+.permission-grid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.permission-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 12px;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  background: #101010;
+}
+
+.permission-item input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-aurora);
+}
+
+.permission-item span,
+.permission-item strong,
+.permission-item small {
+  display: block;
+}
+
+.permission-item small {
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 1100px) {
   #user-center .system-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-assign-form,
+  .operator-account-row {
     grid-template-columns: 1fr;
   }
 }
