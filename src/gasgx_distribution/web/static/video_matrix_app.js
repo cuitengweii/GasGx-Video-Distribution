@@ -117,8 +117,8 @@ const coverMaskModeOptions = [
   ["full", "全蒙版"],
 ];
 const endingTemplateModeOptions = [
-  ["dynamic", "动态封面"],
-  ["random", "随机素材"],
+  ["dynamic", "文字片尾"],
+  ["random", "视频片尾"],
 ];
 
 async function api(path, options = {}) {
@@ -178,7 +178,7 @@ function refreshPhonePreviewFrame(id, payload = null) {
 }
 
 function setInitialLoading() {
-  ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateSelector", "videoTemplateForm", "coverForm", "endingTemplateForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
+  ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateForm", "coverForm", "endingTemplateForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
   setPanelLoading("videoTemplateGallery", "加载正文模板...");
   setImageLoading("videoTemplatePreview", "加载正文预览...");
   setImageLoading("coverPreview", "加载封面预览...");
@@ -196,7 +196,6 @@ async function init() {
   renderSource(data);
   renderComposition(data);
   renderTextSettings();
-  renderVideoTemplateSelector();
   renderVideoTemplateEditor();
   renderCoverSelector();
   renderCoverEditor();
@@ -572,6 +571,7 @@ function renderCoverTemplateMenu() {
 }
 
 function renderVideoTemplateSelector() {
+  if (!$("videoTemplateSelector")) return;
   $("videoTemplateSelector").innerHTML = Object.entries(templates).map(([id, item], index) =>
     `<button class="${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${escapeHtml(videoTemplateDisplayName(id, item, index))}</button>`).join("");
   $("videoTemplateSelector").querySelectorAll("button").forEach((btn) => btn.onclick = async () => {
@@ -595,6 +595,10 @@ function videoTemplateDisplayName(id, item, index = Object.keys(templates).index
   return numberedTemplateName("视频叠层模板", id, item, index, /视频叠层模板\s*(\d+)/);
 }
 
+function endingTemplateDisplayName(id, item, index = Object.keys(endingCoverTemplates()).indexOf(id)) {
+  return numberedTemplateName("片尾封面模板", id, item, index, /(?:片尾封面模板|片尾模板)\s*(\d+)/);
+}
+
 async function selectVideoTemplate(templateId, options = {}) {
   if (!templateId || !templates[templateId]) return;
   const refreshTemplateGallery = options.refreshTemplateGallery !== false;
@@ -602,7 +606,6 @@ async function selectVideoTemplate(templateId, options = {}) {
   setImageLoading("videoTemplatePreview", "切换正文模板...");
   if (refreshTemplateGallery) setPanelLoading("videoTemplateGallery", "切换正文模板...");
   if ($("sidebarVideoTemplate")) $("sidebarVideoTemplate").value = templateId;
-  renderVideoTemplateSelector();
   renderVideoTemplateEditor();
   await saveTemplateSelection();
   await refreshVideoTemplatePreview();
@@ -638,7 +641,7 @@ function renderCoverEditor() {
     <p class="visual-editor-hint">点击预览里的文字或按钮后拖动定位；工具栏可调整字号、颜色、对齐和文字内容。</p>
     <div class="template-actions cover-template-actions">
       <button type="button" id="saveCover">保存</button>
-      <button type="button" id="saveCoverAsNew" class="secondary">新建保存</button>
+      <button type="button" id="saveCoverAsNew">新建保存</button>
     </div>`];
   $("coverForm").innerHTML = html.join("");
   $("coverForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
@@ -674,7 +677,7 @@ function renderEndingTemplatePanel(data) {
   ).join("");
   const options = localTemplates.length
     ? localTemplates.map((item) => `<option value="${escapeHtml(item.name)}" ${selected === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")
-    : `<option value="">目录内暂无片尾素材</option>`;
+    : `<option value="">目录内暂无视频片尾素材</option>`;
   $("endingTemplateForm").innerHTML = `
     <h3>片尾模板调整区</h3>
     <div class="template-tabs ending-mode-tabs">${modeButtons}</div>
@@ -699,7 +702,7 @@ function renderEndingTemplatePanel(data) {
       refreshEndingTemplatePreview();
     };
   }
-  $("openEndingTemplateDir").onclick = () => openFolder(endingTemplateState.directory);
+  renderEndingTemplateMenu();
   $("openEndingTemplateDirInline").onclick = () => openFolder(endingTemplateState.directory);
 }
 
@@ -746,11 +749,11 @@ function endingRandomMaterialHtml(localTemplates) {
         <small>${item.type === "video" ? "视频" : "图片"}</small>
         ${item.type === "video" ? endingPreviewToggleButtonHtml(item.name) : ""}
       </label>`).join("")
-    : `<div class="ending-template-empty compact">暂无片尾素材，请先上传到目录。</div>`;
+    : `<div class="ending-template-empty compact">暂无视频片尾素材，请先上传到目录。</div>`;
   return `
-    <div class="cover-section-title">随机素材选择</div>
+    <div class="cover-section-title">视频片尾选择</div>
     <div class="ending-material-list">${rows}</div>
-    <p class="visual-editor-hint">从 video_matrix\\ending_template 勾选备用片尾素材；生成时会从已勾选素材里随机取一个。</p>`;
+    <p class="visual-editor-hint">从 video_matrix\\ending_template 勾选备用视频片尾；生成时会从已勾选素材里随机取一个。</p>`;
 }
 
 function bindEndingRandomMaterials() {
@@ -782,11 +785,83 @@ function endingPreviewToggleButtonHtml(name) {
 }
 
 function endingCoverTemplate() {
-  const base = state.ending_cover_template || JSON.parse(JSON.stringify(coverTemplates[selectedCover] || {}));
-  state.ending_cover_template = base;
-  applyIndependentCoverDefaults(base);
-  base.cover_layout = "single_video";
-  return base;
+  ensureEndingCoverTemplates();
+  const selectedId = state.ending_cover_template_id;
+  const base = state.ending_cover_templates[selectedId];
+  state.ending_cover_template = JSON.parse(JSON.stringify(base));
+  applyIndependentCoverDefaults(state.ending_cover_template);
+  state.ending_cover_template.cover_layout = "single_video";
+  return state.ending_cover_template;
+}
+
+function isInheritedEndingCoverName(name) {
+  const value = String(name || "").trim();
+  if (!value || value === "Ending Cover") return true;
+  if (/^片尾模板\s*\d+$/i.test(value)) return true;
+  return Object.values(coverTemplates || {}).some((template) => String(template?.name || "").trim() === value);
+}
+
+function ensureEndingCoverTemplates() {
+  const fallback = state.ending_cover_template && typeof state.ending_cover_template === "object"
+    ? JSON.parse(JSON.stringify(state.ending_cover_template))
+    : JSON.parse(JSON.stringify(coverTemplates[selectedCover] || {}));
+  applyIndependentCoverDefaults(fallback);
+  fallback.cover_layout = "single_video";
+  if (isInheritedEndingCoverName(fallback.name)) fallback.name = "片尾封面模板 01";
+  if (!state.ending_cover_templates || typeof state.ending_cover_templates !== "object") {
+    state.ending_cover_templates = { ending_cover_template_01: fallback };
+  }
+  if (!state.ending_cover_template_id || !state.ending_cover_templates[state.ending_cover_template_id]) {
+    state.ending_cover_template_id = Object.keys(state.ending_cover_templates)[0] || "ending_cover_template_01";
+  }
+  if (!state.ending_cover_templates[state.ending_cover_template_id]) {
+    state.ending_cover_templates[state.ending_cover_template_id] = fallback;
+  }
+}
+
+function endingCoverTemplates() {
+  ensureEndingCoverTemplates();
+  return state.ending_cover_templates;
+}
+
+function renderEndingTemplateMenu() {
+  const menu = $("endingTemplateMenu");
+  const trigger = $("endingTemplateSwitch");
+  if (!menu || !trigger) return;
+  menu.innerHTML = Object.entries(endingCoverTemplates()).map(([id, item], index) =>
+    `<button type="button" class="${id === state.ending_cover_template_id ? "active" : ""}" data-ending-cover-template="${escapeHtml(id)}">${escapeHtml(endingTemplateDisplayName(id, item, index))}</button>`
+  ).join("");
+  trigger.onclick = () => {
+    const expanded = menu.classList.toggle("hidden") === false;
+    trigger.setAttribute("aria-expanded", expanded ? "true" : "false");
+  };
+  menu.querySelectorAll("[data-ending-cover-template]").forEach((button) => {
+    button.onclick = async () => {
+      menu.classList.add("hidden");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.disabled = true;
+      trigger.classList.add("is-loading");
+      trigger.innerHTML = buttonLoadingInline("切换中...");
+      try {
+        await selectEndingCoverTemplate(button.dataset.endingCoverTemplate);
+      } finally {
+        trigger.disabled = false;
+        trigger.classList.remove("is-loading");
+        trigger.innerHTML = buttonIconLabel("⇄", "模板切换");
+      }
+    };
+  });
+}
+
+async function selectEndingCoverTemplate(templateId) {
+  const templateMap = endingCoverTemplates();
+  if (!templateId || !templateMap[templateId]) return;
+  state.ending_cover_template_id = templateId;
+  state.ending_cover_template = JSON.parse(JSON.stringify(templateMap[templateId]));
+  setImageLoading("endingTemplatePreview", "切换片尾模板...");
+  renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
+  await saveState();
+  await refreshEndingTemplatePreview();
 }
 
 function endingCoverEditorHtml() {
@@ -795,7 +870,7 @@ function endingCoverEditorHtml() {
     `<option value="${value}" ${value === coverTemplateValue(t, "mask_mode", "bottom_gradient") ? "selected" : ""}>${label}</option>`
   ).join("");
   return `
-    <label>模板名称<input data-ending-cover-key="name" type="text" value="${escapeHtml(t.name || "Ending Cover")}"></label>
+    <label>模板名称<input data-ending-cover-key="name" type="text" value="${escapeHtml(t.name || "片尾封面模板 01")}"></label>
     <div class="cover-section-title">蒙版编辑区</div>
     <label>蒙版类型<select data-ending-cover-key="mask_mode">${maskModeOptions}</select></label>
     <label>蒙版颜色<input data-ending-cover-key="mask_color" type="color" value="${escapeHtml(coverTemplateValue(t, "mask_color", t.gradient_color || t.tint_color || "#071015"))}"></label>
@@ -805,7 +880,11 @@ function endingCoverEditorHtml() {
     <label>Slogan文字<input data-ending-cover-key="single_cover_slogan_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_slogan_text", defaultSingleCoverSlogan()))}"></label>
     <label>片尾文案<textarea data-ending-cover-key="single_cover_title_text" rows="3">${escapeHtml(coverTemplateValue(t, "single_cover_title_text", $("followText").value || state.follow_text || defaultSingleCoverTitle()))}</textarea></label>
     ${coverVisualToolbarHtml(t, "ending-cover-visual-toolbar")}
-    <p class="visual-editor-hint">点击片尾预览里的文字后拖动定位；这组设置只影响片尾动态封面。</p>`;
+    <div class="template-actions ending-template-actions">
+      <button type="button" id="saveEndingCover">保存</button>
+      <button type="button" id="saveEndingCoverAsNew">新建保存</button>
+    </div>
+    <p class="visual-editor-hint">点击片尾预览里的文字后拖动定位；这组设置只影响文字片尾。</p>`;
 }
 
 function bindEndingCoverEditor() {
@@ -817,6 +896,8 @@ function bindEndingCoverEditor() {
     bindRangeControl(control.dataset.key, () => updateEndingCoverTemplateField(control.querySelector('input[type="range"]')));
   });
   bindCoverVisualToolbar("endingTemplateForm", "endingTemplatePreview");
+  $("saveEndingCover").onclick = saveCurrentEndingCoverTemplate;
+  $("saveEndingCoverAsNew").onclick = saveEndingCoverAsNewTemplate;
 }
 
 function updateEndingCoverTemplateField(input) {
@@ -824,6 +905,9 @@ function updateEndingCoverTemplateField(input) {
   const key = input.dataset.endingCoverKey || (input.dataset.key === "ending-mask-opacity" ? "mask_opacity" : input.dataset.key);
   if (!template || !key) return;
   template[key] = input.type === "range" || input.type === "number" ? Number(input.value) : input.value;
+  if (state.ending_cover_template_id && state.ending_cover_templates?.[state.ending_cover_template_id]) {
+    state.ending_cover_templates[state.ending_cover_template_id] = JSON.parse(JSON.stringify(template));
+  }
   if (key === "single_cover_title_text") {
     $("followText").value = input.value;
     state.follow_text = input.value;
@@ -831,6 +915,81 @@ function updateEndingCoverTemplateField(input) {
   setImageLoading("endingTemplatePreview", "应用片尾封面参数...");
   refreshEndingTemplatePreview();
   scheduleStateSave();
+}
+
+function nextEndingCoverTemplateMeta(templateMap) {
+  let next = 1;
+  Object.entries(templateMap || {}).forEach(([id, template]) => {
+    const idMatch = String(id).match(/^ending_cover_template_(\d+)$/);
+    const nameMatch = String(template?.name || "").match(/^片尾封面模板\s*(\d+)$/);
+    const value = Math.max(Number(idMatch?.[1] || 0), Number(nameMatch?.[1] || 0));
+    if (value >= next) next = value + 1;
+  });
+  const serial = String(next).padStart(2, "0");
+  return { id: `ending_cover_template_${serial}`, name: `片尾封面模板 ${serial}` };
+}
+
+async function saveCurrentEndingCoverTemplate() {
+  const template = endingCoverTemplate();
+  const selectedId = state.ending_cover_template_id;
+  const button = $("saveEndingCover");
+  const label = button?.textContent || "保存";
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.innerHTML = buttonLoadingInline("保存中...");
+  }
+  try {
+    state.ending_cover_templates[selectedId] = JSON.parse(JSON.stringify(template));
+    state.ending_cover_template = JSON.parse(JSON.stringify(template));
+    await saveState();
+    pendingTemplateSave = "";
+    renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
+    await refreshEndingTemplatePreview();
+    log(`已保存片尾模板：${template.name || selectedId}`);
+    showTemplateActionStatus("保存成功", "endingTemplateForm");
+  } catch (error) {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.textContent = label;
+    }
+    log(`片尾模板保存失败：${error.message}`);
+  }
+}
+
+async function saveEndingCoverAsNewTemplate() {
+  const sourceTemplate = endingCoverTemplate();
+  const nextMeta = nextEndingCoverTemplateMeta(endingCoverTemplates());
+  const button = $("saveEndingCoverAsNew");
+  const label = button?.textContent || "新建保存";
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.innerHTML = buttonLoadingInline("新建中...");
+  }
+  try {
+    const newTemplate = JSON.parse(JSON.stringify(sourceTemplate));
+    applyIndependentCoverDefaults(newTemplate);
+    newTemplate.cover_layout = "single_video";
+    newTemplate.name = nextMeta.name;
+    state.ending_cover_templates = {...state.ending_cover_templates, [nextMeta.id]: newTemplate};
+    state.ending_cover_template_id = nextMeta.id;
+    state.ending_cover_template = JSON.parse(JSON.stringify(newTemplate));
+    await saveState();
+    pendingTemplateSave = "";
+    renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
+    await refreshEndingTemplatePreview();
+    log(`已新建片尾模板：${nextMeta.name}`);
+    showTemplateActionStatus("新建保存成功", "endingTemplateForm");
+  } catch (error) {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.textContent = label;
+    }
+    log(`片尾模板新建失败：${error.message}`);
+  }
 }
 
 function endingTemplateMode() {
@@ -874,13 +1033,13 @@ async function refreshEndingTemplatePreview() {
       assetBox.innerHTML = asset.type === "video"
         ? `<video data-ending-preview-video src="${escapeHtml(asset.url)}" muted loop controls playsinline ${endingPreviewOverrideName ? "autoplay" : ""}></video>`
         : `<img src="${escapeHtml(asset.url)}" alt="">`;
-      caption.textContent = `${mode === "random" ? "随机片尾素材预览" : "指定片尾素材"} / ${asset.name}`;
+      caption.textContent = `${mode === "random" ? "视频片尾素材预览" : "指定视频片尾"} / ${asset.name}`;
       if (asset.type === "video" && endingPreviewOverrideName) {
         const video = assetBox.querySelector("[data-ending-preview-video]");
         video?.play?.().catch(() => {});
       }
     } else {
-      assetBox.innerHTML = `<div class="ending-template-empty">暂无片尾素材</div>`;
+      assetBox.innerHTML = `<div class="ending-template-empty">暂无视频片尾素材</div>`;
       assetBox.classList.remove("hidden");
       caption.textContent = `${shortPath(endingTemplateState.directory)} / 0 个素材`;
     }
@@ -906,7 +1065,7 @@ async function refreshEndingTemplatePreview() {
       background_image_urls: modelImages.map((image) => image.url).filter(Boolean),
     });
   }
-  caption.textContent = `动态片尾封面 / ${template.name || "Ending Cover"}`;
+  caption.textContent = `文字片尾 / ${template.name || "Ending Cover"}`;
   clearImageLoading("endingTemplatePreview");
 }
 
@@ -1235,6 +1394,9 @@ function applyEndingCoverTemplateUpdates(updates) {
   const template = endingCoverTemplate();
   if (!template || !updates) return;
   Object.assign(template, updates);
+  if (state.ending_cover_template_id && state.ending_cover_templates?.[state.ending_cover_template_id]) {
+    state.ending_cover_templates[state.ending_cover_template_id] = JSON.parse(JSON.stringify(template));
+  }
   Object.entries(updates).forEach(([key, value]) => {
     const input = $("endingTemplateForm")?.querySelector(`[data-ending-cover-key="${key}"]`);
     if (input) input.value = value;
@@ -1294,6 +1456,9 @@ function applyEndingCoverTextUpdates(text) {
       }
     }
   });
+  if (state.ending_cover_template_id && state.ending_cover_templates?.[state.ending_cover_template_id]) {
+    state.ending_cover_templates[state.ending_cover_template_id] = JSON.parse(JSON.stringify(template));
+  }
   scheduleStateSave();
 }
 
@@ -1343,7 +1508,7 @@ async function refreshVideoTemplateGallery() {
   setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
   Object.entries(templates).forEach(([id, template], index) => {
-    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(template)}<span>${id} / ${videoTemplateDisplayName(id, template, index)}</span></div>`);
+    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(template)}<button type="button" class="video-template-name-button" data-template-name="${escapeHtml(id)}">${escapeHtml(videoTemplateDisplayName(id, template, index))}</button></div>`);
   });
   $("videoTemplateGallery").innerHTML = cards.join("");
   $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => {
@@ -1839,7 +2004,7 @@ async function runPreflightChecks(statePayload) {
     await wait(80);
     let result;
     try {
-      result = await checks[index].run();
+      result = await checks[index].run(index);
     } catch (error) {
       result = { status: "fail", detail: error.message || "预检执行失败" };
     }
@@ -1851,11 +2016,32 @@ async function runPreflightChecks(statePayload) {
 
   actions.classList.remove("is-running");
   if (!hasFail) {
-    actions.classList.add("is-complete");
-    setPreflightSummary("预检通过", "当前保存条件未发现会阻断提交的问题，正在进入最终确认。");
-    await wait(420);
-    closePreflightModal();
-    return true;
+    setPreflightSummary("预检通过", "当前保存条件未发现会阻断提交的问题，点击继续进入最终确认。");
+    $("preflightContinue").hidden = false;
+    $("preflightCancel").hidden = false;
+    $("preflightCancel").textContent = "返回修改";
+    return new Promise((resolve) => {
+      const cleanup = () => {
+        $("preflightContinue").onclick = null;
+        $("preflightCancel").onclick = null;
+        $("preflightClose").onclick = null;
+      };
+      $("preflightContinue").onclick = () => {
+        cleanup();
+        closePreflightModal();
+        resolve(true);
+      };
+      $("preflightCancel").onclick = () => {
+        cleanup();
+        closePreflightModal();
+        resolve(false);
+      };
+      $("preflightClose").onclick = () => {
+        cleanup();
+        closePreflightModal();
+        resolve(false);
+      };
+    });
   }
 
   setPreflightSummary("预检未通过", "请按红色节点提示修正后再点击立即生成。");
@@ -1884,14 +2070,28 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
   const activeIds = Array.isArray(statePayload.active_category_ids) ? statePayload.active_category_ids : [];
   const composition = Array.isArray(statePayload.composition_sequence) ? statePayload.composition_sequence : [];
   const selectedEndingNames = Array.isArray(statePayload.ending_template_ids) ? statePayload.ending_template_ids.filter(Boolean) : [];
+  const formats = Array.isArray(statePayload.output_options) ? statePayload.output_options.filter(Boolean) : [];
+  const categorySummary = activeIds.length
+    ? activeIds.map((id) => `${categoryNames[id] || id}(${statePayload.recent_limits?.[id] || 0})`).join(" / ")
+    : "未启用分类";
+  const compositionSeconds = composition.reduce((sum, row) => sum + Number(row.duration || 0), 0);
+  const compositionSummary = composition.length
+    ? composition.map((row, index) => `${index + 1}.${categoryNames[row.category_id] || row.category_id} ${Number(row.duration || 0).toFixed(1)}s`).join(" / ")
+    : "未配置结构";
+  const endingSummary = statePayload.ending_template_mode === "random"
+    ? `视频片尾 / 已选 ${selectedEndingNames.length || "目录全部"} / 目录 ${shortPath(statePayload.ending_template_dir || "")}`
+    : `文字片尾 / ${statePayload.ending_cover_template?.name || "未命名模板"}`;
   return [
     {
       title: "连接生成接口",
       pendingText: "读取最新素材、模板、BGM 和片尾目录状态。",
       readyText: "接口可用，已读取最新状态。",
-      run: async () => {
+      configText: "接口 /api/video-matrix/state；用于刷新素材数量、模板列表、BGM 曲库和片尾目录。",
+      run: async (index) => {
+        await animatePreflightProgress(index, 0, "开始连接接口...");
         const data = await api("/api/video-matrix/state");
         setLiveData(data);
+        await animatePreflightProgress(index, 100, "接口状态读取完成。");
         return { status: "pass", detail: "接口可用，已读取最新状态。" };
       },
     },
@@ -1899,14 +2099,19 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "输出参数",
       pendingText: "检查数量、并行、帧率、节拍分析时长和输出目录。",
       readyText: "输出参数完整。",
-      run: () => {
+      configText: `数量 ${statePayload.output_count} / 并行 ${statePayload.max_workers} / 帧率 ${statePayload.target_fps}fps / 节拍 ${statePayload.video_duration_min}-${statePayload.video_duration_max}s / 输出 ${formats.join(", ") || "未选择"} / 目录 ${shortPath(statePayload.output_root || "")}`,
+      run: async (index) => {
+        await animatePreflightProgress(index, 15, "检查生成数量和并行线程...");
         const formats = Array.isArray(statePayload.output_options) ? statePayload.output_options.filter(Boolean) : [];
         if (!Number.isFinite(statePayload.output_count) || statePayload.output_count < 1) return { status: "fail", detail: "生成数量必须大于 0。" };
         if (!Number.isFinite(statePayload.max_workers) || statePayload.max_workers < 1) return { status: "fail", detail: "并行线程必须大于 0。" };
+        await animatePreflightProgress(index, 45, "检查目标帧率和输出格式...");
         if (![30, 60].includes(Number(statePayload.target_fps))) return { status: "fail", detail: "目标帧率只能是 30 或 60。" };
         if (!formats.length) return { status: "fail", detail: "至少需要选择一种输出格式。" };
+        await animatePreflightProgress(index, 75, "检查输出目录和节拍时长...");
         if (!String(statePayload.output_root || "").trim()) return { status: "fail", detail: "最终视频生成目录不能为空。" };
         if (Number(statePayload.video_duration_min) > Number(statePayload.video_duration_max)) return { status: "fail", detail: "最小节拍分析时长不能大于最大节拍分析时长。" };
+        await animatePreflightProgress(index, 100, "输出参数检查完成。");
         return { status: "pass", detail: `${statePayload.output_count} 条 / ${statePayload.max_workers} 线程 / ${statePayload.target_fps}fps / ${formats.join(", ")}` };
       },
     },
@@ -1914,12 +2119,16 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "模板可用性",
       pendingText: "检查第一屏封面模板和正文叠层模板是否存在。",
       readyText: "模板配置可用。",
-      run: () => {
+      configText: `正文叠层 ${statePayload.template_id || "未选择"} / 第一屏封面 ${statePayload.cover_template_id || "未选择"}`,
+      run: async (index) => {
+        await animatePreflightProgress(index, 20, "检查正文叠层模板...");
         const live = getLiveData() || {};
         const liveVideoTemplates = live.templates || templates || {};
         const liveCoverTemplates = live.cover_templates || coverTemplates || {};
         if (!liveVideoTemplates[statePayload.template_id]) return { status: "fail", detail: `正文叠层模板不存在：${statePayload.template_id || "未选择"}` };
+        await animatePreflightProgress(index, 55, "检查第一屏封面模板...");
         if (!liveCoverTemplates[statePayload.cover_template_id]) return { status: "fail", detail: `第一屏封面模板不存在：${statePayload.cover_template_id || "未选择"}` };
+        await animatePreflightProgress(index, 100, "模板检查完成。");
         return { status: "pass", detail: `正文 ${statePayload.template_id} / 封面 ${statePayload.cover_template_id}` };
       },
     },
@@ -1927,23 +2136,37 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "本地 BGM",
       pendingText: "检查本地背景音乐库是否有可用 MP3。",
       readyText: "BGM 可用。",
-      run: () => {
+      configText: `来源 Local library / 已选 ${statePayload.bgm_library_id || "未指定，生成时随机"} / 曲库目录 ${shortPath(bgmLibraryState.directory || "")}`,
+      run: async (index) => {
+        await animatePreflightProgress(index, 25, "读取本地曲库...");
         const live = getLiveData() || {};
         const localBgm = Array.isArray(live.local_bgm) ? live.local_bgm : bgmLibraryState.local;
         if (!localBgm.length) return { status: "fail", detail: "本地背景音乐库没有可用 MP3。" };
+        await animatePreflightProgress(index, 70, "核对已选 BGM...");
         if (statePayload.bgm_library_id && !localBgm.includes(statePayload.bgm_library_id)) return { status: "fail", detail: `已选 BGM 不在本地曲库：${statePayload.bgm_library_id}` };
+        await animatePreflightProgress(index, 100, "BGM 检查完成。");
         return { status: "pass", detail: statePayload.bgm_library_id ? `已选 ${statePayload.bgm_library_id}` : `本地曲库 ${localBgm.length} 首，生成时随机取 1 首。` };
       },
     },
     {
       title: "分类素材",
-      pendingText: "检查启用分类是否有可用素材。",
+      pendingText: "逐个类目检查可用素材数量。",
       readyText: "启用分类都有素材。",
-      run: () => {
+      configText: `启用 ${activeIds.length} 类 / 最近素材上限：${categorySummary}`,
+      run: async (index) => {
         const live = getLiveData() || {};
         const counts = live.category_counts || {};
         if (!activeIds.length) return { status: "fail", detail: "至少需要启用一个素材分类。" };
-        const empty = activeIds.filter((id) => Number(counts[id] || 0) < 1);
+        const empty = [];
+        for (let categoryIndex = 0; categoryIndex < activeIds.length; categoryIndex += 1) {
+          const id = activeIds[categoryIndex];
+          const percent = Math.round((categoryIndex / activeIds.length) * 100);
+          const label = categoryNames[id] || id;
+          await animatePreflightProgress(index, percent, `检索 ${label}：${Number(counts[id] || 0)} 个素材`);
+          await wait(80);
+          if (Number(counts[id] || 0) < 1) empty.push(id);
+        }
+        await animatePreflightProgress(index, 100, "分类素材逐项检索完成。");
         if (empty.length) return { status: "fail", detail: `这些分类没有素材：${empty.map((id) => categoryNames[id] || id).join("、")}` };
         const total = activeIds.reduce((sum, id) => sum + Number(counts[id] || 0), 0);
         return { status: "pass", detail: `${activeIds.length} 个分类可用，共 ${total} 个素材。` };
@@ -1953,42 +2176,98 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "生成结构",
       pendingText: "检查每个片段分类和片段秒数。",
       readyText: "生成结构可用。",
-      run: () => {
+      configText: `结构 ${composition.length} 段 / 合计约 ${compositionSeconds.toFixed(1)}s / ${compositionSummary}`,
+      run: async (index) => {
         const live = getLiveData() || {};
         const counts = live.category_counts || {};
         if (!composition.length) return { status: "fail", detail: "生成结构不能为空。" };
+        await animatePreflightProgress(index, 12, "检查片段秒数...");
         const invalidDuration = composition.find((row) => !Number.isFinite(Number(row.duration)) || Number(row.duration) <= 0);
         if (invalidDuration) return { status: "fail", detail: "生成结构里存在无效片段秒数。" };
+        for (let rowIndex = 0; rowIndex < composition.length; rowIndex += 1) {
+          const row = composition[rowIndex];
+          const percent = 18 + Math.round(((rowIndex + 1) / composition.length) * 58);
+          await animatePreflightProgress(index, percent, `核对结构第 ${rowIndex + 1} 段：${categoryNames[row.category_id] || row.category_id}`);
+          await wait(45);
+        }
         const missing = composition
           .map((row) => row.category_id)
           .filter((id) => !activeIds.includes(id) || Number(counts[id] || 0) < 1);
         if (missing.length) return { status: "fail", detail: `结构引用了未启用或无素材分类：${[...new Set(missing)].map((id) => categoryNames[id] || id).join("、")}` };
+        await animatePreflightProgress(index, 100, "生成结构检查完成。");
         const seconds = composition.reduce((sum, row) => sum + Number(row.duration || 0), 0);
-        const status = seconds > Number(statePayload.video_duration_max || 0) ? "warn" : "pass";
-        const detail = `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒。${status === "warn" ? "节拍分析会按结构总时长兜底。" : ""}`;
+        const maxDuration = Number(statePayload.video_duration_max || 0);
+        const status = seconds > maxDuration ? "warn" : "pass";
+        const detail = status === "warn"
+          ? `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒，超过最大节拍分析 ${maxDuration.toFixed(1)} 秒。优化建议：把最大节拍分析时长调到不低于 ${Math.ceil(seconds)} 秒，或减少生成结构片段秒数；不调整也能继续，系统会按结构总时长兜底。`
+          : `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒。`;
         return { status, detail };
       },
     },
     {
-      title: "片尾素材",
-      pendingText: "检查片尾封面模板或随机片尾素材是否可读取。",
+      title: "片尾配置",
+      pendingText: "检查文字片尾模板或视频片尾素材是否可读取。",
       readyText: "片尾配置可用。",
-      run: () => {
+      configText: endingSummary,
+      run: async (index) => {
         const mode = statePayload.ending_template_mode || "dynamic";
+        await animatePreflightProgress(index, 20, "识别片尾模式...");
         if (mode === "dynamic") {
-          if (!statePayload.ending_cover_template) return { status: "fail", detail: "动态片尾缺少片尾封面模板配置。" };
-          return { status: "pass", detail: "使用动态片尾封面模板。" };
+          if (!statePayload.ending_cover_template) return { status: "fail", detail: "文字片尾缺少片尾封面模板配置。" };
+          await animatePreflightProgress(index, 100, "文字片尾模板检查完成。");
+          return { status: "pass", detail: "使用文字片尾模板。" };
         }
         const live = getLiveData() || {};
         const endingItems = Array.isArray(live.ending_templates) ? live.ending_templates : endingTemplateState.local;
         const endingNames = new Set(endingItems.map((item) => item.name));
-        if (!endingItems.length) return { status: "fail", detail: "片尾素材目录没有可用素材。" };
+        if (!endingItems.length) return { status: "fail", detail: "视频片尾目录没有可用素材。" };
+        await animatePreflightProgress(index, 55, "核对已选视频片尾...");
         if (selectedEndingNames.length) {
           const missing = selectedEndingNames.filter((name) => !endingNames.has(name));
-          if (missing.length) return { status: "fail", detail: `已选片尾素材不存在：${missing.join("、")}` };
-          return { status: "pass", detail: `随机范围 ${selectedEndingNames.length} 个已选片尾素材。` };
+          if (missing.length) return { status: "fail", detail: `已选视频片尾不存在：${missing.join("、")}` };
+          await animatePreflightProgress(index, 100, "已选视频片尾检查完成。");
+          return { status: "pass", detail: `随机范围 ${selectedEndingNames.length} 个已选视频片尾。` };
         }
-        return { status: "pass", detail: `未指定片尾素材，随机范围为目录内 ${endingItems.length} 个素材。` };
+        await animatePreflightProgress(index, 100, "视频片尾目录检查完成。");
+        return { status: "pass", detail: `未指定视频片尾，随机范围为目录内 ${endingItems.length} 个素材。` };
+      },
+    },
+    {
+      title: "生成文案",
+      pendingText: "检查 HUD、片尾文案和语言设置。",
+      readyText: "文案字段可用。",
+      configText: `语言 ${statePayload.copy_language || "未设置"} / HUD ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"}`,
+      run: async (index) => {
+        await animatePreflightProgress(index, 20, "检查语言设置...");
+        if (!["zh", "en", "ru"].includes(statePayload.copy_language || "")) return { status: "fail", detail: "文案语言配置无效。" };
+        await animatePreflightProgress(index, 55, "检查 HUD 和片尾文案...");
+        const emptyFields = [
+          ["HUD 文本", statePayload.hud_text],
+          ["片尾文案", statePayload.follow_text],
+        ].filter(([, value]) => !String(value || "").trim()).map(([label]) => label);
+        await animatePreflightProgress(index, 100, "文案字段检查完成。");
+        if (emptyFields.length) return { status: "warn", detail: `${emptyFields.join("、")}为空，仍可生成但画面文案会变少。` };
+        return { status: "pass", detail: "HUD、片尾文案和语言设置可用。" };
+      },
+    },
+    {
+      title: "提交完整性",
+      pendingText: "检查即将提交给生成接口的核心字段。",
+      readyText: "提交载荷完整。",
+      configText: `核心字段：模板、封面、BGM、片尾、分类、生成结构、输出目录；提交格式 FormData + payload JSON`,
+      run: async (index) => {
+        await animatePreflightProgress(index, 25, "核对核心字段...");
+        const required = ["template_id", "cover_template_id", "output_root", "composition_sequence", "active_category_ids"];
+        const missing = required.filter((key) => {
+          const value = statePayload[key];
+          return Array.isArray(value) ? !value.length : !value;
+        });
+        await animatePreflightProgress(index, 70, "核对片尾和 BGM 字段...");
+        if (statePayload.ending_template_mode === "random" && !statePayload.ending_template_dir) missing.push("ending_template_dir");
+        if (statePayload.bgm_source !== "Local library") missing.push("bgm_source");
+        await animatePreflightProgress(index, 100, "提交载荷检查完成。");
+        if (missing.length) return { status: "fail", detail: `提交字段不完整：${missing.join("、")}` };
+        return { status: "pass", detail: "核心字段完整，可以进入最终确认。" };
       },
     },
   ];
@@ -2006,7 +2285,12 @@ function preflightChecksHtml(checks) {
           <span class="preflight-status" data-preflight-status>·</span>
           <div>
             <strong>${escapeHtml(check.title)}</strong>
+            <div class="preflight-config">${escapeHtml(check.configText || "使用当前页面已保存配置。")}</div>
             <small data-preflight-detail>${escapeHtml(check.pendingText || "")}</small>
+            <div class="preflight-progress-wrap">
+              <div class="preflight-progress" aria-hidden="true"><div data-preflight-progress></div></div>
+              <span data-preflight-percent>0%</span>
+            </div>
           </div>
           <span class="preflight-badge" data-preflight-badge>等待</span>
         </li>
@@ -2035,6 +2319,27 @@ function setPreflightStepStatus(index, status, detail) {
   if (icon) icon.textContent = icons[status] || "·";
   if (badge) badge.textContent = labels[status] || "等待";
   if (detailNode) detailNode.textContent = detail || "";
+  if (status === "checking") setPreflightProgress(index, 0);
+  if (status === "pass" || status === "warn" || status === "fail") setPreflightProgress(index, 100);
+}
+
+function setPreflightProgress(index, percent) {
+  const node = document.querySelector(`[data-preflight-step="${index}"]`);
+  const bar = node?.querySelector("[data-preflight-progress]");
+  const percentNode = node?.querySelector("[data-preflight-percent]");
+  const value = Math.round(clamp(Number(percent) || 0, 0, 100));
+  if (bar) bar.style.width = `${value}%`;
+  if (percentNode) percentNode.textContent = `${value}%`;
+}
+
+async function animatePreflightProgress(index, percent, detail = "") {
+  setPreflightProgress(index, percent);
+  if (detail) {
+    const node = document.querySelector(`[data-preflight-step="${index}"]`);
+    const detailNode = node?.querySelector("[data-preflight-detail]");
+    if (detailNode) detailNode.textContent = `${Math.round(clamp(Number(percent) || 0, 0, 100))}% - ${detail}`;
+  }
+  await wait(35);
 }
 
 function confirmGeneration(statePayload) {
@@ -2119,6 +2424,8 @@ function collectState() {
     ending_template_id: endingTemplateSelectedName(),
     ending_template_ids: selectedEndingTemplateNames(),
     ending_template_dir: endingTemplateState.directory,
+    ending_cover_template_id: state.ending_cover_template_id,
+    ending_cover_templates: state.ending_cover_templates,
     ending_cover_template: state.ending_cover_template,
     bgm_source: "Local library", bgm_library_id: selectedBgmLibraryId(),
     composition_sequence: state.composition_sequence,
@@ -2171,6 +2478,11 @@ function materialCategories(data = { settings }) {
 function shortPath(value) {
   const parts = String(value).split(/[\\/]+/).filter(Boolean);
   return parts.slice(-2).join("\\") || value;
+}
+
+function shortText(value, maxLength = 36) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
 function outputRootPath() {

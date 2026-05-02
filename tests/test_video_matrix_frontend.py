@@ -39,7 +39,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "endingTemplatePreview" in html
     assert "endingAssetPreview" in html
     assert "endingTemplateForm" in html
-    assert "openEndingTemplateDir" in html
+    assert "endingTemplateSwitch" in html
+    assert "endingTemplateMenu" in html
+    assert "openEndingTemplateDirInline" in app
     assert "点击查看" in html
     assert "coverTemplateSwitch" in html
     assert "coverTemplateMenu" in html
@@ -203,6 +205,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "ending_template_id" in app
     assert "ending_template_ids" in app
     assert "ending_template_dir" in app
+    assert "ending_cover_template_id" in app
+    assert "ending_cover_templates" in app
     assert "endingRandomMaterialHtml" in app
     assert "data-ending-template-choice" in app
     assert "data-ending-play" not in app
@@ -214,6 +218,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "data-ending-preview-video" in app
     assert "video?.play?.().catch(() => {})" in app
     assert "renderEndingTemplatePanel({ ending_templates: endingTemplateState.local" in app
+    assert "renderEndingTemplateMenu" in app
+    assert "selectEndingCoverTemplate" in app
+    assert "片尾封面模板 01" in app
+    assert "saveCurrentEndingCoverTemplate" in app
+    assert "saveEndingCoverAsNewTemplate" in app
+    assert '<button type="button" id="saveEndingCover">保存</button>' in app
+    assert '<button type="button" id="saveEndingCoverAsNew">新建保存</button>' in app
+    assert 'buttonLoadingInline("保存中...")' in app
+    assert 'buttonLoadingInline("新建中...")' in app
     assert "endingFollowText" not in app
     ending_panel_source = app[app.index("function renderEndingTemplatePanel"):app.index("function isIndependentCover")]
     assert "一句话视频描述" not in ending_panel_source
@@ -223,7 +236,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'follow_text: endingCopyText' in app
     assert 'cta: ""' not in app
     assert 'event.source === $("endingTemplatePreview")?.contentWindow ? "ending" : "cover"' in app
-    assert "从 video_matrix\\\\ending_template 勾选备用片尾素材" in app
+    assert "从 video_matrix\\\\ending_template 勾选备用视频片尾" in app
     assert ".ending-material-list" in css
     assert ".ending-material-row" in css
     assert ".ending-material-row button" in css
@@ -244,7 +257,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "saveCoverAsNewTemplate" in app
     assert "nextCoverTemplateMeta" in app
     assert '<button type="button" id="saveCover">保存</button>' in app
-    assert '<button type="button" id="saveCoverAsNew" class="secondary">新建保存</button>' in app
+    assert '<button type="button" id="saveCoverAsNew">新建保存</button>' in app
     assert "saveCurrentCoverTemplate" in app
     assert '$("saveCoverAsNew").onclick = saveCoverAsNewTemplate' in app
     assert 'newTemplate.cover_layout = "single_video"' in app
@@ -351,6 +364,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "videoTemplatePreviewVideos" in app
     assert "videoTemplateCardPreviewHtml(template)" in app
     assert "videoTemplateCardBarHtml(template, \"hud\")" in app
+    assert '${escapeHtml(id)} / ${escapeHtml(videoTemplateDisplayName' not in app
+    assert '${escapeHtml(videoTemplateDisplayName(id, template, index))}' in app
+    assert '<button type="button" id="saveCoverAsNew">新建保存</button>' in app
+    assert "片尾封面模板 01" in app
+    assert "isInheritedEndingCoverName" in app
     assert "function videoTemplateCardBarStyle" in app
     assert "selectedModelImageUrl || modelImages[0]?.url || \"\"" in app
     assert "video-template-thumb-mask" in app
@@ -373,8 +391,17 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "runPreflightChecks(statePayload)" in app
     assert "function buildPreflightChecks" in app
     assert "function setPreflightStepStatus" in app
+    assert "function animatePreflightProgress" in app
+    assert "data-preflight-progress" in app
+    assert "data-preflight-percent" in app
+    assert "preflight-config" in app
+    assert "function shortText" in app
+    assert "点击继续进入最终确认" in app
+    assert "优化建议：把最大节拍分析时长调到不低于" in app
+    assert "提交完整性" in app
+    assert "生成文案" in app
     assert "预检通过" in app
-    assert "片尾素材" in app
+    assert "片尾配置" in app
     assert "本地 BGM" in app
     assert "active_category_ids" in app
     assert "confirmGeneration(statePayload)" in app
@@ -428,7 +455,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "videoTemplateCaption" not in html
     assert "videoTemplateCaption" not in app
     assert html.index('id="videoTemplateBackgrounds"') < html.index('class="cover-workbench"') < html.index('class="video-template-workbench"')
-    assert html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"') < html.index('id="videoTemplateSelector"')
+    assert html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"')
+    assert 'id="videoTemplateSelector"' not in html
+    assert "video-template-name-button" in app
+    assert ".video-template-name-button" in css
     assert ".video-template-picker" in css
     assert "height: calc(var(--preview-phone-height) + 36px)" in css
     assert "minmax(360px, 1fr)" in css
@@ -573,6 +603,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".confirm-algorithm" in css
     assert ".preflight-step" in css
     assert ".preflight-status" in css
+    assert ".preflight-progress" in css
+    assert ".preflight-progress-wrap" in css
+    assert "@keyframes preflightScan" in css
+    assert ".preflight-config" in css
+    assert ".preflight-step.warn small" in css
     assert ".preflight-actions" in css
     assert "composition-panel" in css
     assert "videoDurationMin" in html
@@ -580,8 +615,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "sidebarCoverTemplate" in html
     assert "sidebarVideoTemplate" in html
     assert "sidebarEndingTemplateMode" in html
-    assert '<option value="dynamic">动态封面</option>' in html
-    assert '<option value="random">随机素材</option>' in html
+    assert '<option value="dynamic">文字片尾</option>' in html
+    assert '<option value="random">视频片尾</option>' in html
     assert "renderSidebarTemplateSelectors" in app
     assert "selectCoverTemplate(coverSelect.value)" in app
     assert "selectVideoTemplate(videoSelect.value)" in app

@@ -199,11 +199,92 @@ def test_center_aligned_video_template_wraps_drawtext_inside_canvas() -> None:
     assert "Gas Engines That Turn" in filter_complex
     assert "Gas Engines That Turn Field Gas Into Power':x=92" not in filter_complex
     assert "drawbox=x=110:y=1714" in filter_complex
+    assert "drawbox=x=0:y=820:w=1080:h=80:color=#75b37b@0.62:t=fill" in filter_complex
+    assert "drawbox=x=0:y=627:w=1080:h=92:color=#75b37b@0.62:t=fill" in filter_complex
     assert "fontcolor=#33FF66" in filter_complex
     assert "fontcolor=#FF3366" in filter_complex
     assert "fontcolor=#66CCFF" in filter_complex
     assert filter_complex.count("fontsize=64") >= 2
     assert filter_complex.count("x=(w-text_w)/2") >= 3
+
+
+def test_video_template_text_background_and_color_defaults_match_preview() -> None:
+    variant = plan_variants(
+        [_clip("category_A", "a1")],
+        _settings(
+            composition_sequence=[{"category_id": "category_A", "duration": 0.5}],
+            titles=["GasGx天然气发电机组 搞浅天然气首选"],
+            slogans=["The World's leading engine for monetizing stranded natural gas computing power"],
+        ),
+        HudPayload(["Gas Engine -> Generator Set -> Power Output"], False),
+        [0, 0.5, 1],
+    )[0]
+    template = {
+        "show_hud": True,
+        "show_slogan": True,
+        "show_title": True,
+        "hud_bar_y": 1714,
+        "hud_bar_height": 162,
+        "hud_x": 70,
+        "hud_y": 1762,
+        "hud_font_size": 30,
+        "slogan_x": 92,
+        "slogan_y": 820,
+        "slogan_font_size": 64,
+        "title_x": 116,
+        "title_y": 627,
+        "title_font_size": 30,
+        "hud_bar_color": "#75b37b",
+        "hud_bar_opacity": 0.44,
+        "primary_color": "#FF2FAC",
+        "secondary_color": "#FFFFFF",
+        "align": "center",
+    }
+
+    filter_complex, _inputs = _build_filter_complex(variant, _settings(), template_config=template)
+
+    assert "drawbox=x=0:y=820:w=1080:h=80:color=#75b37b@0.62:t=fill" in filter_complex
+    assert "drawbox=x=0:y=627:w=1080:h=92:color=#75b37b@0.62:t=fill" in filter_complex
+    assert filter_complex.count("fontcolor=#FF2FAC") >= 2
+    assert "fontcolor=#FFFFFF" in filter_complex
+
+
+def test_video_template_text_effect_is_rendered_in_drawtext_filter() -> None:
+    variant = plan_variants(
+        [_clip("category_A", "a1")],
+        _settings(
+            composition_sequence=[{"category_id": "category_A", "duration": 0.5}],
+            titles=["GasGx天然气发电机组 搞浅天然气首选"],
+            slogans=["The World's leading engine for monetizing stranded natural gas computing power"],
+        ),
+        HudPayload(["Gas Engine -> Generator Set -> Power Output"], False),
+        [0, 0.5, 1],
+    )[0]
+    template = {
+        "show_hud": False,
+        "show_slogan": True,
+        "show_title": True,
+        "slogan_x": 92,
+        "slogan_y": 820,
+        "slogan_font_size": 64,
+        "slogan_text_effect": "slide-up",
+        "title_x": 116,
+        "title_y": 627,
+        "title_font_size": 30,
+        "title_text_effect": "shake",
+        "hud_bar_y": 1714,
+        "hud_bar_height": 162,
+        "hud_bar_color": "#75b37b",
+        "hud_bar_opacity": 0.44,
+        "primary_color": "#FF2FAC",
+        "secondary_color": "#FFFFFF",
+        "align": "center",
+    }
+
+    filter_complex, _inputs = _build_filter_complex(variant, _settings(), template_config=template)
+
+    assert ":y=820+44*exp(-4*(t-0.00))" in filter_complex
+    assert ":x=(w-text_w)/2+8*sin(38*(t-0.00)):y=627" in filter_complex
 
 
 def test_hud_text_defaults_to_primary_color_when_not_overridden() -> None:

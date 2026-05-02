@@ -57,6 +57,7 @@ def render_video_template_preview_image(
         )
 
     if template.get("show_slogan", True):
+        _draw_text_background(draw, template, "slogan", width)
         _draw_wrapped(
             draw,
             slogan_text,
@@ -68,6 +69,7 @@ def render_video_template_preview_image(
         )
 
     if template.get("show_title", True):
+        _draw_text_background(draw, template, "title", width)
         _draw_wrapped(
             draw,
             title_text,
@@ -79,6 +81,17 @@ def render_video_template_preview_image(
         )
 
     return Image.alpha_composite(base, overlay).convert("RGB")
+
+
+def _draw_text_background(draw: ImageDraw.ImageDraw, template: dict, target: str, width: int) -> None:
+    x = int(template.get(f"{target}_bg_x", 0))
+    y = int(template.get(f"{target}_bg_y", template[f"{target}_y"]))
+    box_width = int(template.get(f"{target}_bg_width", width))
+    default_height = 80 if target == "slogan" else int(template.get("slogan_bg_height", 92))
+    height = int(template.get(f"{target}_bg_height", default_height))
+    color = str(template.get(f"{target}_bg_color") or template.get("hud_bar_color") or "#0E1A10")
+    opacity = float(template.get(f"{target}_bg_opacity", template.get("slogan_bg_opacity", 0.62)))
+    draw.rectangle((x, y, x + box_width, y + height), fill=_hex_to_rgba(color, opacity))
 
 
 def _fit_background(background: Image.Image, width: int, height: int) -> Image.Image:

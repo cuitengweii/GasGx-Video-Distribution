@@ -402,6 +402,83 @@ body.bgm-modal-open .sidebar {
   font-size: 12px;
   line-height: 1.35;
 }
+.preflight-config {
+  margin: 5px 0 6px;
+  padding: 7px 9px;
+  border: 1px solid rgba(93, 214, 44, .18);
+  border-radius: 7px;
+  color: #cfd8ca;
+  background: rgba(93, 214, 44, .06);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.preflight-progress-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 9px;
+  margin-top: 8px;
+}
+.preflight-progress-wrap span {
+  display: inline-grid;
+  place-items: center;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 1px solid rgba(93, 214, 44, .24);
+  border-radius: 999px;
+  color: var(--green);
+  background: rgba(93, 214, 44, .08);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 10px rgba(93, 214, 44, .42);
+}
+.preflight-progress {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,0)),
+    rgba(255, 255, 255, .07);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), inset 0 1px 2px rgba(0,0,0,.55);
+}
+.preflight-progress div {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.48), rgba(255,255,255,0) 42%),
+    linear-gradient(90deg, #348f24 0%, var(--green) 54%, #b9ff93 100%);
+  box-shadow: 0 0 14px rgba(93,214,44,.56), 0 0 26px rgba(93,214,44,.24);
+  transition: width .28s cubic-bezier(.22, .78, .22, 1);
+}
+.preflight-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: linear-gradient(120deg, transparent 0 30%, rgba(255,255,255,.32) 43%, transparent 56% 100%);
+  background-size: 220px 100%;
+  pointer-events: none;
+}
+.preflight-step.checking .preflight-progress::after {
+  opacity: 1;
+  animation: preflightScan 1.35s ease-in-out infinite;
+}
+.preflight-step.pass .preflight-progress::after,
+.preflight-step.warn .preflight-progress::after,
+.preflight-step.fail .preflight-progress::after {
+  opacity: 0;
+  animation: none;
+}
+@keyframes preflightScan {
+  from { background-position: -180px 0; }
+  to { background-position: 180px 0; }
+}
 .preflight-status {
   display: grid;
   place-items: center;
@@ -436,6 +513,17 @@ body.bgm-modal-open .sidebar {
 .preflight-step.warn {
   border-color: #d8a829;
   background: rgba(216, 168, 41, .12);
+}
+.preflight-step.warn small {
+  color: #f0d27a;
+}
+.preflight-step.warn .preflight-config {
+  border-color: rgba(216, 168, 41, .3);
+  color: #f4ddb0;
+  background: rgba(216, 168, 41, .1);
+}
+.preflight-step.warn .preflight-badge {
+  color: #f0d27a;
 }
 .preflight-step.warn .preflight-status {
   color: #171000;
@@ -1939,6 +2027,11 @@ button.compact-toggle.active {
   padding: 8px 12px;
   font-size: 13px;
 }
+#saveCoverAsNew {
+  color: var(--button-text);
+  background: var(--green);
+  border-color: var(--green);
+}
 #endingTemplateForm button {
   min-height: 38px;
   margin-top: 8px;
@@ -1952,6 +2045,29 @@ button.compact-toggle.active {
 .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .cover-gallery { display:flex; gap:14px; overflow-x:auto; padding:16px 0 4px; }
 .cover-card { flex:0 0 154px; color:var(--muted); font-size:12px; cursor:pointer; }
+.video-template-name-button {
+  width: 100%;
+  min-height: 28px;
+  margin-top: 4px;
+  padding: 3px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.video-template-name-button:hover,
+.video-template-card.active .video-template-name-button {
+  color: var(--green);
+  border-color: rgba(93, 214, 44, .45);
+  background: rgba(93, 214, 44, .10);
+}
 .cover-card img,
 .cover-card video { width:154px; aspect-ratio:9/16; object-fit:cover; border-radius:18px; border:1px solid #333; padding:6px; background:#080808; }
 .cover-card.active img,

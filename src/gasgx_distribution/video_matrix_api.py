@@ -1156,6 +1156,8 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "ending_template_id",
         "ending_template_ids",
         "ending_template_dir",
+        "ending_cover_template_id",
+        "ending_cover_templates",
         "ending_cover_template",
         "bgm_source",
         "bgm_library_id",

@@ -46,7 +46,7 @@
       <label>最大节拍分析时长<input id="videoDurationMax" class="number-field" type="number" min="4" max="120" step="0.5" value="12" /></label>
       <label>第一屏封面模板<select id="sidebarCoverTemplate"></select></label>
       <label>视频叠层模板<select id="sidebarVideoTemplate"></select></label>
-      <label>片尾封面模板<select id="sidebarEndingTemplateMode"><option value="dynamic">动态封面</option><option value="random">随机素材</option></select></label>
+        <label>片尾封面模板<select id="sidebarEndingTemplateMode"><option value="dynamic">文字片尾</option><option value="random">视频片尾</option></select></label>
       <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
       <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option><option value="png">png</option><option value="txt">txt</option><option value="json">json</option></select></label>
       <label>最终视频生成目录<input id="outputRoot" /></label>
@@ -149,7 +149,6 @@
           </div>
           <div class="video-template-picker">
             <div id="videoTemplateGallery" class="cover-gallery"></div>
-            <div id="videoTemplateSelector" class="template-tabs"></div>
           </div>
         </section>
 
@@ -161,7 +160,10 @@
               <div id="endingAssetPreview" class="ending-asset-preview hidden"></div>
               <div class="preview-caption-row">
                 <small id="endingTemplateCaption"></small>
-                <button id="openEndingTemplateDir" class="secondary compact-toggle" type="button">打开目录</button>
+          <div class="cover-template-switcher ending-template-switcher">
+            <button id="endingTemplateSwitch" class="secondary compact-toggle" type="button" aria-expanded="false">⇄ 模板切换</button>
+            <div id="endingTemplateMenu" class="cover-template-menu hidden"></div>
+          </div>
               </div>
             </div>
             <form id="endingTemplateForm" class="control-panel"></form>

@@ -180,6 +180,7 @@ def _build_filter_complex(
         labels.append("[intro]")
     font_arg = _resolve_drawtext_font_arg()
     template = coerce_template(template_config)
+    explicit_template_keys = set((template_config or {}).keys())
     hud_text = " | ".join(variant.hud_lines)
     slogan = variant.slogan
     title = variant.title
@@ -195,7 +196,7 @@ def _build_filter_complex(
             f"colorbalance=rs=-0.05:gs=0.10:bs=-0.04:rh=0.02:gh=0.01:bh=0.03,"
             f"eq=contrast={round(1.18 * variant.lut_strength, 3)}:brightness=-0.02:saturation=1.12,"
             f"setsar=1"
-            f"{_overlay_filters(template, font_arg, hud_text, slogan, title)}"
+            f"{_overlay_filters(template, font_arg, hud_text, slogan, title, explicit_template_keys)}"
             f"[v{idx}]"
         )
         chains.append(chain)
@@ -257,14 +258,11 @@ def _resolve_drawtext_font_arg() -> str:
     return ""
 
 
-def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, title: str) -> str:
+def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, title: str, explicit_template_keys: set[str] | None = None) -> str:
     filters: list[str] = []
+    explicit_template_keys = explicit_template_keys or set()
     if template.get("show_hud", True):
-        filters.append(
-            "drawbox="
-            f"x={int(template.get('hud_bar_x', 0))}:y={int(template['hud_bar_y'])}:w={int(template.get('hud_bar_width', 1080))}:h={int(template['hud_bar_height'])}:"
-            f"color={template['hud_bar_color']}@{float(template['hud_bar_opacity']):.2f}:t=fill"
-        )
+        filters.append(_drawbox_filter(template, "hud"))
         filters.extend(
             _drawtext_lines(
                 template,
@@ -273,9 +271,11 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
                 text_key="hud",
                 color_key="hud_color",
                 max_lines=2,
+                explicit_template_keys=explicit_template_keys,
             )
         )
     if template.get("show_slogan", True):
+        filters.append(_drawbox_filter(template, "slogan"))
         filters.extend(
             _drawtext_lines(
                 template,
@@ -284,9 +284,11 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
                 text_key="slogan",
                 color_key="slogan_color",
                 max_lines=3,
+                explicit_template_keys=explicit_template_keys,
             )
         )
     if template.get("show_title", True):
+        filters.append(_drawbox_filter(template, "title"))
         filters.extend(
             _drawtext_lines(
                 template,
@@ -295,9 +297,29 @@ def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, 
                 text_key="title",
                 color_key="title_color",
                 max_lines=2,
+                explicit_template_keys=explicit_template_keys,
             )
         )
     return "," + ",".join(filters) if filters else ""
+
+
+def _drawbox_filter(template: dict[str, Any], target: str) -> str:
+    if target == "hud":
+        x = int(template.get("hud_bar_x", 0))
+        y = int(template["hud_bar_y"])
+        width = int(template.get("hud_bar_width", 1080))
+        height = int(template["hud_bar_height"])
+        color = str(template["hud_bar_color"])
+        opacity = float(template["hud_bar_opacity"])
+    else:
+        x = int(template.get(f"{target}_bg_x", 0))
+        y = int(template.get(f"{target}_bg_y", template[f"{target}_y"]))
+        width = int(template.get(f"{target}_bg_width", 1080))
+        default_height = 80 if target == "slogan" else int(template.get("slogan_bg_height", 92))
+        height = int(template.get(f"{target}_bg_height", default_height))
+        color = str(template.get(f"{target}_bg_color") or template.get("hud_bar_color") or "#0E1A10")
+        opacity = float(template.get(f"{target}_bg_opacity", template.get("slogan_bg_opacity", 0.62)))
+    return f"drawbox=x={x}:y={y}:w={width}:h={height}:color={color}@{opacity:.2f}:t=fill"
 
 
 def _drawtext_lines(
@@ -308,6 +330,7 @@ def _drawtext_lines(
     text_key: str,
     color_key: str,
     max_lines: int,
+    explicit_template_keys: set[str] | None = None,
 ) -> list[str]:
     font_size = int(template[f"{text_key}_font_size"])
     anchor_x = int(template[f"{text_key}_x"])
@@ -316,25 +339,45 @@ def _drawtext_lines(
     lines = _wrap_text_for_drawtext(text, font_size, max_width)[:max_lines]
     align = str(template.get("align", "left")).lower()
     line_gap = max(1, int(font_size * 1.18))
+    effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
     filters: list[str] = []
     for index, line in enumerate(lines):
         if align == "center":
             x_expr = "(w-text_w)/2"
         else:
             x_expr = str(anchor_x)
+        y_expr = str(anchor_y + index * line_gap)
         filters.append(
             "drawtext="
-            f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key)}:"
+            f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key, explicit_template_keys or set())}:"
             f"fontsize={font_size}:"
-            f"text={_escape_drawtext_text(line)}:x={x_expr}:y={anchor_y + index * line_gap}"
+            f"text={_escape_drawtext_text(line)}"
+            f"{_text_effect_options(effect, x_expr, y_expr, line_index=index)}"
         )
     return filters
 
 
-def _template_text_color(template: dict[str, Any], text_key: str, color_key: str) -> str:
-    if template.get(color_key):
+def _text_effect_options(effect: str, x_expr: str, y_expr: str, *, line_index: int) -> str:
+    delay = line_index * 0.08
+    if effect == "pulse":
+        return f":x={x_expr}:y={y_expr}:alpha='0.80+0.20*sin(5*(t-{delay:.2f}))'"
+    if effect == "glow":
+        return f":x={x_expr}:y={y_expr}:alpha='0.70+0.30*sin(7*(t-{delay:.2f}))'"
+    if effect == "slide-up":
+        return f":x={x_expr}:y={y_expr}+44*exp(-4*(t-{delay:.2f}))"
+    if effect == "shake":
+        return f":x={x_expr}+8*sin(38*(t-{delay:.2f})):y={y_expr}"
+    if effect == "typewriter":
+        return f":x={x_expr}:y={y_expr}:enable='gte(t\\,{delay:.2f})'"
+    if effect == "pop":
+        return f":x={x_expr}:y={y_expr}:alpha='0.65+0.35*exp(-5*(t-{delay:.2f}))*sin(22*(t-{delay:.2f}))'"
+    return f":x={x_expr}:y={y_expr}"
+
+
+def _template_text_color(template: dict[str, Any], text_key: str, color_key: str, explicit_template_keys: set[str]) -> str:
+    if color_key in explicit_template_keys and template.get(color_key):
         return str(template[color_key])
-    if text_key in {"title", "hud"}:
+    if text_key in {"slogan", "hud"}:
         return str(template.get("primary_color") or "#ffffff")
     return str(template.get("secondary_color") or "#ffffff")
 
