@@ -84,6 +84,7 @@ def render_variant(
             outro_cover_path=outro_cover_path,
             outro_seconds=outro_seconds,
             ending_template_path=ending_template_path,
+            text_dir=scratch_dir / "text_layers",
         )
         concat_video(filter_complex, inputs, video_path, bgm_path=bgm_path)
         if cover_path is not None:
@@ -163,6 +164,7 @@ def _build_filter_complex(
     outro_cover_path: Path | None = None,
     outro_seconds: float = 1.0,
     ending_template_path: Path | None = None,
+    text_dir: Path | None = None,
 ) -> tuple[str, list[Path]]:
     inputs = [segment.clip.normalized_path for segment in variant.segments]
     chains: list[str] = []
@@ -178,7 +180,6 @@ def _build_filter_complex(
             f"trim=duration={cover_intro_seconds:.3f},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[intro]"
         )
         labels.append("[intro]")
-    font_arg = _resolve_drawtext_font_arg()
     template = coerce_template(template_config)
     explicit_template_keys = set((template_config or {}).keys())
     hud_text = " | ".join(variant.hud_lines)
@@ -196,7 +197,7 @@ def _build_filter_complex(
             f"colorbalance=rs=-0.05:gs=0.10:bs=-0.04:rh=0.02:gh=0.01:bh=0.03,"
             f"eq=contrast={round(1.18 * variant.lut_strength, 3)}:brightness=-0.02:saturation=1.12,"
             f"setsar=1"
-            f"{_overlay_filters(template, font_arg, hud_text, slogan, title, explicit_template_keys)}"
+            f"{_overlay_filters(template, hud_text, slogan, title, explicit_template_keys, text_dir=text_dir)}"
             f"[v{idx}]"
         )
         chains.append(chain)
@@ -258,52 +259,66 @@ def _resolve_drawtext_font_arg() -> str:
     return ""
 
 
-def _overlay_filters(template: dict, font_arg: str, hud_text: str, slogan: str, title: str, explicit_template_keys: set[str] | None = None) -> str:
+def _overlay_filters(
+    template: dict,
+    hud_text: str,
+    slogan: str,
+    title: str,
+    explicit_template_keys: set[str] | None = None,
+    *,
+    text_dir: Path | None = None,
+) -> str:
     filters: list[str] = []
     explicit_template_keys = explicit_template_keys or set()
     if template.get("show_hud", True):
-        filters.append(_drawbox_filter(template, "hud"))
+        box = _drawbox_filter(template, "hud")
+        if box:
+            filters.append(box)
         filters.extend(
             _drawtext_lines(
                 template,
-                font_arg,
                 hud_text,
                 text_key="hud",
                 color_key="hud_color",
                 max_lines=2,
                 explicit_template_keys=explicit_template_keys,
+                text_dir=text_dir,
             )
         )
     if template.get("show_slogan", True):
-        filters.append(_drawbox_filter(template, "slogan"))
+        box = _drawbox_filter(template, "slogan")
+        if box:
+            filters.append(box)
         filters.extend(
             _drawtext_lines(
                 template,
-                font_arg,
                 slogan,
                 text_key="slogan",
                 color_key="slogan_color",
                 max_lines=3,
                 explicit_template_keys=explicit_template_keys,
+                text_dir=text_dir,
             )
         )
     if template.get("show_title", True):
-        filters.append(_drawbox_filter(template, "title"))
+        box = _drawbox_filter(template, "title")
+        if box:
+            filters.append(box)
         filters.extend(
             _drawtext_lines(
                 template,
-                font_arg,
                 title,
                 text_key="title",
                 color_key="title_color",
                 max_lines=2,
                 explicit_template_keys=explicit_template_keys,
+                text_dir=text_dir,
             )
         )
     return "," + ",".join(filters) if filters else ""
 
 
-def _drawbox_filter(template: dict[str, Any], target: str) -> str:
+def _drawbox_filter(template: dict[str, Any], target: str) -> str | None:
     if target == "hud":
         x = int(template.get("hud_bar_x", 0))
         y = int(template["hud_bar_y"])
@@ -319,39 +334,45 @@ def _drawbox_filter(template: dict[str, Any], target: str) -> str:
         height = int(template.get(f"{target}_bg_height", default_height))
         color = str(template.get(f"{target}_bg_color") or template.get("hud_bar_color") or "#0E1A10")
         opacity = float(template.get(f"{target}_bg_opacity", template.get("slogan_bg_opacity", 0.62)))
+    if opacity <= 0:
+        return None
     return f"drawbox=x={x}:y={y}:w={width}:h={height}:color={color}@{opacity:.2f}:t=fill"
 
 
 def _drawtext_lines(
     template: dict[str, Any],
-    font_arg: str,
     text: str,
     *,
     text_key: str,
     color_key: str,
     max_lines: int,
     explicit_template_keys: set[str] | None = None,
+    text_dir: Path | None = None,
 ) -> list[str]:
     font_size = int(template[f"{text_key}_font_size"])
     anchor_x = int(template[f"{text_key}_x"])
     anchor_y = int(template[f"{text_key}_y"])
     max_width = _text_box_width(template, text_key, anchor_x)
     lines = _wrap_text_for_drawtext(text, font_size, max_width)[:max_lines]
-    align = str(template.get("align", "left")).lower()
+    align = _target_text_align(template, text_key)
     line_gap = max(1, int(font_size * 1.18))
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
+    font_arg = _resolve_drawtext_font_arg()
     filters: list[str] = []
     for index, line in enumerate(lines):
         if align == "center":
             x_expr = "(w-text_w)/2"
+        elif align == "right":
+            x_expr = f"w-text_w-{anchor_x}"
         else:
             x_expr = str(anchor_x)
         y_expr = str(anchor_y + index * line_gap)
+        text_source = _drawtext_text_source(line, text_key, index, text_dir)
         filters.append(
             "drawtext="
             f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key, explicit_template_keys or set())}:"
             f"fontsize={font_size}:"
-            f"text={_escape_drawtext_text(line)}"
+            f"{text_source}"
             f"{_text_effect_options(effect, x_expr, y_expr, line_index=index)}"
         )
     return filters
@@ -382,29 +403,56 @@ def _template_text_color(template: dict[str, Any], text_key: str, color_key: str
     return str(template.get("secondary_color") or "#ffffff")
 
 
+def _target_text_align(template: dict[str, Any], text_key: str) -> str:
+    value = str(template.get(f"{text_key}_text_align") or template.get("align") or "left").strip().lower()
+    return value if value in {"left", "center", "right"} else "left"
+
+
 def _text_box_width(template: dict[str, Any], text_key: str, anchor_x: int) -> int:
+    explicit_width = template.get(f"{text_key}_text_width")
+    if explicit_width is not None:
+        try:
+            return max(120, min(1080, int(float(explicit_width))))
+        except (TypeError, ValueError):
+            pass
+    align = _target_text_align(template, text_key)
     if text_key == "hud":
-        return max(120, 1080 - anchor_x * 2 if str(template.get("align", "left")).lower() == "center" else 1080 - anchor_x - 42)
-    return max(120, 1080 - anchor_x * 2 if str(template.get("align", "left")).lower() == "center" else 1080 - anchor_x - 42)
+        return max(120, 1080 - anchor_x * 2 if align == "center" else 1080 - anchor_x - 42)
+    if align == "center":
+        return max(120, min(1000, 1080 - 84))
+    return max(120, 1080 - anchor_x - 42)
+
+
+def _drawtext_text_source(line: str, text_key: str, line_index: int, text_dir: Path | None) -> str:
+    if text_dir is None:
+        return f"text={_escape_drawtext_text(line)}"
+    text_dir.mkdir(parents=True, exist_ok=True)
+    text_path = text_dir / f"{text_key}_{line_index}.txt"
+    text_path.write_text(line, encoding="utf-8")
+    return f"textfile='{_escape_filter_path(text_path)}'"
 
 
 def _wrap_text_for_drawtext(text: str, font_size: int, max_width: int) -> list[str]:
-    words = text.split()
-    if not words:
+    paragraphs = [line.strip() for line in str(text).replace("\\n", "\n").splitlines()]
+    if not paragraphs:
         return [""]
     font = _load_drawtext_font(font_size)
     draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     lines: list[str] = []
-    current = words[0]
-    for word in words[1:]:
-        candidate = f"{current} {word}"
-        if _measure_text_width(draw, candidate, font) <= max_width:
-            current = candidate
-        else:
-            lines.append(current)
-            current = word
-    lines.append(current)
-    return lines
+    for paragraph in paragraphs:
+        words = paragraph.split()
+        if not words:
+            continue
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if _measure_text_width(draw, candidate, font) <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines or [""]
 
 
 def _load_drawtext_font(size: int) -> ImageFont.ImageFont:
@@ -431,3 +479,7 @@ def _escape_drawtext_text(text: str) -> str:
         "%": "\\%",
     }
     return "".join(replacements.get(char, char) for char in text)
+
+
+def _escape_filter_path(path: Path) -> str:
+    return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")

@@ -226,6 +226,62 @@ def test_render_variant_escapes_drawtext_apostrophe_before_following_lines(monke
         },
     )
 
-    assert "text=The World\\'s leading engine for" in captured["filter_complex"]
-    assert "text='The World\\'s leading engine for'" not in captured["filter_complex"]
+    assert "textfile=" in captured["filter_complex"]
+    assert "text=The World" not in captured["filter_complex"]
+    assert ";x=" not in captured["filter_complex"]
     assert "drawtext=fontfile=" in captured["filter_complex"]
+
+
+def test_overlay_filters_match_selected_template_layer_rules(tmp_path: Path) -> None:
+    template = {
+        "show_hud": True,
+        "show_slogan": True,
+        "show_title": True,
+        "hud_bar_y": 1230,
+        "hud_bar_height": 155,
+        "hud_bar_color": "#0E1A10",
+        "hud_bar_opacity": 0.38,
+        "hud_x": 217,
+        "hud_y": 1296,
+        "hud_font_size": 40,
+        "hud_color": "#d3168a",
+        "slogan_x": 44,
+        "slogan_y": 450,
+        "slogan_font_size": 58,
+        "slogan_color": "#d8228c",
+        "slogan_bg_y": 420,
+        "slogan_bg_height": 216,
+        "slogan_bg_opacity": 0,
+        "slogan_text_align": "center",
+        "slogan_text_effect": "none",
+        "title_x": 228,
+        "title_y": 795,
+        "title_font_size": 52,
+        "title_color": "#d3168a",
+        "title_bg_y": 772,
+        "title_bg_height": 140,
+        "title_bg_opacity": 0,
+        "title_text_align": "center",
+        "title_text_effect": "none",
+    }
+
+    filters = render._overlay_filters(
+        render.coerce_template(template),
+        "终结废气 | 重塑能源 | 就地变现",
+        "The World's leading engine for monetizing stranded natural gas computing power",
+        "GasGx天然气发电机组\n搁浅天然气首选",
+        set(template),
+        text_dir=tmp_path,
+    )
+
+    assert "drawbox=x=0:y=1230" in filters
+    assert "drawbox=x=0:y=420" not in filters
+    assert "drawbox=x=0:y=772" not in filters
+    assert "textfile=" in filters
+    assert "text=The World" not in filters
+    assert filters.count(":x=(w-text_w)/2:y=") >= 2
+    assert "alpha='0.80+0.20*sin" not in filters
+    assert "+44*exp" not in filters
+    assert (tmp_path / "slogan_0.txt").read_text(encoding="utf-8").startswith("The World's leading engine")
+    assert (tmp_path / "title_0.txt").read_text(encoding="utf-8") == "GasGx天然气发电机组"
+    assert (tmp_path / "title_1.txt").read_text(encoding="utf-8") == "搁浅天然气首选"

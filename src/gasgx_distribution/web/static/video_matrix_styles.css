@@ -1046,7 +1046,7 @@ select:disabled {
   min-height: 0;
 }
 .bgm-pixabay-section {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 .bgm-library-popover.modal ul,
 .bgm-library-popover.modal .pixabay-track-list {
@@ -1168,6 +1168,59 @@ select:disabled {
 .pixabay-refresh-button {
   width: 100%;
   margin: 0;
+}
+.pixabay-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 8px;
+}
+.pixabay-search-row input {
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(93, 214, 44, .28);
+  border-radius: 7px;
+  color: var(--text);
+  background: rgba(0, 0, 0, .24);
+  font-size: 12px;
+  font-weight: 800;
+}
+.pixabay-search-row input:focus {
+  outline: 2px solid rgba(93, 214, 44, .42);
+  outline-offset: 1px;
+}
+.pixabay-player-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: 8px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid rgba(93, 214, 44, .24);
+  border-radius: 8px;
+  background: rgba(3, 12, 12, .74);
+}
+.pixabay-player-meta {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+.pixabay-player-meta strong,
+.pixabay-player-meta small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixabay-player-card audio {
+  width: 100%;
+  height: 32px;
+}
+.pixabay-player-card button {
+  min-height: 32px !important;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.pixabay-player-card.is-empty {
+  opacity: .72;
 }
 .bgm-local-item audio {
   width: 100%;
@@ -2263,6 +2316,11 @@ button.compact-toggle.active {
   border: 1px solid rgba(93, 214, 44, .18);
   border-radius: 8px;
   background: rgba(3, 12, 12, .74);
+  cursor: pointer;
+}
+.pixabay-track.is-selected {
+  border-color: var(--green);
+  background: rgba(93, 214, 44, .12);
 }
 .pixabay-track-main {
   min-width: 0;
@@ -2306,9 +2364,9 @@ button.compact-toggle.active {
   justify-content: center;
   gap: 6px;
 }
-.pixabay-track.audio-unavailable button {
-  opacity: .55;
-  cursor: not-allowed;
+.pixabay-track.is-mock-audio button {
+  border: 1px dashed rgba(93, 214, 44, .48);
+  background: rgba(93, 214, 44, .18);
 }
 .embed-mode .sidebar .pixabay-track button {
   min-height: 0 !important;

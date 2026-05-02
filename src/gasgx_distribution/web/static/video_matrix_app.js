@@ -6,7 +6,7 @@ let selectedCover = "";
 let selectedVideoTemplate = "";
 let settings = {};
 let lastPreviewPath = "";
-let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [] };
+let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [], pixabayQuery: "industry", currentPixabayTrack: null };
 let endingTemplateState = { local: [], directory: "" };
 let endingPreviewOverrideName = "";
 let pendingTemplateSave = "";
@@ -2417,6 +2417,8 @@ function collectState() {
     target_fps: Number(radioValue("target_fps") || settings.target_fps || 60),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: radioValue("copy_language"),
+    template_config: activeVideoTemplateSnapshot(),
+    cover_template_config: activeCoverTemplateSnapshot(),
     source_mode: radioValue("source_mode") || "Category folders",
     headline: $("headline").value, subhead: $("subhead").value,
     follow_text: endingCopyText, hud_text: $("hudText").value,
@@ -2436,6 +2438,16 @@ function collectState() {
       clamp(Number(state.recent_limits?.[category.id] || settings.recent_limits?.[category.id] || 8), 1, 10),
     ]))
   };
+}
+
+function activeVideoTemplateSnapshot() {
+  const template = templates[selectedVideoTemplate];
+  return template ? JSON.parse(JSON.stringify(template)) : {};
+}
+
+function activeCoverTemplateSnapshot() {
+  const template = coverTemplates[selectedCover];
+  return template ? JSON.parse(JSON.stringify(template)) : {};
 }
 
 function endingCopyTextValue() {
@@ -2498,6 +2510,8 @@ function renderBgm(data) {
     directory: localBgmDir,
     links: Object.values(data.bgm_library || {}),
     pixabay: [],
+    pixabayQuery: bgmLibraryState.pixabayQuery || "industry",
+    currentPixabayTrack: bgmLibraryState.currentPixabayTrack || null,
   };
   $("bgmPanel").innerHTML = `
     <div class="bgm-label-row">
@@ -2532,7 +2546,9 @@ function toggleBgmLibraryPopover() {
     : "<li>暂无本地 MP3 文件</li>";
   const pixabayList = bgmLibraryState.pixabay.length
     ? renderPixabayTracks()
-    : `<span class="pixabay-empty">正在准备 Pixabay industry 最新曲库。</span>`;
+    : `<span class="pixabay-empty">输入关键词后搜索 Pixabay 曲库。</span>`;
+  const currentPixabay = bgmLibraryState.currentPixabayTrack || bgmLibraryState.pixabay.find((track) => track.audio_url) || {};
+  const currentPixabayAudio = currentPixabay.audio_url || "";
   panel.innerHTML = `
     <div class="bgm-popover-head">
       <div>
@@ -2547,12 +2563,30 @@ function toggleBgmLibraryPopover() {
     </section>
     <section class="bgm-pixabay-section">
       <strong>网络曲库</strong>
-      <button id="loadPixabayTracksInline" class="pixabay-refresh-button" type="button">抓取 Pixabay industry 前 10 首</button>
+      <div class="pixabay-search-row">
+        <input id="pixabaySearchInput" type="search" value="${escapeHtml(bgmLibraryState.pixabayQuery || "industry")}" placeholder="搜索 Pixabay 关键词，例如 industry" />
+        <button id="loadPixabayTracksInline" class="pixabay-refresh-button" type="button">搜索</button>
+      </div>
+      <div class="pixabay-player-card ${currentPixabayAudio ? "" : "is-empty"}">
+        <div class="pixabay-player-meta">
+          <strong id="pixabayCurrentTitle">${escapeHtml(currentPixabay.title || "等待选择音频")}</strong>
+          <small id="pixabayCurrentArtist">${escapeHtml(currentPixabay.artist ? `${currentPixabay.artist} / ${currentPixabay.duration || ""}` : "点击下方曲目试听")}</small>
+        </div>
+        <audio id="pixabayPlayer" controls preload="none" controlsList="nodownload" src="${escapeHtml(currentPixabayAudio)}"></audio>
+        <button id="downloadCurrentPixabay" type="button" ${currentPixabayAudio ? "" : "disabled"}>下载当前到本地</button>
+      </div>
       <div id="pixabayTrackList" class="pixabay-track-list">${pixabayList}</div>
     </section>
   `;
   $("toggleBgmLibrarySize").onclick = toggleBgmLibrarySize;
-  $("loadPixabayTracksInline")?.addEventListener("click", loadPixabayTracks);
+  $("loadPixabayTracksInline")?.addEventListener("click", () => loadPixabayTracks($("pixabaySearchInput")?.value || ""));
+  $("pixabaySearchInput")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") loadPixabayTracks(event.currentTarget.value || "");
+  });
+  $("downloadCurrentPixabay")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    downloadPixabayTrack(event.currentTarget, bgmLibraryState.currentPixabayTrack);
+  });
   panel.querySelectorAll("[data-bgm-select]").forEach((button) => {
     button.onclick = () => selectBgmLibraryId(button.dataset.bgmSelect || "");
   });
@@ -2560,7 +2594,7 @@ function toggleBgmLibraryPopover() {
     button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
   });
   bindExclusiveBgmAudioPlayback(panel);
-  loadPixabayTracks();
+  if (!bgmLibraryState.pixabay.length) loadPixabayTracks(bgmLibraryState.pixabayQuery || "industry");
 }
 function selectedBgmLibraryId() {
   return bgmLibraryState.local.includes(state.bgm_library_id) ? state.bgm_library_id : "";
@@ -2592,45 +2626,90 @@ function toggleBgmLibrarySize() {
   document.body.classList.remove("bgm-modal-open");
 }
 function renderPixabayTracks() {
+  const currentUrl = bgmLibraryState.currentPixabayTrack?.audio_url || "";
   return bgmLibraryState.pixabay.slice(0, 10).map((track, index) => `
-    <article class="pixabay-track ${track.audio_url ? "" : "audio-unavailable"}">
+    <article class="pixabay-track ${track.is_mock_audio ? "is-mock-audio" : ""} ${track.audio_url && track.audio_url === currentUrl ? "is-selected" : ""}" data-pixabay-index="${index}">
       <div class="pixabay-track-main">
         <strong>${index + 1}. ${escapeHtml(track.title)}</strong>
         <span>${escapeHtml(track.artist)} / ${escapeHtml(track.duration)}</span>
-        ${track.audio_url ? `<audio controls preload="none" src="${escapeHtml(track.audio_url)}"></audio>` : `<small>音频地址暂不可用</small>`}
+        <small>${escapeHtml(track.audio_error || "点击曲目载入播放器试听")}</small>
       </div>
-      <button type="button" data-pixabay-download="${escapeHtml(track.audio_url || "")}" data-pixabay-title="${escapeHtml(track.title || "pixabay-industry")}" ${track.audio_url ? "" : "disabled"}>下载到本地</button>
+      <button type="button" data-pixabay-download="${escapeHtml(track.audio_url || "")}" data-pixabay-title="${escapeHtml(track.title || "pixabay-industry")}" data-pixabay-artist="${escapeHtml(track.artist || "Pixabay")}">${track.is_mock_audio ? "模拟下载到本地" : "下载到本地"}</button>
     </article>
   `).join("");
 }
-async function loadPixabayTracks() {
+async function loadPixabayTracks(query = "") {
   const list = $("pixabayTrackList");
+  const normalizedQuery = String(query || "industry").trim() || "industry";
+  bgmLibraryState.pixabayQuery = normalizedQuery;
   list.innerHTML = loadingInline("正在抓取 Pixabay industry...");
   try {
-    const data = await api("/api/video-matrix/pixabay/industry");
+    const data = await api(`/api/video-matrix/pixabay/industry?q=${encodeURIComponent(normalizedQuery)}`);
     bgmLibraryState.pixabay = data.tracks || [];
+    bgmLibraryState.currentPixabayTrack = bgmLibraryState.pixabay.find((track) => track.audio_url) || null;
     list.innerHTML = renderPixabayTracks();
+    syncPixabayPlayer();
+    list.querySelectorAll("[data-pixabay-index]").forEach((item) => {
+      item.addEventListener("click", () => selectPixabayTrack(Number(item.dataset.pixabayIndex || 0)));
+    });
     list.querySelectorAll("[data-pixabay-download]").forEach((button) => {
-      button.onclick = () => downloadPixabayTrack(button);
+      button.onclick = (event) => {
+        event.stopPropagation();
+        downloadPixabayTrack(button);
+      };
     });
     bindExclusiveBgmAudioPlayback($("bgmLibraryPopover"));
   } catch (error) {
     list.textContent = error.message;
   }
 }
-async function downloadPixabayTrack(button) {
-  const url = button.dataset.pixabayDownload || "";
-  if (!url) return;
+function selectPixabayTrack(index) {
+  const track = bgmLibraryState.pixabay[index];
+  if (!track) return;
+  bgmLibraryState.currentPixabayTrack = track;
+  $("pixabayTrackList").innerHTML = renderPixabayTracks();
+  $("pixabayTrackList").querySelectorAll("[data-pixabay-index]").forEach((item) => {
+    item.addEventListener("click", () => selectPixabayTrack(Number(item.dataset.pixabayIndex || 0)));
+  });
+  $("pixabayTrackList").querySelectorAll("[data-pixabay-download]").forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      downloadPixabayTrack(button);
+    };
+  });
+  syncPixabayPlayer(true);
+}
+function syncPixabayPlayer(autoplay = false) {
+  const track = bgmLibraryState.currentPixabayTrack || {};
+  const player = $("pixabayPlayer");
+  if (!player) return;
+  $("pixabayCurrentTitle").textContent = track.title || "等待选择音频";
+  $("pixabayCurrentArtist").textContent = track.artist ? `${track.artist} / ${track.duration || ""}` : "点击下方曲目试听";
+  player.src = track.audio_url || "";
+  $("downloadCurrentPixabay").disabled = !track.audio_url;
+  $("downloadCurrentPixabay").textContent = track.is_mock_audio ? "模拟下载当前到本地" : "下载当前到本地";
+  if (autoplay && track.audio_url) player.play?.().catch(() => {});
+}
+async function downloadPixabayTrack(button, explicitTrack = null) {
+  const track = explicitTrack || bgmLibraryState.pixabay.find((item) => item.audio_url === button.dataset.pixabayDownload) || {};
+  const url = track.is_mock_audio ? "" : (track.audio_url || button.dataset.pixabayDownload || "");
+  const title = track.title || button.dataset.pixabayTitle || "pixabay-industry";
   const label = button.textContent;
   button.disabled = true;
   button.classList.add("is-loading");
-  button.innerHTML = buttonLoadingInline("下载中...");
+  button.innerHTML = buttonLoadingInline(url ? "下载中..." : "模拟写入中...");
   try {
-    const result = await api("/api/video-matrix/bgm/download", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({url, filename: `${button.dataset.pixabayTitle || "pixabay-industry"}.mp3`}),
-    });
+    const result = url
+      ? await api("/api/video-matrix/bgm/download", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({url, filename: `${title}.mp3`}),
+      })
+      : await api("/api/video-matrix/bgm/mock-download", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({filename: `${title}.mp3`, title, artist: track.artist || button.dataset.pixabayArtist || "Pixabay"}),
+      });
     button.textContent = `已下载：${result.filename}`;
     const data = await api("/api/video-matrix/state");
     state = data.ui_state; settings = data.settings;

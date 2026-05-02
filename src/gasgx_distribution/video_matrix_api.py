@@ -20,6 +20,11 @@ from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional local dependency
+    load_dotenv = None
+
 from . import service
 from .video_matrix.cover import render_cover_preview_image
 from .video_matrix.cover_templates import DEFAULT_COVER_TEMPLATE_ID, load_cover_templates, require_cover_template
@@ -58,6 +63,15 @@ PIXABAY_INDUSTRY_TRACKS = [
     {"title": "Visite rapide dans l'industrie", "artist": "Jean-Paul-V", "duration": "4:00", "source_url": "https://pixabay.com/music/search/industry/"},
 ]
 PIXABAY_AUDIO_PATTERN = re.compile(r"https://cdn\.pixabay\.com/download/audio/[^\"'\\<>\s]+")
+PIXABAY_API_AUDIO_ENDPOINT = "https://pixabay.com/api/audio/"
+MOCK_AUDIO_URLS = [
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+]
+
+if load_dotenv is not None:
+    load_dotenv(ROOT / ".env")
 
 router = APIRouter(prefix="/api/video-matrix", tags=["video-matrix"])
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -81,12 +95,18 @@ class BgmDownloadPayload(BaseModel):
     filename: str = ""
 
 
+class BgmMockDownloadPayload(BaseModel):
+    filename: str = ""
+    title: str = ""
+    artist: str = ""
+
+
 def _video_matrix_app_setting(default: Any = None) -> Any:
     if service.brand_database_backend() != "supabase":
         return default
     try:
         return service._app_setting("video_matrix_state", default)
-    except service.SupabaseError:
+    except Exception:
         return default
 
 
@@ -95,9 +115,24 @@ def _save_video_matrix_app_setting(payload: Any) -> bool:
         return False
     try:
         service._save_app_setting("video_matrix_state", payload)
-    except service.SupabaseError:
+    except Exception:
         return False
     return True
+
+
+def _sync_video_matrix_job(job_id: str, payload: dict[str, Any]) -> None:
+    if service.brand_database_backend() != "supabase":
+        return
+    try:
+        service._brand_supabase().update(
+            "video_matrix_jobs",
+            {**payload, "updated_at": service.now_ts()},
+            filters={"job_key": job_id},
+        )
+    except Exception:
+        # Active render progress is primarily local. A transient Supabase outage
+        # must not freeze polling or abort the background render worker.
+        return
 
 
 def _persist_video_matrix_state(payload: Any) -> None:
@@ -575,13 +610,75 @@ def local_bgm_file(filename: str) -> FileResponse:
 
 
 @router.get("/pixabay/industry")
-def pixabay_industry_tracks() -> dict[str, Any]:
+def pixabay_industry_tracks(q: str = "industry") -> dict[str, Any]:
+    query = (q or "industry").strip()
+    api_tracks, api_error = _pixabay_audio_api_tracks(query)
+    source_tracks = api_tracks or _fallback_pixabay_tracks(query)
     tracks = []
-    for track in PIXABAY_INDUSTRY_TRACKS[:10]:
+    for index, track in enumerate(source_tracks[:10]):
         item = dict(track)
-        item["audio_url"] = _resolve_pixabay_audio_url(str(item.get("source_url") or ""))
+        if not item.get("audio_url"):
+            item["audio_url"] = _resolve_pixabay_audio_url(str(item.get("source_url") or ""))
+        if not item.get("audio_url"):
+            item["audio_url"] = MOCK_AUDIO_URLS[index % len(MOCK_AUDIO_URLS)]
+            item["is_mock_audio"] = True
+            item["audio_error"] = "Pixabay 音频暂不可直连，已切换模拟试听源"
         tracks.append(item)
-    return {"tracks": tracks, "source_url": "https://pixabay.com/music/search/industry/"}
+    return {
+        "tracks": tracks,
+        "source_url": f"https://pixabay.com/music/search/{quote(query)}/",
+        "query": query,
+        "api_status": "ok" if api_tracks else "fallback",
+        "api_error": api_error,
+    }
+
+
+def _fallback_pixabay_tracks(query: str) -> list[dict[str, Any]]:
+    query_lower = query.lower()
+    source_tracks = [
+        track for track in PIXABAY_INDUSTRY_TRACKS
+        if not query_lower
+        or query_lower == "industry"
+        or query_lower in f"{track.get('title', '')} {track.get('artist', '')}".lower()
+    ]
+    return source_tracks or PIXABAY_INDUSTRY_TRACKS
+
+
+def _pixabay_audio_api_tracks(query: str) -> tuple[list[dict[str, Any]], str]:
+    api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
+    if not api_key:
+        return [], "未配置 PIXABAY_API_KEY"
+    url = f"{PIXABAY_API_AUDIO_ENDPOINT}?key={quote(api_key)}&q={quote(query or 'industry')}&per_page=10"
+    request = UrlRequest(url, headers={"Accept": "application/json", "User-Agent": "GasGx Video Distribution/0.1"})
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read(2 * 1024 * 1024).decode("utf-8", errors="ignore"))
+    except Exception as exc:
+        return [], f"Pixabay 音频 API 不可用：{exc}"
+    hits = payload.get("hits") if isinstance(payload, dict) else None
+    if not isinstance(hits, list):
+        return [], "Pixabay 音频 API 未返回 hits"
+    tracks = []
+    for hit in hits[:10]:
+        if not isinstance(hit, dict):
+            continue
+        audio_url = str(hit.get("audio") or hit.get("audioURL") or hit.get("previewURL") or hit.get("webformatURL") or "")
+        tracks.append({
+            "title": str(hit.get("title") or hit.get("tags") or "Pixabay audio"),
+            "artist": str(hit.get("user") or "Pixabay"),
+            "duration": _format_seconds(hit.get("duration")),
+            "source_url": str(hit.get("pageURL") or f"https://pixabay.com/music/search/{quote(query)}/"),
+            "audio_url": audio_url,
+        })
+    return tracks, "" if tracks else "Pixabay 音频 API 没有返回曲目"
+
+
+def _format_seconds(value: Any) -> str:
+    try:
+        seconds = int(value)
+    except Exception:
+        return str(value or "")
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 @lru_cache(maxsize=64)
@@ -630,6 +727,23 @@ def download_bgm(payload: BgmDownloadPayload) -> dict[str, Any]:
     return {"ok": True, "filename": target.name, "path": str(target.resolve())}
 
 
+@router.post("/bgm/mock-download")
+def mock_download_bgm(payload: BgmMockDownloadPayload) -> dict[str, Any]:
+    filename = _safe_bgm_filename(payload.filename or f"{payload.title or 'pixabay-mock'}.mp3")
+    if not filename:
+        filename = _safe_bgm_filename("pixabay-mock.mp3")
+    target = BGM_DIR / filename
+    target.parent.mkdir(parents=True, exist_ok=True)
+    title = payload.title or Path(filename).stem
+    artist = payload.artist or "Pixabay mock"
+    content = (
+        "ID3\x04\x00\x00\x00\x00\x00\x21"
+        f"GasGx simulated MP3 download\nTitle: {title}\nArtist: {artist}\n"
+    ).encode("utf-8", errors="ignore")
+    target.write_bytes(content)
+    return {"ok": True, "filename": target.name, "path": str(target.resolve()), "mock": True}
+
+
 @router.post("/generate")
 async def generate(
     payload: str = Form(...),
@@ -644,18 +758,26 @@ async def generate(
     source_root = await _resolve_source_root(request, temp_root, source_files or [])
     _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": ""}
     if service.brand_database_backend() == "supabase":
-        service._brand_supabase().insert(
-            "video_matrix_jobs",
-            {"job_key": job_id, "status": "queued", "progress": 0, "message": "Queued", "request_json": request, "assets_json": [], "error": "", "created_at": service.now_ts(), "updated_at": service.now_ts()},
-        )
+        try:
+            service._brand_supabase().insert(
+                "video_matrix_jobs",
+                {"job_key": job_id, "status": "queued", "progress": 0, "message": "Queued", "request_json": request, "assets_json": [], "error": "", "created_at": service.now_ts(), "updated_at": service.now_ts()},
+            )
+        except Exception:
+            pass
     _executor.submit(_run_generate_job, job_id, request, bgm_path, source_root)
     return {"job_id": job_id}
 
 
 @router.get("/jobs/{job_id}")
 def job_status(job_id: str) -> dict[str, Any]:
+    if job_id in _jobs:
+        return _jobs[job_id]
     if service.brand_database_backend() == "supabase":
-        row = service._brand_supabase().select_one("video_matrix_jobs", filters={"job_key": job_id})
+        try:
+            row = service._brand_supabase().select_one("video_matrix_jobs", filters={"job_key": job_id})
+        except Exception:
+            raise HTTPException(status_code=503, detail="Video matrix job database is temporarily unavailable")
         if row is None:
             raise HTTPException(status_code=404, detail="Unknown job")
         return {
@@ -665,9 +787,7 @@ def job_status(job_id: str) -> dict[str, Any]:
             "assets": row.get("assets_json") or [],
             "error": row.get("error") or "",
         }
-    if job_id not in _jobs:
-        raise HTTPException(status_code=404, detail="Unknown job")
-    return _jobs[job_id]
+    raise HTTPException(status_code=404, detail="Unknown job")
 
 
 def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, source_root: Path | None) -> None:
@@ -693,8 +813,14 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
         cover_templates = video_state.get("cover_templates") or load_cover_templates(COVER_TEMPLATES_PATH)
         template_id = str(request.get("template_id") or DEFAULT_TEMPLATE_ID)
         cover_template_id = str(request.get("cover_template_id") or DEFAULT_COVER_TEMPLATE_ID)
-        template_config = templates.get(template_id) or next(iter(templates.values()))
-        cover_template_config = require_cover_template(cover_templates, cover_template_id)
+        request_template_config = request.get("template_config") if isinstance(request.get("template_config"), dict) else None
+        request_cover_template_config = request.get("cover_template_config") if isinstance(request.get("cover_template_config"), dict) else None
+        template_config = request_template_config or templates.get(template_id) or next(iter(templates.values()))
+        cover_template_config = (
+            require_cover_template({cover_template_id: request_cover_template_config}, cover_template_id)
+            if request_cover_template_config is not None
+            else require_cover_template(cover_templates, cover_template_id)
+        )
         ending_cover_template_config = request.get("ending_cover_template") if isinstance(request.get("ending_cover_template"), dict) else None
         ending_template_path = _resolve_ending_template_path(request)
         recent_limits = request.get("recent_limits") if request.get("source_mode") == "Category folders" else None
@@ -702,8 +828,7 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
 
         def progress(stage: str, value: float, message: str) -> None:
             _jobs[job_id].update({"status": "running", "stage": stage, "progress": value, "message": message})
-            if service.brand_database_backend() == "supabase":
-                service._brand_supabase().update("video_matrix_jobs", {"status": "running", "stage": stage, "progress": value, "message": message, "updated_at": service.now_ts()}, filters={"job_key": job_id})
+            _sync_video_matrix_job(job_id, {"status": "running", "stage": stage, "progress": value, "message": message})
 
         assets = run_pipeline(
             settings=settings,
@@ -748,15 +873,16 @@ def _run_generate_job(job_id: str, request: dict[str, Any], bgm_path: Path, sour
             ],
         }
         _jobs[job_id].update(complete_payload)
-        if service.brand_database_backend() == "supabase":
-            service._brand_supabase().update("video_matrix_jobs", {"status": "complete", "progress": 1, "message": complete_payload["message"], "assets_json": complete_payload["assets"], "updated_at": service.now_ts()}, filters={"job_key": job_id})
-        _save_generation_history(job_id, request, bgm_path, assets, settings, template_id, cover_template_id)
-        _save_signature_history(settings, existing_signatures | {asset.variant.signature for asset in assets})
-        _save_ui_state(_ui_state_from_request(request))
+        _sync_video_matrix_job(job_id, {"status": "complete", "progress": 1, "message": complete_payload["message"], "assets_json": complete_payload["assets"]})
+        try:
+            _save_generation_history(job_id, request, bgm_path, assets, settings, template_id, cover_template_id)
+            _save_signature_history(settings, existing_signatures | {asset.variant.signature for asset in assets})
+            _save_ui_state(_ui_state_from_request(request))
+        except Exception as exc:
+            _jobs[job_id]["warning"] = f"Generated videos are complete, but history sync failed: {exc}"
     except Exception as exc:  # pragma: no cover - surfaced through job endpoint
         _jobs[job_id].update({"status": "error", "error": str(exc), "message": str(exc)})
-        if service.brand_database_backend() == "supabase":
-            service._brand_supabase().update("video_matrix_jobs", {"status": "error", "error": str(exc), "message": str(exc), "updated_at": service.now_ts()}, filters={"job_key": job_id})
+        _sync_video_matrix_job(job_id, {"status": "error", "error": str(exc), "message": str(exc)})
 
 
 async def _resolve_bgm_path(request: dict[str, Any], temp_root: Path, bgm_file: UploadFile | None) -> Path:
@@ -891,7 +1017,7 @@ def _recent_bgm_names(limit: int = 5000) -> set[str]:
             params={"limit": str(max(1, limit))},
             order="created_at.desc",
         )
-    except service.SupabaseError:
+    except Exception:
         return set()
     return {str(row.get("bgm_filename") or "").strip() for row in rows if str(row.get("bgm_filename") or "").strip()}
 
@@ -917,7 +1043,7 @@ def _load_generation_history(limit: int) -> dict[str, set[str]]:
             params={"limit": capped},
             order="created_at.desc",
         )
-    except service.SupabaseError:
+    except Exception:
         return history
     history["signatures"] = {str(row.get("signature") or "").strip() for row in assets if str(row.get("signature") or "").strip()}
     history["clip_ids"] = {str(row.get("clip_id") or "").strip() for row in segments if str(row.get("clip_id") or "").strip()}

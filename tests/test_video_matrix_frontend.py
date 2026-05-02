@@ -74,9 +74,19 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "audio_url" in app
     assert "downloadPixabayTrack" in app
     assert "data-pixabay-download" in app
-    assert "音频地址暂不可用" in app
+    assert "pixabaySearchInput" in app
+    assert "pixabayPlayer" in app
+    assert "downloadCurrentPixabay" in app
+    assert "selectPixabayTrack" in app
+    assert "syncPixabayPlayer" in app
+    assert "track.audio_error" in app
+    assert "/api/video-matrix/bgm/mock-download" in app
+    assert "模拟下载到本地" in app
+    assert "模拟下载当前到本地" in app
+    assert "track.is_mock_audio" in app
+    assert "点击曲目载入播放器试听" in app
     assert "loadPixabayTracks" in app
-    assert 'loadPixabayTracks();' in app
+    assert 'loadPixabayTracks(bgmLibraryState.pixabayQuery || "industry")' in app
     assert "/api/video-matrix/pixabay/industry" in app
     assert "Pixabay industry" in app
     assert "pixabay-track-list" in app
@@ -320,10 +330,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "color-picker-icon" in app
     assert "color-current-dot" in app
     assert app.index('data-value="right" title="右对齐">右齐') < app.index('title="文字颜色"') < app.index('data-visual-command="font-family"')
+    assert "z-index: 2;" in preview
+    assert ".vm-template-text.text-effect-typewriter.active" in preview
+    assert "border-right: 0;" in preview
+    assert "function pointerSelectionTarget(event, node)" in preview
+    assert "function pairedTextNode(target)" in preview
     assert '.vm-template-editable.active[data-template-target="sloganBar"]' in preview
     assert '.vm-template-editable.active[data-template-target="titleBar"]' in preview
-    assert '.vm-template-editable.active[data-template-target="hud"]' in preview
     assert '.vm-template-editable.active[data-template-target="hudBar"]' in preview
+    assert 'data-template-target="hud"></div>' in preview
     assert 'outline-color: #ff4053' in preview
     assert "pairedTextTarget(activeTarget)" in preview
     assert "pairedHudTarget(activeTarget)" in preview
@@ -420,7 +435,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'content: "\\2713"' in css
     assert "color: #071108" in css
     assert ".pixabay-track audio" in css
-    assert ".pixabay-track.audio-unavailable button" in css
+    assert ".pixabay-search-row" in css
+    assert ".pixabay-player-card" in css
+    assert ".pixabay-track.is-selected" in css
+    assert ".pixabay-track.is-mock-audio button" in css
+    assert "border: 1px dashed rgba(93, 214, 44, .48)" in css
     assert ".bgm-download-box" not in css
     assert ".pixabay-refresh-button" in css
     assert ".pixabay-track-list" in css
@@ -626,6 +645,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "video_duration_max" in app
     assert 'renderRadio("targetFpsGroup", "target_fps"' in app
     assert 'target_fps: Number(radioValue("target_fps") || settings.target_fps || 60)' in app
+    assert "template_config: activeVideoTemplateSnapshot()" in app
+    assert "cover_template_config: activeCoverTemplateSnapshot()" in app
+    assert "function activeVideoTemplateSnapshot()" in app
+    assert "function activeCoverTemplateSnapshot()" in app
     assert "目标帧率" in app
     assert "${statePayload.target_fps}fps" in app
     assert ".sidebar-radio-field" in css

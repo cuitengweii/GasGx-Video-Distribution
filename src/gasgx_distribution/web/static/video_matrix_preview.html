@@ -189,6 +189,7 @@
             position: absolute;
             left: 0;
             width: 100%;
+            z-index: 1;
             border-radius: 10px;
             background: rgba(5, 17, 24, .68);
             cursor: move;
@@ -199,6 +200,7 @@
             position: absolute;
             left: 0;
             width: 100%;
+            z-index: 1;
             border-radius: 10px;
             background: rgba(5, 17, 24, .68);
             cursor: move;
@@ -217,6 +219,7 @@
 
         .vm-template-text {
             position: absolute;
+            z-index: 2;
             max-width: 340px;
             color: #fff;
             font-weight: 900;
@@ -249,6 +252,12 @@
             overflow: hidden;
             border-right: 2px solid currentColor;
             animation: vmTextType 1.35s steps(var(--text-effect-steps, 24), end) both, vmTextCaret .7s step-end infinite;
+        }
+
+        .vm-template-text.text-effect-typewriter.active,
+        .vm-template-text.text-effect-typewriter.is-editing {
+            border-right: 0;
+            animation: none;
         }
 
         .vm-template-text.text-effect-pop {
@@ -301,7 +310,6 @@
 
         .vm-template-editable.active[data-template-target="sloganBar"],
         .vm-template-editable.active[data-template-target="titleBar"],
-        .vm-template-editable.active[data-template-target="hud"],
         .vm-template-editable.active[data-template-target="hudBar"] {
             outline-color: #ff4053;
             box-shadow: 0 0 0 2px rgba(255, 64, 83, .35);
@@ -1266,12 +1274,13 @@
         const node = document.getElementById(id);
         node.hidden = !visible;
         if (!visible) return;
+        const safeOpacity = Math.max(0, Math.min(1, Number(opacity ?? 0)));
         node.style.left = designX(x || 0);
         node.style.top = designY(y);
         node.style.height = designY(height);
         node.style.width = designX(width || 1080);
-        node.style.background = color || "rgba(5, 17, 24, .68)";
-        node.style.opacity = opacity;
+        node.style.background = safeOpacity <= 0 ? "transparent" : (color || "rgba(5, 17, 24, .68)");
+        node.style.opacity = safeOpacity <= 0 ? 1 : safeOpacity;
         node.style.borderRadius = designRadius(radius);
       }
 
@@ -1280,7 +1289,7 @@
           node.addEventListener("pointerdown", beginDrag);
           node.addEventListener("click", (event) => {
             event.stopPropagation();
-            selectTarget(node.dataset.templateTarget);
+            selectTarget(pointerSelectionTarget(event, node));
           });
         });
         document.querySelectorAll(".vm-template-text").forEach((node) => {
@@ -1386,6 +1395,21 @@
         return target;
       }
 
+      function pointerSelectionTarget(event, node) {
+        const target = node.dataset.templateTarget;
+        if (!isBackgroundTarget(target)) return target;
+        const textNode = pairedTextNode(target);
+        if (!textNode || textNode.hidden) return target;
+        const rect = textNode.getBoundingClientRect();
+        const insideText = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+        return insideText ? textNode.dataset.templateTarget : target;
+      }
+
+      function pairedTextNode(target) {
+        const textTarget = pairedTextTarget(target);
+        return document.querySelector(`[data-template-target="${textTarget}"].vm-template-text`);
+      }
+
       function ensureTextTarget() {
         const target = pairedTextTarget(activeTarget);
         if (activeTarget !== target) selectTarget(target);
@@ -1447,10 +1471,11 @@
         if (editingTextNode) return;
         if (event.currentTarget.isContentEditable) return;
         if (event.target.closest("#visualToolbar")) return;
-        const target = event.currentTarget.dataset.templateTarget;
+        const target = pointerSelectionTarget(event, event.currentTarget);
         selectTarget(target);
-        const rect = event.currentTarget.getBoundingClientRect();
-        dragging = { target, dx: event.clientX - rect.left, dy: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, active: false };
+        const dragNode = document.querySelector(`[data-template-target="${target}"].vm-template-editable`) || event.currentTarget;
+        const rect = dragNode.getBoundingClientRect();
+        dragging = { target, node: dragNode, dx: event.clientX - rect.left, dy: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, active: false };
         event.currentTarget.setPointerCapture(event.pointerId);
         event.currentTarget.addEventListener("pointermove", dragMove);
         event.currentTarget.addEventListener("pointerup", endDrag, { once: true });
@@ -1467,7 +1492,7 @@
         const phoneRect = phone.getBoundingClientRect();
         const rawX = Math.max(0, Math.min(393, event.clientX - phoneRect.left - dragging.dx));
         const rawY = Math.max(0, Math.min(852, event.clientY - phoneRect.top - dragging.dy));
-        const snapped = snapToCenter(rawX, rawY, event.currentTarget);
+        const snapped = snapToCenter(rawX, rawY, dragging.node || event.currentTarget);
         const updates = isBackgroundTarget(dragging.target)
           ? barPositionUpdates(dragging.target, snapped.x, snapped.y)
           : targetPositionUpdates(dragging.target, snapped.x, snapped.y);
