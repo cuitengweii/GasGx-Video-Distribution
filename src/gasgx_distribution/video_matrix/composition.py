@@ -48,7 +48,7 @@ def plan_variants(
         history_collision: VideoVariant | None = None
         while attempts < attempts_limit:
             attempts += 1
-            segments = _pick_segments(buckets, beat_grid, rng, sequence, historical_clip_ids)
+            segments = _pick_segments(buckets, beat_grid, rng, sequence, historical_clip_ids, float(settings.video_duration_max))
             title = rng.choice(settings.titles)
             slogan = rng.choice(settings.slogans)
             lut_strength = round(1.0 + rng.uniform(-0.03, 0.03), 4)
@@ -93,6 +93,7 @@ def _pick_segments(
     rng: random.Random,
     sequence: list[tuple[str, float]],
     recent_clip_ids: set[str],
+    max_total_duration: float,
 ) -> list[SegmentPlan]:
     beat_pairs = list(zip(beat_grid, beat_grid[1:]))
     if not beat_pairs:
@@ -100,9 +101,14 @@ def _pick_segments(
     selected: list[SegmentPlan] = []
     beat_index = 0
     for index, (category, target_window) in enumerate(sequence):
+        used_duration = sum(segment.duration for segment in selected)
+        remaining_duration = max(0.0, max_total_duration - used_duration)
+        if remaining_duration <= 0.0:
+            break
         clip = _pick_clip(buckets[category], rng, recent_clip_ids)
-        start_time = max(0.0, round(rng.uniform(0.0, max(clip.duration - target_window, 0.0)), 3))
-        duration = _align_duration(target_window, beat_pairs, beat_index)
+        target_duration = min(target_window, remaining_duration)
+        start_time = max(0.0, round(rng.uniform(0.0, max(clip.duration - target_duration, 0.0)), 3))
+        duration = min(_align_duration(target_duration, beat_pairs, beat_index), remaining_duration)
         beat_index = min(len(beat_pairs) - 1, beat_index + max(1, int(duration / 0.45)))
         selected.append(
             SegmentPlan(

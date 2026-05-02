@@ -66,7 +66,7 @@ def run_pipeline(
             hud_payload = build_hud_payload(settings)
     else:
         hud_payload = build_hud_payload(settings)
-    active_composition_sequence = composition_sequence or settings.composition_sequence
+    active_composition_sequence = _fit_composition_sequence_to_max_duration(composition_sequence or settings.composition_sequence, settings.video_duration_max)
     beat_duration_hint = _beat_duration_hint(settings, active_composition_sequence, cover_intro_seconds, outro_seconds)
     _notify(progress_callback, "beat", 0.30, "Analyzing BGM beat grid")
     beat_payload = {
@@ -224,8 +224,36 @@ def _beat_duration_hint(
             segment_total += float(item.get("duration", 0))
         except (AttributeError, TypeError, ValueError):
             continue
-    composition_total = segment_total + max(0.0, cover_intro_seconds) + max(0.0, outro_seconds)
-    return max(float(settings.video_duration_max), composition_total)
+    composition_total = segment_total + max(0.0, cover_intro_seconds)
+    return min(float(settings.video_duration_max), max(float(settings.video_duration_min), composition_total))
+
+
+def _fit_composition_sequence_to_max_duration(
+    composition_sequence: list[dict[str, Any]] | None,
+    max_duration: float,
+) -> list[dict[str, Any]]:
+    sequence = [dict(item) for item in composition_sequence or []]
+    target = max(0.1, float(max_duration))
+    segment_total = 0.0
+    for item in sequence:
+        try:
+            segment_total += max(0.0, float(item.get("duration", 0)))
+        except (TypeError, ValueError):
+            continue
+    if segment_total <= target or segment_total <= 0:
+        return sequence
+    scale = target / segment_total
+    fitted: list[dict[str, Any]] = []
+    for item in sequence:
+        next_item = dict(item)
+        try:
+            duration = max(0.0, float(next_item.get("duration", 0)))
+        except (TypeError, ValueError):
+            fitted.append(next_item)
+            continue
+        next_item["duration"] = duration * scale
+        fitted.append(next_item)
+    return fitted
 
 
 def _resolve_output_root(settings: ProjectSettings, output_root: Path | None) -> Path:

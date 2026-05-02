@@ -6,7 +6,7 @@ let selectedCover = "";
 let selectedVideoTemplate = "";
 let settings = {};
 let lastPreviewPath = "";
-let bgmLibraryState = { local: [], directory: "", links: [], pixabay: [], pixabayQuery: "industry", currentPixabayTrack: null };
+let bgmLibraryState = { local: [], directory: "", links: [] };
 let endingTemplateState = { local: [], directory: "" };
 let endingPreviewOverrideName = "";
 let pendingTemplateSave = "";
@@ -15,6 +15,9 @@ let modelImages = [];
 let selectedModelImageUrl = "";
 let sourcePreviewVideos = [];
 let endingModeLoading = "";
+let displayedJobPercent = 0;
+let jobProgressTimer = null;
+let lastJobSnapshot = null;
 
 const jobStepLabels = [
   ["queued", "任务提交", 0, ["queued"]],
@@ -33,7 +36,7 @@ const jobStepLabels = [
 const jobMessages = {
   queued: "任务已提交，正在等待开始。",
   ingestion: "正在读取并整理素材视频，请确认素材目录里有视频文件。",
-  hud: "正在准备视频里的 HUD 数据和文字信息。",
+  hud: "正在准备视频里的字幕背板数据和文字信息。",
   beat: "正在分析背景音乐节奏，用于卡点混剪。",
   planning: "正在规划每条视频的素材组合，避免重复。",
   render: "正在调用 FFmpeg 生成视频，这一步耗时最长。",
@@ -45,7 +48,7 @@ const jobMessages = {
 const backendJobMessageMap = {
   "Queued": "任务已提交，正在排队准备。请保持当前页面打开，系统会自动开始处理。",
   "Collecting and normalizing source clips": "正在扫描并整理素材视频，按分类目录读取可用片段。",
-  "Preparing GasGx data HUD": "正在准备视频里的 HUD 数据、标题和字幕字段。",
+  "Preparing GasGx data HUD": "正在准备视频里的字幕背板数据、标题和字幕字段。",
   "Analyzing BGM beat grid": "正在分析背景音乐节拍网格，用于后续卡点混剪。",
   "Planning de-duplicated video variants": "正在规划每条视频的素材组合，避免重复使用同一片段。",
   "Finalizing preview assets and manifests": "正在整理导出的 MP4、预览文件和清单。",
@@ -54,11 +57,11 @@ const backendJobMessageMap = {
 const coverFields = [
   ["name", "模板名称", "text"], ["brand", "品牌文字", "text"], ["eyebrow", "眉标文字", "text"], ["cta", "CTA 按钮文字", "text"],
   ["align", "文字对齐", "select"], ["brand_y", "品牌 Y", "range", 0, 420], ["headline_y", "主标题 Y", "range", 0, 1320],
-  ["subhead_y", "副标题 Y", "range", 0, 1500], ["hud_y", "HUD Y", "range", 0, 1780], ["cta_y", "CTA Y", "range", 0, 1840],
+  ["subhead_y", "副标题 Y", "range", 0, 1500], ["hud_y", "字幕背板 Y", "range", 0, 1780], ["cta_y", "CTA Y", "range", 0, 1840],
   ["primary_color", "主文字色", "color"], ["secondary_color", "副文字色", "color"], ["accent_color", "强调色", "color"],
-  ["tint_color", "背景罩色", "color"], ["gradient_color", "渐变色", "color"], ["panel_color", "HUD 面板色", "color"],
+  ["tint_color", "背景罩色", "color"], ["gradient_color", "渐变色", "color"], ["panel_color", "字幕背板面板色", "color"],
   ["tint_opacity", "背景罩透明度", "rangeFloat", 0, 1], ["gradient_opacity", "渐变透明度", "rangeFloat", 0, 1],
-  ["panel_opacity", "HUD 面板透明度", "rangeFloat", 0, 1],
+  ["panel_opacity", "字幕背板面板透明度", "rangeFloat", 0, 1],
 ];
 const videoTemplateFields = [
   ["name", "模板名称", "text"],
@@ -1277,19 +1280,22 @@ function visualTemplateToolbarHtml(template) {
         <select data-visual-command="font-family">${fontOptions}</select>
         <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
       </div>
-      <div class="visual-control-section visual-hud-controls" aria-label="HUD调整区">
-        <div class="visual-section-title">HUD调整区</div>
+      <div class="visual-control-section visual-hud-controls" aria-label="字幕背板调整区">
+        <div class="visual-section-title">字幕背板调整区</div>
         <button type="button" data-visual-command="width-down" title="缩小背景宽度">W-</button>
         <button type="button" data-visual-command="width-up" title="放大背景宽度">W+</button>
         <button type="button" data-visual-command="height-down" title="缩小背景高度">H-</button>
         <button type="button" data-visual-command="height-up" title="放大背景高度">H+</button>
-        <label class="color-swatch-button" title="HUD 背景色">
+        <button type="button" data-visual-command="bar-align" data-value="left" title="字幕背板左对齐">左齐</button>
+        <button type="button" data-visual-command="bar-align" data-value="center" title="字幕背板居中对齐">居中</button>
+        <button type="button" data-visual-command="bar-align" data-value="right" title="字幕背板右对齐">右齐</button>
+        <label class="color-swatch-button" title="字幕背板背景色">
           ${colorPickerIconSvg()}
           <span class="color-current-dot" style="background:${escapeHtml(hudColor)}"></span>
-          <input data-visual-command="hud-bg-color" type="color" value="${escapeHtml(hudColor)}" aria-label="HUD 背景色">
+          <input data-visual-command="hud-bg-color" type="color" value="${escapeHtml(hudColor)}" aria-label="字幕背板背景色">
         </label>
-        <label class="visual-opacity-control">HUD 透明度<input data-visual-command="opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(hudOpacity.toFixed(2))}"><output>${escapeHtml(hudOpacity.toFixed(2))}</output></label>
-        <label class="visual-opacity-control">HUD 圆角<input data-visual-command="hud-radius" type="range" min="0" max="100" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
+        <label class="visual-opacity-control">字幕背板透明度<input data-visual-command="opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(hudOpacity.toFixed(2))}"><output>${escapeHtml(hudOpacity.toFixed(2))}</output></label>
+        <label class="visual-opacity-control">字幕背板圆角<input data-visual-command="hud-radius" type="range" min="0" max="100" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
       </div>
     </div>`;
 }
@@ -1952,6 +1958,8 @@ async function generate() {
     const statePayload = collectState();
     if (!(await runPreflightChecks(statePayload))) return;
     if (!(await confirmGeneration(statePayload))) return;
+    displayedJobPercent = 0;
+    showGenerationWaitOverlay(true, { progress: 0, message: "正在提交生成任务..." });
     button.disabled = true;
     button.textContent = "提交中...";
     updateJobStatus({ status: "queued", stage: "queued", progress: 0, message: "正在提交生成任务..." });
@@ -1963,9 +1971,12 @@ async function generate() {
     [...($("sourceFiles")?.files || [])].forEach((file) => form.append("source_files", file));
     const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
     updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
+    startJobProgressTicker();
     pollJob(job_id);
   } catch (error) {
     updateJobStatus({ status: "error", stage: "error", progress: 0, message: error.message, error: error.message });
+    stopJobProgressTicker();
+    showGenerationWaitOverlay(false);
   } finally {
     button.disabled = false;
     if (!lastPreviewPath) button.textContent = "立即生成";
@@ -1980,14 +1991,19 @@ async function pollJob(jobId) {
   const job = await api(`/api/video-matrix/jobs/${jobId}`);
   updateJobStatus(job);
   if (job.status === "complete") {
+    stopJobProgressTicker();
     lastPreviewPath = job.assets?.[0]?.video_path || "";
     updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。点击下方按钮可预览第一条视频在视频号里的展示效果。`});
+    showGenerationWaitOverlay(false);
     const button = $("generateBtn");
     if (lastPreviewPath) {
       button.dataset.mode = "preview";
       button.textContent = "预览视频";
     }
-  } else if (job.status !== "error") setTimeout(() => pollJob(jobId), 1200);
+  } else if (job.status === "error") {
+    stopJobProgressTicker();
+    showGenerationWaitOverlay(false);
+  } else setTimeout(() => pollJob(jobId), 1200);
 }
 
 async function runPreflightChecks(statePayload) {
@@ -2022,6 +2038,7 @@ async function runPreflightChecks(statePayload) {
     const status = result?.status || "pass";
     if (status === "fail") hasFail = true;
     setPreflightStepStatus(index, status, result?.detail || checks[index].readyText);
+    revealNextPreflightStep(index + 1);
     await wait(50);
   }
 
@@ -2245,20 +2262,20 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
     },
     {
       title: "生成文案",
-      pendingText: "检查 HUD、片尾文案和语言设置。",
+      pendingText: "检查字幕背板、片尾文案和语言设置。",
       readyText: "文案字段可用。",
-      configText: `语言 ${statePayload.copy_language || "未设置"} / HUD ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"}`,
+      configText: `语言 ${statePayload.copy_language || "未设置"} / 字幕背板 ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"}`,
       run: async (index) => {
         await animatePreflightProgress(index, 20, "检查语言设置...");
         if (!["zh", "en", "ru"].includes(statePayload.copy_language || "")) return { status: "fail", detail: "文案语言配置无效。" };
-        await animatePreflightProgress(index, 55, "检查 HUD 和片尾文案...");
+        await animatePreflightProgress(index, 55, "检查字幕背板和片尾文案...");
         const emptyFields = [
-          ["HUD 文本", statePayload.hud_text],
+          ["字幕背板文本", statePayload.hud_text],
           ["片尾文案", statePayload.follow_text],
         ].filter(([, value]) => !String(value || "").trim()).map(([label]) => label);
         await animatePreflightProgress(index, 100, "文案字段检查完成。");
         if (emptyFields.length) return { status: "warn", detail: `${emptyFields.join("、")}为空，仍可生成但画面文案会变少。` };
-        return { status: "pass", detail: "HUD、片尾文案和语言设置可用。" };
+        return { status: "pass", detail: "字幕背板、片尾文案和语言设置可用。" };
       },
     },
     {
@@ -2332,6 +2349,13 @@ function setPreflightStepStatus(index, status, detail) {
   if (detailNode) detailNode.textContent = detail || "";
   if (status === "checking") setPreflightProgress(index, 0);
   if (status === "pass" || status === "warn" || status === "fail") setPreflightProgress(index, 100);
+  if (status === "checking") revealNextPreflightStep(index);
+}
+
+function revealNextPreflightStep(index) {
+  const node = document.querySelector(`[data-preflight-step="${index}"]`);
+  if (!node) return;
+  node.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
 function setPreflightProgress(index, percent) {
@@ -2411,7 +2435,7 @@ function generationConfirmHtml(statePayload) {
         <li>将候选素材归一化为 1080:1920、${statePayload.target_fps}fps 的短视频片段库。</li>
         <li>按“生成结构”的分类顺序和片段秒数，为每条视频抽取不同素材片段。</li>
         <li>分析本地背景音乐节拍，把片段切换点尽量对齐节奏窗口。</li>
-        <li>按当前模板、HUD 文本和片尾文案并行渲染，导出到最终视频目录。</li>
+        <li>按当前模板、字幕背板文本和片尾文案并行渲染，导出到最终视频目录。</li>
       </ol>
     </section>
   `;
@@ -2537,9 +2561,6 @@ function renderBgm(data) {
     local: localBgm,
     directory: localBgmDir,
     links: Object.values(data.bgm_library || {}),
-    pixabay: [],
-    pixabayQuery: bgmLibraryState.pixabayQuery || "industry",
-    currentPixabayTrack: bgmLibraryState.currentPixabayTrack || null,
   };
   $("bgmPanel").innerHTML = `
     <div class="bgm-label-row">
@@ -2562,21 +2583,20 @@ function toggleBgmLibraryPopover() {
   panel.classList.toggle("modal", !isHidden);
   document.body.classList.toggle("bgm-modal-open", !isHidden);
   if (isHidden) return;
-  const localList = bgmLibraryState.local.length
-    ? bgmLibraryState.local.map((name) => `
-      <li class="bgm-local-item ${name === selectedBgmLibraryId() ? "is-selected" : ""}" data-bgm-name="${escapeHtml(name)}">
-        <button type="button" class="bgm-local-select" data-bgm-select="${escapeHtml(name)}" aria-pressed="${name === selectedBgmLibraryId() ? "true" : "false"}" title="设为本次唯一背景音乐">
+  const selectedBgm = selectedBgmLibraryId();
+  const sortedLocalBgm = selectedBgm
+    ? [selectedBgm, ...bgmLibraryState.local.filter((name) => name !== selectedBgm)]
+    : bgmLibraryState.local;
+  const localList = sortedLocalBgm.length
+    ? sortedLocalBgm.map((name) => `
+      <li class="bgm-local-item ${name === selectedBgm ? "is-selected" : ""}" data-bgm-name="${escapeHtml(name)}">
+        <button type="button" class="bgm-local-select" data-bgm-select="${escapeHtml(name)}" aria-pressed="${name === selectedBgm ? "true" : "false"}" title="设为本次唯一背景音乐">
           <span class="bgm-select-check" aria-hidden="true"></span>
           <span>${escapeHtml(name)}</span>
         </button>
         <audio controls preload="none" src="/api/video-matrix/bgm/${encodeURIComponent(name)}"></audio>
       </li>`).join("")
     : "<li>暂无本地 MP3 文件</li>";
-  const pixabayList = bgmLibraryState.pixabay.length
-    ? renderPixabayTracks()
-    : `<span class="pixabay-empty">输入关键词后搜索 Pixabay 曲库。</span>`;
-  const currentPixabay = bgmLibraryState.currentPixabayTrack || bgmLibraryState.pixabay.find((track) => track.audio_url) || {};
-  const currentPixabayAudio = currentPixabay.audio_url || "";
   panel.innerHTML = `
     <div class="bgm-popover-head">
       <div>
@@ -2589,40 +2609,12 @@ function toggleBgmLibraryPopover() {
       <strong>本地曲库</strong>
       <ul>${localList}</ul>
     </section>
-    <section class="bgm-pixabay-section">
-      <strong>网络曲库</strong>
-      <div class="pixabay-search-row">
-        <input id="pixabaySearchInput" type="search" value="${escapeHtml(bgmLibraryState.pixabayQuery || "industry")}" placeholder="搜索 Pixabay 关键词，例如 industry" />
-        <button id="loadPixabayTracksInline" class="pixabay-refresh-button" type="button">搜索</button>
-      </div>
-      <div class="pixabay-player-card ${currentPixabayAudio ? "" : "is-empty"}">
-        <div class="pixabay-player-meta">
-          <strong id="pixabayCurrentTitle">${escapeHtml(currentPixabay.title || "等待选择音频")}</strong>
-          <small id="pixabayCurrentArtist">${escapeHtml(currentPixabay.artist ? `${currentPixabay.artist} / ${currentPixabay.duration || ""}` : "点击下方曲目试听")}</small>
-        </div>
-        <audio id="pixabayPlayer" controls preload="none" controlsList="nodownload" src="${escapeHtml(currentPixabayAudio)}"></audio>
-        <button id="downloadCurrentPixabay" type="button" ${currentPixabayAudio ? "" : "disabled"}>下载当前到本地</button>
-      </div>
-      <div id="pixabayTrackList" class="pixabay-track-list">${pixabayList}</div>
-    </section>
   `;
   $("toggleBgmLibrarySize").onclick = toggleBgmLibrarySize;
-  $("loadPixabayTracksInline")?.addEventListener("click", () => loadPixabayTracks($("pixabaySearchInput")?.value || ""));
-  $("pixabaySearchInput")?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") loadPixabayTracks(event.currentTarget.value || "");
-  });
-  $("downloadCurrentPixabay")?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    downloadPixabayTrack(event.currentTarget, bgmLibraryState.currentPixabayTrack);
-  });
   panel.querySelectorAll("[data-bgm-select]").forEach((button) => {
     button.onclick = () => selectBgmLibraryId(button.dataset.bgmSelect || "");
   });
-  panel.querySelectorAll("[data-pixabay-open]").forEach((button) => {
-    button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
-  });
   bindExclusiveBgmAudioPlayback(panel);
-  if (!bgmLibraryState.pixabay.length) loadPixabayTracks(bgmLibraryState.pixabayQuery || "industry");
 }
 function selectedBgmLibraryId() {
   return bgmLibraryState.local.includes(state.bgm_library_id) ? state.bgm_library_id : "";
@@ -2652,106 +2644,6 @@ function toggleBgmLibrarySize() {
   panel.classList.add("hidden");
   panel.classList.remove("modal");
   document.body.classList.remove("bgm-modal-open");
-}
-function renderPixabayTracks() {
-  const currentUrl = bgmLibraryState.currentPixabayTrack?.audio_url || "";
-  return bgmLibraryState.pixabay.slice(0, 10).map((track, index) => `
-    <article class="pixabay-track ${track.is_cdn_audio ? "is-cdn-audio" : ""} ${track.audio_url && track.audio_url === currentUrl ? "is-selected" : ""}" data-pixabay-index="${index}">
-      <div class="pixabay-track-main">
-        <strong>${index + 1}. ${escapeHtml(track.title)}</strong>
-        <span>${escapeHtml(track.artist)} / ${escapeHtml(track.duration)}</span>
-        <small>${escapeHtml(track.audio_error || "点击曲目载入播放器试听")}</small>
-      </div>
-      <button type="button" data-pixabay-download="${escapeHtml(track.audio_url || "")}" data-pixabay-title="${escapeHtml(track.title || "pixabay-industry")}" data-pixabay-artist="${escapeHtml(track.artist || "Pixabay")}">下载到本地</button>
-    </article>
-  `).join("");
-}
-async function loadPixabayTracks(query = "") {
-  const list = $("pixabayTrackList");
-  const normalizedQuery = String(query || "industry").trim() || "industry";
-  bgmLibraryState.pixabayQuery = normalizedQuery;
-  list.innerHTML = loadingInline("正在抓取 Pixabay industry...");
-  try {
-    const data = await api(`/api/video-matrix/pixabay/industry?q=${encodeURIComponent(normalizedQuery)}`);
-    bgmLibraryState.pixabay = data.tracks || [];
-    bgmLibraryState.currentPixabayTrack = bgmLibraryState.pixabay.find((track) => track.audio_url) || null;
-    list.innerHTML = renderPixabayTracks();
-    syncPixabayPlayer();
-    list.querySelectorAll("[data-pixabay-index]").forEach((item) => {
-      item.addEventListener("click", () => selectPixabayTrack(Number(item.dataset.pixabayIndex || 0)));
-    });
-    list.querySelectorAll("[data-pixabay-download]").forEach((button) => {
-      button.onclick = (event) => {
-        event.stopPropagation();
-        downloadPixabayTrack(button);
-      };
-    });
-    bindExclusiveBgmAudioPlayback($("bgmLibraryPopover"));
-  } catch (error) {
-    list.textContent = error.message;
-  }
-}
-function selectPixabayTrack(index) {
-  const track = bgmLibraryState.pixabay[index];
-  if (!track) return;
-  bgmLibraryState.currentPixabayTrack = track;
-  $("pixabayTrackList").innerHTML = renderPixabayTracks();
-  $("pixabayTrackList").querySelectorAll("[data-pixabay-index]").forEach((item) => {
-    item.addEventListener("click", () => selectPixabayTrack(Number(item.dataset.pixabayIndex || 0)));
-  });
-  $("pixabayTrackList").querySelectorAll("[data-pixabay-download]").forEach((button) => {
-    button.onclick = (event) => {
-      event.stopPropagation();
-      downloadPixabayTrack(button);
-    };
-  });
-  syncPixabayPlayer(true);
-}
-function syncPixabayPlayer(autoplay = false) {
-  const track = bgmLibraryState.currentPixabayTrack || {};
-  const player = $("pixabayPlayer");
-  if (!player) return;
-  $("pixabayCurrentTitle").textContent = track.title || "等待选择音频";
-  $("pixabayCurrentArtist").textContent = track.artist ? `${track.artist} / ${track.duration || ""}` : "点击下方曲目试听";
-  player.src = track.audio_url || "";
-  $("downloadCurrentPixabay").disabled = !track.audio_url;
-  $("downloadCurrentPixabay").textContent = "下载当前到本地";
-  if (autoplay && track.audio_url) player.play?.().catch(() => {});
-}
-async function downloadPixabayTrack(button, explicitTrack = null) {
-  const track = explicitTrack || bgmLibraryState.pixabay.find((item) => item.audio_url === button.dataset.pixabayDownload) || {};
-  const url = track.audio_url || button.dataset.pixabayDownload || "";
-  const title = track.title || button.dataset.pixabayTitle || "pixabay-industry";
-  const label = button.textContent;
-  button.disabled = true;
-  button.classList.add("is-loading");
-  button.innerHTML = buttonLoadingInline("下载中...");
-  try {
-    const result = await api("/api/video-matrix/bgm/download", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({url, filename: `${title}.mp3`}),
-      });
-    button.textContent = `已下载：${result.filename}`;
-    const data = await api("/api/video-matrix/state");
-    state = data.ui_state; settings = data.settings;
-    renderBgm(data);
-    const panel = $("bgmLibraryPopover");
-    panel.classList.remove("hidden");
-    panel.classList.add("modal");
-    document.body.classList.add("bgm-modal-open");
-    toggleBgmLibraryPopover();
-    toggleBgmLibraryPopover();
-  } catch (error) {
-    button.textContent = error.message;
-  } finally {
-    window.setTimeout(() => {
-      if (!button.isConnected) return;
-      button.disabled = false;
-      button.classList.remove("is-loading");
-      if (button.textContent !== label) button.textContent = label;
-    }, 1600);
-  }
 }
 function updateSourceMode() { $("uploadSourcesWrap")?.classList.toggle("hidden", true); }
 function renderRadio(containerId, name, options, selected, onchange) {
@@ -2792,8 +2684,11 @@ function bindRangeControl(idOrKey, onchange) {
 function setMulti(select, values) { [...select.options].forEach(o => o.selected = values.includes(o.value)); }
 function openFolder(path) { return api("/api/video-matrix/open-folder", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path})}); }
 function updateJobStatus(job) {
+  lastJobSnapshot = {...(lastJobSnapshot || {}), ...job};
   const stage = job.stage || job.status || "queued";
-  const percent = Math.max(0, Math.min(100, Math.round((job.progress || 0) * 100)));
+  const rawPercent = Math.max(0, Math.min(100, Math.round((job.progress || 0) * 100)));
+  const percent = job.status === "error" ? rawPercent : Math.max(displayedJobPercent, rawPercent);
+  displayedJobPercent = job.status === "complete" ? 100 : percent;
   const isError = job.status === "error";
   $("jobStatusTitle").textContent = localizedJobTitle(job, stage);
   $("jobPercent").textContent = `${percent}%`;
@@ -2806,6 +2701,41 @@ function updateJobStatus(job) {
     const active = stageKeys.includes(stage) && percent >= stepPercent && !done || key === stage || (stage === "render" && stageKeys.includes("render") && percent >= stepPercent && percent < 97);
     return `<li class="${done ? "done" : ""} ${active ? "active" : ""}"><span></span>${label}</li>`;
   }).join("");
+  updateGenerationWaitOverlay(job, percent);
+}
+function showGenerationWaitOverlay(visible, job = {}) {
+  const overlay = $("generationWaitOverlay");
+  if (!overlay) return;
+  overlay.classList.toggle("hidden", !visible);
+  if (visible) updateGenerationWaitOverlay(job, Math.max(displayedJobPercent, Math.round((job.progress || 0) * 100)));
+}
+function updateGenerationWaitOverlay(job, percent) {
+  const overlay = $("generationWaitOverlay");
+  if (!overlay || overlay.classList.contains("hidden")) return;
+  const stage = job.stage || job.status || "queued";
+  const value = Math.max(0, Math.min(100, Math.round(percent || 0)));
+  const title = $("generationWaitTitle");
+  const detail = $("generationWaitDetail");
+  const fill = $("generationWaitFill");
+  const label = $("generationWaitPercent");
+  if (title) title.textContent = localizedJobTitle(job, stage);
+  if (detail) detail.textContent = `${localizedJobMessage(job, stage)} 页面已锁定，防止误触。`;
+  if (fill) fill.style.width = `${value}%`;
+  if (label) label.textContent = `${value}%`;
+}
+function startJobProgressTicker() {
+  window.clearInterval(jobProgressTimer);
+  jobProgressTimer = window.setInterval(() => {
+    const current = displayedJobPercent;
+    const next = current < 95 ? current + 1 : current;
+    if (next !== current) {
+      updateJobStatus({ ...(lastJobSnapshot || { status: "running", stage: "render", message: "视频生成中，系统会以 1% 为单位持续刷新等待进度。" }), progress: next / 100 });
+    }
+  }, 1400);
+}
+function stopJobProgressTicker() {
+  window.clearInterval(jobProgressTimer);
+  jobProgressTimer = null;
 }
 function log(text) { updateJobStatus({ status: "running", stage: "queued", progress: 0, message: text }); }
 function localizedJobTitle(job, stage) {
@@ -2842,7 +2772,7 @@ function displayTemplateName(value) {
     .replace(/\bCenter\b/g, "居中")
     .replace(/\bBrand\b/g, "品牌")
     .replace(/\bClean Data\b/g, "清爽数据")
-    .replace(/\bImpact Hud\b/g, "冲击 HUD")
+    .replace(/\bImpact Hud\b/g, "冲击字幕背板")
     .replace(/_/g, " ");
 }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch])); }

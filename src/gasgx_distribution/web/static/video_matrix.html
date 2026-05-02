@@ -221,6 +221,15 @@
         </div>
       </div>
     </div>
+    <div id="generationWaitOverlay" class="generation-wait-overlay hidden" role="status" aria-live="polite" aria-label="视频生成中，请等待">
+      <div class="generation-wait-panel">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <strong id="generationWaitTitle">正在生成视频</strong>
+        <small id="generationWaitDetail">已锁定当前页面，防止误触。请保持页面打开。</small>
+        <div class="job-progress"><div id="generationWaitFill"></div></div>
+        <b id="generationWaitPercent">0%</b>
+      </div>
+    </div>
     <script src="/static/video_matrix_app.js"></script>
   </body>
 </html>

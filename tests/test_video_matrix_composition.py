@@ -8,7 +8,7 @@ from PIL import Image
 from gasgx_distribution.video_matrix.composition import plan_variants
 from gasgx_distribution.video_matrix.hud import HudPayload
 from gasgx_distribution.video_matrix.models import ClipMetadata
-from gasgx_distribution.video_matrix.pipeline import _beat_duration_hint
+from gasgx_distribution.video_matrix.pipeline import _beat_duration_hint, _fit_composition_sequence_to_max_duration
 from gasgx_distribution.video_matrix import cover as cover_renderer
 from gasgx_distribution.video_matrix import render as video_renderer
 from gasgx_distribution.video_matrix.render import _build_filter_complex
@@ -147,14 +147,44 @@ def test_beat_duration_hint_expands_to_composition_total() -> None:
     settings = _settings(video_duration_max=12)
     sequence = [{"category_id": f"category_{idx}", "duration": 2.0} for idx in range(9)]
 
-    assert _beat_duration_hint(settings, sequence, cover_intro_seconds=1.0, outro_seconds=1.0) == 20.0
+    assert _beat_duration_hint(settings, sequence, cover_intro_seconds=1.0, outro_seconds=1.0) == 12.0
 
 
 def test_beat_duration_hint_keeps_configured_max_when_larger() -> None:
     settings = _settings(video_duration_max=30)
     sequence = [{"category_id": "category_A", "duration": 2.0}]
 
-    assert _beat_duration_hint(settings, sequence, cover_intro_seconds=1.0, outro_seconds=1.0) == 30.0
+    assert _beat_duration_hint(settings, sequence, cover_intro_seconds=1.0, outro_seconds=1.0) == 8.0
+
+
+def test_fit_composition_sequence_caps_material_duration_without_outro() -> None:
+    sequence = [
+        {"category_id": "category_A", "duration": 4.0},
+        {"category_id": "category_B", "duration": 8.0},
+        {"category_id": "category_C", "duration": 8.0},
+    ]
+
+    fitted = _fit_composition_sequence_to_max_duration(sequence, 10.0)
+
+    assert sum(float(item["duration"]) for item in fitted) <= 10.0
+    assert [item["category_id"] for item in fitted] == ["category_A", "category_B", "category_C"]
+    assert sequence[0]["duration"] == 4.0
+
+
+def test_plan_variants_caps_segments_at_max_duration() -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_B", "b1"), _clip("category_C", "c1")]
+    settings = _settings(
+        video_duration_max=3,
+        composition_sequence=[
+            {"category_id": "category_A", "duration": 2.0},
+            {"category_id": "category_B", "duration": 2.0},
+            {"category_id": "category_C", "duration": 2.0},
+        ],
+    )
+
+    variant = plan_variants(clips, settings, HudPayload(["HUD"], False), [0, 1, 2, 3, 4, 5])[0]
+
+    assert sum(segment.duration for segment in variant.segments) <= 3.0
 
 
 def test_center_aligned_video_template_wraps_drawtext_inside_canvas() -> None:
@@ -315,6 +345,37 @@ def test_hud_text_defaults_to_primary_color_when_not_overridden() -> None:
 
     assert "fontcolor=#5DD62C" in filter_complex
     assert "fontcolor=#FFFFFF" not in filter_complex
+
+
+def test_hud_text_alignment_uses_hud_specific_template_value() -> None:
+    variant = plan_variants(
+        [_clip("category_A", "a"), _clip("category_B", "b"), _clip("category_C", "c")],
+        _settings(),
+        HudPayload(["Gas Input -> Power"], False),
+        [0, 0.5, 1, 1.5],
+    )[0]
+    template = {
+        "show_hud": True,
+        "show_slogan": False,
+        "show_title": False,
+        "hud_bar_x": 0,
+        "hud_bar_y": 1714,
+        "hud_bar_width": 1080,
+        "hud_bar_height": 162,
+        "hud_x": 0,
+        "hud_y": 1762,
+        "hud_font_size": 30,
+        "hud_text_align": "right",
+        "hud_bar_color": "#75b37b",
+        "hud_bar_opacity": 0.44,
+        "primary_color": "#5DD62C",
+        "align": "left",
+    }
+
+    filter_complex, _inputs = _build_filter_complex(variant, _settings(), template_config=template)
+
+    assert ":x=w-text_w-0:y=1762" in filter_complex
+    assert ":x=0:y=1762" not in filter_complex
 
 
 def test_video_renderer_prefers_cjk_fonts_for_chinese_text() -> None:

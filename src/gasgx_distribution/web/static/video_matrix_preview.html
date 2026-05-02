@@ -14,7 +14,7 @@
 
         html,
         body {
-            width: 393px;
+            width: 479.25px;
             height: 852px;
             overflow: hidden;
         }
@@ -31,11 +31,11 @@
         }
 
         .phone-mockup {
-            width: 393px;
+            width: 479.25px;
             height: 852px;
             border-radius: 55px;
-            border: 14px solid #1a1a1a;
-            box-shadow: 0 0 0 2px #333, 0 20px 40px rgba(0,0,0,0.8);
+            border: 0;
+            box-shadow: 0 0 0 14px #1a1a1a, 0 0 0 16px #333, 0 20px 40px rgba(0,0,0,0.8);
             position: relative;
             overflow: hidden;
             background-color: #050505;
@@ -531,10 +531,10 @@
 
         body.cover-profile-mode .phone-mockup,
         body.cover-single-mode .phone-mockup {
-            border: 14px solid #1a1a1a;
+            border: 0;
             border-radius: 55px;
             background: #050505;
-            box-shadow: 0 0 0 2px #333, 0 20px 40px rgba(0,0,0,0.8);
+            box-shadow: 0 0 0 14px #1a1a1a, 0 0 0 16px #333, 0 20px 40px rgba(0,0,0,0.8);
         }
 
         body.cover-profile-mode .cover-profile-shell,
@@ -876,7 +876,7 @@
     </style>
 </head>
 <body>
-    <div class="relative w-[393px] h-[852px]">
+    <div class="relative w-[479.25px] h-[852px]">
         <div class="device-side-button absolute -left-[4px] top-[115px] w-[5px] h-[26px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
         <div class="device-side-button absolute -left-[4px] top-[165px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
         <div class="device-side-button absolute -left-[4px] top-[235px] w-[5px] h-[54px] bg-[#444] rounded-l-[4px] border border-black shadow-sm z-0"></div>
@@ -1039,6 +1039,8 @@
       const phone = document.querySelector(".phone-mockup");
       const backgroundImage = document.getElementById("templateBackgroundImage");
       const templateMask = document.getElementById("templateMaskBg");
+      const PREVIEW_WIDTH = 479.25;
+      const PREVIEW_HEIGHT = 852;
       let currentPayload = templatePayload;
       let activeTarget = "";
       let activeCoverTarget = "";
@@ -1091,27 +1093,27 @@
       }
 
       function designX(value) {
-        return `${Number(value || 0) * 393 / 1080}px`;
+        return `${Number(value || 0) * PREVIEW_WIDTH / 1080}px`;
       }
 
       function designY(value) {
-        return `${Number(value || 0) * 852 / 1920}px`;
+        return `${Number(value || 0) * PREVIEW_HEIGHT / 1920}px`;
       }
 
       function designSize(value) {
-        return `${Math.max(8, Number(value || 24) * 393 / 1080)}px`;
+        return `${Math.max(8, Number(value || 24) * PREVIEW_WIDTH / 1080)}px`;
       }
 
       function designRadius(value) {
-        return `${Math.max(0, Number(value ?? 0) * 393 / 1080)}px`;
+        return `${Math.max(0, Number(value ?? 0) * PREVIEW_WIDTH / 1080)}px`;
       }
 
       function toDesignX(value) {
-        return Math.round(Number(value || 0) * 1080 / 393);
+        return Math.round(Number(value || 0) * 1080 / PREVIEW_WIDTH);
       }
 
       function toDesignY(value) {
-        return Math.round(Number(value || 0) * 1920 / 852);
+        return Math.round(Number(value || 0) * 1920 / PREVIEW_HEIGHT);
       }
 
       function setLayerText(id, visible, value, x, y, size, color) {
@@ -1476,6 +1478,7 @@
         if (command === "height-up") adjustHeight(12);
         if (command === "edit") enterTextEdit();
         if (command === "align") setTextAlign(value || "left");
+        if (command === "bar-align") setBackgroundAlign(value || "left");
         if (command === "font-family") setFontFamily(value);
         if (command === "text-effect") setTextEffect(value);
         if (command === "color") setColor(value);
@@ -1534,6 +1537,10 @@
       }
 
       function ensureHudTarget(command) {
+        if (command === "align") {
+          if (activeTarget !== "hud") selectTarget("hud");
+          return;
+        }
         const target = pairedHudTarget(activeTarget);
         if (activeTarget !== target) selectTarget(target);
       }
@@ -1608,8 +1615,8 @@
           document.getElementById("centerGuides").classList.add("active");
         }
         const phoneRect = phone.getBoundingClientRect();
-        const rawX = Math.max(0, Math.min(393, event.clientX - phoneRect.left - dragging.dx));
-        const rawY = Math.max(0, Math.min(852, event.clientY - phoneRect.top - dragging.dy));
+        const rawX = Math.max(0, Math.min(PREVIEW_WIDTH, event.clientX - phoneRect.left - dragging.dx));
+        const rawY = Math.max(0, Math.min(PREVIEW_HEIGHT, event.clientY - phoneRect.top - dragging.dy));
         const snapped = snapToCenter(rawX, rawY, dragging.node || event.currentTarget);
         const updates = isBackgroundTarget(dragging.target)
           ? barPositionUpdates(dragging.target, snapped.x, snapped.y)
@@ -1646,9 +1653,15 @@
       function adjustWidth(delta) {
         const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
         const template = currentPayload?.template || {};
-        const key = backgroundTargetWidthKey(backgroundTarget);
+        const widthKey = backgroundTargetWidthKey(backgroundTarget);
+        const xKey = backgroundTargetXKey(backgroundTarget);
+        const oldWidth = clamp(Number(template[widthKey] || 1080), 120, 1080);
+        const oldX = clamp(Number(template[xKey] || 0), 0, 1080 - oldWidth);
+        const newWidth = clamp(oldWidth + delta, 120, 1080);
+        const centerX = oldX + oldWidth / 2;
+        const newX = clamp(Math.round(centerX - newWidth / 2), 0, 1080 - newWidth);
         selectTarget(backgroundTarget);
-        postTemplateUpdates({ [key]: clamp(Number(template[key] || 1080) + delta, 120, 1080) });
+        postTemplateUpdates({ [widthKey]: newWidth, [xKey]: newX });
       }
 
       function adjustHeight(delta) {
@@ -1764,17 +1777,33 @@
         postTemplateUpdates({ [backgroundTargetRadiusKey(backgroundTarget)]: clamp(Number(value), 0, 100) });
       }
 
-      function hudScreenAlignX(value) {
-        if (value === "right") return 1080;
-        if (value === "center") return 540;
-        return 0;
+      function setBackgroundAlign(value) {
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
+        const template = currentPayload?.template || {};
+        const width = Number(template[backgroundTargetWidthKey(backgroundTarget)] || 1080);
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [backgroundTargetXKey(backgroundTarget)]: backgroundScreenAlignX(value, width) });
       }
 
-      function hudBarScreenAlignX(value, width) {
+      function backgroundTargetXKey(target) {
+        if (target === "sloganBar") return "slogan_bg_x";
+        if (target === "titleBar") return "title_bg_x";
+        return "hud_bar_x";
+      }
+
+      function backgroundScreenAlignX(value, width) {
         const safeWidth = clamp(Number(width || 1080), 120, 1080);
         if (value === "right") return 1080 - safeWidth;
         if (value === "center") return Math.round((1080 - safeWidth) / 2);
         return 0;
+      }
+
+      function hudScreenAlignX(value) {
+        return 0;
+      }
+
+      function hudBarScreenAlignX(value, width) {
+        return backgroundScreenAlignX(value, width);
       }
 
       function postTemplateUpdates(updates) {
@@ -1826,8 +1855,8 @@
         if (!node) return { x, y };
         const width = node.offsetWidth || 0;
         const height = node.offsetHeight || 0;
-        const centerX = 196.5 - width / 2;
-        const centerY = 426 - height / 2;
+        const centerX = PREVIEW_WIDTH / 2 - width / 2;
+        const centerY = PREVIEW_HEIGHT / 2 - height / 2;
         return {
           x: Math.abs(x - centerX) < 8 ? centerX : x,
           y: Math.abs(y - centerY) < 8 ? centerY : y,

@@ -6,6 +6,11 @@ This repository uses entity documents as the persistent handoff layer.
 
 - `docs/help/DEVELOPER_VIDEO_GENERATION_ALGORITHM.md` - Developer-only reference for the current GasGx video-generation algorithm.
 
+## Runbooks
+
+- `docs/runbooks/MAC_M2_DEPLOYMENT.md` - Mac Apple Silicon deployment checklist for Python, paths, browser profiles, runtime state, and background operation.
+- `docs/runbooks/LOCAL_RUNTIME_SETUP.md` - Local Windows-oriented runtime setup and operator commands.
+
 ## Core documents
 
 - `docs/projects/cybercar/CYBERCAR_STATE.md`

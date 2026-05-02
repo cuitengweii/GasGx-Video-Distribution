@@ -22,6 +22,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "首屏 CTA" not in html
     assert "结尾关注提醒" not in html
     assert "视频 HUD 文本" not in html
+    assert "字幕背板调整区" in app
+    assert "HUD调整区" not in app
     assert "文案参考资料" not in html
     assert '<input id="headline" type="hidden" />' in html
     assert html.index('class="cover-workbench"') < html.index('class="video-template-workbench"') < html.index('class="side-editor"')
@@ -31,10 +33,17 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "generationConfirmModal" in html
     assert "generationPreflightModal" in html
     assert "generationPreflightBody" in html
+    assert "generationWaitOverlay" in html
+    assert "generationWaitPercent" in html
     assert "preflightClose" in html
     assert '"Queued": "任务已提交，正在排队准备。请保持当前页面打开，系统会自动开始处理。"' in app
     assert 'queued: "任务已提交，正在等待开始"' in app
     assert "function localizedJobTitle" in app
+    assert "function showGenerationWaitOverlay" in app
+    assert "function startJobProgressTicker" in app
+    assert "displayedJobPercent" in app
+    assert "视频生成中，系统会以 1% 为单位持续刷新等待进度。" in app
+    assert "revealNextPreflightStep(index + 1)" in app
     assert "片尾封面模板" in html
     assert "endingTemplatePreview" in html
     assert "endingAssetPreview" in html
@@ -69,26 +78,24 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert '$("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory)' in app
     assert "本地曲库列表" in app
     assert "本地曲库</strong>" in app
-    assert "网络曲库" in app
+    assert "网络曲库" not in app
     assert "bgm-select-check" in app
-    assert "audio_url" in app
-    assert "downloadPixabayTrack" in app
-    assert "data-pixabay-download" in app
-    assert "pixabaySearchInput" in app
-    assert "pixabayPlayer" in app
-    assert "downloadCurrentPixabay" in app
-    assert "selectPixabayTrack" in app
-    assert "syncPixabayPlayer" in app
-    assert "track.audio_error" in app
+    assert "downloadPixabayTrack" not in app
+    assert "data-pixabay-download" not in app
+    assert "pixabaySearchInput" not in app
+    assert "pixabayPlayer" not in app
+    assert "downloadCurrentPixabay" not in app
+    assert "selectPixabayTrack" not in app
+    assert "syncPixabayPlayer" not in app
+    assert "track.audio_error" not in app
     assert "/api/video-matrix/bgm/mock-download" not in app
     assert "模拟下载到本地" not in app
-    assert "track.is_cdn_audio" in app
-    assert "点击曲目载入播放器试听" in app
-    assert "loadPixabayTracks" in app
-    assert 'loadPixabayTracks(bgmLibraryState.pixabayQuery || "industry")' in app
-    assert "/api/video-matrix/pixabay/industry" in app
-    assert "Pixabay industry" in app
-    assert "pixabay-track-list" in app
+    assert "track.is_cdn_audio" not in app
+    assert "点击曲目载入播放器试听" not in app
+    assert "loadPixabayTracks" not in app
+    assert "/api/video-matrix/pixabay/industry" not in app
+    assert "Pixabay industry" not in app
+    assert "pixabay-track-list" not in app
     assert "toggleBgmLibrarySize" in app
     assert 'panel.classList.toggle("modal", !isHidden)' in app
     assert "bgm-modal-open" in app
@@ -101,9 +108,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "<span>音频地址</span>" not in app
     assert "音频直链试听 / 下载" not in app
     assert "bgm-local-section" in app
-    assert "bgm-pixabay-section" in app
+    assert "bgm-pixabay-section" not in app
     assert "未选中时生成会随机取 1 首" in app
     assert "selectedBgmLibraryId()" in app
+    assert "const selectedBgm = selectedBgmLibraryId()" in app
+    assert "[selectedBgm, ...bgmLibraryState.local.filter" in app
     assert "data-bgm-select" in app
     assert "bgm_library_id: selectedBgmLibraryId()" in app
     assert "bgm-popover-links" not in app
@@ -113,6 +122,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".category-edit-icon" not in css
     assert ".source-total-count" in css
     assert ".bgm-library-popover" in css
+    assert ".generation-wait-overlay" in css
+    assert ".generation-wait-panel" in css
     assert ".dir-row code" in css
     assert ".embed-mode .sidebar" in css
     assert "overflow: hidden" in css
@@ -433,23 +444,25 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".bgm-select-check" in css
     assert 'content: "\\2713"' in css
     assert "color: #071108" in css
-    assert ".pixabay-track audio" in css
-    assert ".pixabay-search-row" in css
-    assert ".pixabay-player-card" in css
-    assert ".pixabay-track.is-selected" in css
-    assert ".pixabay-track.is-cdn-audio button" in css
-    assert "border: 1px dashed rgba(93, 214, 44, .48)" in css
+    assert "box-shadow: 0 0 0 2px rgba(93, 214, 44, .28)" in css
+    assert "background: linear-gradient(90deg, var(--green), #7cff4f)" in css
+    assert ".pixabay-track audio" not in css
+    assert ".pixabay-search-row" not in css
+    assert ".pixabay-player-card" not in css
+    assert ".pixabay-track.is-selected" not in css
+    assert ".pixabay-track.is-cdn-audio button" not in css
+    assert "border: 1px dashed rgba(93, 214, 44, .48)" not in css
     assert ".bgm-download-box" not in css
-    assert ".pixabay-refresh-button" in css
-    assert ".pixabay-track-list" in css
-    assert ".pixabay-track" in css
+    assert ".pixabay-refresh-button" not in css
+    assert ".pixabay-track-list" not in css
+    assert ".pixabay-track" not in css
     assert ".bgm-library-popover.modal" in css
     assert "z-index: 80" in css
     assert "body.bgm-modal-open .sidebar {\n  z-index: 120;\n}" in css
     assert "100vmax rgba(0, 0, 0, .64)" in css
     assert ".bgm-popover-head" in css
     assert ".bgm-local-section" in css
-    assert ".bgm-pixabay-section" in css
+    assert ".bgm-pixabay-section" not in css
     assert "scrollbar-width: thin" in css
     assert "::-webkit-scrollbar-thumb" in css
     assert "#saveState" in css
@@ -479,6 +492,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".video-template-name-button" in css
     assert ".video-template-picker" in css
     assert "height: calc(var(--preview-phone-height) + 36px)" in css
+    assert "--preview-phone-width: 479.25px" in css
+    assert "width: 479.25px" in css
     assert "minmax(360px, 1fr)" in css
     assert "justify-content:stretch" in css
     assert "max-width: none" in css
@@ -514,9 +529,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'target === "hud" && template[alignKey] ? "0px" : designX(x)' in preview
     assert 'target === "hud" && template[alignKey] ? "100%" : ""' in preview
     assert "文字调整区" in app
-    assert "HUD调整区" in app
-    assert 'data-value="hudBar" title="选择 HUD 背景">HUD背景' not in app
+    assert 'data-visual-command="bar-align" data-value="left" title="字幕背板左对齐">左齐' in app
+    assert 'data-visual-command="bar-align" data-value="center" title="字幕背板居中对齐">居中' in app
+    assert 'data-visual-command="bar-align" data-value="right" title="字幕背板右对齐">右齐' in app
+    assert 'data-value="hudBar" title="选择 字幕背板 背景">字幕背板背景' not in app
     assert 'data-visual-command="opacity"' in app
+    assert "const oldWidth = clamp(Number(template[widthKey] || 1080), 120, 1080)" in preview
+    assert "const centerX = oldX + oldWidth / 2" in preview
+    assert "const newX = clamp(Math.round(centerX - newWidth / 2), 0, 1080 - newWidth)" in preview
+    assert "postTemplateUpdates({ [widthKey]: newWidth, [xKey]: newX })" in preview
     assert "videoTextFontOptions" in app
     assert "爆款粗黑" in app
     assert "招牌漫画" in app
@@ -535,10 +556,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'data-visual-command="text-effect"' in app
     assert "文字动效" in app
     assert 'data-visual-command="hud-bg-color"' in app
-    assert 'aria-label="HUD 背景色"' in app
+    assert 'aria-label="字幕背板背景色"' in app
     assert 'data-visual-command="hud-radius"' in app
     assert 'data-visual-command="hud-radius" type="range" min="0" max="100"' in app
     assert "setBackgroundOpacity(value)" in preview
+    assert "setBackgroundAlign(value || \"left\")" in preview
     assert "setHudBackgroundColor(value)" in preview
     assert "setHudRadius(value)" in preview
     assert "clamp(Number(value), 0, 100)" in preview
@@ -565,12 +587,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "@keyframes vmTextShadowPop" in preview
     assert "@keyframes vmTextType" in preview
     assert ".visual-effect-control" in css
-    assert "backgroundTargetForControl(activeTarget)" not in preview
+    assert 'backgroundTargetForControl(activeTarget || "title")' in preview
+    assert "backgroundTargetXKey(backgroundTarget)" in preview
+    assert "function backgroundScreenAlignX(value, width)" in preview
     assert 'const key = `${target}_font_size`' in preview
     assert 'if (!activeTarget && command === "align") selectTarget("title")' in preview
+    assert 'if (command === "align") {' in preview
+    assert 'if (activeTarget !== "hud") selectTarget("hud")' in preview
     assert "updates.hud_x = hudScreenAlignX(align)" in preview
     assert 'updates.hud_bar_x = hudBarScreenAlignX(align, Number(template.hud_bar_width || 1080))' in preview
-    assert 'if (value === "center") return 540' in preview
+    assert "function hudScreenAlignX(value) {\n        return 0;\n      }" in preview
     assert 'return Math.round((1080 - safeWidth) / 2)' in preview
     assert "显示上标题" in app
     assert "显示中标题" in app
@@ -698,7 +724,8 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "cover-profile-mode" in preview_html
     assert "body.cover-profile-mode .phone-mockup" in preview_html
     assert "body.cover-single-mode .phone-mockup" in preview_html
-    assert "border: 14px solid #1a1a1a" in preview_html
+    assert "border: 0" in preview_html
+    assert "box-shadow: 0 0 0 14px #1a1a1a, 0 0 0 16px #333" in preview_html
     assert "border-radius: 55px" in preview_html
     assert "body.cover-profile-mode .cover-profile-shell" in preview_html
     assert "border-radius: 41px" in preview_html
@@ -737,7 +764,11 @@ def test_video_matrix_preview_matches_wechat_phone_reference_shell() -> None:
     assert "dynamic-island" in preview_html
     assert "bg-overlay" in preview_html
     assert "https://cdn.tailwindcss.com" in preview_html
-    assert "w-[393px] h-[852px]" in preview_html
+    assert "w-[479.25px] h-[852px]" in preview_html
+    assert "const PREVIEW_WIDTH = 479.25" in preview_html
+    assert "const PREVIEW_HEIGHT = 852" in preview_html
+    assert "PREVIEW_WIDTH / 1080" in preview_html
+    assert "PREVIEW_HEIGHT / 1920" in preview_html
     assert "text-stroke-yellow" in preview_html
     assert "模块化算力单元即装即产" not in preview_html
     assert "设备扩展零延迟" not in preview_html
@@ -755,9 +786,10 @@ def test_video_matrix_preview_matches_wechat_phone_reference_shell() -> None:
     assert "phone-status" not in preview_html
     assert "creator-bar" not in preview_html
     assert "channels-nav" not in preview_html
-    assert "width: 393px" in preview_html
+    assert "width: 479.25px" in preview_html
     assert "height: 852px" in preview_html
-    assert "border: 14px solid #1a1a1a" in preview_html
+    assert "border: 0" in preview_html
+    assert "box-shadow: 0 0 0 14px #1a1a1a, 0 0 0 16px #333" in preview_html
     assert "border-radius: 55px" in preview_html
     assert "width: 90px" in preview_html
     assert "height: 26px" in preview_html

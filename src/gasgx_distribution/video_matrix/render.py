@@ -488,6 +488,8 @@ def _text_box_width(template: dict[str, Any], text_key: str, anchor_x: int) -> i
             pass
     align = _target_text_align(template, text_key)
     if text_key == "hud":
+        if template.get("hud_text_align"):
+            return 1080
         return max(120, 1080 - anchor_x * 2 if align == "center" else 1080 - anchor_x - 42)
     if align == "center":
         return max(120, min(1000, 1080 - 84))
