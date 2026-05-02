@@ -994,7 +994,7 @@
             align-self: stretch;
             min-height: 0;
             display: grid;
-            grid-template-rows: auto auto auto auto auto auto auto auto minmax(0, 1fr);
+            grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr);
             gap: 14px;
             border: 1px solid rgba(93, 214, 44, .18);
             border-radius: 8px;
@@ -1018,7 +1018,6 @@
         }
 
         .preview-control-row,
-        .preview-mode-row,
         .preview-count-row {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1026,11 +1025,7 @@
         }
 
         .preview-count-row {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-        }
-
-        .preview-mode-row.single-only {
-            grid-template-columns: 1fr;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
         }
 
         .preview-section-title {
@@ -1048,7 +1043,6 @@
         }
 
         .preview-control-row button,
-        .preview-mode-row button,
         .preview-count-row button,
         .preview-device-row button,
         .preview-video-item {
@@ -1062,7 +1056,6 @@
         }
 
         .preview-control-row button,
-        .preview-mode-row button,
         .preview-count-row button,
         .preview-device-row button {
             height: 36px;
@@ -1083,7 +1076,6 @@
         }
 
         .preview-control-row button.primary,
-        .preview-mode-row button.active,
         .preview-count-row button.active,
         .preview-device-row button.active,
         .preview-video-item.active {
@@ -1388,11 +1380,9 @@
           <button id="previewPlay" class="primary" type="button">同步播放</button>
           <button id="previewStop" type="button">同步停止</button>
         </div>
-        <div class="preview-mode-row single-only">
-          <button id="singleMode" class="active" type="button">单屏查看</button>
-        </div>
         <div class="preview-section-title">展示数量</div>
         <div class="preview-count-row" aria-label="网格数量">
+          <button id="singleMode" class="active" type="button">单屏查看</button>
           <button class="active" type="button" data-grid-count="3">3 个</button>
           <button type="button" data-grid-count="6">6 个</button>
           <button type="button" data-grid-count="9">9 个</button>

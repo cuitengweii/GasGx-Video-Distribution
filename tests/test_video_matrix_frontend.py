@@ -165,6 +165,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "确认启动" in shell_html
     assert 'data-permission="video-matrix"' in shell_html
     assert 'id="local-login-form"' in shell_html
+    assert 'id="top-user-toggle"' in shell_html
+    assert 'id="top-user-menu"' in shell_html
     assert "仅超级管理员分配账号" in shell_html
     assert 'id="operator-account-form"' in shell_html
     assert 'id="permission-grid"' in shell_html
@@ -202,6 +204,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "/api/auth/login" in shell_app
     assert "/api/auth/roles" in shell_app
     assert "/api/auth/users" in shell_app
+    assert 'topMenu.classList.toggle("open", open)' in shell_app
+    assert 'topMenu?.classList.remove("open")' in shell_app
     assert "data-role-permission" in shell_app
     assert "permission-hidden" in shell_app
     assert "data-ai-toggle" in shell_app
@@ -239,6 +243,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".confirm-panel" in shell_css
     assert ".confirm-message" in shell_css
     assert ".permission-grid" in shell_css
+    assert ".top-user-menu.open" in shell_css
     assert ".operator-account-row" in shell_css
     assert ".role-tab.active" in shell_css
     assert ".permission-hidden" in shell_css
@@ -865,6 +870,8 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "同步播放" in preview_html
     assert "同步停止" in preview_html
     assert "展示数量" in preview_html
+    assert "展示数量</div>\n        <div class=\"preview-count-row\"" in preview_html
+    assert "<button id=\"singleMode\" class=\"active\" type=\"button\">单屏查看</button>" in preview_html
     assert "手机模型选择" in preview_html
     assert "视频选择" in preview_html
     assert "previewPlay" in preview_html
@@ -894,7 +901,8 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "button.querySelector(\"video\")" in preview_html
     assert "node.paused" in preview_html
     assert "is-playing" in preview_html
-    assert "grid-template-rows: auto auto auto auto auto auto auto auto minmax(0, 1fr)" in preview_html
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in preview_html
+    assert "grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr)" in preview_html
     preview_video_css = preview_html[preview_html.index("#previewVideo {"):preview_html.index("#templateBackgroundImage {")]
     assert "object-fit: contain" in preview_video_css
     grid_video_css = preview_html[preview_html.index(".preview-grid-phone video {"):preview_html.index(".preview-grid-phone span {")]

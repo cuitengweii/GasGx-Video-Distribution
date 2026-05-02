@@ -489,21 +489,36 @@ function initAuthCenter() {
 function initUserMenu() {
   const toggle = document.querySelector("#user-menu-toggle");
   const menu = document.querySelector("#sidebar-user-actions");
-  if (!toggle || !menu) return;
-  toggle.addEventListener("click", () => {
+  if (toggle && menu) toggle.addEventListener("click", () => {
     const open = menu.classList.toggle("hidden") === false;
     toggle.setAttribute("aria-expanded", String(open));
   });
+  const topToggle = document.querySelector("#top-user-toggle");
+  const topMenu = document.querySelector("#top-user-menu");
+  topToggle?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!topMenu) return;
+    const open = !topMenu.classList.contains("open");
+    topMenu.classList.toggle("open", open);
+    topToggle.setAttribute("aria-expanded", String(open));
+  });
   document.addEventListener("click", (event) => {
-    if (toggle.contains(event.target) || menu.contains(event.target)) return;
-    menu.classList.add("hidden");
-    toggle.setAttribute("aria-expanded", "false");
+    if (toggle && menu && !(toggle.contains(event.target) || menu.contains(event.target))) {
+      menu.classList.add("hidden");
+      toggle.setAttribute("aria-expanded", "false");
+    }
+    if (topToggle && topMenu && !(topToggle.contains(event.target) || topMenu.contains(event.target))) {
+      topMenu.classList.remove("open");
+      topToggle.setAttribute("aria-expanded", "false");
+    }
   });
   document.querySelectorAll("[data-quick-view]").forEach((button) => {
     button.addEventListener("click", () => {
       activateView(button.dataset.quickView);
-      menu.classList.add("hidden");
-      toggle.setAttribute("aria-expanded", "false");
+      menu?.classList.add("hidden");
+      toggle?.setAttribute("aria-expanded", "false");
+      topMenu?.classList.remove("open");
+      topToggle?.setAttribute("aria-expanded", "false");
     });
   });
   const sidebarToggle = document.querySelector("#sidebar-toggle");
