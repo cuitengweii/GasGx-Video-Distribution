@@ -7,6 +7,7 @@ import random
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,7 @@ PIXABAY_INDUSTRY_TRACKS = [
     {"title": "Heavy Industry", "artist": "SPmusic", "duration": "3:22", "source_url": "https://pixabay.com/music/search/industry/"},
     {"title": "Visite rapide dans l'industrie", "artist": "Jean-Paul-V", "duration": "4:00", "source_url": "https://pixabay.com/music/search/industry/"},
 ]
+PIXABAY_AUDIO_PATTERN = re.compile(r"https://cdn\.pixabay\.com/download/audio/[^\"'\\<>\s]+")
 
 router = APIRouter(prefix="/api/video-matrix", tags=["video-matrix"])
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -574,7 +576,33 @@ def local_bgm_file(filename: str) -> FileResponse:
 
 @router.get("/pixabay/industry")
 def pixabay_industry_tracks() -> dict[str, Any]:
-    return {"tracks": PIXABAY_INDUSTRY_TRACKS[:10], "source_url": "https://pixabay.com/music/search/industry/"}
+    tracks = []
+    for track in PIXABAY_INDUSTRY_TRACKS[:10]:
+        item = dict(track)
+        item["audio_url"] = _resolve_pixabay_audio_url(str(item.get("source_url") or ""))
+        tracks.append(item)
+    return {"tracks": tracks, "source_url": "https://pixabay.com/music/search/industry/"}
+
+
+@lru_cache(maxsize=64)
+def _resolve_pixabay_audio_url(source_url: str) -> str:
+    if not source_url.startswith("https://pixabay.com/music/"):
+        return ""
+    request = UrlRequest(
+        source_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "Chrome/124.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            html = response.read(2 * 1024 * 1024).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+    match = PIXABAY_AUDIO_PATTERN.search(html)
+    return match.group(0).replace("\\u0026", "&") if match else ""
 
 
 @router.post("/bgm/download")

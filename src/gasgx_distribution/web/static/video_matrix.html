@@ -114,6 +114,11 @@
       </section>
 
       <section class="editor-grid">
+        <section class="model-image-workbench">
+          <div class="section-title"><span>MODEL MATERIAL</span><b>模拟素材选择</b></div>
+          <div id="videoTemplateBackgrounds" class="template-background-strip"></div>
+        </section>
+
         <section class="cover-workbench">
           <div class="section-title"><span>FIRST SCREEN</span><b>第一屏封面模板</b></div>
           <div class="cover-editor">
@@ -121,7 +126,13 @@
               <iframe id="coverPreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="cover preview" scrolling="no"></iframe>
               <div class="preview-caption-row">
                 <small id="previewCaption"></small>
-                <button id="coverLayoutToggle" class="secondary compact-toggle" type="button">独立视频封面</button>
+                <div class="preview-caption-actions">
+                  <div class="cover-template-switcher">
+                    <button id="coverTemplateSwitch" class="secondary compact-toggle" type="button" aria-expanded="false"><span class="button-icon" aria-hidden="true">⇄</span><span>模板切换</span></button>
+                    <div id="coverTemplateMenu" class="cover-template-menu hidden"></div>
+                  </div>
+                  <button id="coverLayoutToggle" class="secondary compact-toggle" type="button"><span class="button-icon" aria-hidden="true">▣</span><span>独立视频封面</span></button>
+                </div>
               </div>
             </div>
             <form id="coverForm" class="control-panel"></form>
@@ -130,7 +141,6 @@
 
         <section class="video-template-workbench">
           <div class="section-title"><span>VIDEO TEMPLATE</span><b>9:16 正文叠层模板</b></div>
-          <div id="videoTemplateBackgrounds" class="template-background-strip"></div>
           <div class="template-preview-editor">
             <div class="preview-stage compact-preview">
               <iframe id="videoTemplatePreview" class="phone-preview-frame" src="/static/video_matrix_preview.html" title="video template preview" scrolling="no"></iframe>
@@ -190,6 +200,22 @@
         <div class="confirm-actions">
           <button id="confirmCancel" class="secondary" type="button">取消</button>
           <button id="confirmSubmit" class="primary" type="button">确认生成</button>
+        </div>
+      </div>
+    </div>
+    <div id="generationPreflightModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="generationPreflightTitle">
+      <div class="confirm-panel preflight-panel">
+        <div class="confirm-head">
+          <div>
+            <span>PREFLIGHT CHECK</span>
+            <strong id="generationPreflightTitle">生成前预检</strong>
+          </div>
+          <button id="preflightClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+        </div>
+        <div id="generationPreflightBody" class="confirm-body preflight-body"></div>
+        <div class="confirm-actions preflight-actions">
+          <button id="preflightCancel" class="secondary" type="button">返回修改</button>
+          <button id="preflightContinue" class="primary" type="button">继续</button>
         </div>
       </div>
     </div>

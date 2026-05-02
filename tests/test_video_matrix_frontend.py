@@ -29,12 +29,18 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "transcriptFile" not in html
     assert "transcriptText" not in html
     assert "generationConfirmModal" in html
+    assert "generationPreflightModal" in html
+    assert "generationPreflightBody" in html
+    assert "preflightClose" in html
     assert "片尾封面模板" in html
     assert "endingTemplatePreview" in html
     assert "endingAssetPreview" in html
     assert "endingTemplateForm" in html
     assert "openEndingTemplateDir" in html
     assert "点击查看" in html
+    assert "coverTemplateSwitch" in html
+    assert "coverTemplateMenu" in html
+    assert "模板切换" in html
     assert "openBgmDir" in html
     assert "bgmLibraryPopover" in html
     assert "materialCategories(data)" in app
@@ -57,9 +63,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "toggleBgmLibraryPopover" in app
     assert '$("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory)' in app
     assert "本地曲库列表" in app
-    assert "downloadBgmToLibrary" in app
-    assert "/api/video-matrix/bgm/download" in app
+    assert "本地曲库</strong>" in app
+    assert "网络曲库" in app
+    assert "bgm-select-check" in app
+    assert "audio_url" in app
+    assert "downloadPixabayTrack" in app
+    assert "data-pixabay-download" in app
+    assert "音频地址暂不可用" in app
     assert "loadPixabayTracks" in app
+    assert 'loadPixabayTracks();' in app
     assert "/api/video-matrix/pixabay/industry" in app
     assert "Pixabay industry" in app
     assert "pixabay-track-list" in app
@@ -68,7 +80,12 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "bgm-modal-open" in app
     assert 'panel.classList.add("hidden")' in app
     assert 'document.querySelector(".sidebar details summary")' in app
-    assert "音频地址" in app
+    assert "downloadBgmToLibrary" not in app
+    assert "downloadBgm" not in app
+    assert "bgmDownloadUrl" not in app
+    assert "bgmUrlPreview" not in app
+    assert "<span>音频地址</span>" not in app
+    assert "音频直链试听 / 下载" not in app
     assert "bgm-local-section" in app
     assert "bgm-pixabay-section" in app
     assert "未选中时生成会随机取 1 首" in app
@@ -223,8 +240,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "nextTemplateCloneId" in app
     assert "saveCoverAsNewTemplate" in app
     assert "nextCoverTemplateMeta" in app
-    assert '<button type="button" id="saveCover">保存当前模板</button>' in app
+    assert '<button type="button" id="saveCover">保存</button>' in app
+    assert '<button type="button" id="saveCoverAsNew" class="secondary">新建保存</button>' in app
     assert "saveCurrentCoverTemplate" in app
+    assert '$("saveCoverAsNew").onclick = saveCoverAsNewTemplate' in app
+    assert 'newTemplate.cover_layout = "single_video"' in app
+    assert "已新建独立封面模板" in app
+    assert "已自动生成 9 组九宫格图片模板" not in app
     assert 'showTemplateActionStatus("保存成功", "coverForm")' in app
     assert 'await api("/api/video-matrix/cover-templates"' in app
     assert "state.cover_templates = coverTemplates" in app
@@ -248,7 +270,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".ending-template-dir-row" in css
     assert "切换正文模板..." in app
     assert "selectCoverTemplate" in app
+    assert "renderCoverTemplateMenu" in app
+    assert "coverTemplateDisplayName" in app
+    assert "videoTemplateDisplayName" in app
+    assert "data-cover-template" in app
+    assert 'trigger.innerHTML = buttonLoadingInline("切换中...")' in app
     assert "切换第一屏模板..." in app
+    assert "第一屏封面模板" in app
+    assert "视频叠层模板" in app
+    assert 'const nextName = videoTemplateDisplayName(nextId, {}, Object.keys(templates).length)' in app
     assert "coverTemplateBackgrounds" not in html
     assert "renderCoverTemplateBackgrounds" not in app
     assert "coverVisualToolbarHtml" in app
@@ -337,6 +367,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "box-shadow: none" in css
     assert "const recentLimits = state.recent_limits || settings.recent_limits || {}" in app
     assert "transcript_text" not in app
+    assert "runPreflightChecks(statePayload)" in app
+    assert "function buildPreflightChecks" in app
+    assert "function setPreflightStepStatus" in app
+    assert "预检通过" in app
+    assert "片尾素材" in app
+    assert "本地 BGM" in app
+    assert "active_category_ids" in app
     assert "confirmGeneration(statePayload)" in app
     assert "generationConfirmHtml" in app
     assert "启用素材分类" in app
@@ -349,7 +386,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "/api/video-matrix/bgm/" in app
     assert ".help-dot" in css
     assert ".bgm-local-item" in css
-    assert ".bgm-download-box" in css
+    assert ".bgm-select-check" in css
+    assert 'content: "\\2713"' in css
+    assert "color: #071108" in css
+    assert ".pixabay-track audio" in css
+    assert ".pixabay-track.audio-unavailable button" in css
+    assert ".bgm-download-box" not in css
+    assert ".pixabay-refresh-button" in css
     assert ".pixabay-track-list" in css
     assert ".pixabay-track" in css
     assert ".bgm-library-popover.modal" in css
@@ -366,9 +409,23 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".template-actions" in css
     assert "grid-template-columns: minmax(0, 1fr) 124px" in css
     assert "cursor:pointer" in css
+    assert "model-image-workbench" in html
+    assert "模拟素材选择" in html
+    assert "preview-caption-actions" in html
+    assert "button-icon" in html
+    assert "模板切换" in html
+    assert "独立视频封面" in html
+    assert ".model-image-workbench" in css
+    assert ".preview-caption-actions" in css
+    assert ".button-icon" in css
+    assert "grid-template-columns: minmax(88px, .9fr) minmax(100px, 1fr) minmax(60px, 74px) minmax(96px, 124px) minmax(56px, 70px) minmax(54px, 58px)" in css
+    assert ".source-panel .source-composition-row button {\n  width: 100%;" in css
+    assert "left: 0;\n  right: auto;" in css
+    assert "@media (max-width: 1180px)" in css
     assert "videoTemplateCaption" not in html
     assert "videoTemplateCaption" not in app
-    assert html.index('id="videoTemplateBackgrounds"') < html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"') < html.index('id="videoTemplateSelector"')
+    assert html.index('id="videoTemplateBackgrounds"') < html.index('class="cover-workbench"') < html.index('class="video-template-workbench"')
+    assert html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"') < html.index('id="videoTemplateSelector"')
     assert ".video-template-picker" in css
     assert "height: calc(var(--preview-phone-height) + 36px)" in css
     assert "minmax(360px, 1fr)" in css
@@ -475,6 +532,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".color-swatch-button" in css
     assert ".color-picker-icon" in css
     assert ".color-current-dot" in css
+    assert ".cover-template-switcher" in css
+    assert ".cover-template-menu" in css
     assert ".cover-card img," in css
     assert ".cover-card video" in css
     assert "aspect-ratio: 9 / 16" in css
@@ -509,6 +568,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".confirm-modal" in css
     assert ".confirm-panel" in css
     assert ".confirm-algorithm" in css
+    assert ".preflight-step" in css
+    assert ".preflight-status" in css
+    assert ".preflight-actions" in css
     assert "composition-panel" in css
     assert "videoDurationMin" in html
     assert "videoDurationMax" in html

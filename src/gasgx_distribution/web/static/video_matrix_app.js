@@ -133,6 +133,9 @@ function loadingInline(label = "加载中...") {
 function buttonLoadingInline(label) {
   return `<span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
 }
+function buttonIconLabel(icon, label) {
+  return `<span class="button-icon" aria-hidden="true">${escapeHtml(icon)}</span><span>${escapeHtml(label)}</span>`;
+}
 
 function setPanelLoading(id, label = "加载中...") {
   const node = $(id);
@@ -232,15 +235,15 @@ function renderSidebar(data) {
 function renderSidebarTemplateSelectors() {
   const coverSelect = $("sidebarCoverTemplate");
   if (coverSelect) {
-    coverSelect.innerHTML = Object.entries(coverTemplates).map(([id, item]) =>
-      `<option value="${escapeHtml(id)}" ${id === selectedCover ? "selected" : ""}>${escapeHtml(item.name || id)}</option>`
+    coverSelect.innerHTML = Object.entries(coverTemplates).map(([id, item], index) =>
+      `<option value="${escapeHtml(id)}" ${id === selectedCover ? "selected" : ""}>${escapeHtml(coverTemplateDisplayName(id, item, index))}</option>`
     ).join("");
     coverSelect.onchange = () => selectCoverTemplate(coverSelect.value);
   }
   const videoSelect = $("sidebarVideoTemplate");
   if (videoSelect) {
-    videoSelect.innerHTML = Object.entries(templates).map(([id, item]) =>
-      `<option value="${escapeHtml(id)}" ${id === selectedVideoTemplate ? "selected" : ""}>${escapeHtml(item.name || id)}</option>`
+    videoSelect.innerHTML = Object.entries(templates).map(([id, item], index) =>
+      `<option value="${escapeHtml(id)}" ${id === selectedVideoTemplate ? "selected" : ""}>${escapeHtml(videoTemplateDisplayName(id, item, index))}</option>`
     ).join("");
     videoSelect.onchange = () => selectVideoTemplate(videoSelect.value);
   }
@@ -530,20 +533,65 @@ function renderTextSettings() {
 
 function renderCoverSelector() {
   if (!$("coverSelector")) return;
-  $("coverSelector").innerHTML = Object.entries(coverTemplates).map(([id, item]) =>
-    `<button class="${id === selectedCover ? "active" : ""}" data-id="${id}">${item.name || id}</button>`).join("");
+  $("coverSelector").innerHTML = Object.entries(coverTemplates).map(([id, item], index) =>
+    `<button class="${id === selectedCover ? "active" : ""}" data-id="${id}">${escapeHtml(coverTemplateDisplayName(id, item, index))}</button>`).join("");
   $("coverSelector").querySelectorAll("button").forEach((btn) => btn.onclick = async () => {
     selectedCover = btn.dataset.id;
     renderCoverSelector(); renderCoverEditor(); await saveTemplateSelection(); await refreshAllPreviews();
   });
 }
 
+function renderCoverTemplateMenu() {
+  const menu = $("coverTemplateMenu");
+  const trigger = $("coverTemplateSwitch");
+  if (!menu || !trigger) return;
+  menu.innerHTML = Object.entries(coverTemplates).map(([id, item], index) =>
+    `<button type="button" class="${id === selectedCover ? "active" : ""}" data-cover-template="${escapeHtml(id)}">${escapeHtml(coverTemplateDisplayName(id, item, index))}</button>`
+  ).join("");
+  trigger.onclick = () => {
+    const expanded = menu.classList.toggle("hidden") === false;
+    trigger.setAttribute("aria-expanded", expanded ? "true" : "false");
+  };
+  menu.querySelectorAll("[data-cover-template]").forEach((button) => {
+    button.onclick = async () => {
+      menu.classList.add("hidden");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.disabled = true;
+      trigger.classList.add("is-loading");
+      trigger.innerHTML = buttonLoadingInline("切换中...");
+      try {
+        await selectCoverTemplate(button.dataset.coverTemplate);
+      } finally {
+        trigger.disabled = false;
+        trigger.classList.remove("is-loading");
+        trigger.innerHTML = buttonIconLabel("⇄", "模板切换");
+      }
+    };
+  });
+}
+
 function renderVideoTemplateSelector() {
-  $("videoTemplateSelector").innerHTML = Object.entries(templates).map(([id, item]) =>
-    `<button class="${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${item.name || id}</button>`).join("");
+  $("videoTemplateSelector").innerHTML = Object.entries(templates).map(([id, item], index) =>
+    `<button class="${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${escapeHtml(videoTemplateDisplayName(id, item, index))}</button>`).join("");
   $("videoTemplateSelector").querySelectorAll("button").forEach((btn) => btn.onclick = async () => {
     await selectVideoTemplate(btn.dataset.id, { refreshTemplateGallery: false });
   });
+}
+
+function numberedTemplateName(prefix, id, item, index, pattern) {
+  const rawName = String(item?.name || "");
+  const rawId = String(id || "");
+  const matched = rawName.match(pattern) || rawId.match(/_(\d+)$/);
+  const serial = String(Number(matched?.[1] || index + 1)).padStart(2, "0");
+  return `${prefix} ${serial}`;
+}
+
+function coverTemplateDisplayName(id, item, index = Object.keys(coverTemplates).indexOf(id)) {
+  return numberedTemplateName("第一屏封面模板", id, item, index, /(?:第一屏封面模板|九宫格图片模板)\s*(\d+)/);
+}
+
+function videoTemplateDisplayName(id, item, index = Object.keys(templates).indexOf(id)) {
+  return numberedTemplateName("视频叠层模板", id, item, index, /视频叠层模板\s*(\d+)/);
 }
 
 async function selectVideoTemplate(templateId, options = {}) {
@@ -564,10 +612,11 @@ function renderCoverEditor() {
   const t = coverTemplates[selectedCover];
   applyIndependentCoverDefaults(t);
   const independentCover = isIndependentCover(t);
-  $("previewCaption").textContent = `${selectedCover} / ${t.name || selectedCover}${independentCover ? " / 独立视频封面" : ""}`;
+  $("previewCaption").textContent = `${selectedCover} / ${coverTemplateDisplayName(selectedCover, t)}${independentCover ? " / 独立视频封面" : ""}`;
+  renderCoverTemplateMenu();
   const toggle = $("coverLayoutToggle");
   if (toggle) {
-    toggle.textContent = independentCover ? "列表效果预览" : "独立封面预览";
+    toggle.innerHTML = independentCover ? buttonIconLabel("☷", "列表效果预览") : buttonIconLabel("▣", "独立封面预览");
     toggle.classList.toggle("active", independentCover);
     toggle.onclick = toggleCoverLayout;
   }
@@ -587,7 +636,8 @@ function renderCoverEditor() {
     ${coverVisualToolbarHtml(t)}
     <p class="visual-editor-hint">点击预览里的文字或按钮后拖动定位；工具栏可调整字号、颜色、对齐和文字内容。</p>
     <div class="template-actions cover-template-actions">
-      <button type="button" id="saveCover">保存当前模板</button>
+      <button type="button" id="saveCover">保存</button>
+      <button type="button" id="saveCoverAsNew" class="secondary">新建保存</button>
     </div>`];
   $("coverForm").innerHTML = html.join("");
   $("coverForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
@@ -601,6 +651,7 @@ function renderCoverEditor() {
   });
   bindCoverVisualToolbar();
   $("saveCover").onclick = saveCurrentCoverTemplate;
+  $("saveCoverAsNew").onclick = saveCoverAsNewTemplate;
 }
 
 function renderEndingTemplatePanel(data) {
@@ -1290,9 +1341,9 @@ async function refreshVideoTemplatePreview() {
 async function refreshVideoTemplateGallery() {
   setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
-  for (const [id, template] of Object.entries(templates)) {
-    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(template)}<span>${id} / ${template.name || id}</span></div>`);
-  }
+  Object.entries(templates).forEach(([id, template], index) => {
+    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(template)}<span>${id} / ${videoTemplateDisplayName(id, template, index)}</span></div>`);
+  });
   $("videoTemplateGallery").innerHTML = cards.join("");
   $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => {
     card.onclick = async (event) => {
@@ -1470,7 +1521,7 @@ async function cloneVideoTemplate() {
     return;
   }
   const nextId = nextTemplateCloneId(selectedVideoTemplate, templates);
-  const nextName = `${sourceTemplate.name || selectedVideoTemplate} Copy`;
+  const nextName = videoTemplateDisplayName(nextId, {}, Object.keys(templates).length);
   try {
     templates[nextId] = {...JSON.parse(JSON.stringify(sourceTemplate)), name: nextName};
     selectedVideoTemplate = nextId;
@@ -1572,14 +1623,20 @@ async function saveCoverAsNewTemplate() {
   if (!sourceTemplate) return;
   const previousCover = selectedCover;
   const previousTemplates = {...coverTemplates};
-  const button = $("saveCover");
-  const label = button?.textContent || "保存当前模板";
+  const nextMeta = nextCoverTemplateMeta(coverTemplates);
+  const button = $("saveCoverAsNew");
+  const label = button?.textContent || "新建保存";
   if (button) {
     button.disabled = true;
-    button.textContent = "保存中...";
+    button.classList.add("is-loading");
+    button.innerHTML = buttonLoadingInline("新建中...");
   }
-  coverTemplates = buildCoverTemplateVariants(sourceTemplate);
-  selectedCover = "cover_template_01";
+  const newTemplate = JSON.parse(JSON.stringify(sourceTemplate));
+  applyIndependentCoverDefaults(newTemplate);
+  newTemplate.name = nextMeta.name;
+  newTemplate.cover_layout = "single_video";
+  coverTemplates = {...coverTemplates, [nextMeta.id]: newTemplate};
+  selectedCover = nextMeta.id;
   state.cover_template_id = selectedCover;
   state.cover_templates = coverTemplates;
   try {
@@ -1589,7 +1646,8 @@ async function saveCoverAsNewTemplate() {
     renderCoverSelector();
     renderCoverEditor();
     await refreshMainPreview();
-    log("已自动生成 9 组九宫格图片模板");
+    log(`已新建独立封面模板：${nextMeta.name}`);
+    showTemplateActionStatus("新建保存成功", "coverForm");
   } catch (error) {
     coverTemplates = previousTemplates;
     selectedCover = previousCover;
@@ -1597,6 +1655,7 @@ async function saveCoverAsNewTemplate() {
     state.cover_templates = previousTemplates;
     if (button) {
       button.disabled = false;
+      button.classList.remove("is-loading");
       button.textContent = label;
     }
     log(`第一屏新模板保存失败：${error.message}`);
@@ -1607,7 +1666,7 @@ async function saveCurrentCoverTemplate() {
   const template = coverTemplates[selectedCover];
   if (!template) return;
   const button = $("saveCover");
-  const label = button?.textContent || "保存当前模板";
+  const label = button?.textContent || "保存";
   if (button) {
     button.disabled = true;
     button.classList.add("is-loading");
@@ -1714,6 +1773,7 @@ async function generate() {
   button.dataset.mode = "generate";
   try {
     const statePayload = collectState();
+    if (!(await runPreflightChecks(statePayload))) return;
     if (!(await confirmGeneration(statePayload))) return;
     button.disabled = true;
     button.textContent = "提交中...";
@@ -1735,6 +1795,10 @@ async function generate() {
   }
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function pollJob(jobId) {
   const job = await api(`/api/video-matrix/jobs/${jobId}`);
   updateJobStatus(job);
@@ -1747,6 +1811,229 @@ async function pollJob(jobId) {
       button.textContent = "预览视频";
     }
   } else if (job.status !== "error") setTimeout(() => pollJob(jobId), 1200);
+}
+
+async function runPreflightChecks(statePayload) {
+  const modal = $("generationPreflightModal");
+  const body = $("generationPreflightBody");
+  const actions = modal?.querySelector(".preflight-actions");
+  if (!modal || !body || !actions) return true;
+  let liveData = null;
+  const checks = buildPreflightChecks(
+    statePayload,
+    () => liveData,
+    (data) => { liveData = data; }
+  );
+  body.innerHTML = preflightChecksHtml(checks);
+  $("preflightCancel").hidden = true;
+  $("preflightContinue").hidden = true;
+  actions.classList.add("is-running");
+  actions.classList.remove("is-complete");
+  modal.classList.remove("hidden");
+  document.body.classList.add("confirm-modal-open");
+
+  let hasFail = false;
+  for (let index = 0; index < checks.length; index += 1) {
+    setPreflightStepStatus(index, "checking", "检查中...");
+    await wait(80);
+    let result;
+    try {
+      result = await checks[index].run();
+    } catch (error) {
+      result = { status: "fail", detail: error.message || "预检执行失败" };
+    }
+    const status = result?.status || "pass";
+    if (status === "fail") hasFail = true;
+    setPreflightStepStatus(index, status, result?.detail || checks[index].readyText);
+    await wait(50);
+  }
+
+  actions.classList.remove("is-running");
+  if (!hasFail) {
+    actions.classList.add("is-complete");
+    setPreflightSummary("预检通过", "当前保存条件未发现会阻断提交的问题，正在进入最终确认。");
+    await wait(420);
+    closePreflightModal();
+    return true;
+  }
+
+  setPreflightSummary("预检未通过", "请按红色节点提示修正后再点击立即生成。");
+  $("preflightCancel").hidden = false;
+  return new Promise((resolve) => {
+    const close = () => {
+      closePreflightModal();
+      $("preflightCancel").onclick = null;
+      $("preflightClose").onclick = null;
+      resolve(false);
+    };
+    $("preflightCancel").onclick = close;
+    $("preflightClose").onclick = close;
+  });
+}
+
+function closePreflightModal() {
+  const modal = $("generationPreflightModal");
+  modal?.classList.add("hidden");
+  document.body.classList.remove("confirm-modal-open");
+}
+
+function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
+  const categories = materialCategories({ settings });
+  const categoryNames = Object.fromEntries(categories.map((category) => [category.id, category.label]));
+  const activeIds = Array.isArray(statePayload.active_category_ids) ? statePayload.active_category_ids : [];
+  const composition = Array.isArray(statePayload.composition_sequence) ? statePayload.composition_sequence : [];
+  const selectedEndingNames = Array.isArray(statePayload.ending_template_ids) ? statePayload.ending_template_ids.filter(Boolean) : [];
+  return [
+    {
+      title: "连接生成接口",
+      pendingText: "读取最新素材、模板、BGM 和片尾目录状态。",
+      readyText: "接口可用，已读取最新状态。",
+      run: async () => {
+        const data = await api("/api/video-matrix/state");
+        setLiveData(data);
+        return { status: "pass", detail: "接口可用，已读取最新状态。" };
+      },
+    },
+    {
+      title: "输出参数",
+      pendingText: "检查数量、并行、帧率、节拍分析时长和输出目录。",
+      readyText: "输出参数完整。",
+      run: () => {
+        const formats = Array.isArray(statePayload.output_options) ? statePayload.output_options.filter(Boolean) : [];
+        if (!Number.isFinite(statePayload.output_count) || statePayload.output_count < 1) return { status: "fail", detail: "生成数量必须大于 0。" };
+        if (!Number.isFinite(statePayload.max_workers) || statePayload.max_workers < 1) return { status: "fail", detail: "并行线程必须大于 0。" };
+        if (![30, 60].includes(Number(statePayload.target_fps))) return { status: "fail", detail: "目标帧率只能是 30 或 60。" };
+        if (!formats.length) return { status: "fail", detail: "至少需要选择一种输出格式。" };
+        if (!String(statePayload.output_root || "").trim()) return { status: "fail", detail: "最终视频生成目录不能为空。" };
+        if (Number(statePayload.video_duration_min) > Number(statePayload.video_duration_max)) return { status: "fail", detail: "最小节拍分析时长不能大于最大节拍分析时长。" };
+        return { status: "pass", detail: `${statePayload.output_count} 条 / ${statePayload.max_workers} 线程 / ${statePayload.target_fps}fps / ${formats.join(", ")}` };
+      },
+    },
+    {
+      title: "模板可用性",
+      pendingText: "检查第一屏封面模板和正文叠层模板是否存在。",
+      readyText: "模板配置可用。",
+      run: () => {
+        const live = getLiveData() || {};
+        const liveVideoTemplates = live.templates || templates || {};
+        const liveCoverTemplates = live.cover_templates || coverTemplates || {};
+        if (!liveVideoTemplates[statePayload.template_id]) return { status: "fail", detail: `正文叠层模板不存在：${statePayload.template_id || "未选择"}` };
+        if (!liveCoverTemplates[statePayload.cover_template_id]) return { status: "fail", detail: `第一屏封面模板不存在：${statePayload.cover_template_id || "未选择"}` };
+        return { status: "pass", detail: `正文 ${statePayload.template_id} / 封面 ${statePayload.cover_template_id}` };
+      },
+    },
+    {
+      title: "本地 BGM",
+      pendingText: "检查本地背景音乐库是否有可用 MP3。",
+      readyText: "BGM 可用。",
+      run: () => {
+        const live = getLiveData() || {};
+        const localBgm = Array.isArray(live.local_bgm) ? live.local_bgm : bgmLibraryState.local;
+        if (!localBgm.length) return { status: "fail", detail: "本地背景音乐库没有可用 MP3。" };
+        if (statePayload.bgm_library_id && !localBgm.includes(statePayload.bgm_library_id)) return { status: "fail", detail: `已选 BGM 不在本地曲库：${statePayload.bgm_library_id}` };
+        return { status: "pass", detail: statePayload.bgm_library_id ? `已选 ${statePayload.bgm_library_id}` : `本地曲库 ${localBgm.length} 首，生成时随机取 1 首。` };
+      },
+    },
+    {
+      title: "分类素材",
+      pendingText: "检查启用分类是否有可用素材。",
+      readyText: "启用分类都有素材。",
+      run: () => {
+        const live = getLiveData() || {};
+        const counts = live.category_counts || {};
+        if (!activeIds.length) return { status: "fail", detail: "至少需要启用一个素材分类。" };
+        const empty = activeIds.filter((id) => Number(counts[id] || 0) < 1);
+        if (empty.length) return { status: "fail", detail: `这些分类没有素材：${empty.map((id) => categoryNames[id] || id).join("、")}` };
+        const total = activeIds.reduce((sum, id) => sum + Number(counts[id] || 0), 0);
+        return { status: "pass", detail: `${activeIds.length} 个分类可用，共 ${total} 个素材。` };
+      },
+    },
+    {
+      title: "生成结构",
+      pendingText: "检查每个片段分类和片段秒数。",
+      readyText: "生成结构可用。",
+      run: () => {
+        const live = getLiveData() || {};
+        const counts = live.category_counts || {};
+        if (!composition.length) return { status: "fail", detail: "生成结构不能为空。" };
+        const invalidDuration = composition.find((row) => !Number.isFinite(Number(row.duration)) || Number(row.duration) <= 0);
+        if (invalidDuration) return { status: "fail", detail: "生成结构里存在无效片段秒数。" };
+        const missing = composition
+          .map((row) => row.category_id)
+          .filter((id) => !activeIds.includes(id) || Number(counts[id] || 0) < 1);
+        if (missing.length) return { status: "fail", detail: `结构引用了未启用或无素材分类：${[...new Set(missing)].map((id) => categoryNames[id] || id).join("、")}` };
+        const seconds = composition.reduce((sum, row) => sum + Number(row.duration || 0), 0);
+        const status = seconds > Number(statePayload.video_duration_max || 0) ? "warn" : "pass";
+        const detail = `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒。${status === "warn" ? "节拍分析会按结构总时长兜底。" : ""}`;
+        return { status, detail };
+      },
+    },
+    {
+      title: "片尾素材",
+      pendingText: "检查片尾封面模板或随机片尾素材是否可读取。",
+      readyText: "片尾配置可用。",
+      run: () => {
+        const mode = statePayload.ending_template_mode || "dynamic";
+        if (mode === "dynamic") {
+          if (!statePayload.ending_cover_template) return { status: "fail", detail: "动态片尾缺少片尾封面模板配置。" };
+          return { status: "pass", detail: "使用动态片尾封面模板。" };
+        }
+        const live = getLiveData() || {};
+        const endingItems = Array.isArray(live.ending_templates) ? live.ending_templates : endingTemplateState.local;
+        const endingNames = new Set(endingItems.map((item) => item.name));
+        if (!endingItems.length) return { status: "fail", detail: "片尾素材目录没有可用素材。" };
+        if (selectedEndingNames.length) {
+          const missing = selectedEndingNames.filter((name) => !endingNames.has(name));
+          if (missing.length) return { status: "fail", detail: `已选片尾素材不存在：${missing.join("、")}` };
+          return { status: "pass", detail: `随机范围 ${selectedEndingNames.length} 个已选片尾素材。` };
+        }
+        return { status: "pass", detail: `未指定片尾素材，随机范围为目录内 ${endingItems.length} 个素材。` };
+      },
+    },
+  ];
+}
+
+function preflightChecksHtml(checks) {
+  return `
+    <div class="preflight-summary">
+      <strong data-preflight-summary-title>正在预检</strong>
+      <span data-preflight-summary-detail>逐项确认当前生成条件，失败项会阻止提交。</span>
+    </div>
+    <ol class="preflight-list">
+      ${checks.map((check, index) => `
+        <li class="preflight-step" data-preflight-step="${index}">
+          <span class="preflight-status" data-preflight-status>·</span>
+          <div>
+            <strong>${escapeHtml(check.title)}</strong>
+            <small data-preflight-detail>${escapeHtml(check.pendingText || "")}</small>
+          </div>
+          <span class="preflight-badge" data-preflight-badge>等待</span>
+        </li>
+      `).join("")}
+    </ol>
+  `;
+}
+
+function setPreflightSummary(title, detail) {
+  const titleNode = document.querySelector("[data-preflight-summary-title]");
+  const detailNode = document.querySelector("[data-preflight-summary-detail]");
+  if (titleNode) titleNode.textContent = title;
+  if (detailNode) detailNode.textContent = detail;
+}
+
+function setPreflightStepStatus(index, status, detail) {
+  const node = document.querySelector(`[data-preflight-step="${index}"]`);
+  if (!node) return;
+  node.classList.remove("checking", "pass", "warn", "fail");
+  node.classList.add(status);
+  const icon = node.querySelector("[data-preflight-status]");
+  const badge = node.querySelector("[data-preflight-badge]");
+  const detailNode = node.querySelector("[data-preflight-detail]");
+  const icons = { checking: "...", pass: "✓", warn: "!", fail: "×" };
+  const labels = { checking: "检查中", pass: "通过", warn: "提醒", fail: "失败" };
+  if (icon) icon.textContent = icons[status] || "·";
+  if (badge) badge.textContent = labels[status] || "等待";
+  if (detailNode) detailNode.textContent = detail || "";
 }
 
 function confirmGeneration(statePayload) {
@@ -1924,7 +2211,7 @@ function toggleBgmLibraryPopover() {
     ? bgmLibraryState.local.map((name) => `
       <li class="bgm-local-item ${name === selectedBgmLibraryId() ? "is-selected" : ""}" data-bgm-name="${escapeHtml(name)}">
         <button type="button" class="bgm-local-select" data-bgm-select="${escapeHtml(name)}" aria-pressed="${name === selectedBgmLibraryId() ? "true" : "false"}" title="设为本次唯一背景音乐">
-          <span class="bgm-select-dot"></span>
+          <span class="bgm-select-check" aria-hidden="true"></span>
           <span>${escapeHtml(name)}</span>
         </button>
         <audio controls preload="none" src="/api/video-matrix/bgm/${encodeURIComponent(name)}"></audio>
@@ -1932,7 +2219,7 @@ function toggleBgmLibraryPopover() {
     : "<li>暂无本地 MP3 文件</li>";
   const pixabayList = bgmLibraryState.pixabay.length
     ? renderPixabayTracks()
-    : `<span class="pixabay-empty">点击下方按钮抓取试听列表。</span>`;
+    : `<span class="pixabay-empty">正在准备 Pixabay industry 最新曲库。</span>`;
   panel.innerHTML = `
     <div class="bgm-popover-head">
       <div>
@@ -1942,27 +2229,15 @@ function toggleBgmLibraryPopover() {
       <button id="toggleBgmLibrarySize" type="button" class="secondary">收起</button>
     </div>
     <section class="bgm-local-section">
+      <strong>本地曲库</strong>
       <ul>${localList}</ul>
     </section>
     <section class="bgm-pixabay-section">
-      <strong>Pixabay industry 曲库</strong>
+      <strong>网络曲库</strong>
+      <button id="loadPixabayTracksInline" class="pixabay-refresh-button" type="button">抓取 Pixabay industry 前 10 首</button>
       <div id="pixabayTrackList" class="pixabay-track-list">${pixabayList}</div>
     </section>
-    <div class="bgm-download-box">
-      <div class="bgm-download-actions">
-        <button id="loadPixabayTracksInline" type="button">抓取 Pixabay industry 前 10 首</button>
-      </div>
-      <strong>音频直链试听 / 下载</strong>
-      <label><span>音频地址</span><input id="bgmDownloadUrl" placeholder="https://.../music.mp3"></label>
-      <audio id="bgmUrlPreview" controls preload="none"></audio>
-      <button id="downloadBgm" type="button">下载到本地曲库</button>
-      <small id="bgmDownloadStatus"></small>
-    </div>
   `;
-  $("bgmDownloadUrl").oninput = () => {
-    $("bgmUrlPreview").src = $("bgmDownloadUrl").value.trim();
-  };
-  $("downloadBgm").onclick = downloadBgmToLibrary;
   $("toggleBgmLibrarySize").onclick = toggleBgmLibrarySize;
   $("loadPixabayTracksInline")?.addEventListener("click", loadPixabayTracks);
   panel.querySelectorAll("[data-bgm-select]").forEach((button) => {
@@ -1972,6 +2247,7 @@ function toggleBgmLibraryPopover() {
     button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
   });
   bindExclusiveBgmAudioPlayback(panel);
+  loadPixabayTracks();
 }
 function selectedBgmLibraryId() {
   return bgmLibraryState.local.includes(state.bgm_library_id) ? state.bgm_library_id : "";
@@ -2004,10 +2280,13 @@ function toggleBgmLibrarySize() {
 }
 function renderPixabayTracks() {
   return bgmLibraryState.pixabay.slice(0, 10).map((track, index) => `
-    <article class="pixabay-track">
-      <div><strong>${index + 1}. ${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)} / ${escapeHtml(track.duration)}</span></div>
-      <button type="button" data-pixabay-open="${escapeHtml(track.source_url)}">试听</button>
-      <button type="button" data-pixabay-open="${escapeHtml(track.source_url)}">下载页</button>
+    <article class="pixabay-track ${track.audio_url ? "" : "audio-unavailable"}">
+      <div class="pixabay-track-main">
+        <strong>${index + 1}. ${escapeHtml(track.title)}</strong>
+        <span>${escapeHtml(track.artist)} / ${escapeHtml(track.duration)}</span>
+        ${track.audio_url ? `<audio controls preload="none" src="${escapeHtml(track.audio_url)}"></audio>` : `<small>音频地址暂不可用</small>`}
+      </div>
+      <button type="button" data-pixabay-download="${escapeHtml(track.audio_url || "")}" data-pixabay-title="${escapeHtml(track.title || "pixabay-industry")}" ${track.audio_url ? "" : "disabled"}>下载到本地</button>
     </article>
   `).join("");
 }
@@ -2018,33 +2297,46 @@ async function loadPixabayTracks() {
     const data = await api("/api/video-matrix/pixabay/industry");
     bgmLibraryState.pixabay = data.tracks || [];
     list.innerHTML = renderPixabayTracks();
-    list.querySelectorAll("[data-pixabay-open]").forEach((button) => {
-      button.onclick = () => window.open(button.dataset.pixabayOpen, "_blank", "noopener");
+    list.querySelectorAll("[data-pixabay-download]").forEach((button) => {
+      button.onclick = () => downloadPixabayTrack(button);
     });
+    bindExclusiveBgmAudioPlayback($("bgmLibraryPopover"));
   } catch (error) {
     list.textContent = error.message;
   }
 }
-async function downloadBgmToLibrary() {
-  const url = $("bgmDownloadUrl").value.trim();
-  const status = $("bgmDownloadStatus");
-  if (!url) {
-    status.textContent = "请先粘贴 MP3/WAV/M4A 音频直链。";
-    return;
-  }
-  status.innerHTML = loadingInline("正在下载到本地曲库...");
+async function downloadPixabayTrack(button) {
+  const url = button.dataset.pixabayDownload || "";
+  if (!url) return;
+  const label = button.textContent;
+  button.disabled = true;
+  button.classList.add("is-loading");
+  button.innerHTML = buttonLoadingInline("下载中...");
   try {
-    const result = await api("/api/video-matrix/bgm/download", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({url})});
-    status.textContent = `已下载：${result.filename}`;
+    const result = await api("/api/video-matrix/bgm/download", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url, filename: `${button.dataset.pixabayTitle || "pixabay-industry"}.mp3`}),
+    });
+    button.textContent = `已下载：${result.filename}`;
     const data = await api("/api/video-matrix/state");
     state = data.ui_state; settings = data.settings;
     renderBgm(data);
     const panel = $("bgmLibraryPopover");
     panel.classList.remove("hidden");
+    panel.classList.add("modal");
+    document.body.classList.add("bgm-modal-open");
     toggleBgmLibraryPopover();
     toggleBgmLibraryPopover();
   } catch (error) {
-    status.textContent = error.message;
+    button.textContent = error.message;
+  } finally {
+    window.setTimeout(() => {
+      if (!button.isConnected) return;
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      if (button.textContent !== label) button.textContent = label;
+    }, 1600);
   }
 }
 function updateSourceMode() { $("uploadSourcesWrap")?.classList.toggle("hidden", true); }
