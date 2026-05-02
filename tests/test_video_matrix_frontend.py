@@ -95,6 +95,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "toggleBgmLibraryPopover" in app
     assert '$("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory)' in app
     assert 'document.querySelector(".sidebar details summary")' not in app
+    assert "const bgmPanel = $(\"bgmPanel\")" in app
+    assert "if (!bgmPanel) return" in app
     assert "本地曲库列表" in app
     assert "本地曲库</strong>" in app
     assert "网络曲库" not in app

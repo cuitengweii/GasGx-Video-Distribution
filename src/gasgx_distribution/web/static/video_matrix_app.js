@@ -2565,7 +2565,9 @@ function renderBgm(data) {
     directory: localBgmDir,
     links: Object.values(data.bgm_library || {}),
   };
-  $("bgmPanel").innerHTML = `
+  const bgmPanel = $("bgmPanel");
+  if (!bgmPanel) return;
+  bgmPanel.innerHTML = `
     <div class="bgm-label-row">
       <strong>本地背景音乐</strong>
       <button class="help-dot" type="button" aria-label="背景音乐目录" title="把 MP3 文件放到：${escapeHtml(localBgmDir)}">?</button>
