@@ -534,6 +534,7 @@ def _drawtext_lines(
     align = _target_text_align(template, text_key)
     line_gap = max(1, int(font_size * 1.18))
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
+    style = str(template.get(f"{text_key}_text_style") or "none").strip().lower()
     font_arg = _resolve_drawtext_font_arg(font_family)
     filters: list[str] = []
     for index, line in enumerate(lines):
@@ -545,14 +546,76 @@ def _drawtext_lines(
             x_expr = str(anchor_x)
         y_expr = str(anchor_y + index * line_gap)
         text_source = _drawtext_text_source(line, text_key, index, text_dir)
+        filters.extend(
+            _text_style_extra_filters(
+                style,
+                font_arg,
+                text_source,
+                x_expr,
+                y_expr,
+                font_size=font_size,
+                line_index=index,
+            )
+        )
         filters.append(
             "drawtext="
             f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key, explicit_template_keys or set())}:"
             f"fontsize={font_size}:"
             f"{text_source}"
             f"{_text_effect_options(effect, x_expr, y_expr, line_index=index, font_size=font_size)}"
+            f"{_text_style_options(style)}"
         )
     return filters
+
+
+def _text_style_extra_filters(
+    style: str,
+    font_arg: str,
+    text_source: str,
+    x_expr: str,
+    y_expr: str,
+    *,
+    font_size: int,
+    line_index: int,
+) -> list[str]:
+    if style == "gradient":
+        return [
+            "drawtext="
+            f"{font_arg}fontcolor=#5DD62C@0.72:"
+            f"fontsize={font_size}:"
+            f"{text_source}:"
+            f"x={x_expr}:y={y_expr}+{max(2, int(font_size * 0.12))}"
+        ]
+    if style == "reflection":
+        return [
+            "drawtext="
+            f"{font_arg}fontcolor=#FFFFFF@0.24:"
+            f"fontsize={font_size}:"
+            f"{text_source}:"
+            f"x={x_expr}:y={y_expr}+{max(18, int(font_size * 1.18))}:"
+            f"alpha='0.24*exp(-0.18*{line_index})'"
+        ]
+    return []
+
+
+def _text_style_options(style: str) -> str:
+    if style == "soft-shadow":
+        return ":shadowcolor=0x000000@0.78:shadowx=2:shadowy=3"
+    if style == "hard-shadow":
+        return ":shadowcolor=0x000000@0.88:shadowx=6:shadowy=6"
+    if style == "outline":
+        return ":borderw=3:bordercolor=0x000000@0.92"
+    if style == "white-outline":
+        return ":borderw=3:bordercolor=0xFFFFFF@0.92"
+    if style == "glow":
+        return ":shadowcolor=0x5DD62C@0.76:shadowx=0:shadowy=0"
+    if style == "neon":
+        return ":borderw=1:bordercolor=0x5DD62C@0.82:shadowcolor=0x5DD62C@0.82:shadowx=0:shadowy=0"
+    if style == "gradient":
+        return ":borderw=1:bordercolor=0x000000@0.44"
+    if style == "reflection":
+        return ":shadowcolor=0x000000@0.62:shadowx=1:shadowy=2"
+    return ""
 
 
 def _text_effect_options(effect: str, x_expr: str, y_expr: str, *, line_index: int, font_size: int) -> str:

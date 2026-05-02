@@ -1828,13 +1828,27 @@ input[type="color"]::-moz-color-swatch {
 }
 .template-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 124px;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   margin-top: 12px;
+  padding: 10px;
+  border: 1px solid rgba(93,214,44,.36);
+  border-radius: 8px;
+  background: rgba(7, 13, 9, .52);
 }
 .template-actions button {
+  width: 100%;
   min-height: 48px;
-  padding: 11px 12px;
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--button-text);
+  background: var(--green);
+  border-color: var(--green);
+  box-shadow: 0 0 18px var(--accent-soft);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.15;
+  text-align: center;
 }
 .template-actions button.is-loading {
   display: inline-flex;
@@ -1853,9 +1867,10 @@ input[type="color"]::-moz-color-swatch {
   text-align: center;
 }
 .template-actions .secondary {
-  color: var(--text);
-  border-color: #ff4053;
-  box-shadow: inset 0 0 0 2px #ff4053;
+  color: var(--button-text);
+  background: var(--green);
+  border-color: var(--green);
+  box-shadow: 0 0 18px var(--accent-soft);
 }
 .template-background-strip {
   display: flex;
@@ -2156,6 +2171,14 @@ button.compact-toggle.active {
 }
 .cover-template-actions {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+#coverForm .template-actions button,
+#endingTemplateForm .template-actions button,
+#videoTemplateForm .template-actions button {
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 13px;
 }
 .side-editor { margin-top:18px; }
 .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }

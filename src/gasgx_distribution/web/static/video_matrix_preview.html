@@ -319,6 +319,57 @@
             animation: vmTextShadowPop .82s cubic-bezier(.2, 1.35, .42, 1) both;
         }
 
+        .vm-template-text.text-style-soft-shadow {
+            text-shadow: 0 4px 16px rgba(0,0,0,.88);
+        }
+
+        .vm-template-text.text-style-hard-shadow {
+            text-shadow: 4px 4px 0 rgba(0,0,0,.78), 0 2px 10px rgba(0,0,0,.7);
+        }
+
+        .vm-template-text.text-style-outline {
+            -webkit-text-stroke: 2px #000;
+            text-shadow: 0 3px 10px rgba(0,0,0,.78);
+        }
+
+        .vm-template-text.text-style-white-outline {
+            -webkit-text-stroke: 2px #fff;
+            text-shadow: 0 3px 10px rgba(0,0,0,.82);
+        }
+
+        .vm-template-text.text-style-glow {
+            text-shadow: 0 0 12px rgba(93,214,44,.86), 0 0 24px rgba(93,214,44,.48), 0 2px 10px rgba(0,0,0,.72);
+        }
+
+        .vm-template-text.text-style-neon {
+            color: #f4fff0;
+            -webkit-text-stroke: 1px rgba(93,214,44,.75);
+            text-shadow: 0 0 8px rgba(93,214,44,.94), 0 0 22px rgba(93,214,44,.62), 0 0 38px rgba(93,214,44,.32);
+        }
+
+        .vm-template-text.text-style-gradient {
+            color: transparent !important;
+            background: linear-gradient(180deg, #ffffff 0%, #5dd62c 62%, #1f8f23 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            text-shadow: none;
+        }
+
+        .vm-template-text.text-style-reflection::after {
+            content: attr(data-reflection-text);
+            position: absolute;
+            left: 0;
+            top: calc(100% + 8px);
+            width: 100%;
+            color: currentColor;
+            opacity: .28;
+            transform: scaleY(-1);
+            transform-origin: top;
+            mask-image: linear-gradient(to bottom, rgba(0,0,0,.58), rgba(0,0,0,0));
+            -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.58), rgba(0,0,0,0));
+            pointer-events: none;
+        }
+
         @keyframes vmTextFadeIn {
             0% { opacity: 0; }
             100% { opacity: 1; }
@@ -1132,6 +1183,7 @@
         const template = currentPayload?.template || {};
         const alignKey = `${target}_text_align`;
         node.textContent = value || "";
+        node.dataset.reflectionText = value || "";
         const useHudAlignBox = target === "hud" && template[alignKey];
         node.style.left = useHudAlignBox ? designX(template.hud_bar_x ?? x) : designX(x);
         node.style.top = designY(y);
@@ -1142,6 +1194,7 @@
         node.style.fontFamily = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
         node.style.textAlign = template[alignKey] || "left";
         applyTextEffect(node, template[`${target}_text_effect`] || "none", value);
+        applyTextStyle(node, template[`${target}_text_style`] || "none");
       }
 
       function applyTextEffect(node, effect, text) {
@@ -1159,6 +1212,18 @@
         if (normalized === "none") return;
         node.classList.add(`text-effect-${normalized}`);
         node.style.setProperty("--text-effect-steps", Math.max(8, String(text || "").length));
+      }
+
+      function applyTextStyle(node, style) {
+        const styleClasses = [
+          "text-style-soft-shadow", "text-style-hard-shadow", "text-style-outline",
+          "text-style-white-outline", "text-style-glow", "text-style-neon",
+          "text-style-gradient", "text-style-reflection",
+        ];
+        node.classList.remove(...styleClasses);
+        const normalized = style || "none";
+        if (normalized === "none") return;
+        node.classList.add(`text-style-${normalized}`);
       }
 
       function applyTemplatePayload(payload) {
@@ -1489,6 +1554,7 @@
         if (command === "align") setTextAlign(value || "left");
         if (command === "bar-align") setBackgroundAlign(value || "left");
         if (command === "font-family") setFontFamily(value);
+        if (command === "text-style") setTextStyle(value);
         if (command === "text-effect") setTextEffect(value);
         if (command === "color") setColor(value);
         if (command === "hud-bg-color") setHudBackgroundColor(value);
@@ -1697,6 +1763,12 @@
         const target = textTargetForAlignment(activeTarget);
         if (!target) return;
         postTemplateUpdates({ [`${target}_text_effect`]: value || "none" });
+      }
+
+      function setTextStyle(value) {
+        const target = textTargetForAlignment(activeTarget);
+        if (!target) return;
+        postTemplateUpdates({ [`${target}_text_style`]: value || "none" });
       }
 
       function setTextAlign(value) {

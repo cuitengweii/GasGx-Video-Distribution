@@ -140,6 +140,17 @@ const textEffectOptions = [
   ["zoom-in", "放大入场"],
   ["shadow-pop", "阴影冲击"],
 ];
+const textStyleOptions = [
+  ["none", "基础文字"],
+  ["soft-shadow", "柔和阴影"],
+  ["hard-shadow", "硬阴影"],
+  ["outline", "黑色描边"],
+  ["white-outline", "白色描边"],
+  ["glow", "外发光"],
+  ["neon", "霓虹字"],
+  ["gradient", "双色渐变"],
+  ["reflection", "文字倒影"],
+];
 const coverMaskModeOptions = [
   ["none", "无蒙版"],
   ["top_gradient", "上渐变蒙版"],
@@ -1224,7 +1235,7 @@ function renderVideoTemplateEditor() {
   html.push(`
     <div class="template-actions">
       <button type="button" id="saveVideoTemplate">保存当前</button>
-      <button type="button" id="cloneVideoTemplate" class="secondary" title="基于当前正文模板克隆一个新模板">新建模板</button>
+      <button type="button" id="cloneVideoTemplate" title="基于当前正文模板新建保存">新建保存</button>
     </div>`);
   $("videoTemplateForm").innerHTML = html.join("");
   $("videoTemplateForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
@@ -1246,6 +1257,7 @@ function renderVideoTemplateEditor() {
 function visualTemplateToolbarHtml(template) {
   const fontValue = template.title_font_family || videoTextFontOptions[0][0];
   const effectValue = template.title_text_effect || "none";
+  const styleValue = template.title_text_style || "none";
   const hudOpacity = Number(template.hud_bar_opacity ?? 0.68);
   const hudRadius = Number(template.hud_bar_radius ?? 10);
   const hudColor = template.hud_bar_color || "#0E1A10";
@@ -1258,6 +1270,9 @@ function visualTemplateToolbarHtml(template) {
           </button>`).join("");
   const effectOptions = textEffectOptions.map(([value, label]) =>
     `<option value="${escapeHtml(value)}" ${value === effectValue ? "selected" : ""}>${label}</option>`
+  ).join("");
+  const styleOptions = textStyleOptions.map(([value, label]) =>
+    `<option value="${escapeHtml(value)}" ${value === styleValue ? "selected" : ""}>${label}</option>`
   ).join("");
   return `
     <div class="visual-toolbar-panel" aria-label="文字可视化工具">
@@ -1277,6 +1292,7 @@ function visualTemplateToolbarHtml(template) {
         <div class="font-sample-picker" role="listbox" aria-label="字体样张选择">
           ${fontSamples}
         </div>
+        <label class="visual-effect-control">文字样式<select data-visual-command="text-style">${styleOptions}</select></label>
         <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
       </div>
       <div class="visual-control-section visual-hud-controls" aria-label="字幕背板调整区">
@@ -1693,7 +1709,7 @@ async function saveVideoTemplate() {
 
 async function cloneVideoTemplate() {
   const button = $("cloneVideoTemplate");
-  const label = button?.textContent || "新建模板";
+  const label = button?.textContent || "新建保存";
   if (button) {
     button.disabled = true;
     button.classList.add("is-loading");
@@ -1721,7 +1737,7 @@ async function cloneVideoTemplate() {
     await refreshVideoTemplatePreview();
     await refreshVideoTemplateGallery();
     log(`已基于当前正文模板新建：${nextName}`);
-    showTemplateActionStatus("新建模板成功");
+    showTemplateActionStatus("新建保存成功");
   } catch (error) {
     if (button) {
       button.disabled = false;

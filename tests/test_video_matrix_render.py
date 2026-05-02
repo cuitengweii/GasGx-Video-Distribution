@@ -303,3 +303,44 @@ def test_text_effect_options_cover_template_dropdown_values() -> None:
 
     for effect, fragment in expected_fragments.items():
         assert fragment in render._text_effect_options(effect, "100", "200", line_index=0, font_size=48)
+
+
+def test_text_style_options_generate_drawtext_fragments() -> None:
+    expected_fragments = {
+        "soft-shadow": "shadowcolor=0x000000@0.78",
+        "hard-shadow": "shadowx=6:shadowy=6",
+        "outline": "bordercolor=0x000000@0.92",
+        "white-outline": "bordercolor=0xFFFFFF@0.92",
+        "glow": "shadowcolor=0x5DD62C@0.76",
+        "neon": "bordercolor=0x5DD62C@0.82",
+        "gradient": "bordercolor=0x000000@0.44",
+        "reflection": "shadowcolor=0x000000@0.62",
+    }
+
+    for style, fragment in expected_fragments.items():
+        assert fragment in render._text_style_options(style)
+
+
+def test_text_style_extra_filters_support_gradient_and_reflection_layers() -> None:
+    gradient_filters = render._text_style_extra_filters(
+        "gradient",
+        "fontfile=/tmp/font.ttf:",
+        "text=GasGx",
+        "100",
+        "200",
+        font_size=48,
+        line_index=0,
+    )
+    reflection_filters = render._text_style_extra_filters(
+        "reflection",
+        "fontfile=/tmp/font.ttf:",
+        "text=GasGx",
+        "100",
+        "200",
+        font_size=48,
+        line_index=0,
+    )
+
+    assert "fontcolor=#5DD62C@0.72" in gradient_filters[0]
+    assert "fontcolor=#FFFFFF@0.24" in reflection_filters[0]
+    assert "alpha='0.24*exp" in reflection_filters[0]

@@ -318,7 +318,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'button.textContent = "保存中..."' in app
     assert 'showTemplateActionStatus("保存成功")' in app
     assert 'button.innerHTML = buttonLoadingInline("新建中...")' in app
-    assert 'showTemplateActionStatus("新建模板成功")' in app
+    assert 'showTemplateActionStatus("新建保存成功")' in app
     assert ".template-action-status" in css
     assert ".template-actions button.is-loading" in css
     assert ".ending-editor" in css
@@ -489,7 +489,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "#openBgmDir" in css
     assert ".input-with-unit" in css
     assert ".template-actions" in css
-    assert "grid-template-columns: minmax(0, 1fr) 124px" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
+    assert "#coverForm .template-actions button" in css
+    assert "#endingTemplateForm .template-actions button" in css
+    assert "#videoTemplateForm .template-actions button" in css
     assert "cursor:pointer" in css
     assert "model-image-workbench" in html
     assert "模拟素材选择" in html
@@ -592,6 +595,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "English Data Mono" in app
     assert "English Pop Comic" in app
     assert "textEffectOptions" in app
+    assert "textStyleOptions" in app
     assert app.index('["none", "无动效"]') < app.index('["fade-in", "淡入"]')
     for effect in [
         "fade-in", "fade-out", "fade-in-out",
@@ -601,6 +605,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
         assert effect in app
     assert 'data-visual-command="text-effect"' in app
     assert "文字动效" in app
+    for style in [
+        "soft-shadow", "hard-shadow", "outline", "white-outline",
+        "glow", "neon", "gradient", "reflection",
+    ]:
+        assert style in app
+    assert 'data-visual-command="text-style"' in app
+    assert "文字样式" in app
     assert 'data-visual-command="hud-bg-color"' in app
     assert 'aria-label="字幕背板背景色"' in app
     assert 'data-visual-command="hud-radius"' in app
@@ -613,7 +624,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "hudBar.style.borderRadius = designRadius(template.hud_bar_radius ?? 10)" in preview
     assert "function designRadius(value)" in preview
     assert "setTextEffect(value)" in preview
+    assert "setTextStyle(value)" in preview
     assert "applyTextEffect(node" in preview
+    assert "applyTextStyle(node" in preview
     assert "textColorValue(\"slogan\", template)" in preview
     assert "textColorValue(\"title\", template)" in preview
     assert "textColorValue(\"hud\", template)" in preview
@@ -624,6 +637,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "text-effect-fade-in" in preview
     assert "text-effect-slide-left" in preview
     assert "text-effect-shadow-pop" in preview
+    assert "text-style-outline" in preview
+    assert "text-style-gradient" in preview
+    assert "text-style-reflection" in preview
     assert "white-space: pre;" in preview
     assert "word-break: keep-all" in preview
     assert 'if (target === "singleSlogan" || target === "singleTitle")' in preview
