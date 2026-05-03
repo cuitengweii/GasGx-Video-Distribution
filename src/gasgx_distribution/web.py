@@ -477,6 +477,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="account not found")
         return account
 
+    @app.delete("/api/accounts/{account_id}")
+    def delete_account(account_id: int) -> dict[str, Any]:
+        if not service.delete_account(account_id):
+            raise HTTPException(status_code=404, detail="account not found")
+        return {"ok": True, "deleted": account_id}
+
     @app.post("/api/accounts/{account_id}/platforms/{platform}/open-browser")
     def open_browser(account_id: int, platform: str) -> dict[str, Any]:
         try:

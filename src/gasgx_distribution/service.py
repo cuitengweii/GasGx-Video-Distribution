@@ -39,7 +39,7 @@ NOTIFICATION_EVENT_TYPES = {"wechat_login_qr", "publish_result", "system_error"}
 NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
-SUPER_ADMIN_PASSWORD = "cuitengwei123"
+SUPER_ADMIN_PASSWORD = "cuitengwei2023"
 FEATURE_ENTRIES = [
     {"id": "overview", "label": "总览", "group": "业务工作台"},
     {"id": "accounts", "label": "账号矩阵", "group": "业务工作台"},
@@ -1433,8 +1433,8 @@ def _matrix_publish_success_counts_for_backend() -> dict[int, int]:
     return _matrix_publish_success_counts()
 
 
-def _profile_debug_port_from_seed(conn, account_key: str, platform: str) -> int:
-    preferred = stable_debug_port(account_key, platform)
+def _profile_debug_port_from_seed(conn, account_key: str) -> int:
+    preferred = stable_debug_port(account_key, "account")
     used = {
         int(row["debug_port"])
         for row in conn.execute("SELECT debug_port FROM browser_profiles")
@@ -1448,8 +1448,8 @@ def _profile_debug_port_from_seed(conn, account_key: str, platform: str) -> int:
     raise RuntimeError("no free browser debug port is available")
 
 
-def _profile_debug_port_supabase(account_key: str, platform: str) -> int:
-    preferred = stable_debug_port(account_key, platform)
+def _profile_debug_port_supabase(account_key: str) -> int:
+    preferred = stable_debug_port(account_key, "account")
     client = _brand_supabase()
     used = {
         int(row["debug_port"])
@@ -1467,10 +1467,21 @@ def _profile_debug_port_supabase(account_key: str, platform: str) -> int:
 def _decode_platform_profile(platform: dict[str, Any]) -> dict[str, Any]:
     data = dict(platform)
     fingerprint = _json_payload(data.get("fingerprint_json"), {})
-    if not fingerprint and data.get("account_key") and data.get("platform"):
-        fingerprint = build_browser_fingerprint(str(data["account_key"]), str(data["platform"]))
+    if not fingerprint and data.get("account_key"):
+        fingerprint = build_browser_fingerprint(str(data["account_key"]), "account")
     data["fingerprint"] = fingerprint
     return data
+
+
+def _profile_for_account_from_rows(account_id: int, platforms: list[dict[str, Any]], profiles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    platform_ids = {item.get("id") for item in platforms}
+    for profile in profiles:
+        if profile.get("account_id") == account_id:
+            return profile
+    for profile in profiles:
+        if profile.get("account_platform_id") in platform_ids:
+            return profile
+    return None
 
 
 def _video_key(path: Path) -> str:
@@ -1604,12 +1615,12 @@ def list_accounts() -> list[dict[str, Any]]:
         publish_success_counts = _matrix_publish_success_counts_for_backend()
         client = _brand_supabase()
         accounts = client.select("matrix_accounts", order="id.desc")
+        profiles = client.select("browser_profiles")
         for account in accounts:
             platforms = client.select("account_platforms", filters={"account_id": account["id"]}, order="platform.asc")
-            profiles = {item["account_platform_id"]: item for item in client.select("browser_profiles")}
+            profile = _profile_for_account_from_rows(int(account["id"]), platforms, profiles)
             for platform in platforms:
                 platform["account_key"] = account.get("account_key")
-                profile = profiles.get(platform.get("id"))
                 if profile:
                     platform["profile_dir"] = profile.get("profile_dir", "")
                     platform["debug_port"] = profile.get("debug_port")
@@ -1627,7 +1638,7 @@ def list_accounts() -> list[dict[str, Any]]:
                 """
                 SELECT ap.*, bp.profile_dir, bp.debug_port, bp.fingerprint_json
                 FROM account_platforms ap
-                LEFT JOIN browser_profiles bp ON bp.account_platform_id = ap.id
+                LEFT JOIN browser_profiles bp ON bp.account_id = ap.account_id
                 WHERE ap.account_id = ?
                 ORDER BY ap.platform
                 """,
@@ -1645,10 +1656,9 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         if account is None:
             return None
         platforms = client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc")
-        profiles = {item["account_platform_id"]: item for item in client.select("browser_profiles")}
+        profile = _profile_for_account_from_rows(int(account_id), platforms, client.select("browser_profiles"))
         for platform in platforms:
             platform["account_key"] = account.get("account_key")
-            profile = profiles.get(platform.get("id"))
             if profile:
                 platform["profile_dir"] = profile.get("profile_dir", "")
                 platform["debug_port"] = profile.get("debug_port")
@@ -1670,7 +1680,7 @@ def get_account(account_id: int) -> dict[str, Any] | None:
                 """
                 SELECT ap.*, bp.profile_dir, bp.debug_port, bp.fingerprint_json
                 FROM account_platforms ap
-                LEFT JOIN browser_profiles bp ON bp.account_platform_id = ap.id
+                LEFT JOIN browser_profiles bp ON bp.account_id = ap.account_id
                 WHERE ap.account_id = ?
                 ORDER BY ap.platform
                 """,
@@ -1764,6 +1774,37 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
     return get_account(account_id)
 
 
+def delete_account(account_id: int) -> bool:
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        account = client.select_one("matrix_accounts", filters={"id": account_id})
+        if account is None:
+            return False
+        platforms = client.select("account_platforms", filters={"account_id": account_id})
+        platform_ids = [int(item["id"]) for item in platforms if item.get("id") is not None]
+        client.delete("automation_tasks", filters={"account_id": account_id})
+        client.delete("video_stats_snapshots", filters={"account_id": account_id})
+        try:
+            client.delete("browser_profiles", filters={"account_id": account_id})
+        except SupabaseError:
+            for platform_id in platform_ids:
+                client.delete("browser_profiles", filters={"account_platform_id": platform_id})
+        client.delete("account_platforms", filters={"account_id": account_id})
+        client.delete("matrix_accounts", filters={"id": account_id})
+        return True
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM matrix_accounts WHERE id = ?", (account_id,)).fetchone()
+        if row is None:
+            return False
+        conn.execute("DELETE FROM automation_tasks WHERE account_id = ?", (account_id,))
+        conn.execute("DELETE FROM video_stats_snapshots WHERE account_id = ?", (account_id,))
+        conn.execute("DELETE FROM browser_profiles WHERE account_id = ?", (account_id,))
+        conn.execute("DELETE FROM account_platforms WHERE account_id = ?", (account_id,))
+        conn.execute("DELETE FROM matrix_accounts WHERE id = ?", (account_id,))
+    return True
+
+
 def ensure_account_platform(conn, account_id: int, platform: str, handle: str = "") -> dict[str, Any]:
     token = normalize_platform(platform)
     capability = get_platform(token)
@@ -1790,24 +1831,40 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
             )
         else:
             ap = existing
-        profile_dir = profile_dir_for(str(account["account_key"]), token)
+        profile_dir = profile_dir_for(str(account["account_key"]))
         profile_dir.mkdir(parents=True, exist_ok=True)
-        profile = client.select_one("browser_profiles", filters={"account_platform_id": ap["id"]})
-        fingerprint = build_browser_fingerprint(str(account["account_key"]), token)
+        account_platforms = client.select("account_platforms", filters={"account_id": account_id})
+        profile = _profile_for_account_from_rows(account_id, account_platforms, client.select("browser_profiles"))
+        fingerprint = build_browser_fingerprint(str(account["account_key"]), "account")
         if profile is None:
-            client.insert(
-                "browser_profiles",
-                {
-                    "account_platform_id": ap["id"],
-                    "profile_dir": str(profile_dir),
-                    "debug_port": _profile_debug_port_supabase(str(account["account_key"]), token),
-                    "fingerprint_json": fingerprint,
-                    "created_at": ts,
-                    "updated_at": ts,
-                },
-            )
+            payload = {
+                "account_id": account_id,
+                "profile_dir": str(profile_dir),
+                "debug_port": _profile_debug_port_supabase(str(account["account_key"])),
+                "fingerprint_json": fingerprint,
+                "created_at": ts,
+                "updated_at": ts,
+            }
+            try:
+                client.insert("browser_profiles", payload)
+            except Exception:
+                client.insert(
+                    "browser_profiles",
+                    {
+                        "account_platform_id": ap["id"],
+                        "profile_dir": payload["profile_dir"],
+                        "debug_port": payload["debug_port"],
+                        "fingerprint_json": payload["fingerprint_json"],
+                        "created_at": ts,
+                        "updated_at": ts,
+                    },
+                )
         elif not _json_payload(profile.get("fingerprint_json"), {}):
-            client.update("browser_profiles", {"fingerprint_json": fingerprint, "updated_at": ts}, filters={"account_platform_id": ap["id"]})
+            update = {"fingerprint_json": fingerprint, "updated_at": ts}
+            if profile.get("account_id") == account_id:
+                client.update("browser_profiles", update, filters={"account_id": account_id})
+            else:
+                client.update("browser_profiles", update, filters={"id": profile["id"]})
         return ap
     conn.execute(
         """
@@ -1822,32 +1879,32 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
     ).fetchone()
     if ap is None:
         raise RuntimeError("account platform was not created")
-    profile_dir = profile_dir_for(str(ap["account_key"]), token)
-    fingerprint = build_browser_fingerprint(str(ap["account_key"]), token)
+    profile_dir = profile_dir_for(str(ap["account_key"]))
+    fingerprint = build_browser_fingerprint(str(ap["account_key"]), "account")
     conn.execute(
         """
-        INSERT OR IGNORE INTO browser_profiles(account_platform_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
+        INSERT OR IGNORE INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
-            int(ap["id"]),
+            account_id,
             str(profile_dir),
-            _profile_debug_port_from_seed(conn, str(ap["account_key"]), token),
+            _profile_debug_port_from_seed(conn, str(ap["account_key"])),
             json.dumps(fingerprint, ensure_ascii=False),
             ts,
             ts,
         ),
     )
     conn.execute(
-        "UPDATE browser_profiles SET fingerprint_json = ? WHERE account_platform_id = ? AND (fingerprint_json IS NULL OR fingerprint_json = '' OR fingerprint_json = '{}')",
-        (json.dumps(fingerprint, ensure_ascii=False), int(ap["id"])),
+        "UPDATE browser_profiles SET fingerprint_json = ? WHERE account_id = ? AND (fingerprint_json IS NULL OR fingerprint_json = '' OR fingerprint_json = '{}')",
+        (json.dumps(fingerprint, ensure_ascii=False), account_id),
     )
     profile_dir.mkdir(parents=True, exist_ok=True)
     return dict_from_row(ap)
 
 
-def profile_dir_for(account_key: str, platform: str) -> Path:
-    return get_paths().profiles_root / _account_slug(account_key) / normalize_platform(platform)
+def profile_dir_for(account_key: str, platform: str | None = None) -> Path:
+    return get_paths().profiles_root / _account_slug(account_key)
 
 
 def open_account_browser(account_id: int, platform: str) -> dict[str, Any]:

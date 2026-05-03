@@ -747,6 +747,7 @@
             <button class="btn secondary" type="button" data-system-dir="logs">任务日志</button>
             <button class="btn secondary" type="button" data-system-dir="cache">临时缓存</button>
           </div>
+          <p class="system-action-state muted" id="system-directory-state">点击按钮打开对应目录。</p>
         </section>
         <section class="panel system-card">
           <div class="panel-head"><h2>安全设置</h2><span class="system-status">待接入</span></div>
@@ -760,7 +761,7 @@
               <h2>数据库初始化</h2>
               <p class="muted">补齐数据库表内默认配置、视频矩阵模板和数据统计案例。</p>
             </div>
-            <button class="btn primary" id="system-initialize" type="button">一键初始化</button>
+            <button class="btn primary" id="system-initialize" type="button" disabled>一键初始化</button>
           </div>
           <div id="system-initialize-state" class="health-list">
             <div class="muted">未执行初始化。</div>

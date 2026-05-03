@@ -153,6 +153,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "min-height: clamp(28px, 3.5vh, 34px)" in css
     assert "body.video-matrix-active" in shell_css
     assert "body.video-matrix-active .sidebar" in shell_css
+    assert "body.video-matrix-active #video-matrix" in shell_css
+    assert "margin: 0 -28px -44px" in shell_css
     assert "position: fixed" in shell_css
     assert "margin-left: 0" in shell_css
     assert "height: 100vh" in shell_css
@@ -203,6 +205,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'data-system-dir="output"' in shell_html
     assert 'data-system-dir="logs"' in shell_html
     assert 'data-system-dir="cache"' in shell_html
+    assert 'id="system-directory-state"' in shell_html
+    assert "已请求打开" in shell_app
+    assert "打开失败" in shell_app
+    assert 'id="system-initialize" type="button" disabled' in shell_html
     assert "访问记录" in shell_html
     assert "访问密码" not in shell_html
     assert ".notification-list" in shell_css
@@ -239,7 +245,6 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || ""' in shell_app
     assert "赛博皮卡天津港现车" not in shell_app
     assert "赛博皮卡现车：aawbcc" not in shell_app
-    assert 'filter((user) => user.id !== "allen")' in shell_app
     assert 'makeAccountKey(data.display_name, "auto")' in shell_app
     assert 'data.niche = "短视频矩阵"' in shell_app
     assert "绑定运营微信：" in shell_app
@@ -258,13 +263,18 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "/api/auth/users" in shell_app
     assert "/api/auth/users/${encodeURIComponent(userId)}/password" in shell_app
     assert "data-save-user-password" in shell_app
+    assert 'const loginUsers = statePayload.users;' in shell_app
+    assert 'if (user.id === "allen") return `<option value="${user.id}">${role?.name || "超级管理员"}</option>`;' in shell_app
+    assert 'filter((user) => user.id !== "allen")' not in shell_app
     assert "loggedOut: true" in shell_app
     assert "auth-logged-out" in shell_app
     assert 'activateView("overview")' in shell_app
     assert 'window.history.replaceState(null, "", "#login")' in shell_app
     assert 'authState.currentUserId = ""' in shell_app
     assert 'new Set(["user-center"])' in shell_app
-    assert 'const PERMISSION_DENIED_MESSAGE = "权限不足，请向管理员申请！"' in shell_app
+    assert 'const PERMISSION_DENIED_MESSAGE = "您权限不足"' in shell_app
+    assert "permission-denied-toast" in shell_app
+    assert "window.alert(PERMISSION_DENIED_MESSAGE)" not in shell_app
     assert "function canUseView" in shell_app
     assert "function initPermissionGuards" in shell_app
     assert 'node.classList.toggle("permission-denied-entry", !allowed)' in shell_app
@@ -274,6 +284,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'topMenu?.classList.remove("open")' in shell_app
     assert "data-role-permission" in shell_app
     assert "permission-hidden" not in shell_app
+    assert "data-delete-account" in shell_app
+    assert "/api/accounts/${accountId}" in shell_app
+    assert "确认删除矩阵账号" in shell_app
     assert "data-ai-toggle" in shell_app
     assert "通知开启" in shell_app
     assert "通知关闭" in shell_app

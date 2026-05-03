@@ -81,7 +81,7 @@ let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "ov
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
 const SHELL_AUTH_KEY = "gasgx-shell-auth";
-const PERMISSION_DENIED_MESSAGE = "权限不足，请向管理员申请！";
+const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
 const FEATURE_ENTRIES = [
@@ -335,7 +335,21 @@ function isPermissionLimitedView(view = currentView, statePayload = authState) {
 }
 
 function showPermissionDenied() {
-  window.alert(PERMISSION_DENIED_MESSAGE);
+  let toast = document.querySelector("#permission-denied-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "permission-denied-toast";
+    toast.className = "permission-denied-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    document.body.appendChild(toast);
+  }
+  toast.textContent = PERMISSION_DENIED_MESSAGE;
+  toast.classList.add("show");
+  clearTimeout(showPermissionDenied.timer);
+  showPermissionDenied.timer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 1800);
 }
 
 function applyPermissionLimitedState() {
@@ -380,9 +394,10 @@ function renderLoginOptions(statePayload = authState) {
   const loginSelect = document.querySelector("#login-user-select");
   const roleSelect = document.querySelector("#operator-role-select");
   if (loginSelect) {
-    const loginUsers = statePayload.users.filter((user) => user.id !== "allen");
+    const loginUsers = statePayload.users;
     loginSelect.innerHTML = loginUsers.map((user) => {
       const role = statePayload.roles[user.roleId];
+      if (user.id === "allen") return `<option value="${user.id}">${role?.name || "超级管理员"}</option>`;
       return `<option value="${user.id}">${user.name} · ${role?.name || "未分配"}</option>`;
     }).join("");
     loginSelect.value = loginUsers.some((user) => user.id === statePayload.currentUserId)
@@ -635,9 +650,8 @@ function shouldBlockPermissionAction(target) {
   if (target.closest("#refresh") && isPermissionLimitedView()) return true;
   const interactive = target.closest(PERMISSION_INTERACTIVE_SELECTOR);
   const activeView = target.closest(".view.active");
-  if (!interactive && activeView?.classList.contains("permission-limited-view") && activeView.querySelector("iframe")) return true;
-  if (!interactive) return false;
   if (activeView && isPermissionLimitedView(activeView.id)) return true;
+  if (!interactive) return false;
   const adminRegion = target.closest("[data-admin-only]");
   const user = currentAuthUser(authState);
   return Boolean(adminRegion && user?.roleId !== "super_admin");
@@ -982,6 +996,7 @@ function renderAccounts() {
         <div class="account-badges">
           <span class="chip">${account.status}</span>
           <span class="chip success-chip">发布成功 ${account.publish_success_count || 0}</span>
+          <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${account.display_name}">删除账号</button>
         </div>
       </div>
       ${renderPlatformStatusGroup(platforms, "cn")}
@@ -1177,11 +1192,24 @@ function confirmSuperAdminPassword() {
 const confirmSystemInitializePassword = confirmSuperAdminPassword;
 
 function initSystemDirectoryActions() {
+  const stateNode = document.querySelector("#system-directory-state");
   document.querySelectorAll("[data-system-dir]").forEach((button) => {
     button.addEventListener("click", async () => {
+      const label = button.textContent.trim();
       const restoreButton = setButtonLoading(button, "打开中...");
+      if (stateNode) {
+        stateNode.textContent = `正在打开：${label}`;
+        stateNode.classList.remove("danger");
+      }
       try {
-        await api(`/api/system/open-directory/${encodeURIComponent(button.dataset.systemDir)}`, { method: "POST" });
+        const result = await api(`/api/system/open-directory/${encodeURIComponent(button.dataset.systemDir)}`, { method: "POST" });
+        if (stateNode) stateNode.textContent = `已请求打开：${label}${result.path ? `（${result.path}）` : ""}`;
+      } catch (error) {
+        if (stateNode) {
+          stateNode.textContent = `打开失败：${error.message}`;
+          stateNode.classList.add("danger");
+        }
+        throw error;
       } finally {
         restoreButton();
       }
@@ -2195,6 +2223,21 @@ document.addEventListener("click", async (event) => {
     const restoreButton = setButtonLoading(deleteButton, "删除中");
     try {
       await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+      await refresh();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
+  const deleteAccountButton = event.target.closest("[data-delete-account]");
+  if (deleteAccountButton) {
+    const accountId = deleteAccountButton.dataset.deleteAccount;
+    const accountName = deleteAccountButton.dataset.accountName || `#${accountId}`;
+    if (!window.confirm(`确认删除矩阵账号「${accountName}」？相关平台、浏览器配置和任务记录会一并删除。`)) return;
+    const restoreButton = setButtonLoading(deleteAccountButton, "删除中...");
+    try {
+      await api(`/api/accounts/${accountId}`, { method: "DELETE" });
       await refresh();
     } finally {
       restoreButton();

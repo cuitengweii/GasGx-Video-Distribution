@@ -174,7 +174,7 @@ def test_open_material_dir_api(monkeypatch, tmp_path: Path) -> None:
     client = TestClient(create_app())
 
     denied = client.post("/api/settings/material-dir/open", json={"material_dir": "runtime/materials/videos", "password": "wrong"})
-    result = client.post("/api/settings/material-dir/open", json={"material_dir": "runtime/materials/videos", "password": "cuitengwei123"})
+    result = client.post("/api/settings/material-dir/open", json={"material_dir": "runtime/materials/videos", "password": "cuitengwei2023"})
 
     assert denied.status_code == 401
     assert result.status_code == 200
@@ -212,7 +212,7 @@ def test_system_initialize_requires_super_admin_password(monkeypatch, tmp_path: 
     client = TestClient(create_app())
 
     denied = client.post("/api/system/initialize", json={"password": "wrong"})
-    allowed = client.post("/api/system/initialize", json={"password": "cuitengwei123"})
+    allowed = client.post("/api/system/initialize", json={"password": "cuitengwei2023"})
 
     assert denied.status_code == 401
     assert allowed.status_code == 200

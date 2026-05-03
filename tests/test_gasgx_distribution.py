@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from gasgx_distribution import service
 from gasgx_distribution import db as dist_db
 from gasgx_distribution import matrix_publish
+from gasgx_distribution.db import connect
 from gasgx_distribution.supabase_backend import SupabaseError, SupabaseRestClient
 from gasgx_distribution.video_matrix.ingestion import _select_source_files
 from gasgx_distribution.web import create_app
@@ -43,7 +44,7 @@ def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
     dist_db.init_db(FakePaths.database_path)
 
 
-def test_account_crud_creates_independent_platform_profiles(monkeypatch, tmp_path: Path) -> None:
+def test_account_crud_reuses_one_browser_profile_per_matrix_account(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
 
     account = service.create_account(
@@ -56,6 +57,13 @@ def test_account_crud_creates_independent_platform_profiles(monkeypatch, tmp_pat
 
     assert account["account_key"] == "gasgx-cn-01"
     assert {item["platform"] for item in account["platforms"]} == {"douyin", "x", "linkedin"}
+    profile_dirs = {item["profile_dir"] for item in account["platforms"]}
+    debug_ports = {item["debug_port"] for item in account["platforms"]}
+    fingerprints = {json.dumps(item["fingerprint"], sort_keys=True) for item in account["platforms"]}
+    assert len(profile_dirs) == 1
+    assert len(debug_ports) == 1
+    assert len(fingerprints) == 1
+    assert next(iter(profile_dirs)).replace("\\", "/").endswith("profiles/matrix/gasgx-cn-01")
     for item in account["platforms"]:
         assert Path(item["profile_dir"]).exists()
         assert "profiles" in item["profile_dir"]
@@ -82,9 +90,9 @@ def test_operator_auth_seed_uses_database_and_super_admin_password(monkeypatch, 
         user = conn.execute("SELECT password_hash FROM operator_users WHERE id = 'allen'").fetchone()
     assert user is not None
     assert user["password_hash"]
-    assert user["password_hash"] != "cuitengwei123"
+    assert user["password_hash"] != "cuitengwei2023"
 
-    assert service.login_operator_user("allen", "cuitengwei123")["currentUserId"] == "allen"
+    assert service.login_operator_user("allen", "cuitengwei2023")["currentUserId"] == "allen"
     try:
         service.login_operator_user("allen", "wrong")
     except ValueError as exc:
@@ -97,7 +105,7 @@ def test_operator_auth_api_persists_roles_users_and_permissions(monkeypatch, tmp
     _isolated_paths(monkeypatch, tmp_path)
     client = TestClient(create_app())
 
-    login = client.post("/api/auth/login", json={"user_id": "allen", "password": "cuitengwei123"})
+    login = client.post("/api/auth/login", json={"user_id": "allen", "password": "cuitengwei2023"})
     assert login.status_code == 200
     assert login.json()["currentUserId"] == "allen"
 
@@ -313,6 +321,29 @@ def test_api_smoke_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None
     stats = client.get(f"/api/stats?account_id={account['id']}&platform=wechat")
     assert stats.status_code == 200
     assert stats.json()[0]["views"] == 100
+
+
+def test_delete_account_removes_related_platform_profile_tasks_and_stats(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    account = client.post(
+        "/api/accounts",
+        json={"account_key": "delete-01", "display_name": "Delete 01", "platforms": ["wechat", "douyin"]},
+    ).json()
+    task = client.post("/api/tasks", json={"account_id": account["id"], "platform": "wechat", "task_type": "publish"}).json()
+    assert client.post("/api/stats/import", json={"account_id": account["id"], "platform": "wechat", "video_ref": "v1", "views": 10}).status_code == 200
+
+    deleted = client.delete(f"/api/accounts/{account['id']}")
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"ok": True, "deleted": account["id"]}
+    assert client.delete(f"/api/accounts/{account['id']}").status_code == 404
+    assert client.get("/api/accounts").json() == []
+    assert client.get(f"/api/tasks/{task['id']}").status_code == 404
+    with connect() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM account_platforms WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM browser_profiles WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM video_stats_snapshots WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
 
 
 def test_control_plane_provisions_isolated_brand_databases(monkeypatch, tmp_path: Path) -> None:

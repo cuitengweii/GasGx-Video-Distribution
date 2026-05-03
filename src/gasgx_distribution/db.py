@@ -40,13 +40,13 @@ CREATE TABLE IF NOT EXISTS account_platforms (
 
 CREATE TABLE IF NOT EXISTS browser_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_platform_id INTEGER NOT NULL UNIQUE,
+    account_id INTEGER NOT NULL UNIQUE,
     profile_dir TEXT NOT NULL,
     debug_port INTEGER NOT NULL UNIQUE,
     fingerprint_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    FOREIGN KEY(account_platform_id) REFERENCES account_platforms(id) ON DELETE CASCADE
+    FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS notification_routes (
@@ -245,5 +245,28 @@ def init_db(path: Path | None = None) -> None:
         if "sent_at" not in columns:
             conn.execute("ALTER TABLE ai_robot_messages ADD COLUMN sent_at INTEGER")
         profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(browser_profiles)")}
+        if "account_id" not in profile_columns:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS browser_profiles_next (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL UNIQUE,
+                    profile_dir TEXT NOT NULL,
+                    debug_port INTEGER NOT NULL UNIQUE,
+                    fingerprint_json TEXT NOT NULL DEFAULT '{}',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE CASCADE
+                );
+                INSERT OR IGNORE INTO browser_profiles_next(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
+                SELECT ap.account_id, bp.profile_dir, bp.debug_port, COALESCE(bp.fingerprint_json, '{}'), bp.created_at, bp.updated_at
+                FROM browser_profiles bp
+                JOIN account_platforms ap ON ap.id = bp.account_platform_id
+                ORDER BY bp.id;
+                DROP TABLE browser_profiles;
+                ALTER TABLE browser_profiles_next RENAME TO browser_profiles;
+                """
+            )
+            profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(browser_profiles)")}
         if "fingerprint_json" not in profile_columns:
             conn.execute("ALTER TABLE browser_profiles ADD COLUMN fingerprint_json TEXT NOT NULL DEFAULT '{}'")

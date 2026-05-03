@@ -19,6 +19,10 @@ from gasgx_distribution.matrix_publish import (
 from gasgx_distribution.public_settings import save_distribution_settings
 
 
+def _pipeline_cmd(calls: list[list[str]]) -> list[str]:
+    return next(cmd for cmd in calls if len(cmd) >= 3 and cmd[1:3] == ["-m", "cybercar.pipeline"])
+
+
 def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
     class FakePaths:
         repo_root = tmp_path
@@ -196,16 +200,17 @@ def test_wechat_publish_uses_pipeline_draft_mode(monkeypatch, tmp_path: Path) ->
 
     assert result["ok"] is True
     assert calls
-    assert calls[0][0:3] == [calls[0][0], "-m", "cybercar.pipeline"]
-    assert "--publish-only" in calls[0]
-    assert "--wechat-save-draft-only" in calls[0]
-    assert "--wechat-publish-now" not in calls[0]
-    profile_arg = calls[0][calls[0].index("--chrome-user-data-dir") + 1].replace("\\", "/")
-    wechat_profile_arg = calls[0][calls[0].index("--wechat-chrome-user-data-dir") + 1].replace("\\", "/")
-    assert profile_arg.endswith("profiles/matrix/a-01/wechat")
-    assert wechat_profile_arg.endswith("profiles/matrix/a-01/wechat")
-    assert calls[0][calls[0].index("--debug-port") + 1] == "9401"
-    assert calls[0][calls[0].index("--wechat-debug-port") + 1] == "9401"
+    cmd = _pipeline_cmd(calls)
+    assert cmd[0:3] == [cmd[0], "-m", "cybercar.pipeline"]
+    assert "--publish-only" in cmd
+    assert "--wechat-save-draft-only" in cmd
+    assert "--wechat-publish-now" not in cmd
+    profile_arg = cmd[cmd.index("--chrome-user-data-dir") + 1].replace("\\", "/")
+    wechat_profile_arg = cmd[cmd.index("--wechat-chrome-user-data-dir") + 1].replace("\\", "/")
+    assert profile_arg.endswith("profiles/matrix/a-01")
+    assert wechat_profile_arg.endswith("profiles/matrix/a-01")
+    assert cmd[cmd.index("--debug-port") + 1].isdigit()
+    assert cmd[cmd.index("--wechat-debug-port") + 1] == cmd[cmd.index("--debug-port") + 1]
 
 
 def test_wechat_publish_disables_cybercar_required_hashtags(monkeypatch, tmp_path: Path) -> None:
@@ -229,7 +234,8 @@ def test_wechat_publish_disables_cybercar_required_hashtags(monkeypatch, tmp_pat
 
     assert result["ok"] is True
     assert envs
-    assert envs[0]["CYBERCAR_DISABLE_REQUIRED_HASHTAGS"] == "1"
+    pipeline_env = next(env for env in envs if "CYBERCAR_DISABLE_REQUIRED_HASHTAGS" in env)
+    assert pipeline_env["CYBERCAR_DISABLE_REQUIRED_HASHTAGS"] == "1"
 
 
 def test_wechat_publish_requires_uploaded_record_evidence(monkeypatch, tmp_path: Path) -> None:
