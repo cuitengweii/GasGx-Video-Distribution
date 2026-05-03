@@ -341,6 +341,41 @@ def test_text_style_extra_filters_support_gradient_and_reflection_layers() -> No
         line_index=0,
     )
 
-    assert "fontcolor=#5DD62C@0.72" in gradient_filters[0]
+    assert "fontcolor=#5DD62C@0.90" in gradient_filters[0]
+    assert "fontcolor=#1F8F23@0.72" in gradient_filters[1]
     assert "fontcolor=#FFFFFF@0.24" in reflection_filters[0]
     assert "alpha='0.24*exp" in reflection_filters[0]
+
+
+def test_overlay_filters_apply_selected_text_style_to_render_layers(tmp_path: Path) -> None:
+    template = render.coerce_template(
+        {
+            "show_hud": True,
+            "show_slogan": True,
+            "show_title": True,
+            "hud_text_style": "glow",
+            "slogan_text_style": "gradient",
+            "title_text_style": "reflection",
+            "hud_text_effect": "none",
+            "slogan_text_effect": "none",
+            "title_text_effect": "none",
+            "slogan_text_align": "center",
+            "title_text_align": "center",
+        }
+    )
+
+    filters = render._overlay_filters(
+        template,
+        "HUD",
+        "The World's leading engine for monetizing stranded natural gas computing power",
+        "GasGx Natural Gas",
+        set(template),
+        text_dir=tmp_path,
+    )
+
+    assert filters.count("fontcolor=0x5DD62C@0.42") >= 5
+    assert "fontcolor=#5DD62C@0.90" in filters
+    assert "fontcolor=#1F8F23@0.72" in filters
+    assert "fontcolor=#FFFFFF:" in filters
+    assert "fontcolor=#FFFFFF@0.24" in filters
+    assert "alpha='0.24*exp" in filters

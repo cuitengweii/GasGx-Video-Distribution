@@ -895,6 +895,46 @@ function platformName(key) {
   return `<span class="platform-name">${platformIcon(key)}<span>${platformLabel(key)}</span></span>`;
 }
 
+function platformStatusIcon(status) {
+  const normalized = String(status || "unknown").toLowerCase();
+  const ok = ["ready", "active", "logged_in", "success", "ok"].includes(normalized);
+  const warn = ["unknown", "pending", "checking", "not_checked"].includes(normalized);
+  const color = ok ? "currentColor" : warn ? "currentColor" : "currentColor";
+  const path = ok
+    ? '<path d="M20 6 9 17l-5-5"/>'
+    : warn
+      ? '<path d="M12 8v4"/><path d="M12 16h.01"/>'
+      : '<path d="m15 9-6 6"/><path d="m9 9 6 6"/>';
+  return `<svg class="platform-status-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+}
+
+function platformStatusLabel(status) {
+  const normalized = String(status || "unknown").toLowerCase();
+  const labels = {
+    active: "已启用",
+    ready: "已登录",
+    logged_in: "已登录",
+    success: "正常",
+    ok: "正常",
+    login_required: "需登录",
+    logged_out: "未登录",
+    failed: "异常",
+    error: "异常",
+    pending: "待检查",
+    checking: "检查中",
+    not_checked: "待检查",
+    unknown: "未知",
+  };
+  return labels[normalized] || status || "未知";
+}
+
+function platformStatusClass(status) {
+  const normalized = String(status || "unknown").toLowerCase();
+  if (["ready", "active", "logged_in", "success", "ok"].includes(normalized)) return "ready";
+  if (["unknown", "pending", "checking", "not_checked"].includes(normalized)) return "pending";
+  return "error";
+}
+
 function aiRobotLogo(platform) {
   const logo = AI_ROBOT_LOGOS[platform] || { icon: "simple-icons:simpleicons", bg: "#5dd62c", fg: "101010" };
   const src = `https://api.iconify.design/${logo.icon}.svg?color=%23${logo.fg}`;
@@ -975,11 +1015,8 @@ function renderPlatformStatusGroup(platforms, region) {
     .sort((a, b) => PLATFORM_ORDER.indexOf(a.platform) - PLATFORM_ORDER.indexOf(b.platform));
   return `<div class="account-platform-group">
     <div class="region-title compact">${REGION_LABELS[region]}</div>
-    <div class="chips">
-      ${items.map((p) => `<span class="chip platform-chip">${platformIcon(p.platform)}<span>${platformLabel(p.platform)} · ${p.login_status}</span></span>`).join("")}
-    </div>
     <div class="browser-actions">
-      ${items.map((p) => `<button class="btn secondary" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}浏览器</span></button>`).join("")}
+      ${items.map((p) => `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`).join("")}
     </div>
   </div>`;
 }

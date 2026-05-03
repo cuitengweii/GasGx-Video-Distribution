@@ -48,6 +48,15 @@ FONT_FAMILY_CANDIDATES = {
     "times new roman": (Path(r"C:\Windows\Fonts\times.ttf"),),
     "courier new": (Path(r"C:\Windows\Fonts\cour.ttf"),),
     "consolas": (Path(r"C:\Windows\Fonts\consola.ttf"),),
+    "comic sans ms": (Path(r"C:\Windows\Fonts\comic.ttf"), Path(r"C:\Windows\Fonts\comicbd.ttf")),
+    "cooper black": (Path(r"C:\Windows\Fonts\COOPBL.TTF"), Path(r"C:\Windows\Fonts\georgiab.ttf")),
+    "showcard gothic": (Path(r"C:\Windows\Fonts\SHOWG.TTF"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
+    "lucida console": (Path(r"C:\Windows\Fonts\lucon.ttf"), Path(r"C:\Windows\Fonts\cour.ttf")),
+    "english serif luxe": (Path(r"C:\Windows\Fonts\georgia.ttf"), Path(r"C:\Windows\Fonts\times.ttf")),
+    "english data mono": (Path(r"C:\Windows\Fonts\lucon.ttf"), Path(r"C:\Windows\Fonts\cour.ttf")),
+    "english pop comic": (Path(r"C:\Windows\Fonts\comic.ttf"), Path(r"C:\Windows\Fonts\comicbd.ttf"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
+    "retro bold": (Path(r"C:\Windows\Fonts\COOPBL.TTF"), Path(r"C:\Windows\Fonts\georgiab.ttf")),
+    "sign comic": (Path(r"C:\Windows\Fonts\SHOWG.TTF"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
     "simhei": (Path(r"C:\Windows\Fonts\simhei.ttf"),),
     "simsun": (Path(r"C:\Windows\Fonts\simsun.ttc"),),
     "alibaba puhuiti heavy": (Path(r"C:\Windows\Fonts\AlibabaPuHuiTi-Heavy.ttf"), Path(r"C:\Windows\Fonts\Alibaba-PuHuiTi-Heavy.ttf"), Path(r"C:\Windows\Fonts\msyhbd.ttc")),
@@ -535,6 +544,7 @@ def _drawtext_lines(
     line_gap = max(1, int(font_size * 1.18))
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
     style = str(template.get(f"{text_key}_text_style") or "none").strip().lower()
+    color = _template_text_color(template, text_key, color_key, explicit_template_keys or set())
     font_arg = _resolve_drawtext_font_arg(font_family)
     filters: list[str] = []
     for index, line in enumerate(lines):
@@ -559,7 +569,7 @@ def _drawtext_lines(
         )
         filters.append(
             "drawtext="
-            f"{font_arg}fontcolor={_template_text_color(template, text_key, color_key, explicit_template_keys or set())}:"
+            f"{font_arg}fontcolor={_text_style_base_color(style, color)}:"
             f"fontsize={font_size}:"
             f"{text_source}"
             f"{_text_effect_options(effect, x_expr, y_expr, line_index=index, font_size=font_size)}"
@@ -578,13 +588,22 @@ def _text_style_extra_filters(
     font_size: int,
     line_index: int,
 ) -> list[str]:
+    if style == "glow":
+        return _text_glow_layers(font_arg, text_source, x_expr, y_expr, font_size, color="0x5DD62C", alpha=0.42)
+    if style == "neon":
+        return _text_glow_layers(font_arg, text_source, x_expr, y_expr, font_size, color="0x5DD62C", alpha=0.52)
     if style == "gradient":
         return [
             "drawtext="
-            f"{font_arg}fontcolor=#5DD62C@0.72:"
+            f"{font_arg}fontcolor=#5DD62C@0.90:"
             f"fontsize={font_size}:"
             f"{text_source}:"
-            f"x={x_expr}:y={y_expr}+{max(2, int(font_size * 0.12))}"
+            f"x={x_expr}:y={y_expr}+{max(3, int(font_size * 0.18))}",
+            "drawtext="
+            f"{font_arg}fontcolor=#1F8F23@0.72:"
+            f"fontsize={font_size}:"
+            f"{text_source}:"
+            f"x={x_expr}:y={y_expr}+{max(6, int(font_size * 0.34))}",
         ]
     if style == "reflection":
         return [
@@ -596,6 +615,41 @@ def _text_style_extra_filters(
             f"alpha='0.24*exp(-0.18*{line_index})'"
         ]
     return []
+
+
+def _text_glow_layers(
+    font_arg: str,
+    text_source: str,
+    x_expr: str,
+    y_expr: str,
+    font_size: int,
+    *,
+    color: str,
+    alpha: float,
+) -> list[str]:
+    offsets = ((0, 0), (2, 0), (-2, 0), (0, 2), (0, -2))
+    return [
+        "drawtext="
+        f"{font_arg}fontcolor={color}@{alpha:.2f}:"
+        f"fontsize={font_size}:"
+        f"{text_source}:"
+        f"x={x_expr}{_signed_offset(dx)}:y={y_expr}{_signed_offset(dy)}"
+        for dx, dy in offsets
+    ]
+
+
+def _signed_offset(value: int) -> str:
+    if value == 0:
+        return ""
+    return f"+{value}" if value > 0 else str(value)
+
+
+def _text_style_base_color(style: str, color: str) -> str:
+    if style == "gradient":
+        return "#FFFFFF"
+    if style == "neon":
+        return "#F4FFF0"
+    return color
 
 
 def _text_style_options(style: str) -> str:

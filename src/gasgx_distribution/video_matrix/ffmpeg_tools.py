@@ -97,6 +97,8 @@ def normalize_clip(
 def concat_video(filter_complex: str, inputs: list[Path], output: Path, bgm_path: Path | None = None) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     output.parent.mkdir(parents=True, exist_ok=True)
+    filter_script_path = output.parent / f".{output.stem}.filter_complex.txt"
+    filter_script_path.write_text(filter_complex, encoding="utf-8")
     command = [ffmpeg, "-y"]
     for clip in inputs:
         command.extend(["-i", str(clip)])
@@ -104,8 +106,8 @@ def concat_video(filter_complex: str, inputs: list[Path], output: Path, bgm_path
         command.extend(["-stream_loop", "-1", "-i", str(bgm_path)])
     command.extend(
         [
-            "-filter_complex",
-            filter_complex,
+            "-filter_complex_script",
+            str(filter_script_path),
             "-map",
             "[vout]",
             "-c:v",
@@ -131,7 +133,10 @@ def concat_video(filter_complex: str, inputs: list[Path], output: Path, bgm_path
     else:
         command.append("-an")
     command.append(str(output))
-    run_command(command)
+    try:
+        run_command(command)
+    finally:
+        filter_script_path.unlink(missing_ok=True)
 
 
 def extract_frame(video_path: Path, output_path: Path, timestamp: float) -> None:

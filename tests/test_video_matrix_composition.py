@@ -484,6 +484,9 @@ def test_video_renderer_maps_ad_font_families_to_ffmpeg_candidates() -> None:
     assert video_renderer._font_candidates_for_family("'Noto Sans SC Bold', sans-serif")[0].name == "Noto Sans SC Bold (TrueType).otf"
     assert video_renderer._font_candidates_for_family("'Alibaba PuHuiTi Heavy', sans-serif")[0].name == "AlibabaPuHuiTi-Heavy.ttf"
     assert video_renderer._font_candidates_for_family("YouSheBiaoTiHei, sans-serif")[0].name == "YouSheBiaoTiHei.ttf"
+    assert video_renderer._font_candidates_for_family("English Serif Luxe")[0].name == "georgia.ttf"
+    assert video_renderer._font_candidates_for_family("English Data Mono")[0].name == "lucon.ttf"
+    assert video_renderer._font_candidates_for_family("English Pop Comic")[0].name == "comic.ttf"
 
 
 def test_video_renderer_title_background_height_does_not_inherit_slogan_height() -> None:
