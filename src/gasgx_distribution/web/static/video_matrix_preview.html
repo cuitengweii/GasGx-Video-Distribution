@@ -962,6 +962,7 @@
         }
 
         body.preview-browser-mode .preview-workbench {
+            position: relative;
             width: 100vw;
             height: 100vh;
             display: grid;
@@ -969,6 +970,21 @@
             gap: 22px;
             align-items: center;
             padding: 24px 28px;
+        }
+
+        body.preview-browser-mode .preview-workbench.is-loading::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            z-index: 90;
+            width: 36px;
+            height: 36px;
+            margin: -18px 0 0 -18px;
+            border: 3px solid rgba(255,255,255,.22);
+            border-top-color: #5dd62c;
+            border-radius: 50%;
+            animation: previewLoadingSpin .8s linear infinite;
         }
 
         body.preview-browser-mode .preview-stage {
@@ -983,7 +999,12 @@
             width: var(--device-width, 479.25px) !important;
             height: var(--device-height, 852px) !important;
             transform-origin: center;
-            transform: scale(min(calc((100vw - 420px) / var(--device-scale-width, 560)), calc((100vh - 48px) / var(--device-scale-height, 900)), 1));
+            transform: scale(var(--device-fit-scale, 1));
+        }
+
+        body.preview-browser-mode .phone-mockup {
+            width: 100%;
+            height: 100%;
         }
 
         .preview-side-panel {
@@ -1037,7 +1058,7 @@
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 8px;
-            max-height: 132px;
+            max-height: 188px;
             overflow: auto;
             padding-right: 2px;
         }
@@ -1086,11 +1107,44 @@
 
         .preview-video-list {
             min-height: 0;
+            max-height: 256px;
             display: grid;
             align-content: start;
             gap: 8px;
             overflow: auto;
             padding-right: 2px;
+        }
+
+        .preview-loading-row {
+            min-height: 44px;
+            display: grid;
+            place-items: center;
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 6px;
+            background: #111;
+        }
+
+        .preview-loading-spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(255,255,255,.22);
+            border-top-color: #5dd62c;
+            border-radius: 50%;
+            animation: previewLoadingSpin .8s linear infinite;
+        }
+
+        .preview-loading-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 19;
+            display: grid;
+            place-items: center;
+            background: rgba(0,0,0,.28);
+            pointer-events: none;
+        }
+
+        .preview-loading-overlay[hidden] {
+            display: none;
         }
 
         .preview-video-item {
@@ -1130,8 +1184,9 @@
         }
 
         .preview-grid-stage.grid-count-9 {
-            width: min(92vw, 920px);
+            width: min(92vw, calc((100vh - 96px) * 9 / 16));
             grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-rows: repeat(3, minmax(0, 1fr));
             gap: 12px;
         }
 
@@ -1157,13 +1212,28 @@
             border-color: rgba(33, 150, 243, .95);
         }
 
+        .preview-grid-phone .preview-loading-spinner {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            z-index: 3;
+            margin: -12px 0 0 -12px;
+        }
+
+        .preview-grid-phone:not(.is-loading) .preview-loading-spinner {
+            display: none;
+        }
+
         .preview-grid-stage.grid-count-3 .preview-grid-phone {
             max-height: calc(100vh - 72px);
         }
 
-        .preview-grid-stage.grid-count-6 .preview-grid-phone,
-        .preview-grid-stage.grid-count-9 .preview-grid-phone {
+        .preview-grid-stage.grid-count-6 .preview-grid-phone {
             max-height: calc((100vh - 72px) / 2);
+        }
+
+        .preview-grid-stage.grid-count-9 .preview-grid-phone {
+            max-height: calc((100vh - 96px) / 3);
         }
 
         .preview-grid-phone video {
@@ -1185,6 +1255,10 @@
             text-overflow: ellipsis;
             text-shadow: 0 2px 8px #000;
             white-space: nowrap;
+        }
+
+        @keyframes previewLoadingSpin {
+            to { transform: rotate(360deg); }
         }
 
         @media (max-width: 900px) {
@@ -1225,6 +1299,7 @@
 
         <div class="phone-mockup flex flex-col text-white relative z-10 w-full h-full">
             <video id="previewVideo" playsinline autoplay loop></video>
+            <div id="previewVideoLoading" class="preview-loading-overlay" hidden><span class="preview-loading-spinner" aria-hidden="true"></span></div>
             <img id="templateBackgroundImage" alt="">
             <div id="templateMaskBg" class="vm-template-mask-bg" hidden></div>
             <div class="dynamic-island"></div>
@@ -1383,7 +1458,7 @@
         <div class="preview-section-title">展示数量</div>
         <div class="preview-count-row" aria-label="网格数量">
           <button id="singleMode" class="active" type="button">单屏查看</button>
-          <button class="active" type="button" data-grid-count="3">3 个</button>
+          <button type="button" data-grid-count="3">3 个</button>
           <button type="button" data-grid-count="6">6 个</button>
           <button type="button" data-grid-count="9">9 个</button>
         </div>
@@ -1401,6 +1476,7 @@
       const video = document.getElementById("previewVideo");
       const soundToggle = document.getElementById("soundToggle");
       const phone = document.querySelector(".phone-mockup");
+      const templateLayer = document.querySelector(".vm-template-layer");
       const backgroundImage = document.getElementById("templateBackgroundImage");
       const templateMask = document.getElementById("templateMaskBg");
       const previewPlay = document.getElementById("previewPlay");
@@ -1409,6 +1485,8 @@
       const previewVideoList = document.getElementById("previewVideoList");
       const previewGridStage = document.getElementById("previewGridStage");
       const previewDeviceRow = document.getElementById("previewDeviceRow");
+      const previewWorkbench = document.querySelector(".preview-workbench");
+      const previewVideoLoading = document.getElementById("previewVideoLoading");
       const PREVIEW_WIDTH = 479.25;
       const PREVIEW_HEIGHT = 852;
       const GRID_COUNTS = [3, 6, 9];
@@ -1435,10 +1513,12 @@
       let coverDragging = null;
       let editingTextNode = null;
       let editingCoverNode = null;
+      let previewWorkbenchLoadingCount = 0;
       const DRAG_START_THRESHOLD = 5;
       if (videoPath) {
         document.documentElement.classList.add("preview-browser-root");
         document.body.classList.add("preview-browser-mode");
+        resetPreviewSelectionState();
         renderDevicePresets();
         applyDevicePreset(activeDeviceId);
         setPreviewVideo(videoPath);
@@ -1461,10 +1541,15 @@
         if (video.paused) video.play();
         else video.pause();
       }
+      function shouldIgnorePlaybackClick(target) {
+        return Boolean(target.closest("#visualToolbar, button, select, input, textarea, [contenteditable='true']"));
+      }
       function setPreviewVideo(path) {
         activeVideoPath = path || "";
         if (!activeVideoPath) return;
         video.hidden = false;
+        setSingleVideoLoading(true);
+        bindSingleVideoLoading();
         video.src = `/api/video-matrix/preview-file?path=${encodeURIComponent(activeVideoPath)}`;
         video.load();
         video.play().catch(() => {});
@@ -1472,6 +1557,8 @@
         renderPreviewGrid();
       }
       async function loadPreviewVideos(path) {
+        beginPreviewWorkbenchLoading();
+        renderPreviewVideoList(true);
         try {
           const response = await fetch(`/api/video-matrix/preview-files?path=${encodeURIComponent(path)}`);
           if (!response.ok) throw new Error(response.statusText);
@@ -1485,9 +1572,14 @@
         }
         renderPreviewVideoList();
         renderPreviewGrid();
+        endPreviewWorkbenchLoading();
       }
-      function renderPreviewVideoList() {
+      function renderPreviewVideoList(loading = false) {
         if (!previewVideoList) return;
+        if (loading) {
+          previewVideoList.innerHTML = `<div class="preview-loading-row"><span class="preview-loading-spinner" aria-hidden="true"></span></div>`;
+          return;
+        }
         previewVideoList.innerHTML = previewVideos.map((item, index) => `
           <button class="preview-video-item ${item.path === activeVideoPath ? "active" : ""}" type="button" data-preview-path="${encodeURIComponent(item.path)}">
             <strong>${index + 1}. ${escapeHtml(item.name || "生成视频")}</strong>
@@ -1502,16 +1594,63 @@
         previewGridStage.classList.remove(...GRID_COUNTS.map((count) => `grid-count-${count}`));
         previewGridStage.classList.add(`grid-count-${previewGridCount}`);
         previewGridStage.innerHTML = items.map((item, index) => `
-          <button class="preview-grid-phone" type="button" data-preview-path="${encodeURIComponent(item.path || "")}">
-            <video src="/api/video-matrix/preview-file?path=${encodeURIComponent(item.path || activeVideoPath)}" playsinline muted loop></video>
+          <button class="preview-grid-phone is-loading" type="button" data-preview-path="${encodeURIComponent(item.path || "")}">
+            <video src="/api/video-matrix/preview-file?path=${encodeURIComponent(item.path || activeVideoPath)}" playsinline muted loop preload="metadata"></video>
+            <span class="preview-loading-spinner" aria-hidden="true"></span>
             <span>${index + 1}. ${escapeHtml(item.name || "生成视频")}</span>
           </button>
         `).join("");
+        previewGridStage.querySelectorAll("video").forEach((node) => {
+          const card = node.closest(".preview-grid-phone");
+          const clearLoading = () => card?.classList.remove("is-loading");
+          if (node.readyState >= 1) clearLoading();
+          node.addEventListener("loadedmetadata", clearLoading, { once: true });
+          node.addEventListener("loadeddata", clearLoading, { once: true });
+          node.addEventListener("canplay", clearLoading, { once: true });
+          node.addEventListener("playing", clearLoading, { once: true });
+          node.load();
+          window.setTimeout(clearLoading, 1600);
+        });
+      }
+      function setPreviewWorkbenchLoading(loading) {
+        previewWorkbench?.classList.toggle("is-loading", Boolean(loading));
+      }
+      function beginPreviewWorkbenchLoading() {
+        previewWorkbenchLoadingCount += 1;
+        setPreviewWorkbenchLoading(true);
+      }
+      function endPreviewWorkbenchLoading() {
+        previewWorkbenchLoadingCount = Math.max(0, previewWorkbenchLoadingCount - 1);
+        if (!previewWorkbenchLoadingCount) setPreviewWorkbenchLoading(false);
+      }
+      function pulsePreviewWorkbenchLoading(duration = 650) {
+        beginPreviewWorkbenchLoading();
+        window.setTimeout(endPreviewWorkbenchLoading, duration);
+      }
+      function setSingleVideoLoading(loading) {
+        if (!previewVideoLoading) return;
+        previewVideoLoading.hidden = !loading;
+      }
+      function bindSingleVideoLoading() {
+        const clearLoading = () => setSingleVideoLoading(false);
+        if (video.readyState >= 1) clearLoading();
+        video.addEventListener("loadedmetadata", clearLoading, { once: true });
+        video.addEventListener("loadeddata", clearLoading, { once: true });
+        video.addEventListener("canplay", clearLoading, { once: true });
+        video.addEventListener("playing", clearLoading, { once: true });
+        window.setTimeout(clearLoading, 1600);
       }
       function setPreviewMode(mode) {
         const grid = mode === "grid";
         document.body.classList.toggle("grid-preview-mode", grid);
         singleMode?.classList.toggle("active", !grid);
+        if (!grid) {
+          document.querySelectorAll("[data-grid-count]").forEach((item) => item.classList.remove("active"));
+        }
+      }
+      function resetPreviewSelectionState() {
+        singleMode?.classList.add("active");
+        document.querySelectorAll("[data-grid-count]").forEach((item) => item.classList.remove("active"));
       }
       function deviceIconSvg(device) {
         const ratio = Math.max(.42, Math.min(.62, Number(device.width) / Number(device.height) || .46));
@@ -1535,13 +1674,19 @@
       function applyDevicePreset(deviceId) {
         const device = DEVICE_PRESETS.find((item) => item.id === deviceId) || DEVICE_PRESETS[0];
         activeDeviceId = device.id;
+        updateDeviceScale(device);
+        renderDevicePresets();
+      }
+      function updateDeviceScale(device = DEVICE_PRESETS.find((item) => item.id === activeDeviceId) || DEVICE_PRESETS[0]) {
         const wrap = document.querySelector(".preview-device-wrap");
         if (!wrap) return;
         wrap.style.setProperty("--device-width", `${device.width}px`);
         wrap.style.setProperty("--device-height", `${device.height}px`);
         wrap.style.setProperty("--device-scale-width", `${device.width + 96}`);
         wrap.style.setProperty("--device-scale-height", `${device.height + 48}`);
-        renderDevicePresets();
+        const widthScale = (window.innerWidth - 420) / (device.width + 96);
+        const heightScale = (window.innerHeight - 96) / (device.height + 48);
+        wrap.style.setProperty("--device-fit-scale", String(Math.max(.2, Math.min(widthScale, heightScale, 1))));
       }
       function allPreviewVideos() {
         return [video, ...document.querySelectorAll("#previewGridStage video")].filter(Boolean);
@@ -1567,7 +1712,12 @@
         document.querySelectorAll(".preview-grid-phone").forEach((item) => item.classList.remove("is-playing"));
       }
       previewPlay?.addEventListener("click", async () => {
-        await playAllPreviewVideos();
+        beginPreviewWorkbenchLoading();
+        try {
+          await playAllPreviewVideos();
+        } finally {
+          endPreviewWorkbenchLoading();
+        }
       });
       previewStop?.addEventListener("click", () => {
         stopAllPreviewVideos();
@@ -1575,6 +1725,7 @@
       singleMode?.addEventListener("click", () => setPreviewMode("single"));
       document.querySelectorAll("[data-grid-count]").forEach((button) => {
         button.addEventListener("click", () => {
+          pulsePreviewWorkbenchLoading();
           previewGridCount = Number(button.dataset.gridCount || 3);
           document.querySelectorAll("[data-grid-count]").forEach((item) => item.classList.toggle("active", item === button));
           renderPreviewGrid();
@@ -1587,9 +1738,11 @@
         applyDevicePreset(button.dataset.deviceId);
         setPreviewMode("single");
       });
+      window.addEventListener("resize", () => updateDeviceScale());
       previewVideoList?.addEventListener("click", (event) => {
         const button = event.target.closest("[data-preview-path]");
         if (!button) return;
+        pulsePreviewWorkbenchLoading();
         setPreviewVideo(decodeURIComponent(button.dataset.previewPath || ""));
         setPreviewMode("single");
       });
@@ -1612,9 +1765,13 @@
         return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
       }
       video.addEventListener("click", toggleVideoPlayback);
+      templateLayer?.addEventListener("click", (event) => {
+        if (shouldIgnorePlaybackClick(event.target)) return;
+        event.stopPropagation();
+        toggleVideoPlayback();
+      });
       phone.addEventListener("click", (event) => {
-        if (event.target.closest(".vm-template-layer")) return;
-        if (event.target.closest("button")) return;
+        if (shouldIgnorePlaybackClick(event.target)) return;
         toggleVideoPlayback();
       });
       document.addEventListener("click", (event) => {

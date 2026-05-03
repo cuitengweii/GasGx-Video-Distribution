@@ -7,6 +7,30 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <section class="login-screen" id="login-screen" aria-labelledby="login-title">
+    <div class="login-shell">
+      <div class="login-brand">
+        <span class="brand-mark"></span>
+        <div>
+          <strong>GasGx</strong>
+          <small>Video Distribution Console</small>
+        </div>
+      </div>
+      <form class="login-panel" id="local-login-form">
+        <span class="system-status">账号登录</span>
+        <h1 id="login-title">登录控制台</h1>
+        <p class="muted">请输入已分配账号的口令。超级管理员 Allen 的口令为专用管理员密码。</p>
+        <label>账号
+          <select id="login-user-select"></select>
+        </label>
+        <label>口令
+          <input id="login-password" type="password" placeholder="请输入口令" autocomplete="current-password">
+        </label>
+        <button class="btn primary" type="submit">登录</button>
+        <p class="login-error muted" id="login-error"></p>
+      </form>
+    </div>
+  </section>
   <aside class="sidebar">
     <div class="brand">
       <span class="brand-mark" id="brand-mark"></span>
@@ -136,29 +160,14 @@
             <label>品牌前缀<input name="brand_prefix" value="GasGx" required placeholder="例如：GasGx"></label>
             <label>名称<input name="account_name" required placeholder="例如：小白"></label>
           </div>
-          <label>账号编号
-            <select name="account_suffix">
-              <option value="auto">自动生成</option>
-              <option value="01">01</option>
-              <option value="02">02</option>
-              <option value="03">03</option>
-              <option value="04">04</option>
-              <option value="05">05</option>
-              <option value="06">06</option>
-              <option value="07">07</option>
-              <option value="08">08</option>
-              <option value="09">09</option>
-              <option value="10">10</option>
+          <label>绑定运营微信
+            <select name="operator_wechat" required>
+              <option value="aamecc">aamecc</option>
+              <option value="aalbcc">aalbcc</option>
             </select>
           </label>
-          <label>内容方向
-            <select name="niche">
-              <option value="短视频矩阵">短视频矩阵</option>
-              <option value="产品展示">产品展示</option>
-              <option value="客户线索">客户线索</option>
-              <option value="品牌曝光">品牌曝光</option>
-              <option value="海外分发">海外分发</option>
-            </select>
+          <label>账号手机号
+            <input name="phone" inputmode="numeric" pattern="\d{11}" maxlength="11" required placeholder="请输入 11 位手机号" oninvalid="this.setCustomValidity('账号手机号需为 11 位数字')" oninput="this.setCustomValidity('')">
           </label>
           <label>账号状态
             <select name="status">
@@ -574,31 +583,6 @@
 
     <section id="user-center" class="view">
       <div class="system-grid">
-        <section class="panel system-card login-card">
-          <div class="panel-head">
-            <div>
-              <h2>登录入口</h2>
-              <p class="muted">仅超级管理员分配账号；没有注册入口，账号和权限先保存在本机浏览器。</p>
-            </div>
-            <span class="system-status" id="session-role-badge">超级管理员</span>
-          </div>
-          <form class="login-form" id="local-login-form">
-            <label>账号
-              <select id="login-user-select"></select>
-            </label>
-            <label>口令
-              <input id="login-password" type="password" placeholder="超级管理员口令">
-            </label>
-            <button class="btn primary" type="submit">登录</button>
-          </form>
-          <div class="profile-row">
-            <div class="avatar" id="session-avatar">A</div>
-            <div>
-              <strong id="session-user-name">Allen</strong>
-              <p class="muted" id="session-user-desc">超级管理员 / 可分配账号与角色权限</p>
-            </div>
-          </div>
-        </section>
         <section class="panel system-card account-admin-card" data-admin-only>
           <div class="panel-head">
             <div>
@@ -610,6 +594,7 @@
           <form class="account-assign-form" id="operator-account-form">
             <label>姓名<input id="operator-name-input" placeholder="例如：Mia"></label>
             <label>角色<select id="operator-role-select"></select></label>
+            <label>初始口令<input id="operator-password-input" type="password" placeholder="由超级管理员分配"></label>
             <button class="btn primary" type="submit">添加账号</button>
           </form>
           <div class="operator-account-list" id="operator-account-list"></div>
@@ -751,19 +736,22 @@
       <div class="system-grid">
         <section class="panel system-card">
           <div class="panel-head"><h2>部署环境</h2><span class="system-status">本地</span></div>
-          <div class="system-kv"><span>运行地址</span><strong>127.0.0.1:8765</strong></div>
+          <div class="system-kv"><span>运行地址</span><strong>127.0.0.1:8790</strong></div>
           <div class="system-kv"><span>程序目录</span><strong>G:\GasGx Video Distribution</strong></div>
         </section>
         <section class="panel system-card">
           <div class="panel-head"><h2>存储与缓存</h2><span class="system-status">预留</span></div>
-          <div class="system-list">
-            <span>素材目录</span><span>输出目录</span><span>任务日志</span><span>临时缓存</span>
+          <div class="system-list storage-actions">
+            <button class="btn secondary" type="button" data-system-dir="materials">素材目录</button>
+            <button class="btn secondary" type="button" data-system-dir="output">输出目录</button>
+            <button class="btn secondary" type="button" data-system-dir="logs">任务日志</button>
+            <button class="btn secondary" type="button" data-system-dir="cache">临时缓存</button>
           </div>
         </section>
         <section class="panel system-card">
           <div class="panel-head"><h2>安全设置</h2><span class="system-status">待接入</span></div>
           <div class="system-list">
-            <span>访问密码</span><span>本机白名单</span><span>操作审计</span>
+            <span>访问记录</span><span>本机白名单</span><span>操作审计</span>
           </div>
         </section>
         <section class="panel system-card wide-system-card">
@@ -781,13 +769,13 @@
         <section class="panel system-card wide-system-card">
           <div class="panel-head">
             <div>
-              <h2>数据库运行检查</h2>
+              <h2>数据库字典</h2>
               <p class="muted" id="supabase-health-meta"></p>
             </div>
-            <span class="system-status" id="supabase-health-state">未加载</span>
+            <span class="system-status" id="supabase-health-state">读取中</span>
           </div>
           <div class="health-list" id="supabase-health-list">
-            <div class="muted">暂无数据库健康检查结果。</div>
+            <div class="muted">暂无数据库字典。</div>
           </div>
         </section>
       </div>
@@ -819,43 +807,43 @@
               <span>概览</span>
               <strong>工作台总览</strong>
               <p>查看账号、素材、任务、发布结果和系统健康的入口页。</p>
-              <code>docs/help/WORKSPACE_OVERVIEW.md</code>
+              <code aria-hidden="true">docs/help/WORKSPACE_OVERVIEW.md</code>
             </article>
             <article class="help-doc-card">
               <span>账号矩阵</span>
               <strong>账号矩阵维护</strong>
               <p>管理账号档案、平台槽位、独立浏览器 profile 和登录状态。</p>
-              <code>docs/help/ACCOUNT_MATRIX.md</code>
+              <code aria-hidden="true">docs/help/ACCOUNT_MATRIX.md</code>
             </article>
             <article class="help-doc-card">
               <span>公共设置</span>
               <strong>公共设置与平台配置</strong>
               <p>配置素材目录、全局发布策略、平台专属文案和权限选项。</p>
-              <code>docs/help/PUBLIC_SETTINGS.md</code>
+              <code aria-hidden="true">docs/help/PUBLIC_SETTINGS.md</code>
             </article>
             <article class="help-doc-card featured">
               <span>视频生成</span>
               <strong>视频生成工作台</strong>
               <p>分类素材、第一屏封面、背景音乐、文案参考、组合结构和批量导出。</p>
-              <code>docs/help/VIDEO_GENERATION_WORKBENCH.md</code>
+              <code aria-hidden="true">docs/help/VIDEO_GENERATION_WORKBENCH.md</code>
             </article>
             <article class="help-doc-card">
               <span>任务中心</span>
               <strong>发布任务与队列</strong>
               <p>创建发布、评论、私信、统计任务，理解定时策略、失败重试和队列状态。</p>
-              <code>docs/help/TASK_CENTER.md</code>
+              <code aria-hidden="true">docs/help/TASK_CENTER.md</code>
             </article>
             <article class="help-doc-card">
               <span>数据统计</span>
               <strong>数据统计看板</strong>
               <p>按账号、平台、内容和营销转化查看矩阵运营效果。</p>
-              <code>docs/help/DATA_STATISTICS.md</code>
+              <code aria-hidden="true">docs/help/DATA_STATISTICS.md</code>
             </article>
             <article class="help-doc-card">
               <span>AI机器人</span>
               <strong>AI 机器人与通知</strong>
               <p>配置 WeCom、DingTalk、Lark、Telegram、WhatsApp 通知和测试消息。</p>
-              <code>docs/help/AI_ROBOT.md</code>
+              <code aria-hidden="true">docs/help/AI_ROBOT.md</code>
             </article>
           </div>
         </section>
@@ -872,19 +860,19 @@
               <span>用户中心</span>
               <strong>用户中心与偏好</strong>
               <p>维护操作员资料、主题配色、Logo、Slogan 和本地偏好。</p>
-              <code>docs/help/USER_CENTER.md</code>
+              <code aria-hidden="true">docs/help/USER_CENTER.md</code>
             </article>
             <article class="help-doc-card">
               <span>通知中心</span>
               <strong>通知中心</strong>
               <p>集中查看生成完成、发布失败、登录失效和素材不足提醒。</p>
-              <code>docs/help/NOTIFICATION_CENTER.md</code>
+              <code aria-hidden="true">docs/help/NOTIFICATION_CENTER.md</code>
             </article>
             <article class="help-doc-card">
               <span>系统设置</span>
               <strong>系统设置与数据库</strong>
               <p>检查本地环境、缓存、数据库初始化、数据库健康状态和安全配置。</p>
-              <code>docs/help/SYSTEM_SETTINGS.md</code>
+              <code aria-hidden="true">docs/help/SYSTEM_SETTINGS.md</code>
             </article>
           </div>
         </section>
@@ -901,9 +889,19 @@
               <span>算法说明</span>
               <strong>视频生成算法</strong>
               <p>素材分桶、BGM 节拍切片、随机去重变体、FFmpeg 合成、封面和文案输出。</p>
-              <code>docs/help/DEVELOPER_VIDEO_GENERATION_ALGORITHM.md</code>
+              <code aria-hidden="true">docs/help/DEVELOPER_VIDEO_GENERATION_ALGORITHM.md</code>
             </article>
           </div>
+        </section>
+        <section class="help-reader-panel hidden" id="help-doc-reader">
+          <div class="help-reader-head">
+            <div>
+              <span class="system-status">知识库文档</span>
+              <h2 id="help-reader-title">帮助文档</h2>
+            </div>
+            <button class="btn secondary" id="help-reader-close" type="button">返回列表</button>
+          </div>
+          <article class="help-reader-body" id="help-reader-body"></article>
         </section>
       </div>
     </section>
@@ -931,6 +929,27 @@
       <div class="confirm-actions">
         <button id="matrixRunConfirmCancel" class="btn secondary" type="button">取消</button>
         <button id="matrixRunConfirmSubmit" class="btn primary" type="button">确认启动</button>
+      </div>
+    </div>
+  </div>
+  <div id="systemInitializePasswordModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="systemInitializePasswordTitle">
+    <div class="confirm-panel password-confirm-panel">
+      <div class="confirm-head">
+        <div>
+          <span>ADMIN VERIFY</span>
+          <strong id="systemInitializePasswordTitle">超级管理员密码验证</strong>
+        </div>
+        <button id="systemInitializePasswordClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="confirm-body">
+        <label class="password-confirm-field">请输入 Allen 超级管理员密码
+          <input id="systemInitializePasswordInput" type="password" autocomplete="current-password" placeholder="超级管理员密码">
+        </label>
+        <p class="login-error muted" id="systemInitializePasswordError"></p>
+      </div>
+      <div class="confirm-actions">
+        <button id="systemInitializePasswordCancel" class="btn secondary" type="button">取消</button>
+        <button id="systemInitializePasswordSubmit" class="btn primary" type="button">验证并继续</button>
       </div>
     </div>
   </div>

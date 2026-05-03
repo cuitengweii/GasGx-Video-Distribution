@@ -163,12 +163,32 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "matrixRunConfirmModal" in shell_html
     assert "确认立即启动矩阵发布作业" in shell_html
     assert "确认启动" in shell_html
+    assert "systemInitializePasswordModal" in shell_html
+    assert 'id="systemInitializePasswordInput" type="password"' in shell_html
+    assert "超级管理员密码验证" in shell_html
+    assert "验证并继续" in shell_html
+    assert "数据库字典" in shell_html
+    assert "数据库运行检查" not in shell_html
     assert 'data-permission="video-matrix"' in shell_html
     assert 'id="local-login-form"' in shell_html
+    assert 'id="login-screen"' in shell_html
+    assert "登录控制台" in shell_html
+    assert 'name="account_suffix"' not in shell_html
+    assert "账号编号" not in shell_html
+    assert 'name="niche"' not in shell_html
+    assert "内容方向" not in shell_html
+    assert "绑定运营微信" in shell_html
+    assert "aamecc" in shell_html
+    assert "aalbcc" in shell_html
+    assert "账号手机号" in shell_html
+    assert 'name="phone"' in shell_html
+    assert 'pattern="\\d{11}"' in shell_html
+    assert "账号手机号需为 11 位数字" in shell_html
     assert 'id="top-user-toggle"' in shell_html
     assert 'id="top-user-menu"' in shell_html
-    assert "仅超级管理员分配账号" in shell_html
+    assert "仅超级管理员分配账号" not in shell_html
     assert 'id="operator-account-form"' in shell_html
+    assert 'id="operator-password-input"' in shell_html
     assert 'id="permission-grid"' in shell_html
     assert "视频生成完成" in shell_html
     assert "视频号发布失败" in shell_html
@@ -176,9 +196,23 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "企业微信群机器人已发送日报" in shell_html
     assert "发布前审核等待确认" in shell_html
     assert "当前没有新的系统提醒" not in shell_html
+    assert "127.0.0.1:8790" in shell_html
+    assert "127.0.0.1:8765" not in shell_html
+    assert 'class="system-list storage-actions"' in shell_html
+    assert 'data-system-dir="materials"' in shell_html
+    assert 'data-system-dir="output"' in shell_html
+    assert 'data-system-dir="logs"' in shell_html
+    assert 'data-system-dir="cache"' in shell_html
+    assert "访问记录" in shell_html
+    assert "访问密码" not in shell_html
     assert ".notification-list" in shell_css
     assert ".notification-card.danger" in shell_css
     assert ".notification-card.warning" in shell_css
+    assert ".notification-card .inline-actions" in shell_css
+    assert ".notification-card .inline-actions .btn" in shell_css
+    assert "min-width: 104px" in shell_css
+    assert "gap: 10px" in shell_css
+    assert ".btn.ghost" in shell_css
     assert "function isWebhookOnlyAiRobot" in shell_app
     assert '["wecom", "dingtalk", "lark"].includes(platform)' in shell_app
     assert "function aiRobotWebhookHint" in shell_app
@@ -200,14 +234,46 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "素材维护员" in shell_app
     assert "数据监控员" in shell_app
     assert "function applyPermissions()" in shell_app
+    assert '<option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>' in shell_app
+    assert '<option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>' in shell_app
+    assert 'platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || ""' in shell_app
+    assert "赛博皮卡天津港现车" not in shell_app
+    assert "赛博皮卡现车：aawbcc" not in shell_app
+    assert 'filter((user) => user.id !== "allen")' in shell_app
+    assert 'makeAccountKey(data.display_name, "auto")' in shell_app
+    assert 'data.niche = "短视频矩阵"' in shell_app
+    assert "绑定运营微信：" in shell_app
+    assert "已有相同任务在队列中" in shell_app
+    assert "已加入队列，等待人工执行" in shell_app
+    assert 'button.setAttribute("aria-busy", "true")' in shell_app
+    assert "登录中..." in shell_app
+    assert "添加中..." in shell_app
+    assert "保存中..." in shell_app
+    assert "切换中..." in shell_app
+    assert "退出中..." in shell_app
+    assert "恢复中..." in shell_app
     assert "/api/auth/state" in shell_app
     assert "/api/auth/login" in shell_app
     assert "/api/auth/roles" in shell_app
     assert "/api/auth/users" in shell_app
+    assert "/api/auth/users/${encodeURIComponent(userId)}/password" in shell_app
+    assert "data-save-user-password" in shell_app
+    assert "loggedOut: true" in shell_app
+    assert "auth-logged-out" in shell_app
+    assert 'activateView("overview")' in shell_app
+    assert 'window.history.replaceState(null, "", "#login")' in shell_app
+    assert 'authState.currentUserId = ""' in shell_app
+    assert 'new Set(["user-center"])' in shell_app
+    assert 'const PERMISSION_DENIED_MESSAGE = "权限不足，请向管理员申请！"' in shell_app
+    assert "function canUseView" in shell_app
+    assert "function initPermissionGuards" in shell_app
+    assert 'node.classList.toggle("permission-denied-entry", !allowed)' in shell_app
+    assert 'section.classList.toggle("permission-limited-view", locked)' in shell_app
+    assert 'activateView(fallback)' not in shell_app
     assert 'topMenu.classList.toggle("open", open)' in shell_app
     assert 'topMenu?.classList.remove("open")' in shell_app
     assert "data-role-permission" in shell_app
-    assert "permission-hidden" in shell_app
+    assert "permission-hidden" not in shell_app
     assert "data-ai-toggle" in shell_app
     assert "通知开启" in shell_app
     assert "通知关闭" in shell_app
@@ -224,10 +290,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "使用帮助知识库" in shell_html
     assert "help-layout" in shell_html
     assert "help-category-section" in shell_html
+    assert 'id="help-doc-reader"' in shell_html
+    assert 'id="help-reader-body"' in shell_html
     assert "docs/help/VIDEO_GENERATION_WORKBENCH.md" in shell_html
     assert "docs/help/ACCOUNT_MATRIX.md" in shell_html
     assert "docs/help/SYSTEM_SETTINGS.md" in shell_html
     assert "docs/help/DEVELOPER_VIDEO_GENERATION_ALGORITHM.md" in shell_html
+    assert '<span class="system-status">知识库文档</span>' in shell_html
     assert ".notify-switch" in shell_css
     assert ".ai-config-mode-card" in shell_css
     assert ".ai-config-panel[hidden]" in shell_css
@@ -239,14 +308,50 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".help-hero-panel" in shell_css
     assert ".help-doc-grid" in shell_css
     assert ".help-doc-card" in shell_css
+    assert ".help-reader-panel" in shell_css
+    assert ".help-reader-body" in shell_css
+    assert "display: none" in shell_css
+    assert "/api/help-docs/" in shell_app
+    assert "function renderHelpMarkdown" in shell_app
+    assert "function openHelpDocument" in shell_app
+    assert "help-reader-path" not in shell_app
     assert ".confirm-modal" in shell_css
     assert ".confirm-panel" in shell_css
     assert ".confirm-message" in shell_css
     assert ".permission-grid" in shell_css
+    assert ".login-screen" in shell_css
+    assert "body.auth-logged-out .sidebar" in shell_css
+    assert "body.auth-logged-out .workspace" in shell_css
     assert ".top-user-menu.open" in shell_css
     assert ".operator-account-row" in shell_css
+    assert ".account-admin-card" in shell_css
+    assert ".role-admin-card" in shell_css
+    assert "grid-template-columns: minmax(220px, 0.8fr) minmax(280px, 1fr) minmax(360px, 1.35fr)" in shell_css
+    assert ".role-admin-card .role-tabs" in shell_css
+    assert "grid-template-columns: repeat(4, minmax(118px, 1fr))" in shell_css
+    assert "grid-column: 1 / -1" in shell_css
     assert ".role-tab.active" in shell_css
     assert ".permission-hidden" in shell_css
+    assert ".permission-denied-entry" in shell_css
+    assert ".permission-limited-view" in shell_css
+    assert ".permission-admin-only" in shell_css
+    assert ".permission-limited-view iframe" in shell_css
+    assert "#system-settings .storage-actions" in shell_css
+    assert "grid-template-columns: repeat(auto-fit, minmax(104px, 1fr))" in shell_css
+    assert "/api/system/open-directory/" in shell_app
+    assert "function initSystemDirectoryActions" in shell_app
+    assert "function confirmSuperAdminPassword" in shell_app
+    assert "const confirmSystemInitializePassword = confirmSuperAdminPassword" in shell_app
+    assert 'body: JSON.stringify({ password })' in shell_app
+    assert 'body: JSON.stringify({ material_dir: materialDir, password })' in shell_app
+    assert "/api/system/database-dictionary" in shell_app
+    assert "function renderDatabaseDictionary" in shell_app
+    assert "renderSystemHealth" not in shell_app
+    assert ".db-dictionary-table" in shell_css
+    assert ".db-dictionary-columns" in shell_css
+    assert ".db-dictionary-column" in shell_css
+    assert ".password-confirm-panel" in shell_css
+    assert ".password-confirm-field" in shell_css
     assert "body.video-matrix-active" in shell_css
     assert "overflow: hidden" in shell_css
     assert "flex-direction: column" in shell_css
@@ -874,8 +979,39 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "<button id=\"singleMode\" class=\"active\" type=\"button\">单屏查看</button>" in preview_html
     assert "手机模型选择" in preview_html
     assert "视频选择" in preview_html
+    assert "body.preview-browser-mode .phone-mockup" in preview_html
+    assert "transform: scale(var(--device-fit-scale, 1))" in preview_html
+    assert "function updateDeviceScale" in preview_html
+    assert "window.innerHeight - 96" in preview_html
+    assert "window.addEventListener(\"resize\", () => updateDeviceScale())" in preview_html
+    assert "max-height: 188px" in preview_html
+    assert "max-height: 256px" in preview_html
     assert "previewPlay" in preview_html
     assert "previewStop" in preview_html
+    assert "previewVideoLoading" in preview_html
+    assert "preview-loading-spinner" in preview_html
+    assert "preview-loading-overlay" in preview_html
+    assert "preview-loading-row" in preview_html
+    assert "previewLoadingSpin" in preview_html
+    assert "setPreviewWorkbenchLoading" in preview_html
+    assert "beginPreviewWorkbenchLoading" in preview_html
+    assert "endPreviewWorkbenchLoading" in preview_html
+    assert "pulsePreviewWorkbenchLoading" in preview_html
+    assert "previewWorkbenchLoadingCount" in preview_html
+    assert "setSingleVideoLoading" in preview_html
+    assert "resetPreviewSelectionState" in preview_html
+    assert "singleMode?.classList.add(\"active\")" in preview_html
+    assert "bindSingleVideoLoading" in preview_html
+    assert "loadedmetadata" in preview_html
+    assert "playing" in preview_html
+    assert "window.setTimeout(clearLoading, 1600)" in preview_html
+    assert "preload=\"metadata\"" in preview_html
+    assert "node.load()" in preview_html
+    assert "renderPreviewVideoList(true)" in preview_html
+    assert "previewWorkbench?.classList.toggle(\"is-loading\"" in preview_html
+    assert "pulsePreviewWorkbenchLoading();" in preview_html
+    assert "await playAllPreviewVideos();" in preview_html
+    assert "if (video.readyState >= 1) clearLoading()" in preview_html
     assert "gridMode" not in preview_html
     assert "九宫格查看" not in preview_html
     assert "previewGridStage" in preview_html
@@ -891,6 +1027,7 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "Huawei Mate 60 Pro" not in preview_html
     assert "Mate 60 Pro" in preview_html
     assert "data-grid-count=\"3\"" in preview_html
+    assert '<button class="active" type="button" data-grid-count="3">' not in preview_html
     assert "data-grid-count=\"6\"" in preview_html
     assert "data-grid-count=\"9\"" in preview_html
     assert "previewGridCount = 3" in preview_html
@@ -901,7 +1038,13 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "button.querySelector(\"video\")" in preview_html
     assert "node.paused" in preview_html
     assert "is-playing" in preview_html
+    assert "preview-grid-phone is-loading" in preview_html
+    assert "card?.classList.remove(\"is-loading\")" in preview_html
+    assert 'item.classList.remove("active")' in preview_html
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in preview_html
+    assert "width: min(92vw, calc((100vh - 96px) * 9 / 16))" in preview_html
+    assert "grid-template-rows: repeat(3, minmax(0, 1fr))" in preview_html
+    assert "max-height: calc((100vh - 96px) / 3)" in preview_html
     assert "grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr)" in preview_html
     preview_video_css = preview_html[preview_html.index("#previewVideo {"):preview_html.index("#templateBackgroundImage {")]
     assert "object-fit: contain" in preview_video_css
@@ -965,6 +1108,9 @@ def test_video_matrix_preview_matches_wechat_phone_reference_shell() -> None:
     assert "transform: translateY(-24px)" in preview_html
     assert 'aria-label="小窗"' not in preview_html
     assert "phone.addEventListener" in preview_html
+    assert "templateLayer?.addEventListener(\"click\"" in preview_html
     assert "toggleVideoPlayback" in preview_html
+    assert "shouldIgnorePlaybackClick" in preview_html
+    assert "event.stopPropagation()" in preview_html
     assert "rgba(0,0,0,0.4) 0%" in preview_html
     assert "self-contained" in preview_css

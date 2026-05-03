@@ -58,6 +58,7 @@ class DistributionSettingsPayload(BaseModel):
 
 class OpenMaterialDirPayload(BaseModel):
     material_dir: str = ""
+    password: str = ""
 
 
 class AiRobotConfigPayload(BaseModel):
@@ -113,6 +114,14 @@ class OperatorUserRolePayload(BaseModel):
     role_id: str
 
 
+class OperatorUserPasswordPayload(BaseModel):
+    password: str
+
+
+class SystemInitializePayload(BaseModel):
+    password: str = ""
+
+
 class OperatorRolePayload(BaseModel):
     name: str
 
@@ -152,6 +161,20 @@ def create_app() -> FastAPI:
     @app.get("/api/platforms")
     def platforms() -> list[dict[str, Any]]:
         return [item.__dict__ for item in SUPPORTED_PLATFORMS]
+
+    @app.get("/api/help-docs/{doc_name}")
+    def help_doc(doc_name: str) -> dict[str, Any]:
+        safe_name = Path(doc_name).name
+        if safe_name != doc_name or not safe_name.endswith(".md"):
+            raise HTTPException(status_code=404, detail="help doc not found")
+        path = Path(__file__).resolve().parents[2] / "docs" / "help" / safe_name
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="help doc not found")
+        return {
+            "name": safe_name,
+            "path": f"docs/help/{safe_name}",
+            "content": path.read_text(encoding="utf-8"),
+        }
 
     @app.get("/api/brand")
     def get_brand(request: Request) -> dict[str, Any]:
@@ -211,8 +234,16 @@ def create_app() -> FastAPI:
             "checks": checks,
         }
 
+    @app.get("/api/system/database-dictionary")
+    def database_dictionary() -> dict[str, Any]:
+        return service.database_dictionary()
+
     @app.post("/api/system/initialize")
-    def system_initialize() -> dict[str, Any]:
+    def system_initialize(payload: SystemInitializePayload) -> dict[str, Any]:
+        try:
+            service.login_operator_user("allen", payload.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
         return service.initialize_system()
 
     @app.patch("/api/brand")
@@ -241,6 +272,13 @@ def create_app() -> FastAPI:
     def auth_update_user_role(user_id: str, payload: OperatorUserRolePayload) -> dict[str, Any]:
         try:
             return service.update_operator_user_role(user_id, payload.role_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/auth/users/{user_id}/password")
+    def auth_update_user_password(user_id: str, payload: OperatorUserPasswordPayload) -> dict[str, Any]:
+        try:
+            return service.update_operator_user_password(user_id, payload.password)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -305,7 +343,18 @@ def create_app() -> FastAPI:
 
     @app.post("/api/settings/material-dir/open")
     def open_material_dir(payload: OpenMaterialDirPayload) -> dict[str, Any]:
+        try:
+            service.login_operator_user("allen", payload.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
         return service.open_material_directory(payload.material_dir)
+
+    @app.post("/api/system/open-directory/{kind}")
+    def open_system_directory(kind: str) -> dict[str, Any]:
+        try:
+            return service.open_system_directory(kind)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/ai-robots/configs")
     def ai_robot_configs() -> list[dict[str, Any]]:

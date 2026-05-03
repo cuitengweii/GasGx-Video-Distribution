@@ -305,6 +305,24 @@ def update_operator_user_role(user_id: str, role_id: str) -> dict[str, Any]:
     return operator_auth_state(current_user_id="allen")
 
 
+def update_operator_user_password(user_id: str, password: str) -> dict[str, Any]:
+    if user_id == "allen":
+        raise ValueError("super admin password is fixed by system configuration")
+    password = str(password or "").strip()
+    if not password:
+        raise ValueError("password is required")
+    ts = now_ts()
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM operator_users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise ValueError("operator user not found")
+        conn.execute(
+            "UPDATE operator_users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (_password_hash(password), ts, user_id),
+        )
+    return operator_auth_state(current_user_id="allen")
+
+
 def create_operator_role(name: str) -> dict[str, Any]:
     name = str(name or "").strip()
     if not name:
@@ -1491,13 +1509,94 @@ def _remaining_material_video_count() -> int:
 
 def open_material_directory(raw_path: str) -> dict[str, Any]:
     material_dir = resolve_material_dir({"material_dir": raw_path})
+    return _open_directory(material_dir)
+
+
+def _open_directory(path: Path) -> dict[str, Any]:
+    path.mkdir(parents=True, exist_ok=True)
     if sys.platform.startswith("win"):
-        os.startfile(str(material_dir))  # type: ignore[attr-defined]
+        os.startfile(str(path))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(material_dir)])
+        subprocess.Popen(["open", str(path)])
     else:
-        subprocess.Popen(["xdg-open", str(material_dir)])
-    return {"ok": True, "path": str(material_dir)}
+        subprocess.Popen(["xdg-open", str(path)])
+    return {"ok": True, "path": str(path)}
+
+
+def open_system_directory(kind: str) -> dict[str, Any]:
+    paths = get_paths()
+    settings = ProjectSettings.from_file(_config_root() / "defaults.json")
+    ui_state = load_ui_state(_config_root() / "ui_state.json")
+    output_root = Path(str(ui_state.get("output_root") or settings.output_root)).expanduser()
+    if not output_root.is_absolute():
+        output_root = paths.repo_root / output_root
+    targets = {
+        "materials": resolve_material_dir(),
+        "output": output_root.resolve(),
+        "logs": paths.runtime_root / "video_matrix" / "logs",
+        "cache": paths.runtime_root / "video_matrix" / "web_uploads",
+    }
+    if kind not in targets:
+        raise ValueError("unknown system directory")
+    return _open_directory(targets[kind])
+
+
+def database_dictionary() -> dict[str, Any]:
+    backend = brand_database_backend()
+    if backend == "supabase":
+        schema_path = get_paths().repo_root / "config" / "supabase" / "brand_baseline.sql"
+        return {
+            "backend": backend,
+            "source": str(schema_path),
+            "tables": _parse_supabase_schema(schema_path.read_text(encoding="utf-8") if schema_path.exists() else ""),
+        }
+    with connect() as conn:
+        tables = []
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        for row in rows:
+            name = row["name"]
+            columns = []
+            for column in conn.execute(f"PRAGMA table_info({name})").fetchall():
+                constraints = []
+                if column["pk"]:
+                    constraints.append("PRIMARY KEY")
+                if column["notnull"]:
+                    constraints.append("NOT NULL")
+                if column["dflt_value"] is not None:
+                    constraints.append(f"DEFAULT {column['dflt_value']}")
+                columns.append({
+                    "name": column["name"],
+                    "type": column["type"] or "unknown",
+                    "constraints": " ".join(constraints),
+                })
+            tables.append({"name": name, "columns": columns})
+    return {"backend": backend, "source": "sqlite", "tables": tables}
+
+
+def _parse_supabase_schema(sql: str) -> list[dict[str, Any]]:
+    tables: list[dict[str, Any]] = []
+    pattern = re.compile(r"create\s+table\s+if\s+not\s+exists\s+([a-zA-Z0-9_]+)\s*\((.*?)\);", re.IGNORECASE | re.DOTALL)
+    for match in pattern.finditer(sql):
+        table_name = match.group(1)
+        columns = []
+        for raw_line in match.group(2).splitlines():
+            line = raw_line.strip().rstrip(",")
+            if not line or line.startswith("--"):
+                continue
+            token = line.split(None, 1)[0].strip('"')
+            if token.lower() in {"constraint", "primary", "foreign", "unique", "check"}:
+                continue
+            rest = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ""
+            type_match = re.match(r"([a-zA-Z0-9_]+(?:\s*\([^)]*\))?(?:\[\])?)\s*(.*)", rest, re.DOTALL)
+            columns.append({
+                "name": token,
+                "type": type_match.group(1).strip() if type_match else rest,
+                "constraints": type_match.group(2).strip() if type_match else "",
+            })
+        tables.append({"name": table_name, "columns": columns})
+    return tables
 
 
 def list_accounts() -> list[dict[str, Any]]:

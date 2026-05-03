@@ -111,6 +111,35 @@ def test_operator_auth_api_persists_roles_users_and_permissions(monkeypatch, tmp
     created = client.post("/api/auth/users", json={"name": "Mia", "role_id": role_id, "password": "mia123"})
     assert created.status_code == 200
     assert any(user["name"] == "Mia" and user["roleId"] == role_id for user in created.json()["users"])
+    user_id = next(user["id"] for user in created.json()["users"] if user["name"] == "Mia")
+    reset = client.patch(f"/api/auth/users/{user_id}/password", json={"password": "new-mia-pass"})
+    assert reset.status_code == 200
+    assert client.post("/api/auth/login", json={"user_id": user_id, "password": "new-mia-pass"}).status_code == 200
+    assert client.post("/api/auth/login", json={"user_id": user_id, "password": "mia123"}).status_code == 401
+
+
+def test_help_doc_api_returns_whitelisted_markdown(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    response = client.get("/api/help-docs/WORKSPACE_OVERVIEW.md")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["path"] == "docs/help/WORKSPACE_OVERVIEW.md"
+    assert payload["content"].startswith("# ")
+
+    assert client.get("/api/help-docs/../README.md").status_code == 404
+
+
+def test_help_docs_are_user_facing_knowledge_base_pages() -> None:
+    help_dir = Path(__file__).resolve().parents[1] / "docs" / "help"
+    for path in help_dir.glob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "GasGx Video Distribution" not in text
+        assert "Pixabay" not in text
+        assert "## 常见问题" in text
+        assert "## 操作检查清单" in text or "## 开发排查清单" in text
+        assert len(text.splitlines()) >= 40
 
 
 def test_creating_many_wechat_accounts_allocates_unique_profiles_ports_and_fingerprints(monkeypatch, tmp_path: Path) -> None:

@@ -1,90 +1,95 @@
-# Developer Help: Video Generation Algorithm
+# 视频生成算法说明
 
-This document records the current GasGx video-generation algorithm for developer lookup. It describes the implemented code path as of 2026-04-29; it is not a product or marketing explanation.
+## 这篇文档解决什么问题
 
-## Entry Points
+本文面向维护人员和开发人员，解释视频生成链路的主要阶段、关键输入、输出结果和排查方向。普通运营人员通常只需要阅读“视频生成工作台”文档。
 
-- `G:\GasGx Video Distribution\src\gasgx_distribution\video_matrix\pipeline.py`
-- `G:\GasGx Video Distribution\src\gasgx_distribution\video_matrix\ingestion.py`
-- `G:\GasGx Video Distribution\src\gasgx_distribution\video_matrix\composition.py`
-- `G:\GasGx Video Distribution\src\gasgx_distribution\video_matrix\render.py`
-- `G:\GasGx Video Distribution\src\gasgx_distribution\video_matrix\beat.py`
+## 核心模块
 
-## High-Level Algorithm
+- `src/gasgx_distribution/video_matrix/pipeline.py`：组织生成任务流程。
+- `src/gasgx_distribution/video_matrix/ingestion.py`：读取和筛选素材。
+- `src/gasgx_distribution/video_matrix/composition.py`：组合素材片段和模板配置。
+- `src/gasgx_distribution/video_matrix/render.py`：调用渲染与导出逻辑。
+- `src/gasgx_distribution/video_matrix/beat.py`：处理节拍、切片和时间点。
 
-The current generator is a material-remix pipeline. It does not synthesize video frames from a text prompt. It ingests existing clips, normalizes them, buckets them by category, cuts beat-aligned segments, creates de-duplicated variants, and renders the final vertical videos with FFmpeg overlays and BGM.
+## 输入数据
 
-## Pipeline Steps
+视频生成通常需要以下输入：
 
-1. Source ingestion
-   - Reads video files from the configured `source_root`, usually `runtime/video_matrix/incoming`.
-   - Supports `.mp4`, `.mov`, `.m4v`, `.avi`, and `.mkv`.
-   - Infers material categories from path parts and filename keywords.
-   - Writes normalized clips under the configured `library_root`.
+- 素材分类目录。
+- 输出数量。
+- 输出目录。
+- 封面模板配置。
+- 正文模板配置。
+- 片尾模板配置。
+- 本地背景音乐。
+- 组合顺序和去重策略。
+- 目标帧率、时长范围和并发参数。
 
-2. Clip normalization
-   - Uses FFmpeg to convert each clip to the configured target size and frame rate.
-   - Current defaults are `1080x1920` and `60fps`.
-   - Removes source audio.
-   - Applies light image tuning through `eq=contrast=1.15:brightness=-0.03:saturation=1.05`.
+## 素材选择逻辑
 
-3. HUD data preparation
-   - Builds HUD lines from live data when available.
-   - Live mode tries BTC/USD and network hashrate endpoints.
-   - If live data fails, the pipeline falls back to `hud_fixed_formulas` from `config/video_matrix/defaults.json`.
+素材选择会尽量根据分类目录读取可用视频片段。维护时重点关注：
 
-4. BGM beat grid
-   - Uses `librosa` to detect beats from the selected BGM.
-   - If `librosa` is missing or beat detection fails, it falls back to a fixed grid with about `0.48s` spacing.
-   - Segment durations are aligned against this beat grid.
+- 分类目录是否存在。
+- 每个分类是否有足够素材。
+- 文件扩展名是否受支持。
+- 文件是否损坏或不可读。
+- 最近使用限制是否导致可选素材过少。
 
-5. Variant planning
-   - Uses `composition_sequence` from `config/video_matrix/defaults.json` or the generate request.
-   - The default sequence preserves the previous behavior:
+如果素材不足，生成结果可能重复或失败。
 
-```text
-category_A -> category_B -> category_A -> category_C
-```
+## 组合逻辑
 
-   - The default target segment windows preserve the previous behavior:
+组合逻辑负责把素材片段、模板、封面、片尾和音频组合为一个生成计划。它需要保证：
 
-```text
-1.5s -> 3.4s -> 1.5s -> 3.0s
-```
+- 输出数量符合用户设置。
+- 每条视频的片段顺序合理。
+- 模板快照完整。
+- 片尾模式明确。
+- 背景音乐路径可用。
+- 输出文件名不会冲突。
 
-   - Each row can now be changed in the video-generation UI by selecting a category and segment duration.
-   - For each segment, randomly chooses a clip from the required category and randomly chooses a valid start time.
-   - Randomly chooses title, slogan, LUT strength, zoom, mirror flag, and crop offsets.
+## 渲染逻辑
 
-6. De-duplication
-   - Builds a SHA1 signature from segment clip IDs, start times, durations, title, slogan, visual parameters, and HUD lines.
-   - If a signature has already been used in the batch, planning retries.
-   - If `variant_history_enabled` is true, previously generated signatures are loaded from `runtime/video_matrix/signature_history.json` or database `video_matrix_state.signature_history`.
-   - `max_variant_attempts` controls the retry limit. The default is 20.
+渲染阶段会把组合计划转换为实际视频文件。排查时重点看：
 
-7. Rendering
-   - Builds an FFmpeg `filter_complex` graph.
-   - Each segment is trimmed, scaled, cropped, optionally mirrored, color-balanced, and enhanced.
-   - HUD, slogan, and title are drawn with FFmpeg `drawbox` and `drawtext`.
-   - Optional intro and outro covers are inserted as looped still-image video segments.
-   - Segments are concatenated into `[vout]`.
-   - BGM is looped with `-stream_loop -1` and cut to the final video length with `-shortest`.
+- FFmpeg 是否可用。
+- 输出目录是否可写。
+- 输入素材是否能被解码。
+- 音频和视频时长是否匹配。
+- 并发数是否过高导致资源不足。
 
-8. Sidecar outputs
-   - Can emit MP4, PNG cover, TXT copy, and JSON manifest depending on requested output types.
-   - Cover generation uses the configured cover template when available.
-   - Marketing copy first tries the Spark CLI in `D:\code\Python`; if unavailable, it falls back to `config/video_matrix/copy_template.txt`.
+## 进度状态
 
-9. Parallel execution
-   - `run_pipeline()` renders variants with `ThreadPoolExecutor`.
-   - Default worker count is capped by total variants, CPU count, and an upper bound of 4 workers.
+生成任务通常会经历：
 
-## Current Important Constraint
+- 排队。
+- 读取素材。
+- 生成组合。
+- 渲染视频。
+- 写入输出文件。
+- 完成或失败。
 
-The default composition still consumes `category_A`, `category_B`, and `category_C` to remain backward compatible. Additional categories are available once they are added to `composition_sequence` through the UI or configuration.
+前端会按任务状态刷新进度，用户应保持页面和本地服务运行。
 
-## V1 Extensibility Hooks
+## 常见问题
 
-- `beat_detection` controls `mode`, BPM bounds, and fallback beat spacing without adding new audio dependencies.
-- `enhancement_modules` is reserved for future AI/GPU visual enhancement modules and is disabled by default.
-- `copy_mode` is reserved for future copy-generation policy. The current behavior remains Spark first, template fallback.
+### 为什么生成速度慢？
+
+可能是素材体积大、并发过低、机器资源不足、模板复杂或输出数量过多。可以先减少输出数量进行验证。
+
+### 为什么某些素材没有被选中？
+
+可能是分类不匹配、最近使用限制、文件格式不支持或素材读取失败。
+
+### 为什么输出文件缺少音频？
+
+检查本地背景音乐是否可读，音频编码是否支持，以及渲染日志中是否有音频处理错误。
+
+## 开发排查清单
+
+- 使用小批量素材复现问题。
+- 保存失败任务的输入参数。
+- 检查素材分类、模板快照和输出目录。
+- 先验证单条生成，再扩大到批量。
+- 修改算法后补充前端和后端测试。

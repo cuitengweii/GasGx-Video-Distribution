@@ -173,11 +173,66 @@ def test_open_material_dir_api(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("gasgx_distribution.service.open_material_directory", fake_open_material_directory)
     client = TestClient(create_app())
 
-    result = client.post("/api/settings/material-dir/open", json={"material_dir": "runtime/materials/videos"})
+    denied = client.post("/api/settings/material-dir/open", json={"material_dir": "runtime/materials/videos", "password": "wrong"})
+    result = client.post("/api/settings/material-dir/open", json={"material_dir": "runtime/materials/videos", "password": "cuitengwei123"})
 
+    assert denied.status_code == 401
     assert result.status_code == 200
     assert result.json()["ok"] is True
     assert opened == ["runtime/materials/videos"]
+
+
+def test_open_system_directory_api(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    opened = []
+
+    def fake_open_system_directory(kind: str) -> dict[str, str | bool]:
+        opened.append(kind)
+        return {"ok": True, "path": str(tmp_path / kind)}
+
+    monkeypatch.setattr("gasgx_distribution.service.open_system_directory", fake_open_system_directory)
+    client = TestClient(create_app())
+
+    result = client.post("/api/system/open-directory/output")
+
+    assert result.status_code == 200
+    assert result.json()["ok"] is True
+    assert opened == ["output"]
+
+
+def test_system_initialize_requires_super_admin_password(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    initialized = []
+
+    def fake_initialize_system() -> dict[str, bool]:
+        initialized.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr("gasgx_distribution.service.initialize_system", fake_initialize_system)
+    client = TestClient(create_app())
+
+    denied = client.post("/api/system/initialize", json={"password": "wrong"})
+    allowed = client.post("/api/system/initialize", json={"password": "cuitengwei123"})
+
+    assert denied.status_code == 401
+    assert allowed.status_code == 200
+    assert allowed.json()["ok"] is True
+    assert initialized == [True]
+
+
+def test_database_dictionary_api_returns_tables(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    result = client.get("/api/system/database-dictionary")
+
+    assert result.status_code == 200
+    payload = result.json()
+    assert payload["tables"]
+    table_names = {table["name"] for table in payload["tables"]}
+    assert "matrix_accounts" in table_names
+    matrix_accounts = next(table for table in payload["tables"] if table["name"] == "matrix_accounts")
+    assert any(column["name"] == "account_key" for column in matrix_accounts["columns"])
 
 
 def test_matrix_wechat_job_status_api(monkeypatch, tmp_path: Path) -> None:

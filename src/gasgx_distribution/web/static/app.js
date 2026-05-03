@@ -71,7 +71,7 @@ const state = {
   aiRobotEditingPlatform: "",
   aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
-  systemHealth: null,
+  databaseDictionary: null,
   analytics: {},
 };
 
@@ -81,6 +81,8 @@ let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "ov
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
 const SHELL_AUTH_KEY = "gasgx-shell-auth";
+const PERMISSION_DENIED_MESSAGE = "权限不足，请向管理员申请！";
+const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
 const FEATURE_ENTRIES = [
   { id: "overview", label: "总览", group: "业务工作台" },
@@ -256,7 +258,8 @@ function initBrandSettings() {
     reader.onload = () => applyShellBrand({ name: nameInput.value, slogan: sloganInput.value, logoDataUrl: String(reader.result || "") });
     reader.readAsDataURL(file);
   });
-  document.querySelector("#save-brand-settings").addEventListener("click", async () => {
+  document.querySelector("#save-brand-settings").addEventListener("click", async (event) => {
+    const restoreButton = setButtonLoading(event.currentTarget, "保存中...");
     const currentLogo = document.querySelector("#brand-logo-image").src || "";
     const payload = {
       name: nameInput.value,
@@ -266,13 +269,19 @@ function initBrandSettings() {
       theme_id: localStorage.getItem(SHELL_THEME_KEY) || "gasgx-green",
       default_account_prefix: nameInput.value || "GasGx",
     };
-    const settings = await api("/api/brand", { method: "PATCH", body: JSON.stringify(payload) });
-    saveShellBrand({ name: settings.name, slogan: settings.slogan, logoDataUrl: settings.logo_asset_path || "" });
+    try {
+      const settings = await api("/api/brand", { method: "PATCH", body: JSON.stringify(payload) });
+      saveShellBrand({ name: settings.name, slogan: settings.slogan, logoDataUrl: settings.logo_asset_path || "" });
+    } finally {
+      restoreButton();
+    }
   });
-  document.querySelector("#reset-brand-settings").addEventListener("click", () => {
+  document.querySelector("#reset-brand-settings").addEventListener("click", (event) => {
+    const restoreButton = setButtonLoading(event.currentTarget, "恢复中...");
     localStorage.removeItem(SHELL_BRAND_KEY);
     upload.value = "";
     applyShellBrand({});
+    window.setTimeout(restoreButton, 160);
   });
 }
 
@@ -303,6 +312,7 @@ function saveAuthSession(nextSession) {
 }
 
 function currentAuthUser(statePayload = authState) {
+  if (!statePayload.currentUserId) return null;
   return statePayload.users.find((user) => user.id === statePayload.currentUserId) || statePayload.users[0];
 }
 
@@ -312,39 +322,72 @@ function currentPermissions(statePayload = authState) {
   return new Set(role?.permissions || []);
 }
 
+function canUseView(view, statePayload = authState) {
+  const user = currentAuthUser(statePayload);
+  if (!user) return view === "user-center";
+  if (user.roleId === "super_admin") return true;
+  return currentPermissions(statePayload).has(view);
+}
+
+function isPermissionLimitedView(view = currentView, statePayload = authState) {
+  const section = document.querySelector(`#${view}`);
+  return Boolean(section && !canUseView(view, statePayload));
+}
+
+function showPermissionDenied() {
+  window.alert(PERMISSION_DENIED_MESSAGE);
+}
+
+function applyPermissionLimitedState() {
+  document.querySelectorAll(".view").forEach((section) => {
+    const locked = isPermissionLimitedView(section.id);
+    section.classList.toggle("permission-limited-view", locked);
+    section.querySelectorAll(PERMISSION_INTERACTIVE_SELECTOR).forEach((node) => {
+      if (!node.closest(".permission-notice")) node.classList.toggle("permission-blocked-control", locked);
+    });
+  });
+}
+
 function applyPermissions() {
-  const authState = readAuthState();
-  const user = currentAuthUser(authState);
-  const role = authState.roles[user?.roleId] || authState.roles.publisher;
-  const permissions = currentPermissions(authState);
+  const statePayload = authState;
+  const user = currentAuthUser(statePayload);
+  const role = user ? statePayload.roles[user?.roleId] || statePayload.roles.publisher : null;
+  const permissions = user ? currentPermissions(statePayload) : new Set(["user-center"]);
   document.querySelector("#signed-user-name").textContent = user?.name || "未登录";
   document.querySelector(".signed-user-badge")?.setAttribute("aria-label", `当前登录用户 ${user?.name || "未登录"}`);
-  document.querySelector("#session-user-name").textContent = user?.name || "未登录";
-  document.querySelector("#session-user-desc").textContent = `${role?.name || "未分配角色"} / ${user?.roleId === "super_admin" ? "可分配账号与角色权限" : "按角色显示功能入口"}`;
-  document.querySelector("#session-role-badge").textContent = role?.name || "未分配";
-  document.querySelector("#session-avatar").textContent = (user?.name || "G").slice(0, 1).toUpperCase();
+  const sessionUserName = document.querySelector("#session-user-name");
+  const sessionUserDesc = document.querySelector("#session-user-desc");
+  const sessionRoleBadge = document.querySelector("#session-role-badge");
+  const sessionAvatar = document.querySelector("#session-avatar");
+  if (sessionUserName) sessionUserName.textContent = user?.name || "未登录";
+  if (sessionUserDesc) sessionUserDesc.textContent = user ? `${role?.name || "未分配角色"} / ${user?.roleId === "super_admin" ? "可分配账号与角色权限" : "按角色显示功能入口"}` : "请用已分配账号登录";
+  if (sessionRoleBadge) sessionRoleBadge.textContent = role?.name || "未登录";
+  if (sessionAvatar) sessionAvatar.textContent = (user?.name || "G").slice(0, 1).toUpperCase();
+  document.body.classList.toggle("auth-logged-out", !user);
   document.querySelectorAll("[data-permission]").forEach((node) => {
     const allowed = permissions.has(node.dataset.permission) || user?.roleId === "super_admin";
-    node.classList.toggle("permission-hidden", !allowed);
+    node.classList.toggle("permission-denied-entry", !allowed);
+    if (!allowed) node.setAttribute("title", PERMISSION_DENIED_MESSAGE);
+    else node.removeAttribute("title");
   });
   document.querySelectorAll("[data-admin-only]").forEach((node) => {
-    node.classList.toggle("permission-hidden", user?.roleId !== "super_admin");
+    node.classList.toggle("permission-admin-only", user?.roleId !== "super_admin");
   });
-  if (!permissions.has(currentView) && user?.roleId !== "super_admin") {
-    const fallback = FEATURE_ENTRIES.find((entry) => permissions.has(entry.id))?.id || "overview";
-    activateView(fallback);
-  }
+  applyPermissionLimitedState();
 }
 
 function renderLoginOptions(statePayload = authState) {
   const loginSelect = document.querySelector("#login-user-select");
   const roleSelect = document.querySelector("#operator-role-select");
   if (loginSelect) {
-    loginSelect.innerHTML = statePayload.users.map((user) => {
+    const loginUsers = statePayload.users.filter((user) => user.id !== "allen");
+    loginSelect.innerHTML = loginUsers.map((user) => {
       const role = statePayload.roles[user.roleId];
       return `<option value="${user.id}">${user.name} · ${role?.name || "未分配"}</option>`;
     }).join("");
-    loginSelect.value = statePayload.currentUserId;
+    loginSelect.value = loginUsers.some((user) => user.id === statePayload.currentUserId)
+      ? statePayload.currentUserId
+      : loginUsers[0]?.id || "";
   }
   if (roleSelect) {
     roleSelect.innerHTML = Object.entries(statePayload.roles).map(([roleId, role]) => `<option value="${roleId}">${role.name}</option>`).join("");
@@ -362,6 +405,8 @@ function renderOperatorAccounts(statePayload = authState) {
         <select data-user-role="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>
           ${Object.entries(statePayload.roles).map(([roleId, item]) => `<option value="${roleId}" ${roleId === user.roleId ? "selected" : ""}>${item.name}</option>`).join("")}
         </select>
+        <input data-user-password="${user.id}" type="password" placeholder="${user.roleId === "super_admin" ? "系统固定" : "设置/重置口令"}" ${user.roleId === "super_admin" ? "disabled" : ""}>
+        <button class="btn secondary" type="button" data-save-user-password="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>保存口令</button>
         <span>${role?.name || "未分配"}</span>
       </article>
     `;
@@ -373,6 +418,25 @@ function renderOperatorAccounts(statePayload = authState) {
         body: JSON.stringify({ role_id: select.value }),
       });
       renderAuthCenter();
+    });
+  });
+  list.querySelectorAll("[data-save-user-password]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const userId = button.dataset.saveUserPassword;
+      const input = list.querySelector(`[data-user-password="${userId}"]`);
+      const password = input?.value.trim() || "";
+      if (!password) return;
+      const restoreButton = setButtonLoading(button, "保存中...");
+      try {
+        authState = await api(`/api/auth/users/${encodeURIComponent(userId)}/password`, {
+          method: "PATCH",
+          body: JSON.stringify({ password }),
+        });
+        input.value = "";
+        renderAuthCenter();
+      } finally {
+        restoreButton();
+      }
     });
   });
 }
@@ -387,11 +451,16 @@ function renderRoleTabs(statePayload = authState) {
   `).join("");
   tabs.querySelectorAll("[data-role-tab]").forEach((button) => {
     button.addEventListener("click", async () => {
+      const restoreButton = setButtonLoading(button, "切换中...");
       const session = readStoredAuthSession();
       session.editingRoleId = button.dataset.roleTab;
       saveAuthSession(session);
-      authState = await api(`/api/auth/state?current_user_id=${encodeURIComponent(authState.currentUserId)}&editing_role_id=${encodeURIComponent(session.editingRoleId)}`);
-      renderAuthCenter();
+      try {
+        authState = await api(`/api/auth/state?current_user_id=${encodeURIComponent(authState.currentUserId)}&editing_role_id=${encodeURIComponent(session.editingRoleId)}`);
+        renderAuthCenter();
+      } finally {
+        restoreButton();
+      }
     });
   });
 }
@@ -437,6 +506,7 @@ function renderAuthCenter() {
 async function loadAuthCenter() {
   const session = readStoredAuthSession();
   authState = await api(`/api/auth/state?current_user_id=${encodeURIComponent(session.currentUserId || "allen")}&editing_role_id=${encodeURIComponent(session.editingRoleId || "super_admin")}`);
+  if (session.loggedOut) authState.currentUserId = "";
   renderAuthCenter();
 }
 
@@ -445,43 +515,74 @@ function initAuthCenter() {
   document.querySelector("#local-login-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const password = document.querySelector("#login-password").value.trim();
+    const errorNode = document.querySelector("#login-error");
+    if (errorNode) errorNode.textContent = "";
     if (!password) return;
-    authState = await api("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ user_id: document.querySelector("#login-user-select").value, password }),
-    });
-    saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId });
-    document.querySelector("#login-password").value = "";
-    renderAuthCenter();
+    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "登录中...");
+    try {
+      authState = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ user_id: document.querySelector("#login-user-select").value, password }),
+      });
+      saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId, loggedOut: false });
+      document.querySelector("#login-password").value = "";
+      renderAuthCenter();
+      activateView("overview");
+    } catch (error) {
+      if (errorNode) errorNode.textContent = error.message || "登录失败";
+    } finally {
+      restoreButton();
+    }
   });
   document.querySelector("#operator-account-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const nameInput = document.querySelector("#operator-name-input");
     const name = nameInput.value.trim();
     if (!name) return;
-    authState = await api("/api/auth/users", {
-      method: "POST",
-      body: JSON.stringify({ name, role_id: document.querySelector("#operator-role-select").value || "publisher" }),
-    });
-    nameInput.value = "";
-    renderAuthCenter();
+    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "添加中...");
+    try {
+      authState = await api("/api/auth/users", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          role_id: document.querySelector("#operator-role-select").value || "publisher",
+          password: document.querySelector("#operator-password-input").value.trim(),
+        }),
+      });
+      nameInput.value = "";
+      document.querySelector("#operator-password-input").value = "";
+      renderAuthCenter();
+    } finally {
+      restoreButton();
+    }
   });
   document.querySelector("#role-create-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const input = document.querySelector("#role-name-input");
     const name = input.value.trim();
     if (!name) return;
-    authState = await api("/api/auth/roles", { method: "POST", body: JSON.stringify({ name }) });
-    saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId });
-    input.value = "";
-    renderAuthCenter();
+    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "添加中...");
+    try {
+      authState = await api("/api/auth/roles", { method: "POST", body: JSON.stringify({ name }) });
+      saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId });
+      input.value = "";
+      renderAuthCenter();
+    } finally {
+      restoreButton();
+    }
   });
   document.querySelectorAll("[data-logout]").forEach((button) => {
     button.addEventListener("click", async () => {
-      saveAuthSession({ currentUserId: "publisher", editingRoleId: "super_admin" });
-      authState = await api("/api/auth/state?current_user_id=publisher&editing_role_id=super_admin");
-      renderAuthCenter();
-      activateView("user-center");
+      const restoreButton = setButtonLoading(button, "退出中...");
+      try {
+        saveAuthSession({ currentUserId: "", editingRoleId: "super_admin", loggedOut: true });
+        authState = await api("/api/auth/state?current_user_id=allen&editing_role_id=super_admin");
+        authState.currentUserId = "";
+        renderAuthCenter();
+        window.history.replaceState(null, "", "#login");
+      } finally {
+        restoreButton();
+      }
     });
   });
 }
@@ -530,6 +631,40 @@ function initUserMenu() {
   });
 }
 
+function shouldBlockPermissionAction(target) {
+  if (target.closest("#refresh") && isPermissionLimitedView()) return true;
+  const interactive = target.closest(PERMISSION_INTERACTIVE_SELECTOR);
+  const activeView = target.closest(".view.active");
+  if (!interactive && activeView?.classList.contains("permission-limited-view") && activeView.querySelector("iframe")) return true;
+  if (!interactive) return false;
+  if (activeView && isPermissionLimitedView(activeView.id)) return true;
+  const adminRegion = target.closest("[data-admin-only]");
+  const user = currentAuthUser(authState);
+  return Boolean(adminRegion && user?.roleId !== "super_admin");
+}
+
+function initPermissionGuards() {
+  document.addEventListener("click", (event) => {
+    if (!shouldBlockPermissionAction(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showPermissionDenied();
+  }, true);
+  document.addEventListener("submit", (event) => {
+    if (!shouldBlockPermissionAction(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showPermissionDenied();
+  }, true);
+  document.addEventListener("change", (event) => {
+    if (!shouldBlockPermissionAction(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showPermissionDenied();
+    renderAuthCenter();
+  }, true);
+}
+
 function showTaskState(message, kind = "muted") {
   let node = document.querySelector("#task-create-state");
   if (!node) {
@@ -540,6 +675,15 @@ function showTaskState(message, kind = "muted") {
   }
   node.className = kind;
   node.textContent = message;
+}
+
+function formatFriendlyMessage(message) {
+  const text = String(message || "");
+  const duplicateTaskMatch = text.match(/^duplicate active task already queued: #(\d+)$/i);
+  if (duplicateTaskMatch) return `已有相同任务在队列中：#${duplicateTaskMatch[1]}`;
+  if (text === "queued for manual worker execution") return "已加入队列，等待人工执行";
+  if (text === "pending") return "待处理";
+  return text || "操作失败，请稍后重试";
 }
 
 async function api(path, options = {}) {
@@ -558,18 +702,116 @@ function setButtonLoading(button, loadingText = "处理中") {
   if (!button) return () => {};
   const previousHtml = button.innerHTML;
   const previousDisabled = button.disabled;
+  const previousBusy = button.getAttribute("aria-busy");
   button.disabled = true;
   button.classList.add("loading");
+  button.setAttribute("aria-busy", "true");
   button.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span><span>${loadingText}</span>`;
   return () => {
     button.innerHTML = previousHtml;
     button.disabled = previousDisabled;
     button.classList.remove("loading");
+    if (previousBusy === null) button.removeAttribute("aria-busy");
+    else button.setAttribute("aria-busy", previousBusy);
   };
 }
 
 function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+}
+
+function renderHelpMarkdown(markdown) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const html = [];
+  let listOpen = false;
+  let codeOpen = false;
+  const closeList = () => {
+    if (listOpen) {
+      html.push("</ul>");
+      listOpen = false;
+    }
+  };
+  lines.forEach((line) => {
+    if (line.trim().startsWith("```")) {
+      closeList();
+      html.push(codeOpen ? "</code></pre>" : "<pre><code>");
+      codeOpen = !codeOpen;
+      return;
+    }
+    if (codeOpen) {
+      html.push(escapeHtml(line));
+      return;
+    }
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeList();
+      return;
+    }
+    if (trimmed.startsWith("# ")) {
+      closeList();
+      html.push(`<h1>${escapeHtml(trimmed.slice(2))}</h1>`);
+      return;
+    }
+    if (trimmed.startsWith("## ")) {
+      closeList();
+      html.push(`<h2>${escapeHtml(trimmed.slice(3))}</h2>`);
+      return;
+    }
+    if (trimmed.startsWith("### ")) {
+      closeList();
+      html.push(`<h3>${escapeHtml(trimmed.slice(4))}</h3>`);
+      return;
+    }
+    if (trimmed.startsWith("- ")) {
+      if (!listOpen) {
+        html.push("<ul>");
+        listOpen = true;
+      }
+      html.push(`<li>${escapeHtml(trimmed.slice(2))}</li>`);
+      return;
+    }
+    closeList();
+    html.push(`<p>${escapeHtml(trimmed)}</p>`);
+  });
+  closeList();
+  if (codeOpen) html.push("</code></pre>");
+  return html.join("");
+}
+
+async function openHelpDocument(path) {
+  const docName = String(path || "").split("/").pop();
+  if (!docName) return;
+  const reader = document.querySelector("#help-doc-reader");
+  const body = document.querySelector("#help-reader-body");
+  if (!reader || !body) return;
+  reader.classList.remove("hidden");
+  body.innerHTML = loadingInline("加载帮助文档...");
+  const doc = await api(`/api/help-docs/${encodeURIComponent(docName)}`);
+  const firstTitle = String(doc.content || "").split(/\r?\n/).find((line) => line.startsWith("# "));
+  document.querySelector("#help-reader-title").textContent = firstTitle ? firstTitle.replace(/^#\s*/, "") : doc.name;
+  body.innerHTML = renderHelpMarkdown(doc.content);
+  reader.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function initHelpCenter() {
+  document.querySelectorAll(".help-doc-card").forEach((card) => {
+    card.setAttribute("tabindex", "0");
+    card.setAttribute("role", "button");
+    card.addEventListener("click", () => openHelpDocument(card.querySelector("code")?.textContent || ""));
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openHelpDocument(card.querySelector("code")?.textContent || "");
+      }
+    });
+  });
+  document.querySelector("#help-reader-close")?.addEventListener("click", () => {
+    document.querySelector("#help-doc-reader")?.classList.add("hidden");
+  });
 }
 
 function setPageLoading(label = "加载中...") {
@@ -584,7 +826,7 @@ function setPageLoading(label = "加载中...") {
     ["#matrix-job-status", "加载作业..."],
     ["#operation-notice-routes", "加载通知..."],
     ["#login-qr-batches", "加载登录批次..."],
-    ["#supabase-health-list", "加载状态..."],
+    ["#supabase-health-list", "加载数据库字典..."],
   ];
   targets.forEach(([selector, text]) => {
     const node = document.querySelector(selector);
@@ -614,7 +856,7 @@ function setViewLoading(view) {
       ["#operation-notice-routes", "加载通知..."],
       ["#login-qr-batches", "加载登录批次..."],
     ],
-    "system-settings": [["#supabase-health-list", "加载状态..."]],
+    "system-settings": [["#supabase-health-list", "加载数据库字典..."]],
   };
   if (view === "ai-robot") renderAiRobotLoading();
   (targets[view] || []).forEach(([selector, text]) => {
@@ -762,11 +1004,11 @@ function renderTasks() {
           <span class="task-account-name">${accountLabel}</span>
         </div>
         <span class="task-actions">
-          <span class="status-${task.status}">${task.status}</span>
+          <span class="status-${task.status}">${formatFriendlyMessage(task.status)}</span>
           <button class="btn secondary task-delete" data-delete-task="${task.id}" type="button">删除队列</button>
         </span>
       </div>
-      <div class="muted">${task.summary || task.error || ""}</div>
+      <div class="muted">${formatFriendlyMessage(task.summary || task.error || "")}</div>
     </article>`;
   }).join("") || `<div class="muted">暂无任务</div>`;
 }
@@ -875,10 +1117,12 @@ function initSystemInitialize() {
   const stateNode = document.querySelector("#system-initialize-state");
   if (!button || !stateNode) return;
   button.addEventListener("click", async () => {
+    const password = await confirmSuperAdminPassword();
+    if (!password) return;
     const restoreButton = setButtonLoading(button, "初始化中");
     stateNode.innerHTML = `<div class="muted">正在补齐数据库初始化数据...</div>`;
     try {
-      const result = await api("/api/system/initialize", { method: "POST" });
+      const result = await api("/api/system/initialize", { method: "POST", body: JSON.stringify({ password }) });
       const inserted = Object.entries(result.inserted || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "无";
       const skipped = Object.entries(result.skipped || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "无";
       stateNode.innerHTML = `<div><strong>${result.ok ? "初始化完成" : "初始化未完成"}</strong><span>${result.seed_version || result.error || ""}</span></div><div><span>新增</span><strong>${inserted}</strong></div><div><span>跳过</span><strong>${skipped}</strong></div>`;
@@ -888,6 +1132,60 @@ function initSystemInitialize() {
     } finally {
       restoreButton();
     }
+  });
+}
+
+function confirmSuperAdminPassword() {
+  const modal = document.querySelector("#systemInitializePasswordModal");
+  if (!modal) return Promise.resolve("");
+  const input = document.querySelector("#systemInitializePasswordInput");
+  const error = document.querySelector("#systemInitializePasswordError");
+  const submit = document.querySelector("#systemInitializePasswordSubmit");
+  const cancel = document.querySelector("#systemInitializePasswordCancel");
+  const closeButton = document.querySelector("#systemInitializePasswordClose");
+  modal.classList.remove("hidden");
+  if (input) input.value = "";
+  if (error) error.textContent = "";
+  window.setTimeout(() => input?.focus(), 0);
+  return new Promise((resolve) => {
+    const close = (password = "") => {
+      modal.classList.add("hidden");
+      if (submit) submit.onclick = null;
+      if (cancel) cancel.onclick = null;
+      if (closeButton) closeButton.onclick = null;
+      if (input) input.onkeydown = null;
+      resolve(password);
+    };
+    const verify = () => {
+      const password = input?.value.trim() || "";
+      if (!password) {
+        if (error) error.textContent = "请输入超级管理员密码";
+        return;
+      }
+      close(password);
+    };
+    if (submit) submit.onclick = verify;
+    if (cancel) cancel.onclick = () => close("");
+    if (closeButton) closeButton.onclick = () => close("");
+    if (input) input.onkeydown = (event) => {
+      if (event.key === "Enter") verify();
+      if (event.key === "Escape") close("");
+    };
+  });
+}
+
+const confirmSystemInitializePassword = confirmSuperAdminPassword;
+
+function initSystemDirectoryActions() {
+  document.querySelectorAll("[data-system-dir]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const restoreButton = setButtonLoading(button, "打开中...");
+      try {
+        await api(`/api/system/open-directory/${encodeURIComponent(button.dataset.systemDir)}`, { method: "POST" });
+      } finally {
+        restoreButton();
+      }
+    });
   });
 }
 
@@ -1269,27 +1567,38 @@ function renderBoundAiRobotPlatforms() {
   });
 }
 
-function renderSystemHealth() {
+function renderDatabaseDictionary() {
   const status = document.querySelector("#supabase-health-state");
   const list = document.querySelector("#supabase-health-list");
   const meta = document.querySelector("#supabase-health-meta");
   if (!status || !list || !meta) return;
-  const health = state.systemHealth;
-  if (!health) {
+  const dictionary = state.databaseDictionary;
+  if (!dictionary) {
     status.textContent = "未加载";
-    list.innerHTML = `<div class="muted">暂无数据库健康检查结果。</div>`;
+    list.innerHTML = `<div class="muted">暂无数据库字典。</div>`;
     meta.textContent = "";
     return;
   }
-  status.textContent = health.ok ? "正常" : "异常";
-  status.classList.toggle("danger", !health.ok);
-  meta.textContent = `品牌 ${health.brand_id || "-"} · App ${health.app_version || "-"} · Schema ${health.schema_version || "-"}`;
-  list.innerHTML = (health.checks || []).map((item) => `
-    <div class="health-row ${item.ok ? "ok" : "fail"}">
-      <span>${item.name}</span>
-      <strong>${item.ok ? "通过" : "失败"}</strong>
-      <small>${item.ok ? healthDetailText(item.details || {}) : displayDatabaseKeyword(item.error || "未知错误")}</small>
-    </div>
+  const tables = dictionary.tables || [];
+  status.textContent = `${tables.length} 张表`;
+  status.classList.remove("danger");
+  meta.textContent = `${displayDatabaseKeyword(dictionary.backend || "database")} · ${displayDatabaseKeyword(dictionary.source || "-")}`;
+  list.innerHTML = tables.map((table) => `
+    <article class="db-dictionary-table">
+      <div class="db-dictionary-head">
+        <strong>${table.name}</strong>
+        <span>${(table.columns || []).length} 字段</span>
+      </div>
+      <div class="db-dictionary-columns">
+        ${(table.columns || []).map((column) => `
+          <div class="db-dictionary-column">
+            <strong>${column.name}</strong>
+            <code>${displayDatabaseKeyword(column.type || "-")}</code>
+            <small>${displayDatabaseKeyword(column.constraints || "")}</small>
+          </div>
+        `).join("")}
+      </div>
+    </article>
   `).join("");
 }
 
@@ -1362,8 +1671,8 @@ async function loadViewData(view, { force = false } = {}) {
     state.loginQrBatches = await api("/api/login-qr-batches");
     renderOperationNotifications();
   } else if (view === "system-settings") {
-    state.systemHealth = await api("/api/system/supabase-health");
-    renderSystemHealth();
+    state.databaseDictionary = await api("/api/system/database-dictionary");
+    renderDatabaseDictionary();
   } else if (view === "video-matrix") {
     mountVideoMatrixWorkbench();
   }
@@ -1413,8 +1722,7 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>视频号合集
       <select name="platforms.${platform.key}.collection_name">
-        <option value="赛博皮卡天津港现车" ${value.collection_name === "赛博皮卡天津港现车" ? "selected" : ""}>赛博皮卡天津港现车</option>
-        <option value="赛博皮卡现车：aawbcc" ${value.collection_name === "赛博皮卡现车：aawbcc" ? "selected" : ""}>赛博皮卡现车：aawbcc</option>
+        <option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>
         <option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>
       </select>
     </label>
@@ -1534,6 +1842,7 @@ function activateView(view, updateHash = true) {
   currentView = view;
   document.body.classList.toggle("video-matrix-active", view === "video-matrix");
   setViewHeader(view);
+  applyPermissionLimitedState();
   if (view === "video-matrix") {
     mountVideoMatrixWorkbench();
   } else {
@@ -1570,12 +1879,24 @@ document.querySelector("#account-form").addEventListener("submit", async (event)
   const data = Object.fromEntries(new FormData(event.target).entries());
   const brandPrefix = String(data.brand_prefix || "").trim();
   const accountName = String(data.account_name || "").trim();
+  const operatorWechat = String(data.operator_wechat || "").trim();
+  const phone = String(data.phone || "").trim();
+  if (!/^\d{11}$/.test(phone)) {
+    const phoneInput = event.target.elements.phone;
+    phoneInput?.setCustomValidity("账号手机号需为 11 位数字");
+    phoneInput?.reportValidity();
+    phoneInput?.setCustomValidity("");
+    restoreButton();
+    return;
+  }
   data.display_name = [brandPrefix, accountName].filter(Boolean).join(" ");
-  data.account_key = makeAccountKey(data.display_name, data.account_suffix);
+  data.account_key = makeAccountKey(data.display_name, "auto");
+  data.niche = "短视频矩阵";
+  data.notes = `绑定运营微信：${operatorWechat}；账号手机号：${phone}`;
   delete data.brand_prefix;
   delete data.account_name;
-  delete data.account_suffix;
-  data.notes = "";
+  delete data.operator_wechat;
+  delete data.phone;
   data.platforms = PLATFORM_ORDER;
   try {
     await api("/api/accounts", { method: "POST", body: JSON.stringify(data) });
@@ -1598,7 +1919,7 @@ document.querySelector("#task-form").addEventListener("submit", async (event) =>
     event.target.reset();
     await refresh();
   } catch (error) {
-    showTaskState(error.message, "status-unsupported");
+    showTaskState(formatFriendlyMessage(error.message), "status-unsupported");
   } finally {
     restoreButton();
   }
@@ -1791,11 +2112,13 @@ document.querySelector("#open-material-dir").addEventListener("click", async (ev
   const button = event.currentTarget;
   const form = document.querySelector("#distribution-settings-form");
   const materialDir = form.elements["common.material_dir"].value || "runtime/materials/videos";
-  const restoreButton = setButtonLoading(button, "修改中");
+  const password = await confirmSuperAdminPassword();
+  if (!password) return;
+  const restoreButton = setButtonLoading(button, "打开中...");
   try {
     await api("/api/settings/material-dir/open", {
       method: "POST",
-      body: JSON.stringify({ material_dir: materialDir }),
+      body: JSON.stringify({ material_dir: materialDir, password }),
     });
   } finally {
     restoreButton();
@@ -1913,8 +2236,11 @@ setViewHeader(document.querySelector(".nav-btn.active")?.dataset.view || "overvi
 renderThemePalette();
 initBrandSettings();
 initSystemInitialize();
+initSystemDirectoryActions();
 initUserMenu();
+initPermissionGuards();
 initAuthCenter();
+initHelpCenter();
 
 
 /*

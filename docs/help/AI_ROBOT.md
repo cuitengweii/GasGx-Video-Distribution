@@ -1,31 +1,71 @@
 # AI 机器人与通知
 
-## 2026-04-30 Operations Notice Routes
+## 这篇文档解决什么问题
 
-- AI robot settings store the platform credentials and sender configuration.
-- Operations notice routes are separate switches stored in `notification_routes`.
-- WeChat login QR notices currently support route switches for Telegram, DingTalk, and WeCom.
-- A route is sendable only when both conditions are true: the operation route is enabled, and the corresponding AI robot platform is enabled with a usable webhook/Bot target.
-- QR login notices are grouped by `login_batch_id` so operators receive one summary for a batch instead of one noisy message per account.
-- Telegram, DingTalk, and WeCom currently receive the QR summary text and local QR path/link. Telegram direct photo upload can be added later when QR image upload is required.
+AI 机器人用于把任务结果、登录提醒、系统异常和运营摘要发送到企业通知渠道。它减少人工巡检成本，让关键异常及时出现在团队群或机器人会话中。
 
-## 用途
+## 适用对象
 
-AI 机器人用于配置企业微信、钉钉、飞书/Lark、Telegram、WhatsApp 等通知通道，并把测试消息或系统提醒写入发送队列。
+- 超级管理员：配置通知渠道和密钥。
+- 发布员：接收发布失败、登录失效和任务完成提醒。
+- 素材维护员：接收素材不足或生成异常提醒。
 
-## 主要功能
+## 支持的通知渠道
 
-- 保存平台机器人 Webhook 或 Bot Token。
-- 发送测试消息并写入消息队列。
-- 查看消息状态、重试次数和发送结果。
-- 通过 worker 执行 pending 或 retry 消息发送。
+平台当前预留或支持以下渠道：
 
-## 运行入口
+- 企业微信。
+- 钉钉。
+- 飞书 / Lark。
+- Telegram。
+- WhatsApp。
 
-- CLI: `python -m gasgx_distribution ai-robot-send-worker --limit 10`
-- Web API: `POST /api/ai-robots/messages/send-worker?limit=10`
+不同渠道配置方式不同，通常包括 Webhook 地址、签名密钥、Bot Token 或目标会话 ID。
 
-## 注意事项
+## 配置流程
 
-- 真实可用性依赖每个平台的 webhook_url、secret、target_id 或 Bot Token 配置。
-- 钉钉、飞书等签名参数如果需要精确适配，应按真实平台协议实测校准。
+1. 进入 AI 机器人页面。
+2. 选择要配置的平台。
+3. 根据平台填写 Webhook、Token 或目标 ID。
+4. 保存配置。
+5. 发送测试消息。
+6. 到目标群或会话确认是否收到消息。
+
+## 通知类型
+
+- 视频生成完成。
+- 发布任务失败。
+- 登录状态失效。
+- 素材分类不足。
+- 系统错误。
+- 日报或运营摘要。
+
+## Telegram 快速配置
+
+1. 在 Telegram 中通过 BotFather 创建机器人。
+2. 获取 Bot Token。
+3. 打开机器人会话并发送一条消息。
+4. 在平台中解析 Chat ID。
+5. 保存配置并发送测试消息。
+
+## 常见问题
+
+### 测试消息发送失败怎么办？
+
+检查 Webhook 地址、Token、签名密钥和目标会话 ID。确认机器人已加入目标群，并具有发送消息权限。
+
+### 为什么保存了配置但没有通知？
+
+检查通知路由是否开启，任务是否触发了对应事件，以及消息发送队列是否有失败记录。
+
+### 为什么同一事件收到多条消息？
+
+可能是重复触发任务、失败重试或多个通知渠道同时启用。需要检查通知路由和任务状态。
+
+## 操作检查清单
+
+- Webhook 或 Token 正确。
+- 目标会话可接收消息。
+- 测试消息已成功。
+- 通知路由已开启。
+- 失败消息可在队列中追踪。
