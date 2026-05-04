@@ -274,7 +274,9 @@ def ensure_operator_auth_seed() -> None:
     init_db()
     ts = now_ts()
     with connect() as conn:
+        existing_permission_count = conn.execute("SELECT COUNT(*) AS count FROM operator_role_permissions").fetchone()["count"]
         for role_id, name in DEFAULT_ROLE_NAMES.items():
+            role_exists = conn.execute("SELECT 1 FROM operator_roles WHERE id = ?", (role_id,)).fetchone() is not None
             conn.execute(
                 """
                 INSERT INTO operator_roles(id, name, created_at, updated_at)
@@ -283,11 +285,13 @@ def ensure_operator_auth_seed() -> None:
                 """,
                 (role_id, name, ts, ts),
             )
-            for permission in DEFAULT_ROLE_PERMISSIONS[role_id]:
-                conn.execute(
-                    "INSERT OR IGNORE INTO operator_role_permissions(role_id, permission, created_at) VALUES (?, ?, ?)",
-                    (role_id, permission, ts),
-                )
+            should_seed_permissions = not role_exists or existing_permission_count == 0
+            if should_seed_permissions:
+                for permission in DEFAULT_ROLE_PERMISSIONS[role_id]:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO operator_role_permissions(role_id, permission, created_at) VALUES (?, ?, ?)",
+                        (role_id, permission, ts),
+                    )
         conn.execute(
             """
             INSERT INTO operator_users(id, name, role_id, password_hash, created_at, updated_at)
@@ -1985,6 +1989,8 @@ def _decode_platform_profile(platform: dict[str, Any]) -> dict[str, Any]:
     if not fingerprint and data.get("account_key"):
         fingerprint = build_browser_fingerprint(str(data["account_key"]), "account")
     data["fingerprint"] = fingerprint
+    if str(data.get("login_status") or "").strip().lower() == "unknown":
+        data["login_status"] = "ready"
     return data
 
 
@@ -2057,7 +2063,7 @@ def open_system_directory(kind: str) -> dict[str, Any]:
     if not output_root.is_absolute():
         output_root = paths.repo_root / output_root
     targets = {
-        "materials": resolve_material_dir(),
+        "materials": paths.runtime_root / "video_matrix" / "incoming",
         "output": output_root.resolve(),
         "logs": paths.runtime_root / "video_matrix" / "logs",
         "cache": paths.runtime_root / "video_matrix" / "web_uploads",
@@ -2112,7 +2118,7 @@ def _parse_supabase_schema(sql: str) -> list[dict[str, Any]]:
             if not line or line.startswith("--"):
                 continue
             token = line.split(None, 1)[0].strip('"')
-            if token.lower() in {"constraint", "primary", "foreign", "unique", "check"}:
+            if token.lower() in {"constraint", "primary", "foreign", "unique", "check"} or token.lower().startswith(("unique(", "primary key", "foreign key", "check(")):
                 continue
             rest = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ""
             type_match = re.match(r"([a-zA-Z0-9_]+(?:\s*\([^)]*\))?(?:\[\])?)\s*(.*)", rest, re.DOTALL)

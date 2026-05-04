@@ -70,10 +70,14 @@ const state = {
   notificationEvents: [],
   loginQrBatches: [],
   terminalExecution: { colors: [], operators: [], windows: [], summary: {} },
+  terminalQrVisible: false,
+  terminalConfigOpen: false,
   aiRobotEditingPlatform: "",
   aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
   databaseDictionary: null,
+  databaseDictionaryExpanded: {},
+  databaseDictionaryLocalized: false,
   analytics: {},
   operatorWechats: ["aamecc", "aalbcc"],
 };
@@ -96,6 +100,7 @@ let terminalCountdownTimer = null;
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
 const SHELL_AUTH_KEY = "gasgx-shell-auth";
+const DATABASE_DICTIONARY_LOCALE_KEY = "gasgx-db-dictionary-locale";
 const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
@@ -183,6 +188,239 @@ const VIEW_HEADERS = {
 
 function displayDatabaseKeyword(value) {
   return String(value ?? "").replaceAll("Supabase", "数据库");
+}
+
+state.databaseDictionaryLocalized = localStorage.getItem(DATABASE_DICTIONARY_LOCALE_KEY) === "zh";
+
+const DATABASE_DICTIONARY_TABLE_LABELS = {
+  matrix_accounts: "矩阵账号",
+  account_platforms: "账号平台",
+  browser_profiles: "浏览器配置",
+  notification_routes: "通知路由",
+  login_qr_batches: "登录二维码批次",
+  login_qr_items: "登录二维码明细",
+  automation_tasks: "自动化任务",
+  video_stats_snapshots: "视频统计快照",
+  ai_robot_configs: "AI 机器人配置",
+  ai_robot_messages: "AI 机器人消息",
+  brand_settings: "品牌设置",
+  schema_migrations: "数据库迁移",
+  app_settings: "应用设置",
+  analytics_items: "分析条目",
+  video_matrix_assets: "视频矩阵素材",
+  video_matrix_jobs: "视频矩阵任务",
+  video_matrix_generation_runs: "视频矩阵生成记录",
+  video_matrix_generation_assets: "视频矩阵生成素材",
+  video_matrix_generation_segments: "视频矩阵生成片段",
+  app_seed_runs: "初始化种子记录",
+  brand_members: "品牌成员",
+};
+
+const DATABASE_DICTIONARY_COLUMN_LABELS = {
+  id: "编号",
+  account_key: "账号标识",
+  display_name: "显示名称",
+  niche: "领域",
+  status: "状态",
+  notes: "备注",
+  created_at: "创建时间",
+  updated_at: "更新时间",
+  account_id: "账号编号",
+  platform: "平台",
+  handle: "账号句柄",
+  enabled: "启用",
+  capability_status: "能力状态",
+  login_status: "登录状态",
+  last_checked_at: "最后检查时间",
+  profile_dir: "配置目录",
+  debug_port: "调试端口",
+  fingerprint_json: "指纹配置",
+  event_type: "事件类型",
+  batch_id: "批次编号",
+  payload_json: "载荷数据",
+  notified_at: "通知时间",
+  reason: "原因",
+  url: "链接",
+  qr_path: "二维码路径",
+  qr_fingerprint: "二维码指纹",
+  task_type: "任务类型",
+  summary: "摘要",
+  error: "错误",
+  retry_count: "重试次数",
+  last_attempt_at: "最后尝试时间",
+  sent_at: "发送时间",
+  video_ref: "视频引用",
+  views: "播放量",
+  likes: "点赞数",
+  comments: "评论数",
+  shares: "分享数",
+  messages: "私信数",
+  published_at: "发布时间",
+  captured_at: "抓取时间",
+  bot_name: "机器人名称",
+  webhook_url: "回调地址",
+  webhook_secret: "回调密钥",
+  signing_secret: "签名密钥",
+  target_id: "目标编号",
+  message_type: "消息类型",
+  name: "名称",
+  slogan: "标语",
+  logo_asset_path: "Logo 资源路径",
+  primary_color: "主色",
+  theme_id: "主题编号",
+  default_account_prefix: "默认账号前缀",
+  version: "版本",
+  app_version: "应用版本",
+  applied_at: "应用时间",
+  setting_key: "设置键",
+  asset_key: "素材键",
+  asset_type: "素材类型",
+  title: "标题",
+  path: "路径",
+  metadata_json: "元数据",
+  source: "来源",
+  job_key: "任务编号",
+  stage: "阶段",
+  progress: "进度",
+  message: "消息",
+  request_json: "请求数据",
+  assets_json: "素材数据",
+  run_id: "运行编号",
+  bgm_filename: "背景音乐文件名",
+  bgm_path: "背景音乐路径",
+  composition_json: "组合数据",
+  sequence_number: "序号",
+  signature: "签名",
+  copy_path: "文案路径",
+  manifest_path: "清单路径",
+  template_id: "模板编号",
+  cover_template_id: "封面模板编号",
+  copy_language: "文案语言",
+  segment_index: "片段序号",
+  clip_id: "片段编号",
+  category: "分类",
+  source_path: "源文件路径",
+  normalized_path: "标准化路径",
+  start_time: "开始时间",
+  duration: "时长",
+  user_id: "用户编号",
+  role: "角色",
+  item_key: "条目键",
+  section: "分区",
+  sort_order: "排序",
+};
+
+const DATABASE_DICTIONARY_TYPE_LABELS = {
+  bigint: "大整数",
+  integer: "整数",
+  numeric: "数值",
+  text: "文本",
+  jsonb: "JSON 数据",
+  uuid: "UUID",
+};
+
+function translateDatabaseName(name, map, localized) {
+  const raw = String(name ?? "").trim();
+  if (!localized) return raw;
+  return map[raw] || raw;
+}
+
+function translateDatabaseType(type, localized) {
+  const raw = String(type ?? "").trim();
+  if (!localized) return displayDatabaseKeyword(raw);
+  return DATABASE_DICTIONARY_TYPE_LABELS[raw.toLowerCase()] || displayDatabaseKeyword(raw);
+}
+
+function translateDatabaseDefaultValue(meta, localized) {
+  if (!localized) return meta.defaultValue ? displayDatabaseKeyword(meta.defaultValue) : "NULL";
+  const raw = String(meta.defaultValue || "").trim();
+  if (!raw) return "空值";
+  if (/^null$/i.test(raw)) return "空值";
+  if (/^as identity$/i.test(raw)) return "自增标识";
+  if (/^''$/i.test(raw)) return "空字符串";
+  if (/^\{\}::jsonb$/i.test(raw)) return "空 JSON 对象";
+  if (/^\[\]::jsonb$/i.test(raw)) return "空 JSON 数组";
+  const rawValue = raw.replace(/^'(.+)'$/u, "$1");
+  const defaultValueLabels = {
+    active: "启用",
+    pending: "待处理",
+    registered: "已登记",
+    unknown: "未知",
+    draft: "草稿",
+    public: "公开",
+    inherit: "继承",
+    queued: "排队中",
+    available: "可用",
+    seed: "种子",
+    sent: "已发送",
+    retry: "重试",
+    failed: "失败",
+    running: "运行中",
+    complete: "完成",
+    info: "提示",
+    warning: "警告",
+    error: "错误",
+    blocking: "阻塞",
+    critical: "严重",
+    enabled: "已启用",
+    disabled: "已禁用",
+    short_video: "短视频",
+    video: "视频",
+    text: "文本",
+    image: "图片",
+  };
+  if (defaultValueLabels[rawValue]) return defaultValueLabels[rawValue];
+  return displayDatabaseKeyword(raw);
+}
+
+function translateDatabaseConstraintSummary(meta, localized) {
+  if (!localized) return meta.raw || "无约束";
+  const raw = meta.raw || "";
+  const parts = [];
+  if (meta.primary) parts.push("主键");
+  if (meta.notNull) parts.push("非空");
+  if (/unique/i.test(raw)) parts.push("唯一");
+  if (/references/i.test(raw)) parts.push("外键");
+  if (/generated by default as identity/i.test(raw)) parts.push("自增");
+  if (/on delete cascade/i.test(raw)) parts.push("删除级联");
+  if (/on delete set null/i.test(raw)) parts.push("删除置空");
+  if (/check/i.test(raw)) parts.push("校验");
+  if (/default/i.test(raw) && meta.defaultValue) parts.push(`默认 ${translateDatabaseDefaultValue(meta, true)}`);
+  return parts.length ? parts.join(" / ") : "无约束";
+}
+
+function parseDatabaseColumnMeta(constraints) {
+  const raw = String(constraints || "").trim();
+  const primary = /\bPRIMARY\s+KEY\b/i.test(raw);
+  const notNull = /\bNOT\s+NULL\b/i.test(raw);
+  const defaultMatch = raw.match(
+    /\bDEFAULT\b\s+(.+?)(?=\s+\b(?:PRIMARY\s+KEY|NOT\s+NULL|UNIQUE|REFERENCES|CHECK|COLLATE|CONSTRAINT)\b|$)/i
+  );
+  const defaultValue = defaultMatch ? defaultMatch[1].trim().replace(/,+$/, "") : "";
+  return {
+    raw,
+    primary,
+    notNull,
+    defaultValue,
+  };
+}
+
+function isDatabaseTableExpanded(tableName) {
+  return state.databaseDictionaryExpanded?.[tableName] !== false;
+}
+
+function toggleDatabaseTable(tableName) {
+  if (!tableName) return;
+  const next = { ...(state.databaseDictionaryExpanded || {}) };
+  next[tableName] = !isDatabaseTableExpanded(tableName);
+  state.databaseDictionaryExpanded = next;
+  renderDatabaseDictionary();
+}
+
+function toggleDatabaseDictionaryLocale() {
+  state.databaseDictionaryLocalized = !state.databaseDictionaryLocalized;
+  localStorage.setItem(DATABASE_DICTIONARY_LOCALE_KEY, state.databaseDictionaryLocalized ? "zh" : "en");
+  renderDatabaseDictionary();
 }
 
 function setViewHeader(view) {
@@ -507,7 +745,7 @@ function renderOperatorAccounts(statePayload = authState) {
         <select data-user-role="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>
           ${Object.entries(statePayload.roles).map(([roleId, item]) => `<option value="${roleId}" ${roleId === user.roleId ? "selected" : ""}>${item.name}</option>`).join("")}
         </select>
-        <input data-user-password="${user.id}" type="password" placeholder="${user.roleId === "super_admin" ? "系统固定" : "设置/重置口令"}" ${user.roleId === "super_admin" ? "disabled" : ""}>
+        <input data-user-password="${user.id}" type="text" placeholder="${user.roleId === "super_admin" ? "系统固定" : "设置/重置口令"}" ${user.roleId === "super_admin" ? "disabled" : ""}>
         <button class="btn secondary" type="button" data-save-user-password="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>保存口令</button>
         <span>${role?.name || "未分配"}</span>
       </article>
@@ -794,11 +1032,28 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
+  const text = await response.arrayBuffer().then((buffer) => {
+    const decoded = new TextDecoder("utf-8").decode(buffer);
+    if (/[ÃÂåçæèäöü]/.test(decoded) && !/[\u4e00-\u9fff]/.test(decoded)) {
+      try {
+        const repaired = new TextDecoder("utf-8").decode(Uint8Array.from(decoded, (char) => char.charCodeAt(0)));
+        if (/[\u4e00-\u9fff]/.test(repaired)) return repaired;
+      } catch (_error) {
+        return decoded;
+      }
+    }
+    return decoded;
+  });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
+    let body = {};
+    try {
+      body = JSON.parse(text);
+    } catch (_error) {
+      body = {};
+    }
     throw new Error(body.detail || response.statusText);
   }
-  return response.json();
+  return JSON.parse(text);
 }
 
 function setButtonLoading(button, loadingText = "处理中") {
@@ -1005,8 +1260,8 @@ function platformStatusLabel(status) {
   const normalized = String(status || "unknown").toLowerCase();
   const labels = {
     active: "已启用",
-    ready: "已登录",
-    logged_in: "已登录",
+    ready: "已部署",
+    logged_in: "已部署",
     success: "正常",
     ok: "正常",
     login_required: "需登录",
@@ -1292,10 +1547,10 @@ function renderTerminalExecution() {
   const windows = state.terminalExecution.windows || [];
   const summary = state.terminalExecution.summary || {};
   const loginStarted = Boolean(state.terminalExecution.login_started);
-  document.querySelector("#terminal-init-modal")?.classList.toggle("hidden", Boolean(state.terminalExecution.initialized));
+  document.querySelector("#terminal-init-modal")?.classList.toggle("hidden", !state.terminalConfigOpen);
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
-    startLoginButton.disabled = !state.terminalExecution.initialized || loginStarted;
+    startLoginButton.disabled = loginStarted;
     startLoginButton.textContent = loginStarted ? "登录中" : "开始登录";
   }
   const progress = document.querySelector("#terminal-global-progress");
@@ -1324,7 +1579,7 @@ function renderTerminalExecution() {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${loginStarted && window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
@@ -1560,14 +1815,19 @@ function initSystemDirectoryActions() {
       if (stateNode) {
         stateNode.textContent = `正在打开：${label}`;
         stateNode.classList.remove("danger");
+        stateNode.removeAttribute("title");
       }
       try {
         const result = await api(`/api/system/open-directory/${encodeURIComponent(button.dataset.systemDir)}`, { method: "POST" });
-        if (stateNode) stateNode.textContent = `已请求打开：${label}${result.path ? `（${result.path}）` : ""}`;
+        if (stateNode) {
+          stateNode.textContent = `已打开：${label}`;
+          stateNode.title = result.path || "";
+        }
       } catch (error) {
         if (stateNode) {
           stateNode.textContent = `打开失败：${error.message}`;
           stateNode.classList.add("danger");
+          stateNode.removeAttribute("title");
         }
         throw error;
       } finally {
@@ -1967,36 +2227,73 @@ function renderBoundAiRobotPlatforms() {
 function renderDatabaseDictionary() {
   const status = document.querySelector("#supabase-health-state");
   const list = document.querySelector("#supabase-health-list");
-  const meta = document.querySelector("#supabase-health-meta");
-  if (!status || !list || !meta) return;
+  const toggle = document.querySelector("#database-dictionary-locale-toggle");
+  if (!status || !list) return;
+  const localized = Boolean(state.databaseDictionaryLocalized);
+  if (toggle) {
+    toggle.textContent = localized ? "英文版" : "中文版";
+    toggle.setAttribute("aria-pressed", String(localized));
+  }
   const dictionary = state.databaseDictionary;
   if (!dictionary) {
     status.textContent = "未加载";
     list.innerHTML = `<div class="muted">暂无数据库字典。</div>`;
-    meta.textContent = "";
     return;
   }
   const tables = dictionary.tables || [];
   status.textContent = `${tables.length} 张表`;
   status.classList.remove("danger");
-  meta.textContent = `${displayDatabaseKeyword(dictionary.backend || "database")} · ${displayDatabaseKeyword(dictionary.source || "-")}`;
-  list.innerHTML = tables.map((table) => `
-    <article class="db-dictionary-table">
-      <div class="db-dictionary-head">
-        <strong>${table.name}</strong>
-        <span>${(table.columns || []).length} 字段</span>
-      </div>
-      <div class="db-dictionary-columns">
-        ${(table.columns || []).map((column) => `
-          <div class="db-dictionary-column">
-            <strong>${column.name}</strong>
-            <code>${displayDatabaseKeyword(column.type || "-")}</code>
-            <small>${displayDatabaseKeyword(column.constraints || "")}</small>
+  list.innerHTML = tables.map((table) => {
+    const columns = table.columns || [];
+    const expanded = isDatabaseTableExpanded(table.name);
+    const tableName = translateDatabaseName(table.name, DATABASE_DICTIONARY_TABLE_LABELS, localized);
+    return `
+      <article class="db-dictionary-table ${expanded ? "is-expanded" : "is-collapsed"}">
+        <button class="db-dictionary-head" type="button" data-db-table="${table.name}" aria-expanded="${expanded}">
+          <span class="db-dictionary-head-copy">
+            <strong>${tableName}</strong>
+            <small>${localized ? `${columns.length} 个字段` : `${columns.length} 字段`}</small>
+          </span>
+          <span class="db-dictionary-table-badge">${expanded ? "折叠" : "展开"}</span>
+        </button>
+        <div class="db-dictionary-shell" ${expanded ? "" : 'hidden aria-hidden="true"'}>
+          <div class="db-dictionary-toolbar">
+            <span class="db-dictionary-toolbar-title">${localized ? "字段列表" : "Columns"}</span>
+            <button class="db-dictionary-about" type="button" disabled>${localized ? "字段类型说明" : "About data types"}</button>
           </div>
-        `).join("")}
-      </div>
-    </article>
-  `).join("");
+          <div class="db-dictionary-grid db-dictionary-grid-head" aria-hidden="true">
+            <span>${localized ? "字段名" : "Name"}</span>
+            <span>${localized ? "类型" : "Type"}</span>
+            <span>${localized ? "默认值" : "Default Value"}</span>
+          </div>
+          <div class="db-dictionary-rows">
+            ${columns.map((column) => {
+              const meta = parseDatabaseColumnMeta(column.constraints);
+              const columnName = translateDatabaseName(column.name, DATABASE_DICTIONARY_COLUMN_LABELS, localized);
+              const defaultValue = translateDatabaseDefaultValue(meta, localized);
+              return `
+                <div class="db-dictionary-grid db-dictionary-row">
+                  <div class="db-dictionary-name">
+                    <span class="db-dictionary-icon">${meta.primary ? "#" : "T"}</span>
+                    <div>
+                      <strong>${columnName}</strong>
+                      <small>${translateDatabaseConstraintSummary(meta, localized)}</small>
+                    </div>
+                  </div>
+                  <div class="db-dictionary-type">${translateDatabaseType(column.type || "-", localized)}</div>
+                  <div class="db-dictionary-default ${meta.defaultValue ? "" : "is-null"}">${defaultValue}</div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  list.querySelectorAll("[data-db-table]").forEach((button) => {
+    button.onclick = () => toggleDatabaseTable(button.dataset.dbTable || "");
+  });
 }
 
 function healthDetailText(details) {
@@ -2061,6 +2358,7 @@ async function loadViewData(view, { force = false } = {}) {
     renderTaskSelects();
     renderTasks();
   } else if (view === "terminal-execution") {
+    state.terminalQrVisible = false;
     state.terminalExecution = await api("/api/terminal-execution/state");
     renderTerminalExecution();
     startTerminalPolling();
@@ -2439,23 +2737,18 @@ document.querySelector("#terminal-config-list")?.addEventListener("click", (even
   swatch.classList.add("active");
 });
 
-document.querySelector("#terminal-start-system")?.addEventListener("click", async (event) => {
-  const restoreButton = setButtonLoading(event.currentTarget, "进入中");
-  try {
-    state.terminalExecution = await api("/api/terminal-execution/start", {
-      method: "POST",
-      body: JSON.stringify({ windows: readTerminalConfigRows() }),
-    });
-    renderTerminalExecution();
-  } finally {
-    restoreButton();
-  }
-});
-
 document.querySelector("#terminal-start-login")?.addEventListener("click", async (event) => {
   const restoreButton = setButtonLoading(event.currentTarget, "启动中");
   try {
+    if (!state.terminalExecution.initialized || state.terminalConfigOpen) {
+      state.terminalExecution = await api("/api/terminal-execution/start", {
+        method: "POST",
+        body: JSON.stringify({ windows: readTerminalConfigRows() }),
+      });
+    }
     state.terminalExecution = await api("/api/terminal-execution/start-login", { method: "POST" });
+    state.terminalQrVisible = true;
+    state.terminalConfigOpen = false;
     renderTerminalExecution();
     startTerminalPolling();
   } finally {
@@ -2464,7 +2757,8 @@ document.querySelector("#terminal-start-login")?.addEventListener("click", async
 });
 
 document.querySelector("#terminal-edit-config")?.addEventListener("click", () => {
-  document.querySelector("#terminal-init-modal")?.classList.remove("hidden");
+  state.terminalConfigOpen = true;
+  renderTerminalExecution();
 });
 
 document.querySelector("#distribution-settings-form").addEventListener("submit", async (event) => {
@@ -2845,6 +3139,7 @@ renderThemePalette();
 initBrandSettings();
 initSystemInitialize();
 initSystemDirectoryActions();
+document.querySelector("#database-dictionary-locale-toggle")?.addEventListener("click", toggleDatabaseDictionaryLocale);
 initUserMenu();
 initPermissionGuards();
 initAuthCenter();

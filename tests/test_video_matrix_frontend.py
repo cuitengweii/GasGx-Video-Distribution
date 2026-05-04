@@ -158,6 +158,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "position: fixed" in shell_css
     assert "margin-left: 0" in shell_css
     assert "height: 100vh" in shell_css
+    assert ".job-layout" in shell_css
+    assert ".job-group" in shell_css
+    assert ".job-group-grid" in shell_css
     app_shell = ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js"
     shell_app = app_shell.read_text(encoding="utf-8")
     shell_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "index.html").read_text(encoding="utf-8")
@@ -165,11 +168,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "matrixRunConfirmModal" in shell_html
     assert "确认立即启动矩阵发布作业" in shell_html
     assert "确认启动" in shell_html
+    assert "job-layout" in shell_html
+    assert "调度参数" in shell_html
+    assert "轮换与补跑" in shell_html
     assert "systemInitializePasswordModal" in shell_html
     assert 'id="systemInitializePasswordInput" type="password"' in shell_html
     assert "超级管理员密码验证" in shell_html
     assert "验证并继续" in shell_html
     assert "数据库字典" in shell_html
+    assert "中文版" in shell_html
+    assert 'id="supabase-health-meta"' not in shell_html
     assert "数据库运行检查" not in shell_html
     assert 'data-permission="video-matrix"' in shell_html
     assert 'id="local-login-form"' in shell_html
@@ -199,6 +207,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "仅超级管理员分配账号" not in shell_html
     assert 'id="operator-account-form"' in shell_html
     assert 'id="operator-password-input"' in shell_html
+    assert 'data-user-password="${user.id}" type="text"' in shell_app
+    assert "About data types" in shell_app
+    assert "Default Value" in shell_app
+    assert "db-dictionary-shell" in shell_app
+    assert "db-dictionary-table-badge" in shell_app
+    assert "toggleDatabaseTable" in shell_app
+    assert "is-collapsed" in shell_app
     assert 'id="permission-grid"' in shell_html
     assert "视频生成完成" in shell_html
     assert "视频号发布失败" in shell_html
@@ -219,6 +234,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'id="system-initialize" type="button" disabled' in shell_html
     assert "访问记录" in shell_html
     assert "访问密码" not in shell_html
+    assert "已部署" in shell_app
     assert ".notification-list" in shell_css
     assert ".notification-card.danger" in shell_css
     assert ".notification-card.warning" in shell_css
@@ -394,8 +410,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "function renderDatabaseDictionary" in shell_app
     assert "renderSystemHealth" not in shell_app
     assert ".db-dictionary-table" in shell_css
-    assert ".db-dictionary-columns" in shell_css
-    assert ".db-dictionary-column" in shell_css
+    assert ".db-dictionary-shell" in shell_css
+    assert ".db-dictionary-grid" in shell_css
+    assert ".db-dictionary-row" in shell_css
+    assert ".db-dictionary-table.is-collapsed" in shell_css
     assert ".password-confirm-panel" in shell_css
     assert ".password-confirm-field" in shell_css
     assert "body.video-matrix-active" in shell_css

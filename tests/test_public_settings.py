@@ -156,6 +156,7 @@ def test_distribution_settings_api(monkeypatch, tmp_path: Path) -> None:
     )
 
     assert result.status_code == 200
+    assert "charset=utf-8" in result.headers["content-type"]
     assert result.json()["jobs"]["matrix_wechat_publish"]["batch_size"] == 3
     assert result.json()["jobs"]["matrix_wechat_publish"]["enabled"] is True
     assert result.json()["platforms"]["tiktok"]["caption"] == "TikTok caption"

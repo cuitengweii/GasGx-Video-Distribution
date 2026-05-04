@@ -23,7 +23,8 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'data-quick-view="tasks" data-permission="tasks">任务队列</button>' not in html
     assert 'data-quick-view="video-matrix" data-permission="video-matrix">生成视频</button>' not in html
     assert "终端前置配置区" in html
-    assert "确认配置并进入" in html
+    assert "确认配置并进入" not in html
+    assert 'id="terminal-start-system"' not in html
     assert 'id="terminal-start-login">开始登录</button>' in html
     assert 'data-quick-view="notifications"' in html
     assert 'data-quick-view="tasks"' in html
@@ -35,13 +36,22 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert ".terminal-console" in css
     assert ".terminal-task-column" in css
     assert ".terminal-qr-placeholder" in css
+    assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in css
+    assert "overflow-x: hidden;" in css
+    assert "min-width: 0;" in css
+    assert "pointer-events: none;" in css
+    assert "pointer-events: auto;" in css
     app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "/api/terminal-execution/state" in app
+    assert "/api/terminal-execution/start" in app
     assert "/api/terminal-execution/start-login" in app
     assert "#terminal-config-list" in app
-    assert 'setButtonLoading(event.currentTarget, "进入中")' in app
     assert 'setButtonLoading(event.currentTarget, "启动中")' in app
-    assert "loginStarted && window.qr_data_url" in app
+    assert "#terminal-start-system" not in app
+    assert "!state.terminalExecution.initialized || state.terminalConfigOpen" in app
+    assert "state.terminalQrVisible && loginStarted && window.qr_data_url" in app
+    assert "state.terminalQrVisible = false;" in app
+    assert "state.terminalQrVisible = true;" in app
     assert 'aria-label="等待开始登录"' in app
     assert "terminalCountdownTimer" in app
     assert "}, 1000);" in app

@@ -76,6 +76,21 @@ def test_account_crud_reuses_one_browser_profile_per_matrix_account(monkeypatch,
     assert updated["notes"] == "phase-one"
 
 
+def test_account_platform_unknown_login_status_renders_as_ready(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx CN 02",
+            "display_name": "GasGx CN 02",
+            "platforms": ["wechat"],
+        }
+    )
+
+    platform = next(item for item in account["platforms"] if item["platform"] == "wechat")
+    assert platform["login_status"] == "ready"
+
+
 def test_operator_auth_seed_uses_database_and_super_admin_password(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.ensure_database()
@@ -124,6 +139,19 @@ def test_operator_auth_api_persists_roles_users_and_permissions(monkeypatch, tmp
     assert reset.status_code == 200
     assert client.post("/api/auth/login", json={"user_id": user_id, "password": "new-mia-pass"}).status_code == 200
     assert client.post("/api/auth/login", json={"user_id": user_id, "password": "mia123"}).status_code == 401
+
+
+def test_operator_auth_default_role_permissions_can_be_removed(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    permissions = client.put("/api/auth/roles/publisher/permissions", json={"permissions": ["overview", "help-center"]})
+    assert permissions.status_code == 200
+    assert set(permissions.json()["roles"]["publisher"]["permissions"]) == {"overview", "help-center"}
+
+    state = client.get("/api/auth/state?current_user_id=allen&editing_role_id=publisher")
+    assert state.status_code == 200
+    assert set(state.json()["roles"]["publisher"]["permissions"]) == {"overview", "help-center"}
 
 
 def test_help_doc_api_returns_whitelisted_markdown(monkeypatch, tmp_path: Path) -> None:

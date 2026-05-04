@@ -168,6 +168,9 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-store, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("application/json") and "charset=" not in content_type.lower():
+            response.headers["content-type"] = "application/json; charset=utf-8"
         return response
 
     start_scheduler()

@@ -239,85 +239,103 @@
             </div>
             <button class="btn primary job-run-button" id="matrix-run-now" type="button">立即启动一次</button>
           </div>
-          <label class="job-icon-field">每批账号数
-            <select name="jobs.matrix_wechat_publish.batch_size">
-              <option value="1">1 个</option>
-              <option value="2">2 个</option>
-              <option value="3">3 个</option>
-              <option value="4">4 个</option>
-              <option value="5">5 个</option>
-              <option value="6">6 个</option>
-              <option value="7">7 个</option>
-              <option value="8">8 个</option>
-              <option value="9">9 个</option>
-              <option value="10">10 个</option>
-            </select>
-          </label>
-          <label class="job-icon-field">后台定时启动
-            <select name="jobs.matrix_wechat_publish.enabled">
-              <option value="false">关闭</option>
-              <option value="true">开启</option>
-            </select>
-          </label>
-          <label class="job-icon-field">定时模式
-            <select name="jobs.matrix_wechat_publish.schedule_mode">
-              <option value="interval">按间隔</option>
-              <option value="daily">每天固定时间</option>
-            </select>
-          </label>
-          <label class="job-icon-field">每天发布时间
-            <input type="time" name="jobs.matrix_wechat_publish.daily_time" value="09:00">
-          </label>
-          <label class="job-icon-field">间隔发布
-            <select name="jobs.matrix_wechat_publish.run_interval_minutes">
-              <option value="30">30 分钟</option>
-              <option value="60">1 小时</option>
-              <option value="360">6 小时</option>
-              <option value="720">12 小时</option>
-              <option value="1440">24 小时</option>
-            </select>
-          </label>
-          <label class="job-icon-field">批次最小间隔
-            <select name="jobs.matrix_wechat_publish.batch_interval_min_minutes">
-              <option value="0">0 分钟</option>
-              <option value="3">3 分钟</option>
-              <option value="5">5 分钟</option>
-              <option value="10">10 分钟</option>
-              <option value="15">15 分钟</option>
-            </select>
-          </label>
-          <label class="job-icon-field">批次最大间隔
-            <select name="jobs.matrix_wechat_publish.batch_interval_max_minutes">
-              <option value="0">0 分钟</option>
-              <option value="5">5 分钟</option>
-              <option value="10">10 分钟</option>
-              <option value="15">15 分钟</option>
-              <option value="30">30 分钟</option>
-            </select>
-          </label>
-          <label class="job-icon-field">起始批次轮换
-            <select name="jobs.matrix_wechat_publish.rotate_start_group">
-              <option value="true">开启</option>
-              <option value="false">关闭</option>
-            </select>
-          </label>
-          <label class="job-icon-field">批次内随机顺序
-            <select name="jobs.matrix_wechat_publish.shuffle_within_batch">
-              <option value="true">开启</option>
-              <option value="false">关闭</option>
-            </select>
-          </label>
-          <label class="job-icon-field">失败最后补跑
-            <select name="jobs.matrix_wechat_publish.retry_failed_last">
-              <option value="true">开启</option>
-              <option value="false">关闭</option>
-            </select>
-          </label>
-          <div class="job-monitor wide-field">
-            <div class="row-head">
-              <strong>作业监控</strong>
+          <div class="job-layout">
+            <section class="job-group">
+              <div class="job-group-head">
+                <strong>调度参数</strong>
+                <span class="muted">控制每次发布的批量规模、定时模式和发布时间。</span>
+              </div>
+              <div class="job-group-grid">
+                <label class="job-icon-field">每批账号数
+                  <select name="jobs.matrix_wechat_publish.batch_size">
+                    <option value="1">1 个</option>
+                    <option value="2">2 个</option>
+                    <option value="3">3 个</option>
+                    <option value="4">4 个</option>
+                    <option value="5">5 个</option>
+                    <option value="6">6 个</option>
+                    <option value="7">7 个</option>
+                    <option value="8">8 个</option>
+                    <option value="9">9 个</option>
+                    <option value="10">10 个</option>
+                  </select>
+                </label>
+                <label class="job-icon-field">后台定时启动
+                  <select name="jobs.matrix_wechat_publish.enabled">
+                    <option value="false">关闭</option>
+                    <option value="true">开启</option>
+                  </select>
+                </label>
+                <label class="job-icon-field">定时模式
+                  <select name="jobs.matrix_wechat_publish.schedule_mode">
+                    <option value="interval">按间隔</option>
+                    <option value="daily">每天固定时间</option>
+                  </select>
+                </label>
+                <label class="job-icon-field">每天发布时间
+                  <input type="time" name="jobs.matrix_wechat_publish.daily_time" value="09:00">
+                </label>
+                <label class="job-icon-field">间隔发布
+                  <select name="jobs.matrix_wechat_publish.run_interval_minutes">
+                    <option value="30">30 分钟</option>
+                    <option value="60">1 小时</option>
+                    <option value="360">6 小时</option>
+                    <option value="720">12 小时</option>
+                    <option value="1440">24 小时</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+            <section class="job-group">
+              <div class="job-group-head">
+                <strong>轮换与补跑</strong>
+                <span class="muted">管理批次间隔、批次轮换、批次内顺序和失败补跑。</span>
+              </div>
+              <div class="job-group-grid">
+                <label class="job-icon-field">批次最小间隔
+                  <select name="jobs.matrix_wechat_publish.batch_interval_min_minutes">
+                    <option value="0">0 分钟</option>
+                    <option value="3">3 分钟</option>
+                    <option value="5">5 分钟</option>
+                    <option value="10">10 分钟</option>
+                    <option value="15">15 分钟</option>
+                  </select>
+                </label>
+                <label class="job-icon-field">批次最大间隔
+                  <select name="jobs.matrix_wechat_publish.batch_interval_max_minutes">
+                    <option value="0">0 分钟</option>
+                    <option value="5">5 分钟</option>
+                    <option value="10">10 分钟</option>
+                    <option value="15">15 分钟</option>
+                    <option value="30">30 分钟</option>
+                  </select>
+                </label>
+                <label class="job-icon-field">起始批次轮换
+                  <select name="jobs.matrix_wechat_publish.rotate_start_group">
+                    <option value="true">开启</option>
+                    <option value="false">关闭</option>
+                  </select>
+                </label>
+                <label class="job-icon-field">批次内随机顺序
+                  <select name="jobs.matrix_wechat_publish.shuffle_within_batch">
+                    <option value="true">开启</option>
+                    <option value="false">关闭</option>
+                  </select>
+                </label>
+                <label class="job-icon-field">失败最后补跑
+                  <select name="jobs.matrix_wechat_publish.retry_failed_last">
+                    <option value="true">开启</option>
+                    <option value="false">关闭</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+            <div class="job-monitor wide-field">
+              <div class="row-head">
+                <strong>作业监控</strong>
+              </div>
+              <div id="matrix-job-status" class="job-status-grid"></div>
             </div>
-            <div id="matrix-job-status" class="job-status-grid"></div>
           </div>
         </section>
 
@@ -499,7 +517,6 @@
               <p>默认5个执行窗口，请为每个窗口指派运营微信及对应的物理防呆色标</p>
             </div>
             <div class="terminal-config-list" id="terminal-config-list"></div>
-            <button class="terminal-btn-primary" type="button" id="terminal-start-system">确认配置并进入</button>
           </div>
         </div>
 
@@ -771,7 +788,6 @@
         <section class="panel system-card">
           <div class="panel-head"><h2>部署环境</h2><span class="system-status">本地</span></div>
           <div class="system-kv"><span>运行地址</span><strong>127.0.0.1:8790</strong></div>
-          <div class="system-kv"><span>程序目录</span><strong>G:\GasGx Video Distribution</strong></div>
         </section>
         <section class="panel system-card">
           <div class="panel-head"><h2>存储与缓存</h2><span class="system-status">预留</span></div>
@@ -802,12 +818,14 @@
           </div>
         </section>
         <section class="panel system-card wide-system-card">
-          <div class="panel-head">
-            <div>
-              <h2>数据库字典</h2>
-              <p class="muted" id="supabase-health-meta"></p>
+            <div class="panel-head">
+              <div>
+                <h2>数据库字典</h2>
+              </div>
+              <div class="db-dictionary-badges">
+              <button id="database-dictionary-locale-toggle" class="system-status system-status-secondary" type="button" aria-pressed="false">中文版</button>
+              <span class="system-status" id="supabase-health-state">读取中</span>
             </div>
-            <span class="system-status" id="supabase-health-state">读取中</span>
           </div>
           <div class="health-list" id="supabase-health-list">
             <div class="muted">暂无数据库字典。</div>
@@ -820,7 +838,7 @@
       <div class="help-layout">
         <section class="panel help-hero-panel">
           <div>
-            <span class="system-status">GasGx Docs</span>
+            <span class="system-status">Docs</span>
             <h2>使用帮助知识库</h2>
             <p class="muted">按操作场景整理主要功能文档，覆盖账号、视频生成、发布、数据、机器人、系统维护和开发说明。</p>
           </div>
