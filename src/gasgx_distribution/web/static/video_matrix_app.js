@@ -272,6 +272,7 @@ function renderSidebar(data) {
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
   $("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory);
+  $("openPreviewVideo").onclick = openPreviewVideoPage;
 }
 
 function renderSidebarTemplateSelectors() {
@@ -1972,10 +1973,31 @@ const scheduleStateSave = debounce(async () => {
   await api("/api/video-matrix/state", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(state)});
 }, 500);
 
+async function resolvePreviewVideoPath() {
+  if (lastPreviewPath) return lastPreviewPath;
+  const root = outputRootPath();
+  if (!root) return "";
+  try {
+    const payload = await api(`/api/video-matrix/preview-files?path=${encodeURIComponent(root)}`);
+    const firstVideo = Array.isArray(payload.videos) ? payload.videos[0] : null;
+    return firstVideo?.path || "";
+  } catch {
+    return "";
+  }
+}
+
+async function openPreviewVideoPage() {
+  const path = await resolvePreviewVideoPath();
+  const url = path
+    ? `/static/video_matrix_preview.html?path=${encodeURIComponent(path)}`
+    : "/static/video_matrix_preview.html";
+  window.open(url, "_blank", "noopener");
+}
+
 async function generate() {
   const button = $("generateBtn");
   if (lastPreviewPath && button.dataset.mode === "preview") {
-    window.open(`/static/video_matrix_preview.html?path=${encodeURIComponent(lastPreviewPath)}`, "_blank", "noopener");
+    await openPreviewVideoPage();
     return;
   }
   lastPreviewPath = "";

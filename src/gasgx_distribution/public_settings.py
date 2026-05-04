@@ -12,6 +12,7 @@ DEFAULT_COMMON_SETTINGS: dict[str, Any] = {
     "publish_mode": "publish",
     "topics": "#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿",
     "upload_timeout": 60,
+    "operator_wechats": ["aamecc", "aalbcc"],
 }
 
 DEFAULT_MATRIX_WECHAT_JOB_SETTINGS: dict[str, Any] = {
@@ -87,6 +88,15 @@ def _normalize_common(payload: dict[str, Any]) -> dict[str, Any]:
     merged["material_dir"] = str(merged.get("material_dir") or DEFAULT_COMMON_SETTINGS["material_dir"]).strip()
     merged["topics"] = str(merged.get("topics") or DEFAULT_COMMON_SETTINGS["topics"]).strip()
     merged["upload_timeout"] = _normalize_timeout(merged.get("upload_timeout"))
+    raw_operators = merged.get("operator_wechats")
+    if not isinstance(raw_operators, list):
+        raw_operators = DEFAULT_COMMON_SETTINGS["operator_wechats"]
+    operators = []
+    for item in raw_operators:
+        value = str(item or "").strip()
+        if value and value not in operators:
+            operators.append(value)
+    merged["operator_wechats"] = operators or list(DEFAULT_COMMON_SETTINGS["operator_wechats"])
     return merged
 
 

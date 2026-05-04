@@ -9,7 +9,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .ffmpeg_tools import concat_video, extract_frame
+from .ffmpeg_tools import append_video_tail, concat_video, extract_frame
 from .cover import render_intro_cover, render_outro_cover
 from .models import RenderedAsset, VideoVariant
 from .settings import ProjectSettings
@@ -65,6 +65,7 @@ FONT_FAMILY_CANDIDATES = {
     "youshebiaotihei": (Path(r"C:\Windows\Fonts\YouSheBiaoTiHei.ttf"), Path(r"C:\Windows\Fonts\YouSheBiaoTiHei-2.ttf"), Path(r"C:\Windows\Fonts\simhei.ttf")),
 }
 ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 
 
 def render_variant(
@@ -90,6 +91,7 @@ def render_variant(
     output_types = output_types or {"mp4"}
     base_name = f"{filename_prefix}vibe_{variant.sequence_number:02d}"
     video_path = batch_dir / f"{base_name}.mp4"
+    main_video_path = batch_dir / f".{base_name}_main.mp4"
     scratch_dir = batch_dir / ".render_tmp" / base_name
     cover_frame = scratch_dir / f"{base_name}_raw_cover.png"
     intro_frame = scratch_dir / f"{base_name}_intro_frame.png"
@@ -108,7 +110,9 @@ def render_variant(
                 {
                     "base_name": base_name,
                     "segment_count": len(variant.segments),
-                    "target_duration": sum(segment.duration for segment in variant.segments) + max(0.0, cover_intro_seconds) + max(0.0, outro_seconds),
+                    "target_duration": sum(segment.duration for segment in variant.segments)
+                    + max(0.0, cover_intro_seconds)
+                    + (max(0.0, outro_seconds) if not _is_video_ending(ending_template_path) else 0.0),
                     "output_types": sorted(output_types),
                 },
             )
@@ -130,6 +134,8 @@ def render_variant(
                 render_outro_cover(outro_frame, outro_cover, settings, ending_cover_template_config, outro_text.strip(), variant.hud_lines)
             outro_cover_path = outro_cover
 
+        video_ending_path = ending_template_path if _is_video_ending(ending_template_path) else None
+        inline_ending_path = None if video_ending_path is not None else ending_template_path
         with _span(telemetry, "render", "filter_build", _overlay_complexity(template_config, variant)):
             filter_complex, inputs = _build_filter_complex(
                 variant,
@@ -139,7 +145,7 @@ def render_variant(
                 cover_intro_seconds=cover_intro_seconds,
                 outro_cover_path=outro_cover_path,
                 outro_seconds=outro_seconds,
-                ending_template_path=ending_template_path,
+                ending_template_path=inline_ending_path,
                 text_dir=scratch_dir / "text_layers",
             )
         if telemetry is not None:
@@ -164,7 +170,27 @@ def render_variant(
                 "segment_duration": sum(segment.duration for segment in variant.segments),
             },
         ):
-            concat_video(filter_complex, inputs, video_path, bgm_path=bgm_path)
+            body_output_path = main_video_path if video_ending_path is not None else video_path
+            concat_video(filter_complex, inputs, body_output_path, bgm_path=bgm_path)
+        if video_ending_path is not None:
+            with _span(
+                telemetry,
+                "render",
+                "ffmpeg_append_video_ending",
+                {
+                    "main_video_path": main_video_path,
+                    "ending_template_path": video_ending_path,
+                    "output_path": video_path,
+                },
+            ):
+                append_video_tail(
+                    main_video_path,
+                    video_ending_path,
+                    video_path,
+                    settings.target_width,
+                    settings.target_height,
+                    settings.target_fps,
+                )
         if telemetry is not None:
             telemetry.event("render", "video_output_ready", {"video_path": video_path, "video_bytes": _file_size(video_path)})
         if cover_path is not None:
@@ -222,7 +248,7 @@ def render_variant(
         return RenderedAsset(variant, video_path, cover_path, copy_path, manifest_path)
     finally:
         with _span(telemetry, "render", "cleanup", {"scratch_dir": scratch_dir}):
-            for temp_path in (cover_frame, intro_frame, intro_cover, outro_frame, outro_cover):
+            for temp_path in (cover_frame, intro_frame, intro_cover, outro_frame, outro_cover, main_video_path):
                 temp_path.unlink(missing_ok=True)
             if scratch_dir.exists():
                 shutil.rmtree(scratch_dir, ignore_errors=True)
@@ -338,6 +364,10 @@ def _build_filter_complex(
         labels.append("[ending]")
     chains.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vout]")
     return ";".join(chains), inputs
+
+
+def _is_video_ending(path: Path | None) -> bool:
+    return path is not None and path.suffix.lower() in VIDEO_EXTENSIONS
 
 
 def _decorate_cover(source_path: Path, target_path: Path, title: str) -> None:

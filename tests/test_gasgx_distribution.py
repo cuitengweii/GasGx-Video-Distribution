@@ -293,6 +293,16 @@ def test_task_creation_rejects_duplicate_active_task(monkeypatch, tmp_path: Path
         raise AssertionError("duplicate active task was accepted")
 
 
+def test_task_creation_accepts_draft_task(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
+
+    task = service.create_task({"account_id": account["id"], "platform": "wechat", "task_type": "draft"})
+
+    assert task["task_type"] == "draft"
+    assert task["status"] == "pending"
+
+
 def test_api_smoke_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     client = TestClient(create_app())

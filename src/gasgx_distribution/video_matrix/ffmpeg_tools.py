@@ -139,6 +139,54 @@ def concat_video(filter_complex: str, inputs: list[Path], output: Path, bgm_path
         filter_script_path.unlink(missing_ok=True)
 
 
+def append_video_tail(
+    main_video: Path,
+    ending_video: Path,
+    output: Path,
+    width: int,
+    height: int,
+    fps: int,
+) -> None:
+    ffmpeg = resolve_binary("ffmpeg")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    filter_complex = (
+        f"[0:v]fps={fps},scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v0];"
+        f"[1:v]fps={fps},scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v1];"
+        "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a0];"
+        "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a1];"
+        "[v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout]"
+    )
+    run_command(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(main_video),
+            "-i",
+            str(ending_video),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output),
+        ]
+    )
+
+
 def extract_frame(video_path: Path, output_path: Path, timestamp: float) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     output_path.parent.mkdir(parents=True, exist_ok=True)

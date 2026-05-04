@@ -182,9 +182,17 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "绑定运营微信" in shell_html
     assert "aamecc" in shell_html
     assert "aalbcc" in shell_html
+    assert 'id="operator-wechat-value" value="aamecc"' in shell_html
+    assert 'class="inline-select"' in shell_html
+    assert 'id="operator-wechat-add-input"' in shell_html
+    assert 'id="operator-wechat-add"' in shell_html
+    assert 'data-operator-wechat-option="aamecc"' in shell_html
+    assert 'data-operator-wechat-option="aalbcc"' in shell_html
+    assert 'name="operator_wechat_new"' not in shell_html
     assert "账号手机号" in shell_html
     assert 'name="phone"' in shell_html
     assert 'pattern="\\d{11}"' in shell_html
+    assert 'id="account-phone-hint"' in shell_html
     assert "账号手机号需为 11 位数字" in shell_html
     assert 'id="top-user-toggle"' in shell_html
     assert 'id="top-user-menu"' in shell_html
@@ -243,11 +251,36 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert '<option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>' in shell_app
     assert '<option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>' in shell_app
     assert 'platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || ""' in shell_app
+    assert "platform-chip" not in shell_app
+    assert "platform-inline-status" in shell_app
+    assert "${platformLabel(p.platform)}浏览器" not in shell_app
     assert "赛博皮卡天津港现车" not in shell_app
     assert "赛博皮卡现车：aawbcc" not in shell_app
     assert 'makeAccountKey(data.display_name, "auto")' in shell_app
     assert 'data.niche = "短视频矩阵"' in shell_app
     assert "绑定运营微信：" in shell_app
+    assert "function accountOperatorWechat(account)" in shell_app
+    assert "account-operator-wechat" in shell_app
+    assert "function addOperatorWechatOptionFromMenu()" in shell_app
+    assert "function renderOperatorWechatPicker()" in shell_app
+    assert "setOperatorWechatValue(value)" in shell_app
+    assert "document.createElement(\"button\")" in shell_app
+    assert "/api/operator-wechats" in shell_app
+    assert "loadOperatorWechats()" in shell_app
+    assert "window.prompt" not in shell_app
+    assert "请先在下拉中新增运营微信号" in shell_app
+    assert "function updateAccountPhoneHint()" in shell_app
+    assert "function accountPhone(account)" in shell_app
+    assert "仍可继续创建" in shell_app
+    assert "account-phone-hint-icon" in shell_app
+    assert "updateAccountPhoneHint();" in shell_app
+    assert "function showAccountCreatedToast(account)" in shell_app
+    assert "账号创建成功" in shell_app
+    assert "showAccountCreatedToast(created)" in shell_app
+    assert ".account-created-toast" in shell_css
+    assert ".account-phone-hint.warning" in shell_css
+    assert "#ff6464" in shell_css
+    assert ".account-phone-hint-icon" in shell_css
     assert "已有相同任务在队列中" in shell_app
     assert "已加入队列，等待人工执行" in shell_app
     assert 'button.setAttribute("aria-busy", "true")' in shell_app
@@ -1043,6 +1076,15 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert '<button class="active" type="button" data-grid-count="3">' not in preview_html
     assert "data-grid-count=\"6\"" in preview_html
     assert "data-grid-count=\"9\"" in preview_html
+
+
+def test_video_matrix_sidebar_preview_button_resolves_output_directory_video() -> None:
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_app.js").read_text(encoding="utf-8")
+    preview_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
+
+    assert "async function resolvePreviewVideoPath()" in app
+    assert "`/api/video-matrix/preview-files?path=${encodeURIComponent(root)}`" in app
+    assert "firstVideo?.path || \"\"" in app
     assert "previewGridCount = 3" in preview_html
     assert "sourceItems.slice(0, previewGridCount)" in preview_html
     assert "playAllPreviewVideos" in preview_html

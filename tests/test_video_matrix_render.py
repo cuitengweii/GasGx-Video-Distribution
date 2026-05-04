@@ -106,12 +106,25 @@ def test_render_variant_appends_prebuilt_ending_template(monkeypatch, tmp_path: 
     def fake_concat(filter_complex, inputs, output, bgm_path=None) -> None:
         captured["filter_complex"] = filter_complex
         captured["inputs"] = inputs
+        captured["body_output"] = output
         output.write_bytes(b"mp4")
+
+    def fake_append(main_video, ending_video, output, width, height, fps) -> None:
+        captured["append"] = {
+            "main_video": main_video,
+            "ending_video": ending_video,
+            "output": output,
+            "width": width,
+            "height": height,
+            "fps": fps,
+        }
+        output.write_bytes(b"mp4+ending")
 
     def fail_extract_frame(*_args, **_kwargs) -> None:
         raise AssertionError("prebuilt ending should skip dynamic outro frame extraction")
 
     monkeypatch.setattr(render, "concat_video", fake_concat)
+    monkeypatch.setattr(render, "append_video_tail", fake_append)
     monkeypatch.setattr(render, "extract_frame", fail_extract_frame)
 
     render.render_variant(
@@ -125,9 +138,17 @@ def test_render_variant_appends_prebuilt_ending_template(monkeypatch, tmp_path: 
         ending_template_path=ending,
     )
 
-    assert ending in captured["inputs"]
-    assert "[ending]" in captured["filter_complex"]
-    assert "concat=n=2" in captured["filter_complex"]
+    assert ending not in captured["inputs"]
+    assert "[ending]" not in captured["filter_complex"]
+    assert "concat=n=1" in captured["filter_complex"]
+    assert captured["body_output"].name == ".vibe_01_main.mp4"
+    assert captured["append"]["main_video"].name == ".vibe_01_main.mp4"
+    assert captured["append"]["ending_video"] == ending
+    assert captured["append"]["output"].name == "vibe_01.mp4"
+    assert captured["append"]["width"] == 1080
+    assert captured["append"]["height"] == 1920
+    assert captured["append"]["fps"] == 30
+    assert not (tmp_path / ".vibe_01_main.mp4").exists()
 
 
 def test_render_variant_copy_uses_ending_follow_text_without_cta(monkeypatch, tmp_path: Path) -> None:

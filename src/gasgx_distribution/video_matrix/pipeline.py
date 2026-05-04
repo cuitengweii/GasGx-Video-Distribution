@@ -18,6 +18,7 @@ from .settings import ProjectSettings
 
 
 ProgressCallback = Callable[[str, float, str], None]
+VIDEO_ENDING_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 
 
 def run_pipeline(
@@ -67,7 +68,8 @@ def run_pipeline(
     else:
         hud_payload = build_hud_payload(settings)
     active_composition_sequence = _fit_composition_sequence_to_max_duration(composition_sequence or settings.composition_sequence, settings.video_duration_max)
-    beat_duration_hint = _beat_duration_hint(settings, active_composition_sequence, cover_intro_seconds, outro_seconds)
+    algorithm_outro_seconds = 0.0 if _is_video_ending(ending_template_path) else outro_seconds
+    beat_duration_hint = _beat_duration_hint(settings, active_composition_sequence, cover_intro_seconds, algorithm_outro_seconds)
     _notify(progress_callback, "beat", 0.30, "Analyzing BGM beat grid")
     beat_payload = {
         "bgm_path": bgm_path,
@@ -210,6 +212,10 @@ def _resolve_worker_count(max_workers: int | None, total: int) -> int:
         return max(1, min(max_workers, total))
     cpu_count = os.cpu_count() or 2
     return max(1, min(total, max(2, cpu_count // 2), 4))
+
+
+def _is_video_ending(path: Path | None) -> bool:
+    return path is not None and path.suffix.lower() in VIDEO_ENDING_EXTENSIONS
 
 
 def _beat_duration_hint(

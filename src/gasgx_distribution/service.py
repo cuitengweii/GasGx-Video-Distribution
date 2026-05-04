@@ -45,6 +45,7 @@ FEATURE_ENTRIES = [
     {"id": "accounts", "label": "账号矩阵", "group": "业务工作台"},
     {"id": "settings", "label": "公共设置", "group": "业务工作台"},
     {"id": "tasks", "label": "任务中心", "group": "业务工作台"},
+    {"id": "terminal-execution", "label": "终端执行", "group": "业务工作台"},
     {"id": "stats", "label": "数据统计", "group": "业务工作台"},
     {"id": "ai-robot", "label": "AI机器人", "group": "业务工作台"},
     {"id": "video-matrix", "label": "视频生成", "group": "业务工作台"},
@@ -55,7 +56,7 @@ FEATURE_ENTRIES = [
 ]
 DEFAULT_ROLE_PERMISSIONS = {
     "super_admin": [item["id"] for item in FEATURE_ENTRIES],
-    "publisher": ["overview", "accounts", "settings", "tasks", "video-matrix", "user-center", "notifications", "help-center"],
+    "publisher": ["overview", "accounts", "settings", "tasks", "terminal-execution", "video-matrix", "user-center", "notifications", "help-center"],
     "material_manager": ["overview", "accounts", "video-matrix", "user-center", "notifications", "help-center"],
     "data_monitor": ["overview", "stats", "user-center", "notifications", "help-center"],
 }
@@ -390,6 +391,33 @@ def save_distribution_settings_db(payload: dict[str, Any]) -> dict[str, Any]:
     settings = save_local_distribution_settings(payload)
     _save_app_setting("distribution_settings", settings)
     return settings
+
+
+def list_operator_wechats() -> list[str]:
+    settings = load_distribution_settings_db()
+    operators = settings.get("common", {}).get("operator_wechats")
+    if not isinstance(operators, list):
+        return ["aamecc", "aalbcc"]
+    values = []
+    for item in operators:
+        value = str(item or "").strip()
+        if value and value not in values:
+            values.append(value)
+    return values or ["aamecc", "aalbcc"]
+
+
+def add_operator_wechat(value: str) -> dict[str, Any]:
+    operator = str(value or "").strip()
+    if not operator:
+        raise ValueError("operator_wechat is required")
+    settings = load_distribution_settings_db()
+    common = settings.setdefault("common", {})
+    operators = list_operator_wechats()
+    if operator not in operators:
+        operators.append(operator)
+    common["operator_wechats"] = operators
+    save_distribution_settings_db(settings)
+    return {"operator_wechat": operator, "items": operators}
 
 
 def load_wechat_publish_settings_db() -> dict[str, Any]:
@@ -1144,6 +1172,320 @@ def list_login_qr_batches(limit: int = 20) -> list[dict[str, Any]]:
             dict_from_row(row)
             for row in conn.execute("SELECT * FROM login_qr_batches ORDER BY id DESC LIMIT ?", (max(1, int(limit or 20)),))
         ]
+
+
+TERMINAL_COLORS = [
+    {"hex": "#3B82F6", "name": "科技蓝"},
+    {"hex": "#F97316", "name": "活力橙"},
+    {"hex": "#A855F7", "name": "神秘紫"},
+    {"hex": "#EC4899", "name": "醒目粉"},
+    {"hex": "#EAB308", "name": "明亮黄"},
+]
+
+
+def _terminal_state_path() -> Path:
+    return get_paths().runtime_root / "terminal_execution_state.json"
+
+
+def _load_terminal_state() -> dict[str, Any]:
+    path = _terminal_state_path()
+    if not path.exists():
+        return {"windows": [], "config": [], "initialized": False, "updated_at": 0}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"windows": [], "config": [], "initialized": False, "updated_at": 0}
+    return payload if isinstance(payload, dict) else {"windows": [], "config": [], "initialized": False, "updated_at": 0}
+
+
+def _save_terminal_state(payload: dict[str, Any]) -> None:
+    payload["updated_at"] = now_ts()
+    path = _terminal_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _account_operator_wechat(account: dict[str, Any]) -> str:
+    for key in ("operator_wechat", "operator_weixin", "wechat_operator"):
+        value = str(account.get(key) or "").strip()
+        if value:
+            return value
+    notes = str(account.get("notes") or "")
+    patterns = [
+        r"绑定运营微信[:：]\s*([A-Za-z0-9_.@\-]+)",
+        r"运营微信[:：]\s*([A-Za-z0-9_.@\-]+)",
+        r"operator[_\s-]*wechat[:：=]\s*([A-Za-z0-9_.@\-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, notes, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return "未绑定运营微信"
+
+
+def _has_wechat_platform(account: dict[str, Any]) -> bool:
+    return any(str(item.get("platform") or "") == "wechat" for item in account.get("platforms") or [])
+
+
+def _terminal_operator_groups() -> list[dict[str, Any]]:
+    accounts = [
+        account for account in list_accounts()
+        if str(account.get("status") or "") == "active" and _has_wechat_platform(account)
+    ]
+    configured_operators = list_operator_wechats()
+    grouped: dict[str, list[dict[str, Any]]] = {operator: [] for operator in configured_operators}
+    unbound: list[dict[str, Any]] = []
+    for account in accounts:
+        operator = _account_operator_wechat(account)
+        if operator == "未绑定运营微信" and configured_operators:
+            unbound.append(account)
+            continue
+        grouped.setdefault(operator, []).append(account)
+    if not configured_operators and unbound:
+        grouped["未绑定运营微信"] = unbound
+    result = []
+    for operator, items in grouped.items():
+        items.sort(key=lambda item: int(item.get("id") or 0))
+        result.append({
+            "operator_wechat": operator,
+            "accounts": [
+                {
+                    "id": int(item.get("id") or 0),
+                    "account_key": item.get("account_key"),
+                    "display_name": item.get("display_name") or item.get("account_key"),
+                    "publish_success_count": int(item.get("publish_success_count") or 0),
+                    "login_status": next((platform.get("login_status") for platform in item.get("platforms", []) if platform.get("platform") == "wechat"), ""),
+                }
+                for item in items
+            ],
+        })
+    result.sort(key=lambda item: (-len(item.get("accounts") or []), str(item["operator_wechat"])))
+    return result
+
+
+def terminal_execution_state() -> dict[str, Any]:
+    groups = _terminal_operator_groups()
+    state = _load_terminal_state()
+    return {
+        "ok": True,
+        "colors": TERMINAL_COLORS,
+        "operators": groups,
+        "windows": state.get("windows") or [],
+        "config": state.get("config") or [],
+        "initialized": bool(state.get("initialized")) or bool(state.get("windows")),
+        "summary": _terminal_summary(state.get("windows") or [], groups),
+    }
+
+
+def _terminal_summary(windows: list[dict[str, Any]], groups: list[dict[str, Any]]) -> dict[str, Any]:
+    total = sum(len(group.get("accounts") or []) for group in groups)
+    success = 0
+    for window in windows:
+        for account in window.get("accounts") or []:
+            if str(account.get("status") or "") == "success":
+                success += 1
+    return {"total": total, "success": success, "active_windows": len([item for item in windows if item.get("enabled")])}
+
+
+def _terminal_qr_data_url(account_id: int) -> str:
+    account = get_account(account_id) or {}
+    platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
+    if not platform:
+        return ""
+    try:
+        result = engine._prepare_platform_login_qr_notice(  # type: ignore[attr-defined]
+            platform_name="wechat",
+            open_url=get_platform("wechat").open_url,  # type: ignore[union-attr]
+            debug_port=int(platform.get("debug_port") or 0),
+            chrome_user_data_dir=str(platform.get("profile_dir") or ""),
+            auto_open_chrome=False,
+            refresh_page=False,
+            allow_navigation=False,
+        )
+    except Exception:
+        return ""
+    photo_bytes = result.get("photo_bytes") if isinstance(result, dict) else b""
+    if not isinstance(photo_bytes, (bytes, bytearray)) or not photo_bytes:
+        return ""
+    mime = str(result.get("mime") or "image/png")
+    return f"data:{mime};base64,{base64.b64encode(bytes(photo_bytes)).decode('ascii')}"
+
+
+def _close_wechat_browser_for_account(account_id: int) -> None:
+    account = get_account(account_id) or {}
+    platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
+    if not platform:
+        return
+    try:
+        pid = engine._find_debug_chrome_process_pid(int(platform.get("debug_port") or 0), str(platform.get("profile_dir") or ""))  # type: ignore[attr-defined]
+        if pid:
+            engine._terminate_windows_process_tree(int(pid))  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+
+def _terminal_account_cards(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": int(item.get("id") or 0),
+            "display_name": item.get("display_name") or item.get("account_key"),
+            "account_key": item.get("account_key"),
+            "status": "pending",
+            "status_text": "未登录",
+            "task_id": None,
+            "publish_success_count": int(item.get("publish_success_count") or 0),
+        }
+        for item in accounts
+    ]
+
+
+def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
+    groups = {item["operator_wechat"]: item for item in _terminal_operator_groups()}
+    windows = []
+    saved_config = []
+    for index, raw in enumerate(payload.get("windows") or [], start=1):
+        saved_config.append({
+            "id": int(raw.get("id") or index),
+            "enabled": bool(raw.get("enabled", True)),
+            "operator_wechat": str(raw.get("operator_wechat") or "").strip(),
+            "color": str(raw.get("color") or TERMINAL_COLORS[(index - 1) % len(TERMINAL_COLORS)]["hex"]),
+        })
+        if not bool(raw.get("enabled", True)):
+            continue
+        operator = str(raw.get("operator_wechat") or "").strip()
+        if operator not in groups:
+            continue
+        group = groups[operator]
+        accounts = _terminal_account_cards(group.get("accounts") or [])
+        if not accounts:
+            continue
+        color = str(raw.get("color") or TERMINAL_COLORS[(index - 1) % len(TERMINAL_COLORS)]["hex"])
+        current = accounts[0]
+        current["status"] = "opening"
+        current["status_text"] = "正在打开浏览器"
+        try:
+            open_account_browser(int(current["id"]), "wechat")
+            current["status"] = "waiting_qr"
+            current["status_text"] = "等待扫码中..."
+            qr_data_url = _terminal_qr_data_url(int(current["id"]))
+        except Exception as exc:
+            current["status"] = "error"
+            current["status_text"] = str(exc)
+            qr_data_url = ""
+        windows.append({
+            "id": int(raw.get("id") or index),
+            "enabled": True,
+            "operator_wechat": operator,
+            "color": color,
+            "color_name": next((item["name"] for item in TERMINAL_COLORS if item["hex"].lower() == color.lower()), ""),
+            "current_index": 0,
+            "qr_data_url": qr_data_url,
+            "manual_available_at": now_ts() + 60,
+            "accounts": accounts,
+        })
+    if not windows:
+        raise ValueError("至少需要启用一个已绑定运营微信的终端")
+    state = {"windows": windows, "config": saved_config, "initialized": True}
+    _save_terminal_state(state)
+    return terminal_execution_state()
+
+
+def _queue_terminal_draft_task(account_id: int) -> dict[str, Any]:
+    try:
+        return create_task({"account_id": account_id, "platform": "wechat", "task_type": "draft", "payload": {"source": "terminal-execution"}})
+    except ValueError as exc:
+        duplicate = re.search(r"#(\d+)", str(exc))
+        if duplicate:
+            task = get_task(int(duplicate.group(1)))
+            if task:
+                return task
+        raise
+
+
+def _advance_terminal_window(window: dict[str, Any]) -> None:
+    accounts = window.get("accounts") or []
+    current_index = int(window.get("current_index") or 0)
+    if current_index >= len(accounts):
+        return
+    current = accounts[current_index]
+    account_id = int(current.get("id") or 0)
+    try:
+        result = check_login_status(account_id, "wechat")
+    except Exception as exc:
+        current["status"] = "error"
+        current["status_text"] = str(exc)
+        return
+    if str(result.get("status") or "") != "ready":
+        current["status"] = "waiting_qr"
+        current["status_text"] = "等待扫码中..."
+        if not window.get("qr_data_url"):
+            window["qr_data_url"] = _terminal_qr_data_url(account_id)
+        return
+    if current.get("task_id"):
+        task = get_task(int(current.get("task_id") or 0)) or {}
+        task_status = str(task.get("status") or "").lower()
+        if task_status in {"success", "completed", "published"}:
+            current["status"] = "success"
+            current["status_text"] = "发布成功"
+            current["publish_success_count"] = int(current.get("publish_success_count") or 0) + 1
+            _close_wechat_browser_for_account(account_id)
+            next_index = current_index + 1
+            window["current_index"] = next_index
+            window["qr_data_url"] = ""
+            window["manual_available_at"] = now_ts() + 60
+            if next_index >= len(accounts):
+                return
+            next_account = accounts[next_index]
+            next_account["status"] = "opening"
+            next_account["status_text"] = "正在打开浏览器"
+            try:
+                open_account_browser(int(next_account["id"]), "wechat")
+                next_account["status"] = "waiting_qr"
+                next_account["status_text"] = "等待扫码中..."
+                window["qr_data_url"] = _terminal_qr_data_url(int(next_account["id"]))
+            except Exception as exc:
+                next_account["status"] = "error"
+                next_account["status_text"] = str(exc)
+        elif task_status in {"failed", "error", "unsupported"}:
+            current["status"] = "error"
+            current["status_text"] = str(task.get("summary") or task.get("error") or "任务执行失败")
+        else:
+            current["status"] = "running"
+            current["status_text"] = "已登录，草稿任务执行中"
+        return
+    if not current.get("task_id"):
+        task = _queue_terminal_draft_task(account_id)
+        current["task_id"] = task.get("id")
+    current["status"] = "running"
+    current["status_text"] = "已登录，草稿任务已加入队列"
+
+
+def poll_terminal_execution() -> dict[str, Any]:
+    state = _load_terminal_state()
+    for window in state.get("windows") or []:
+        _advance_terminal_window(window)
+    _save_terminal_state(state)
+    return terminal_execution_state()
+
+
+def manual_terminal_publish(window_id: int) -> dict[str, Any]:
+    state = _load_terminal_state()
+    target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
+    if target is None:
+        raise KeyError("window not found")
+    if now_ts() < int(target.get("manual_available_at") or 0):
+        return terminal_execution_state()
+    accounts = target.get("accounts") or []
+    current_index = int(target.get("current_index") or 0)
+    if current_index < len(accounts):
+        current = accounts[current_index]
+        task = _queue_terminal_draft_task(int(current.get("id") or 0))
+        current["task_id"] = task.get("id")
+        current["status"] = "running"
+        current["status_text"] = "已人工触发草稿任务"
+    target["manual_available_at"] = now_ts() + 60
+    _save_terminal_state(state)
+    return terminal_execution_state()
 
 
 def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
@@ -1983,15 +2325,15 @@ def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
 def create_task(payload: dict[str, Any]) -> dict[str, Any]:
     ensure_database()
     task_type = str(payload.get("task_type") or "").strip().lower()
-    if task_type not in {"publish", "comment", "message", "stats"}:
-        raise ValueError("task_type must be publish, comment, message, or stats")
+    if task_type not in {"publish", "draft", "comment", "message", "stats"}:
+        raise ValueError("task_type must be publish, draft, comment, message, or stats")
     account_id = payload.get("account_id")
     platform = normalize_platform(str(payload.get("platform") or ""))
     capability = get_platform(platform) if platform else None
     supported = True
     if capability is None:
         supported = task_type == "stats" and not platform
-    elif task_type == "publish":
+    elif task_type in {"publish", "draft"}:
         supported = capability.can_publish
     elif task_type == "comment":
         supported = capability.can_comment
@@ -2091,6 +2433,50 @@ def delete_task(task_id: int) -> bool:
     with connect() as conn:
         cursor = conn.execute("DELETE FROM automation_tasks WHERE id = ?", (task_id,))
         return bool(cursor.rowcount)
+
+
+def delete_tasks(task_ids: list[int]) -> int:
+    ids = sorted({int(task_id) for task_id in task_ids if int(task_id) > 0})
+    if not ids:
+        return 0
+    if brand_database_backend() == "supabase":
+        deleted = 0
+        client = _brand_supabase()
+        for task_id in ids:
+            if client.delete("automation_tasks", filters={"id": task_id}):
+                deleted += 1
+        return deleted
+    ensure_database()
+    placeholders = ",".join("?" for _ in ids)
+    with connect() as conn:
+        cursor = conn.execute(f"DELETE FROM automation_tasks WHERE id IN ({placeholders})", ids)
+        return int(cursor.rowcount or 0)
+
+
+def update_tasks_status(task_ids: list[int], status: str) -> int:
+    ids = sorted({int(task_id) for task_id in task_ids if int(task_id) > 0})
+    normalized = str(status or "").strip().lower()
+    if normalized not in {"pending", "paused"}:
+        raise ValueError("status must be pending or paused")
+    if not ids:
+        return 0
+    ts = now_ts()
+    if brand_database_backend() == "supabase":
+        updated = 0
+        client = _brand_supabase()
+        for task_id in ids:
+            row = client.update("automation_tasks", {"status": normalized, "updated_at": ts}, filters={"id": task_id})
+            if row:
+                updated += 1
+        return updated
+    ensure_database()
+    placeholders = ",".join("?" for _ in ids)
+    with connect() as conn:
+        cursor = conn.execute(
+            f"UPDATE automation_tasks SET status = ?, updated_at = ? WHERE id IN ({placeholders})",
+            [normalized, ts, *ids],
+        )
+        return int(cursor.rowcount or 0)
 
 
 def import_stats(payload: dict[str, Any]) -> dict[str, Any]:

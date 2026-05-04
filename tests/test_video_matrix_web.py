@@ -506,6 +506,15 @@ def test_video_matrix_full_clone_page_exists() -> None:
     assert "/static/video_matrix_styles.css" in html
 
 
+def test_video_matrix_sidebar_has_preview_video_button() -> None:
+    client = TestClient(create_app())
+
+    response = client.get("/static/video_matrix.html")
+
+    assert response.status_code == 200
+    assert 'id="openPreviewVideo"' in response.text
+
+
 def test_video_matrix_can_add_named_material_category(monkeypatch, tmp_path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

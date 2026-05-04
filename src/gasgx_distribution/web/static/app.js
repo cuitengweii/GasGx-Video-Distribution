@@ -68,15 +68,28 @@ const state = {
   aiRobotMessages: [],
   notificationRoutes: [],
   loginQrBatches: [],
+  terminalExecution: { colors: [], operators: [], windows: [], summary: {} },
   aiRobotEditingPlatform: "",
   aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
   databaseDictionary: null,
   analytics: {},
+  operatorWechats: ["aamecc", "aalbcc"],
 };
+
+const taskSelection = new Set();
+const taskFilters = { account: "", platform: "", status: "", taskType: "" };
+const TASK_TYPE_OPTIONS = [
+  ["draft", "保存草稿"],
+  ["publish", "自动发布"],
+  ["comment", "自动评论"],
+  ["message", "自动私信"],
+  ["stats", "数据统计"],
+];
 
 const loadedViews = new Set();
 let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "overview";
+let terminalPollTimer = null;
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
@@ -89,6 +102,7 @@ const FEATURE_ENTRIES = [
   { id: "accounts", label: "账号矩阵", group: "业务工作台" },
   { id: "settings", label: "公共设置", group: "业务工作台" },
   { id: "tasks", label: "任务中心", group: "业务工作台" },
+  { id: "terminal-execution", label: "终端执行", group: "业务工作台" },
   { id: "stats", label: "数据统计", group: "业务工作台" },
   { id: "ai-robot", label: "AI机器人", group: "业务工作台" },
   { id: "video-matrix", label: "视频生成", group: "业务工作台" },
@@ -107,7 +121,7 @@ const DEFAULT_AUTH_STATE = {
     },
     publisher: {
       name: "发布员",
-      permissions: ["overview", "accounts", "settings", "tasks", "video-matrix", "user-center", "notifications", "help-center"],
+      permissions: ["overview", "accounts", "settings", "tasks", "terminal-execution", "video-matrix", "user-center", "notifications", "help-center"],
     },
     material_manager: {
       name: "素材维护员",
@@ -156,6 +170,7 @@ const VIEW_HEADERS = {
   "user-center": ["用户中心", "预留操作者资料、角色权限、工作偏好和本地部署身份入口。"],
   settings: ["公共设置", "配置发布素材目录、上传策略、平台参数和矩阵发布作业。"],
   tasks: ["任务中心", "查看发布、评论、私信、登录检测等任务队列和执行状态。"],
+  "terminal-execution": ["终端执行", "预留本地终端命令执行入口。"],
   stats: ["数据统计", "短视频账号矩阵数字化营销客户端数据看板。"],
   "ai-robot": ["AI机器人", "AI客服、企业微信、钉钉、飞书、Telegram 与 WhatsApp 统一接入。"],
   "video-matrix": ["视频生成", "分类素材、第一屏封面、视频文字、背景音乐和批量导出工作台。"],
@@ -172,7 +187,7 @@ function setViewHeader(view) {
   const [title, description] = VIEW_HEADERS[view] || VIEW_HEADERS.overview;
   document.querySelector("#page-title").textContent = title;
   document.querySelector("#page-description").textContent = description;
-  document.querySelector("#refresh").classList.toggle("hidden", view === "video-matrix");
+  document.querySelector("#refresh")?.classList.toggle("hidden", view === "video-matrix");
 }
 
 function broadcastShellTheme(theme) {
@@ -352,6 +367,24 @@ function showPermissionDenied() {
   }, 1800);
 }
 
+function showAccountCreatedToast(account) {
+  let toast = document.querySelector("#account-created-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "account-created-toast";
+    toast.className = "permission-denied-toast account-created-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = `<strong>账号创建成功</strong><span>#${account.id} ${account.display_name}</span>`;
+  toast.classList.add("show");
+  clearTimeout(showAccountCreatedToast.timer);
+  showAccountCreatedToast.timer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 2600);
+}
+
 function applyPermissionLimitedState() {
   document.querySelectorAll(".view").forEach((section) => {
     const locked = isPermissionLimitedView(section.id);
@@ -360,6 +393,58 @@ function applyPermissionLimitedState() {
       if (!node.closest(".permission-notice")) node.classList.toggle("permission-blocked-control", locked);
     });
   });
+}
+
+function setOperatorWechatValue(value) {
+  const picker = document.querySelector("#operator-wechat-select");
+  const hidden = document.querySelector("#operator-wechat-value");
+  const trigger = picker?.querySelector(".inline-select-trigger");
+  if (!picker || !hidden || !trigger || !value) return;
+  picker.dataset.value = value;
+  hidden.value = value;
+  trigger.textContent = value;
+  trigger.setAttribute("aria-expanded", "false");
+  picker.querySelector(".inline-select-menu")?.classList.add("hidden");
+}
+
+function renderOperatorWechatPicker() {
+  const picker = document.querySelector("#operator-wechat-select");
+  const menu = picker?.querySelector(".inline-select-menu");
+  const addRow = menu?.querySelector(".inline-select-add");
+  if (!picker || !menu || !addRow) return;
+  menu.querySelectorAll("[data-operator-wechat-option]").forEach((item) => item.remove());
+  state.operatorWechats.forEach((value) => {
+    const option = document.createElement("button");
+    option.className = "inline-select-option";
+    option.type = "button";
+    option.dataset.operatorWechatOption = value;
+    option.textContent = value;
+    menu.insertBefore(option, addRow);
+  });
+  const current = state.operatorWechats.includes(picker.dataset.value) ? picker.dataset.value : state.operatorWechats[0];
+  setOperatorWechatValue(current || "aamecc");
+}
+
+function addOperatorWechatOptionFromMenu() {
+  const picker = document.querySelector("#operator-wechat-select");
+  const input = document.querySelector("#operator-wechat-add-input");
+  const menu = picker?.querySelector(".inline-select-menu");
+  const value = input?.value.trim();
+  if (!picker || !input || !menu || !value) {
+    input?.focus();
+    return;
+  }
+  const addButton = document.querySelector("#operator-wechat-add");
+  const restoreButton = setButtonLoading(addButton, "保存中");
+  api("/api/operator-wechats", {
+    method: "POST",
+    body: JSON.stringify({ operator_wechat: value }),
+  }).then((result) => {
+    state.operatorWechats = result.items || state.operatorWechats;
+    input.value = "";
+    renderOperatorWechatPicker();
+    setOperatorWechatValue(result.operator_wechat || value);
+  }).finally(restoreButton);
 }
 
 function applyPermissions() {
@@ -697,6 +782,8 @@ function formatFriendlyMessage(message) {
   if (duplicateTaskMatch) return `已有相同任务在队列中：#${duplicateTaskMatch[1]}`;
   if (text === "queued for manual worker execution") return "已加入队列，等待人工执行";
   if (text === "pending") return "待处理";
+  if (text === "paused") return "已暂停";
+  if (text === "unsupported") return "暂不支持";
   return text || "操作失败，请稍后重试";
 }
 
@@ -870,6 +957,10 @@ function setViewLoading(view) {
       ["#operation-notice-routes", "加载通知..."],
       ["#login-qr-batches", "加载登录批次..."],
     ],
+    "terminal-execution": [
+      ["#terminal-config-list", "加载运营微信配置..."],
+      ["#terminal-matrix-workspace", "加载终端执行数据..."],
+    ],
     "system-settings": [["#supabase-health-list", "加载数据库字典..."]],
   };
   if (view === "ai-robot") renderAiRobotLoading();
@@ -1021,14 +1112,21 @@ function renderPlatformStatusGroup(platforms, region) {
   </div>`;
 }
 
+function accountOperatorWechat(account) {
+  const match = String(account?.notes || "").match(/绑定运营微信：([^；;]+)/);
+  return match ? match[1].trim() : "";
+}
+
 function renderAccounts() {
   document.querySelector("#accounts-list").innerHTML = state.accounts.map((account) => {
     const platforms = account.platforms || [];
+    const operatorWechat = accountOperatorWechat(account);
     return `<article class="account-row">
       <div class="row-head">
         <div class="account-title-wrap">
           <strong class="account-title">#${account.id} ${account.display_name}</strong>
           <div class="account-subtitle">${account.account_key} · ${account.niche || ""}</div>
+          <div class="account-operator-wechat">绑定运营微信：<strong>${operatorWechat || "-"}</strong></div>
         </div>
         <div class="account-badges">
           <span class="chip">${account.status}</span>
@@ -1042,15 +1140,65 @@ function renderAccounts() {
   }).join("") || `<div class="muted">暂无账号</div>`;
 }
 
+function taskTypeLabel(type) {
+  return TASK_TYPE_OPTIONS.find(([value]) => value === type)?.[1] || type || "未指定";
+}
+
+function taskAccountLabel(task) {
+  const accountId = Number(task.account_id || 0);
+  const account = state.accounts.find((item) => Number(item.id) === accountId);
+  return account
+    ? `#${account.id} ${account.display_name || account.account_key || "未命名账号"}`
+    : (accountId ? `#${accountId} 未知账号` : "未指定账号");
+}
+
+function filteredTasks() {
+  return state.tasks.filter((task) => {
+    const accountId = String(task.account_id || "");
+    return (!taskFilters.account || accountId === taskFilters.account)
+      && (!taskFilters.platform || task.platform === taskFilters.platform)
+      && (!taskFilters.status || task.status === taskFilters.status)
+      && (!taskFilters.taskType || task.task_type === taskFilters.taskType);
+  });
+}
+
+function taskFilterOptions(items, valueGetter, labelGetter) {
+  const seen = new Set();
+  return items.map((item) => {
+    const value = String(valueGetter(item) || "");
+    if (!value || seen.has(value)) return "";
+    seen.add(value);
+    return `<option value="${value}">${labelGetter(item)}</option>`;
+  }).join("");
+}
+
 function renderTasks() {
-  document.querySelector("#tasks-list").innerHTML = state.tasks.map((task) => {
-    const accountId = Number(task.account_id || 0);
-    const account = state.accounts.find((item) => Number(item.id) === accountId);
-    const accountLabel = account
-      ? `#${account.id} ${account.display_name || account.account_key || "未命名账号"}`
-      : (accountId ? `#${accountId} 未知账号` : "未指定账号");
-    return `<article class="task-row">
+  const list = filteredTasks();
+  const visibleIds = list.map((task) => Number(task.id));
+  Array.from(taskSelection).forEach((id) => {
+    if (!state.tasks.some((task) => Number(task.id) === Number(id))) taskSelection.delete(id);
+  });
+  const selectedVisible = visibleIds.filter((id) => taskSelection.has(id));
+  document.querySelector("#tasks-list").innerHTML = `
+    <div class="task-toolbar">
+      <div class="task-filter-grid">
+        <label>账号<select data-task-filter="account"><option value="">全部账号</option>${taskFilterOptions(state.tasks, (task) => task.account_id, taskAccountLabel)}</select></label>
+        <label>平台<select data-task-filter="platform"><option value="">全部平台</option>${taskFilterOptions(state.tasks, (task) => task.platform, (task) => platformLabel(task.platform))}</select></label>
+        <label>状态<select data-task-filter="status"><option value="">全部状态</option>${taskFilterOptions(state.tasks, (task) => task.status, (task) => formatFriendlyMessage(task.status))}</select></label>
+        <label>任务类型<select data-task-filter="taskType"><option value="">全部类型</option>${TASK_TYPE_OPTIONS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
+      </div>
+      <div class="task-bulk-actions">
+        <label class="task-check-all"><input type="checkbox" data-task-select-all ${visibleIds.length && selectedVisible.length === visibleIds.length ? "checked" : ""}>全选</label>
+        <span class="muted">已选 ${taskSelection.size} 条</span>
+        <button class="btn secondary btn-sm" type="button" data-task-bulk-status="paused" ${taskSelection.size ? "" : "disabled"}>暂停队列</button>
+        <button class="btn secondary btn-sm danger-action" type="button" data-task-bulk-delete ${taskSelection.size ? "" : "disabled"}>删除队列</button>
+      </div>
+    </div>
+    ${list.map((task) => {
+      const accountLabel = taskAccountLabel(task);
+      return `<article class="task-row">
       <div class="row-head">
+        <label class="task-row-check"><input type="checkbox" data-task-select="${task.id}" ${taskSelection.has(Number(task.id)) ? "checked" : ""}></label>
         <div class="task-title-wrap">
           <strong>#${task.id} ${platformName(task.platform)}</strong>
           <span class="task-account-name">${accountLabel}</span>
@@ -1060,9 +1208,133 @@ function renderTasks() {
           <button class="btn secondary task-delete" data-delete-task="${task.id}" type="button">删除队列</button>
         </span>
       </div>
+      <div class="task-meta">
+        <span>任务类型：${taskTypeLabel(task.task_type)}</span>
+        <span>账号：${accountLabel}</span>
+        <span>平台：${platformLabel(task.platform)}</span>
+      </div>
       <div class="muted">${formatFriendlyMessage(task.summary || task.error || "")}</div>
     </article>`;
-  }).join("") || `<div class="muted">暂无任务</div>`;
+    }).join("") || `<div class="muted">暂无匹配任务</div>`}
+  `;
+  document.querySelectorAll("[data-task-filter]").forEach((select) => {
+    select.value = taskFilters[select.dataset.taskFilter] || "";
+  });
+}
+
+function terminalColorByIndex(index) {
+  return (state.terminalExecution.colors || [])[index % Math.max(1, (state.terminalExecution.colors || []).length)] || { hex: "#3B82F6", name: "科技蓝" };
+}
+
+function renderTerminalConfig() {
+  const list = document.querySelector("#terminal-config-list");
+  if (!list) return;
+  const operators = state.terminalExecution.operators || [];
+  const colors = state.terminalExecution.colors || [];
+  const savedRows = state.terminalExecution.config || [];
+  const defaultRows = savedRows.length ? savedRows : Array.from({ length: 5 }, (_, index) => ({
+    id: index + 1,
+    enabled: Boolean(operators[index] || operators[0]),
+    operator_wechat: operators[index]?.operator_wechat || operators[index % Math.max(1, operators.length)]?.operator_wechat || "",
+    color: terminalColorByIndex(index).hex,
+  }));
+  list.innerHTML = defaultRows.map((row, index) => `
+    <div class="terminal-config-row ${row.enabled ? "" : "disabled"}" data-terminal-config-row="${row.id}">
+      <label class="terminal-config-left">
+        <input type="checkbox" class="terminal-checkbox" data-terminal-enabled ${row.enabled ? "checked" : ""}>
+        <span>终端 ${String(row.id).padStart(2, "0")}</span>
+      </label>
+      <select class="terminal-wx-select" data-terminal-operator ${row.enabled ? "" : "disabled"}>
+        ${operators.map((operator) => `<option value="${operator.operator_wechat}" ${operator.operator_wechat === row.operator_wechat ? "selected" : ""}>${operator.operator_wechat}</option>`).join("") || `<option value="">暂无绑定运营微信</option>`}
+      </select>
+      <div class="terminal-swatch-group">
+        ${colors.map((color, colorIndex) => `
+          <button class="terminal-swatch ${color.hex === row.color ? "active" : ""}" type="button" data-terminal-color="${color.hex}" title="${color.name}" style="background:${color.hex};color:${color.hex}" ${row.enabled ? "" : "disabled"}></button>
+        `).join("")}
+      </div>
+    </div>
+  `).join("");
+}
+
+function terminalPlaceholderIcon() {
+  return `<svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#0f0f0f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.3"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M8 12h8"></path></svg>`;
+}
+
+function renderTerminalExecution() {
+  renderTerminalConfig();
+  const windows = state.terminalExecution.windows || [];
+  const summary = state.terminalExecution.summary || {};
+  document.querySelector("#terminal-init-modal")?.classList.toggle("hidden", Boolean(state.terminalExecution.initialized));
+  const progress = document.querySelector("#terminal-global-progress");
+  if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
+  const active = document.querySelector("#terminal-active-windows");
+  if (active) active.textContent = String(summary.active_windows || windows.length || 0);
+  const workspace = document.querySelector("#terminal-matrix-workspace");
+  if (!workspace) return;
+  workspace.innerHTML = windows.map((window) => {
+    const accounts = window.accounts || [];
+    const currentIndex = Number(window.current_index || 0);
+    const color = window.color || "#3B82F6";
+    const colorDim = `${color}33`;
+    const successCount = accounts.filter((account) => account.status === "success").length;
+    const current = accounts[currentIndex] || {};
+    const manualWait = Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000));
+    return `
+      <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
+        <div class="terminal-color-anchor"></div>
+        <div class="terminal-col-header">
+          <div class="terminal-col-header-top">
+            <span style="font-weight:700;font-size:16px;">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
+            <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
+          </div>
+          <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
+        </div>
+        <div class="terminal-qr-section">
+          <div class="terminal-qr-placeholder">${window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div style="font-size:12px;color:var(--terminal-text-sub);">正在等待 [${current.display_name || "-"}] 扫码确认</div>
+        </div>
+        <div class="terminal-account-list">
+          ${accounts.map((account, index) => `
+            <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
+              <div class="terminal-account-info">
+                <div class="terminal-avatar"></div>
+                <div>
+                  <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
+                  <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
+                </div>
+              </div>
+              <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
+            </div>
+          `).join("") || `<div class="muted">暂无账号</div>`}
+        </div>
+        <div class="terminal-col-footer">
+          <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
+          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${manualWait > 0 ? "disabled" : ""}>${manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布"}</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function readTerminalConfigRows() {
+  return Array.from(document.querySelectorAll("[data-terminal-config-row]")).map((row) => {
+    const activeSwatch = row.querySelector(".terminal-swatch.active");
+    return {
+      id: Number(row.dataset.terminalConfigRow || 0),
+      enabled: Boolean(row.querySelector("[data-terminal-enabled]")?.checked),
+      operator_wechat: row.querySelector("[data-terminal-operator]")?.value || "",
+      color: activeSwatch?.dataset.terminalColor || terminalColorByIndex(0).hex,
+    };
+  });
+}
+
+function startTerminalPolling() {
+  if (terminalPollTimer) clearInterval(terminalPollTimer);
+  terminalPollTimer = setInterval(async () => {
+    if (currentView !== "terminal-execution") return;
+    state.terminalExecution = await api("/api/terminal-execution/poll", { method: "POST" });
+    renderTerminalExecution();
+  }, 10000);
 }
 
 function renderStats() {
@@ -1691,6 +1963,10 @@ async function loadAccounts() {
   state.accounts = await api("/api/accounts");
 }
 
+async function loadOperatorWechats() {
+  state.operatorWechats = await api("/api/operator-wechats");
+}
+
 async function loadTasks() {
   state.tasks = await api("/api/tasks");
 }
@@ -1707,7 +1983,10 @@ async function loadViewData(view, { force = false } = {}) {
     renderPlatforms();
   } else if (view === "accounts") {
     await loadPlatforms();
+    await loadOperatorWechats();
     await loadAccounts();
+    renderOperatorWechatPicker();
+    updateAccountPhoneHint();
     renderAccounts();
   } else if (view === "settings") {
     await loadPlatforms();
@@ -1721,6 +2000,10 @@ async function loadViewData(view, { force = false } = {}) {
     await loadTasks();
     renderTaskSelects();
     renderTasks();
+  } else if (view === "terminal-execution") {
+    state.terminalExecution = await api("/api/terminal-execution/state");
+    renderTerminalExecution();
+    startTerminalPolling();
   } else if (view === "stats") {
     await loadAccounts();
     state.summary = await api("/api/summary");
@@ -1896,6 +2179,31 @@ function makeAccountKey(displayName, suffix) {
   return `gasgx-${slug || "account"}-${seq}`;
 }
 
+function accountPhone(account) {
+  const match = String(account?.notes || "").match(/账号手机号：(\d{11})/);
+  return match ? match[1] : "";
+}
+
+function updateAccountPhoneHint() {
+  const input = document.querySelector('#account-form input[name="phone"]');
+  const hint = document.querySelector("#account-phone-hint");
+  if (!input || !hint) return;
+  const phone = input.value.trim();
+  if (!/^\d{11}$/.test(phone)) {
+    hint.innerHTML = "";
+    hint.classList.remove("warning");
+    return;
+  }
+  const matches = state.accounts.filter((account) => accountPhone(account) === phone);
+  if (!matches.length) {
+    hint.innerHTML = "";
+    hint.classList.remove("warning");
+    return;
+  }
+  hint.innerHTML = `<svg class="account-phone-hint-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.7 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><span>该手机号已用于 ${matches.map((account) => `#${account.id} ${account.display_name}`).join("、")}，仍可继续创建。</span>`;
+  hint.classList.add("warning");
+}
+
 function activateView(view, updateHash = true) {
   const button = document.querySelector(`.nav-btn[data-view="${view}"]`);
   const section = document.querySelector(`#${view}`);
@@ -1926,7 +2234,7 @@ document.querySelectorAll(".nav-btn").forEach((button) => {
   button.addEventListener("click", () => activateView(button.dataset.view));
 });
 
-document.querySelector("#refresh").addEventListener("click", async (event) => {
+document.querySelector("#refresh")?.addEventListener("click", async (event) => {
   const restoreButton = setButtonLoading(event.currentTarget, "刷新中");
   try {
     state.aiRobotConfigs = await api("/api/ai-robots/configs");
@@ -1946,6 +2254,12 @@ document.querySelector("#account-form").addEventListener("submit", async (event)
   const accountName = String(data.account_name || "").trim();
   const operatorWechat = String(data.operator_wechat || "").trim();
   const phone = String(data.phone || "").trim();
+  updateAccountPhoneHint();
+  if (!operatorWechat || operatorWechat === "__new__") {
+    showTaskState("请先在下拉中新增运营微信号", "status-unsupported");
+    restoreButton();
+    return;
+  }
   if (!/^\d{11}$/.test(phone)) {
     const phoneInput = event.target.elements.phone;
     phoneInput?.setCustomValidity("账号手机号需为 11 位数字");
@@ -1964,12 +2278,46 @@ document.querySelector("#account-form").addEventListener("submit", async (event)
   delete data.phone;
   data.platforms = PLATFORM_ORDER;
   try {
-    await api("/api/accounts", { method: "POST", body: JSON.stringify(data) });
+    const created = await api("/api/accounts", { method: "POST", body: JSON.stringify(data) });
     event.target.reset();
+    setOperatorWechatValue("aamecc");
     await refresh();
+    showAccountCreatedToast(created);
   } finally {
     restoreButton();
   }
+});
+
+document.querySelector("#operator-wechat-select")?.addEventListener("click", (event) => {
+  const picker = event.currentTarget;
+  const option = event.target.closest("[data-operator-wechat-option]");
+  if (option) {
+    setOperatorWechatValue(option.dataset.operatorWechatOption);
+    return;
+  }
+  if (event.target.closest("#operator-wechat-add")) {
+    addOperatorWechatOptionFromMenu();
+    return;
+  }
+  if (event.target.closest(".inline-select-trigger")) {
+    const menu = picker.querySelector(".inline-select-menu");
+    const expanded = menu?.classList.toggle("hidden") === false;
+    picker.querySelector(".inline-select-trigger")?.setAttribute("aria-expanded", String(expanded));
+    if (expanded) picker.querySelector("#operator-wechat-add-input")?.focus();
+  }
+});
+document.querySelector("#operator-wechat-add-input")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addOperatorWechatOptionFromMenu();
+  }
+});
+document.querySelector('#account-form input[name="phone"]')?.addEventListener("input", updateAccountPhoneHint);
+document.addEventListener("click", (event) => {
+  const picker = document.querySelector("#operator-wechat-select");
+  if (!picker || picker.contains(event.target)) return;
+  picker.querySelector(".inline-select-menu")?.classList.add("hidden");
+  picker.querySelector(".inline-select-trigger")?.setAttribute("aria-expanded", "false");
 });
 
 document.querySelector("#task-form").addEventListener("submit", async (event) => {
@@ -1988,6 +2336,64 @@ document.querySelector("#task-form").addEventListener("submit", async (event) =>
   } finally {
     restoreButton();
   }
+});
+
+document.querySelector("#tasks-list").addEventListener("change", (event) => {
+  const filter = event.target.closest("[data-task-filter]");
+  if (filter) {
+    taskFilters[filter.dataset.taskFilter] = filter.value;
+    renderTasks();
+    return;
+  }
+  const selectAll = event.target.closest("[data-task-select-all]");
+  if (selectAll) {
+    const ids = filteredTasks().map((task) => Number(task.id));
+    ids.forEach((id) => selectAll.checked ? taskSelection.add(id) : taskSelection.delete(id));
+    renderTasks();
+    return;
+  }
+  const taskCheckbox = event.target.closest("[data-task-select]");
+  if (taskCheckbox) {
+    const id = Number(taskCheckbox.dataset.taskSelect);
+    if (taskCheckbox.checked) taskSelection.add(id);
+    else taskSelection.delete(id);
+    renderTasks();
+  }
+});
+
+document.querySelector("#terminal-config-list")?.addEventListener("change", (event) => {
+  const row = event.target.closest("[data-terminal-config-row]");
+  if (!row) return;
+  const enabled = Boolean(row.querySelector("[data-terminal-enabled]")?.checked);
+  row.classList.toggle("disabled", !enabled);
+  row.querySelector("[data-terminal-operator]")?.toggleAttribute("disabled", !enabled);
+  row.querySelectorAll("[data-terminal-color]").forEach((button) => button.toggleAttribute("disabled", !enabled));
+});
+
+document.querySelector("#terminal-config-list")?.addEventListener("click", (event) => {
+  const swatch = event.target.closest("[data-terminal-color]");
+  if (!swatch || swatch.disabled) return;
+  const row = swatch.closest("[data-terminal-config-row]");
+  row?.querySelectorAll("[data-terminal-color]").forEach((button) => button.classList.remove("active"));
+  swatch.classList.add("active");
+});
+
+document.querySelector("#terminal-start-system")?.addEventListener("click", async (event) => {
+  const restoreButton = setButtonLoading(event.currentTarget, "初始化中");
+  try {
+    state.terminalExecution = await api("/api/terminal-execution/start", {
+      method: "POST",
+      body: JSON.stringify({ windows: readTerminalConfigRows() }),
+    });
+    renderTerminalExecution();
+    startTerminalPolling();
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("#terminal-edit-config")?.addEventListener("click", () => {
+  document.querySelector("#terminal-init-modal")?.classList.remove("hidden");
 });
 
 document.querySelector("#distribution-settings-form").addEventListener("submit", async (event) => {
@@ -2260,7 +2666,58 @@ document.addEventListener("click", async (event) => {
     const restoreButton = setButtonLoading(deleteButton, "删除中");
     try {
       await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+      taskSelection.delete(Number(taskId));
       await refresh();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
+  const bulkStatusButton = event.target.closest("[data-task-bulk-status]");
+  if (bulkStatusButton) {
+    const ids = Array.from(taskSelection);
+    if (!ids.length) return;
+    const status = bulkStatusButton.dataset.taskBulkStatus;
+    const restoreButton = setButtonLoading(bulkStatusButton, "调整中");
+    try {
+      await api("/api/tasks/bulk-status", {
+        method: "POST",
+        body: JSON.stringify({ ids, status }),
+      });
+      taskSelection.clear();
+      await refresh();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
+  const bulkDeleteButton = event.target.closest("[data-task-bulk-delete]");
+  if (bulkDeleteButton) {
+    const ids = Array.from(taskSelection);
+    if (!ids.length) return;
+    if (!window.confirm(`确认删除已选 ${ids.length} 条队列任务？`)) return;
+    const restoreButton = setButtonLoading(bulkDeleteButton, "删除中");
+    try {
+      await api("/api/tasks/bulk-delete", {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      });
+      taskSelection.clear();
+      await refresh();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
+  const terminalManualButton = event.target.closest("[data-terminal-manual]");
+  if (terminalManualButton) {
+    const restoreButton = setButtonLoading(terminalManualButton, "触发中");
+    try {
+      state.terminalExecution = await api(`/api/terminal-execution/windows/${terminalManualButton.dataset.terminalManual}/manual-publish`, { method: "POST" });
+      renderTerminalExecution();
     } finally {
       restoreButton();
     }

@@ -7,7 +7,7 @@ from typing import Any
 
 from Collection.cybercar.cybercar_video_capture_and_publishing_module import main
 
-DEFAULT_SYNC_DIR = Path(r"D:\code\Runtime\telegram_login_sync")
+DEFAULT_SYNC_DIR = Path(__file__).resolve().parents[2] / "runtime" / "telegram_login_sync"
 
 
 def _normalize_text(value: Any) -> str:

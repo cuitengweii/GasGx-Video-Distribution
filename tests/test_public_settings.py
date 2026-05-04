@@ -162,6 +162,23 @@ def test_distribution_settings_api(monkeypatch, tmp_path: Path) -> None:
     assert client.get("/api/settings/distribution").json()["common"]["upload_timeout"] == 180
 
 
+def test_operator_wechats_api_persists_to_distribution_settings(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    added = client.post("/api/operator-wechats", json={"operator_wechat": "aamebb"})
+
+    assert added.status_code == 200
+    assert added.json()["items"] == ["aamecc", "aalbcc", "aamebb"]
+    assert client.get("/api/operator-wechats").json() == ["aamecc", "aalbcc", "aamebb"]
+    assert load_distribution_settings()["common"]["operator_wechats"] == ["aamecc", "aalbcc", "aamebb"]
+
+    duplicate = client.post("/api/operator-wechats", json={"operator_wechat": "aamebb"})
+
+    assert duplicate.status_code == 200
+    assert duplicate.json()["items"] == ["aamecc", "aalbcc", "aamebb"]
+
+
 def test_open_material_dir_api(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     opened = []
@@ -262,3 +279,34 @@ def test_delete_task_api(monkeypatch, tmp_path: Path) -> None:
 
     assert result.status_code == 200
     assert all(item["id"] != task["id"] for item in client.get("/api/tasks").json())
+
+
+def test_bulk_task_status_and_delete_api(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    account = client.post(
+        "/api/accounts",
+        json={"account_key": "a-01", "display_name": "A", "platforms": ["wechat"]},
+    ).json()
+    first = client.post(
+        "/api/tasks",
+        json={"account_id": account["id"], "platform": "wechat", "task_type": "publish"},
+    ).json()
+    second = client.post(
+        "/api/tasks",
+        json={"account_id": account["id"], "platform": "wechat", "task_type": "draft"},
+    ).json()
+
+    paused = client.post("/api/tasks/bulk-status", json={"ids": [first["id"], second["id"]], "status": "paused"})
+
+    assert paused.status_code == 200
+    assert paused.json()["updated"] == 2
+    tasks = client.get("/api/tasks").json()
+    assert {item["id"]: item["status"] for item in tasks}[first["id"]] == "paused"
+    assert {item["id"]: item["status"] for item in tasks}[second["id"]] == "paused"
+
+    deleted = client.post("/api/tasks/bulk-delete", json={"ids": [first["id"], second["id"]]})
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == 2
+    assert client.get("/api/tasks").json() == []

@@ -46,6 +46,7 @@
       <button class="nav-btn" data-view="accounts" data-permission="accounts">账号矩阵</button>
       <button class="nav-btn" data-view="settings" data-permission="settings">公共设置</button>
       <button class="nav-btn" data-view="tasks" data-permission="tasks">任务中心</button>
+      <button class="nav-btn" data-view="terminal-execution" data-permission="terminal-execution">终端执行</button>
       <button class="nav-btn" data-view="stats" data-permission="stats">数据统计</button>
       <button class="nav-btn" data-view="ai-robot" data-permission="ai-robot">AI机器人</button>
       <button class="nav-btn" data-view="video-matrix" data-permission="video-matrix">视频生成</button>
@@ -93,13 +94,6 @@
         </div>
       </div>
     </header>
-    <div class="page-toolbar">
-      <button id="refresh" class="btn secondary">刷新当前数据</button>
-      <button class="btn secondary" type="button" data-quick-view="notifications" data-permission="notifications">查看提醒</button>
-      <button class="btn secondary" type="button" data-quick-view="tasks" data-permission="tasks">任务队列</button>
-      <button class="btn primary" type="button" data-quick-view="video-matrix" data-permission="video-matrix">生成视频</button>
-    </div>
-
     <section id="overview" class="view active">
       <div id="summary" class="metric-grid"></div>
       <div class="operator-layout">
@@ -161,13 +155,22 @@
             <label>名称<input name="account_name" required placeholder="例如：小白"></label>
           </div>
           <label>绑定运营微信
-            <select name="operator_wechat" required>
-              <option value="aamecc">aamecc</option>
-              <option value="aalbcc">aalbcc</option>
-            </select>
+            <input type="hidden" name="operator_wechat" id="operator-wechat-value" value="aamecc">
+            <div class="inline-select" id="operator-wechat-select" data-value="aamecc">
+              <button class="inline-select-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">aamecc</button>
+              <div class="inline-select-menu hidden" role="listbox">
+                <button class="inline-select-option" type="button" data-operator-wechat-option="aamecc">aamecc</button>
+                <button class="inline-select-option" type="button" data-operator-wechat-option="aalbcc">aalbcc</button>
+                <div class="inline-select-add">
+                  <input id="operator-wechat-add-input" placeholder="新增运营微信">
+                  <button class="btn secondary btn-sm" id="operator-wechat-add" type="button">添加</button>
+                </div>
+              </div>
+            </div>
           </label>
           <label>账号手机号
             <input name="phone" inputmode="numeric" pattern="\d{11}" maxlength="11" required placeholder="请输入 11 位手机号" oninvalid="this.setCustomValidity('账号手机号需为 11 位数字')" oninput="this.setCustomValidity('')">
+            <span class="account-phone-hint" id="account-phone-hint" aria-live="polite"></span>
           </label>
           <label>账号状态
             <select name="status">
@@ -470,6 +473,7 @@
           <label>任务类型
             <select name="task_type">
               <option value="publish">自动发布</option>
+              <option value="draft" selected>保存草稿</option>
               <option value="comment">自动评论</option>
               <option value="message">自动私信</option>
               <option value="stats">数据统计</option>
@@ -483,6 +487,33 @@
           </div>
           <div id="tasks-list" class="task-list"></div>
         </div>
+      </div>
+    </section>
+
+    <section id="terminal-execution" class="view">
+      <div class="terminal-console">
+        <div class="terminal-init-modal" id="terminal-init-modal">
+          <div class="terminal-glass terminal-modal-content">
+            <div class="terminal-modal-header">
+              <h2>终端前置配置区</h2>
+              <p>默认5个执行窗口，请为每个窗口指派运营微信及对应的物理防呆色标</p>
+            </div>
+            <div class="terminal-config-list" id="terminal-config-list"></div>
+            <button class="terminal-btn-primary" type="button" id="terminal-start-system">确认并初始化执行矩阵</button>
+          </div>
+        </div>
+
+        <header class="terminal-global-header terminal-glass">
+          <div class="terminal-header-title">
+            <h1>MATRIX <span>DISTRIBUTION</span></h1>
+          </div>
+          <div class="terminal-global-stats">
+            <div class="terminal-stat-item"><span>总进度:</span> <strong id="terminal-global-progress">0/0</strong></div>
+            <div class="terminal-stat-item"><span>运行窗口:</span> <strong id="terminal-active-windows">0</strong></div>
+          </div>
+          <button class="terminal-btn-primary" type="button" id="terminal-edit-config">修改配置</button>
+        </header>
+        <div class="terminal-workspace" id="terminal-matrix-workspace"></div>
       </div>
     </section>
 

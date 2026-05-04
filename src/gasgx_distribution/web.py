@@ -38,6 +38,26 @@ class TaskPayload(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskBulkPayload(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+
+
+class TaskStatusPayload(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+    status: str
+
+
+class TerminalWindowPayload(BaseModel):
+    id: int
+    enabled: bool = True
+    operator_wechat: str = ""
+    color: str = ""
+
+
+class TerminalStartPayload(BaseModel):
+    windows: list[TerminalWindowPayload] = Field(default_factory=list)
+
+
 class WechatPublishSettingsPayload(BaseModel):
     material_dir: str = ""
     publish_mode: str = "publish"
@@ -116,6 +136,10 @@ class OperatorUserRolePayload(BaseModel):
 
 class OperatorUserPasswordPayload(BaseModel):
     password: str
+
+
+class OperatorWechatPayload(BaseModel):
+    operator_wechat: str
 
 
 class SystemInitializePayload(BaseModel):
@@ -341,6 +365,17 @@ def create_app() -> FastAPI:
     def update_distribution_settings(payload: DistributionSettingsPayload) -> dict[str, Any]:
         return service.save_distribution_settings_db(_model_payload(payload))
 
+    @app.get("/api/operator-wechats")
+    def operator_wechats() -> list[str]:
+        return service.list_operator_wechats()
+
+    @app.post("/api/operator-wechats")
+    def add_operator_wechat(payload: OperatorWechatPayload) -> dict[str, Any]:
+        try:
+            return service.add_operator_wechat(payload.operator_wechat)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/settings/material-dir/open")
     def open_material_dir(payload: OpenMaterialDirPayload) -> dict[str, Any]:
         try:
@@ -448,6 +483,28 @@ def create_app() -> FastAPI:
     def login_qr_batches(limit: int = Query(default=20)) -> list[dict[str, Any]]:
         return service.list_login_qr_batches(limit=limit)
 
+    @app.get("/api/terminal-execution/state")
+    def terminal_execution_state() -> dict[str, Any]:
+        return service.terminal_execution_state()
+
+    @app.post("/api/terminal-execution/start")
+    def terminal_execution_start(payload: TerminalStartPayload) -> dict[str, Any]:
+        try:
+            return service.start_terminal_execution(_model_payload(payload))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/terminal-execution/poll")
+    def terminal_execution_poll() -> dict[str, Any]:
+        return service.poll_terminal_execution()
+
+    @app.post("/api/terminal-execution/windows/{window_id}/manual-publish")
+    def terminal_execution_manual_publish(window_id: int) -> dict[str, Any]:
+        try:
+            return service.manual_terminal_publish(window_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/notification-routes")
     def notification_routes() -> list[dict[str, Any]]:
         return service.list_notification_routes()
@@ -507,6 +564,18 @@ def create_app() -> FastAPI:
     @app.get("/api/tasks")
     def tasks() -> list[dict[str, Any]]:
         return service.list_tasks()
+
+    @app.post("/api/tasks/bulk-delete")
+    def bulk_delete_tasks(payload: TaskBulkPayload) -> dict[str, Any]:
+        return {"ok": True, "deleted": service.delete_tasks(payload.ids)}
+
+    @app.post("/api/tasks/bulk-status")
+    def bulk_update_task_status(payload: TaskStatusPayload) -> dict[str, Any]:
+        try:
+            updated = service.update_tasks_status(payload.ids, payload.status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "updated": updated, "status": payload.status}
 
     @app.get("/api/tasks/{task_id}")
     def task(task_id: int) -> dict[str, Any]:

@@ -113,9 +113,7 @@ def _default_workspace() -> str:
             return str(get_paths().runtime_root)
         except Exception:
             pass
-    if os.name == "nt":
-        return r"D:\code\Runtime\CyberCar_Workspace"
-    return str(Path.home() / "CyberCar_Workspace")
+    return str(Path(__file__).resolve().parents[2] / "runtime")
 
 
 DEFAULT_WORKSPACE = _default_workspace()
@@ -486,9 +484,7 @@ def _default_chrome_user_data_dir() -> str:
             return str(get_paths().default_profile_dir)
         except Exception:
             pass
-    if os.name == "nt":
-        return r"D:\code\Runtime\ChromeDebugProfile_CyberCar"
-    return str(Path.home() / "CyberCarChromeDebug_CyberCar")
+    return str(Path(__file__).resolve().parents[2] / "profiles" / "default")
 
 
 DEFAULT_CHROME_USER_DATA_DIR = _default_chrome_user_data_dir()
