@@ -24,6 +24,9 @@ def test_task_center_renders_account_name_in_task_rows() -> None:
     assert '["message", "自动私信"]' in app
     assert '["stats", "数据统计"]' in app
     assert "data-task-filter=\"account\"" in app
+    assert "function taskAccountFilterOptions()" in app
+    assert "${taskAccountFilterOptions()}" in app
+    assert "taskFilterOptions(state.tasks, (task) => task.account_id, taskAccountLabel)" not in app
     assert "data-task-filter=\"platform\"" in app
     assert "data-task-filter=\"status\"" in app
     assert "data-task-filter=\"taskType\"" in app

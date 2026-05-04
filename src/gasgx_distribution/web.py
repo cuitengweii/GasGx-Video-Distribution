@@ -494,6 +494,13 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/terminal-execution/start-login")
+    def terminal_execution_start_login() -> dict[str, Any]:
+        try:
+            return service.start_terminal_login()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/terminal-execution/poll")
     def terminal_execution_poll() -> dict[str, Any]:
         return service.poll_terminal_execution()
@@ -508,6 +515,10 @@ def create_app() -> FastAPI:
     @app.get("/api/notification-routes")
     def notification_routes() -> list[dict[str, Any]]:
         return service.list_notification_routes()
+
+    @app.get("/api/notification-events")
+    def notification_events() -> list[dict[str, Any]]:
+        return service.list_notification_event_definitions()
 
     @app.post("/api/notification-routes/{event_type}/{platform}")
     def save_notification_route(event_type: str, platform: str, payload: dict[str, Any]) -> dict[str, Any]:

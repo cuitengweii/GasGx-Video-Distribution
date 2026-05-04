@@ -3264,6 +3264,12 @@ body.video-matrix-active #video-matrix {
   font-size: 14px;
 }
 
+.terminal-header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
 .terminal-stat-item span {
   color: var(--terminal-text-sub);
   margin-right: 8px;

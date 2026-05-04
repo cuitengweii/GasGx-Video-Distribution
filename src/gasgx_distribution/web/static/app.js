@@ -67,6 +67,7 @@ const state = {
   aiRobotConfigs: [],
   aiRobotMessages: [],
   notificationRoutes: [],
+  notificationEvents: [],
   loginQrBatches: [],
   terminalExecution: { colors: [], operators: [], windows: [], summary: {} },
   aiRobotEditingPlatform: "",
@@ -90,6 +91,7 @@ const TASK_TYPE_OPTIONS = [
 const loadedViews = new Set();
 let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "overview";
 let terminalPollTimer = null;
+let terminalCountdownTimer = null;
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
@@ -1172,6 +1174,23 @@ function taskFilterOptions(items, valueGetter, labelGetter) {
   }).join("");
 }
 
+function taskAccountFilterOptions() {
+  const seen = new Set();
+  const accountOptions = state.accounts.map((account) => {
+    const value = String(account.id || "");
+    if (!value || seen.has(value)) return "";
+    seen.add(value);
+    return `<option value="${value}">#${account.id} ${account.display_name || account.account_key || "Unnamed Account"}</option>`;
+  }).join("");
+  const taskOnlyOptions = state.tasks.map((task) => {
+    const value = String(task.account_id || "");
+    if (!value || seen.has(value)) return "";
+    seen.add(value);
+    return `<option value="${value}">${taskAccountLabel(task)}</option>`;
+  }).join("");
+  return accountOptions + taskOnlyOptions;
+}
+
 function renderTasks() {
   const list = filteredTasks();
   const visibleIds = list.map((task) => Number(task.id));
@@ -1182,7 +1201,7 @@ function renderTasks() {
   document.querySelector("#tasks-list").innerHTML = `
     <div class="task-toolbar">
       <div class="task-filter-grid">
-        <label>账号<select data-task-filter="account"><option value="">全部账号</option>${taskFilterOptions(state.tasks, (task) => task.account_id, taskAccountLabel)}</select></label>
+        <label>账号<select data-task-filter="account"><option value="">全部账号</option>${taskAccountFilterOptions()}</select></label>
         <label>平台<select data-task-filter="platform"><option value="">全部平台</option>${taskFilterOptions(state.tasks, (task) => task.platform, (task) => platformLabel(task.platform))}</select></label>
         <label>状态<select data-task-filter="status"><option value="">全部状态</option>${taskFilterOptions(state.tasks, (task) => task.status, (task) => formatFriendlyMessage(task.status))}</select></label>
         <label>任务类型<select data-task-filter="taskType"><option value="">全部类型</option>${TASK_TYPE_OPTIONS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
@@ -1257,14 +1276,28 @@ function renderTerminalConfig() {
 }
 
 function terminalPlaceholderIcon() {
-  return `<svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#0f0f0f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.3"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M8 12h8"></path></svg>`;
+  return `<svg width="112" height="112" viewBox="0 0 112 112" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="等待开始登录">
+    <rect x="22" y="18" width="68" height="76" rx="12" fill="var(--terminal-glass-bg)" stroke="var(--term-color)" stroke-opacity=".7" stroke-width="2"/>
+    <rect x="34" y="30" width="16" height="16" rx="3" stroke="var(--term-color)" stroke-width="2"/>
+    <rect x="62" y="30" width="16" height="16" rx="3" stroke="var(--term-color)" stroke-width="2"/>
+    <rect x="34" y="58" width="16" height="16" rx="3" stroke="var(--term-color)" stroke-width="2"/>
+    <path d="M63 58h15v15M63 74h6M78 82h-8M54 84h-8" stroke="var(--term-color)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M38 90h36" stroke="var(--terminal-text-sub)" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="56" cy="56" r="44" stroke="var(--term-color)" stroke-opacity=".18" stroke-width="2"/>
+  </svg>`;
 }
 
 function renderTerminalExecution() {
   renderTerminalConfig();
   const windows = state.terminalExecution.windows || [];
   const summary = state.terminalExecution.summary || {};
+  const loginStarted = Boolean(state.terminalExecution.login_started);
   document.querySelector("#terminal-init-modal")?.classList.toggle("hidden", Boolean(state.terminalExecution.initialized));
+  const startLoginButton = document.querySelector("#terminal-start-login");
+  if (startLoginButton) {
+    startLoginButton.disabled = !state.terminalExecution.initialized || loginStarted;
+    startLoginButton.textContent = loginStarted ? "登录中" : "开始登录";
+  }
   const progress = document.querySelector("#terminal-global-progress");
   if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
   const active = document.querySelector("#terminal-active-windows");
@@ -1278,7 +1311,8 @@ function renderTerminalExecution() {
     const colorDim = `${color}33`;
     const successCount = accounts.filter((account) => account.status === "success").length;
     const current = accounts[currentIndex] || {};
-    const manualWait = Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000));
+    const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
+    const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录 [${current.display_name || "-"}]`;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
         <div class="terminal-color-anchor"></div>
@@ -1290,8 +1324,8 @@ function renderTerminalExecution() {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
-          <div style="font-size:12px;color:var(--terminal-text-sub);">正在等待 [${current.display_name || "-"}] 扫码确认</div>
+          <div class="terminal-qr-placeholder">${loginStarted && window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
           ${accounts.map((account, index) => `
@@ -1309,11 +1343,23 @@ function renderTerminalExecution() {
         </div>
         <div class="terminal-col-footer">
           <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
-          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${manualWait > 0 ? "disabled" : ""}>${manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布"}</button>
+          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${!loginStarted || manualWait > 0 ? "disabled" : ""}>${!loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布")}</button>
         </div>
       </div>
     `;
   }).join("");
+}
+
+function updateTerminalManualCountdowns() {
+  const windows = state.terminalExecution.windows || [];
+  const loginStarted = Boolean(state.terminalExecution.login_started);
+  const windowById = new Map(windows.map((window) => [String(window.id), window]));
+  document.querySelectorAll("[data-terminal-manual]").forEach((button) => {
+    const window = windowById.get(String(button.dataset.terminalManual || ""));
+    const manualWait = loginStarted ? Math.max(0, Number(window?.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
+    button.disabled = !loginStarted || manualWait > 0;
+    button.textContent = !loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布");
+  });
 }
 
 function readTerminalConfigRows() {
@@ -1335,6 +1381,11 @@ function startTerminalPolling() {
     state.terminalExecution = await api("/api/terminal-execution/poll", { method: "POST" });
     renderTerminalExecution();
   }, 10000);
+  if (terminalCountdownTimer) clearInterval(terminalCountdownTimer);
+  terminalCountdownTimer = setInterval(() => {
+    if (currentView !== "terminal-execution") return;
+    updateTerminalManualCountdowns();
+  }, 1000);
 }
 
 function renderStats() {
@@ -1556,23 +1607,32 @@ function renderOperationNotifications() {
   const routeNode = document.querySelector("#operation-notice-routes");
   const batchNode = document.querySelector("#login-qr-batches");
   if (routeNode) {
-    const routes = (state.notificationRoutes || []).filter((item) => item.event_type === "wechat_login_qr");
-    const byPlatform = Object.fromEntries(routes.map((item) => [item.platform, item]));
-    const routeButtons = ["telegram", "dingtalk", "wecom"].map((platform) => {
-      const enabled = Boolean(byPlatform[platform]?.enabled);
-      return `<button class="btn btn-sm ${enabled ? "primary" : "ghost"}" data-notice-route="wechat_login_qr" data-notice-platform="${platform}" data-notice-enabled="${enabled ? "0" : "1"}">${aiPlatformLabel(platform)} ${enabled ? "开启" : "关闭"}</button>`;
+    const routes = state.notificationRoutes || [];
+    const eventTypes = Array.from(new Set(routes.map((item) => item.event_type)));
+    routeNode.innerHTML = eventTypes.map((eventType) => {
+      const eventRoutes = routes.filter((item) => item.event_type === eventType);
+      const first = eventRoutes[0] || {};
+      const byPlatform = Object.fromEntries(eventRoutes.map((item) => [item.platform, item]));
+      const routeButtons = ["telegram", "dingtalk", "wecom"].map((platform) => {
+        const enabled = Boolean(byPlatform[platform]?.enabled);
+        return `<button class="btn btn-sm ${enabled ? "primary" : "ghost"}" data-notice-route="${eventType}" data-notice-platform="${platform}" data-notice-enabled="${enabled ? "0" : "1"}">${aiPlatformLabel(platform)} ${enabled ? "开启" : "关闭"}</button>`;
+      }).join("");
+      const severity = first.default_severity || "info";
+      const cardClass = severity === "critical" || severity === "blocking" ? "danger" : severity === "warning" || severity === "error" ? "warning" : "info";
+      const subtypes = (first.subtypes || []).join(" / ");
+      return `
+        <article class="notification-card ${cardClass}">
+          <span class="notification-dot"></span>
+          <div>
+            <strong>${first.label || eventType}</strong>
+            <p>${first.source || ""}</p>
+            <p>${eventType}${subtypes ? ` · ${subtypes}` : ""}</p>
+            <div class="inline-actions">${routeButtons}</div>
+          </div>
+          <time>${severity}</time>
+        </article>
+      `;
     }).join("");
-    routeNode.innerHTML = `
-      <article class="notification-card info">
-        <span class="notification-dot"></span>
-        <div>
-          <strong>运营通知开关：视频号登录二维码</strong>
-          <p>${routes.map((item) => `${aiPlatformLabel(item.platform)} ${item.enabled ? "开启" : "关闭"}`).join(" / ") || "未配置"}</p>
-          <div class="inline-actions">${routeButtons}</div>
-        </div>
-        <time>实时</time>
-      </article>
-    `;
   }
   if (batchNode) {
     const batches = state.loginQrBatches || [];
@@ -2015,6 +2075,7 @@ async function loadViewData(view, { force = false } = {}) {
     state.aiRobotMessages = await api("/api/ai-robots/messages");
     renderAiRobot();
   } else if (view === "notifications") {
+    state.notificationEvents = await api("/api/notification-events");
     state.notificationRoutes = await api("/api/notification-routes");
     state.loginQrBatches = await api("/api/login-qr-batches");
     renderOperationNotifications();
@@ -2379,12 +2440,22 @@ document.querySelector("#terminal-config-list")?.addEventListener("click", (even
 });
 
 document.querySelector("#terminal-start-system")?.addEventListener("click", async (event) => {
-  const restoreButton = setButtonLoading(event.currentTarget, "初始化中");
+  const restoreButton = setButtonLoading(event.currentTarget, "进入中");
   try {
     state.terminalExecution = await api("/api/terminal-execution/start", {
       method: "POST",
       body: JSON.stringify({ windows: readTerminalConfigRows() }),
     });
+    renderTerminalExecution();
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("#terminal-start-login")?.addEventListener("click", async (event) => {
+  const restoreButton = setButtonLoading(event.currentTarget, "启动中");
+  try {
+    state.terminalExecution = await api("/api/terminal-execution/start-login", { method: "POST" });
     renderTerminalExecution();
     startTerminalPolling();
   } finally {

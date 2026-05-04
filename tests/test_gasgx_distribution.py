@@ -243,6 +243,60 @@ def test_login_qr_batch_deduplicates_and_does_not_require_configured_robot(monke
         assert conn.execute("SELECT COUNT(*) AS c FROM login_qr_items").fetchone()["c"] == 1
 
 
+def test_notification_events_cover_ai_robot_route_matrix(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    events = service.list_notification_event_definitions()
+    event_types = {item["event_type"] for item in events}
+
+    assert {
+        "wechat_login_qr",
+        "login_status",
+        "publish_result",
+        "video_generation",
+        "material_issue",
+        "system_error",
+        "ops_summary",
+        "action_required",
+    }.issubset(event_types)
+    assert all(item["default_center"] is True for item in events)
+    assert all(item["routeable"] is True for item in events)
+
+    routes = service.list_notification_routes()
+    assert len(routes) == len(event_types) * 3
+    material_routes = [item for item in routes if item["event_type"] == "material_issue"]
+    assert {item["platform"] for item in material_routes} == {"telegram", "dingtalk", "wecom"}
+    assert all(item["default_severity"] == "warning" for item in material_routes)
+
+
+def test_route_operation_notification_uses_event_metadata(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    result = service.route_operation_notification(
+        "video_generation",
+        {"subtype": "completed", "title": "视频生成完成", "run_id": "run-1"},
+        notify=False,
+    )
+
+    assert result["event_type"] == "video_generation"
+    assert result["subtype"] == "completed"
+    assert result["severity"] == "warning"
+    assert result["notification_center"] is True
+    assert result["routeable"] is True
+    assert result["notification_platforms"] == []
+
+
+def test_notification_events_api_exposes_route_metadata(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    response = client.get("/api/notification-events")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(item["event_type"] == "ops_summary" and "daily_sent" in item["subtypes"] for item in payload)
+
+
 def test_accounts_include_matrix_publish_success_count(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     first = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})

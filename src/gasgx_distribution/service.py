@@ -35,7 +35,82 @@ from .video_matrix.ui_state import load_ui_state
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 AI_ROBOT_PLATFORMS = {"wecom", "dingtalk", "lark", "telegram", "whatsapp"}
 AI_ROBOT_RETRY_LIMIT = 3
-NOTIFICATION_EVENT_TYPES = {"wechat_login_qr", "publish_result", "system_error"}
+NOTIFICATION_EVENT_DEFINITIONS = [
+    {
+        "event_type": "wechat_login_qr",
+        "label": "登录二维码",
+        "default_severity": "blocking",
+        "default_center": True,
+        "routeable": True,
+        "source": "登录巡检或发布前置检查生成/更新扫码二维码时触发",
+        "subtypes": ["qr_generated", "qr_updated", "login_required"],
+    },
+    {
+        "event_type": "login_status",
+        "label": "登录状态",
+        "default_severity": "blocking",
+        "default_center": True,
+        "routeable": True,
+        "source": "登录巡检、发布前置检查或终端执行发现登录失效/即将失效/登录失败时触发",
+        "subtypes": ["expired", "expiring_soon", "failed", "inspection_result"],
+    },
+    {
+        "event_type": "publish_result",
+        "label": "发布结果",
+        "default_severity": "error",
+        "default_center": True,
+        "routeable": True,
+        "source": "发布、上传、草稿保存、仅上传不发布、任务终态变化时触发",
+        "subtypes": ["published", "failed", "upload_failed", "draft_saved", "uploaded_only", "queued", "running", "cancelled"],
+    },
+    {
+        "event_type": "video_generation",
+        "label": "视频生成",
+        "default_severity": "warning",
+        "default_center": True,
+        "routeable": True,
+        "source": "视频矩阵生成流水线完成、失败或异常中断时触发",
+        "subtypes": ["completed", "failed", "interrupted"],
+    },
+    {
+        "event_type": "material_issue",
+        "label": "素材问题",
+        "default_severity": "warning",
+        "default_center": True,
+        "routeable": True,
+        "source": "素材盘点、生成前校验或发布前校验发现素材不足/分类不完整/不可用素材跳过时触发",
+        "subtypes": ["insufficient", "category_incomplete", "skipped_unusable"],
+    },
+    {
+        "event_type": "system_error",
+        "label": "系统异常",
+        "default_severity": "critical",
+        "default_center": True,
+        "routeable": True,
+        "source": "关键依赖不可用、调度/作业失败、存储或配置异常被捕获时触发",
+        "subtypes": ["dependency_unavailable", "scheduler_failed", "job_failed", "storage_error", "config_error"],
+    },
+    {
+        "event_type": "ops_summary",
+        "label": "运营汇总",
+        "default_severity": "info",
+        "default_center": True,
+        "routeable": True,
+        "source": "日报、运营摘要生成后推送完成或推送失败时触发",
+        "subtypes": ["daily_sent", "daily_failed", "summary_sent", "summary_failed"],
+    },
+    {
+        "event_type": "action_required",
+        "label": "人工处理",
+        "default_severity": "warning",
+        "default_center": True,
+        "routeable": True,
+        "source": "流程需要人工确认、补充配置或处理队列积压时触发",
+        "subtypes": ["confirmation_required", "configuration_required", "queue_backlog"],
+    },
+]
+NOTIFICATION_EVENT_TYPES = {item["event_type"] for item in NOTIFICATION_EVENT_DEFINITIONS}
+NOTIFICATION_EVENT_META = {item["event_type"]: item for item in NOTIFICATION_EVENT_DEFINITIONS}
 NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
@@ -951,7 +1026,7 @@ def save_notification_route(event_type: str, platform: str, enabled: bool) -> di
 
 def list_notification_routes() -> list[dict[str, Any]]:
     defaults = [
-        {"event_type": event, "platform": platform, "enabled": False}
+        {**NOTIFICATION_EVENT_META[event], "platform": platform, "enabled": False}
         for event in sorted(NOTIFICATION_EVENT_TYPES)
         for platform in sorted(NOTIFICATION_PLATFORMS)
     ]
@@ -982,6 +1057,60 @@ def _enabled_notification_platforms(event_type: str) -> list[str]:
         if bool(configs.get(str(item["platform"]), {}).get("enabled"))
         and bool(configs.get(str(item["platform"]), {}).get("webhook_url"))
     ]
+
+
+def list_notification_event_definitions() -> list[dict[str, Any]]:
+    return [dict(item) for item in NOTIFICATION_EVENT_DEFINITIONS]
+
+
+def _notification_text(event_type: str, payload: dict[str, Any]) -> str:
+    meta = NOTIFICATION_EVENT_META.get(event_type, {"label": event_type})
+    subtype = str(payload.get("subtype") or "").strip()
+    title = str(payload.get("title") or meta["label"]).strip()
+    summary = str(payload.get("summary") or payload.get("reason") or "").strip()
+    severity = str(payload.get("severity") or meta.get("default_severity") or "info").strip()
+    lines = [f"[{severity}] {title}"]
+    if subtype:
+        lines.append(f"类型: {event_type}/{subtype}")
+    else:
+        lines.append(f"类型: {event_type}")
+    if summary:
+        lines.append(f"摘要: {summary}")
+    for key in ("account", "platform", "task_id", "run_id", "action"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            lines.append(f"{key}: {value}")
+    return "\n".join(lines)
+
+
+def route_operation_notification(event_type: str, payload: dict[str, Any] | None = None, *, notify: bool = True) -> dict[str, Any]:
+    event = str(event_type or "").strip()
+    if event not in NOTIFICATION_EVENT_TYPES:
+        raise ValueError("unsupported notification event_type")
+    message = dict(payload or {})
+    meta = NOTIFICATION_EVENT_META[event]
+    message.setdefault("message_type", event)
+    message.setdefault("severity", meta.get("default_severity") or "info")
+    message.setdefault("notification_center", bool(meta.get("default_center")))
+    message.setdefault("routeable", bool(meta.get("routeable")))
+    platforms = _enabled_notification_platforms(event) if notify and bool(meta.get("routeable")) else []
+    text = str(message.get("text") or "").strip() or _notification_text(event, message)
+    results: list[dict[str, Any]] = []
+    for platform in platforms:
+        try:
+            queued = enqueue_ai_robot_message(platform, {**message, "text": text, "message_type": event}, test=False)
+            results.append(send_ai_robot_message_now(queued) if str(queued.get("status") or "") != "unsupported" else queued)
+        except Exception as exc:
+            results.append({"platform": platform, "ok": False, "error": str(exc)})
+    return {
+        "event_type": event,
+        "subtype": message.get("subtype") or "",
+        "severity": message["severity"],
+        "notification_center": bool(message["notification_center"]),
+        "routeable": bool(message["routeable"]),
+        "notification_platforms": platforms,
+        "notification_results": results,
+    }
 
 
 def _qr_fingerprint(item: dict[str, Any]) -> str:
@@ -1016,7 +1145,7 @@ def _login_qr_text(batch_id: str, items: list[dict[str, Any]]) -> str:
 
 
 def _send_notification_text(platform: str, text: str) -> dict[str, Any]:
-    message = enqueue_ai_robot_message(platform, {"text": text, "message_type": "wechat_login_qr"}, test=False)
+    message = enqueue_ai_robot_message(platform, {"text": text, "message_type": "wechat_login_qr", "subtype": "qr_generated"}, test=False)
     if str(message.get("status") or "") == "unsupported":
         return message
     return send_ai_robot_message_now(message)
@@ -1266,14 +1395,34 @@ def _terminal_operator_groups() -> list[dict[str, Any]]:
 def terminal_execution_state() -> dict[str, Any]:
     groups = _terminal_operator_groups()
     state = _load_terminal_state()
+    login_started = bool(state.get("login_started"))
+    windows = state.get("windows") or []
+    visible_windows = windows
+    if not login_started:
+        visible_windows = []
+        for window in windows:
+            visible_window = dict(window)
+            visible_window["qr_data_url"] = ""
+            visible_window["manual_available_at"] = 0
+            visible_accounts = []
+            for index, account in enumerate(window.get("accounts") or []):
+                visible_account = dict(account)
+                if index == int(window.get("current_index") or 0) and str(visible_account.get("status") or "") != "success":
+                    visible_account["status"] = "pending"
+                    visible_account["status_text"] = "等待开始登录"
+                    visible_account["task_id"] = None
+                visible_accounts.append(visible_account)
+            visible_window["accounts"] = visible_accounts
+            visible_windows.append(visible_window)
     return {
         "ok": True,
         "colors": TERMINAL_COLORS,
         "operators": groups,
-        "windows": state.get("windows") or [],
+        "windows": visible_windows,
         "config": state.get("config") or [],
-        "initialized": bool(state.get("initialized")) or bool(state.get("windows")),
-        "summary": _terminal_summary(state.get("windows") or [], groups),
+        "initialized": bool(state.get("initialized")) or bool(windows),
+        "login_started": login_started,
+        "summary": _terminal_summary(windows, groups),
     }
 
 
@@ -1361,17 +1510,9 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         color = str(raw.get("color") or TERMINAL_COLORS[(index - 1) % len(TERMINAL_COLORS)]["hex"])
         current = accounts[0]
-        current["status"] = "opening"
-        current["status_text"] = "正在打开浏览器"
-        try:
-            open_account_browser(int(current["id"]), "wechat")
-            current["status"] = "waiting_qr"
-            current["status_text"] = "等待扫码中..."
-            qr_data_url = _terminal_qr_data_url(int(current["id"]))
-        except Exception as exc:
-            current["status"] = "error"
-            current["status_text"] = str(exc)
-            qr_data_url = ""
+        current["status"] = "pending"
+        current["status_text"] = "等待开始登录"
+        qr_data_url = ""
         windows.append({
             "id": int(raw.get("id") or index),
             "enabled": True,
@@ -1380,12 +1521,40 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "color_name": next((item["name"] for item in TERMINAL_COLORS if item["hex"].lower() == color.lower()), ""),
             "current_index": 0,
             "qr_data_url": qr_data_url,
-            "manual_available_at": now_ts() + 60,
+            "manual_available_at": 0,
             "accounts": accounts,
         })
     if not windows:
         raise ValueError("至少需要启用一个已绑定运营微信的终端")
-    state = {"windows": windows, "config": saved_config, "initialized": True}
+    state = {"windows": windows, "config": saved_config, "initialized": True, "login_started": False}
+    _save_terminal_state(state)
+    return terminal_execution_state()
+
+
+def start_terminal_login() -> dict[str, Any]:
+    state = _load_terminal_state()
+    windows = state.get("windows") or []
+    if not windows:
+        raise ValueError("请先初始化执行矩阵")
+    for window in windows:
+        accounts = window.get("accounts") or []
+        current_index = int(window.get("current_index") or 0)
+        if current_index >= len(accounts):
+            continue
+        current = accounts[current_index]
+        current["status"] = "opening"
+        current["status_text"] = "正在打开浏览器"
+        try:
+            open_account_browser(int(current["id"]), "wechat")
+            current["status"] = "waiting_qr"
+            current["status_text"] = "等待扫码中..."
+            window["qr_data_url"] = _terminal_qr_data_url(int(current["id"]))
+        except Exception as exc:
+            current["status"] = "error"
+            current["status_text"] = str(exc)
+            window["qr_data_url"] = ""
+        window["manual_available_at"] = now_ts() + 60
+    state["login_started"] = True
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -1462,6 +1631,8 @@ def _advance_terminal_window(window: dict[str, Any]) -> None:
 
 def poll_terminal_execution() -> dict[str, Any]:
     state = _load_terminal_state()
+    if not bool(state.get("login_started")):
+        return terminal_execution_state()
     for window in state.get("windows") or []:
         _advance_terminal_window(window)
     _save_terminal_state(state)
@@ -1473,6 +1644,8 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
     target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
     if target is None:
         raise KeyError("window not found")
+    if not bool(state.get("login_started")):
+        return terminal_execution_state()
     if now_ts() < int(target.get("manual_available_at") or 0):
         return terminal_execution_state()
     accounts = target.get("accounts") or []

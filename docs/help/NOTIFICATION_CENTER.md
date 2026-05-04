@@ -35,6 +35,10 @@
 
 如果某类通知不需要外部群提醒，可以关闭对应路由，但仍建议在通知中心保留查看。
 
+当前完整路由事件包括：`wechat_login_qr`、`login_status`、`publish_result`、`video_generation`、`material_issue`、`system_error`、`ops_summary`、`action_required`。每个事件默认进入通知中心，并可按 Telegram、钉钉、企业微信分别开启或关闭外发。
+
+新增通知时必须明确四件事：何时触发、默认严重级别、是否进入通知中心、是否可走 AI 机器人路由。若现有 `event_type` 不能表达，应补充 `NOTIFICATION_EVENT_DEFINITIONS`，或在已有事件下增加子类型。
+
 ## 常见问题
 
 ### 为什么通知中心有提醒，但群里没收到？

@@ -499,7 +499,7 @@
               <p>默认5个执行窗口，请为每个窗口指派运营微信及对应的物理防呆色标</p>
             </div>
             <div class="terminal-config-list" id="terminal-config-list"></div>
-            <button class="terminal-btn-primary" type="button" id="terminal-start-system">确认并初始化执行矩阵</button>
+            <button class="terminal-btn-primary" type="button" id="terminal-start-system">确认配置并进入</button>
           </div>
         </div>
 
@@ -511,7 +511,10 @@
             <div class="terminal-stat-item"><span>总进度:</span> <strong id="terminal-global-progress">0/0</strong></div>
             <div class="terminal-stat-item"><span>运行窗口:</span> <strong id="terminal-active-windows">0</strong></div>
           </div>
-          <button class="terminal-btn-primary" type="button" id="terminal-edit-config">修改配置</button>
+          <div class="terminal-header-actions">
+            <button class="terminal-btn-primary" type="button" id="terminal-start-login">开始登录</button>
+            <button class="terminal-btn-primary" type="button" id="terminal-edit-config">修改配置</button>
+          </div>
         </header>
         <div class="terminal-workspace" id="terminal-matrix-workspace"></div>
       </div>
