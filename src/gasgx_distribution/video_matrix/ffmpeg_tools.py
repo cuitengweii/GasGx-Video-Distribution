@@ -67,6 +67,7 @@ def normalize_clip(
     width: int,
     height: int,
     fps: int,
+    speed_mode: str = "quality",
 ) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +75,7 @@ def normalize_clip(
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},fps={fps},eq=contrast=1.15:brightness=-0.03:saturation=1.05"
     )
+    profile = _video_encode_profile(speed_mode)
     run_command(
         [
             ffmpeg,
@@ -86,19 +88,26 @@ def normalize_clip(
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            profile["preset"],
             "-crf",
-            "20",
+            profile["crf"],
             str(target),
         ]
     )
 
 
-def concat_video(filter_complex: str, inputs: list[Path], output: Path, bgm_path: Path | None = None) -> None:
+def concat_video(
+    filter_complex: str,
+    inputs: list[Path],
+    output: Path,
+    bgm_path: Path | None = None,
+    speed_mode: str = "quality",
+) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     output.parent.mkdir(parents=True, exist_ok=True)
     filter_script_path = output.parent / f".{output.stem}.filter_complex.txt"
     filter_script_path.write_text(filter_complex, encoding="utf-8")
+    profile = _video_encode_profile(speed_mode)
     command = [ffmpeg, "-y"]
     for clip in inputs:
         command.extend(["-i", str(clip)])
@@ -113,9 +122,9 @@ def concat_video(filter_complex: str, inputs: list[Path], output: Path, bgm_path
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            profile["preset"],
             "-crf",
-            "20",
+            profile["crf"],
         ]
     )
     if bgm_path is not None:
@@ -126,7 +135,7 @@ def concat_video(filter_complex: str, inputs: list[Path], output: Path, bgm_path
                 "-c:a",
                 "aac",
                 "-b:a",
-                "192k",
+                "128k" if speed_mode == "fast_first" else "192k",
                 "-shortest",
             ]
         )
@@ -256,3 +265,9 @@ def _extract_video_stream(stderr: str) -> tuple[int, int, int]:
     height = int(resolution_match.group(2))
     fps = int(round(float(fps_match.group(1)))) if fps_match else 0
     return width, height, fps
+
+
+def _video_encode_profile(speed_mode: str) -> dict[str, str]:
+    if str(speed_mode).strip().lower() == "fast_first":
+        return {"preset": "veryfast", "crf": "23"}
+    return {"preset": "fast", "crf": "20"}

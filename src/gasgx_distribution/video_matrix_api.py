@@ -779,7 +779,7 @@ async def generate(
     bgm_path = await _resolve_bgm_path(request, temp_root, bgm_file)
     source_root = await _resolve_source_root(request, temp_root, source_files or [])
     trace = GenerationTrace(job_id, TELEMETRY_LOG_ROOT, _request_telemetry_summary(request, bgm_path, source_root))
-    _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": "", "report_path": str(trace.run_dir / "run_report.md")}
+    _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "first_asset_ready": False, "error": "", "report_path": str(trace.run_dir / "run_report.md")}
     if service.brand_database_backend() == "supabase":
         try:
             service._brand_supabase().insert(
@@ -808,6 +808,7 @@ def job_status(job_id: str) -> dict[str, Any]:
             "progress": row.get("progress"),
             "message": row.get("message"),
             "assets": row.get("assets_json") or [],
+            "first_asset_ready": bool(row.get("assets_json") or []),
             "error": row.get("error") or "",
         }
     raise HTTPException(status_code=404, detail="Unknown job")
@@ -824,6 +825,7 @@ def _request_telemetry_summary(request: dict[str, Any], bgm_path: Path, source_r
         "template_id": request.get("template_id") or DEFAULT_TEMPLATE_ID,
         "cover_template_id": request.get("cover_template_id") or DEFAULT_COVER_TEMPLATE_ID,
         "ending_template_mode": request.get("ending_template_mode") or "dynamic",
+        "render_speed_mode": request.get("render_speed_mode") or "quality",
         "bgm_source": request.get("bgm_source") or "Local library",
         "bgm_filename": bgm_path.name,
         "bgm_path": bgm_path,
@@ -883,11 +885,27 @@ def _run_generate_job(
         ending_template_path = _resolve_ending_template_path(request)
         recent_limits = request.get("recent_limits") if request.get("source_mode") == "Category folders" else None
         active_category_ids = request.get("active_category_ids") if request.get("source_mode") == "Category folders" else None
+        speed_mode = str(request.get("render_speed_mode") or "quality")
+        if speed_mode not in {"quality", "fast_first"}:
+            speed_mode = "quality"
 
         def progress(stage: str, value: float, message: str) -> None:
             _jobs[job_id].update({"status": "running", "stage": stage, "progress": value, "message": message})
             trace.event("progress", stage, {"progress": value, "message": message})
             _sync_video_matrix_job(job_id, {"status": "running", "stage": stage, "progress": value, "message": message})
+
+        def on_asset_ready(asset: Any, completed: int, total: int) -> None:
+            payload = {
+                "video_path": str(asset.video_path),
+                "cover_path": str(asset.cover_path) if asset.cover_path else "",
+                "copy_path": str(asset.copy_path) if asset.copy_path else "",
+                "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
+            }
+            job_assets = _jobs[job_id].setdefault("assets", [])
+            job_assets.append(payload)
+            _jobs[job_id]["first_asset_ready"] = True
+            _jobs[job_id]["message"] = f"Rendered video {completed}/{total}"
+            _sync_video_matrix_job(job_id, {"status": "running", "assets_json": job_assets, "message": _jobs[job_id]["message"]})
 
         with trace.span("pipeline", "run_pipeline"):
             assets = run_pipeline(
@@ -912,6 +930,8 @@ def _run_generate_job(
                 recent_segment_keys=set(generation_history["segment_keys"]),
                 ending_template_path=ending_template_path,
                 telemetry=trace,
+                speed_mode=speed_mode,
+                asset_callback=on_asset_ready,
                 text_overrides={
                     "headline": str(request.get("headline") or ""),
                     "subhead": str(request.get("subhead") or ""),
@@ -934,6 +954,7 @@ def _run_generate_job(
             "status": "complete",
             "progress": 1.0,
             "message": f"Completed {len(assets)} exports",
+            "first_asset_ready": bool(assets),
             "assets": [
                 {
                     "video_path": str(asset.video_path),
@@ -1343,6 +1364,7 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "video_duration_min",
         "video_duration_max",
         "target_fps",
+        "render_speed_mode",
         "headline",
         "subhead",
         "follow_text",

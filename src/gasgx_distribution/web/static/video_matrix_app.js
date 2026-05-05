@@ -269,6 +269,7 @@ function renderSidebar(data) {
   $("outputOptions").onchange = scheduleStateSave;
   $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 60), scheduleStateSave);
+  renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "快速首出"], ["quality", "标准质量"]], String(state.render_speed_mode || "quality"), scheduleStateSave);
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
   $("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory);
@@ -2048,6 +2049,15 @@ async function pollJob(jobId) {
       button.dataset.mode = "preview";
       button.textContent = "预览视频";
     }
+  } else if ((job.status === "running" || job.status === "queued") && ((job.assets && job.assets.length > 0) || job.first_asset_ready)) {
+    const first = job.assets?.[0]?.video_path || "";
+    if (first) {
+      lastPreviewPath = first;
+      const button = $("generateBtn");
+      button.dataset.mode = "preview";
+      button.textContent = "预览视频";
+    }
+    setTimeout(() => pollJob(jobId), 1200);
   } else if (job.status === "error") {
     stopJobProgressTicker();
     showGenerationWaitOverlay(false);
@@ -2175,7 +2185,7 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "输出参数",
       pendingText: "检查数量、并行、帧率、节拍分析时长和输出目录。",
       readyText: "输出参数完整。",
-      configText: `数量 ${statePayload.output_count} / 并行 ${statePayload.max_workers} / 帧率 ${statePayload.target_fps}fps / 节拍 ${statePayload.video_duration_min}-${statePayload.video_duration_max}s / 输出 ${formats.join(", ") || "未选择"} / 目录 ${shortPath(statePayload.output_root || "")}`,
+      configText: `数量 ${statePayload.output_count} / 并行 ${statePayload.max_workers} / 帧率 ${statePayload.target_fps}fps / 速度 ${statePayload.render_speed_mode || "quality"} / 节拍 ${statePayload.video_duration_min}-${statePayload.video_duration_max}s / 输出 ${formats.join(", ") || "未选择"} / 目录 ${shortPath(statePayload.output_root || "")}`,
       run: async (index) => {
         await animatePreflightProgress(index, 15, "检查生成数量和并行线程...");
         const formats = Array.isArray(statePayload.output_options) ? statePayload.output_options.filter(Boolean) : [];
@@ -2460,6 +2470,7 @@ function generationConfirmHtml(statePayload) {
       <div><span>最小节拍分析</span><strong>${statePayload.video_duration_min} 秒</strong></div>
       <div><span>最大节拍分析</span><strong>${statePayload.video_duration_max} 秒</strong></div>
       <div><span>目标帧率</span><strong>${statePayload.target_fps} fps</strong></div>
+      <div><span>生成速度</span><strong>${escapeHtml(statePayload.render_speed_mode || "quality")}</strong></div>
       <div><span>输出格式</span><strong>${escapeHtml((statePayload.output_options || []).join(", "))}</strong></div>
     </div>
     <section>
@@ -2497,6 +2508,7 @@ function collectState() {
     video_duration_min: Number($("videoDurationMin").value || settings.video_duration_min || 8),
     video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 12),
     target_fps: Number(radioValue("target_fps") || settings.target_fps || 60),
+    render_speed_mode: String(radioValue("render_speed_mode") || state.render_speed_mode || "quality"),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: state.copy_language || settings.copy_language || "zh",
     template_config: activeVideoTemplateSnapshot(),

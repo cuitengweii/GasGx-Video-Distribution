@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
@@ -18,6 +19,7 @@ from .settings import ProjectSettings
 
 
 ProgressCallback = Callable[[str, float, str], None]
+AssetCallback = Callable[[RenderedAsset, int, int], None]
 VIDEO_ENDING_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 
 
@@ -46,6 +48,8 @@ def run_pipeline(
     recent_segment_keys: set[str] | None = None,
     ending_template_path: Path | None = None,
     telemetry: Any | None = None,
+    speed_mode: str = "quality",
+    asset_callback: AssetCallback | None = None,
 ) -> list[RenderedAsset]:
     _notify(progress_callback, "ingestion", 0.05, "Collecting and normalizing source clips")
     if telemetry is not None:
@@ -56,9 +60,16 @@ def run_pipeline(
                 recent_limits=recent_limits,
                 active_category_ids=active_category_ids,
                 telemetry=telemetry,
+                speed_mode=speed_mode,
             )
     else:
-        clips = ingest_sources(settings, source_root=source_root, recent_limits=recent_limits, active_category_ids=active_category_ids)
+        clips = ingest_sources(
+            settings,
+            source_root=source_root,
+            recent_limits=recent_limits,
+            active_category_ids=active_category_ids,
+            speed_mode=speed_mode,
+        )
     if not clips:
         raise ValueError("No source videos were found for ingestion")
     _notify(progress_callback, "hud", 0.20, "Preparing GasGx data HUD")
@@ -71,32 +82,42 @@ def run_pipeline(
     algorithm_outro_seconds = 0.0 if _is_video_ending(ending_template_path) else outro_seconds
     beat_duration_hint = _beat_duration_hint(settings, active_composition_sequence, cover_intro_seconds, algorithm_outro_seconds)
     _notify(progress_callback, "beat", 0.30, "Analyzing BGM beat grid")
+    beat_mode = "fallback" if speed_mode == "fast_first" else str(settings.beat_detection.get("mode", "auto"))
     beat_payload = {
         "bgm_path": bgm_path,
         "duration_hint": beat_duration_hint,
         "fallback_spacing": float(settings.beat_detection.get("fallback_spacing", 0.48)),
-        "mode": str(settings.beat_detection.get("mode", "auto")),
+        "mode": beat_mode,
     }
-    if telemetry is not None:
-        with telemetry.span("beat", "detect_beat_grid", beat_payload):
+    beat_cache = _load_beat_grid_cache(settings)
+    cache_key = _beat_cache_key(bgm_path, beat_duration_hint, settings, beat_mode)
+    cached_grid = beat_cache.get(cache_key)
+    beat_grid: list[float]
+    if isinstance(cached_grid, list) and cached_grid:
+        beat_grid = [float(item) for item in cached_grid]
+    else:
+        if telemetry is not None:
+            with telemetry.span("beat", "detect_beat_grid", beat_payload):
+                beat_grid = detect_beat_grid(
+                    bgm_path,
+                    duration_hint=beat_duration_hint,
+                    target_bpm_min=int(settings.beat_detection.get("target_bpm_min", 120)),
+                    target_bpm_max=int(settings.beat_detection.get("target_bpm_max", 130)),
+                    fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
+                    mode=beat_mode,
+                )
+            telemetry.event("beat", "beat_grid_ready", {"beat_count": len(beat_grid), **beat_payload})
+        else:
             beat_grid = detect_beat_grid(
                 bgm_path,
                 duration_hint=beat_duration_hint,
                 target_bpm_min=int(settings.beat_detection.get("target_bpm_min", 120)),
                 target_bpm_max=int(settings.beat_detection.get("target_bpm_max", 130)),
                 fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
-                mode=str(settings.beat_detection.get("mode", "auto")),
+                mode=beat_mode,
             )
-        telemetry.event("beat", "beat_grid_ready", {"beat_count": len(beat_grid), **beat_payload})
-    else:
-        beat_grid = detect_beat_grid(
-            bgm_path,
-            duration_hint=beat_duration_hint,
-            target_bpm_min=int(settings.beat_detection.get("target_bpm_min", 120)),
-            target_bpm_max=int(settings.beat_detection.get("target_bpm_max", 130)),
-            fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
-            mode=str(settings.beat_detection.get("mode", "auto")),
-        )
+        beat_cache[cache_key] = beat_grid
+        _save_beat_grid_cache(settings, beat_cache)
     _notify(progress_callback, "planning", 0.42, "Planning de-duplicated video variants")
     planning_payload = {
         "clip_count": len(clips),
@@ -182,6 +203,7 @@ def run_pipeline(
                     outro_seconds,
                     ending_template_path,
                     telemetry.variant(variant.sequence_number) if telemetry is not None else None,
+                    speed_mode,
                 ): variant.sequence_number
                 for variant in variants
             }
@@ -192,6 +214,8 @@ def run_pipeline(
                 progress = render_start + (completed / total) * render_span
                 if telemetry is not None:
                     telemetry.event("render", "variant_completed", {"sequence_number": futures[future], "completed": completed, "total": total})
+                if asset_callback is not None:
+                    asset_callback(assets[-1], completed, total)
                 _notify(progress_callback, "render", progress, f"Rendered video {completed}/{total}")
         finally:
             executor.shutdown(wait=True)
@@ -300,3 +324,46 @@ def _copy_template_path() -> Path:
 @contextmanager
 def _nullcontext():
     yield
+
+
+def _beat_cache_path(settings: ProjectSettings) -> Path:
+    return settings.runtime_root / "beat_cache.json"
+
+
+def _beat_cache_key(settings_bgm_path: Path, duration_hint: float, settings: ProjectSettings, mode: str) -> str:
+    return "|".join(
+        [
+            str(settings_bgm_path.resolve()),
+            f"{duration_hint:.3f}",
+            str(int(settings.beat_detection.get("target_bpm_min", 120))),
+            str(int(settings.beat_detection.get("target_bpm_max", 130))),
+            f"{float(settings.beat_detection.get('fallback_spacing', 0.48)):.3f}",
+            str(mode),
+        ]
+    )
+
+
+def _load_beat_grid_cache(settings: ProjectSettings) -> dict[str, list[float]]:
+    path = _beat_cache_path(settings)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    cache: dict[str, list[float]] = {}
+    for key, values in raw.items():
+        if isinstance(values, list):
+            try:
+                cache[str(key)] = [float(item) for item in values]
+            except (TypeError, ValueError):
+                continue
+    return cache
+
+
+def _save_beat_grid_cache(settings: ProjectSettings, cache: dict[str, list[float]]) -> None:
+    path = _beat_cache_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
