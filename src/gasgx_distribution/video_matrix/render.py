@@ -86,6 +86,7 @@ def render_variant(
     outro_seconds: float = 1.0,
     ending_template_path: Path | None = None,
     telemetry: Any | None = None,
+    speed_mode: str = "quality",
 ) -> RenderedAsset:
     batch_dir.mkdir(parents=True, exist_ok=True)
     output_types = output_types or {"mp4"}
@@ -171,7 +172,7 @@ def render_variant(
             },
         ):
             body_output_path = main_video_path if video_ending_path is not None else video_path
-            concat_video(filter_complex, inputs, body_output_path, bgm_path=bgm_path)
+            concat_video(filter_complex, inputs, body_output_path, bgm_path=bgm_path, speed_mode=speed_mode)
         if video_ending_path is not None:
             with _span(
                 telemetry,

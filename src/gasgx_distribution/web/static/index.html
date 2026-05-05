@@ -362,10 +362,6 @@
             <h2>AI客服与企业消息机器人</h2>
             <p class="muted">保存真实平台机器人配置，接收已验签 Webhook，并把测试消息或回调消息写入本地发送队列。</p>
           </div>
-          <div class="ai-hero-actions">
-            <button class="btn primary" id="ai-save-config" type="button">保存配置</button>
-            <button class="btn secondary" id="ai-send-test" type="button">发送测试</button>
-          </div>
         </section>
         <section class="panel" id="ai-platform-status-panel">
           <div class="panel-head">
@@ -517,6 +513,9 @@
               <p>默认5个执行窗口，请为每个窗口指派运营微信及对应的物理防呆色标</p>
             </div>
             <div class="terminal-config-list" id="terminal-config-list"></div>
+            <div class="terminal-modal-actions">
+              <button class="terminal-btn-primary" type="button" id="terminal-reenter">重新进入</button>
+            </div>
           </div>
         </div>
 
@@ -529,7 +528,7 @@
             <div class="terminal-stat-item"><span>运行窗口:</span> <strong id="terminal-active-windows">0</strong></div>
           </div>
           <div class="terminal-header-actions">
-            <button class="terminal-btn-primary" type="button" id="terminal-start-login">开始登录</button>
+            <button class="terminal-btn-primary" type="button" id="terminal-start-login">获取二维码</button>
             <button class="terminal-btn-primary" type="button" id="terminal-edit-config">修改配置</button>
           </div>
         </header>
@@ -542,18 +541,16 @@
         <div class="dashboard-filters panel">
           <label>时间维度
             <select id="stats-period">
-              <option>今日</option>
-              <option>昨日</option>
-              <option selected>近7天</option>
+              <option selected>昨日</option>
+              <option>近7天</option>
               <option>近30天</option>
-              <option>自定义时间</option>
             </select>
           </label>
           <label>筛选平台
             <select id="stats-platform-filter">
               <option>全部平台</option>
               <option>抖音</option>
-              <option>视频号</option>
+              <option selected>视频号</option>
               <option>小红书</option>
               <option>快手</option>
             </select>
@@ -561,9 +558,6 @@
           <label>筛选账号
             <select id="stats-account-filter">
               <option>全部账号</option>
-              <option>GasGx小绿</option>
-              <option>GasGx小黄</option>
-              <option>GasGx发电机组案例</option>
             </select>
           </label>
         </div>
@@ -656,7 +650,6 @@
               <h2>角色权限</h2>
               <p class="muted">角色可添加；每个角色可以点选分配功能入口。</p>
             </div>
-            <span class="system-status">可配置</span>
           </div>
           <form class="role-create-form" id="role-create-form">
             <input id="role-name-input" maxlength="16" placeholder="新增角色名称">
@@ -796,25 +789,15 @@
             <button class="btn secondary" type="button" data-system-dir="output">输出目录</button>
             <button class="btn secondary" type="button" data-system-dir="logs">任务日志</button>
             <button class="btn secondary" type="button" data-system-dir="cache">临时缓存</button>
+            <button class="btn secondary" type="button" id="clear-supabase-read-cache">清理 Supabase 读缓存</button>
           </div>
           <p class="system-action-state muted" id="system-directory-state">点击按钮打开对应目录。</p>
+          <p class="system-action-state muted" id="supabase-read-cache-state" hidden></p>
         </section>
         <section class="panel system-card">
           <div class="panel-head"><h2>安全设置</h2><span class="system-status">待接入</span></div>
           <div class="system-list">
             <span>访问记录</span><span>本机白名单</span><span>操作审计</span>
-          </div>
-        </section>
-        <section class="panel system-card wide-system-card">
-          <div class="panel-head">
-            <div>
-              <h2>数据库初始化</h2>
-              <p class="muted">补齐数据库表内默认配置、视频矩阵模板和数据统计案例。</p>
-            </div>
-            <button class="btn primary" id="system-initialize" type="button" disabled>一键初始化</button>
-          </div>
-          <div id="system-initialize-state" class="health-list">
-            <div class="muted">未执行初始化。</div>
           </div>
         </section>
         <section class="panel system-card wide-system-card">

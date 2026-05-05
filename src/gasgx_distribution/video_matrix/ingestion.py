@@ -69,6 +69,7 @@ def ingest_sources(
     recent_limits: dict[str, int] | None = None,
     active_category_ids: list[str] | None = None,
     telemetry: Any | None = None,
+    speed_mode: str = "quality",
 ) -> list[ClipMetadata]:
     root = source_root or settings.source_root
     root.mkdir(parents=True, exist_ok=True)
@@ -96,23 +97,30 @@ def ingest_sources(
             "source_bytes": _file_size(source_path),
             "target_path": normalized_path,
         }
-        if telemetry is not None:
-            with telemetry.span("ingestion", "normalize_clip", payload):
+        if _normalize_cache_hit(source_path, normalized_path, settings.target_width, settings.target_height, settings.target_fps, speed_mode):
+            if telemetry is not None:
+                telemetry.event("ingestion", "normalize_cache_hit", payload)
+        else:
+            if telemetry is not None:
+                with telemetry.span("ingestion", "normalize_clip", payload):
+                    normalize_clip(
+                        source=source_path,
+                        target=normalized_path,
+                        width=settings.target_width,
+                        height=settings.target_height,
+                        fps=settings.target_fps,
+                        speed_mode=speed_mode,
+                    )
+            else:
                 normalize_clip(
                     source=source_path,
                     target=normalized_path,
                     width=settings.target_width,
                     height=settings.target_height,
                     fps=settings.target_fps,
+                    speed_mode=speed_mode,
                 )
-        else:
-            normalize_clip(
-                source=source_path,
-                target=normalized_path,
-                width=settings.target_width,
-                height=settings.target_height,
-                fps=settings.target_fps,
-            )
+            _write_normalize_cache(source_path, normalized_path, settings.target_width, settings.target_height, settings.target_fps, speed_mode)
         if telemetry is not None:
             with telemetry.span("ingestion", "probe_normalized_clip", {"clip_id": clip_id, "normalized_path": normalized_path}):
                 raw_metadata = probe_media(normalized_path)
@@ -256,3 +264,65 @@ def _file_size(path: Path) -> int:
         return path.stat().st_size
     except OSError:
         return 0
+
+
+def _normalize_cache_hit(
+    source_path: Path,
+    normalized_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    speed_mode: str,
+) -> bool:
+    if not normalized_path.exists():
+        return False
+    cache_path = _normalize_cache_path(normalized_path)
+    if not cache_path.exists():
+        return False
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    try:
+        source_stat = source_path.stat()
+        normalized_stat = normalized_path.stat()
+    except OSError:
+        return False
+    if normalized_stat.st_mtime_ns < source_stat.st_mtime_ns:
+        return False
+    return (
+        int(payload.get("source_mtime_ns", -1)) == int(source_stat.st_mtime_ns)
+        and int(payload.get("source_size", -1)) == int(source_stat.st_size)
+        and int(payload.get("width", -1)) == int(width)
+        and int(payload.get("height", -1)) == int(height)
+        and int(payload.get("fps", -1)) == int(fps)
+        and str(payload.get("speed_mode", "")) == speed_mode
+    )
+
+
+def _write_normalize_cache(
+    source_path: Path,
+    normalized_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    speed_mode: str,
+) -> None:
+    cache_path = _normalize_cache_path(normalized_path)
+    try:
+        source_stat = source_path.stat()
+        payload = {
+            "source_mtime_ns": int(source_stat.st_mtime_ns),
+            "source_size": int(source_stat.st_size),
+            "width": int(width),
+            "height": int(height),
+            "fps": int(fps),
+            "speed_mode": speed_mode,
+        }
+        cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return
+
+
+def _normalize_cache_path(normalized_path: Path) -> Path:
+    return normalized_path.with_suffix(".norm.json")

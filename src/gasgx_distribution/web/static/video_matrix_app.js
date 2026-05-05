@@ -9,6 +9,7 @@ let lastPreviewPath = "";
 let bgmLibraryState = { local: [], directory: "", links: [] };
 let endingTemplateState = { local: [], directory: "" };
 let endingPreviewOverrideName = "";
+let endingTemplateUploadInput = null;
 let pendingTemplateSave = "";
 let coverEditingContext = "cover";
 let modelImages = [];
@@ -18,6 +19,7 @@ let endingModeLoading = "";
 let displayedJobPercent = 0;
 let jobProgressTimer = null;
 let lastJobSnapshot = null;
+let activeJobId = "";
 
 const jobStepLabels = [
   ["queued", "任务提交", 0, ["queued"]],
@@ -181,6 +183,60 @@ function buttonIconLabel(icon, label) {
   return `<span class="button-icon" aria-hidden="true">${escapeHtml(icon)}</span><span>${escapeHtml(label)}</span>`;
 }
 
+function showVideoMatrixNotice(message, title = "提示", actionLabel = "确定") {
+  let modal = document.querySelector("#video-matrix-notice-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "video-matrix-notice-modal";
+    modal.className = "confirm-modal hidden";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.innerHTML = `
+      <div class="confirm-panel video-matrix-notice-panel">
+        <div class="confirm-head">
+          <div>
+            <span>VIDEO MATRIX</span>
+            <strong data-notice-title>提示</strong>
+          </div>
+          <button class="icon-btn" type="button" data-notice-close aria-label="关闭">×</button>
+        </div>
+        <div class="confirm-body" data-notice-body></div>
+        <div class="confirm-actions">
+          <button class="primary" type="button" data-notice-action>确定</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+  const titleNode = modal.querySelector("[data-notice-title]");
+  const bodyNode = modal.querySelector("[data-notice-body]");
+  const actionButton = modal.querySelector("[data-notice-action]");
+  const closeButton = modal.querySelector("[data-notice-close]");
+  if (titleNode) titleNode.textContent = title;
+  if (bodyNode) bodyNode.textContent = message;
+  if (actionButton) actionButton.textContent = actionLabel;
+  const close = () => {
+    modal.classList.add("hidden");
+    document.body.classList.remove("confirm-modal-open");
+    actionButton.onclick = null;
+    closeButton.onclick = null;
+  };
+  actionButton.onclick = close;
+  closeButton.onclick = close;
+  modal.classList.remove("hidden");
+  document.body.classList.add("confirm-modal-open");
+  return new Promise((resolve) => {
+    actionButton.onclick = () => {
+      close();
+      resolve(true);
+    };
+    closeButton.onclick = () => {
+      close();
+      resolve(false);
+    };
+  });
+}
+
 function setPanelLoading(id, label = "加载中...") {
   const node = $(id);
   if (node) node.innerHTML = loadingInline(label);
@@ -236,6 +292,7 @@ async function init() {
   setInitialLoading();
   const data = await api("/api/video-matrix/state");
   state = data.ui_state; templates = data.templates; coverTemplates = data.cover_templates; settings = data.settings;
+  activeJobId = state.active_job_id || "";
   sourcePreviewVideos = Array.isArray(data.source_videos) ? data.source_videos : [];
   selectedCover = state.cover_template_id || Object.keys(coverTemplates)[0];
   selectedVideoTemplate = state.template_id || Object.keys(templates)[0];
@@ -249,6 +306,9 @@ async function init() {
   renderEndingTemplatePanel(data);
   await loadModelImages();
   await refreshAllPreviews();
+  if (activeJobId) {
+    await restoreActiveJobOverlay();
+  }
 }
 
 function renderSidebar(data) {
@@ -269,6 +329,7 @@ function renderSidebar(data) {
   $("outputOptions").onchange = scheduleStateSave;
   $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 60), scheduleStateSave);
+  renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "快速首出"], ["quality", "标准质量"]], state.render_speed_mode || "fast_first", scheduleStateSave);
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
   $("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory);
@@ -710,6 +771,7 @@ function renderEndingTemplatePanel(data) {
     <div class="ending-template-dir-row ${mode === "random" ? "" : "hidden"}">
       <code title="${escapeHtml(endingTemplateState.directory)}">${escapeHtml(shortPath(endingTemplateState.directory))}</code>
       <span class="badge">${localTemplates.length} 个素材</span>
+      <button id="uploadEndingTemplateBtn" class="secondary" type="button">上传</button>
       <button id="openEndingTemplateDirInline" class="secondary" type="button">打开</button>
     </div>
   `;
@@ -727,7 +789,55 @@ function renderEndingTemplatePanel(data) {
     };
   }
   renderEndingTemplateMenu();
+  if (mode === "random") bindEndingTemplateUpload();
   $("openEndingTemplateDirInline").onclick = () => openFolder(endingTemplateState.directory);
+}
+
+function bindEndingTemplateUpload() {
+  if (!endingTemplateUploadInput) {
+    endingTemplateUploadInput = document.createElement("input");
+    endingTemplateUploadInput.type = "file";
+    endingTemplateUploadInput.accept = ".mp4,video/mp4";
+    endingTemplateUploadInput.className = "hidden";
+    endingTemplateUploadInput.setAttribute("aria-hidden", "true");
+    document.body.appendChild(endingTemplateUploadInput);
+    endingTemplateUploadInput.onchange = async () => {
+      const file = endingTemplateUploadInput?.files?.[0];
+      endingTemplateUploadInput.value = "";
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith(".mp4")) {
+        await showVideoMatrixNotice("只允许上传 mp4 文件", "上传失败");
+        return;
+      }
+      const form = new FormData();
+      form.append("file", file);
+      const button = $("uploadEndingTemplateBtn");
+      if (button) {
+        button.disabled = true;
+        button.classList.add("is-loading");
+        button.innerHTML = buttonLoadingInline("上传中...");
+      }
+      try {
+        const result = await api("/api/video-matrix/ending-templates/upload", { method: "POST", body: form });
+        const fresh = await api("/api/video-matrix/state");
+        renderEndingTemplatePanel(fresh);
+        refreshEndingTemplatePreview();
+        await showVideoMatrixNotice(`上传成功：${result.filename}`, "上传成功");
+      } catch (error) {
+        await showVideoMatrixNotice(`上传失败：${error.message}`, "上传失败");
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.classList.remove("is-loading");
+          button.textContent = "上传";
+        }
+      }
+    };
+  }
+  const button = $("uploadEndingTemplateBtn");
+  if (button) {
+    button.onclick = () => endingTemplateUploadInput?.click();
+  }
 }
 
 async function switchEndingTemplateMode(mode, sourceButton = null) {
@@ -1973,6 +2083,36 @@ const scheduleStateSave = debounce(async () => {
   await api("/api/video-matrix/state", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(state)});
 }, 500);
 
+async function saveActiveJobState(jobId, job = null) {
+  if (!jobId) return;
+  activeJobId = jobId;
+  state = collectState();
+  state.active_job_id = jobId;
+  state.active_job_snapshot = job ? {
+    status: job.status || "",
+    stage: job.stage || "",
+    progress: Number(job.progress || 0),
+    message: job.message || "",
+  } : state.active_job_snapshot || {};
+  await api("/api/video-matrix/state", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(state),
+  });
+}
+
+async function clearActiveJobState() {
+  activeJobId = "";
+  state = collectState();
+  delete state.active_job_id;
+  delete state.active_job_snapshot;
+  await api("/api/video-matrix/state", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(state),
+  });
+}
+
 async function resolvePreviewVideoPath() {
   if (lastPreviewPath) return lastPreviewPath;
   const root = outputRootPath();
@@ -2014,13 +2154,14 @@ async function generate() {
     if (!bgmLibraryState.local.length) {
       throw new Error("本地背景音乐库还没有可用 MP3。请把 MP3 文件放入左侧问号提示里的目录，然后刷新页面。");
     }
-    const form = new FormData();
-    form.append("payload", JSON.stringify(statePayload));
-    [...($("sourceFiles")?.files || [])].forEach((file) => form.append("source_files", file));
-    const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
-    updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
-    startJobProgressTicker();
-    pollJob(job_id);
+      const form = new FormData();
+      form.append("payload", JSON.stringify(statePayload));
+      [...($("sourceFiles")?.files || [])].forEach((file) => form.append("source_files", file));
+      const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
+      await saveActiveJobState(job_id, { status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
+      updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
+      startJobProgressTicker();
+      pollJob(job_id);
   } catch (error) {
     updateJobStatus({ status: "error", stage: "error", progress: 0, message: error.message, error: error.message });
     stopJobProgressTicker();
@@ -2037,12 +2178,23 @@ function wait(ms) {
 
 async function pollJob(jobId) {
   const job = await api(`/api/video-matrix/jobs/${jobId}`);
+  activeJobId = jobId;
+  await saveActiveJobState(jobId, job);
   updateJobStatus(job);
+  if (!lastPreviewPath && (job.first_asset_ready || (Array.isArray(job.assets) && job.assets.length))) {
+    lastPreviewPath = job.assets?.[0]?.video_path || "";
+    const button = $("generateBtn");
+    if (lastPreviewPath) {
+      button.dataset.mode = "preview";
+      button.textContent = "预览视频";
+    }
+  }
   if (job.status === "complete") {
     stopJobProgressTicker();
     lastPreviewPath = job.assets?.[0]?.video_path || "";
     updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。点击下方按钮可预览第一条视频在视频号里的展示效果。`});
     showGenerationWaitOverlay(false);
+    await clearActiveJobState();
     const button = $("generateBtn");
     if (lastPreviewPath) {
       button.dataset.mode = "preview";
@@ -2051,7 +2203,38 @@ async function pollJob(jobId) {
   } else if (job.status === "error") {
     stopJobProgressTicker();
     showGenerationWaitOverlay(false);
+    await clearActiveJobState();
   } else setTimeout(() => pollJob(jobId), 1200);
+}
+
+async function restoreActiveJobOverlay() {
+  if (!activeJobId) return;
+  if (jobProgressTimer) return;
+  try {
+    const job = await api(`/api/video-matrix/jobs/${activeJobId}`);
+    updateJobStatus(job);
+    if (job.status === "complete") {
+      lastPreviewPath = job.assets?.[0]?.video_path || "";
+      showGenerationWaitOverlay(false);
+      await clearActiveJobState();
+      const button = $("generateBtn");
+      if (lastPreviewPath) {
+        button.dataset.mode = "preview";
+        button.textContent = "预览视频";
+      }
+      return;
+    }
+    if (job.status === "error") {
+      showGenerationWaitOverlay(false);
+      await clearActiveJobState();
+      return;
+    }
+    showGenerationWaitOverlay(true, job);
+    startJobProgressTicker();
+    pollJob(activeJobId);
+  } catch (error) {
+    log(`恢复进度框失败：${error.message}`);
+  }
 }
 
 async function runPreflightChecks(statePayload) {
@@ -2175,7 +2358,7 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "输出参数",
       pendingText: "检查数量、并行、帧率、节拍分析时长和输出目录。",
       readyText: "输出参数完整。",
-      configText: `数量 ${statePayload.output_count} / 并行 ${statePayload.max_workers} / 帧率 ${statePayload.target_fps}fps / 节拍 ${statePayload.video_duration_min}-${statePayload.video_duration_max}s / 输出 ${formats.join(", ") || "未选择"} / 目录 ${shortPath(statePayload.output_root || "")}`,
+      configText: `数量 ${statePayload.output_count} / 并行 ${statePayload.max_workers} / 帧率 ${statePayload.target_fps}fps / 模式 ${statePayload.render_speed_mode} / 节拍 ${statePayload.video_duration_min}-${statePayload.video_duration_max}s / 输出 ${formats.join(", ") || "未选择"} / 目录 ${shortPath(statePayload.output_root || "")}`,
       run: async (index) => {
         await animatePreflightProgress(index, 15, "检查生成数量和并行线程...");
         const formats = Array.isArray(statePayload.output_options) ? statePayload.output_options.filter(Boolean) : [];
@@ -2460,6 +2643,7 @@ function generationConfirmHtml(statePayload) {
       <div><span>最小节拍分析</span><strong>${statePayload.video_duration_min} 秒</strong></div>
       <div><span>最大节拍分析</span><strong>${statePayload.video_duration_max} 秒</strong></div>
       <div><span>目标帧率</span><strong>${statePayload.target_fps} fps</strong></div>
+      <div><span>生成模式</span><strong>${statePayload.render_speed_mode === "fast_first" ? "快速首出" : "标准质量"}</strong></div>
       <div><span>输出格式</span><strong>${escapeHtml((statePayload.output_options || []).join(", "))}</strong></div>
     </div>
     <section>
@@ -2497,6 +2681,7 @@ function collectState() {
     video_duration_min: Number($("videoDurationMin").value || settings.video_duration_min || 8),
     video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 12),
     target_fps: Number(radioValue("target_fps") || settings.target_fps || 60),
+    render_speed_mode: radioValue("render_speed_mode") || state.render_speed_mode || "fast_first",
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: state.copy_language || settings.copy_language || "zh",
     template_config: activeVideoTemplateSnapshot(),
@@ -2843,6 +3028,12 @@ window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin || event.data?.type !== "gasgx-cover-template-text-update") return;
   coverEditingContext = event.source === $("endingTemplatePreview")?.contentWindow ? "ending" : "cover";
   applyCoverTextUpdates(event.data.text);
+});
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-matrix-restore") return;
+  if (activeJobId) {
+    restoreActiveJobOverlay();
+  }
 });
 
 init().catch((err) => log(err.message));

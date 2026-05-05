@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import hashlib
 import base64
 import sqlite3
 import time
+from threading import Lock
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
 from contextlib import contextmanager
@@ -255,6 +257,53 @@ def _brand_supabase() -> SupabaseRestClient:
     return SupabaseRestClient.from_instance(instance)
 
 
+_SUPABASE_READ_CACHE_LOCK = Lock()
+_SUPABASE_READ_CACHE: dict[str, Any] = {}
+_SUPABASE_APP_SETTINGS_CACHE: dict[str, Any] = {}
+
+
+def clear_supabase_read_cache() -> dict[str, Any]:
+    """Drop in-process caches for repeated Supabase reads; the next requests refetch from PostgREST."""
+    backend = brand_database_backend()
+    if backend != "supabase":
+        return {"ok": True, "backend": backend, "cleared": False}
+    with _SUPABASE_READ_CACHE_LOCK:
+        _SUPABASE_READ_CACHE.clear()
+        _SUPABASE_APP_SETTINGS_CACHE.clear()
+    return {"ok": True, "backend": "supabase", "cleared": True}
+
+
+def _invalidate_supabase_read_cache(*keys: str) -> None:
+    if brand_database_backend() != "supabase" or not keys:
+        return
+    with _SUPABASE_READ_CACHE_LOCK:
+        for key in keys:
+            _SUPABASE_READ_CACHE.pop(key, None)
+
+
+def _invalidate_supabase_app_settings_cache(*keys: str) -> None:
+    if brand_database_backend() != "supabase" or not keys:
+        return
+    with _SUPABASE_READ_CACHE_LOCK:
+        for key in keys:
+            _SUPABASE_APP_SETTINGS_CACHE.pop(key, None)
+
+
+def _supabase_read_cache_peek(key: str) -> bool:
+    with _SUPABASE_READ_CACHE_LOCK:
+        return key in _SUPABASE_READ_CACHE
+
+
+def _supabase_read_cache_get(key: str) -> Any:
+    with _SUPABASE_READ_CACHE_LOCK:
+        return copy.deepcopy(_SUPABASE_READ_CACHE[key])
+
+
+def _supabase_read_cache_set(key: str, value: Any) -> None:
+    with _SUPABASE_READ_CACHE_LOCK:
+        _SUPABASE_READ_CACHE[key] = copy.deepcopy(value)
+
+
 def _json_payload(value: Any, default: Any = None) -> Any:
     if value is None:
         return default
@@ -441,11 +490,19 @@ def _config_root() -> Path:
 def _app_setting(key: str, default: Any = None) -> Any:
     if brand_database_backend() != "supabase":
         return default
+    with _SUPABASE_READ_CACHE_LOCK:
+        if key in _SUPABASE_APP_SETTINGS_CACHE:
+            return copy.deepcopy(_SUPABASE_APP_SETTINGS_CACHE[key])
     row = _brand_supabase().select_one("app_settings", filters={"setting_key": key})
-    return _json_payload(row.get("payload_json") if row else None, default)
+    parsed = _json_payload(row.get("payload_json") if row else None, default)
+    with _SUPABASE_READ_CACHE_LOCK:
+        _SUPABASE_APP_SETTINGS_CACHE[key] = copy.deepcopy(parsed)
+    return copy.deepcopy(parsed)
 
 
 def _save_app_setting(key: str, payload: Any) -> dict[str, Any]:
+    if brand_database_backend() == "supabase":
+        _invalidate_supabase_app_settings_cache(key)
     return _brand_supabase().upsert(
         "app_settings",
         {"setting_key": key, "payload_json": payload, "updated_at": now_ts()},
@@ -565,6 +622,8 @@ def _seed_analytics_items() -> list[tuple[str, str, dict[str, Any]]]:
 
 def list_analytics_items() -> dict[str, list[dict[str, Any]]]:
     if brand_database_backend() == "supabase":
+        if _supabase_read_cache_peek("analytics_items"):
+            return _supabase_read_cache_get("analytics_items")
         rows = _brand_supabase().select("analytics_items", order="sort_order.asc,id.asc")
         items = [(str(row["section"]), str(row["item_key"]), _json_payload(row.get("payload_json"), {})) for row in rows]
     else:
@@ -574,7 +633,9 @@ def list_analytics_items() -> dict[str, list[dict[str, Any]]]:
         item = dict(payload or {})
         item.setdefault("key", key)
         grouped.setdefault(section, []).append(item)
-    return grouped
+    if brand_database_backend() == "supabase":
+        _supabase_read_cache_set("analytics_items", grouped)
+    return copy.deepcopy(grouped)
 
 
 def _insert_seed_item(table: str, key_field: str, key: str, payload: dict[str, Any]) -> bool:
@@ -636,11 +697,15 @@ def initialize_system() -> dict[str, Any]:
         mark("seed_runs", True)
     else:
         mark("seed_runs", False)
+    _invalidate_supabase_read_cache("analytics_items", "dashboard_summary")
+    _invalidate_supabase_app_settings_cache("distribution_settings", "video_matrix_state")
     return {"ok": True, "backend": "supabase", "seed_version": SEED_VERSION, "inserted": inserted, "skipped": skipped}
 
 
 def load_brand_settings() -> dict[str, Any]:
     if brand_database_backend() == "supabase":
+        if _supabase_read_cache_peek("brand_settings"):
+            return _supabase_read_cache_get("brand_settings")
         row = _brand_supabase().select_one("brand_settings", filters={"id": 1})
         if row is None:
             ts = now_ts()
@@ -659,7 +724,8 @@ def load_brand_settings() -> dict[str, Any]:
                 },
                 on_conflict="id",
             )
-        return row
+        _supabase_read_cache_set("brand_settings", row)
+        return copy.deepcopy(row)
     ensure_database()
     with connect() as conn:
         row = conn.execute("SELECT * FROM brand_settings WHERE id = 1").fetchone()
@@ -688,7 +754,9 @@ def save_brand_settings(payload: dict[str, Any]) -> dict[str, Any]:
             "default_account_prefix": str(payload.get("default_account_prefix") or current.get("default_account_prefix") or "GasGx").strip() or "GasGx",
             "updated_at": now_ts(),
         }
-        return _brand_supabase().update("brand_settings", next_data, filters={"id": 1})
+        row = _brand_supabase().update("brand_settings", next_data, filters={"id": 1})
+        _invalidate_supabase_read_cache("brand_settings")
+        return row
     ensure_database()
     current = load_brand_settings()
     next_data = {
@@ -748,11 +816,15 @@ def _private_ai_config(platform: str) -> dict[str, Any] | None:
 
 def list_ai_robot_configs() -> list[dict[str, Any]]:
     if brand_database_backend() == "supabase":
+        if _supabase_read_cache_peek("ai_robot_configs"):
+            return _supabase_read_cache_get("ai_robot_configs")
         rows = {
             row["platform"]: _public_ai_config(row)
             for row in _brand_supabase().select("ai_robot_configs", order="platform.asc")
         }
-        return [_default_ai_robot_config(platform, rows.get(platform)) for platform in sorted(AI_ROBOT_PLATFORMS)]
+        result = [_default_ai_robot_config(platform, rows.get(platform)) for platform in sorted(AI_ROBOT_PLATFORMS)]
+        _supabase_read_cache_set("ai_robot_configs", result)
+        return copy.deepcopy(result)
     ensure_database()
     with connect() as conn:
         rows = {
@@ -791,7 +863,9 @@ def get_ai_robot_config(platform: str) -> dict[str, Any] | None:
 def delete_ai_robot_config(platform: str) -> bool:
     token = _normalize_ai_platform(platform)
     if brand_database_backend() == "supabase":
-        return _brand_supabase().delete("ai_robot_configs", filters={"platform": token})
+        ok = _brand_supabase().delete("ai_robot_configs", filters={"platform": token})
+        _invalidate_supabase_read_cache("ai_robot_configs")
+        return ok
     ensure_database()
     with connect() as conn:
         cursor = conn.execute("DELETE FROM ai_robot_configs WHERE platform = ?", (token,))
@@ -824,6 +898,7 @@ def save_ai_robot_config(platform: str, payload: dict[str, Any]) -> dict[str, An
             "updated_at": ts,
         }
         row = client.upsert("ai_robot_configs", data, on_conflict="platform")
+        _invalidate_supabase_read_cache("ai_robot_configs")
         return _public_ai_config(row)
     with connect() as conn:
         existing = conn.execute("SELECT * FROM ai_robot_configs WHERE platform = ?", (token,)).fetchone()
@@ -916,7 +991,7 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
         message["test"] = True
     ts = now_ts()
     if brand_database_backend() == "supabase":
-        return _brand_supabase().insert(
+        inserted = _brand_supabase().insert(
             "ai_robot_messages",
             {
                 "platform": token,
@@ -929,6 +1004,8 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
                 "updated_at": ts,
             },
         )
+        _invalidate_supabase_read_cache("ai_robot_messages")
+        return inserted
     with connect() as conn:
         cursor = conn.execute(
             """
@@ -961,7 +1038,11 @@ def get_ai_robot_message(message_id: int) -> dict[str, Any] | None:
 
 def list_ai_robot_messages() -> list[dict[str, Any]]:
     if brand_database_backend() == "supabase":
-        return _brand_supabase().select("ai_robot_messages", order="id.desc")
+        if _supabase_read_cache_peek("ai_robot_messages"):
+            return _supabase_read_cache_get("ai_robot_messages")
+        rows = _brand_supabase().select("ai_robot_messages", order="id.desc")
+        _supabase_read_cache_set("ai_robot_messages", rows)
+        return copy.deepcopy(rows)
     ensure_database()
     with connect() as conn:
         return [dict_from_row(row) for row in conn.execute("SELECT * FROM ai_robot_messages ORDER BY id DESC LIMIT 100")]
@@ -1008,13 +1089,15 @@ def save_notification_route(event_type: str, platform: str, enabled: bool) -> di
     ts = now_ts()
     if brand_database_backend() == "supabase":
         try:
-            return _brand_supabase().upsert(
+            row = _brand_supabase().upsert(
                 "notification_routes",
                 {"event_type": event, "platform": token, "enabled": 1 if enabled else 0, "created_at": ts, "updated_at": ts},
                 on_conflict="event_type,platform",
             )
         except SupabaseError as exc:
             return {"event_type": event, "platform": token, "enabled": bool(enabled), "ok": False, "storage_unavailable": True, "error": str(exc)}
+        _invalidate_supabase_read_cache("notification_routes")
+        return row
     ensure_database()
     with connect() as conn:
         conn.execute(
@@ -1035,6 +1118,8 @@ def list_notification_routes() -> list[dict[str, Any]]:
         for platform in sorted(NOTIFICATION_PLATFORMS)
     ]
     if brand_database_backend() == "supabase":
+        if _supabase_read_cache_peek("notification_routes"):
+            return _supabase_read_cache_get("notification_routes")
         try:
             rows = {
                 (row["event_type"], row["platform"]): {**row, "enabled": bool(row.get("enabled"))}
@@ -1042,7 +1127,9 @@ def list_notification_routes() -> list[dict[str, Any]]:
             }
         except SupabaseError:
             rows = {}
-        return [{**item, **rows.get((item["event_type"], item["platform"]), {})} for item in defaults]
+        merged = [{**item, **rows.get((item["event_type"], item["platform"]), {})} for item in defaults]
+        _supabase_read_cache_set("notification_routes", merged)
+        return copy.deepcopy(merged)
     ensure_database()
     with connect() as conn:
         rows = {
@@ -1320,6 +1407,27 @@ def _terminal_state_path() -> Path:
     return get_paths().runtime_root / "terminal_execution_state.json"
 
 
+def _terminal_qr_cache_root() -> Path:
+    return get_paths().runtime_root / "terminal_qr_cache"
+
+
+def _terminal_qr_cache_path(window_id: int) -> Path:
+    return _terminal_qr_cache_root() / f"window-{int(window_id):02d}.png"
+
+
+def terminal_qr_image_path(window_id: int) -> str | None:
+    path = _terminal_qr_cache_path(window_id)
+    return str(path) if path.exists() else None
+
+
+_TERMINAL_EXECUTION_STATE_CACHE: dict[str, Any] = {"expires_at": 0.0, "value": None}
+
+
+def _invalidate_terminal_execution_state_cache() -> None:
+    _TERMINAL_EXECUTION_STATE_CACHE["expires_at"] = 0.0
+    _TERMINAL_EXECUTION_STATE_CACHE["value"] = None
+
+
 def _load_terminal_state() -> dict[str, Any]:
     path = _terminal_state_path()
     if not path.exists():
@@ -1336,6 +1444,42 @@ def _save_terminal_state(payload: dict[str, Any]) -> None:
     path = _terminal_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _invalidate_terminal_execution_state_cache()
+
+
+def _clear_terminal_qr_cache(window_id: int) -> None:
+    try:
+        path = _terminal_qr_cache_path(window_id)
+        if path.exists():
+            path.unlink()
+    except Exception:
+        return
+
+
+def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
+    account = get_account(account_id) or {}
+    platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
+    if not platform:
+        return ""
+    try:
+        result = engine._prepare_platform_login_qr_notice(  # type: ignore[attr-defined]
+            platform_name="wechat",
+            open_url=get_platform("wechat").open_url,  # type: ignore[union-attr]
+            debug_port=int(platform.get("debug_port") or 0),
+            chrome_user_data_dir=str(platform.get("profile_dir") or ""),
+            auto_open_chrome=False,
+            refresh_page=False,
+            allow_navigation=False,
+        )
+    except Exception:
+        return ""
+    photo_bytes = result.get("photo_bytes") if isinstance(result, dict) else b""
+    if not isinstance(photo_bytes, (bytes, bytearray)) or not photo_bytes:
+        return ""
+    cache_path = _terminal_qr_cache_path(window_id)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(bytes(photo_bytes))
+    return str(cache_path)
 
 
 def _account_operator_wechat(account: dict[str, Any]) -> str:
@@ -1397,6 +1541,10 @@ def _terminal_operator_groups() -> list[dict[str, Any]]:
 
 
 def terminal_execution_state() -> dict[str, Any]:
+    now = time.monotonic()
+    cached = _TERMINAL_EXECUTION_STATE_CACHE
+    if cached["value"] is not None and now < float(cached["expires_at"] or 0.0):
+        return cached["value"]
     groups = _terminal_operator_groups()
     state = _load_terminal_state()
     login_started = bool(state.get("login_started"))
@@ -1406,7 +1554,7 @@ def terminal_execution_state() -> dict[str, Any]:
         visible_windows = []
         for window in windows:
             visible_window = dict(window)
-            visible_window["qr_data_url"] = ""
+            visible_window["qr_url"] = ""
             visible_window["manual_available_at"] = 0
             visible_accounts = []
             for index, account in enumerate(window.get("accounts") or []):
@@ -1418,7 +1566,7 @@ def terminal_execution_state() -> dict[str, Any]:
                 visible_accounts.append(visible_account)
             visible_window["accounts"] = visible_accounts
             visible_windows.append(visible_window)
-    return {
+    result = {
         "ok": True,
         "colors": TERMINAL_COLORS,
         "operators": groups,
@@ -1428,6 +1576,9 @@ def terminal_execution_state() -> dict[str, Any]:
         "login_started": login_started,
         "summary": _terminal_summary(windows, groups),
     }
+    cached["value"] = result
+    cached["expires_at"] = now + 3.0
+    return result
 
 
 def _terminal_summary(windows: list[dict[str, Any]], groups: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1438,30 +1589,6 @@ def _terminal_summary(windows: list[dict[str, Any]], groups: list[dict[str, Any]
             if str(account.get("status") or "") == "success":
                 success += 1
     return {"total": total, "success": success, "active_windows": len([item for item in windows if item.get("enabled")])}
-
-
-def _terminal_qr_data_url(account_id: int) -> str:
-    account = get_account(account_id) or {}
-    platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
-    if not platform:
-        return ""
-    try:
-        result = engine._prepare_platform_login_qr_notice(  # type: ignore[attr-defined]
-            platform_name="wechat",
-            open_url=get_platform("wechat").open_url,  # type: ignore[union-attr]
-            debug_port=int(platform.get("debug_port") or 0),
-            chrome_user_data_dir=str(platform.get("profile_dir") or ""),
-            auto_open_chrome=False,
-            refresh_page=False,
-            allow_navigation=False,
-        )
-    except Exception:
-        return ""
-    photo_bytes = result.get("photo_bytes") if isinstance(result, dict) else b""
-    if not isinstance(photo_bytes, (bytes, bytearray)) or not photo_bytes:
-        return ""
-    mime = str(result.get("mime") or "image/png")
-    return f"data:{mime};base64,{base64.b64encode(bytes(photo_bytes)).decode('ascii')}"
 
 
 def _close_wechat_browser_for_account(account_id: int) -> None:
@@ -1497,13 +1624,8 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
     windows = []
     saved_config = []
     for index, raw in enumerate(payload.get("windows") or [], start=1):
-        saved_config.append({
-            "id": int(raw.get("id") or index),
-            "enabled": bool(raw.get("enabled", True)),
-            "operator_wechat": str(raw.get("operator_wechat") or "").strip(),
-            "color": str(raw.get("color") or TERMINAL_COLORS[(index - 1) % len(TERMINAL_COLORS)]["hex"]),
-        })
-        if not bool(raw.get("enabled", True)):
+        enabled = bool(raw.get("enabled", True))
+        if not enabled:
             continue
         operator = str(raw.get("operator_wechat") or "").strip()
         if operator not in groups:
@@ -1516,7 +1638,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
         current = accounts[0]
         current["status"] = "pending"
         current["status_text"] = "等待开始登录"
-        qr_data_url = ""
+        qr_path = ""
         windows.append({
             "id": int(raw.get("id") or index),
             "enabled": True,
@@ -1524,9 +1646,16 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "color": color,
             "color_name": next((item["name"] for item in TERMINAL_COLORS if item["hex"].lower() == color.lower()), ""),
             "current_index": 0,
-            "qr_data_url": qr_data_url,
+            "qr_path": qr_path,
+            "qr_url": "",
             "manual_available_at": 0,
             "accounts": accounts,
+        })
+        saved_config.append({
+            "id": int(raw.get("id") or index),
+            "enabled": True,
+            "operator_wechat": operator,
+            "color": color,
         })
     if not windows:
         raise ValueError("至少需要启用一个已绑定运营微信的终端")
@@ -1552,11 +1681,15 @@ def start_terminal_login() -> dict[str, Any]:
             open_account_browser(int(current["id"]), "wechat")
             current["status"] = "waiting_qr"
             current["status_text"] = "等待扫码中..."
-            window["qr_data_url"] = _terminal_qr_data_url(int(current["id"]))
+            qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), int(current["id"]))
+            window["qr_path"] = qr_path
+            window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
         except Exception as exc:
             current["status"] = "error"
             current["status_text"] = str(exc)
-            window["qr_data_url"] = ""
+            _clear_terminal_qr_cache(int(window.get("id") or 0))
+            window["qr_path"] = ""
+            window["qr_url"] = ""
         window["manual_available_at"] = now_ts() + 60
     state["login_started"] = True
     _save_terminal_state(state)
@@ -1591,9 +1724,14 @@ def _advance_terminal_window(window: dict[str, Any]) -> None:
     if str(result.get("status") or "") != "ready":
         current["status"] = "waiting_qr"
         current["status_text"] = "等待扫码中..."
-        if not window.get("qr_data_url"):
-            window["qr_data_url"] = _terminal_qr_data_url(account_id)
+        if not window.get("qr_url"):
+            qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
+            window["qr_path"] = qr_path
+            window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
         return
+    _clear_terminal_qr_cache(int(window.get("id") or 0))
+    window["qr_path"] = ""
+    window["qr_url"] = ""
     if current.get("task_id"):
         task = get_task(int(current.get("task_id") or 0)) or {}
         task_status = str(task.get("status") or "").lower()
@@ -1604,7 +1742,9 @@ def _advance_terminal_window(window: dict[str, Any]) -> None:
             _close_wechat_browser_for_account(account_id)
             next_index = current_index + 1
             window["current_index"] = next_index
-            window["qr_data_url"] = ""
+            _clear_terminal_qr_cache(int(window.get("id") or 0))
+            window["qr_path"] = ""
+            window["qr_url"] = ""
             window["manual_available_at"] = now_ts() + 60
             if next_index >= len(accounts):
                 return
@@ -1615,7 +1755,9 @@ def _advance_terminal_window(window: dict[str, Any]) -> None:
                 open_account_browser(int(next_account["id"]), "wechat")
                 next_account["status"] = "waiting_qr"
                 next_account["status_text"] = "等待扫码中..."
-                window["qr_data_url"] = _terminal_qr_data_url(int(next_account["id"]))
+                qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), int(next_account["id"]))
+                window["qr_path"] = qr_path
+                window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
             except Exception as exc:
                 next_account["status"] = "error"
                 next_account["status_text"] = str(exc)
@@ -1659,6 +1801,9 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         task = _queue_terminal_draft_task(int(current.get("id") or 0))
         current["task_id"] = task.get("id")
         current["status"] = "running"
+        qr_path = _write_terminal_qr_cache(int(target.get("id") or 0), int(current.get("id") or 0))
+        target["qr_path"] = qr_path
+        target["qr_url"] = f"/api/terminal-execution/windows/{int(target.get('id') or 0)}/qr-image" if qr_path else ""
         current["status_text"] = "已人工触发草稿任务"
     target["manual_available_at"] = now_ts() + 60
     _save_terminal_state(state)
@@ -1682,6 +1827,7 @@ def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
             )
             row["status"] = "sending"
             row["last_attempt_at"] = ts
+        _invalidate_supabase_read_cache("ai_robot_messages")
         return claimed
     ensure_database()
     with connect() as conn:
@@ -1817,7 +1963,9 @@ def _mark_ai_robot_message_sending(message: dict[str, Any]) -> dict[str, Any]:
     ts = now_ts()
     payload = {"status": "sending", "summary": "claimed by robot sender", "last_attempt_at": ts, "updated_at": ts}
     if brand_database_backend() == "supabase":
-        return _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+        row = _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+        _invalidate_supabase_read_cache("ai_robot_messages")
+        return row
     with connect() as conn:
         conn.execute(
             """
@@ -1834,7 +1982,9 @@ def _mark_ai_robot_message_sent(message: dict[str, Any]) -> dict[str, Any]:
     ts = now_ts()
     payload = {"status": "sent", "summary": "sent by robot sender", "error": "", "sent_at": ts, "updated_at": ts}
     if brand_database_backend() == "supabase":
-        return _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+        row = _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+        _invalidate_supabase_read_cache("ai_robot_messages")
+        return row
     with connect() as conn:
         conn.execute(
             """
@@ -1862,7 +2012,9 @@ def _mark_ai_robot_message_failed(message: dict[str, Any], error: str) -> dict[s
         "updated_at": ts,
     }
     if brand_database_backend() == "supabase":
-        return _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+        row = _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
+        _invalidate_supabase_read_cache("ai_robot_messages")
+        return row
     with connect() as conn:
         conn.execute(
             """
@@ -2133,6 +2285,8 @@ def _parse_supabase_schema(sql: str) -> list[dict[str, Any]]:
 
 def list_accounts() -> list[dict[str, Any]]:
     if brand_database_backend() == "supabase":
+        if _supabase_read_cache_peek("accounts"):
+            return _supabase_read_cache_get("accounts")
         publish_success_counts = _matrix_publish_success_counts_for_backend()
         client = _brand_supabase()
         accounts = client.select("matrix_accounts", order="id.desc")
@@ -2149,7 +2303,8 @@ def list_accounts() -> list[dict[str, Any]]:
                 platform.update(_decode_platform_profile(platform))
             account["platforms"] = platforms
             account["publish_success_count"] = publish_success_counts.get(int(account["id"]), 0)
-        return accounts
+        _supabase_read_cache_set("accounts", accounts)
+        return copy.deepcopy(accounts)
     ensure_database()
     publish_success_counts = _matrix_publish_success_counts()
     with connect() as conn:
@@ -2234,6 +2389,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
         )
         for platform in platforms:
             ensure_account_platform(None, int(account["id"]), str(platform))
+        _invalidate_supabase_read_cache("accounts", "dashboard_summary")
         return get_account(int(account["id"])) or {}
     ensure_database()
     ts = now_ts()
@@ -2277,6 +2433,7 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
         if update:
             update["updated_at"] = now_ts()
             _brand_supabase().update("matrix_accounts", update, filters={"id": account_id})
+            _invalidate_supabase_read_cache("accounts")
         return get_account(account_id)
     ensure_database()
     allowed = {"display_name", "niche", "status", "notes"}
@@ -2312,6 +2469,7 @@ def delete_account(account_id: int) -> bool:
                 client.delete("browser_profiles", filters={"account_platform_id": platform_id})
         client.delete("account_platforms", filters={"account_id": account_id})
         client.delete("matrix_accounts", filters={"id": account_id})
+        _invalidate_supabase_read_cache("accounts", "dashboard_summary", "stats:all")
         return True
     ensure_database()
     with connect() as conn:
@@ -2338,6 +2496,7 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
         if account is None:
             raise ValueError("account not found")
         existing = client.select_one("account_platforms", filters={"account_id": account_id, "platform": token})
+        dirty = existing is None
         if existing is None:
             ap = client.insert(
                 "account_platforms",
@@ -2380,12 +2539,16 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
                         "updated_at": ts,
                     },
                 )
+            dirty = True
         elif not _json_payload(profile.get("fingerprint_json"), {}):
             update = {"fingerprint_json": fingerprint, "updated_at": ts}
             if profile.get("account_id") == account_id:
                 client.update("browser_profiles", update, filters={"account_id": account_id})
             else:
                 client.update("browser_profiles", update, filters={"id": profile["id"]})
+            dirty = True
+        if dirty:
+            _invalidate_supabase_read_cache("accounts")
         return ap
     conn.execute(
         """
@@ -2551,6 +2714,7 @@ def create_task(payload: dict[str, Any]) -> dict[str, Any]:
                 "updated_at": ts,
             },
         )
+        _invalidate_supabase_read_cache("dashboard_summary")
         return task
     with connect() as conn:
         if status in {"pending", "running"} and account_id:
@@ -2607,7 +2771,10 @@ def get_task(task_id: int) -> dict[str, Any] | None:
 
 def delete_task(task_id: int) -> bool:
     if brand_database_backend() == "supabase":
-        return _brand_supabase().delete("automation_tasks", filters={"id": task_id})
+        ok = _brand_supabase().delete("automation_tasks", filters={"id": task_id})
+        if ok:
+            _invalidate_supabase_read_cache("dashboard_summary")
+        return ok
     ensure_database()
     with connect() as conn:
         cursor = conn.execute("DELETE FROM automation_tasks WHERE id = ?", (task_id,))
@@ -2624,6 +2791,8 @@ def delete_tasks(task_ids: list[int]) -> int:
         for task_id in ids:
             if client.delete("automation_tasks", filters={"id": task_id}):
                 deleted += 1
+        if deleted:
+            _invalidate_supabase_read_cache("dashboard_summary")
         return deleted
     ensure_database()
     placeholders = ",".join("?" for _ in ids)
@@ -2647,6 +2816,8 @@ def update_tasks_status(task_ids: list[int], status: str) -> int:
             row = client.update("automation_tasks", {"status": normalized, "updated_at": ts}, filters={"id": task_id})
             if row:
                 updated += 1
+        if updated:
+            _invalidate_supabase_read_cache("dashboard_summary")
         return updated
     ensure_database()
     placeholders = ",".join("?" for _ in ids)
@@ -2686,6 +2857,8 @@ def import_stats(payload: dict[str, Any]) -> dict[str, Any]:
                 },
             )
             inserted += 1
+        if inserted:
+            _invalidate_supabase_read_cache("dashboard_summary", "stats:all")
         return {"ok": True, "inserted": inserted}
     with connect() as conn:
         for item in rows:
@@ -2721,7 +2894,13 @@ def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[s
         token = normalize_platform(platform)
         if token:
             params["platform"] = f"eq.{token}"
-        return _brand_supabase().select_where("video_stats_snapshots", params=params, order="captured_at.desc,id.desc")
+        cache_key = "stats:all"
+        if not params and _supabase_read_cache_peek(cache_key):
+            return _supabase_read_cache_get(cache_key)
+        rows = _brand_supabase().select_where("video_stats_snapshots", params=params, order="captured_at.desc,id.desc")
+        if not params:
+            _supabase_read_cache_set(cache_key, rows)
+        return copy.deepcopy(rows)
     ensure_database()
     clauses: list[str] = []
     values: list[Any] = []
@@ -2771,15 +2950,23 @@ def dashboard_summary() -> dict[str, Any]:
 
 
 def _dashboard_summary_supabase() -> dict[str, Any]:
+    if _supabase_read_cache_peek("dashboard_summary"):
+        return _supabase_read_cache_get("dashboard_summary")
     client = _brand_supabase()
     try:
         payload = client.rpc("dashboard_summary")
     except Exception:
-        return _dashboard_summary_supabase_legacy(client)
+        legacy = _dashboard_summary_supabase_legacy(client)
+        _supabase_read_cache_set("dashboard_summary", legacy)
+        return copy.deepcopy(legacy)
     row = payload[0] if isinstance(payload, list) and payload else payload
     if not isinstance(row, dict):
-        return _dashboard_summary_supabase_legacy(client)
-    return _normalize_dashboard_summary(row)
+        legacy = _dashboard_summary_supabase_legacy(client)
+        _supabase_read_cache_set("dashboard_summary", legacy)
+        return copy.deepcopy(legacy)
+    normalized = _normalize_dashboard_summary(row)
+    _supabase_read_cache_set("dashboard_summary", normalized)
+    return copy.deepcopy(normalized)
 
 
 def _normalize_dashboard_summary(row: dict[str, Any]) -> dict[str, int]:

@@ -692,6 +692,26 @@ def test_video_matrix_state_lists_ending_templates(monkeypatch, tmp_path) -> Non
     assert file_response.content == b"video"
 
 
+def test_video_matrix_uploads_ending_template_and_adds_unique_suffix(monkeypatch, tmp_path) -> None:
+    ending_dir = tmp_path / "ending_template"
+    ending_dir.mkdir()
+    (ending_dir / "dup.mp4").write_bytes(b"old")
+    monkeypatch.setattr(video_matrix_api, "ENDING_TEMPLATE_DIR", ending_dir)
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/video-matrix/ending-templates/upload",
+        files={"file": ("dup.mp4", BytesIO(b"new"), "video/mp4")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filename"] != "dup.mp4"
+    assert payload["filename"].startswith("dup_")
+    assert payload["filename"].endswith(".mp4")
+    assert (ending_dir / payload["filename"]).read_bytes() == b"new"
+
+
 def test_video_matrix_generate_passes_specific_ending_template(monkeypatch, tmp_path) -> None:
     ending_dir = tmp_path / "ending_template"
     ending_dir.mkdir()

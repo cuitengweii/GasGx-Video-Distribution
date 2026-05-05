@@ -42,6 +42,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "generationWaitOverlay" in html
     assert "generationWaitPercent" in html
     assert "preflightClose" in html
+    assert 'class="section-title source-panel-title"' in html
+    assert html.count('class="section-title"') >= 4
     assert '"Queued": "任务已提交，正在排队准备。请保持当前页面打开，系统会自动开始处理。"' in app
     assert 'queued: "任务已提交，正在等待开始"' in app
     assert "function localizedJobTitle" in app
@@ -56,6 +58,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "endingTemplateForm" in html
     assert "endingTemplateSwitch" in html
     assert "endingTemplateMenu" in html
+    assert "uploadEndingTemplateBtn" in app
+    assert "/ending-templates/upload" in app
+    assert "showVideoMatrixNotice" in app
+    assert "alert(`上传成功：${result.filename}`)" not in app
     assert "openEndingTemplateDirInline" in app
     assert "点击查看" not in html
     assert '<button id="saveState" type="button">背景音乐库</button>' in html
@@ -147,10 +153,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".dir-row code" in css
     assert ".embed-mode .sidebar" in css
     assert "overflow: hidden" in css
-    assert "font-size: 12px" in css
+    assert ".embed-mode .sidebar {\n  display: grid;\n  width: 268px;" in css
+    assert ".embed-mode .sidebar input,\n.embed-mode .sidebar select {\n  min-height: clamp(24px, 3.1vh, 30px);" in css
     assert ".embed-mode .sidebar-radio-field .radio-row" in css
     assert ".embed-mode .library-action" in css
-    assert "min-height: clamp(28px, 3.5vh, 34px)" in css
+    assert "font-size: 11px" in css
     assert "body.video-matrix-active" in shell_css
     assert "body.video-matrix-active .sidebar" in shell_css
     assert "body.video-matrix-active #video-matrix" in shell_css
@@ -231,7 +238,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'id="system-directory-state"' in shell_html
     assert "已请求打开" in shell_app
     assert "打开失败" in shell_app
-    assert 'id="system-initialize" type="button" disabled' in shell_html
+    assert 'id="system-initialize"' not in shell_html
+    assert 'id="system-initialize-state"' not in shell_html
     assert "访问记录" in shell_html
     assert "访问密码" not in shell_html
     assert "已部署" in shell_app
@@ -717,7 +725,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".preview-caption-actions" in css
     assert ".button-icon" in css
     assert "grid-template-columns: minmax(88px, .9fr) minmax(100px, 1fr) minmax(116px, 148px) minmax(56px, 70px) minmax(54px, 58px)" in css
+    assert ".section-title b {\n  display: block;\n  font-size: 18px;\n  line-height: 1.15;\n  color: #f3f6f1;\n}" in css
     assert ".source-panel .source-composition-row button {\n  width: 100%;" in css
+    assert ".ending-template-dir-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto auto auto;" in css
     assert "left: 0;\n  right: auto;" in css
     assert "@media (max-width: 1180px)" in css
     assert "videoTemplateCaption" not in html

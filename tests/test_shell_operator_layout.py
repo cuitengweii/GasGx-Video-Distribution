@@ -17,6 +17,7 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'data-view="terminal-execution" data-permission="terminal-execution">终端执行</button>' in html
     assert html.index('data-view="tasks"') < html.index('data-view="terminal-execution"') < html.index('data-view="stats"')
     assert "terminal-init-modal" in html
+    assert "terminal-reenter" in html
     assert '<div class="page-toolbar">' not in html
     assert 'id="refresh"' not in html
     assert 'data-quick-view="notifications" data-permission="notifications">查看提醒</button>' not in html
@@ -25,7 +26,8 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert "终端前置配置区" in html
     assert "确认配置并进入" not in html
     assert 'id="terminal-start-system"' not in html
-    assert 'id="terminal-start-login">开始登录</button>' in html
+    assert 'id="terminal-start-login">获取二维码</button>' in html
+    assert 'id="terminal-reenter">重新进入</button>' in html
     assert 'data-quick-view="notifications"' in html
     assert 'data-quick-view="tasks"' in html
     assert 'data-quick-view="video-matrix"' in html
@@ -36,20 +38,26 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert ".terminal-console" in css
     assert ".terminal-task-column" in css
     assert ".terminal-qr-placeholder" in css
+    assert ".terminal-task-column.terminal-glass" in css
     assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in css
     assert "overflow-x: hidden;" in css
     assert "min-width: 0;" in css
     assert "pointer-events: none;" in css
     assert "pointer-events: auto;" in css
+    assert "backdrop-filter: none;" in css
+    assert "animation: terminalScan" not in css
+    assert "prefers-reduced-motion: reduce" in css
     app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "/api/terminal-execution/state" in app
     assert "/api/terminal-execution/start" in app
     assert "/api/terminal-execution/start-login" in app
+    assert "/api/terminal-execution/windows/" in app
     assert "#terminal-config-list" in app
+    assert "#terminal-reenter" in app
     assert 'setButtonLoading(event.currentTarget, "启动中")' in app
     assert "#terminal-start-system" not in app
     assert "!state.terminalExecution.initialized || state.terminalConfigOpen" in app
-    assert "state.terminalQrVisible && loginStarted && window.qr_data_url" in app
+    assert "state.terminalQrVisible && loginStarted && window.qr_url" in app
     assert "state.terminalQrVisible = false;" in app
     assert "state.terminalQrVisible = true;" in app
     assert 'aria-label="等待开始登录"' in app
@@ -64,7 +72,16 @@ def test_terminal_config_does_not_start_login_side_effects() -> None:
     login_block = service.split("def start_terminal_login", 1)[1].split("def _queue_terminal_draft_task", 1)[0]
 
     assert "open_account_browser" not in configure_block
-    assert "_terminal_qr_data_url" not in configure_block
+    assert "_write_terminal_qr_cache" not in configure_block
     assert '"login_started": False' in configure_block
     assert "open_account_browser" in login_block
-    assert "_terminal_qr_data_url" in login_block
+    assert "_write_terminal_qr_cache" in login_block
+
+
+def test_terminal_execution_only_persists_enabled_windows() -> None:
+    service = (ROOT / "src" / "gasgx_distribution" / "service.py").read_text(encoding="utf-8")
+    block = service.split("def start_terminal_execution", 1)[1].split("def start_terminal_login", 1)[0]
+
+    assert 'if not enabled:' in block
+    assert 'saved_config.append({' in block
+    assert '"enabled": True' in block

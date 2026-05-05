@@ -1551,7 +1551,7 @@ function renderTerminalExecution() {
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
     startLoginButton.disabled = loginStarted;
-    startLoginButton.textContent = loginStarted ? "登录中" : "开始登录";
+    startLoginButton.textContent = loginStarted ? "登录中" : "获取二维码";
   }
   const progress = document.querySelector("#terminal-global-progress");
   if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
@@ -1579,14 +1579,13 @@ function renderTerminalExecution() {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
           ${accounts.map((account, index) => `
             <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
               <div class="terminal-account-info">
-                <div class="terminal-avatar"></div>
                 <div>
                   <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
                   <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
@@ -1647,7 +1646,6 @@ function renderStats() {
   const summary = state.summary || {};
   const overview = [
     ["矩阵账号总数", summary.accounts || 4, "+8.4%", "up"],
-    ["新增账号数", 2, "+100%", "up"],
     ["累计作品总量", 186, "+18.6%", "up"],
     ["累计总曝光", "68.4万", "+24.8%", "up"],
     ["累计总播放", "28.6万", "+19.2%", "up"],
@@ -1659,6 +1657,24 @@ function renderStats() {
   document.querySelector("#stats-overview").innerHTML = overview.map(([label, value, change, trend]) => `
     <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
   `).join("");
+
+  const statsAccountFilter = document.querySelector("#stats-account-filter");
+  if (statsAccountFilter) {
+    const activeAccounts = (state.accounts || [])
+      .filter((account) => String(account.status || "").toLowerCase() === "active")
+      .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+    const currentValue = statsAccountFilter.value;
+    const activeOptions = activeAccounts.map((account) => {
+      const label = account.display_name || account.account_key || `账号 ${account.id}`;
+      return `<option value="${account.id}">#${account.id} ${label}</option>`;
+    }).join("");
+    statsAccountFilter.innerHTML = `<option value="">全部账号</option>${activeOptions}`;
+    if (currentValue && [...statsAccountFilter.options].some((option) => option.value === currentValue)) {
+      statsAccountFilter.value = currentValue;
+    } else {
+      statsAccountFilter.value = "";
+    }
+  }
 
   const accounts = [
     ["GasGx小绿", "视频号", "正常", "86,200", "18,600", "12,480", "+860", "42.1%", "8.6%", 12, "爆款账号", ""],
@@ -1805,6 +1821,41 @@ function confirmSuperAdminPassword() {
 }
 
 const confirmSystemInitializePassword = confirmSuperAdminPassword;
+
+function initSupabaseReadCacheClear() {
+  const button = document.querySelector("#clear-supabase-read-cache");
+  const stateNode = document.querySelector("#supabase-read-cache-state");
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    const restoreButton = setButtonLoading(button, "清理中...");
+    if (stateNode) {
+      stateNode.hidden = false;
+      stateNode.textContent = "";
+      stateNode.classList.remove("danger");
+    }
+    try {
+      const result = await api("/api/system/supabase-read-cache/clear", { method: "POST" });
+      if (stateNode) {
+        if (result.cleared) {
+          stateNode.textContent = "已清空进程内 Supabase 读缓存，后续请求将重新拉取远端数据。";
+        } else {
+          stateNode.textContent =
+            result.backend === "sqlite"
+              ? "当前品牌库为 SQLite，未启用 Supabase 读缓存。"
+              : "未清理缓存。";
+        }
+      }
+    } catch (error) {
+      if (stateNode) {
+        stateNode.textContent = `清理失败：${error.message}`;
+        stateNode.classList.add("danger");
+      }
+      throw error;
+    } finally {
+      restoreButton();
+    }
+  });
+}
 
 function initSystemDirectoryActions() {
   const stateNode = document.querySelector("#system-directory-state");
@@ -2089,15 +2140,11 @@ function renderAiRobot() {
   const editingTelegram = editingPlatform === "telegram" || !telegramBound;
   const configured = visibleAiRobotConfigs().filter(isAiRobotBound);
   const config = editingPlatform ? aiRobotConfigFor(editingPlatform) : (configured.length ? configured[0] : selectedAiRobotConfig());
-  const saveButton = document.querySelector("#ai-save-config");
-  const sendTestButton = document.querySelector("#ai-send-test");
   const panelSaveButton = document.querySelector("#ai-save-config-panel");
   const panelSendTestButton = document.querySelector("#ai-send-test-panel");
   const formHidden = !editingPlatform;
   if (configPanel) configPanel.hidden = formHidden;
   form.hidden = formHidden;
-  saveButton.classList.toggle("hidden", formHidden);
-  sendTestButton.classList.toggle("hidden", formHidden);
   panelSaveButton?.classList.toggle("hidden", formHidden);
   panelSendTestButton?.classList.toggle("hidden", formHidden);
   form.elements.platform.value = config.platform || "wecom";
@@ -2577,6 +2624,7 @@ function activateView(view, updateHash = true) {
   applyPermissionLimitedState();
   if (view === "video-matrix") {
     mountVideoMatrixWorkbench();
+    restoreVideoMatrixWorkbench();
   } else {
     loadViewData(view).catch((error) => {
       const target = section.querySelector(".loading-inline") || section;
@@ -2761,6 +2809,21 @@ document.querySelector("#terminal-edit-config")?.addEventListener("click", () =>
   renderTerminalExecution();
 });
 
+document.querySelector("#terminal-reenter")?.addEventListener("click", async (event) => {
+  const restoreButton = setButtonLoading(event.currentTarget, "重新进入中...");
+  try {
+    state.terminalExecution = await api("/api/terminal-execution/start", {
+      method: "POST",
+      body: JSON.stringify({ windows: readTerminalConfigRows() }),
+    });
+    state.terminalConfigOpen = false;
+    state.terminalQrVisible = false;
+    renderTerminalExecution();
+  } finally {
+    restoreButton();
+  }
+});
+
 document.querySelector("#distribution-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "保存中");
@@ -2812,7 +2875,7 @@ document.querySelector("#telegram-open-updates")?.addEventListener("click", () =
   window.open(`https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates`, "_blank", "noopener,noreferrer");
 });
 
-document.querySelector("#ai-save-config").addEventListener("click", async (event) => {
+document.querySelector("#ai-save-config")?.addEventListener("click", async (event) => {
   const button = event.currentTarget;
   const form = document.querySelector("#ai-robot-form");
   const stateNode = document.querySelector("#ai-config-state");
@@ -2873,11 +2936,15 @@ document.querySelector("#ai-save-config").addEventListener("click", async (event
 });
 
 document.querySelector("#ai-save-config-panel")?.addEventListener("click", () => {
-  document.querySelector("#ai-save-config")?.click();
+  const form = document.querySelector("#ai-robot-form");
+  const button = document.querySelector("#ai-save-config-panel");
+  if (form && button) saveAiRobotConfig(form, button);
 });
 
 document.querySelector("#ai-send-test-panel")?.addEventListener("click", () => {
-  document.querySelector("#ai-send-test")?.click();
+  const form = document.querySelector("#ai-robot-form");
+  const button = document.querySelector("#ai-send-test-panel");
+  if (form && button) sendAiRobotTest(form.elements.platform.value, button);
 });
 
 document.querySelector("#ai-copy-lark-callback")?.addEventListener("click", async (event) => {
@@ -2938,11 +3005,6 @@ function renderAiRobotLoading() {
   if (channelGrid) channelGrid.innerHTML = loading;
   if (messageList && !state.aiRobotMessagesCollapsed) messageList.innerHTML = loading;
 }
-
-document.querySelector("#ai-send-test").addEventListener("click", async (event) => {
-  const form = document.querySelector("#ai-robot-form");
-  await sendAiRobotTest(form.elements.platform.value, event.currentTarget);
-});
 
 document.querySelector("#open-material-dir").addEventListener("click", async (event) => {
   const button = event.currentTarget;
@@ -3139,6 +3201,7 @@ renderThemePalette();
 initBrandSettings();
 initSystemInitialize();
 initSystemDirectoryActions();
+initSupabaseReadCacheClear();
 document.querySelector("#database-dictionary-locale-toggle")?.addEventListener("click", toggleDatabaseDictionaryLocale);
 initUserMenu();
 initPermissionGuards();
@@ -3386,6 +3449,11 @@ function mountVideoMatrixWorkbench() {
     const theme = SHELL_THEMES.find((item) => item.id === localStorage.getItem(SHELL_THEME_KEY)) || SHELL_THEMES[0];
     broadcastShellTheme(theme);
   });
+}
+
+function restoreVideoMatrixWorkbench() {
+  const frame = document.querySelector(".video-matrix-frame");
+  frame?.contentWindow?.postMessage({ type: "gasgx-video-matrix-restore" }, window.location.origin);
 }
 
 document.querySelector('[data-view="video-matrix"]').addEventListener("click", mountVideoMatrixWorkbench);

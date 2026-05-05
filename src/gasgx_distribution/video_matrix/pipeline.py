@@ -4,6 +4,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,6 +19,7 @@ from .settings import ProjectSettings
 
 
 ProgressCallback = Callable[[str, float, str], None]
+AssetCallback = Callable[[RenderedAsset, int, int], None]
 VIDEO_ENDING_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 
 
@@ -46,6 +48,8 @@ def run_pipeline(
     recent_segment_keys: set[str] | None = None,
     ending_template_path: Path | None = None,
     telemetry: Any | None = None,
+    speed_mode: str = "quality",
+    asset_callback: AssetCallback | None = None,
 ) -> list[RenderedAsset]:
     _notify(progress_callback, "ingestion", 0.05, "Collecting and normalizing source clips")
     if telemetry is not None:
@@ -56,9 +60,16 @@ def run_pipeline(
                 recent_limits=recent_limits,
                 active_category_ids=active_category_ids,
                 telemetry=telemetry,
+                speed_mode=speed_mode,
             )
     else:
-        clips = ingest_sources(settings, source_root=source_root, recent_limits=recent_limits, active_category_ids=active_category_ids)
+        clips = ingest_sources(
+            settings,
+            source_root=source_root,
+            recent_limits=recent_limits,
+            active_category_ids=active_category_ids,
+            speed_mode=speed_mode,
+        )
     if not clips:
         raise ValueError("No source videos were found for ingestion")
     _notify(progress_callback, "hud", 0.20, "Preparing GasGx data HUD")
@@ -71,32 +82,52 @@ def run_pipeline(
     algorithm_outro_seconds = 0.0 if _is_video_ending(ending_template_path) else outro_seconds
     beat_duration_hint = _beat_duration_hint(settings, active_composition_sequence, cover_intro_seconds, algorithm_outro_seconds)
     _notify(progress_callback, "beat", 0.30, "Analyzing BGM beat grid")
+    beat_mode = "fallback" if speed_mode == "fast_first" else str(settings.beat_detection.get("mode", "auto"))
     beat_payload = {
         "bgm_path": bgm_path,
         "duration_hint": beat_duration_hint,
         "fallback_spacing": float(settings.beat_detection.get("fallback_spacing", 0.48)),
-        "mode": str(settings.beat_detection.get("mode", "auto")),
+        "mode": beat_mode,
     }
-    if telemetry is not None:
-        with telemetry.span("beat", "detect_beat_grid", beat_payload):
+    beat_grid = _load_beat_grid_cache(
+        bgm_path,
+        duration_hint=beat_duration_hint,
+        target_bpm_min=int(settings.beat_detection.get("target_bpm_min", 120)),
+        target_bpm_max=int(settings.beat_detection.get("target_bpm_max", 130)),
+        fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
+        mode=beat_mode,
+    )
+    if beat_grid is None:
+        if telemetry is not None:
+            with telemetry.span("beat", "detect_beat_grid", beat_payload):
+                beat_grid = detect_beat_grid(
+                    bgm_path,
+                    duration_hint=beat_duration_hint,
+                    target_bpm_min=int(settings.beat_detection.get("target_bpm_min", 120)),
+                    target_bpm_max=int(settings.beat_detection.get("target_bpm_max", 130)),
+                    fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
+                    mode=beat_mode,
+                )
+        else:
             beat_grid = detect_beat_grid(
                 bgm_path,
                 duration_hint=beat_duration_hint,
                 target_bpm_min=int(settings.beat_detection.get("target_bpm_min", 120)),
                 target_bpm_max=int(settings.beat_detection.get("target_bpm_max", 130)),
                 fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
-                mode=str(settings.beat_detection.get("mode", "auto")),
+                mode=beat_mode,
             )
-        telemetry.event("beat", "beat_grid_ready", {"beat_count": len(beat_grid), **beat_payload})
-    else:
-        beat_grid = detect_beat_grid(
+        _save_beat_grid_cache(
             bgm_path,
+            beat_grid,
             duration_hint=beat_duration_hint,
             target_bpm_min=int(settings.beat_detection.get("target_bpm_min", 120)),
             target_bpm_max=int(settings.beat_detection.get("target_bpm_max", 130)),
             fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
-            mode=str(settings.beat_detection.get("mode", "auto")),
+            mode=beat_mode,
         )
+    if telemetry is not None:
+        telemetry.event("beat", "beat_grid_ready", {"beat_count": len(beat_grid), **beat_payload})
     _notify(progress_callback, "planning", 0.42, "Planning de-duplicated video variants")
     planning_payload = {
         "clip_count": len(clips),
@@ -182,14 +213,18 @@ def run_pipeline(
                     outro_seconds,
                     ending_template_path,
                     telemetry.variant(variant.sequence_number) if telemetry is not None else None,
+                    speed_mode,
                 ): variant.sequence_number
                 for variant in variants
             }
             completed = 0
             for future in as_completed(futures):
-                assets.append(future.result())
+                rendered_asset = future.result()
+                assets.append(rendered_asset)
                 completed += 1
                 progress = render_start + (completed / total) * render_span
+                if asset_callback is not None:
+                    asset_callback(rendered_asset, completed, total)
                 if telemetry is not None:
                     telemetry.event("render", "variant_completed", {"sequence_number": futures[future], "completed": completed, "total": total})
                 _notify(progress_callback, "render", progress, f"Rendered video {completed}/{total}")
@@ -295,6 +330,81 @@ def _apply_text_overrides(variants: list, text_overrides: dict[str, str] | None)
 
 def _copy_template_path() -> Path:
     return Path(__file__).resolve().parents[3] / "config" / "video_matrix" / "copy_template.txt"
+
+
+def _beat_cache_path() -> Path:
+    return Path(__file__).resolve().parents[3] / "runtime" / "video_matrix" / "beat_cache.json"
+
+
+def _beat_cache_key(
+    bgm_path: Path,
+    duration_hint: float,
+    target_bpm_min: int,
+    target_bpm_max: int,
+    fallback_spacing: float,
+    mode: str,
+) -> str:
+    return "|".join(
+        [
+            str(bgm_path.resolve()),
+            str(int(bgm_path.stat().st_mtime_ns)) if bgm_path.exists() else "0",
+            f"{duration_hint:.3f}",
+            str(target_bpm_min),
+            str(target_bpm_max),
+            f"{fallback_spacing:.4f}",
+            mode,
+        ]
+    )
+
+
+def _load_beat_grid_cache(
+    bgm_path: Path,
+    duration_hint: float,
+    target_bpm_min: int,
+    target_bpm_max: int,
+    fallback_spacing: float,
+    mode: str,
+) -> list[float] | None:
+    path = _beat_cache_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    key = _beat_cache_key(bgm_path, duration_hint, target_bpm_min, target_bpm_max, fallback_spacing, mode)
+    cached = payload.get(key)
+    if isinstance(cached, list) and cached:
+        return [float(item) for item in cached]
+    return None
+
+
+def _save_beat_grid_cache(
+    bgm_path: Path,
+    beat_grid: list[float],
+    duration_hint: float,
+    target_bpm_min: int,
+    target_bpm_max: int,
+    fallback_spacing: float,
+    mode: str,
+) -> None:
+    path = _beat_cache_path()
+    try:
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        key = _beat_cache_key(bgm_path, duration_hint, target_bpm_min, target_bpm_max, fallback_spacing, mode)
+        payload[key] = beat_grid
+        # keep last 32 entries
+        while len(payload) > 32:
+            payload.pop(next(iter(payload)))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return
 
 
 @contextmanager

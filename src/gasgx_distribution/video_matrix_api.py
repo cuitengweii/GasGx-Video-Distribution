@@ -613,6 +613,7 @@ def model_image_file(filename: str) -> FileResponse:
     return FileResponse(target, media_type=_image_media_type(target), filename=target.name)
 
 
+
 @router.get("/ending-templates/{filename}")
 def ending_template_file(filename: str) -> FileResponse:
     target = ENDING_TEMPLATE_DIR / Path(filename).name
@@ -779,7 +780,15 @@ async def generate(
     bgm_path = await _resolve_bgm_path(request, temp_root, bgm_file)
     source_root = await _resolve_source_root(request, temp_root, source_files or [])
     trace = GenerationTrace(job_id, TELEMETRY_LOG_ROOT, _request_telemetry_summary(request, bgm_path, source_root))
-    _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "error": "", "report_path": str(trace.run_dir / "run_report.md")}
+    _jobs[job_id] = {
+        "status": "queued",
+        "progress": 0,
+        "message": "Queued",
+        "assets": [],
+        "error": "",
+        "first_asset_ready": False,
+        "report_path": str(trace.run_dir / "run_report.md"),
+    }
     if service.brand_database_backend() == "supabase":
         try:
             service._brand_supabase().insert(
@@ -809,6 +818,7 @@ def job_status(job_id: str) -> dict[str, Any]:
             "message": row.get("message"),
             "assets": row.get("assets_json") or [],
             "error": row.get("error") or "",
+            "first_asset_ready": bool(row.get("assets_json") or []),
         }
     raise HTTPException(status_code=404, detail="Unknown job")
 
@@ -819,6 +829,7 @@ def _request_telemetry_summary(request: dict[str, Any], bgm_path: Path, source_r
         "output_count": int(request.get("output_count") or 0),
         "max_workers": int(request.get("max_workers") or 3),
         "target_fps": int(request.get("target_fps") or 0),
+        "render_speed_mode": str(request.get("render_speed_mode") or "quality"),
         "output_options": list(request.get("output_options") or ["mp4"]),
         "output_root": request.get("output_root") or "",
         "template_id": request.get("template_id") or DEFAULT_TEMPLATE_ID,
@@ -860,6 +871,9 @@ def _run_generate_job(
             )
         if request.get("target_fps") is not None:
             settings.target_fps = 60 if int(request.get("target_fps") or settings.target_fps) == 60 else 30
+        speed_mode = str(request.get("render_speed_mode") or "quality")
+        if speed_mode not in {"quality", "fast_first"}:
+            speed_mode = "quality"
         request = _normalize_request_category_ids(request, settings)
         with trace.span("history", "load_generation_history", {"limit": settings.variant_history_limit}):
             generation_history = _load_generation_history(settings.variant_history_limit)
@@ -889,6 +903,32 @@ def _run_generate_job(
             trace.event("progress", stage, {"progress": value, "message": message})
             _sync_video_matrix_job(job_id, {"status": "running", "stage": stage, "progress": value, "message": message})
 
+        def on_asset_ready(asset: Any, completed: int, total: int) -> None:
+            asset_payload = {
+                "video_path": str(asset.video_path),
+                "cover_path": str(asset.cover_path) if asset.cover_path else "",
+                "copy_path": str(asset.copy_path) if asset.copy_path else "",
+                "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
+            }
+            existing_assets = list(_jobs[job_id].get("assets") or [])
+            existing_assets.append(asset_payload)
+            _jobs[job_id].update(
+                {
+                    "status": "running",
+                    "assets": existing_assets,
+                    "first_asset_ready": bool(existing_assets),
+                    "message": f"Rendered video {completed}/{total}",
+                }
+            )
+            _sync_video_matrix_job(
+                job_id,
+                {
+                    "status": "running",
+                    "message": f"Rendered video {completed}/{total}",
+                    "assets_json": existing_assets,
+                },
+            )
+
         with trace.span("pipeline", "run_pipeline"):
             assets = run_pipeline(
                 settings=settings,
@@ -912,6 +952,8 @@ def _run_generate_job(
                 recent_segment_keys=set(generation_history["segment_keys"]),
                 ending_template_path=ending_template_path,
                 telemetry=trace,
+                speed_mode=speed_mode,
+                asset_callback=on_asset_ready,
                 text_overrides={
                     "headline": str(request.get("headline") or ""),
                     "subhead": str(request.get("subhead") or ""),
@@ -1281,6 +1323,42 @@ def _resolve_ending_template_path(request: dict[str, Any]) -> Path | None:
     raise ValueError(f"Selected ending template was not found: {filename}")
 
 
+def _unique_ending_template_filename(filename: str) -> str:
+    target = Path(filename).name.strip()
+    if not target:
+        return ""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(target).stem).strip("._-") or "ending_template"
+    suffix = Path(target).suffix.lower()
+    candidate = f"{stem}{suffix}"
+    existing = {path.name for path in _list_ending_template_files()}
+    if candidate not in existing:
+        return candidate
+    while True:
+        unique_name = f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
+        if unique_name not in existing:
+            return unique_name
+
+
+@router.post("/ending-templates/upload")
+async def upload_ending_template(file: UploadFile = File(...)) -> dict[str, Any]:
+    filename = Path(file.filename or "ending_template.mp4").name
+    if Path(filename).suffix.lower() != ".mp4":
+        raise HTTPException(status_code=400, detail="Only mp4 files are allowed")
+    ENDING_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = _unique_ending_template_filename(filename)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    target = ENDING_TEMPLATE_DIR / safe_name
+    target.write_bytes(await file.read())
+    return {
+        "ok": True,
+        "filename": target.name,
+        "path": str(target),
+        "url": f"/api/video-matrix/ending-templates/{quote(target.name)}",
+        "directory": str(ENDING_TEMPLATE_DIR),
+    }
+
+
 def _list_local_bgm_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
@@ -1343,6 +1421,7 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "video_duration_min",
         "video_duration_max",
         "target_fps",
+        "render_speed_mode",
         "headline",
         "subhead",
         "follow_text",

@@ -191,6 +191,7 @@
             inset: 0;
             z-index: 18;
             overflow: hidden;
+            cursor: pointer;
         }
 
         .vm-template-hud-bar {
@@ -1531,15 +1532,22 @@
       video.play().catch(() => {
         soundToggle.textContent = "Tap for sound";
       });
-      soundToggle.addEventListener("click", async () => {
+      function enablePreviewAudio() {
         video.muted = false;
         video.volume = 1;
-        await video.play();
         soundToggle.textContent = "Sound on";
+      }
+      soundToggle.addEventListener("click", async () => {
+        enablePreviewAudio();
+        await video.play();
       });
       function toggleVideoPlayback() {
-        if (video.paused) video.play();
-        else video.pause();
+        if (video.paused) {
+          enablePreviewAudio();
+          video.play().catch(() => {});
+          return;
+        }
+        video.pause();
       }
       function shouldIgnorePlaybackClick(target) {
         return Boolean(target.closest("#visualToolbar, button, select, input, textarea, [contenteditable='true']"));
@@ -1768,10 +1776,12 @@
       templateLayer?.addEventListener("click", (event) => {
         if (shouldIgnorePlaybackClick(event.target)) return;
         event.stopPropagation();
+        enablePreviewAudio();
         toggleVideoPlayback();
       });
       phone.addEventListener("click", (event) => {
         if (shouldIgnorePlaybackClick(event.target)) return;
+        enablePreviewAudio();
         toggleVideoPlayback();
       });
       document.addEventListener("click", (event) => {
