@@ -358,7 +358,7 @@ function renderSource(data) {
   });
   $("addCategory").onclick = addMaterialCategory;
   $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；每次按照目录把最新拍摄的短视频上传进对应的目录；勾选素材目录并设置最新素材数量后，系统会自动计算片段时长并按行顺序组合混剪。";
-  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], state.source_mode || "Category folders", () => {
+  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"], ["Upload files", "手动上传"]], state.source_mode || "Category folders", () => {
     updateSourceMode();
     scheduleStateSave();
   });
@@ -2693,7 +2693,12 @@ function toggleBgmLibrarySize() {
   panel.classList.remove("modal");
   document.body.classList.remove("bgm-modal-open");
 }
-function updateSourceMode() { $("uploadSourcesWrap")?.classList.toggle("hidden", true); }
+function updateSourceMode() {
+  const wrap = $("uploadSourcesWrap");
+  if (!wrap) return;
+  const uploadMode = radioValue("source_mode") === "Upload files";
+  wrap.classList.toggle("hidden", !uploadMode);
+}
 function renderRadio(containerId, name, options, selected, onchange) {
   $(containerId).innerHTML = options.map(([value, label]) => `<label><input type="radio" name="${name}" value="${value}" ${value === selected ? "checked" : ""}>${label}</label>`).join("");
   document.querySelectorAll(`input[name="${name}"]`).forEach(r => r.onchange = onchange || (() => {}));
