@@ -17,6 +17,8 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'data-view="terminal-execution" data-permission="terminal-execution">终端执行</button>' in html
     assert html.index('data-view="tasks"') < html.index('data-view="terminal-execution"') < html.index('data-view="stats"')
     assert "terminal-init-modal" in html
+    assert "terminal-modal-actions" in html
+    assert "data-terminal-save-config" in html
     assert "terminal-header-subtitle" in html
     assert "terminal-platform-bar" in html
     assert "terminal-platform-config-panel" in html
@@ -39,6 +41,9 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert ".terminal-console" in css
     assert ".terminal-task-column" in css
     assert ".terminal-qr-placeholder" in css
+    assert ".terminal-modal-actions" in css
+    assert "position: fixed;" in css
+    assert "left: 260px;" in css
     assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in css
     assert "overflow-x: hidden;" in css
     assert "min-width: 0;" in css
@@ -49,6 +54,7 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert "/api/terminal-execution/start" in app
     assert "/api/terminal-execution/start-login" in app
     assert "#terminal-config-list" in app
+    assert "#terminal-save-config, [data-terminal-save-config]" in app
     assert "#terminal-start-system" not in app
     assert "!state.terminalExecution.initialized || state.terminalConfigOpen" in app
     assert "state.terminalQrVisible && loginStarted && window.qr_url" in app

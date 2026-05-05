@@ -1868,6 +1868,10 @@ select option {
     min-height: 0;
   }
 
+  .terminal-init-modal {
+    left: 0;
+  }
+
   nav {
     grid-template-columns: repeat(5, minmax(0, 1fr));
     padding-bottom: 0;
@@ -3732,15 +3736,23 @@ body.video-matrix-active #video-matrix {
 }
 
 .terminal-init-modal {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 260px;
+  z-index: 30;
   background: rgba(0, 0, 0, 0.8);
   backdrop-filter: blur(5px);
   display: flex;
   justify-content: center;
   align-items: center;
+  padding: 28px;
   pointer-events: none;
+}
+
+body.sidebar-collapsed .terminal-init-modal {
+  left: 0;
 }
 
 .terminal-init-modal.hidden {
@@ -3750,6 +3762,8 @@ body.video-matrix-active #video-matrix {
 .terminal-modal-content {
   padding: 32px;
   width: min(580px, calc(100vw - 48px));
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
   border-radius: 12px;
   pointer-events: auto;
 }
@@ -3786,6 +3800,12 @@ body.video-matrix-active #video-matrix {
 .terminal-config-list .loading-inline .btn-spinner {
   border-color: rgba(93, 214, 44, 0.22);
   border-top-color: var(--terminal-green);
+}
+
+.terminal-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
 }
 
 .terminal-config-row {

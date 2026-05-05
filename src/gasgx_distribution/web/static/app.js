@@ -4184,7 +4184,7 @@ document.addEventListener("click", async (event) => {
   const routeBack = event.target.closest("#terminal-route-back");
   const terminalStart = event.target.closest("#terminal-start-login");
   const terminalEdit = event.target.closest("#terminal-edit-config");
-  const terminalSave = event.target.closest("#terminal-save-config");
+  const terminalSave = event.target.closest("#terminal-save-config, [data-terminal-save-config]");
   const embeddedStart = event.target.closest("[data-terminal-start-action]");
   const embeddedEdit = event.target.closest("[data-terminal-edit-action]");
   if (!enter && !configJump && !longDetect && !longOpen && !terminalStart && !terminalEdit && !terminalSave && !routeBack && !embeddedStart && !embeddedEdit) return;
