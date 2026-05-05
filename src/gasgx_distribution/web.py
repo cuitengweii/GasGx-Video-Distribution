@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from . import control_plane, service
 from .platforms import SUPPORTED_PLATFORMS
+from .public_settings import resolve_material_dir
 from .scheduler import scheduler_status, start_scheduler, trigger_matrix_wechat_job, trigger_matrix_wechat_login_check
 from .tenant import bind_tenant_database
 from .video_matrix.ffmpeg_tools import ffmpeg_runtime_health
@@ -380,11 +381,13 @@ def create_app() -> FastAPI:
 
     @app.get("/api/settings/distribution")
     def get_distribution_settings() -> dict[str, Any]:
-        return service.load_distribution_settings_db()
+        data = service.load_distribution_settings_db()
+        return {**data, "resolved_material_dir": str(resolve_material_dir())}
 
     @app.patch("/api/settings/distribution")
     def update_distribution_settings(payload: DistributionSettingsPayload) -> dict[str, Any]:
-        return service.save_distribution_settings_db(_model_payload(payload))
+        data = service.save_distribution_settings_db(_model_payload(payload))
+        return {**data, "resolved_material_dir": str(resolve_material_dir())}
 
     @app.get("/api/operator-wechats")
     def operator_wechats() -> list[str]:

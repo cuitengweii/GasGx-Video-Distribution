@@ -40,6 +40,7 @@ def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("gasgx_distribution.service.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.matrix_publish.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.public_settings.get_paths", lambda: FakePaths())
+    monkeypatch.setattr("gasgx_distribution.paths.get_paths", lambda: FakePaths())
     dist_db.init_db(FakePaths.database_path)
 
 

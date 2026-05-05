@@ -6,9 +6,11 @@ from typing import Any
 
 from .paths import get_paths
 from .platforms import SUPPORTED_PLATFORMS
+from .video_matrix.output_root import resolve_video_matrix_output_root
 
 DEFAULT_COMMON_SETTINGS: dict[str, Any] = {
     "material_dir": "runtime/materials/videos",
+    "material_dir_follows_video_matrix": True,
     "publish_mode": "publish",
     "topics": "#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿",
     "upload_timeout": 60,
@@ -86,6 +88,9 @@ def _normalize_common(payload: dict[str, Any]) -> dict[str, Any]:
     mode = str(merged.get("publish_mode") or "publish").strip().lower()
     merged["publish_mode"] = "draft" if mode == "draft" else "publish"
     merged["material_dir"] = str(merged.get("material_dir") or DEFAULT_COMMON_SETTINGS["material_dir"]).strip()
+    merged["material_dir_follows_video_matrix"] = _normalize_bool(
+        merged.get("material_dir_follows_video_matrix", DEFAULT_COMMON_SETTINGS["material_dir_follows_video_matrix"])
+    )
     merged["topics"] = str(merged.get("topics") or DEFAULT_COMMON_SETTINGS["topics"]).strip()
     merged["upload_timeout"] = _normalize_timeout(merged.get("upload_timeout"))
     raw_operators = merged.get("operator_wechats")
@@ -242,6 +247,7 @@ def load_platform_publish_settings(platform: str) -> dict[str, Any]:
     return {
         **platform_settings,
         "material_dir": common["material_dir"],
+        "material_dir_follows_video_matrix": common["material_dir_follows_video_matrix"],
         "publish_mode": common["publish_mode"] if publish_mode == "inherit" else publish_mode,
         "topics": common["topics"],
         "upload_timeout": upload_timeout,
@@ -275,11 +281,22 @@ def save_wechat_publish_settings(payload: dict[str, Any]) -> dict[str, Any]:
     return load_wechat_publish_settings()
 
 
-def resolve_material_dir(settings: dict[str, Any] | None = None) -> Path:
+def resolve_material_dir(settings: dict[str, Any] | None = None, *, material_dir_override: str | None = None) -> Path:
+    if material_dir_override is not None and str(material_dir_override).strip():
+        raw = str(material_dir_override).strip()
+        path = Path(raw)
+        if not path.is_absolute():
+            path = get_paths().repo_root / path
+        path.mkdir(parents=True, exist_ok=True)
+        return path.resolve()
     active = settings or load_distribution_settings()["common"]
-    raw = str(active.get("material_dir") or DEFAULT_COMMON_SETTINGS["material_dir"]).strip()
-    path = Path(raw)
-    if not path.is_absolute():
-        path = get_paths().repo_root / path
+    if _normalize_bool(active.get("material_dir_follows_video_matrix", True)):
+        path = resolve_video_matrix_output_root()
+    else:
+        raw = str(active.get("material_dir") or DEFAULT_COMMON_SETTINGS["material_dir"]).strip()
+        path = Path(raw)
+        if not path.is_absolute():
+            path = get_paths().repo_root / path
+        path = path.resolve()
     path.mkdir(parents=True, exist_ok=True)
     return path

@@ -30,6 +30,7 @@ from .public_settings import load_distribution_settings, resolve_material_dir
 from .public_settings import save_distribution_settings as save_local_distribution_settings
 from .supabase_backend import SupabaseError, SupabaseRestClient
 from .video_matrix.cover_templates import load_cover_templates
+from .video_matrix.output_root import resolve_video_matrix_output_root
 from .video_matrix.settings import ProjectSettings
 from .video_matrix.templates import load_templates
 from .video_matrix.ui_state import load_ui_state
@@ -2241,7 +2242,7 @@ def _remaining_material_video_count() -> int:
 
 
 def open_material_directory(raw_path: str) -> dict[str, Any]:
-    material_dir = resolve_material_dir({"material_dir": raw_path})
+    material_dir = resolve_material_dir(material_dir_override=raw_path)
     return _open_directory(material_dir)
 
 
@@ -2258,14 +2259,9 @@ def _open_directory(path: Path) -> dict[str, Any]:
 
 def open_system_directory(kind: str) -> dict[str, Any]:
     paths = get_paths()
-    settings = ProjectSettings.from_file(_config_root() / "defaults.json")
-    ui_state = load_ui_state(_config_root() / "ui_state.json")
-    output_root = Path(str(ui_state.get("output_root") or settings.output_root)).expanduser()
-    if not output_root.is_absolute():
-        output_root = paths.repo_root / output_root
     targets = {
         "materials": paths.runtime_root / "video_matrix" / "incoming",
-        "output": output_root.resolve(),
+        "output": resolve_video_matrix_output_root(),
         "logs": paths.runtime_root / "video_matrix" / "logs",
         "cache": paths.runtime_root / "video_matrix" / "web_uploads",
     }

@@ -8,6 +8,7 @@ from gasgx_distribution import db as dist_db
 from gasgx_distribution.public_settings import (
     load_distribution_settings,
     load_wechat_publish_settings,
+    resolve_material_dir,
     save_distribution_settings,
     save_wechat_publish_settings,
 )
@@ -30,6 +31,7 @@ def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("gasgx_distribution.service.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.public_settings.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.matrix_publish.get_paths", lambda: FakePaths())
+    monkeypatch.setattr("gasgx_distribution.paths.get_paths", lambda: FakePaths())
     dist_db.init_db(FakePaths.database_path)
 
 
@@ -82,6 +84,24 @@ def test_wechat_public_settings_api(monkeypatch, tmp_path: Path) -> None:
     assert result.json()["short_title"] == "GasGx API"
     assert result.json()["location"] == ""
     assert client.get("/api/settings/wechat-publish").json()["upload_timeout"] == 120
+
+
+def test_resolve_material_dir_follows_video_matrix_output(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    assert resolve_material_dir() == (tmp_path / "runtime" / "materials" / "videos").resolve()
+
+
+def test_resolve_material_dir_custom_when_follow_disabled(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    save_distribution_settings(
+        {
+            "common": {
+                "material_dir": "runtime/materials/custom",
+                "material_dir_follows_video_matrix": False,
+            },
+        }
+    )
+    assert resolve_material_dir() == (tmp_path / "runtime" / "materials" / "custom").resolve()
 
 
 def test_distribution_settings_store_common_and_platforms(monkeypatch, tmp_path: Path) -> None:
