@@ -6,6 +6,7 @@ from PIL import Image
 import pytest
 
 from gasgx_distribution.video_matrix import render
+from gasgx_distribution.video_matrix.ffmpeg_tools import FFmpegError
 from gasgx_distribution.video_matrix.models import ClipMetadata, SegmentPlan, VideoVariant
 from gasgx_distribution.video_matrix.settings import ProjectSettings
 
@@ -103,13 +104,13 @@ def test_render_variant_appends_prebuilt_ending_template(monkeypatch, tmp_path: 
     ending.write_bytes(b"ending")
     captured = {}
 
-    def fake_concat(filter_complex, inputs, output, bgm_path=None) -> None:
+    def fake_concat(filter_complex, inputs, output, bgm_path=None, speed_mode=None, threads=None) -> None:
         captured["filter_complex"] = filter_complex
         captured["inputs"] = inputs
         captured["body_output"] = output
         output.write_bytes(b"mp4")
 
-    def fake_append(main_video, ending_video, output, width, height, fps) -> None:
+    def fake_append(main_video, ending_video, output, width, height, fps, threads=None) -> None:
         captured["append"] = {
             "main_video": main_video,
             "ending_video": ending_video,
@@ -156,7 +157,7 @@ def test_render_variant_copy_uses_ending_follow_text_without_cta(monkeypatch, tm
     source.write_bytes(b"video")
     variant = _variant(source)
 
-    def fake_concat(_filter_complex, _inputs, output, bgm_path=None) -> None:
+    def fake_concat(_filter_complex, _inputs, output, bgm_path=None, speed_mode=None, threads=None) -> None:
         output.write_bytes(b"mp4")
 
     monkeypatch.setattr(render, "concat_video", fake_concat)
@@ -193,7 +194,7 @@ def test_render_variant_uses_independent_ending_cover_template(monkeypatch, tmp_
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b"outro")
 
-    def fake_concat(filter_complex, inputs, output, bgm_path=None) -> None:
+    def fake_concat(filter_complex, inputs, output, bgm_path=None, speed_mode=None, threads=None) -> None:
         captured["inputs"] = inputs
         output.write_bytes(b"mp4")
 
@@ -225,7 +226,7 @@ def test_render_variant_escapes_drawtext_apostrophe_before_following_lines(monke
     variant = _variant(source)
     variant.title = "The World's leading engine for monetizing stranded natural gas"
 
-    def fake_concat(filter_complex, inputs, output, bgm_path=None) -> None:
+    def fake_concat(filter_complex, inputs, output, bgm_path=None, speed_mode=None, threads=None) -> None:
         captured["filter_complex"] = filter_complex
         output.write_bytes(b"mp4")
 
@@ -251,6 +252,28 @@ def test_render_variant_escapes_drawtext_apostrophe_before_following_lines(monke
     assert "text=The World" not in captured["filter_complex"]
     assert ";x=" not in captured["filter_complex"]
     assert "drawtext=fontfile=" in captured["filter_complex"]
+
+
+def test_render_variant_wraps_ffmpeg_errors_with_user_message(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+
+    def fail_concat(*_args, **_kwargs) -> None:
+        raise FFmpegError("ffmpeg not found")
+
+    monkeypatch.setattr(render, "concat_video", fail_concat)
+
+    with pytest.raises(render.VideoMatrixRenderError) as excinfo:
+        render.render_variant(
+            _variant(source),
+            _settings(tmp_path),
+            template_copy="",
+            batch_dir=tmp_path,
+            cover_template_config=None,
+        )
+
+    assert excinfo.value.error_code == "ffmpeg_failed"
+    assert excinfo.value.user_message == "请确认已安装 FFmpeg 并加入 PATH"
 
 
 def test_overlay_filters_match_selected_template_layer_rules(tmp_path: Path) -> None:

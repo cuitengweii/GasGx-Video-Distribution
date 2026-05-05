@@ -95,6 +95,13 @@
     "modules": []
   },
   "copy_mode": "spark_then_template",
+  "font_dirs": [
+    "C:/Windows/Fonts",
+    "/Library/Fonts",
+    "/System/Library/Fonts",
+    "/usr/share/fonts",
+    "/usr/local/share/fonts"
+  ],
   "default_title_prefix": "GasGx",
   "slogans": [
     "Stop Flaring. Start Hashing.",

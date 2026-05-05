@@ -70,3 +70,27 @@ def test_concat_video_uses_filter_complex_script(monkeypatch, tmp_path: Path) ->
     assert long_filter not in args
     assert captured["script_text"] == long_filter
     assert not Path(captured["script_path"]).exists()
+
+
+def test_ffmpeg_runtime_health_reports_binary_paths(monkeypatch) -> None:
+    monkeypatch.setattr(ffmpeg_tools, "resolve_binary", lambda name: f"/bin/{name}")
+
+    health = ffmpeg_tools.ffmpeg_runtime_health()
+
+    assert health["ffmpeg_ok"] is True
+    assert health["ffprobe_ok"] is True
+    assert health["ffmpeg_path"] == "/bin/ffmpeg"
+    assert health["ffprobe_path"] == "/bin/ffprobe"
+
+
+def test_resolve_ffmpeg_threads_prefers_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("VIDEO_MATRIX_FFMPEG_THREADS", "5")
+
+    assert ffmpeg_tools.resolve_ffmpeg_threads(worker_count=2, concurrent_jobs=2) == 5
+
+
+def test_resolve_ffmpeg_threads_scales_down_with_workers(monkeypatch) -> None:
+    monkeypatch.delenv("VIDEO_MATRIX_FFMPEG_THREADS", raising=False)
+    monkeypatch.setattr(ffmpeg_tools.os, "cpu_count", lambda: 16)
+
+    assert ffmpeg_tools.resolve_ffmpeg_threads(worker_count=2, concurrent_jobs=1) == 8

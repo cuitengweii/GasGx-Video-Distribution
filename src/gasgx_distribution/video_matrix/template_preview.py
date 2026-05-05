@@ -4,18 +4,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .font_config import build_font_candidates
 from .settings import ProjectSettings
 from .templates import coerce_template
-
-
-FONT_CANDIDATES = (
-    Path(r"C:\Windows\Fonts\arial.ttf"),
-    Path(r"C:\Windows\Fonts\segoeui.ttf"),
-)
-BOLD_FONT_CANDIDATES = (
-    Path(r"C:\Windows\Fonts\arialbd.ttf"),
-    Path(r"C:\Windows\Fonts\segoeuib.ttf"),
-)
 
 
 def render_video_template_preview_image(
@@ -155,7 +146,9 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont)
 
 
 def _load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
-    candidates = BOLD_FONT_CANDIDATES if bold else FONT_CANDIDATES
+    candidates = build_font_candidates()
+    if bold:
+        candidates = tuple(path for path in candidates if "bd" in path.name.lower() or "bold" in path.name.lower()) + candidates
     for candidate in candidates:
         if candidate.exists():
             return ImageFont.truetype(str(candidate), size)

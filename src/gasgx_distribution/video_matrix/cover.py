@@ -4,29 +4,10 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .font_config import build_font_candidates, build_font_candidates_for_family
 from .cover_templates import coerce_cover_template
 from .models import VideoVariant
 from .settings import ProjectSettings
-
-
-FONT_CANDIDATES = (
-    Path(r"C:\Windows\Fonts\msyh.ttc"),
-    Path(r"C:\Windows\Fonts\simhei.ttf"),
-    Path(r"C:\Windows\Fonts\simsun.ttc"),
-    Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
-    Path(r"C:\Windows\Fonts\Noto Sans SC (TrueType).otf"),
-    Path(r"C:\Windows\Fonts\arial.ttf"),
-    Path(r"C:\Windows\Fonts\segoeui.ttf"),
-)
-BOLD_FONT_CANDIDATES = (
-    Path(r"C:\Windows\Fonts\msyhbd.ttc"),
-    Path(r"C:\Windows\Fonts\simhei.ttf"),
-    Path(r"C:\Windows\Fonts\simsunb.ttf"),
-    Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf"),
-    Path(r"C:\Windows\Fonts\Noto Sans SC Medium (TrueType).otf"),
-    Path(r"C:\Windows\Fonts\arialbd.ttf"),
-    Path(r"C:\Windows\Fonts\segoeuib.ttf"),
-)
 
 
 def render_intro_cover(
@@ -493,7 +474,9 @@ def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) 
 
 
 def _load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
-    candidates = BOLD_FONT_CANDIDATES if bold else FONT_CANDIDATES
+    candidates = build_font_candidates_for_family("microsoft yahei bold" if bold else "microsoft yahei")
+    if bold:
+        candidates = (*candidates, *build_font_candidates())
     for candidate in candidates:
         if candidate.exists():
             return ImageFont.truetype(str(candidate), size)

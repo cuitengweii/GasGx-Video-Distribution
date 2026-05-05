@@ -11,7 +11,7 @@
 
 ```powershell
 cd D:\code\CyberCar
-python -m pip install -e .[runtime,dev]
+python -m pip install -e ".[runtime,dev]"
 python -m cybercar migrate-legacy
 ```
 
@@ -33,3 +33,6 @@ python -m cybercar engage wechat --max-posts 3 --max-replies 1
 - Use `python -m cybercar telegram worker` as the only long-running operator entry.
 - Trigger collect/publish manually from the Telegram review flow or explicit CLI commands.
 - If Windows auto-recovery is required, install the Telegram watchdog tasks with `powershell -ExecutionPolicy Bypass -File .\scripts\install_telegram_supervisor_task.ps1 -StartNow`.
+- Video matrix job progress is cached in `runtime/video_matrix/jobs/{job_id}.json`, but if the service restarts before a job is completed, progress queries can still become stale; re-run the generation if the job no longer advances.
+- Video matrix encoding is intentionally conservative by default: default render workers are capped to a small value, and each ffmpeg/x264 encode uses `VIDEO_MATRIX_FFMPEG_THREADS` when set or a derived per-job thread budget otherwise.
+- Recommended tuning order: set `VIDEO_MATRIX_FFMPEG_THREADS` first, then raise `max_workers` only if the machine still has headroom.

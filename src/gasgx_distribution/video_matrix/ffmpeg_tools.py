@@ -1,15 +1,51 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Iterable
 
 
 class FFmpegError(RuntimeError):
     pass
+
+
+def ffmpeg_runtime_health() -> dict[str, str | bool]:
+    health: dict[str, str | bool] = {"ffmpeg_ok": False, "ffprobe_ok": False}
+    try:
+        health["ffmpeg_path"] = resolve_binary("ffmpeg")
+        health["ffmpeg_ok"] = True
+    except FFmpegError as exc:
+        health["ffmpeg_error"] = str(exc)
+    try:
+        health["ffprobe_path"] = resolve_binary("ffprobe")
+        health["ffprobe_ok"] = True
+    except FFmpegError as exc:
+        health["ffprobe_error"] = str(exc)
+    return health
+
+
+def resolve_ffmpeg_threads(worker_count: int | None = None, concurrent_jobs: int | None = None) -> int:
+    env_threads = _read_int_env("VIDEO_MATRIX_FFMPEG_THREADS")
+    if env_threads is not None:
+        return max(1, env_threads)
+    cpu_count = os.cpu_count() or 1
+    workers = max(1, worker_count or 1)
+    jobs = max(1, concurrent_jobs or 1)
+    threads = cpu_count // max(1, workers * jobs)
+    return max(1, threads)
+
+
+def acquire_encode_slot() -> None:
+    _ENCODE_SLOTS.acquire()
+
+
+def release_encode_slot() -> None:
+    _ENCODE_SLOTS.release()
 
 
 def resolve_binary(name: str) -> str:
@@ -25,19 +61,23 @@ def resolve_binary(name: str) -> str:
 
 
 def run_command(args: Iterable[str]) -> subprocess.CompletedProcess[str]:
-    process = subprocess.run(
-        list(args),
-        check=False,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-    )
-    if process.returncode != 0:
-        stderr = process.stderr or ""
-        stdout = process.stdout or ""
-        raise FFmpegError(stderr.strip() or stdout.strip() or "FFmpeg command failed")
-    return process
+    acquire_encode_slot()
+    try:
+        process = subprocess.run(
+            list(args),
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+        )
+        if process.returncode != 0:
+            stderr = process.stderr or ""
+            stdout = process.stdout or ""
+            raise FFmpegError(stderr.strip() or stdout.strip() or "FFmpeg command failed")
+        return process
+    finally:
+        release_encode_slot()
 
 
 def probe_media(path: Path) -> dict:
@@ -68,9 +108,11 @@ def normalize_clip(
     height: int,
     fps: int,
     speed_mode: str = "quality",
+    threads: int | None = None,
 ) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     target.parent.mkdir(parents=True, exist_ok=True)
+    threads = max(1, threads or resolve_ffmpeg_threads())
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},fps={fps},eq=contrast=1.15:brightness=-0.03:saturation=1.05"
@@ -87,6 +129,10 @@ def normalize_clip(
             "-an",
             "-c:v",
             "libx264",
+            "-threads",
+            str(threads),
+            "-x264-params",
+            f"threads={threads}",
             "-preset",
             profile["preset"],
             "-crf",
@@ -102,12 +148,14 @@ def concat_video(
     output: Path,
     bgm_path: Path | None = None,
     speed_mode: str = "quality",
+    threads: int | None = None,
 ) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     output.parent.mkdir(parents=True, exist_ok=True)
     filter_script_path = output.parent / f".{output.stem}.filter_complex.txt"
     filter_script_path.write_text(filter_complex, encoding="utf-8")
     profile = _video_encode_profile(speed_mode)
+    threads = max(1, threads or resolve_ffmpeg_threads())
     command = [ffmpeg, "-y"]
     for clip in inputs:
         command.extend(["-i", str(clip)])
@@ -121,6 +169,10 @@ def concat_video(
             "[vout]",
             "-c:v",
             "libx264",
+            "-threads",
+            str(threads),
+            "-x264-params",
+            f"threads={threads}",
             "-preset",
             profile["preset"],
             "-crf",
@@ -155,9 +207,11 @@ def append_video_tail(
     width: int,
     height: int,
     fps: int,
+    threads: int | None = None,
 ) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     output.parent.mkdir(parents=True, exist_ok=True)
+    threads = max(1, threads or resolve_ffmpeg_threads())
     filter_complex = (
         f"[0:v]fps={fps},scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v0];"
@@ -183,6 +237,10 @@ def append_video_tail(
             "[aout]",
             "-c:v",
             "libx264",
+            "-threads",
+            str(threads),
+            "-x264-params",
+            f"threads={threads}",
             "-preset",
             "fast",
             "-crf",
@@ -271,3 +329,24 @@ def _video_encode_profile(speed_mode: str) -> dict[str, str]:
     if str(speed_mode).strip().lower() == "fast_first":
         return {"preset": "veryfast", "crf": "23"}
     return {"preset": "fast", "crf": "20"}
+
+
+def _resolve_encode_slots() -> int:
+    env_slots = _read_int_env("VIDEO_MATRIX_GLOBAL_ENCODE_SLOTS")
+    if env_slots is not None:
+        return max(1, env_slots)
+    cpu_count = os.cpu_count() or 1
+    return max(1, cpu_count // 4)
+
+
+def _read_int_env(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return None
+
+
+_ENCODE_SLOTS = threading.BoundedSemaphore(max(1, _resolve_encode_slots()))

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
+import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .beat import detect_beat_grid
+from .ffmpeg_tools import resolve_ffmpeg_threads
 from .composition import plan_variants
 from .cover_templates import DEFAULT_COVER_TEMPLATE_ID, default_cover_templates, require_cover_template
 from .hud import build_hud_payload
@@ -16,6 +18,7 @@ from .ingestion import ingest_sources
 from .models import RenderedAsset
 from .render import render_variant
 from .settings import ProjectSettings
+from ..paths import get_paths
 
 
 ProgressCallback = Callable[[str, float, str], None]
@@ -89,9 +92,8 @@ def run_pipeline(
         "fallback_spacing": float(settings.beat_detection.get("fallback_spacing", 0.48)),
         "mode": beat_mode,
     }
-    beat_cache = _load_beat_grid_cache(settings)
     cache_key = _beat_cache_key(bgm_path, beat_duration_hint, settings, beat_mode)
-    cached_grid = beat_cache.get(cache_key)
+    cached_grid = _load_beat_grid_cache(settings, cache_key)
     beat_grid: list[float]
     if isinstance(cached_grid, list) and cached_grid:
         beat_grid = [float(item) for item in cached_grid]
@@ -116,8 +118,7 @@ def run_pipeline(
                 fallback_spacing=float(settings.beat_detection.get("fallback_spacing", 0.48)),
                 mode=beat_mode,
             )
-        beat_cache[cache_key] = beat_grid
-        _save_beat_grid_cache(settings, beat_cache)
+        _save_beat_grid_cache(settings, cache_key, beat_grid)
     _notify(progress_callback, "planning", 0.42, "Planning de-duplicated video variants")
     planning_payload = {
         "clip_count": len(clips),
@@ -167,6 +168,7 @@ def run_pipeline(
     render_span = 0.50
     total = max(len(variants), 1)
     worker_count = _resolve_worker_count(max_workers, total)
+    ffmpeg_threads = resolve_ffmpeg_threads(worker_count=worker_count, concurrent_jobs=2)
     if telemetry is not None:
         telemetry.event(
             "render",
@@ -175,12 +177,13 @@ def run_pipeline(
                 "variant_count": total,
                 "worker_count": worker_count,
                 "cpu_count": os.cpu_count() or 0,
+                "ffmpeg_threads": ffmpeg_threads,
                 "output_types": sorted(output_types or {"mp4"}),
                 "output_root": batch_dir,
             },
         )
     _notify(progress_callback, "render", render_start, f"Rendering {total} videos with {worker_count} workers")
-    with (telemetry.span("render", "render_batch", {"variant_count": total, "worker_count": worker_count}) if telemetry is not None else _nullcontext()):
+    with (telemetry.span("render", "render_batch", {"variant_count": total, "worker_count": worker_count, "ffmpeg_threads": ffmpeg_threads}) if telemetry is not None else _nullcontext()):
         executor = ThreadPoolExecutor(max_workers=worker_count)
         try:
             futures = {
@@ -204,18 +207,38 @@ def run_pipeline(
                     ending_template_path,
                     telemetry.variant(variant.sequence_number) if telemetry is not None else None,
                     speed_mode,
+                    ffmpeg_threads,
                 ): variant.sequence_number
                 for variant in variants
             }
             completed = 0
+            failed = 0
             for future in as_completed(futures):
-                assets.append(future.result())
+                sequence_number = futures[future]
+                try:
+                    asset = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    failed += 1
+                    if telemetry is not None:
+                        telemetry.event(
+                            "render",
+                            "variant_failed",
+                            {
+                                "sequence_number": sequence_number,
+                                "completed": completed,
+                                "failed": failed,
+                                "total": total,
+                                "error": str(exc),
+                            },
+                        )
+                    continue
+                assets.append(asset)
                 completed += 1
                 progress = render_start + (completed / total) * render_span
                 if telemetry is not None:
-                    telemetry.event("render", "variant_completed", {"sequence_number": futures[future], "completed": completed, "total": total})
+                    telemetry.event("render", "variant_completed", {"sequence_number": sequence_number, "completed": completed, "total": total})
                 if asset_callback is not None:
-                    asset_callback(assets[-1], completed, total)
+                    asset_callback(asset, completed, total)
                 _notify(progress_callback, "render", progress, f"Rendered video {completed}/{total}")
         finally:
             executor.shutdown(wait=True)
@@ -235,7 +258,8 @@ def _resolve_worker_count(max_workers: int | None, total: int) -> int:
     if max_workers is not None:
         return max(1, min(max_workers, total))
     cpu_count = os.cpu_count() or 2
-    return max(1, min(total, max(2, cpu_count // 2), 4))
+    default_workers = max(1, min(2, (cpu_count + 3) // 4))
+    return max(1, min(total, default_workers))
 
 
 def _is_video_ending(path: Path | None) -> bool:
@@ -327,7 +351,9 @@ def _nullcontext():
 
 
 def _beat_cache_path(settings: ProjectSettings) -> Path:
-    return settings.runtime_root / "beat_cache.json"
+    path = get_paths().runtime_root / "video_matrix" / "beat_cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _beat_cache_key(settings_bgm_path: Path, duration_hint: float, settings: ProjectSettings, mode: str) -> str:
@@ -343,27 +369,56 @@ def _beat_cache_key(settings_bgm_path: Path, duration_hint: float, settings: Pro
     )
 
 
-def _load_beat_grid_cache(settings: ProjectSettings) -> dict[str, list[float]]:
-    path = _beat_cache_path(settings)
-    if not path.exists():
-        return {}
+def _load_beat_grid_cache(settings: ProjectSettings, cache_key: str) -> list[float] | None:
+    path = _beat_cache_entry_path(settings, cache_key)
+    if path.exists():
+        return _load_beat_grid_cache_entry(path)
+    legacy_path = _beat_cache_legacy_path(settings)
+    if not legacy_path.exists():
+        return None
+    try:
+        raw = json.loads(legacy_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    values = raw.get(cache_key)
+    if not isinstance(values, list):
+        return None
+    try:
+        return [float(item) for item in values]
+    except (TypeError, ValueError):
+        return None
+
+
+def _save_beat_grid_cache(settings: ProjectSettings, cache_key: str, beat_grid: list[float]) -> None:
+    path = _beat_cache_entry_path(settings, cache_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(path, json.dumps(beat_grid, ensure_ascii=False))
+
+
+def _beat_cache_legacy_path(settings: ProjectSettings) -> Path:
+    return get_paths().runtime_root / "video_matrix" / "beat_cache.json"
+
+
+def _beat_cache_entry_path(settings: ProjectSettings, cache_key: str) -> Path:
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()
+    return _beat_cache_path(settings) / f"{digest}.json"
+
+
+def _load_beat_grid_cache_entry(path: Path) -> list[float] | None:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    cache: dict[str, list[float]] = {}
-    for key, values in raw.items():
-        if isinstance(values, list):
-            try:
-                cache[str(key)] = [float(item) for item in values]
-            except (TypeError, ValueError):
-                continue
-    return cache
+        return None
+    if not isinstance(raw, list):
+        return None
+    try:
+        return [float(item) for item in raw]
+    except (TypeError, ValueError):
+        return None
 
 
-def _save_beat_grid_cache(settings: ProjectSettings, cache: dict[str, list[float]]) -> None:
-    path = _beat_cache_path(settings)
+def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    path.write_text(content, encoding="utf-8")

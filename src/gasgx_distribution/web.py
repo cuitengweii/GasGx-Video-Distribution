@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from . import control_plane, service
 from .platforms import SUPPORTED_PLATFORMS
 from .scheduler import scheduler_status, start_scheduler, trigger_matrix_wechat_job, trigger_matrix_wechat_login_check
 from .tenant import bind_tenant_database
+from .video_matrix.ffmpeg_tools import ffmpeg_runtime_health
 from .video_matrix_api import router as video_matrix_router
 
 
@@ -174,6 +176,14 @@ def create_app() -> FastAPI:
         return response
 
     start_scheduler()
+    health = ffmpeg_runtime_health()
+    logging.getLogger(__name__).info(
+        "video matrix ffmpeg health: ffmpeg_ok=%s ffprobe_ok=%s ffmpeg_path=%s ffprobe_path=%s",
+        health.get("ffmpeg_ok"),
+        health.get("ffprobe_ok"),
+        health.get("ffmpeg_path", health.get("ffmpeg_error", "")),
+        health.get("ffprobe_path", health.get("ffprobe_error", "")),
+    )
     static_dir = Path(__file__).resolve().parent / "web" / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
@@ -260,6 +270,10 @@ def create_app() -> FastAPI:
             "brand_id": request.state.brand_instance.get("id"),
             "checks": checks,
         }
+
+    @app.get("/api/video-matrix/health")
+    def video_matrix_health() -> dict[str, Any]:
+        return ffmpeg_runtime_health()
 
     @app.get("/api/system/database-dictionary")
     def database_dictionary() -> dict[str, Any]:

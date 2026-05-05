@@ -9,63 +9,22 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .ffmpeg_tools import append_video_tail, concat_video, extract_frame
+from .ffmpeg_tools import FFmpegError, append_video_tail, concat_video, extract_frame
+from .font_config import build_font_candidates_for_family
 from .cover import render_intro_cover, render_outro_cover
 from .models import RenderedAsset, VideoVariant
 from .settings import ProjectSettings
 from .spark_text import build_marketing_copy
 from .templates import coerce_template
-
-FONT_CANDIDATES = (
-    Path(r"C:\Windows\Fonts\msyh.ttc"),
-    Path(r"C:\Windows\Fonts\msyhbd.ttc"),
-    Path(r"C:\Windows\Fonts\simhei.ttf"),
-    Path(r"C:\Windows\Fonts\simsun.ttc"),
-    Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
-    Path(r"C:\Windows\Fonts\Noto Sans SC (TrueType).otf"),
-    Path(r"C:\Windows\Fonts\arial.ttf"),
-    Path(r"C:\Windows\Fonts\segoeui.ttf"),
-    Path(r"C:\Windows\Fonts\arialbd.ttf"),
-)
-FONT_FAMILY_CANDIDATES = {
-    "microsoft yahei": (Path(r"C:\Windows\Fonts\msyh.ttc"), Path(r"C:\Windows\Fonts\msyhbd.ttc")),
-    "microsoft yahei bold": (Path(r"C:\Windows\Fonts\msyhbd.ttc"), Path(r"C:\Windows\Fonts\msyh.ttc")),
-    "microsoft jhenghei": (Path(r"C:\Windows\Fonts\msjh.ttc"), Path(r"C:\Windows\Fonts\msjhbd.ttc")),
-    "noto sans sc": (Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"), Path(r"C:\Windows\Fonts\Noto Sans SC (TrueType).otf")),
-    "noto sans sc bold": (Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf"), Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf")),
-    "arial black": (Path(r"C:\Windows\Fonts\ariblk.ttf"), Path(r"C:\Windows\Fonts\arialbd.ttf")),
-    "impact": (Path(r"C:\Windows\Fonts\impact.ttf"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
-    "dinnextltpro-bold": (Path(r"C:\Windows\Fonts\DINNextLTPro-Bold.ttf"), Path(r"C:\Windows\Fonts\bahnschrift.ttf")),
-    "din condensed": (Path(r"C:\Windows\Fonts\DINNextLTPro-Bold.ttf"), Path(r"C:\Windows\Fonts\bahnschrift.ttf")),
-    "dinnextltpro-medium": (Path(r"C:\Windows\Fonts\DINNextLTPro-Medium.ttf"), Path(r"C:\Windows\Fonts\bahnschrift.ttf")),
-    "bahnschrift": (Path(r"C:\Windows\Fonts\bahnschrift.ttf"),),
-    "bahnschrift condensed": (Path(r"C:\Windows\Fonts\bahnschrift.ttf"),),
-    "arial narrow": (Path(r"C:\Windows\Fonts\arialn.ttf"), Path(r"C:\Windows\Fonts\arial.ttf")),
-    "trebuchet ms": (Path(r"C:\Windows\Fonts\trebuc.ttf"),),
-    "segoe ui black": (Path(r"C:\Windows\Fonts\seguibl.ttf"), Path(r"C:\Windows\Fonts\segoeuib.ttf")),
-    "franklin gothic heavy": (Path(r"C:\Windows\Fonts\FRAHV.TTF"), Path(r"C:\Windows\Fonts\framd.ttf")),
-    "georgia": (Path(r"C:\Windows\Fonts\georgia.ttf"),),
-    "times new roman": (Path(r"C:\Windows\Fonts\times.ttf"),),
-    "courier new": (Path(r"C:\Windows\Fonts\cour.ttf"),),
-    "consolas": (Path(r"C:\Windows\Fonts\consola.ttf"),),
-    "comic sans ms": (Path(r"C:\Windows\Fonts\comic.ttf"), Path(r"C:\Windows\Fonts\comicbd.ttf")),
-    "cooper black": (Path(r"C:\Windows\Fonts\COOPBL.TTF"), Path(r"C:\Windows\Fonts\georgiab.ttf")),
-    "showcard gothic": (Path(r"C:\Windows\Fonts\SHOWG.TTF"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
-    "lucida console": (Path(r"C:\Windows\Fonts\lucon.ttf"), Path(r"C:\Windows\Fonts\cour.ttf")),
-    "english serif luxe": (Path(r"C:\Windows\Fonts\georgia.ttf"), Path(r"C:\Windows\Fonts\times.ttf")),
-    "english data mono": (Path(r"C:\Windows\Fonts\lucon.ttf"), Path(r"C:\Windows\Fonts\cour.ttf")),
-    "english pop comic": (Path(r"C:\Windows\Fonts\comic.ttf"), Path(r"C:\Windows\Fonts\comicbd.ttf"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
-    "retro bold": (Path(r"C:\Windows\Fonts\COOPBL.TTF"), Path(r"C:\Windows\Fonts\georgiab.ttf")),
-    "sign comic": (Path(r"C:\Windows\Fonts\SHOWG.TTF"), Path(r"C:\Windows\Fonts\ariblk.ttf")),
-    "simhei": (Path(r"C:\Windows\Fonts\simhei.ttf"),),
-    "simsun": (Path(r"C:\Windows\Fonts\simsun.ttc"),),
-    "alibaba puhuiti heavy": (Path(r"C:\Windows\Fonts\AlibabaPuHuiTi-Heavy.ttf"), Path(r"C:\Windows\Fonts\Alibaba-PuHuiTi-Heavy.ttf"), Path(r"C:\Windows\Fonts\msyhbd.ttc")),
-    "source han sans heavy": (Path(r"C:\Windows\Fonts\SourceHanSansSC-Heavy.otf"), Path(r"C:\Windows\Fonts\Source Han Sans SC Heavy.otf"), Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf")),
-    "harmonyos sans sc bold": (Path(r"C:\Windows\Fonts\HarmonyOS_Sans_SC_Bold.ttf"), Path(r"C:\Windows\Fonts\HarmonyOS Sans SC Bold.ttf"), Path(r"C:\Windows\Fonts\Noto Sans SC Bold (TrueType).otf")),
-    "youshebiaotihei": (Path(r"C:\Windows\Fonts\YouSheBiaoTiHei.ttf"), Path(r"C:\Windows\Fonts\YouSheBiaoTiHei-2.ttf"), Path(r"C:\Windows\Fonts\simhei.ttf")),
-}
 ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+
+
+class VideoMatrixRenderError(RuntimeError):
+    def __init__(self, message: str, *, error_code: str, user_message: str) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.user_message = user_message
 
 
 def render_variant(
@@ -87,6 +46,7 @@ def render_variant(
     ending_template_path: Path | None = None,
     telemetry: Any | None = None,
     speed_mode: str = "quality",
+    ffmpeg_threads: int | None = None,
 ) -> RenderedAsset:
     batch_dir.mkdir(parents=True, exist_ok=True)
     output_types = output_types or {"mp4"}
@@ -172,7 +132,14 @@ def render_variant(
             },
         ):
             body_output_path = main_video_path if video_ending_path is not None else video_path
-            concat_video(filter_complex, inputs, body_output_path, bgm_path=bgm_path, speed_mode=speed_mode)
+            concat_video(
+                filter_complex,
+                inputs,
+                body_output_path,
+                bgm_path=bgm_path,
+                speed_mode=speed_mode,
+                threads=ffmpeg_threads,
+            )
         if video_ending_path is not None:
             with _span(
                 telemetry,
@@ -191,6 +158,7 @@ def render_variant(
                     settings.target_width,
                     settings.target_height,
                     settings.target_fps,
+                    threads=ffmpeg_threads,
                 )
         if telemetry is not None:
             telemetry.event("render", "video_output_ready", {"video_path": video_path, "video_bytes": _file_size(video_path)})
@@ -247,6 +215,12 @@ def render_variant(
                     encoding="utf-8",
                 )
         return RenderedAsset(variant, video_path, cover_path, copy_path, manifest_path)
+    except FFmpegError as exc:
+            raise VideoMatrixRenderError(
+                str(exc),
+                error_code="ffmpeg_failed",
+                user_message="请确认已安装 FFmpeg 并加入 PATH",
+            ) from exc
     finally:
         with _span(telemetry, "render", "cleanup", {"scratch_dir": scratch_dir}):
             for temp_path in (cover_frame, intro_frame, intro_cover, outro_frame, outro_cover, main_video_path):
@@ -397,29 +371,7 @@ def _resolve_drawtext_font_arg(font_family: str | None = None) -> str:
 
 
 def _font_candidates_for_family(font_family: str | None = None) -> tuple[Path, ...]:
-    candidates: list[Path] = []
-    for family in _font_family_names(font_family):
-        candidates.extend(FONT_FAMILY_CANDIDATES.get(family, ()))
-    candidates.extend(FONT_CANDIDATES)
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate).lower()
-        if key not in seen:
-            unique.append(candidate)
-            seen.add(key)
-    return tuple(unique)
-
-
-def _font_family_names(font_family: str | None) -> list[str]:
-    if not font_family:
-        return []
-    names: list[str] = []
-    for item in str(font_family).split(","):
-        name = item.strip().strip("'\"").strip().lower()
-        if name and name not in {"sans-serif", "serif", "monospace"}:
-            names.append(name)
-    return names
+    return build_font_candidates_for_family(font_family)
 
 
 def _overlay_filters(
