@@ -1932,6 +1932,7 @@ function renderTerminalExecution() {
   }
   if (editConfigButton) {
     editConfigButton.textContent = route === "hub" ? "进入视频号" : route === "wechat" ? "修改配置" : "打开创作者后台";
+    editConfigButton.classList.toggle("hidden", route === "hub");
   }
 
   if (route === "hub") {
