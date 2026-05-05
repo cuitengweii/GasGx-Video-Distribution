@@ -114,4 +114,3 @@ echo "$ALL_PROXY"
 - Browser profiles should be regenerated on Mac.
 - Runtime cache, logs, lock files, and temporary media outputs should not be treated as required migration assets.
 - A clean Mac acceptance pass should cover: web console opens, material directory is readable, dry-run publish assigns material correctly, browser profile opens, login state persists, and at least one platform-specific login check completes.
-

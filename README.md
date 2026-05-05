@@ -10,6 +10,14 @@ This workspace also contains a local GasGx matrix-account console for maintainin
 python -m gasgx_distribution web
 ```
 
+开发和测试请先安装 dev 依赖：
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+CI 里跑 pytest 也应先安装 `.[dev]`。
+
 Default URL: `http://127.0.0.1:8765/`
 
 The console stores its SQLite database at `runtime/gasgx_distribution.db` and creates per-account browser state under `profiles/matrix/<account_key>/<platform>/`. Phase 1 keeps existing CyberCar CLI behavior intact and exposes unsupported deep automations for LinkedIn, Facebook, YouTube, VK, and Instagram as explicit `unsupported` task records instead of pretending they are production-ready.
