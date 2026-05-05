@@ -25,7 +25,7 @@ from cybercar.settings import apply_runtime_environment as apply_cybercar_enviro
 
 from .db import connect, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
-from .platforms import DEBUG_PORT_END, DEBUG_PORT_START, get_platform, normalize_platform, stable_debug_port
+from .platforms import DEBUG_PORT_END, DEBUG_PORT_START, SUPPORTED_PLATFORMS, get_platform, normalize_platform, stable_debug_port
 from .public_settings import load_distribution_settings, resolve_material_dir
 from .public_settings import save_distribution_settings as save_local_distribution_settings
 from .supabase_backend import SupabaseError, SupabaseRestClient
@@ -1460,7 +1460,10 @@ def _clear_terminal_qr_cache(window_id: int) -> None:
 
 
 def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
-    account = get_account(account_id) or {}
+    try:
+        account = get_account(account_id) or {}
+    except (SupabaseError, requests.RequestException, OSError, TimeoutError):
+        return ""
     platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
     if not platform:
         return ""
@@ -1575,6 +1578,9 @@ def terminal_execution_state() -> dict[str, Any]:
         "operators": groups,
         "windows": visible_windows,
         "config": state.get("config") or [],
+        "active_platform": str(state.get("active_platform") or "wechat"),
+        "platform_capabilities": state.get("platform_capabilities") or _terminal_platform_capabilities(),
+        "profile_by_platform": state.get("profile_by_platform") or _terminal_profile_by_platform(),
         "initialized": bool(state.get("initialized")) or bool(windows),
         "login_started": login_started,
         "summary": _terminal_summary(windows, groups),
@@ -1592,6 +1598,38 @@ def _terminal_summary(windows: list[dict[str, Any]], groups: list[dict[str, Any]
             if str(account.get("status") or "") == "success":
                 success += 1
     return {"total": total, "success": success, "active_windows": len([item for item in windows if item.get("enabled")])}
+
+
+def _terminal_platform_capabilities() -> dict[str, dict[str, Any]]:
+    capabilities: dict[str, dict[str, Any]] = {}
+    for platform in SUPPORTED_PLATFORMS:
+        session_policy = "daily_qr" if platform.key == "wechat" else "persistent"
+        capabilities[platform.key] = {
+            "label": platform.label,
+            "sessionPolicy": session_policy,
+            "canOpenBrowser": bool(platform.can_open_browser),
+            "canLoginStatus": bool(platform.can_login_status),
+            "canPublish": bool(platform.can_publish),
+            "canComment": bool(platform.can_comment),
+            "canMessage": bool(platform.can_message),
+            "canStats": bool(platform.can_stats),
+            "openUrl": platform.open_url,
+        }
+    return capabilities
+
+
+def _terminal_profile_by_platform() -> dict[str, dict[str, Any]]:
+    profiles: dict[str, dict[str, Any]] = {}
+    for platform in SUPPORTED_PLATFORMS:
+        session_policy = "daily_qr" if platform.key == "wechat" else "persistent"
+        profiles[platform.key] = {
+            "platform": platform.key,
+            "label": platform.label,
+            "sessionPolicy": session_policy,
+            "openUrl": platform.open_url,
+            "browserRuntime": "terminal-execution",
+        }
+    return profiles
 
 
 def _close_wechat_browser_for_account(account_id: int) -> None:
@@ -1662,7 +1700,15 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
         })
     if not windows:
         raise ValueError("至少需要启用一个已绑定运营微信的终端")
-    state = {"windows": windows, "config": saved_config, "initialized": True, "login_started": False}
+    state = {
+        "windows": windows,
+        "config": saved_config,
+        "initialized": True,
+        "login_started": False,
+        "active_platform": "wechat",
+        "platform_capabilities": _terminal_platform_capabilities(),
+        "profile_by_platform": _terminal_profile_by_platform(),
+    }
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -2294,18 +2340,33 @@ def list_accounts() -> list[dict[str, Any]]:
         client = _brand_supabase()
         accounts = client.select("matrix_accounts", order="id.desc")
         profiles = client.select("browser_profiles")
+        platforms_by_account: dict[int, list[dict[str, Any]]] = {}
+        for platform in client.select("account_platforms", order="platform.asc"):
+            account_id = int(platform.get("account_id") or 0)
+            platforms_by_account.setdefault(account_id, []).append(platform)
+        profiles_by_account: dict[int, dict[str, Any]] = {}
+        profiles_by_platform: dict[int, dict[str, Any]] = {}
+        for profile in profiles:
+            account_id = int(profile.get("account_id") or 0)
+            if account_id:
+                profiles_by_account[account_id] = profile
+            platform_id = int(profile.get("account_platform_id") or 0)
+            if platform_id:
+                profiles_by_platform[platform_id] = profile
         for account in accounts:
-            platforms = client.select("account_platforms", filters={"account_id": account["id"]}, order="platform.asc")
-            profile = _profile_for_account_from_rows(int(account["id"]), platforms, profiles)
+            account_id = int(account["id"])
+            platforms = [dict(item) for item in platforms_by_account.get(account_id, [])]
+            profile = profiles_by_account.get(account_id)
             for platform in platforms:
                 platform["account_key"] = account.get("account_key")
-                if profile:
-                    platform["profile_dir"] = profile.get("profile_dir", "")
-                    platform["debug_port"] = profile.get("debug_port")
-                    platform["fingerprint_json"] = profile.get("fingerprint_json", {})
+                platform_profile = profiles_by_platform.get(int(platform.get("id") or 0), profile)
+                if platform_profile:
+                    platform["profile_dir"] = platform_profile.get("profile_dir", "")
+                    platform["debug_port"] = platform_profile.get("debug_port")
+                    platform["fingerprint_json"] = platform_profile.get("fingerprint_json", {})
                 platform.update(_decode_platform_profile(platform))
             account["platforms"] = platforms
-            account["publish_success_count"] = publish_success_counts.get(int(account["id"]), 0)
+            account["publish_success_count"] = publish_success_counts.get(account_id, 0)
         return _cache_supabase_read("accounts", accounts)
     ensure_database()
     publish_success_counts = _matrix_publish_success_counts()

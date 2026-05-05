@@ -6,6 +6,7 @@ import hmac
 import hashlib
 import sqlite3
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
@@ -1378,3 +1379,70 @@ def test_supabase_read_cache_covers_common_list_endpoints(monkeypatch, tmp_path:
     service.clear_supabase_read_cache()
     assert service.load_brand_settings()["id"] == 1
     assert fake.calls["select_one"] == 3
+
+
+def test_terminal_execution_state_exposes_platform_breakdown(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    payload = client.get("/api/terminal-execution/state")
+
+    assert payload.status_code == 200
+    data = payload.json()
+    assert data["active_platform"] == "wechat"
+    assert data["platform_capabilities"]["wechat"]["sessionPolicy"] == "daily_qr"
+    assert data["platform_capabilities"]["douyin"]["sessionPolicy"] == "persistent"
+    assert data["profile_by_platform"]["wechat"]["browserRuntime"] == "terminal-execution"
+
+
+def test_terminal_qr_cache_falls_back_when_account_lookup_times_out(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    def fail_get_account(account_id: int) -> dict[str, Any] | None:
+        raise SupabaseError("timeout")
+
+    monkeypatch.setattr(service, "get_account", fail_get_account)
+
+    assert service._write_terminal_qr_cache(1, 123) == ""
+
+
+def test_supabase_list_accounts_uses_bulk_platform_fetch(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object] | None, str | None]] = []
+
+        def select(self, table: str, *, order: str | None = None, filters: dict[str, object] | None = None):
+            self.calls.append((table, filters, order))
+            if table == "matrix_accounts":
+                return [
+                    {"id": 2, "account_key": "a2", "display_name": "A2"},
+                    {"id": 1, "account_key": "a1", "display_name": "A1"},
+                ]
+            if table == "account_platforms":
+                return [
+                    {"id": 11, "account_id": 1, "platform": "wechat", "enabled": 1},
+                    {"id": 12, "account_id": 2, "platform": "douyin", "enabled": 1},
+                ]
+            if table == "browser_profiles":
+                return [
+                    {"account_id": 1, "profile_dir": "profiles/a1", "debug_port": 9333, "fingerprint_json": {"provider": "builtin-light"}},
+                    {"account_platform_id": 12, "profile_dir": "profiles/a2", "debug_port": 9444, "fingerprint_json": {"provider": "builtin-light"}},
+                ]
+            raise AssertionError(f"unexpected select table: {table}")
+
+        def select_one(self, table: str, *, filters: dict[str, object]):
+            raise AssertionError(f"unexpected select_one table: {table}")
+
+    fake = FakeClient()
+    monkeypatch.setattr(service, "_brand_supabase", lambda: fake)
+
+    accounts = service.list_accounts()
+
+    assert [item["id"] for item in accounts] == [2, 1]
+    assert [item["platforms"][0]["platform"] for item in accounts] == ["douyin", "wechat"]
+    assert len(fake.calls) == 3
+    assert fake.calls[1][0] == "browser_profiles"
+    assert fake.calls[2][0] == "account_platforms"
