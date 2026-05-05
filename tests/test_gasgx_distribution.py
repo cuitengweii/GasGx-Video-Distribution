@@ -1314,3 +1314,67 @@ def test_clear_supabase_read_cache_supabase_backend(monkeypatch, tmp_path: Path)
     assert cleared["cleared"] is True
     assert not service._supabase_read_cache_peek("dashboard_summary")
     assert "distribution_settings" not in service._SUPABASE_APP_SETTINGS_CACHE
+
+
+def test_supabase_read_cache_covers_common_list_endpoints(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: dict[str, int] = {"select": 0, "select_one": 0}
+
+        def select(self, table: str, *, order: str | None = None, filters: dict[str, object] | None = None):
+            self.calls["select"] += 1
+            if table == "matrix_accounts":
+                return [{"id": 1, "account_key": "a1", "display_name": "A1"}]
+            if table == "account_platforms":
+                return [{"id": 11, "account_id": 1, "platform": "wechat", "enabled": 1}]
+            if table == "browser_profiles":
+                return [{"account_id": 1, "profile_dir": "profiles/a1", "debug_port": 9333, "fingerprint_json": {"provider": "builtin-light"}}]
+            if table == "ai_robot_configs":
+                return [{"platform": "wecom", "enabled": 1, "bot_name": "Bot", "webhook_url": "https://example.test", "webhook_secret": "secret", "signing_secret": "", "target_id": "tid", "created_at": 1, "updated_at": 1}]
+            if table == "notification_routes":
+                return [{"event_type": "action_required", "platform": "wecom", "enabled": 1}]
+            if table == "analytics_items":
+                return [{"section": "overview", "item_key": "new_accounts", "payload_json": {"label": "x"}, "sort_order": 1}]
+            raise AssertionError(f"unexpected select table: {table}")
+
+        def select_one(self, table: str, *, filters: dict[str, object]):
+            self.calls["select_one"] += 1
+            if table == "brand_settings":
+                return {
+                    "id": 1,
+                    "name": "GasGx",
+                    "slogan": "Video Distribution",
+                    "logo_asset_path": "",
+                    "primary_color": "#5dd62c",
+                    "theme_id": "gasgx-green",
+                    "default_account_prefix": "GasGx",
+                }
+            if table == "app_settings":
+                return {"setting_key": str(filters["setting_key"]), "payload_json": {"common": {"material_dir": "runtime/a"}}}
+            return None
+
+    fake = FakeClient()
+    monkeypatch.setattr(service, "_brand_supabase", lambda: fake)
+
+    assert service.load_brand_settings()["id"] == 1
+    assert service.load_brand_settings()["id"] == 1
+    assert service.load_distribution_settings_db()["common"]["material_dir"] == "runtime/a"
+    assert service.load_distribution_settings_db()["common"]["material_dir"] == "runtime/a"
+    assert len(service.list_accounts()) == 1
+    assert len(service.list_accounts()) == 1
+    assert len(service.list_ai_robot_configs()) == 5
+    assert len(service.list_ai_robot_configs()) == 5
+    assert len(service.list_notification_routes()) >= 1
+    assert len(service.list_notification_routes()) >= 1
+    assert service.list_analytics_items()["overview"][0]["key"] == "new_accounts"
+    assert service.list_analytics_items()["overview"][0]["key"] == "new_accounts"
+
+    assert fake.calls["select_one"] == 2
+    assert fake.calls["select"] == 6
+
+    service.clear_supabase_read_cache()
+    assert service.load_brand_settings()["id"] == 1
+    assert fake.calls["select_one"] == 3
