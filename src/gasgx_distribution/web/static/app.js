@@ -1838,12 +1838,12 @@ function initSupabaseReadCacheClear() {
       const result = await api("/api/system/supabase-read-cache/clear", { method: "POST" });
       if (stateNode) {
         if (result.cleared) {
-          stateNode.textContent = "宸叉竻绌鸿繘绋嬪唴 Supabase 璇荤紦瀛橈紝鍚庣画璇锋眰灏嗛噸鏂版媺鍙栬繙绔暟鎹€?;
+          stateNode.textContent = "宸叉竻绌鸿繘绋嬪唴搴旂敤缂撳瓨锛屽悗缁х画璇锋眰灏嗛噸鏂版媺鍙栬繙绔暟鎹€?;
         } else {
           stateNode.textContent =
             result.backend === "sqlite"
-              ? "褰撳墠鍝佺墝搴撲负 SQLite锛屾湭鍚敤 Supabase 璇荤紦瀛樸€?
-              : "鏈竻鐞嗙紦瀛樸€?;
+              ? "褰撳墠鍝佺墝搴撲负 SQLite锛屾湭鍚敤搴旂敤缂撳瓨銆?
+              : "鏈竻鐞嗙紦瀛樸€?";
         }
       }
     } catch (error) {

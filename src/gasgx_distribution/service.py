@@ -634,7 +634,7 @@ def list_analytics_items() -> dict[str, list[dict[str, Any]]]:
         item.setdefault("key", key)
         grouped.setdefault(section, []).append(item)
     if brand_database_backend() == "supabase":
-        _supabase_read_cache_set("analytics_items", grouped)
+        return _cache_supabase_read("analytics_items", grouped)
     return copy.deepcopy(grouped)
 
 
@@ -828,8 +828,7 @@ def list_ai_robot_configs() -> list[dict[str, Any]]:
             for row in _brand_supabase().select("ai_robot_configs", order="platform.asc")
         }
         result = [_default_ai_robot_config(platform, rows.get(platform)) for platform in sorted(AI_ROBOT_PLATFORMS)]
-        _supabase_read_cache_set("ai_robot_configs", result)
-        return copy.deepcopy(result)
+        return _cache_supabase_read("ai_robot_configs", result)
     ensure_database()
     with connect() as conn:
         rows = {
@@ -1133,8 +1132,7 @@ def list_notification_routes() -> list[dict[str, Any]]:
         except SupabaseError:
             rows = {}
         merged = [{**item, **rows.get((item["event_type"], item["platform"]), {})} for item in defaults]
-        _supabase_read_cache_set("notification_routes", merged)
-        return copy.deepcopy(merged)
+        return _cache_supabase_read("notification_routes", merged)
     ensure_database()
     with connect() as conn:
         rows = {
@@ -2308,8 +2306,7 @@ def list_accounts() -> list[dict[str, Any]]:
                 platform.update(_decode_platform_profile(platform))
             account["platforms"] = platforms
             account["publish_success_count"] = publish_success_counts.get(int(account["id"]), 0)
-        _supabase_read_cache_set("accounts", accounts)
-        return copy.deepcopy(accounts)
+        return _cache_supabase_read("accounts", accounts)
     ensure_database()
     publish_success_counts = _matrix_publish_success_counts()
     with connect() as conn:
