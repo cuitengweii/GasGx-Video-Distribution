@@ -1785,9 +1785,12 @@ def _prepare_platform_login_qr_notice(
             open_url=open_target_url,
             close_stale_login_tabs=True,
         )
-    if allow_navigation and refresh_page:
+    if refresh_page:
         try:
-            active_page.get(open_target_url)
+            if allow_navigation:
+                active_page.get(open_target_url)
+            else:
+                active_page.refresh()
         except Exception:
             try:
                 active_page.refresh()

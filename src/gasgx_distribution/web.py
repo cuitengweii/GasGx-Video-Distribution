@@ -559,12 +559,33 @@ def create_app() -> FastAPI:
         path = service.terminal_qr_image_path(window_id)
         if path is None:
             raise HTTPException(status_code=404, detail="qr image not found")
-        return FileResponse(path)
+        return FileResponse(
+            path,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+
+    @app.post("/api/terminal-execution/windows/{window_id}/accounts/{account_id}/qr")
+    def terminal_execution_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
+        try:
+            return service.open_terminal_account_qr(window_id, account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/terminal-execution/windows/{window_id}/manual-publish")
     def terminal_execution_manual_publish(window_id: int) -> dict[str, Any]:
         try:
             return service.manual_terminal_publish(window_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/terminal-execution/windows/{window_id}/confirm-publish-success")
+    def terminal_execution_confirm_publish_success(window_id: int) -> dict[str, Any]:
+        try:
+            return service.confirm_terminal_publish_success(window_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

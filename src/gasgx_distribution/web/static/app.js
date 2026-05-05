@@ -1076,6 +1076,18 @@ function setButtonLoading(button, loadingText = "处理中") {
   };
 }
 
+function pulseButtonLoading(button, loadingText = "处理中", holdMs = 280) {
+  if (!button || button.disabled || button.classList.contains("loading")) return () => {};
+  const restoreButton = setButtonLoading(button, loadingText);
+  const timer = window.setTimeout(() => {
+    restoreButton();
+  }, holdMs);
+  return () => {
+    window.clearTimeout(timer);
+    restoreButton();
+  };
+}
+
 function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
@@ -1574,6 +1586,157 @@ function terminalPlaceholderIcon() {
   </svg>`;
 }
 
+function terminalWindowActionButtons(window, current, loginStarted) {
+  const accounts = window.accounts || [];
+  const currentIndex = Number(window.current_index || 0);
+  const hasCurrent = Boolean(current && current.id && currentIndex < accounts.length);
+  const hasTask = Boolean(current?.task_id);
+  const hasQr = Boolean(window.qr_url);
+  const isSuccess = String(current?.status || "") === "success";
+  const canPublish = loginStarted && hasCurrent && hasQr && !hasTask && !isSuccess;
+  const canConfirm = loginStarted && hasCurrent && hasTask && !isSuccess;
+  const hasNext = currentIndex + 1 < accounts.length;
+  const publishLabel = !hasCurrent ? "全部完成" : hasTask ? "发布已触发" : hasQr ? "发布" : "先获取二维码";
+  const confirmLabel = hasNext ? "发布成功，下一账号" : "发布成功，完成";
+  return `
+    <div class="terminal-window-actions">
+      <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${canPublish ? "" : "disabled"}>${publishLabel}</button>
+      <button class="terminal-col-btn secondary" type="button" data-terminal-confirm-success="${window.id}" ${canConfirm ? "" : "disabled"}>${confirmLabel}</button>
+    </div>
+  `;
+}
+
+function terminalQrImageMarkup(window, qrVisible, currentAccountId) {
+  if (!qrVisible) return terminalPlaceholderIcon();
+  const qrUrl = window.qr_url || "";
+  const refreshAccountId = Number(currentAccountId || 0);
+  return `
+    <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}">
+      <img src="${qrUrl}" alt="视频号登录二维码">
+    </button>
+  `;
+}
+
+function terminalWechatWindowMarkup(window, loginStarted) {
+  const accounts = window.accounts || [];
+  const currentIndex = Number(window.current_index || 0);
+  const color = window.color || "#3B82F6";
+  const colorDim = `${color}33`;
+  const successCount = accounts.filter((account) => account.status === "success").length;
+  const current = accounts[currentIndex] || {};
+  const qrStatusText = loginStarted && window.qr_url ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击获取 [${current.display_name || "-"}] 登录二维码`;
+  const qrVisible = loginStarted && window.qr_url;
+  return `
+    <div class="terminal-task-column terminal-glass" data-terminal-window-id="${window.id}" style="--term-color:${color};--term-color-dim:${colorDim}">
+      <div class="terminal-color-anchor"></div>
+      <div class="terminal-col-header">
+        <div class="terminal-col-header-top">
+          <span style="font-weight:700;font-size:16px;">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
+          <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
+        </div>
+        <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
+      </div>
+      <div class="terminal-qr-section">
+        <div class="terminal-qr-placeholder">${terminalQrImageMarkup(window, qrVisible, current.id)}</div>
+        <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
+      </div>
+      <div class="terminal-account-list">
+        ${accounts.map((account, index) => `
+          <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
+            <div class="terminal-account-info">
+              <div class="terminal-avatar"></div>
+              <div>
+                <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
+                <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
+              </div>
+            </div>
+            <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
+          </div>
+        `).join("") || `<div class="muted">暂无账号</div>`}
+      </div>
+      <div class="terminal-col-footer">
+        <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
+        ${terminalWindowActionButtons(window, current, loginStarted)}
+      </div>
+    </div>
+  `;
+}
+
+function syncTerminalWechatSummary(summary, windows) {
+  const summaryNode = document.querySelector(".terminal-wechat-summary");
+  if (summaryNode) {
+    summaryNode.innerHTML = `
+      <div class="metric"><span>已完成账号数</span><strong>${summary.success || 0}</strong></div>
+      <div class="metric"><span>总账号数</span><strong>${summary.total || 0}</strong></div>
+      <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
+    `;
+  }
+  const progress = document.querySelector("#terminal-global-progress");
+  if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
+  const active = document.querySelector("#terminal-active-windows");
+  if (active) active.textContent = String(summary.active_windows || windows.length || 0);
+}
+
+function waitForTerminalQrVisible(windowId, accountId, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const tick = () => {
+      const button = document.querySelector(`[data-terminal-account-qr="${windowId}:${accountId}"]`);
+      const windowNode = button?.closest(".terminal-task-column");
+      const currentText = windowNode?.querySelector(".terminal-qr-section img[alt='视频号登录二维码']");
+      if (currentText?.getAttribute("src")) {
+        const img = currentText;
+        if (img.complete && img.naturalWidth > 0) {
+          resolve(true);
+          return;
+        }
+        img.addEventListener("load", () => resolve(true), { once: true });
+        img.addEventListener("error", () => resolve(false), { once: true });
+        return;
+      }
+      if (Date.now() >= deadline) {
+        resolve(false);
+        return;
+      }
+      window.requestAnimationFrame(tick);
+    };
+    tick();
+  });
+}
+
+async function refreshTerminalAccountQr(windowId, accountId, button) {
+  const restoreButton = setButtonLoading(button, "刷新中");
+  try {
+    const refreshRoot = document.querySelector(".terminal-workspace-wechat") || document.querySelector("#terminal-matrix-workspace");
+    const targetNode = refreshRoot?.querySelector(`[data-terminal-window-id="${windowId}"]`);
+    targetNode?.querySelectorAll(".terminal-qr-placeholder img[alt='视频号登录二维码']").forEach((img) => img.remove());
+
+    const nextState = await api(`/api/terminal-execution/windows/${windowId}/accounts/${accountId}/qr`, { method: "POST" });
+    state.terminalExecution = nextState;
+    const loginStarted = Boolean(nextState.login_started);
+    const targetWindow = (nextState.windows || []).find((item) => String(item.id) === String(windowId));
+    if (refreshRoot && targetNode && targetWindow) {
+      targetNode.outerHTML = terminalWechatWindowMarkup(targetWindow, loginStarted);
+      syncTerminalWechatSummary(nextState.summary || {}, nextState.windows || []);
+    } else {
+      renderTerminalExecution();
+    }
+    await waitForTerminalQrVisible(windowId, accountId);
+  } finally {
+    restoreButton();
+  }
+}
+
+function installGlobalButtonLoading() {
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button || button.disabled || button.classList.contains("loading")) return;
+    if (button.dataset.noGlobalLoading === "1") return;
+    if (button.matches("[data-terminal-manual], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route]")) return;
+    pulseButtonLoading(button, "处理中");
+  }, true);
+}
+
 function renderTerminalExecution() {
   renderTerminalConfig();
   const windows = state.terminalExecution.windows || [];
@@ -1583,8 +1746,8 @@ function renderTerminalExecution() {
   document.querySelector("#terminal-init-modal")?.classList.toggle("hidden", !state.terminalConfigOpen);
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
-    startLoginButton.disabled = loginStarted;
-    startLoginButton.textContent = loginStarted ? "等待扫码" : "开始登录";
+    startLoginButton.disabled = false;
+    startLoginButton.textContent = "获取登录二维码";
   }
   const progress = document.querySelector("#terminal-global-progress");
   if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
@@ -1600,7 +1763,7 @@ function renderTerminalExecution() {
     const successCount = accounts.filter((account) => account.status === "success").length;
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
-    const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录 [${current.display_name || "-"}]`;
+    const qrStatusText = loginStarted && window.qr_url ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击获取 [${current.display_name || "-"}] 登录二维码`;
     const qrVisible = loginStarted && window.qr_url;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
@@ -1613,7 +1776,7 @@ function renderTerminalExecution() {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${qrVisible ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${terminalQrImageMarkup(window, qrVisible, current.id)}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
@@ -1626,13 +1789,13 @@ function renderTerminalExecution() {
                   <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
                 </div>
               </div>
-              <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
-            </div>
-          `).join("") || `<div class="muted">暂无账号</div>`}
+            <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
+          </div>
+        `).join("") || `<div class="muted">暂无账号</div>`}
         </div>
         <div class="terminal-col-footer">
           <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
-          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${!loginStarted || manualWait > 0 ? "disabled" : ""}>${!loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布")}</button>
+          ${terminalWindowActionButtons(window, current, loginStarted)}
         </div>
       </div>
     `;
@@ -1745,55 +1908,8 @@ function renderTerminalDailyQrView(root) {
   const loginStarted = Boolean(state.terminalExecution.login_started);
   const workspace = root instanceof Element ? root : document.querySelector("#terminal-matrix-workspace");
   if (!workspace) return;
-  workspace.innerHTML = windows.map((window) => {
-    const accounts = window.accounts || [];
-    const currentIndex = Number(window.current_index || 0);
-    const color = window.color || "#3B82F6";
-    const colorDim = `${color}33`;
-    const successCount = accounts.filter((account) => account.status === "success").length;
-    const current = accounts[currentIndex] || {};
-    const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
-    const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录[${current.display_name || "-"}]`;
-    const qrVisible = loginStarted && window.qr_url;
-    return `
-      <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
-        <div class="terminal-color-anchor"></div>
-        <div class="terminal-col-header">
-          <div class="terminal-col-header-top">
-            <span style="font-weight:700;font-size:16px;">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
-            <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
-          </div>
-          <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
-        </div>
-        <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${qrVisible ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
-          <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
-        </div>
-        <div class="terminal-account-list">
-          ${accounts.map((account, index) => `
-            <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
-              <div class="terminal-account-info">
-                <div class="terminal-avatar"></div>
-                <div>
-                  <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
-                  <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
-                </div>
-              </div>
-              <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
-            </div>
-          `).join("") || `<div class="muted">暂无账号</div>`}
-        </div>
-        <div class="terminal-col-footer">
-          <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
-          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${!loginStarted || manualWait > 0 ? "disabled" : ""}>${!loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布")}</button>
-        </div>
-      </div>
-    `;
-  }).join("");
-  const progress = document.querySelector("#terminal-global-progress");
-  if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
-  const active = document.querySelector("#terminal-active-windows");
-  if (active) active.textContent = String(summary.active_windows || windows.length || 0);
+  workspace.innerHTML = windows.map((window) => terminalWechatWindowMarkup(window, loginStarted)).join("");
+  syncTerminalWechatSummary(summary, windows);
 }
 
 function renderTerminalSessionBoardView() {
@@ -1836,8 +1952,8 @@ function renderTerminalExecution() {
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
     const loginStarted = Boolean(state.terminalExecution.login_started);
-    startLoginButton.disabled = loginStarted || context.platform !== "wechat";
-    startLoginButton.textContent = context.platform === "wechat" ? (loginStarted ? "等待扫码" : "开始登录") : "检测全部";
+    startLoginButton.disabled = context.platform !== "wechat";
+    startLoginButton.textContent = context.platform === "wechat" ? "获取登录二维码" : "检测全部";
   }
   const subtitle = document.querySelector("#terminal-header-subtitle");
   if (subtitle) {
@@ -1864,7 +1980,7 @@ function updateTerminalManualCountdowns() {
     const window = windowById.get(String(button.dataset.terminalManual || ""));
     const manualWait = loginStarted ? Math.max(0, Number(window?.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     button.disabled = !loginStarted || manualWait > 0;
-    button.textContent = !loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布");
+    button.textContent = !loginStarted ? "先获取二维码" : (manualWait > 0 ? `发布 (${manualWait}s)` : "发布");
   });
 }
 
@@ -1882,20 +1998,9 @@ function readTerminalConfigRows() {
 
 function startTerminalPolling() {
   if (terminalPollTimer) clearInterval(terminalPollTimer);
-  terminalPollTimer = setInterval(async () => {
-    if (currentView !== "terminal-execution") return;
-    try {
-      state.terminalExecution = await api("/api/terminal-execution/poll", { method: "POST" });
-      renderTerminalExecution();
-    } catch {
-      /* 保持当前界面，避免轮询失败把页面打回无限加载态 */
-    }
-  }, 10000);
+  terminalPollTimer = null;
   if (terminalCountdownTimer) clearInterval(terminalCountdownTimer);
-  terminalCountdownTimer = setInterval(() => {
-    if (currentView !== "terminal-execution") return;
-    updateTerminalManualCountdowns();
-  }, 1000);
+  terminalCountdownTimer = null;
 }
 
 function terminalCurrentRoute() {
@@ -1970,30 +2075,28 @@ function renderTerminalExecution() {
   if (terminalShellTitle) terminalShellTitle.textContent = route === "hub" ? "终端执行" : `${terminalPlatformName(route)} 终端`;
   if (terminalShellDesc) terminalShellDesc.textContent = route === "hub"
     ? "先选平台，再进入平台专属子流程。"
-    : route === "wechat"
-      ? "视频号采用每日登录扫码队列；登录后由矩阵调度继续推进。"
-      : "一次登录长期有效；失效后重新检测或重新登录。";
+    : "一次登录长期有效；失效后重新检测或重新登录。";
   if (subtitle) subtitle.textContent = route === "hub"
     ? "平台枢纽页只列入口卡片，不混排视频号多窗。"
     : route === "wechat"
-      ? "视频号独立流程：配置、开始登录、扫码、窗态清晰。"
+      ? "视频号独立流程：配置、获取二维码、扫码、发布、进入下一账号。"
       : "长会话平台：选账号、检测登录、打开创作者后台。";
   if (progressLabel) progressLabel.textContent = route === "hub" ? "平台数:" : route === "wechat" ? "总进度:" : "账号数:";
   if (activeLabel) activeLabel.textContent = route === "hub" ? "分组数:" : route === "wechat" ? "运行窗:" : "账号卡:";
   if (startLoginButton) {
-    startLoginButton.textContent = route === "hub" ? "刷新健康" : route === "wechat" ? (loginStarted ? "等待扫码" : "开始登录") : "检测登录";
-    startLoginButton.disabled = route === "wechat" && loginStarted;
-  }
-  if (editConfigButton) {
-    editConfigButton.textContent = route === "hub" ? "进入视频号" : route === "wechat" ? "修改配置" : "打开创作者后台";
+    startLoginButton.textContent = route === "hub" ? "刷新健康" : route === "wechat" ? "获取登录二维码" : "检测登录";
+    startLoginButton.disabled = false;
   }
   if (headerActions) {
+    const editConfigButtonHtml = route === "wechat"
+      ? `<button class="terminal-btn-primary" type="button" id="terminal-edit-config">修改配置</button>`
+      : "";
     const saveConfigButtonHtml = route === "wechat"
       ? `<button class="terminal-btn-primary" type="button" id="terminal-save-config">更新配置</button>`
       : "";
     headerActions.innerHTML = `
-      <button class="terminal-btn-primary" type="button" id="terminal-start-login">${route === "hub" ? "刷新健康" : route === "wechat" ? (loginStarted ? "等待扫码" : "开始登录") : "检测登录"}</button>
-      <button class="terminal-btn-primary" type="button" id="terminal-edit-config">${route === "hub" ? "进入视频号" : route === "wechat" ? "修改配置" : "打开创作者后台"}</button>
+      <button class="terminal-btn-primary" type="button" id="terminal-start-login">${route === "hub" ? "刷新健康" : route === "wechat" ? "获取登录二维码" : "检测登录"}</button>
+      ${editConfigButtonHtml}
       ${saveConfigButtonHtml}
     `;
   }
@@ -2067,7 +2170,7 @@ function renderTerminalExecution() {
             <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
           </div>
           <div class="terminal-entry-actions terminal-route-actions">
-            <button class="btn primary" type="button" data-terminal-start-action="1" ${loginStarted ? "disabled" : ""}>${loginStarted ? "等待扫码" : "开始登录"}</button>
+            <button class="btn primary" type="button" data-terminal-start-action="1">获取登录二维码</button>
             <button class="btn secondary" type="button" data-terminal-edit-action="1">修改配置</button>
           </div>
           <div class="terminal-workspace terminal-workspace-wechat"></div>
@@ -2134,7 +2237,7 @@ function updateTerminalManualCountdowns() {
     const window = windowById.get(String(button.dataset.terminalManual || ""));
     const manualWait = loginStarted ? Math.max(0, Number(window?.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     button.disabled = !loginStarted || manualWait > 0;
-    button.textContent = !loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布");
+    button.textContent = !loginStarted ? "先获取二维码" : (manualWait > 0 ? `发布 (${manualWait}s)` : "发布");
   });
 }
 
@@ -3078,7 +3181,6 @@ async function loadViewData(view, { force = false } = {}) {
       };
       renderTerminalExecution();
     }
-    startTerminalPolling();
   } else if (view === "stats") {
     await loadAccounts();
     state.summary = await api("/api/summary");
@@ -3496,7 +3598,6 @@ document.querySelector("#terminal-start-login-legacy")?.addEventListener("click"
     state.terminalQrVisible = true;
     state.terminalConfigOpen = false;
     renderTerminalExecution();
-    startTerminalPolling();
   } finally {
     restoreButton();
   }
@@ -3854,9 +3955,29 @@ document.addEventListener("click", async (event) => {
 
   const terminalManualButton = event.target.closest("[data-terminal-manual]");
   if (terminalManualButton) {
-    const restoreButton = setButtonLoading(terminalManualButton, "触发中");
+    const restoreButton = setButtonLoading(terminalManualButton, "发布中");
     try {
       state.terminalExecution = await api(`/api/terminal-execution/windows/${terminalManualButton.dataset.terminalManual}/manual-publish`, { method: "POST" });
+      renderTerminalExecution();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
+  const terminalQrRefreshButton = event.target.closest("[data-terminal-qr-refresh]");
+  if (terminalQrRefreshButton) {
+    const [windowId, accountId] = String(terminalQrRefreshButton.dataset.terminalQrRefresh || "").split(":");
+    if (!Number(windowId) || !Number(accountId)) return;
+    await refreshTerminalAccountQr(windowId, accountId, terminalQrRefreshButton);
+    return;
+  }
+
+  const terminalConfirmButton = event.target.closest("[data-terminal-confirm-success]");
+  if (terminalConfirmButton) {
+    const restoreButton = setButtonLoading(terminalConfirmButton, "进入下一个");
+    try {
+      state.terminalExecution = await api(`/api/terminal-execution/windows/${terminalConfirmButton.dataset.terminalConfirmSuccess}/confirm-publish-success`, { method: "POST" });
       renderTerminalExecution();
     } finally {
       restoreButton();
@@ -3920,6 +4041,7 @@ initUserMenu();
 initPermissionGuards();
 initAuthCenter();
 initHelpCenter();
+installGlobalButtonLoading();
 
 
 /*
@@ -4203,7 +4325,6 @@ document.addEventListener("click", async (event) => {
         });
         state.terminalConfigOpen = false;
         renderTerminalExecution();
-        if (state.terminalExecution.login_started) startTerminalPolling();
       }
     } finally {
       restoreButton();
@@ -4227,7 +4348,6 @@ document.addEventListener("click", async (event) => {
       state.terminalQrVisible = true;
       state.terminalConfigOpen = false;
       renderTerminalExecution();
-      startTerminalPolling();
       return;
     }
     const account = terminalLongSessionAccounts(route)[0];
@@ -4303,7 +4423,6 @@ document.addEventListener("click", async (event) => {
       state.terminalQrVisible = true;
       state.terminalConfigOpen = false;
       renderTerminalExecution();
-      startTerminalPolling();
       return;
     }
     const account = terminalLongSessionAccounts(route)[0];

@@ -1466,8 +1466,15 @@ def terminal_qr_image_path(window_id: int) -> str | None:
     return str(path) if path.exists() else None
 
 
-def _terminal_qr_url(window_id: int) -> str:
-    return f"/api/terminal-execution/windows/{int(window_id):d}/qr-image"
+def _terminal_qr_cache_bust() -> int:
+    return int(time.time() * 1000)
+
+
+def _terminal_qr_url(window_id: int, version: int | None = None) -> str:
+    base = f"/api/terminal-execution/windows/{int(window_id):d}/qr-image"
+    if version is None:
+        return base
+    return f"{base}?v={int(version)}"
 
 
 def _write_terminal_qr_data_url_cache(window_id: int, data_url: str) -> str:
@@ -1493,7 +1500,10 @@ def _public_terminal_window(window: dict[str, Any]) -> dict[str, Any]:
     qr_path = str(visible.get("qr_path") or "").strip()
     qr_url = str(visible.get("qr_url") or "").strip()
     if qr_path:
-        visible["qr_url"] = _terminal_qr_url(window_id)
+        if not qr_url or qr_url.startswith("data:"):
+            visible["qr_url"] = _terminal_qr_url(window_id)
+        else:
+            visible["qr_url"] = qr_url
     elif qr_url.startswith("data:"):
         visible["qr_url"] = ""
     return visible
@@ -1587,7 +1597,7 @@ def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
             debug_port=int(platform.get("debug_port") or 0),
             chrome_user_data_dir=str(platform.get("profile_dir") or ""),
             auto_open_chrome=False,
-            refresh_page=False,
+            refresh_page=True,
             allow_navigation=False,
         )
     except Exception:
@@ -1800,7 +1810,7 @@ def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, A
     qr_path = str(previous.get("qr_path") or "").strip()
     if qr_path and Path(qr_path).exists():
         window["qr_path"] = qr_path
-        window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0))
+        window["qr_url"] = str(previous.get("qr_url") or _terminal_qr_url(int(window.get("id") or 0)))
         window["manual_available_at"] = int(previous.get("manual_available_at") or 0)
         return True
     return False
@@ -1888,20 +1898,18 @@ def start_terminal_login() -> dict[str, Any]:
     windows = state.get("windows") or []
     if not windows:
         raise ValueError("请先初始化执行矩阵")
-    if bool(state.get("login_started")):
-        return terminal_execution_state()
     opened_count = 0
     for window in windows:
         accounts = window.get("accounts") or []
         current_index = int(window.get("current_index") or 0)
         if current_index < len(accounts):
             current = accounts[current_index]
-            if str(current.get("status") or "") not in {"success", "running"} and not current.get("task_id"):
+            if str(current.get("status") or "") != "success" and not current.get("task_id"):
                 _open_terminal_window_current_account(window)
                 opened_count += 1
             elif str(current.get("status") or "") not in {"success", "running"}:
                 current["status"] = "pending"
-                current["status_text"] = "等待开始登录"
+                current["status_text"] = "等待获取登录二维码"
                 current["task_id"] = None
                 window["qr_path"] = ""
                 window["qr_url"] = ""
@@ -1909,7 +1917,7 @@ def start_terminal_login() -> dict[str, Any]:
     state["login_started"] = True
     state["probe_cursor"] = 0
     if opened_count:
-        state["next_probe_at"] = now_ts() + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
+        state["next_probe_at"] = 0
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -1929,14 +1937,14 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
         current["status_text"] = "等待扫码中..."
         qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
         window["qr_path"] = qr_path
-        window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0)) if qr_path else ""
+        window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
     except Exception as exc:
         current["status"] = "error"
         current["status_text"] = str(exc)
         _clear_terminal_qr_cache(int(window.get("id") or 0))
         window["qr_path"] = ""
         window["qr_url"] = ""
-    window["manual_available_at"] = now_ts() + 60
+    window["manual_available_at"] = 0
     return True
 
 
@@ -1978,7 +1986,7 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
         if not window.get("qr_url"):
             qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
             window["qr_path"] = qr_path
-            window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0)) if qr_path else ""
+            window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
         return True
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     window["qr_path"] = ""
@@ -2050,11 +2058,64 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         task = _queue_terminal_draft_task(int(current.get("id") or 0))
         current["task_id"] = task.get("id")
         current["status"] = "running"
-        qr_path = _write_terminal_qr_cache(int(target.get("id") or 0), int(current.get("id") or 0))
-        target["qr_path"] = qr_path
-        target["qr_url"] = _terminal_qr_url(int(target.get("id") or 0)) if qr_path else ""
-        current["status_text"] = "已人工触发草稿任务"
-    target["manual_available_at"] = now_ts() + 60
+        current["status_text"] = "已触发发布，等待人工确认成功"
+    target["manual_available_at"] = 0
+    _save_terminal_state(state)
+    return terminal_execution_state()
+
+
+def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
+    state = _load_terminal_state()
+    target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
+    if target is None:
+        raise KeyError("window not found")
+    accounts = target.get("accounts") or []
+    next_index = next((index for index, item in enumerate(accounts) if int(item.get("id") or 0) == int(account_id)), -1)
+    if next_index < 0:
+        raise KeyError("account not found")
+    target["current_index"] = next_index
+    target["manual_available_at"] = 0
+    _clear_terminal_qr_cache(int(target.get("id") or 0))
+    for account in accounts:
+        if int(account.get("id") or 0) == int(account_id):
+            account["status"] = "pending"
+            account["status_text"] = "等待获取登录二维码"
+            account["task_id"] = None
+            break
+    _open_terminal_window_current_account(target)
+    _save_terminal_state(state)
+    return terminal_execution_state()
+
+
+def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
+    state = _load_terminal_state()
+    target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
+    if target is None:
+        raise KeyError("window not found")
+    if not bool(state.get("login_started")):
+        return terminal_execution_state()
+    accounts = target.get("accounts") or []
+    current_index = int(target.get("current_index") or 0)
+    if current_index >= len(accounts):
+        return terminal_execution_state()
+    current = accounts[current_index]
+    if str(current.get("status") or "") != "success":
+        current["status"] = "success"
+        current["status_text"] = "发布成功"
+        current["publish_success_count"] = int(current.get("publish_success_count") or 0) + 1
+    _close_wechat_browser_for_account(int(current.get("id") or 0))
+    _clear_terminal_qr_cache(int(target.get("id") or 0))
+    target["qr_path"] = ""
+    target["qr_url"] = ""
+    target["manual_available_at"] = 0
+    next_index = current_index + 1
+    target["current_index"] = next_index
+    if next_index < len(accounts):
+        next_account = accounts[next_index]
+        next_account["status"] = "pending"
+        next_account["status_text"] = "等待获取登录二维码"
+        next_account["task_id"] = None
+        _open_terminal_window_current_account(target)
     _save_terminal_state(state)
     return terminal_execution_state()
 

@@ -30,7 +30,7 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert "终端前置配置区" in html
     assert "确认配置并进入" not in html
     assert 'id="terminal-start-system"' not in html
-    assert 'id="terminal-start-login">开始登录</button>' in html
+    assert 'id="terminal-start-login">获取登录二维码</button>' in html
     assert 'data-quick-view="notifications"' in html
     assert 'data-quick-view="tasks"' in html
     assert 'data-quick-view="video-matrix"' in html
@@ -42,28 +42,37 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert ".terminal-task-column" in css
     assert ".terminal-qr-placeholder" in css
     assert ".terminal-modal-actions" in css
+    assert ".terminal-workspace.terminal-workspace-wechat" in css
+    assert ".terminal-window-actions" in css
     assert "position: fixed;" in css
     assert "left: 260px;" in css
-    assert ".terminal-workspace.terminal-workspace-wechat" in css
     assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in css
     assert "overflow-x: hidden;" in css
     assert "min-width: 0;" in css
     assert "pointer-events: none;" in css
     assert "pointer-events: auto;" in css
+
     app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "/api/terminal-execution/state" in app
     assert "/api/terminal-execution/start" in app
     assert "/api/terminal-execution/start-login" in app
+    assert "/api/terminal-execution/poll" not in app
+    assert "/api/terminal-execution/windows/" in app
+    assert "/accounts/" in app
+    assert "/qr" in app
+    assert "confirm-publish-success" in app
+    assert "data-terminal-confirm-success" in app
+    assert "data-terminal-qr-refresh" in app
     assert "#terminal-config-list" in app
     assert "#terminal-save-config, [data-terminal-save-config]" in app
     assert "#terminal-start-system" not in app
     assert "!state.terminalExecution.initialized || state.terminalConfigOpen" in app
     assert "const qrVisible = loginStarted && window.qr_url;" in app
     assert "state.terminalQrVisible && loginStarted && window.qr_url" not in app
-    assert "state.terminalQrVisible = false;" in app
-    assert "state.terminalQrVisible = true;" in app
-    assert "terminalCountdownTimer" in app
-    assert "}, 1000);" in app
+    assert "视频号采用每日登录扫码队列；登录后由矩阵调度继续推进。" not in app
+    assert "一次登录长期有效；失效后重新检测或重新登录。" in app
+    assert "setInterval(async" not in app
+    assert "installGlobalButtonLoading" in app
 
 
 def test_terminal_config_does_not_start_login_side_effects() -> None:
