@@ -45,15 +45,22 @@ body {
 }
 
 .embed-mode .sidebar {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: 280px;
   height: 100vh;
-  padding: clamp(6px, .9vh, 10px) 18px;
-  overflow: hidden;
-  align-content: start;
-  gap: clamp(2px, .45vh, 5px);
-  font-size: 12px;
-  line-height: 1.15;
+  padding: clamp(4px, .6vh, 8px) 14px;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  justify-content: space-between;
+  gap: clamp(1px, .25vh, 4px);
+  font-size: 11px;
+  line-height: 1.08;
+  scrollbar-width: none;
+}
+
+.embed-mode .sidebar::-webkit-scrollbar {
+  display: none;
 }
 
 .embed-mode .back-link {
@@ -85,81 +92,103 @@ body {
 }
 
 .embed-mode .sidebar label {
-  margin: clamp(2px, .45vh, 5px) 0;
-  gap: 3px;
+  margin: clamp(1px, .2vh, 3px) 0;
+  gap: 2px;
+  font-size: 11px;
+  flex: 1 1 0;
+  min-height: 0;
 }
 .embed-mode .sidebar label > input,
 .embed-mode .sidebar label > select,
 .embed-mode .sidebar label > textarea {
-  margin-top: 3px;
+  margin-top: 2px;
 }
 
 .embed-mode .sidebar input,
 .embed-mode .sidebar select {
-  min-height: clamp(28px, 3.5vh, 34px);
-  padding: clamp(5px, .65vh, 8px) 10px;
-  font-size: 12px;
+  min-height: clamp(24px, 2.8vh, 30px);
+  padding: clamp(4px, .4vh, 6px) 8px;
+  font-size: 11px;
+  width: 100%;
 }
 .embed-mode .sidebar .input-with-unit input {
   min-height: 100%;
 }
 
 .embed-mode .sidebar button {
-  min-height: clamp(30px, 3.7vh, 36px);
-  margin: clamp(2px, .45vh, 4px) 0;
-  padding: 7px 10px;
-  font-size: 12px;
+  min-height: clamp(28px, 3.2vh, 36px);
+  margin: clamp(1px, .25vh, 3px) 0;
+  padding: 5px 8px;
+  font-size: 11px;
+  flex: 1 1 0;
 }
 
 .embed-mode .sidebar details {
-  margin-top: clamp(1px, .35vh, 3px);
+  margin-top: clamp(0px, .2vh, 2px);
 }
 
 .embed-mode .sidebar summary {
   cursor: pointer;
   font-weight: 900;
+  font-size: 11px;
 }
 
 .embed-mode .bgm-library-hint {
-  max-height: 38px;
+  max-height: 28px;
   overflow: hidden;
 }
 .embed-mode .range-with-value {
-  min-height: 26px;
+  min-height: 22px;
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .embed-mode .range-with-value input {
-  min-height: 20px;
+  min-height: 18px;
   padding: 0;
 }
 .embed-mode .radio-row {
-  gap: 6px 10px;
-  margin: 5px 0;
+  gap: 4px 6px;
+  margin: 3px 0;
 }
 .embed-mode .sidebar-radio-field {
-  margin: clamp(2px, .45vh, 5px) 0;
-  font-size: 12px;
+  margin: clamp(1px, .25vh, 3px) 0;
+  font-size: 11px;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .embed-mode .sidebar-radio-field > span {
-  margin-bottom: 3px;
+  margin-bottom: 2px;
 }
 .embed-mode .sidebar-radio-field .radio-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin: 3px 0 5px;
+  gap: 4px;
+  margin: 2px 0 3px;
+  flex: 1 1 0;
 }
 .embed-mode .sidebar-radio-field .radio-row label {
   justify-content: center;
-  min-height: clamp(30px, 3.7vh, 36px);
-  padding: 6px 8px;
+  min-height: clamp(28px, 3.2vh, 34px);
+  padding: 4px 6px;
 }
 .embed-mode .library-action {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  gap: 4px;
+  flex: 1 1 0;
+  min-height: 0;
 }
 .embed-mode .library-action button {
   margin: 0;
+  min-height: 0;
+}
+
+.embed-mode #openPreviewVideo {
+  margin-bottom: clamp(18px, 2.4vh, 28px);
 }
 button, input, select, textarea { font: inherit; }
 .sidebar {

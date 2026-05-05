@@ -3673,6 +3673,87 @@ body.video-matrix-active #video-matrix {
   align-items: stretch;
 }
 
+.terminal-platform-bar {
+  display: flex;
+  gap: 10px;
+  padding: 12px 28px 0;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.terminal-config-panel {
+  margin: 0 28px 6px;
+  padding: 14px 16px;
+}
+
+.terminal-config-panel.hidden {
+  display: none;
+}
+
+.terminal-config-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.terminal-config-panel-body {
+  color: var(--terminal-text-sub);
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.terminal-platform-tab {
+  border: 1px solid var(--terminal-glass-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--terminal-text-main);
+  border-radius: 14px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 160px;
+}
+
+.terminal-platform-tab.active {
+  border-color: var(--terminal-green);
+  box-shadow: 0 0 0 1px rgba(93, 214, 44, 0.25) inset;
+}
+
+.terminal-platform-tab span {
+  color: var(--terminal-text-sub);
+  font-size: 12px;
+}
+
+.terminal-session-board {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.terminal-session-card {
+  padding: 16px;
+  border-radius: 16px;
+}
+
+.terminal-session-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.terminal-session-card-body {
+  margin-top: 12px;
+  color: var(--terminal-text-sub);
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
 .terminal-task-column {
   min-width: 0;
   width: 100%;

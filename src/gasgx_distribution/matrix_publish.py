@@ -8,12 +8,15 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 from typing import Any
 
 from .paths import get_paths
 from .public_settings import load_distribution_settings, load_wechat_publish_settings, resolve_material_dir
 from . import service
+from .platforms import get_platform
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 
@@ -30,6 +33,8 @@ class PublishPlanItem:
     workspace: Path
     batch_index: int
     batch_position: int
+    platform: str = "wechat"
+    publish_date: str = ""
 
 
 def materials_video_dir() -> Path:
@@ -100,12 +105,12 @@ def _release_publish_lock() -> None:
 def _load_state() -> dict[str, Any]:
     path = state_path()
     if not path.exists():
-        return {"used_videos": [], "runs": []}
+        return {"consumed": [], "runs": []}
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
-        return {"used_videos": [], "runs": []}
-    return payload if isinstance(payload, dict) else {"used_videos": [], "runs": []}
+        return {"consumed": [], "runs": []}
+    return payload if isinstance(payload, dict) else {"consumed": [], "runs": []}
 
 
 def _save_state(payload: dict[str, Any]) -> None:
@@ -117,17 +122,136 @@ def _video_key(path: Path) -> str:
     return f"{path.name}|{stat.st_size}|{int(stat.st_mtime)}"
 
 
+def _load_timezone() -> ZoneInfo:
+    raw = str(load_distribution_settings().get("common", {}).get("timezone") or "").strip()
+    if raw:
+        try:
+            return ZoneInfo(raw)
+        except ZoneInfoNotFoundError:
+            pass
+    return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def _today_date(tz: ZoneInfo) -> date:
+    return datetime.now(tz).date()
+
+
+def _parse_yyyymmdd(token: str) -> date | None:
+    if len(token) != 8 or not token.isdigit():
+        return None
+    try:
+        return date(int(token[0:4]), int(token[4:6]), int(token[6:8]))
+    except ValueError:
+        return None
+
+
+def _manifest_created_day(manifest_path: Path, tz: ZoneInfo) -> date | None:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = str(payload.get("created_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tz)
+    return parsed.astimezone(tz).date()
+
+
+def asset_day(path: Path, tz: ZoneInfo | None = None) -> date:
+    active_tz = tz or _load_timezone()
+    parent_name = path.parent.name
+    if parent_name and parent_name[:8].isdigit() and len(parent_name) >= 9 and parent_name[8] == "_":
+        parsed = _parse_yyyymmdd(parent_name[:8])
+        if parsed is not None:
+            return parsed
+    manifest_path = path.with_name(f"{path.stem}_manifest.json")
+    if manifest_path.exists():
+        manifest_day = _manifest_created_day(manifest_path, active_tz)
+        if manifest_day is not None:
+            return manifest_day
+    return datetime.fromtimestamp(path.stat().st_mtime, active_tz).date()
+
+
+def _relative_asset_key(path: Path) -> str:
+    root = materials_video_dir()
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except Exception:
+        return str(path.resolve())
+
+
+def _consumed_records() -> list[dict[str, Any]]:
+    state = _load_state()
+    records = state.get("consumed", [])
+    if isinstance(records, list):
+        return [item for item in records if isinstance(item, dict)]
+    return []
+
+
+def _consumed_index(today: str | None = None) -> set[tuple[str, int, str, str]]:
+    result: set[tuple[str, int, str, str]] = set()
+    for item in _consumed_records():
+        asset_key = str(item.get("asset_key") or "").strip()
+        account_id = int(item.get("account_id") or 0)
+        platform = str(item.get("platform") or "").strip()
+        publish_date = str(item.get("publish_date") or "").strip()
+        if asset_key and account_id > 0 and platform and publish_date and (today is None or publish_date == today):
+            result.add((asset_key, account_id, platform, publish_date))
+    return result
+
+
+def _consumed_slots(today: str) -> set[tuple[int, str, str]]:
+    slots: set[tuple[int, str, str]] = set()
+    for item in _consumed_records():
+        publish_date = str(item.get("publish_date") or "").strip()
+        if publish_date != today:
+            continue
+        account_id = int(item.get("account_id") or 0)
+        platform = str(item.get("platform") or "").strip()
+        if account_id > 0 and platform:
+            slots.add((account_id, platform, publish_date))
+    return slots
+
+
+def _scan_material_candidates(root: Path) -> list[Path]:
+    videos: list[Path] = []
+    for path in root.iterdir():
+        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS:
+            videos.append(path)
+            continue
+        if path.is_dir():
+            for child in path.iterdir():
+                if child.is_file() and child.suffix.lower() in VIDEO_EXTENSIONS:
+                    videos.append(child)
+    return videos
+
+
 def list_candidate_videos(*, include_used: bool = False) -> list[Path]:
-    used = set(str(item) for item in _load_state().get("used_videos", []))
-    videos = [
-        path
-        for path in materials_video_dir().iterdir()
-        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
-    ]
-    videos.sort(key=lambda item: (item.stat().st_mtime, item.name), reverse=True)
-    if include_used:
-        return videos
-    return [path for path in videos if _video_key(path) not in used]
+    tz = _load_timezone()
+    today = _today_date(tz)
+    videos = _scan_material_candidates(materials_video_dir())
+    today_videos = [path for path in videos if asset_day(path, tz) == today]
+    today_videos.sort(key=lambda item: (item.stat().st_mtime, item.name), reverse=True)
+    return today_videos
+
+
+def _account_platform_slots(accounts: list[dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    slots: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for account in accounts:
+        for platform in sorted(account.get("platforms") or [], key=lambda item: str(item.get("platform") or "")):
+            token = str(platform.get("platform") or "").strip()
+            cap = get_platform(token)
+            if not cap or not cap.can_publish or not bool(platform.get("enabled", True)):
+                continue
+            slots.append((account, platform))
+    return slots
 
 
 def _wechat_profile(platforms: list[dict[str, Any]]) -> Path | None:
@@ -155,6 +279,18 @@ def list_wechat_accounts() -> list[dict[str, Any]]:
                 "wechat_fingerprint": platform.get("fingerprint") or {},
             }
         )
+    result.sort(key=lambda item: int(item.get("id") or 0))
+    return result
+
+
+def list_active_publish_accounts() -> list[dict[str, Any]]:
+    accounts = [account for account in service.list_accounts() if str(account.get("status") or "") == "active"]
+    result: list[dict[str, Any]] = []
+    for account in accounts:
+        platforms = [item for item in account.get("platforms") or [] if bool(item.get("enabled", True))]
+        if not platforms:
+            continue
+        result.append({**account, "platforms": platforms})
     result.sort(key=lambda item: int(item.get("id") or 0))
     return result
 
@@ -216,14 +352,23 @@ def _ordered_account_batches(accounts: list[dict[str, Any]], settings: dict[str,
 
 
 def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
-    accounts = list_wechat_accounts()
+    accounts = list_active_publish_accounts()
     settings = _matrix_wechat_job_settings()
     videos = list_candidate_videos()
     if limit > 0:
         accounts = accounts[:limit]
     account_batches = _ordered_account_batches(accounts, settings)
     ordered_accounts = [account for batch in account_batches for account in batch]
-    count = min(len(ordered_accounts), len(videos))
+    slots = _account_platform_slots(ordered_accounts)
+    today = _today_date(_load_timezone()).isoformat()
+    consumed = _consumed_slots(today)
+    plan_slots = []
+    for account, platform in slots:
+        key = (int(account.get("id") or 0), str(platform.get("platform") or ""), today)
+        if key in consumed:
+            continue
+        plan_slots.append((account, platform))
+    count = min(len(plan_slots), len(videos))
     account_batch_lookup = {
         int(account["id"]): (batch_index, batch_position)
         for batch_index, batch in enumerate(account_batches, start=1)
@@ -232,7 +377,7 @@ def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     root = get_paths().runtime_root / "matrix_publish_runs"
     plan: list[PublishPlanItem] = []
-    for account, video in zip(ordered_accounts[:count], videos[:count]):
+    for (account, platform), video in zip(plan_slots[:count], videos[:count]):
         account_key = str(account.get("account_key") or f"account-{account.get('id')}").strip()
         workspace = root / f"{timestamp}_{account_key}"
         batch_index, batch_position = account_batch_lookup.get(int(account["id"]), (1, len(plan) + 1))
@@ -241,13 +386,15 @@ def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
                 account_id=int(account["id"]),
                 account_key=account_key,
                 display_name=str(account.get("display_name") or account_key),
-                profile_dir=Path(str(account["wechat_profile_dir"])),
-                debug_port=int(account.get("wechat_debug_port") or 0),
-                fingerprint=dict(account.get("wechat_fingerprint") or {}),
+                profile_dir=Path(str(platform.get("profile_dir") or account.get("wechat_profile_dir") or "")),
+                debug_port=int(platform.get("debug_port") or account.get("wechat_debug_port") or 0),
+                fingerprint=dict(platform.get("fingerprint") or account.get("wechat_fingerprint") or {}),
                 source_video=video,
                 workspace=workspace,
                 batch_index=batch_index,
                 batch_position=batch_position,
+                platform=str(platform.get("platform") or "wechat"),
+                publish_date=today,
             )
         )
     return plan
@@ -371,7 +518,7 @@ def check_wechat_matrix_login_status(
 
 
 def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
-    plan = build_publish_plan(limit=limit)
+    plan = [item for item in build_publish_plan(limit=limit) if item.platform == "wechat"]
     job_settings = _matrix_wechat_job_settings()
     settings = load_wechat_publish_settings()
     if dry_run:
@@ -420,7 +567,7 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
         return {"ok": False, "skipped": True, "reason": "publish_lock_active", "lock": lock_payload}
 
     state = _load_state()
-    used = set(str(item) for item in state.get("used_videos", []))
+    consumed = list(state.get("consumed", [])) if isinstance(state.get("consumed"), list) else []
     runs = list(state.get("runs", [])) if isinstance(state.get("runs"), list) else []
     results: list[dict[str, Any]] = []
     try:
@@ -495,12 +642,12 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                 )
             evidence_ok = _has_wechat_publish_evidence(item.workspace)
             success = completed.returncode == 0 and evidence_ok
-            video_key = _video_key(item.source_video)
-            if success:
-                used.add(video_key)
             record = {
                 "account_id": item.account_id,
                 "account_key": item.account_key,
+                "platform": item.platform,
+                "asset_key": _relative_asset_key(item.source_video),
+                "publish_date": item.publish_date or _today_date(_load_timezone()).isoformat(),
                 "display_name": item.display_name,
                 "video": str(item.source_video),
                 "prepared_video": str(prepared),
@@ -519,7 +666,18 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                 record["error"] = "wechat publish returned 0 but no uploaded_records_wechat.jsonl evidence was written"
             results.append(record)
             runs.append(record)
-            state["used_videos"] = sorted(used)
+            if success:
+                consumed.append(
+                    {
+                        "asset_key": record["asset_key"],
+                        "account_id": item.account_id,
+                        "platform": item.platform,
+                        "publish_date": record["publish_date"],
+                        "success": True,
+                        "finished_at": int(time.time()),
+                    }
+                )
+            state["consumed"] = consumed[-500:]
             state["runs"] = runs[-200:]
             _save_state(state)
         return {"ok": all(item["success"] for item in results), "count": len(results), "results": results}

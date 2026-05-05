@@ -10,6 +10,7 @@ from gasgx_distribution import db as dist_db
 from gasgx_distribution import service
 from gasgx_distribution.matrix_publish import (
     _caption_with_topics,
+    asset_day,
     _runtime_config_for_wechat,
     build_publish_plan,
     list_candidate_videos,
@@ -145,14 +146,92 @@ def test_publish_plan_rotates_after_last_successful_account(monkeypatch, tmp_pat
         service.create_account({"account_key": f"a-{index:02d}", "display_name": f"A{index}", "platforms": ["wechat"]})
         _write_video(tmp_path / "runtime" / "materials" / "videos" / f"{index}.mp4", int(time.time()) + index)
     state_path = tmp_path / "runtime" / "matrix_publish_state.json"
+    state_path.write_text('{"consumed":[],"runs":[{"account_id":3,"success":true}]}', encoding="utf-8")
+
+    plan = build_publish_plan()
+
+    assert [item.account_key for item in plan] == ["a-04", "a-01", "a-02", "a-03"]
+
+
+def test_list_candidate_videos_includes_batch_subdirectories_and_filters_previous_day(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    base = tmp_path / "runtime" / "materials" / "videos"
+    today = int(time.time())
+    yesterday = today - 86400
+    _write_video(base / "20260505_120000_abcd1234" / "today.mp4", today)
+    _write_video(base / "plain.mp4", today)
+    _write_video(base / "20260504_120000_abcd1234" / "old.mp4", yesterday)
+
+    candidates = list_candidate_videos()
+
+    assert {item.name for item in candidates} == {"today.mp4", "plain.mp4"}
+    assert asset_day(base / "20260505_120000_abcd1234" / "today.mp4").isoformat() == time.strftime("%Y-%m-%d", time.localtime(today))
+
+
+def test_publish_plan_allows_same_day_multi_platform_slots(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat", "douyin"]})
+    base = tmp_path / "runtime" / "materials" / "videos"
+    _write_video(base / "one.mp4", int(time.time()))
+    plan = build_publish_plan()
+
+    assert [item.platform for item in plan] == ["douyin"]
+    assert [item.source_video.name for item in plan] == ["one.mp4"]
+
+    state_path = tmp_path / "runtime" / "matrix_publish_state.json"
     state_path.write_text(
-        '{"used_videos":[],"runs":[{"account_id":3,"success":true}]}',
+        json.dumps(
+            {
+                "consumed": [
+                    {
+                        "asset_key": "one.mp4",
+                        "account_id": 1,
+                        "platform": "douyin",
+                        "publish_date": time.strftime("%Y-%m-%d"),
+                        "success": True,
+                        "finished_at": int(time.time()),
+                    }
+                ],
+                "runs": [],
+            }
+        ),
         encoding="utf-8",
     )
 
     plan = build_publish_plan()
 
-    assert [item.account_key for item in plan] == ["a-04", "a-01", "a-02", "a-03"]
+    assert [item.platform for item in plan] == ["wechat"]
+    assert [item.source_video.name for item in plan] == ["one.mp4"]
+
+
+def test_publish_plan_skips_same_account_same_platform_same_day(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat"]})
+    base = tmp_path / "runtime" / "materials" / "videos"
+    _write_video(base / "one.mp4", int(time.time()))
+    state_path = tmp_path / "runtime" / "matrix_publish_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "consumed": [
+                    {
+                        "asset_key": "one.mp4",
+                        "account_id": 1,
+                        "platform": "wechat",
+                        "publish_date": time.strftime("%Y-%m-%d"),
+                        "success": True,
+                        "finished_at": int(time.time()),
+                    }
+                ],
+                "runs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = build_publish_plan()
+
+    assert plan == []
 
 
 def test_caption_with_topics_appends_global_topics() -> None:

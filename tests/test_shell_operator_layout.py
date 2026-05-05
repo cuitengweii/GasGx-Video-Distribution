@@ -17,6 +17,9 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'data-view="terminal-execution" data-permission="terminal-execution">终端执行</button>' in html
     assert html.index('data-view="tasks"') < html.index('data-view="terminal-execution"') < html.index('data-view="stats"')
     assert "terminal-init-modal" in html
+    assert "terminal-header-subtitle" in html
+    assert "terminal-platform-bar" in html
+    assert "terminal-platform-config-panel" in html
     assert '<div class="page-toolbar">' not in html
     assert 'id="refresh"' not in html
     assert 'data-quick-view="notifications" data-permission="notifications">查看提醒</button>' not in html

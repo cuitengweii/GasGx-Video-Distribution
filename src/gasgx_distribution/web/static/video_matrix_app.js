@@ -254,6 +254,7 @@ async function init() {
 function renderSidebar(data) {
   $("outputCount").value = state.output_count || 3;
   $("maxWorkers").value = state.max_workers || 3;
+  $("maxWorkersValue").textContent = `${$("maxWorkers").value}`;
   $("videoDurationMin").value = state.video_duration_min || settings.video_duration_min || 8;
   $("videoDurationMax").value = state.video_duration_max || settings.video_duration_max || 12;
   syncNumber("outputCount");
@@ -2761,7 +2762,7 @@ function renderRadio(containerId, name, options, selected, onchange) {
 function radioValue(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value || ""; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function syncNumber(id) { const el = $(id); if (!el) return; el.oninput = () => { let value = Number(el.value || 3); value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value)); if (String(value) !== el.value) el.value = value; if (id === "outputCount") $("metricCount").textContent = el.value; scheduleStateSave(); }; }
-function syncRange(id) { bindRangeControl(id, () => { if (id === "outputCount") $("metricCount").textContent = $(id).value; if (id === "maxWorkers") $("metricWorkers").textContent = $(id).value; scheduleStateSave(); }); }
+function syncRange(id) { bindRangeControl(id, () => { if (id === "outputCount") $("metricCount").textContent = $(id).value; if (id === "maxWorkers") { $("metricWorkers").textContent = $(id).value; $("maxWorkersValue").textContent = $(id).value; } scheduleStateSave(); }); }
 function rangeControlHtml({ id = "", key = "", label, min, max, step = 1, value, className = "" }) {
   const attr = key ? `data-key="${escapeHtml(key)}"` : "";
   const rangeId = id || `control-${key}`;

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
@@ -161,8 +162,10 @@ def run_pipeline(
     active_cover_template = _resolve_cover_template_config(cover_template_id, cover_template_config)
     active_ending_cover_template = ending_cover_template_config or active_cover_template
     active_output_root = _resolve_output_root(settings, output_root)
-    batch_dir = active_output_root
-    filename_prefix = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
+    run_dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    batch_dir = active_output_root / run_dir_name
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    filename_prefix = ""
     assets: list[RenderedAsset] = []
     render_start = 0.45
     render_span = 0.50
@@ -180,6 +183,7 @@ def run_pipeline(
                 "ffmpeg_threads": ffmpeg_threads,
                 "output_types": sorted(output_types or {"mp4"}),
                 "output_root": batch_dir,
+                "base_output_root": active_output_root,
             },
         )
     _notify(progress_callback, "render", render_start, f"Rendering {total} videos with {worker_count} workers")

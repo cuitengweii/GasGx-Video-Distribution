@@ -45,11 +45,11 @@ Last updated: 2026-04-30
 1. UI or scheduler calls the matrix 视频号 run endpoint.
 2. `matrix_publish` acquires `runtime/matrix_publish.lock`.
 3. Active 视频号 accounts are ordered by batch settings, previous success rotation, and optional in-batch shuffle.
-4. Candidate videos are read from the configured material directory, excluding videos already marked used in `runtime/matrix_publish_state.json`.
+4. Candidate videos are read from the configured material directory, limited to the current local calendar day, and filtered against per-`(asset_key, account_id, platform, publish_date)` success records in `runtime/matrix_publish_state.json`.
 5. Each selected account receives exactly one source video in its own workspace under `runtime/matrix_publish_runs/<timestamp>_<account_key>/`.
 6. The execution command calls `python -m cybercar.pipeline --publish-only --upload-platforms wechat --limit 1` with the account profile path and account debug port.
 7. Success is recorded only when the process exits cleanly and `uploaded_records_wechat.jsonl` evidence exists.
-8. Used-video state and run history are appended after each account result.
+8. Consumption state and run history are appended after each account result.
 
 ## Configuration Model
 

@@ -69,7 +69,7 @@ const state = {
   notificationRoutes: [],
   notificationEvents: [],
   loginQrBatches: [],
-  terminalExecution: { colors: [], operators: [], windows: [], summary: {} },
+  terminalExecution: { colors: [], operators: [], windows: [], summary: {}, platform_capabilities: {}, profile_by_platform: {}, active_platform: "wechat" },
   terminalQrVisible: false,
   terminalConfigOpen: false,
   aiRobotEditingPlatform: "",
@@ -1503,6 +1503,21 @@ function terminalColorByIndex(index) {
 function renderTerminalConfig() {
   const list = document.querySelector("#terminal-config-list");
   if (!list) return;
+  const platform = terminalActivePlatform();
+  if (platform !== "wechat") {
+    list.innerHTML = `
+      <div class="terminal-config-row">
+        <div class="terminal-config-left">
+          <span>当前平台仅展示按需检测配置</span>
+        </div>
+        <div class="terminal-session-card-body">
+          <div>该平台不使用视频号矩阵窗位、运营微信绑定和二维码队列。</div>
+          <div>请在页面顶部切换平台后，再通过“当前平台配置”查看对应字段组。</div>
+        </div>
+      </div>
+    `;
+    return;
+  }
   const operators = state.terminalExecution.operators || [];
   const colors = state.terminalExecution.colors || [];
   const savedRows = state.terminalExecution.config || [];
@@ -1579,7 +1594,7 @@ function renderTerminalExecution() {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
@@ -1603,6 +1618,207 @@ function renderTerminalExecution() {
       </div>
     `;
   }).join("");
+}
+
+function terminalPlatformPolicyLabel(policy) {
+  return policy === "daily_qr" ? "每日登录" : "会话长期有效";
+}
+
+function terminalPlatformList() {
+  const capabilities = state.terminalExecution.platform_capabilities || {};
+  return Object.entries(capabilities).map(([key, item]) => ({
+    key,
+    label: item?.label || platformName(key),
+    sessionPolicy: item?.sessionPolicy || "persistent",
+    openUrl: item?.openUrl || "",
+  }));
+}
+
+function terminalActivePlatform() {
+  return String(state.terminalExecution.active_platform || "wechat");
+}
+
+function terminalPlatformContext() {
+  const platform = terminalActivePlatform();
+  const capability = state.terminalExecution.platform_capabilities?.[platform] || {};
+  const profile = state.terminalExecution.profile_by_platform?.[platform] || {};
+  const sessionPolicy = capability.sessionPolicy || profile.sessionPolicy || (platform === "wechat" ? "daily_qr" : "persistent");
+  return {
+    platform,
+    label: capability.label || platformName(platform),
+    sessionPolicy,
+    openUrl: capability.openUrl || profile.openUrl || "",
+    profile,
+    capability,
+  };
+}
+
+function renderTerminalPlatformBar() {
+  const bar = document.querySelector("#terminal-platform-bar");
+  if (!bar) return;
+  const activePlatform = terminalActivePlatform();
+  const platforms = terminalPlatformList();
+  bar.innerHTML = platforms.map((platform) => {
+    const active = platform.key === activePlatform;
+    return `
+      <button class="terminal-platform-tab ${active ? "active" : ""}" type="button" data-terminal-platform="${platform.key}">
+        <strong>${platform.label}</strong>
+        <span>${terminalPlatformPolicyLabel(platform.sessionPolicy)}</span>
+      </button>
+    `;
+  }).join("");
+  bar.querySelectorAll("[data-terminal-platform]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.terminalExecution.active_platform = String(button.dataset.terminalPlatform || "wechat");
+      renderTerminalExecution();
+    });
+  });
+}
+
+function renderTerminalConfigPanel() {
+  const panel = document.querySelector("#terminal-platform-config-panel");
+  if (!panel) return;
+  const context = terminalPlatformContext();
+  const isWechat = context.platform === "wechat";
+  panel.classList.toggle("hidden", false);
+  panel.innerHTML = isWechat
+    ? `
+      <div class="terminal-config-panel-head">
+        <strong>当前平台配置：视频号</strong>
+        <span class="terminal-status-badge theme">每日登录</span>
+      </div>
+      <div class="terminal-config-panel-body">
+        <div>只渲染视频号所需字段组：运营微信、色标、窗口启用。</div>
+        <div>切换到其它平台后，会改为长会话配置/检测视图，不复用二维码占位。</div>
+      </div>
+    `
+    : `
+      <div class="terminal-config-panel-head">
+        <strong>当前平台配置：${context.label}</strong>
+        <span class="terminal-status-badge theme">按需检测</span>
+      </div>
+      <div class="terminal-config-panel-body">
+        <div>只展示该平台需要的配置字段，缺失字段不渲染。</div>
+        <div>入口：${context.openUrl || "-"}</div>
+        <div>浏览器运行态：${context.profile.browserRuntime || "-"}</div>
+      </div>
+    `;
+}
+
+function renderTerminalDailyQrView() {
+  const windows = state.terminalExecution.windows || [];
+  const summary = state.terminalExecution.summary || {};
+  const loginStarted = Boolean(state.terminalExecution.login_started);
+  const workspace = document.querySelector("#terminal-matrix-workspace");
+  if (!workspace) return;
+  workspace.innerHTML = windows.map((window) => {
+    const accounts = window.accounts || [];
+    const currentIndex = Number(window.current_index || 0);
+    const color = window.color || "#3B82F6";
+    const colorDim = `${color}33`;
+    const successCount = accounts.filter((account) => account.status === "success").length;
+    const current = accounts[currentIndex] || {};
+    const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
+    const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录[${current.display_name || "-"}]`;
+    return `
+      <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
+        <div class="terminal-color-anchor"></div>
+        <div class="terminal-col-header">
+          <div class="terminal-col-header-top">
+            <span style="font-weight:700;font-size:16px;">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
+            <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
+          </div>
+          <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
+        </div>
+        <div class="terminal-qr-section">
+          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
+        </div>
+        <div class="terminal-account-list">
+          ${accounts.map((account, index) => `
+            <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
+              <div class="terminal-account-info">
+                <div class="terminal-avatar"></div>
+                <div>
+                  <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
+                  <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
+                </div>
+              </div>
+              <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
+            </div>
+          `).join("") || `<div class="muted">暂无账号</div>`}
+        </div>
+        <div class="terminal-col-footer">
+          <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
+          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${!loginStarted || manualWait > 0 ? "disabled" : ""}>${!loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布")}</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  const progress = document.querySelector("#terminal-global-progress");
+  if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
+  const active = document.querySelector("#terminal-active-windows");
+  if (active) active.textContent = String(summary.active_windows || windows.length || 0);
+}
+
+function renderTerminalSessionBoardView() {
+  const workspace = document.querySelector("#terminal-matrix-workspace");
+  if (!workspace) return;
+  const profileByPlatform = state.terminalExecution.profile_by_platform || {};
+  const platforms = terminalPlatformList().filter((platform) => platform.key !== "wechat");
+  workspace.innerHTML = `
+    <div class="terminal-session-board">
+      ${platforms.map((platform) => {
+        const profile = profileByPlatform[platform.key] || {};
+        return `
+          <article class="terminal-session-card terminal-glass">
+            <div class="terminal-session-card-head">
+              <strong>${platform.label}</strong>
+              <span class="terminal-status-badge theme">${terminalPlatformPolicyLabel(platform.sessionPolicy)}</span>
+            </div>
+            <div class="muted">入口: ${profile.openUrl || platform.openUrl || "-"}</div>
+            <div class="terminal-session-card-body">
+              <div>会话状态: 长会话，按需检测或失效时再登录</div>
+              <div>浏览器运行态: ${profile.browserRuntime || "-"}</div>
+            </div>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+  const progress = document.querySelector("#terminal-global-progress");
+  if (progress) progress.textContent = "0/0";
+  const active = document.querySelector("#terminal-active-windows");
+  if (active) active.textContent = "0";
+}
+
+function renderTerminalExecution() {
+  renderTerminalConfig();
+  renderTerminalPlatformBar();
+  renderTerminalConfigPanel();
+  const context = terminalPlatformContext();
+  document.querySelector("#terminal-init-modal")?.classList.toggle("hidden", !state.terminalConfigOpen);
+  const startLoginButton = document.querySelector("#terminal-start-login");
+  if (startLoginButton) {
+    const loginStarted = Boolean(state.terminalExecution.login_started);
+    startLoginButton.disabled = loginStarted || context.platform !== "wechat";
+    startLoginButton.textContent = context.platform === "wechat" ? (loginStarted ? "登录中" : "开始登录") : "检测全部";
+  }
+  const subtitle = document.querySelector("#terminal-header-subtitle");
+  if (subtitle) {
+    subtitle.textContent = context.platform === "wechat"
+      ? "视频号采用每日登录扫码队列；其它平台采用长会话按需检测。"
+      : `${context.label}采用长会话模型，按需检测或失效时再登录。`;
+  }
+  const progressLabel = document.querySelector("#terminal-progress-label");
+  const activeLabel = document.querySelector("#terminal-active-label");
+  if (progressLabel) progressLabel.textContent = context.platform === "wechat" ? "总进度:" : "待关注:";
+  if (activeLabel) activeLabel.textContent = context.platform === "wechat" ? "运行窗口:" : "会话卡片:";
+  if (context.platform === "wechat") {
+    renderTerminalDailyQrView();
+  } else {
+    renderTerminalSessionBoardView();
+  }
 }
 
 function updateTerminalManualCountdowns() {

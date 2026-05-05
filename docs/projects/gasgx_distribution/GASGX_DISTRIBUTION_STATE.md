@@ -6,6 +6,7 @@
 - WeChat matrix accounts now resolve browser runtime from persisted `browser_profiles`: profile path, debug port, and `fingerprint_json`.
 - New profile records use `profiles/matrix/<account_key>/wechat`, a stable debug-port pool from `12000-32000`, and a built-in light fingerprint with UA, language, locale, timezone, window size, and reserved proxy slot.
 - Matrix publish dry-run and real publish no longer use the temporary `9400 + account_id` rule; they read `browser_profiles.debug_port` and pass fingerprint launch args into the CyberCar/Chrome execution path.
+- Matrix publish candidate selection now filters to the current local day and records success as per-platform consumption entries instead of a global `used_videos` set, so the same file can still be reused on a different platform the same day when policy allows.
 - A matrix login-check command is available: `python -m gasgx_distribution matrix-wechat-login-check --batch-size 5`. The scheduler rotates small batches and skips scheduled login checks while publish is running.
 - Real publish now preflights only planned WeChat accounts. If any planned account is `login_required`, the publish round is skipped before workspace/material consumption.
 - Operation notification routing is separate from AI robot config through `notification_routes`. The UI exposes WeChat login QR notification switches for Telegram, DingTalk, and WeCom.
