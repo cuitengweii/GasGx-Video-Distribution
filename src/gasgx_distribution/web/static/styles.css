@@ -932,6 +932,7 @@ select option {
 }
 
 .client-overview {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 0;
 }
 
@@ -3791,6 +3792,13 @@ body.video-matrix-active #video-matrix {
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+.terminal-avatar {
+  width: 32px;
+  height: 32px;
+  background: var(--terminal-glass-border);
+  border-radius: 50%;
 }
 
 .terminal-acc-name {

@@ -1586,6 +1586,7 @@ function renderTerminalExecution() {
           ${accounts.map((account, index) => `
             <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
               <div class="terminal-account-info">
+                <div class="terminal-avatar"></div>
                 <div>
                   <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
                   <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
@@ -1646,7 +1647,6 @@ function renderStats() {
   const summary = state.summary || {};
   const overview = [
     ["矩阵账号总数", summary.accounts || 4, "+8.4%", "up"],
-    ["新增账号数", 2, "+100%", "up"],
     ["累计作品总量", 186, "+18.6%", "up"],
     ["累计总曝光", "68.4万", "+24.8%", "up"],
     ["累计总播放", "28.6万", "+19.2%", "up"],
@@ -1658,6 +1658,24 @@ function renderStats() {
   document.querySelector("#stats-overview").innerHTML = overview.map(([label, value, change, trend]) => `
     <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
   `).join("");
+
+  const statsAccountFilter = document.querySelector("#stats-account-filter");
+  if (statsAccountFilter) {
+    const activeAccounts = (state.accounts || [])
+      .filter((account) => String(account.status || "").toLowerCase() === "active")
+      .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+    const currentValue = statsAccountFilter.value;
+    const activeOptions = activeAccounts.map((account) => {
+      const label = account.display_name || account.account_key || `账号 ${account.id}`;
+      return `<option value="${account.id}">#${account.id} ${label}</option>`;
+    }).join("");
+    statsAccountFilter.innerHTML = `<option value="">全部账号</option>${activeOptions}`;
+    if (currentValue && [...statsAccountFilter.options].some((option) => option.value === currentValue)) {
+      statsAccountFilter.value = currentValue;
+    } else {
+      statsAccountFilter.value = "";
+    }
+  }
 
   const accounts = [
     ["GasGx小绿", "视频号", "正常", "86,200", "18,600", "12,480", "+860", "42.1%", "8.6%", 12, "爆款账号", ""],
@@ -2123,15 +2141,11 @@ function renderAiRobot() {
   const editingTelegram = editingPlatform === "telegram" || !telegramBound;
   const configured = visibleAiRobotConfigs().filter(isAiRobotBound);
   const config = editingPlatform ? aiRobotConfigFor(editingPlatform) : (configured.length ? configured[0] : selectedAiRobotConfig());
-  const saveButton = document.querySelector("#ai-save-config");
-  const sendTestButton = document.querySelector("#ai-send-test");
   const panelSaveButton = document.querySelector("#ai-save-config-panel");
   const panelSendTestButton = document.querySelector("#ai-send-test-panel");
   const formHidden = !editingPlatform;
   if (configPanel) configPanel.hidden = formHidden;
   form.hidden = formHidden;
-  saveButton.classList.toggle("hidden", formHidden);
-  sendTestButton.classList.toggle("hidden", formHidden);
   panelSaveButton?.classList.toggle("hidden", formHidden);
   panelSendTestButton?.classList.toggle("hidden", formHidden);
   form.elements.platform.value = config.platform || "wecom";
