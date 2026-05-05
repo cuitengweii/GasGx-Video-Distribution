@@ -1539,6 +1539,145 @@ def test_terminal_execution_state_normalizes_legacy_qr_data_url(monkeypatch, tmp
     assert (runtime_dir / "terminal_qr_cache" / "window-01.png").read_bytes() == b"ABC"
 
 
+def test_terminal_execution_state_recovers_existing_qr_cache(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    cache_dir = runtime_dir / "terminal_qr_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "window-01.png").write_bytes(b"cached-qr")
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "aamecc",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [
+                            {"id": 9, "display_name": "GasGx test07", "status": "waiting_qr", "status_text": "等待扫码中..."}
+                        ],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    service._invalidate_terminal_execution_state_cache()
+    client = TestClient(create_app())
+    payload = client.get("/api/terminal-execution/state")
+
+    assert payload.status_code == 200
+    data = payload.json()
+    assert data["windows"][0]["qr_url"] == "/api/terminal-execution/windows/1/qr-image"
+    assert data["windows"][0]["qr_path"].endswith("window-01.png")
+
+
+def test_terminal_config_update_preserves_active_qr_for_same_window(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    cache_dir = runtime_dir / "terminal_qr_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    qr_path = cache_dir / "window-01.png"
+    qr_path.write_bytes(b"active-qr")
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op-a",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 1234,
+                        "qr_path": str(qr_path),
+                        "qr_url": "/api/terminal-execution/windows/1/qr-image",
+                        "accounts": [{"id": 10, "display_name": "A", "status": "waiting_qr", "status_text": "waiting", "task_id": None}],
+                    }
+                ],
+                "config": [{"id": 1, "enabled": True, "operator_wechat": "op-a", "color": "#3B82F6"}],
+                "initialized": True,
+                "login_started": True,
+                "probe_cursor": 0,
+                "next_probe_at": 2000,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        service,
+        "_terminal_operator_groups",
+        lambda: [{"operator_wechat": "op-a", "accounts": [{"id": 10, "account_key": "a", "display_name": "A"}]}],
+    )
+    monkeypatch.setattr(service, "now_ts", lambda: 1500)
+
+    result = service.start_terminal_execution({"windows": [{"id": 1, "enabled": True, "operator_wechat": "op-a", "color": "#F97316"}]})
+
+    window = result["windows"][0]
+    assert result["login_started"] is True
+    assert window["color"] == "#F97316"
+    assert window["qr_url"] == "/api/terminal-execution/windows/1/qr-image"
+    assert window["accounts"][0]["status"] == "waiting_qr"
+    assert window["manual_available_at"] == 1234
+
+
+def test_terminal_config_update_clears_stale_qr_when_window_operator_changes(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    cache_dir = runtime_dir / "terminal_qr_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    qr_path = cache_dir / "window-01.png"
+    qr_path.write_bytes(b"stale-qr")
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op-a",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "qr_path": str(qr_path),
+                        "qr_url": "/api/terminal-execution/windows/1/qr-image",
+                        "accounts": [{"id": 10, "display_name": "A", "status": "waiting_qr", "status_text": "waiting", "task_id": None}],
+                    }
+                ],
+                "config": [{"id": 1, "enabled": True, "operator_wechat": "op-a", "color": "#3B82F6"}],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        service,
+        "_terminal_operator_groups",
+        lambda: [{"operator_wechat": "op-b", "accounts": [{"id": 11, "account_key": "b", "display_name": "B"}]}],
+    )
+
+    result = service.start_terminal_execution({"windows": [{"id": 1, "enabled": True, "operator_wechat": "op-b", "color": "#A855F7"}]})
+
+    window = result["windows"][0]
+    assert result["login_started"] is True
+    assert window["operator_wechat"] == "op-b"
+    assert window["qr_url"] == ""
+    assert window["accounts"][0]["id"] == 11
+    assert not qr_path.exists()
+
+
 def test_brand_api_omits_large_inline_logo_asset(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     large_logo = "data:image/png;base64," + ("A" * (service.BRAND_INLINE_ASSET_MAX_CHARS + 1))
@@ -1593,7 +1732,7 @@ def test_public_brand_settings_supabase_uses_lightweight_columns(monkeypatch, tm
     assert {call["columns"] for call in fake.select_where_calls} == {"logo_asset_path", "id"}
 
 
-def test_terminal_poll_probes_one_window_per_interval(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_probes_all_windows_per_interval(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -1620,13 +1759,13 @@ def test_terminal_poll_probes_one_window_per_interval(monkeypatch, tmp_path: Pat
     service.poll_terminal_execution()
     service.poll_terminal_execution()
 
-    assert calls == [1]
+    assert calls == [1, 2, 3]
     state = json.loads((runtime_dir / "terminal_execution_state.json").read_text(encoding="utf-8"))
-    assert state["probe_cursor"] == 1
+    assert state["probe_cursor"] == 0
     assert state["next_probe_at"] > 0
 
 
-def test_terminal_start_login_opens_windows_sequentially(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_start_login_opens_all_windows_for_current_batch(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -1655,14 +1794,9 @@ def test_terminal_start_login_opens_windows_sequentially(monkeypatch, tmp_path: 
 
     service._invalidate_terminal_execution_state_cache()
     first_state = service.start_terminal_login()
-    service.poll_terminal_execution()
-    now["value"] = 110
-    second_state = service.poll_terminal_execution()
 
-    assert opened == [1, 2]
-    assert first_state["windows"][0]["accounts"][0]["status"] == "waiting_qr"
-    assert first_state["windows"][1]["accounts"][0]["status"] == "pending"
-    assert second_state["windows"][1]["accounts"][0]["status"] == "waiting_qr"
+    assert opened == [1, 2, 3]
+    assert [item["accounts"][0]["status"] for item in first_state["windows"]] == ["waiting_qr", "waiting_qr", "waiting_qr"]
 
 
 def test_terminal_qr_cache_falls_back_when_account_lookup_times_out(monkeypatch, tmp_path: Path) -> None:

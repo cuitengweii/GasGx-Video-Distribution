@@ -1522,9 +1522,9 @@ def _load_terminal_state() -> dict[str, Any]:
         for window in windows:
             if not isinstance(window, dict):
                 continue
+            window_id = int(window.get("id") or 0)
             qr_data_url = str(window.pop("qr_data_url", "") or "").strip()
             if qr_data_url:
-                window_id = int(window.get("id") or 0)
                 qr_path = str(window.get("qr_path") or "").strip()
                 if not qr_path or not Path(qr_path).exists():
                     qr_path = _write_terminal_qr_data_url_cache(window_id, qr_data_url)
@@ -1535,11 +1535,18 @@ def _load_terminal_state() -> dict[str, Any]:
                 window["qr_url"] = ""
             if not str(window.get("qr_path") or "").strip() and str(window.get("qr_cache_path") or "").strip():
                 window["qr_path"] = str(window.get("qr_cache_path") or "")
+            if (
+                bool(payload.get("login_started"))
+                and not str(window.get("qr_path") or "").strip()
+                and _terminal_qr_cache_path(window_id).exists()
+            ):
+                window["qr_path"] = str(_terminal_qr_cache_path(window_id))
+                window["qr_url"] = _terminal_qr_url(window_id)
             if bool(payload.get("login_started")) and str(window.get("qr_url") or "").strip():
                 qr_path = str(window.get("qr_path") or "").strip()
-                path = Path(qr_path) if qr_path else _terminal_qr_cache_path(int(window.get("id") or 0))
+                path = Path(qr_path) if qr_path else _terminal_qr_cache_path(window_id)
                 try:
-                    if not path.exists() or (time.time() - path.stat().st_mtime) > 120:
+                    if not path.exists():
                         window["qr_url"] = ""
                         window["qr_path"] = ""
                 except Exception:
@@ -1767,10 +1774,50 @@ def _terminal_account_cards(accounts: list[dict[str, Any]]) -> list[dict[str, An
     ]
 
 
+def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, Any]) -> bool:
+    accounts = window.get("accounts") or []
+    previous_accounts = previous.get("accounts") or []
+    if not accounts or not previous_accounts:
+        return False
+    previous_by_id = {int(item.get("id") or 0): item for item in previous_accounts if isinstance(item, dict)}
+    previous_current_index = int(previous.get("current_index") or 0)
+    previous_current = previous_accounts[previous_current_index] if previous_current_index < len(previous_accounts) else {}
+    previous_current_id = int(previous_current.get("id") or 0) if isinstance(previous_current, dict) else 0
+    next_current_index = next(
+        (index for index, account in enumerate(accounts) if int(account.get("id") or 0) == previous_current_id),
+        0,
+    )
+    window["current_index"] = next_current_index
+    for account in accounts:
+        previous_account = previous_by_id.get(int(account.get("id") or 0))
+        if not previous_account:
+            continue
+        for key in ("status", "status_text", "task_id"):
+            account[key] = previous_account.get(key)
+    next_current = accounts[next_current_index]
+    if int(next_current.get("id") or 0) != previous_current_id:
+        return False
+    qr_path = str(previous.get("qr_path") or "").strip()
+    if qr_path and Path(qr_path).exists():
+        window["qr_path"] = qr_path
+        window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0))
+        window["manual_available_at"] = int(previous.get("manual_available_at") or 0)
+        return True
+    return False
+
+
 def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
     groups = {item["operator_wechat"]: item for item in _terminal_operator_groups()}
+    previous_state = _load_terminal_state()
+    previous_login_started = bool(previous_state.get("login_started"))
+    previous_windows = {
+        int(item.get("id") or 0): item
+        for item in previous_state.get("windows") or []
+        if isinstance(item, dict)
+    }
     windows = []
     saved_config = []
+    retained_window_ids: set[int] = set()
     for index, raw in enumerate(payload.get("windows") or [], start=1):
         enabled = bool(raw.get("enabled", True))
         if not enabled:
@@ -1787,8 +1834,9 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
         current["status"] = "pending"
         current["status_text"] = "等待开始登录"
         qr_path = ""
-        windows.append({
-            "id": int(raw.get("id") or index),
+        window_id = int(raw.get("id") or index)
+        window = {
+            "id": window_id,
             "enabled": True,
             "operator_wechat": operator,
             "color": color,
@@ -1798,24 +1846,39 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "qr_url": "",
             "manual_available_at": 0,
             "accounts": accounts,
-        })
+        }
+        previous_window = previous_windows.get(window_id)
+        if previous_login_started and previous_window and str(previous_window.get("operator_wechat") or "") == operator:
+            retained_window_ids.add(window_id)
+            if not _carry_terminal_window_runtime(window, previous_window):
+                _clear_terminal_qr_cache(window_id)
+        elif previous_login_started:
+            _clear_terminal_qr_cache(window_id)
+        windows.append(window)
         saved_config.append({
-            "id": int(raw.get("id") or index),
+            "id": window_id,
             "enabled": True,
             "operator_wechat": operator,
             "color": color,
         })
     if not windows:
         raise ValueError("至少需要启用一个已绑定运营微信的终端")
+    if previous_login_started:
+        for previous_id in previous_windows:
+            if previous_id not in retained_window_ids and all(int(item.get("id") or 0) != previous_id for item in windows):
+                _clear_terminal_qr_cache(previous_id)
     state = {
         "windows": windows,
         "config": saved_config,
         "initialized": True,
-        "login_started": False,
+        "login_started": previous_login_started,
         "active_platform": "wechat",
         "platform_capabilities": _terminal_platform_capabilities(),
         "profile_by_platform": _terminal_profile_by_platform(),
     }
+    if previous_login_started:
+        state["probe_cursor"] = int(previous_state.get("probe_cursor") or 0)
+        state["next_probe_at"] = int(previous_state.get("next_probe_at") or 0)
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -1827,25 +1890,25 @@ def start_terminal_login() -> dict[str, Any]:
         raise ValueError("请先初始化执行矩阵")
     if bool(state.get("login_started")):
         return terminal_execution_state()
-    opened_index: int | None = None
-    for index, window in enumerate(windows):
-        if opened_index is None and _open_terminal_window_current_account(window):
-            opened_index = index
-            continue
+    opened_count = 0
+    for window in windows:
         accounts = window.get("accounts") or []
         current_index = int(window.get("current_index") or 0)
         if current_index < len(accounts):
             current = accounts[current_index]
-            if str(current.get("status") or "") not in {"success", "running"}:
+            if str(current.get("status") or "") not in {"success", "running"} and not current.get("task_id"):
+                _open_terminal_window_current_account(window)
+                opened_count += 1
+            elif str(current.get("status") or "") not in {"success", "running"}:
                 current["status"] = "pending"
                 current["status_text"] = "等待开始登录"
                 current["task_id"] = None
-            window["qr_path"] = ""
-            window["qr_url"] = ""
-            window["manual_available_at"] = 0
+                window["qr_path"] = ""
+                window["qr_url"] = ""
+                window["manual_available_at"] = 0
     state["login_started"] = True
-    if opened_index is not None:
-        state["probe_cursor"] = (opened_index + 1) % len(windows)
+    state["probe_cursor"] = 0
+    if opened_count:
         state["next_probe_at"] = now_ts() + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
     _save_terminal_state(state)
     return terminal_execution_state()
@@ -1963,13 +2026,10 @@ def poll_terminal_execution() -> dict[str, Any]:
         return terminal_execution_state()
     windows = [window for window in (state.get("windows") or []) if isinstance(window, dict)]
     if windows:
-        start = int(state.get("probe_cursor") or 0) % len(windows)
-        for offset in range(len(windows)):
-            index = (start + offset) % len(windows)
-            if _advance_terminal_window(windows[index]):
-                state["probe_cursor"] = (index + 1) % len(windows)
-                state["next_probe_at"] = now + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
-                break
+        for window in windows:
+            _advance_terminal_window(window)
+        state["probe_cursor"] = 0
+        state["next_probe_at"] = now + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
     _save_terminal_state(state)
     return terminal_execution_state()
 

@@ -44,6 +44,7 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert ".terminal-modal-actions" in css
     assert "position: fixed;" in css
     assert "left: 260px;" in css
+    assert ".terminal-workspace.terminal-workspace-wechat" in css
     assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in css
     assert "overflow-x: hidden;" in css
     assert "min-width: 0;" in css
@@ -57,7 +58,8 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert "#terminal-save-config, [data-terminal-save-config]" in app
     assert "#terminal-start-system" not in app
     assert "!state.terminalExecution.initialized || state.terminalConfigOpen" in app
-    assert "state.terminalQrVisible && loginStarted && window.qr_url" in app
+    assert "const qrVisible = loginStarted && window.qr_url;" in app
+    assert "state.terminalQrVisible && loginStarted && window.qr_url" not in app
     assert "state.terminalQrVisible = false;" in app
     assert "state.terminalQrVisible = true;" in app
     assert "terminalCountdownTimer" in app
@@ -71,6 +73,7 @@ def test_terminal_config_does_not_start_login_side_effects() -> None:
 
     assert "open_account_browser" not in configure_block
     assert "_terminal_qr_data_url" not in configure_block
-    assert '"login_started": False' in configure_block
+    assert "_write_terminal_qr_cache" not in configure_block
+    assert "previous_login_started" in configure_block
     assert "open_account_browser" in login_block
     assert "_write_terminal_qr_cache" in login_block

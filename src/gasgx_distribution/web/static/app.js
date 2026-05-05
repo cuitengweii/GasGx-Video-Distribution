@@ -1601,7 +1601,7 @@ function renderTerminalExecution() {
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录 [${current.display_name || "-"}]`;
-    const qrVisible = state.terminalQrVisible && loginStarted && window.qr_url;
+    const qrVisible = loginStarted && window.qr_url;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
         <div class="terminal-color-anchor"></div>
@@ -1754,7 +1754,7 @@ function renderTerminalDailyQrView(root) {
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录[${current.display_name || "-"}]`;
-    const qrVisible = state.terminalQrVisible && loginStarted && window.qr_url;
+    const qrVisible = loginStarted && window.qr_url;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
         <div class="terminal-color-anchor"></div>
@@ -1939,17 +1939,18 @@ function renderTerminalExecution() {
   const platforms = (state.platforms || []).filter((item) => ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"].includes(item.key));
   const platformMap = new Map(platforms.map((item) => [item.key, item]));
   const isHubRoute = route === "hub";
+  section.dataset.terminalRoute = route;
 
   if (headerActions) headerActions.classList.toggle("hidden", !isHubRoute);
   if (platformBar) {
-    platformBar.classList.toggle("hidden", isHubRoute);
-    if (isHubRoute) platformBar.innerHTML = "";
+    platformBar.classList.toggle("hidden", isHubRoute || route === "wechat");
+    if (isHubRoute || route === "wechat") platformBar.innerHTML = "";
   }
-  if (configPanel && isHubRoute) {
+  if (configPanel && (isHubRoute || route === "wechat")) {
     configPanel.classList.add("hidden");
     configPanel.innerHTML = "";
   }
-  if (!isHubRoute) {
+  if (!isHubRoute && route !== "wechat") {
     renderTerminalPlatformBar();
     renderTerminalConfigPanel();
   }
@@ -4202,6 +4203,7 @@ document.addEventListener("click", async (event) => {
         });
         state.terminalConfigOpen = false;
         renderTerminalExecution();
+        if (state.terminalExecution.login_started) startTerminalPolling();
       }
     } finally {
       restoreButton();
