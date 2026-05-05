@@ -263,7 +263,7 @@ _SUPABASE_APP_SETTINGS_CACHE: dict[str, Any] = {}
 
 
 def clear_supabase_read_cache() -> dict[str, Any]:
-    """Drop in-process caches for repeated Supabase reads; the next requests refetch from PostgREST."""
+    """Drop in-process caches for repeated Supabase reads and app settings; the next requests refetch from PostgREST."""
     backend = brand_database_backend()
     if backend != "supabase":
         return {"ok": True, "backend": backend, "cleared": False}
@@ -740,6 +740,11 @@ def load_brand_settings() -> dict[str, Any]:
             )
             row = conn.execute("SELECT * FROM brand_settings WHERE id = 1").fetchone()
         return dict_from_row(row)
+
+
+def _cache_supabase_read(key: str, value: Any) -> Any:
+    _supabase_read_cache_set(key, value)
+    return copy.deepcopy(value)
 
 
 def save_brand_settings(payload: dict[str, Any]) -> dict[str, Any]:
