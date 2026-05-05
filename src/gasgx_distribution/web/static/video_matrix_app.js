@@ -705,9 +705,17 @@ function renderEndingTemplatePanel(data) {
     : `<option value="">目录内暂无视频片尾素材</option>`;
   $("endingTemplateForm").innerHTML = `
     <h3>片尾模板调整区</h3>
+    <div id="endingTemplateUploadStatus" class="ending-template-upload-status" hidden></div>
     <div class="template-tabs ending-mode-tabs">${modeButtons}</div>
     ${mode === "dynamic" ? endingCoverEditorHtml() : ""}
     ${mode === "random" ? endingRandomMaterialHtml(localTemplates) : ""}
+    <div class="ending-template-upload-row">
+      <label class="ending-template-upload">
+        <span>上传片尾 MP4</span>
+        <input id="endingTemplateUpload" type="file" accept=".mp4,video/mp4">
+        <small>仅支持 MP4，建议文件名保持原始素材名，上传后会进入片尾目录。</small>
+      </label>
+    </div>
     <div class="ending-template-dir-row ${mode === "random" ? "" : "hidden"}">
       <code title="${escapeHtml(endingTemplateState.directory)}">${escapeHtml(shortPath(endingTemplateState.directory))}</code>
       <span class="badge">${localTemplates.length} 个素材</span>
@@ -729,6 +737,41 @@ function renderEndingTemplatePanel(data) {
   }
   renderEndingTemplateMenu();
   $("openEndingTemplateDirInline").onclick = () => openFolder(endingTemplateState.directory);
+  $("endingTemplateUpload").onchange = async () => {
+    const file = $("endingTemplateUpload").files?.[0];
+    if (!file) return;
+    if (!/\.mp4$/i.test(file.name)) {
+      showEndingTemplateUploadStatus("仅支持 MP4 文件，请重新选择。", "warn");
+      $("endingTemplateUpload").value = "";
+      return;
+    }
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      showEndingTemplateUploadStatus("正在上传片尾 MP4...", "loading");
+      await api("/api/video-matrix/ending-templates/upload", { method: "POST", body: form });
+      $("endingTemplateUpload").value = "";
+      const data = await api("/api/video-matrix/state");
+      renderEndingTemplatePanel(data);
+      await refreshEndingTemplatePreview();
+      showEndingTemplateUploadStatus(`上传成功：${file.name}`, "success");
+      log(`已上传片尾素材：${file.name}`);
+    } catch (error) {
+      showEndingTemplateUploadStatus(`上传失败：${error.message}`, "error");
+    }
+  };
+}
+
+function showEndingTemplateUploadStatus(message, tone = "success") {
+  const node = $("endingTemplateUploadStatus");
+  if (!node) return;
+  node.hidden = false;
+  node.dataset.tone = tone;
+  node.textContent = message;
+  window.clearTimeout(showEndingTemplateUploadStatus.timer);
+  showEndingTemplateUploadStatus.timer = window.setTimeout(() => {
+    node.hidden = true;
+  }, 2600);
 }
 
 async function switchEndingTemplateMode(mode, sourceButton = null) {

@@ -1,9 +1,9 @@
-﻿const PLATFORM_LABELS = {
-  wechat: "瑙嗛鍙?,
-  douyin: "鎶栭煶",
-  kuaishou: "蹇墜",
-  xiaohongshu: "灏忕孩涔?,
-  bilibili: "B绔?,
+const PLATFORM_LABELS = {
+  wechat: "视频号",
+  douyin: "抖音",
+  kuaishou: "快手",
+  xiaohongshu: "小红书",
+  bilibili: "B站",
   tiktok: "TikTok",
   x: "X",
   linkedin: "LinkedIn",
@@ -14,8 +14,8 @@
 };
 
 const REGION_LABELS = {
-  cn: "鍥藉唴骞冲彴",
-  global: "鍥藉骞冲彴",
+  cn: "国内平台",
+  global: "国外平台",
 };
 
 const PLATFORM_LOGOS = {
@@ -85,11 +85,11 @@ const state = {
 const taskSelection = new Set();
 const taskFilters = { account: "", platform: "", status: "", taskType: "" };
 const TASK_TYPE_OPTIONS = [
-  ["draft", "淇濆瓨鑽夌"],
-  ["publish", "鑷姩鍙戝竷"],
-  ["comment", "鑷姩璇勮"],
-  ["message", "鑷姩绉佷俊"],
-  ["stats", "鏁版嵁缁熻"],
+  ["draft", "保存草稿"],
+  ["publish", "自动发布"],
+  ["comment", "自动评论"],
+  ["message", "自动私信"],
+  ["stats", "数据统计"],
 ];
 
 const loadedViews = new Set();
@@ -101,49 +101,49 @@ const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
 const SHELL_AUTH_KEY = "gasgx-shell-auth";
 const DATABASE_DICTIONARY_LOCALE_KEY = "gasgx-db-dictionary-locale";
-const PERMISSION_DENIED_MESSAGE = "鎮ㄦ潈闄愪笉瓒?;
+const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
 const FEATURE_ENTRIES = [
-  { id: "overview", label: "鎬昏", group: "涓氬姟宸ヤ綔鍙? },
-  { id: "accounts", label: "璐﹀彿鐭╅樀", group: "涓氬姟宸ヤ綔鍙? },
-  { id: "settings", label: "鍏叡璁剧疆", group: "涓氬姟宸ヤ綔鍙? },
-  { id: "tasks", label: "浠诲姟涓績", group: "涓氬姟宸ヤ綔鍙? },
-  { id: "terminal-execution", label: "缁堢鎵ц", group: "涓氬姟宸ヤ綔鍙? },
-  { id: "stats", label: "鏁版嵁缁熻", group: "涓氬姟宸ヤ綔鍙? },
-  { id: "ai-robot", label: "AI鏈哄櫒浜?, group: "涓氬姟宸ヤ綔鍙? },
-  { id: "video-matrix", label: "瑙嗛鐢熸垚", group: "涓氬姟宸ヤ綔鍙? },
-  { id: "user-center", label: "鐢ㄦ埛涓績", group: "绯荤粺绠＄悊" },
-  { id: "notifications", label: "閫氱煡涓績", group: "绯荤粺绠＄悊" },
-  { id: "system-settings", label: "绯荤粺璁剧疆", group: "绯荤粺绠＄悊" },
-  { id: "help-center", label: "甯姪鏂囨。", group: "绯荤粺绠＄悊" },
+  { id: "overview", label: "总览", group: "业务工作台" },
+  { id: "accounts", label: "账号矩阵", group: "业务工作台" },
+  { id: "settings", label: "公共设置", group: "业务工作台" },
+  { id: "tasks", label: "任务中心", group: "业务工作台" },
+  { id: "terminal-execution", label: "终端执行", group: "业务工作台" },
+  { id: "stats", label: "数据统计", group: "业务工作台" },
+  { id: "ai-robot", label: "AI机器人", group: "业务工作台" },
+  { id: "video-matrix", label: "视频生成", group: "业务工作台" },
+  { id: "user-center", label: "用户中心", group: "系统管理" },
+  { id: "notifications", label: "通知中心", group: "系统管理" },
+  { id: "system-settings", label: "系统设置", group: "系统管理" },
+  { id: "help-center", label: "帮助文档", group: "系统管理" },
 ];
 
 const DEFAULT_AUTH_STATE = {
   currentUserId: "allen",
   roles: {
     super_admin: {
-      name: "瓒呯骇绠＄悊鍛?,
+      name: "超级管理员",
       permissions: FEATURE_ENTRIES.map((item) => item.id),
     },
     publisher: {
-      name: "鍙戝竷鍛?,
+      name: "发布员",
       permissions: ["overview", "accounts", "settings", "tasks", "terminal-execution", "video-matrix", "user-center", "notifications", "help-center"],
     },
     material_manager: {
-      name: "绱犳潗缁存姢鍛?,
+      name: "素材维护员",
       permissions: ["overview", "accounts", "video-matrix", "user-center", "notifications", "help-center"],
     },
     data_monitor: {
-      name: "鏁版嵁鐩戞帶鍛?,
+      name: "数据监控员",
       permissions: ["overview", "stats", "user-center", "notifications", "help-center"],
     },
   },
   users: [
     { id: "allen", name: "Allen", roleId: "super_admin" },
-    { id: "publisher", name: "鍙戝竷鍛?, roleId: "publisher" },
-    { id: "material", name: "绱犳潗缁存姢鍛?, roleId: "material_manager" },
-    { id: "analyst", name: "鏁版嵁鐩戞帶鍛?, roleId: "data_monitor" },
+    { id: "publisher", name: "发布员", roleId: "publisher" },
+    { id: "material", name: "素材维护员", roleId: "material_manager" },
+    { id: "analyst", name: "数据监控员", roleId: "data_monitor" },
   ],
   editingRoleId: "super_admin",
 };
@@ -172,150 +172,150 @@ const SHELL_THEMES = [
 ];
 
 const VIEW_HEADERS = {
-  overview: ["璐﹀彿鐭╅樀缁存姢绯荤粺", "鐙珛璐﹀彿銆佺嫭绔嬫祻瑙堝櫒銆佸彂甯?璇勮/绉佷俊/缁熻浠诲姟鍏ュ彛"],
-  accounts: ["璐﹀彿鐭╅樀", "缁存姢 GasGx 鍥藉唴澶栧钩鍙拌处鍙枫€佺嫭绔嬫祻瑙堝櫒閰嶇疆鍜岀櫥褰曠姸鎬併€?],
-  "user-center": ["鐢ㄦ埛涓績", "棰勭暀鎿嶄綔鑰呰祫鏂欍€佽鑹叉潈闄愩€佸伐浣滃亸濂藉拰鏈湴閮ㄧ讲韬唤鍏ュ彛銆?],
-  settings: ["鍏叡璁剧疆", "閰嶇疆鍙戝竷绱犳潗鐩綍銆佷笂浼犵瓥鐣ャ€佸钩鍙板弬鏁板拰鐭╅樀鍙戝竷浣滀笟銆?],
-  tasks: ["浠诲姟涓績", "鏌ョ湅鍙戝竷銆佽瘎璁恒€佺淇°€佺櫥褰曟娴嬬瓑浠诲姟闃熷垪鍜屾墽琛岀姸鎬併€?],
-  "terminal-execution": ["缁堢鎵ц", "棰勭暀鏈湴缁堢鍛戒护鎵ц鍏ュ彛銆?],
-  stats: ["鏁版嵁缁熻", "鐭棰戣处鍙风煩闃垫暟瀛楀寲钀ラ攢瀹㈡埛绔暟鎹湅鏉裤€?],
-  "ai-robot": ["AI鏈哄櫒浜?, "AI瀹㈡湇銆佷紒涓氬井淇°€侀拤閽夈€侀涔︺€乀elegram 涓?WhatsApp 缁熶竴鎺ュ叆銆?],
-  "video-matrix": ["瑙嗛鐢熸垚", "鍒嗙被绱犳潗銆佺涓€灞忓皝闈€佽棰戞枃瀛椼€佽儗鏅煶涔愬拰鎵归噺瀵煎嚭宸ヤ綔鍙般€?],
-  notifications: ["閫氱煡涓績", "闆嗕腑灞曠ず鐢熸垚瀹屾垚銆佸彂甯冨け璐ャ€佺櫥褰曞け鏁堝拰绱犳潗涓嶈冻鎻愰啋銆?],
-  "system-settings": ["绯荤粺璁剧疆", "棰勭暀鏈湴閮ㄧ讲銆佸瓨鍌ㄧ紦瀛樸€佸畨鍏ㄧ瓥鐣ュ拰绯荤粺缁存姢鍏ュ彛銆?],
-  "help-center": ["甯姪鏂囨。", "棰勭暀鎿嶄綔鎵嬪唽銆侀儴缃茶鏄庛€佽棰戠敓鎴愭祦绋嬪拰甯歌闂銆?],
+  overview: ["账号矩阵维护系统", "独立账号、独立浏览器、发布/评论/私信/统计任务入口"],
+  accounts: ["账号矩阵", "维护 GasGx 国内外平台账号、独立浏览器配置和登录状态。"],
+  "user-center": ["用户中心", "预留操作者资料、角色权限、工作偏好和本地部署身份入口。"],
+  settings: ["公共设置", "配置发布素材目录、上传策略、平台参数和矩阵发布作业。"],
+  tasks: ["任务中心", "查看发布、评论、私信、登录检测等任务队列和执行状态。"],
+  "terminal-execution": ["终端执行", "预留本地终端命令执行入口。"],
+  stats: ["数据统计", "短视频账号矩阵数字化营销客户端数据看板。"],
+  "ai-robot": ["AI机器人", "AI客服、企业微信、钉钉、飞书、Telegram 与 WhatsApp 统一接入。"],
+  "video-matrix": ["视频生成", "分类素材、第一屏封面、视频文字、背景音乐和批量导出工作台。"],
+  notifications: ["通知中心", "集中展示生成完成、发布失败、登录失效和素材不足提醒。"],
+  "system-settings": ["系统设置", "预留本地部署、存储缓存、安全策略和系统维护入口。"],
+  "help-center": ["帮助文档", "预留操作手册、部署说明、视频生成流程和常见问题。"],
 };
 
 function displayDatabaseKeyword(value) {
-  return String(value ?? "").replaceAll("Supabase", "鏁版嵁搴?);
+  return String(value ?? "").replaceAll("Supabase", "数据库");
 }
 
 state.databaseDictionaryLocalized = localStorage.getItem(DATABASE_DICTIONARY_LOCALE_KEY) === "zh";
 
 const DATABASE_DICTIONARY_TABLE_LABELS = {
-  matrix_accounts: "鐭╅樀璐﹀彿",
-  account_platforms: "璐﹀彿骞冲彴",
-  browser_profiles: "娴忚鍣ㄩ厤缃?,
-  notification_routes: "閫氱煡璺敱",
-  login_qr_batches: "鐧诲綍浜岀淮鐮佹壒娆?,
-  login_qr_items: "鐧诲綍浜岀淮鐮佹槑缁?,
-  automation_tasks: "鑷姩鍖栦换鍔?,
-  video_stats_snapshots: "瑙嗛缁熻蹇収",
-  ai_robot_configs: "AI 鏈哄櫒浜洪厤缃?,
-  ai_robot_messages: "AI 鏈哄櫒浜烘秷鎭?,
-  brand_settings: "鍝佺墝璁剧疆",
-  schema_migrations: "鏁版嵁搴撹縼绉?,
-  app_settings: "搴旂敤璁剧疆",
-  analytics_items: "鍒嗘瀽鏉＄洰",
-  video_matrix_assets: "瑙嗛鐭╅樀绱犳潗",
-  video_matrix_jobs: "瑙嗛鐭╅樀浠诲姟",
-  video_matrix_generation_runs: "瑙嗛鐭╅樀鐢熸垚璁板綍",
-  video_matrix_generation_assets: "瑙嗛鐭╅樀鐢熸垚绱犳潗",
-  video_matrix_generation_segments: "瑙嗛鐭╅樀鐢熸垚鐗囨",
-  app_seed_runs: "鍒濆鍖栫瀛愯褰?,
-  brand_members: "鍝佺墝鎴愬憳",
+  matrix_accounts: "矩阵账号",
+  account_platforms: "账号平台",
+  browser_profiles: "浏览器配置",
+  notification_routes: "通知路由",
+  login_qr_batches: "登录二维码批次",
+  login_qr_items: "登录二维码明细",
+  automation_tasks: "自动化任务",
+  video_stats_snapshots: "视频统计快照",
+  ai_robot_configs: "AI 机器人配置",
+  ai_robot_messages: "AI 机器人消息",
+  brand_settings: "品牌设置",
+  schema_migrations: "数据库迁移",
+  app_settings: "应用设置",
+  analytics_items: "分析条目",
+  video_matrix_assets: "视频矩阵素材",
+  video_matrix_jobs: "视频矩阵任务",
+  video_matrix_generation_runs: "视频矩阵生成记录",
+  video_matrix_generation_assets: "视频矩阵生成素材",
+  video_matrix_generation_segments: "视频矩阵生成片段",
+  app_seed_runs: "初始化种子记录",
+  brand_members: "品牌成员",
 };
 
 const DATABASE_DICTIONARY_COLUMN_LABELS = {
-  id: "缂栧彿",
-  account_key: "璐﹀彿鏍囪瘑",
-  display_name: "鏄剧ず鍚嶇О",
-  niche: "棰嗗煙",
-  status: "鐘舵€?,
-  notes: "澶囨敞",
-  created_at: "鍒涘缓鏃堕棿",
-  updated_at: "鏇存柊鏃堕棿",
-  account_id: "璐﹀彿缂栧彿",
-  platform: "骞冲彴",
-  handle: "璐﹀彿鍙ユ焺",
-  enabled: "鍚敤",
-  capability_status: "鑳藉姏鐘舵€?,
-  login_status: "鐧诲綍鐘舵€?,
-  last_checked_at: "鏈€鍚庢鏌ユ椂闂?,
-  profile_dir: "閰嶇疆鐩綍",
-  debug_port: "璋冭瘯绔彛",
-  fingerprint_json: "鎸囩汗閰嶇疆",
-  event_type: "浜嬩欢绫诲瀷",
-  batch_id: "鎵规缂栧彿",
-  payload_json: "杞借嵎鏁版嵁",
-  notified_at: "閫氱煡鏃堕棿",
-  reason: "鍘熷洜",
-  url: "閾炬帴",
-  qr_path: "浜岀淮鐮佽矾寰?,
-  qr_fingerprint: "浜岀淮鐮佹寚绾?,
-  task_type: "浠诲姟绫诲瀷",
-  summary: "鎽樿",
-  error: "閿欒",
-  retry_count: "閲嶈瘯娆℃暟",
-  last_attempt_at: "鏈€鍚庡皾璇曟椂闂?,
-  sent_at: "鍙戦€佹椂闂?,
-  video_ref: "瑙嗛寮曠敤",
-  views: "鎾斁閲?,
-  likes: "鐐硅禐鏁?,
-  comments: "璇勮鏁?,
-  shares: "鍒嗕韩鏁?,
-  messages: "绉佷俊鏁?,
-  published_at: "鍙戝竷鏃堕棿",
-  captured_at: "鎶撳彇鏃堕棿",
-  bot_name: "鏈哄櫒浜哄悕绉?,
-  webhook_url: "鍥炶皟鍦板潃",
-  webhook_secret: "鍥炶皟瀵嗛挜",
-  signing_secret: "绛惧悕瀵嗛挜",
-  target_id: "鐩爣缂栧彿",
-  message_type: "娑堟伅绫诲瀷",
-  name: "鍚嶇О",
-  slogan: "鏍囪",
-  logo_asset_path: "Logo 璧勬簮璺緞",
-  primary_color: "涓昏壊",
-  theme_id: "涓婚缂栧彿",
-  default_account_prefix: "榛樿璐﹀彿鍓嶇紑",
-  version: "鐗堟湰",
-  app_version: "搴旂敤鐗堟湰",
-  applied_at: "搴旂敤鏃堕棿",
-  setting_key: "璁剧疆閿?,
-  asset_key: "绱犳潗閿?,
-  asset_type: "绱犳潗绫诲瀷",
-  title: "鏍囬",
-  path: "璺緞",
-  metadata_json: "鍏冩暟鎹?,
-  source: "鏉ユ簮",
-  job_key: "浠诲姟缂栧彿",
-  stage: "闃舵",
-  progress: "杩涘害",
-  message: "娑堟伅",
-  request_json: "璇锋眰鏁版嵁",
-  assets_json: "绱犳潗鏁版嵁",
-  run_id: "杩愯缂栧彿",
-  bgm_filename: "鑳屾櫙闊充箰鏂囦欢鍚?,
-  bgm_path: "鑳屾櫙闊充箰璺緞",
-  composition_json: "缁勫悎鏁版嵁",
-  sequence_number: "搴忓彿",
-  signature: "绛惧悕",
-  copy_path: "鏂囨璺緞",
-  manifest_path: "娓呭崟璺緞",
-  template_id: "妯℃澘缂栧彿",
-  cover_template_id: "灏侀潰妯℃澘缂栧彿",
-  copy_language: "鏂囨璇█",
-  segment_index: "鐗囨搴忓彿",
-  clip_id: "鐗囨缂栧彿",
-  category: "鍒嗙被",
-  source_path: "婧愭枃浠惰矾寰?,
-  normalized_path: "鏍囧噯鍖栬矾寰?,
-  start_time: "寮€濮嬫椂闂?,
-  duration: "鏃堕暱",
-  user_id: "鐢ㄦ埛缂栧彿",
-  role: "瑙掕壊",
-  item_key: "鏉＄洰閿?,
-  section: "鍒嗗尯",
-  sort_order: "鎺掑簭",
+  id: "编号",
+  account_key: "账号标识",
+  display_name: "显示名称",
+  niche: "领域",
+  status: "状态",
+  notes: "备注",
+  created_at: "创建时间",
+  updated_at: "更新时间",
+  account_id: "账号编号",
+  platform: "平台",
+  handle: "账号句柄",
+  enabled: "启用",
+  capability_status: "能力状态",
+  login_status: "登录状态",
+  last_checked_at: "最后检查时间",
+  profile_dir: "配置目录",
+  debug_port: "调试端口",
+  fingerprint_json: "指纹配置",
+  event_type: "事件类型",
+  batch_id: "批次编号",
+  payload_json: "载荷数据",
+  notified_at: "通知时间",
+  reason: "原因",
+  url: "链接",
+  qr_path: "二维码路径",
+  qr_fingerprint: "二维码指纹",
+  task_type: "任务类型",
+  summary: "摘要",
+  error: "错误",
+  retry_count: "重试次数",
+  last_attempt_at: "最后尝试时间",
+  sent_at: "发送时间",
+  video_ref: "视频引用",
+  views: "播放量",
+  likes: "点赞数",
+  comments: "评论数",
+  shares: "分享数",
+  messages: "私信数",
+  published_at: "发布时间",
+  captured_at: "抓取时间",
+  bot_name: "机器人名称",
+  webhook_url: "回调地址",
+  webhook_secret: "回调密钥",
+  signing_secret: "签名密钥",
+  target_id: "目标编号",
+  message_type: "消息类型",
+  name: "名称",
+  slogan: "标语",
+  logo_asset_path: "Logo 资源路径",
+  primary_color: "主色",
+  theme_id: "主题编号",
+  default_account_prefix: "默认账号前缀",
+  version: "版本",
+  app_version: "应用版本",
+  applied_at: "应用时间",
+  setting_key: "设置键",
+  asset_key: "素材键",
+  asset_type: "素材类型",
+  title: "标题",
+  path: "路径",
+  metadata_json: "元数据",
+  source: "来源",
+  job_key: "任务编号",
+  stage: "阶段",
+  progress: "进度",
+  message: "消息",
+  request_json: "请求数据",
+  assets_json: "素材数据",
+  run_id: "运行编号",
+  bgm_filename: "背景音乐文件名",
+  bgm_path: "背景音乐路径",
+  composition_json: "组合数据",
+  sequence_number: "序号",
+  signature: "签名",
+  copy_path: "文案路径",
+  manifest_path: "清单路径",
+  template_id: "模板编号",
+  cover_template_id: "封面模板编号",
+  copy_language: "文案语言",
+  segment_index: "片段序号",
+  clip_id: "片段编号",
+  category: "分类",
+  source_path: "源文件路径",
+  normalized_path: "标准化路径",
+  start_time: "开始时间",
+  duration: "时长",
+  user_id: "用户编号",
+  role: "角色",
+  item_key: "条目键",
+  section: "分区",
+  sort_order: "排序",
 };
 
 const DATABASE_DICTIONARY_TYPE_LABELS = {
-  bigint: "澶ф暣鏁?,
-  integer: "鏁存暟",
-  numeric: "鏁板€?,
-  text: "鏂囨湰",
-  jsonb: "JSON 鏁版嵁",
+  bigint: "大整数",
+  integer: "整数",
+  numeric: "数值",
+  text: "文本",
+  jsonb: "JSON 数据",
   uuid: "UUID",
 };
 
@@ -334,59 +334,59 @@ function translateDatabaseType(type, localized) {
 function translateDatabaseDefaultValue(meta, localized) {
   if (!localized) return meta.defaultValue ? displayDatabaseKeyword(meta.defaultValue) : "NULL";
   const raw = String(meta.defaultValue || "").trim();
-  if (!raw) return "绌哄€?;
-  if (/^null$/i.test(raw)) return "绌哄€?;
-  if (/^as identity$/i.test(raw)) return "鑷鏍囪瘑";
-  if (/^''$/i.test(raw)) return "绌哄瓧绗︿覆";
-  if (/^\{\}::jsonb$/i.test(raw)) return "绌?JSON 瀵硅薄";
-  if (/^\[\]::jsonb$/i.test(raw)) return "绌?JSON 鏁扮粍";
+  if (!raw) return "空值";
+  if (/^null$/i.test(raw)) return "空值";
+  if (/^as identity$/i.test(raw)) return "自增标识";
+  if (/^''$/i.test(raw)) return "空字符串";
+  if (/^\{\}::jsonb$/i.test(raw)) return "空 JSON 对象";
+  if (/^\[\]::jsonb$/i.test(raw)) return "空 JSON 数组";
   const rawValue = raw.replace(/^'(.+)'$/u, "$1");
   const defaultValueLabels = {
-    active: "鍚敤",
-    pending: "寰呭鐞?,
-    registered: "宸茬櫥璁?,
-    unknown: "鏈煡",
-    draft: "鑽夌",
-    public: "鍏紑",
-    inherit: "缁ф壙",
-    queued: "鎺掗槦涓?,
-    available: "鍙敤",
-    seed: "绉嶅瓙",
-    sent: "宸插彂閫?,
-    retry: "閲嶈瘯",
-    failed: "澶辫触",
-    running: "杩愯涓?,
-    complete: "瀹屾垚",
-    info: "鎻愮ず",
-    warning: "璀﹀憡",
-    error: "閿欒",
-    blocking: "闃诲",
-    critical: "涓ラ噸",
-    enabled: "宸插惎鐢?,
-    disabled: "宸茬鐢?,
-    short_video: "鐭棰?,
-    video: "瑙嗛",
-    text: "鏂囨湰",
-    image: "鍥剧墖",
+    active: "启用",
+    pending: "待处理",
+    registered: "已登记",
+    unknown: "未知",
+    draft: "草稿",
+    public: "公开",
+    inherit: "继承",
+    queued: "排队中",
+    available: "可用",
+    seed: "种子",
+    sent: "已发送",
+    retry: "重试",
+    failed: "失败",
+    running: "运行中",
+    complete: "完成",
+    info: "提示",
+    warning: "警告",
+    error: "错误",
+    blocking: "阻塞",
+    critical: "严重",
+    enabled: "已启用",
+    disabled: "已禁用",
+    short_video: "短视频",
+    video: "视频",
+    text: "文本",
+    image: "图片",
   };
   if (defaultValueLabels[rawValue]) return defaultValueLabels[rawValue];
   return displayDatabaseKeyword(raw);
 }
 
 function translateDatabaseConstraintSummary(meta, localized) {
-  if (!localized) return meta.raw || "鏃犵害鏉?;
+  if (!localized) return meta.raw || "无约束";
   const raw = meta.raw || "";
   const parts = [];
-  if (meta.primary) parts.push("涓婚敭");
-  if (meta.notNull) parts.push("闈炵┖");
-  if (/unique/i.test(raw)) parts.push("鍞竴");
-  if (/references/i.test(raw)) parts.push("澶栭敭");
-  if (/generated by default as identity/i.test(raw)) parts.push("鑷");
-  if (/on delete cascade/i.test(raw)) parts.push("鍒犻櫎绾ц仈");
-  if (/on delete set null/i.test(raw)) parts.push("鍒犻櫎缃┖");
-  if (/check/i.test(raw)) parts.push("鏍￠獙");
-  if (/default/i.test(raw) && meta.defaultValue) parts.push(`榛樿 ${translateDatabaseDefaultValue(meta, true)}`);
-  return parts.length ? parts.join(" / ") : "鏃犵害鏉?;
+  if (meta.primary) parts.push("主键");
+  if (meta.notNull) parts.push("非空");
+  if (/unique/i.test(raw)) parts.push("唯一");
+  if (/references/i.test(raw)) parts.push("外键");
+  if (/generated by default as identity/i.test(raw)) parts.push("自增");
+  if (/on delete cascade/i.test(raw)) parts.push("删除级联");
+  if (/on delete set null/i.test(raw)) parts.push("删除置空");
+  if (/check/i.test(raw)) parts.push("校验");
+  if (/default/i.test(raw) && meta.defaultValue) parts.push(`默认 ${translateDatabaseDefaultValue(meta, true)}`);
+  return parts.length ? parts.join(" / ") : "无约束";
 }
 
 function parseDatabaseColumnMeta(constraints) {
@@ -514,7 +514,7 @@ function initBrandSettings() {
     reader.readAsDataURL(file);
   });
   document.querySelector("#save-brand-settings").addEventListener("click", async (event) => {
-    const restoreButton = setButtonLoading(event.currentTarget, "淇濆瓨涓?..");
+    const restoreButton = setButtonLoading(event.currentTarget, "保存中...");
     const currentLogo = document.querySelector("#brand-logo-image").src || "";
     const payload = {
       name: nameInput.value,
@@ -532,7 +532,7 @@ function initBrandSettings() {
     }
   });
   document.querySelector("#reset-brand-settings").addEventListener("click", (event) => {
-    const restoreButton = setButtonLoading(event.currentTarget, "鎭㈠涓?..");
+    const restoreButton = setButtonLoading(event.currentTarget, "恢复中...");
     localStorage.removeItem(SHELL_BRAND_KEY);
     upload.value = "";
     applyShellBrand({});
@@ -617,7 +617,7 @@ function showAccountCreatedToast(account) {
     toast.setAttribute("aria-live", "polite");
     document.body.appendChild(toast);
   }
-  toast.innerHTML = `<strong>璐﹀彿鍒涘缓鎴愬姛</strong><span>#${account.id} ${account.display_name}</span>`;
+  toast.innerHTML = `<strong>账号创建成功</strong><span>#${account.id} ${account.display_name}</span>`;
   toast.classList.add("show");
   clearTimeout(showAccountCreatedToast.timer);
   showAccountCreatedToast.timer = setTimeout(() => {
@@ -675,7 +675,7 @@ function addOperatorWechatOptionFromMenu() {
     return;
   }
   const addButton = document.querySelector("#operator-wechat-add");
-  const restoreButton = setButtonLoading(addButton, "淇濆瓨涓?);
+  const restoreButton = setButtonLoading(addButton, "保存中");
   api("/api/operator-wechats", {
     method: "POST",
     body: JSON.stringify({ operator_wechat: value }),
@@ -692,15 +692,15 @@ function applyPermissions() {
   const user = currentAuthUser(statePayload);
   const role = user ? statePayload.roles[user?.roleId] || statePayload.roles.publisher : null;
   const permissions = user ? currentPermissions(statePayload) : new Set(["user-center"]);
-  document.querySelector("#signed-user-name").textContent = user?.name || "鏈櫥褰?;
-  document.querySelector(".signed-user-badge")?.setAttribute("aria-label", `褰撳墠鐧诲綍鐢ㄦ埛 ${user?.name || "鏈櫥褰?}`);
+  document.querySelector("#signed-user-name").textContent = user?.name || "未登录";
+  document.querySelector(".signed-user-badge")?.setAttribute("aria-label", `当前登录用户 ${user?.name || "未登录"}`);
   const sessionUserName = document.querySelector("#session-user-name");
   const sessionUserDesc = document.querySelector("#session-user-desc");
   const sessionRoleBadge = document.querySelector("#session-role-badge");
   const sessionAvatar = document.querySelector("#session-avatar");
-  if (sessionUserName) sessionUserName.textContent = user?.name || "鏈櫥褰?;
-  if (sessionUserDesc) sessionUserDesc.textContent = user ? `${role?.name || "鏈垎閰嶈鑹?} / ${user?.roleId === "super_admin" ? "鍙垎閰嶈处鍙蜂笌瑙掕壊鏉冮檺" : "鎸夎鑹叉樉绀哄姛鑳藉叆鍙?}` : "璇风敤宸插垎閰嶈处鍙风櫥褰?;
-  if (sessionRoleBadge) sessionRoleBadge.textContent = role?.name || "鏈櫥褰?;
+  if (sessionUserName) sessionUserName.textContent = user?.name || "未登录";
+  if (sessionUserDesc) sessionUserDesc.textContent = user ? `${role?.name || "未分配角色"} / ${user?.roleId === "super_admin" ? "可分配账号与角色权限" : "按角色显示功能入口"}` : "请用已分配账号登录";
+  if (sessionRoleBadge) sessionRoleBadge.textContent = role?.name || "未登录";
   if (sessionAvatar) sessionAvatar.textContent = (user?.name || "G").slice(0, 1).toUpperCase();
   document.body.classList.toggle("auth-logged-out", !user);
   document.querySelectorAll("[data-permission]").forEach((node) => {
@@ -722,8 +722,8 @@ function renderLoginOptions(statePayload = authState) {
     const loginUsers = statePayload.users;
     loginSelect.innerHTML = loginUsers.map((user) => {
       const role = statePayload.roles[user.roleId];
-      if (user.id === "allen") return `<option value="${user.id}">${role?.name || "瓒呯骇绠＄悊鍛?}</option>`;
-      return `<option value="${user.id}">${user.name} 路 ${role?.name || "鏈垎閰?}</option>`;
+      if (user.id === "allen") return `<option value="${user.id}">${role?.name || "超级管理员"}</option>`;
+      return `<option value="${user.id}">${user.name} · ${role?.name || "未分配"}</option>`;
     }).join("");
     loginSelect.value = loginUsers.some((user) => user.id === statePayload.currentUserId)
       ? statePayload.currentUserId
@@ -745,9 +745,9 @@ function renderOperatorAccounts(statePayload = authState) {
         <select data-user-role="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>
           ${Object.entries(statePayload.roles).map(([roleId, item]) => `<option value="${roleId}" ${roleId === user.roleId ? "selected" : ""}>${item.name}</option>`).join("")}
         </select>
-        <input data-user-password="${user.id}" type="text" placeholder="${user.roleId === "super_admin" ? "绯荤粺鍥哄畾" : "璁剧疆/閲嶇疆鍙ｄ护"}" ${user.roleId === "super_admin" ? "disabled" : ""}>
-        <button class="btn secondary" type="button" data-save-user-password="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>淇濆瓨鍙ｄ护</button>
-        <span>${role?.name || "鏈垎閰?}</span>
+        <input data-user-password="${user.id}" type="text" placeholder="${user.roleId === "super_admin" ? "系统固定" : "设置/重置口令"}" ${user.roleId === "super_admin" ? "disabled" : ""}>
+        <button class="btn secondary" type="button" data-save-user-password="${user.id}" ${user.roleId === "super_admin" ? "disabled" : ""}>保存口令</button>
+        <span>${role?.name || "未分配"}</span>
       </article>
     `;
   }).join("");
@@ -766,7 +766,7 @@ function renderOperatorAccounts(statePayload = authState) {
       const input = list.querySelector(`[data-user-password="${userId}"]`);
       const password = input?.value.trim() || "";
       if (!password) return;
-      const restoreButton = setButtonLoading(button, "淇濆瓨涓?..");
+      const restoreButton = setButtonLoading(button, "保存中...");
       try {
         authState = await api(`/api/auth/users/${encodeURIComponent(userId)}/password`, {
           method: "PATCH",
@@ -791,7 +791,7 @@ function renderRoleTabs(statePayload = authState) {
   `).join("");
   tabs.querySelectorAll("[data-role-tab]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const restoreButton = setButtonLoading(button, "鍒囨崲涓?..");
+      const restoreButton = setButtonLoading(button, "切换中...");
       const session = readStoredAuthSession();
       session.editingRoleId = button.dataset.roleTab;
       saveAuthSession(session);
@@ -858,7 +858,7 @@ function initAuthCenter() {
     const errorNode = document.querySelector("#login-error");
     if (errorNode) errorNode.textContent = "";
     if (!password) return;
-    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "鐧诲綍涓?..");
+    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "登录中...");
     try {
       authState = await api("/api/auth/login", {
         method: "POST",
@@ -869,7 +869,7 @@ function initAuthCenter() {
       renderAuthCenter();
       activateView("overview");
     } catch (error) {
-      if (errorNode) errorNode.textContent = error.message || "鐧诲綍澶辫触";
+      if (errorNode) errorNode.textContent = error.message || "登录失败";
     } finally {
       restoreButton();
     }
@@ -879,7 +879,7 @@ function initAuthCenter() {
     const nameInput = document.querySelector("#operator-name-input");
     const name = nameInput.value.trim();
     if (!name) return;
-    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "娣诲姞涓?..");
+    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "添加中...");
     try {
       authState = await api("/api/auth/users", {
         method: "POST",
@@ -901,7 +901,7 @@ function initAuthCenter() {
     const input = document.querySelector("#role-name-input");
     const name = input.value.trim();
     if (!name) return;
-    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "娣诲姞涓?..");
+    const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "添加中...");
     try {
       authState = await api("/api/auth/roles", { method: "POST", body: JSON.stringify({ name }) });
       saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId });
@@ -913,7 +913,7 @@ function initAuthCenter() {
   });
   document.querySelectorAll("[data-logout]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const restoreButton = setButtonLoading(button, "閫€鍑轰腑...");
+      const restoreButton = setButtonLoading(button, "退出中...");
       try {
         saveAuthSession({ currentUserId: "", editingRoleId: "super_admin", loggedOut: true });
         authState = await api("/api/auth/state?current_user_id=allen&editing_role_id=super_admin");
@@ -965,9 +965,9 @@ function initUserMenu() {
   const sidebarToggle = document.querySelector("#sidebar-toggle");
   sidebarToggle?.addEventListener("click", () => {
     const collapsed = document.body.classList.toggle("sidebar-collapsed");
-    sidebarToggle.textContent = collapsed ? "鈥? : "鈥?;
+    sidebarToggle.textContent = collapsed ? "›" : "‹";
     sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
-    sidebarToggle.setAttribute("aria-label", collapsed ? "鏄剧ず宸︿晶鏍? : "闅愯棌宸︿晶鏍?);
+    sidebarToggle.setAttribute("aria-label", collapsed ? "显示左侧栏" : "隐藏左侧栏");
   });
 }
 
@@ -1019,12 +1019,12 @@ function showTaskState(message, kind = "muted") {
 function formatFriendlyMessage(message) {
   const text = String(message || "");
   const duplicateTaskMatch = text.match(/^duplicate active task already queued: #(\d+)$/i);
-  if (duplicateTaskMatch) return `宸叉湁鐩稿悓浠诲姟鍦ㄩ槦鍒椾腑锛?${duplicateTaskMatch[1]}`;
-  if (text === "queued for manual worker execution") return "宸插姞鍏ラ槦鍒楋紝绛夊緟浜哄伐鎵ц";
-  if (text === "pending") return "寰呭鐞?;
-  if (text === "paused") return "宸叉殏鍋?;
-  if (text === "unsupported") return "鏆備笉鏀寔";
-  return text || "鎿嶄綔澶辫触锛岃绋嶅悗閲嶈瘯";
+  if (duplicateTaskMatch) return `已有相同任务在队列中：#${duplicateTaskMatch[1]}`;
+  if (text === "queued for manual worker execution") return "已加入队列，等待人工执行";
+  if (text === "pending") return "待处理";
+  if (text === "paused") return "已暂停";
+  if (text === "unsupported") return "暂不支持";
+  return text || "操作失败，请稍后重试";
 }
 
 async function api(path, options = {}) {
@@ -1034,7 +1034,7 @@ async function api(path, options = {}) {
   });
   const text = await response.arrayBuffer().then((buffer) => {
     const decoded = new TextDecoder("utf-8").decode(buffer);
-    if (/[脙脗氓莽忙猫盲枚眉]/.test(decoded) && !/[\u4e00-\u9fff]/.test(decoded)) {
+    if (/[ÃÂåçæèäöü]/.test(decoded) && !/[\u4e00-\u9fff]/.test(decoded)) {
       try {
         const repaired = new TextDecoder("utf-8").decode(Uint8Array.from(decoded, (char) => char.charCodeAt(0)));
         if (/[\u4e00-\u9fff]/.test(repaired)) return repaired;
@@ -1056,7 +1056,7 @@ async function api(path, options = {}) {
   return JSON.parse(text);
 }
 
-function setButtonLoading(button, loadingText = "澶勭悊涓?) {
+function setButtonLoading(button, loadingText = "处理中") {
   if (!button) return () => {};
   const previousHtml = button.innerHTML;
   const previousDisabled = button.disabled;
@@ -1074,7 +1074,7 @@ function setButtonLoading(button, loadingText = "澶勭悊涓?) {
   };
 }
 
-function loadingInline(label = "鍔犺浇涓?..") {
+function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
 
@@ -1147,7 +1147,7 @@ async function openHelpDocument(path) {
   const body = document.querySelector("#help-reader-body");
   if (!reader || !body) return;
   reader.classList.remove("hidden");
-  body.innerHTML = loadingInline("鍔犺浇甯姪鏂囨。...");
+  body.innerHTML = loadingInline("加载帮助文档...");
   const doc = await api(`/api/help-docs/${encodeURIComponent(docName)}`);
   const firstTitle = String(doc.content || "").split(/\r?\n/).find((line) => line.startsWith("# "));
   document.querySelector("#help-reader-title").textContent = firstTitle ? firstTitle.replace(/^#\s*/, "") : doc.name;
@@ -1172,19 +1172,19 @@ function initHelpCenter() {
   });
 }
 
-function setPageLoading(label = "鍔犺浇涓?..") {
+function setPageLoading(label = "加载中...") {
   const targets = [
-    ["#summary", "鍔犺浇姒傝..."],
-    ["#platforms", "鍔犺浇骞冲彴..."],
-    ["#accounts-list", "鍔犺浇璐﹀彿..."],
-    ["#tasks-list", "鍔犺浇浠诲姟..."],
-    ["#stats-overview", "鍔犺浇缁熻..."],
-    ["#operation-progress", "鍔犺浇杩涘害..."],
-    ["#platform-settings-list", "鍔犺浇璁剧疆..."],
-    ["#matrix-job-status", "鍔犺浇浣滀笟..."],
-    ["#operation-notice-routes", "鍔犺浇閫氱煡..."],
-    ["#login-qr-batches", "鍔犺浇鐧诲綍鎵规..."],
-    ["#supabase-health-list", "鍔犺浇鏁版嵁搴撳瓧鍏?.."],
+    ["#summary", "加载概览..."],
+    ["#platforms", "加载平台..."],
+    ["#accounts-list", "加载账号..."],
+    ["#tasks-list", "加载任务..."],
+    ["#stats-overview", "加载统计..."],
+    ["#operation-progress", "加载进度..."],
+    ["#platform-settings-list", "加载设置..."],
+    ["#matrix-job-status", "加载作业..."],
+    ["#operation-notice-routes", "加载通知..."],
+    ["#login-qr-batches", "加载登录批次..."],
+    ["#supabase-health-list", "加载数据库字典..."],
   ];
   targets.forEach(([selector, text]) => {
     const node = document.querySelector(selector);
@@ -1196,29 +1196,29 @@ function setPageLoading(label = "鍔犺浇涓?..") {
 function setViewLoading(view) {
   const targets = {
     overview: [
-      ["#summary", "鍔犺浇姒傝..."],
-      ["#platforms", "鍔犺浇骞冲彴..."],
+      ["#summary", "加载概览..."],
+      ["#platforms", "加载平台..."],
     ],
-    accounts: [["#accounts-list", "鍔犺浇璐﹀彿..."]],
+    accounts: [["#accounts-list", "加载账号..."]],
     settings: [
-      ["#platform-settings-list", "鍔犺浇璁剧疆..."],
-      ["#matrix-job-status", "鍔犺浇浣滀笟..."],
+      ["#platform-settings-list", "加载设置..."],
+      ["#matrix-job-status", "加载作业..."],
     ],
-    tasks: [["#tasks-list", "鍔犺浇浠诲姟..."]],
+    tasks: [["#tasks-list", "加载任务..."]],
     stats: [
-      ["#stats-overview", "鍔犺浇缁熻..."],
-      ["#operation-progress", "鍔犺浇杩涘害..."],
+      ["#stats-overview", "加载统计..."],
+      ["#operation-progress", "加载进度..."],
     ],
     "ai-robot": [],
     notifications: [
-      ["#operation-notice-routes", "鍔犺浇閫氱煡..."],
-      ["#login-qr-batches", "鍔犺浇鐧诲綍鎵规..."],
+      ["#operation-notice-routes", "加载通知..."],
+      ["#login-qr-batches", "加载登录批次..."],
     ],
     "terminal-execution": [
-      ["#terminal-config-list", "鍔犺浇杩愯惀寰俊閰嶇疆..."],
-      ["#terminal-matrix-workspace", "鍔犺浇缁堢鎵ц鏁版嵁..."],
+      ["#terminal-config-list", "加载运营微信配置..."],
+      ["#terminal-matrix-workspace", "加载终端执行数据..."],
     ],
-    "system-settings": [["#supabase-health-list", "鍔犺浇鏁版嵁搴撳瓧鍏?.."]],
+    "system-settings": [["#supabase-health-list", "加载数据库字典..."]],
   };
   if (view === "ai-robot") renderAiRobotLoading();
   (targets[view] || []).forEach(([selector, text]) => {
@@ -1259,21 +1259,21 @@ function platformStatusIcon(status) {
 function platformStatusLabel(status) {
   const normalized = String(status || "unknown").toLowerCase();
   const labels = {
-    active: "宸插惎鐢?,
-    ready: "宸查儴缃?,
-    logged_in: "宸查儴缃?,
-    success: "姝ｅ父",
-    ok: "姝ｅ父",
-    login_required: "闇€鐧诲綍",
-    logged_out: "鏈櫥褰?,
-    failed: "寮傚父",
-    error: "寮傚父",
-    pending: "寰呮鏌?,
-    checking: "妫€鏌ヤ腑",
-    not_checked: "寰呮鏌?,
-    unknown: "鏈煡",
+    active: "已启用",
+    ready: "已部署",
+    logged_in: "已部署",
+    success: "正常",
+    ok: "正常",
+    login_required: "需登录",
+    logged_out: "未登录",
+    failed: "异常",
+    error: "异常",
+    pending: "待检查",
+    checking: "检查中",
+    not_checked: "待检查",
+    unknown: "未知",
   };
-  return labels[normalized] || status || "鏈煡";
+  return labels[normalized] || status || "未知";
 }
 
 function platformStatusClass(status) {
@@ -1298,22 +1298,22 @@ function metric(label, value) {
 function renderSummary() {
   const s = state.summary;
   document.querySelector("#summary").innerHTML = [
-    metric("璐﹀彿", s.accounts || 0),
-    metric("骞冲彴妲戒綅", s.platforms || 0),
-    metric("鍓╀綑绱犳潗", s.remaining_material_videos || 0),
-    metric("杩愯涓换鍔?, s.running_tasks || 0),
-    metric("澶辫触浠诲姟", s.failed_tasks || 0),
-    metric("鎾斁", s.views || 0),
-    metric("璇勮", s.comments || 0),
+    metric("账号", s.accounts || 0),
+    metric("平台槽位", s.platforms || 0),
+    metric("剩余素材", s.remaining_material_videos || 0),
+    metric("运行中任务", s.running_tasks || 0),
+    metric("失败任务", s.failed_tasks || 0),
+    metric("播放", s.views || 0),
+    metric("评论", s.comments || 0),
   ].join("");
 }
 
 function abilityText(item) {
   return [
-    item.can_publish ? "鍙戝竷" : "",
-    item.can_comment ? "璇勮" : "",
-    item.can_message ? "绉佷俊" : "",
-    item.can_login_status ? "鐧诲綍妫€娴? : "娴忚鍣ㄧ淮鎶?,
+    item.can_publish ? "发布" : "",
+    item.can_comment ? "评论" : "",
+    item.can_message ? "私信" : "",
+    item.can_login_status ? "登录检测" : "浏览器维护",
   ].filter(Boolean);
 }
 
@@ -1328,7 +1328,7 @@ function renderPlatforms() {
       <div class="region-title">${REGION_LABELS[region]}</div>
       <div class="platform-grid">
         ${cards.map((item) => `<div class="platform-card">
-          <div class="row-head"><strong>${platformName(item.key)}</strong><span>${item.region === "cn" ? "鍥藉唴" : "鍥藉"}</span></div>
+          <div class="row-head"><strong>${platformName(item.key)}</strong><span>${item.region === "cn" ? "国内" : "国外"}</span></div>
           <div class="chips">${abilityText(item).map((a) => `<span class="chip">${a}</span>`).join("")}</div>
         </div>`).join("")}
       </div>
@@ -1340,7 +1340,7 @@ function renderTaskSelects() {
   const accountSelect = document.querySelector("#task-account-select");
   accountSelect.innerHTML = state.accounts.length
     ? state.accounts.map((account) => `<option value="${account.id}">#${account.id} ${account.display_name}</option>`).join("")
-    : `<option value="">璇峰厛鍒涘缓璐﹀彿</option>`;
+    : `<option value="">请先创建账号</option>`;
 
   const platformSelect = document.querySelector("#task-platform-select");
   const groupedOptions = ["cn", "global"].map((region) => {
@@ -1370,7 +1370,7 @@ function renderPlatformStatusGroup(platforms, region) {
 }
 
 function accountOperatorWechat(account) {
-  const match = String(account?.notes || "").match(/缁戝畾杩愯惀寰俊锛?[^锛?]+)/);
+  const match = String(account?.notes || "").match(/绑定运营微信：([^；;]+)/);
   return match ? match[1].trim() : "";
 }
 
@@ -1382,31 +1382,31 @@ function renderAccounts() {
       <div class="row-head">
         <div class="account-title-wrap">
           <strong class="account-title">#${account.id} ${account.display_name}</strong>
-          <div class="account-subtitle">${account.account_key} 路 ${account.niche || ""}</div>
-          <div class="account-operator-wechat">缁戝畾杩愯惀寰俊锛?strong>${operatorWechat || "-"}</strong></div>
+          <div class="account-subtitle">${account.account_key} · ${account.niche || ""}</div>
+          <div class="account-operator-wechat">绑定运营微信：<strong>${operatorWechat || "-"}</strong></div>
         </div>
         <div class="account-badges">
           <span class="chip">${account.status}</span>
-          <span class="chip success-chip">鍙戝竷鎴愬姛 ${account.publish_success_count || 0}</span>
-          <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${account.display_name}">鍒犻櫎璐﹀彿</button>
+          <span class="chip success-chip">发布成功 ${account.publish_success_count || 0}</span>
+          <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${account.display_name}">删除账号</button>
         </div>
       </div>
       ${renderPlatformStatusGroup(platforms, "cn")}
       ${renderPlatformStatusGroup(platforms, "global")}
     </article>`;
-  }).join("") || `<div class="muted">鏆傛棤璐﹀彿</div>`;
+  }).join("") || `<div class="muted">暂无账号</div>`;
 }
 
 function taskTypeLabel(type) {
-  return TASK_TYPE_OPTIONS.find(([value]) => value === type)?.[1] || type || "鏈寚瀹?;
+  return TASK_TYPE_OPTIONS.find(([value]) => value === type)?.[1] || type || "未指定";
 }
 
 function taskAccountLabel(task) {
   const accountId = Number(task.account_id || 0);
   const account = state.accounts.find((item) => Number(item.id) === accountId);
   return account
-    ? `#${account.id} ${account.display_name || account.account_key || "鏈懡鍚嶈处鍙?}`
-    : (accountId ? `#${accountId} 鏈煡璐﹀彿` : "鏈寚瀹氳处鍙?);
+    ? `#${account.id} ${account.display_name || account.account_key || "未命名账号"}`
+    : (accountId ? `#${accountId} 未知账号` : "未指定账号");
 }
 
 function filteredTasks() {
@@ -1456,16 +1456,16 @@ function renderTasks() {
   document.querySelector("#tasks-list").innerHTML = `
     <div class="task-toolbar">
       <div class="task-filter-grid">
-        <label>璐﹀彿<select data-task-filter="account"><option value="">鍏ㄩ儴璐﹀彿</option>${taskAccountFilterOptions()}</select></label>
-        <label>骞冲彴<select data-task-filter="platform"><option value="">鍏ㄩ儴骞冲彴</option>${taskFilterOptions(state.tasks, (task) => task.platform, (task) => platformLabel(task.platform))}</select></label>
-        <label>鐘舵€?select data-task-filter="status"><option value="">鍏ㄩ儴鐘舵€?/option>${taskFilterOptions(state.tasks, (task) => task.status, (task) => formatFriendlyMessage(task.status))}</select></label>
-        <label>浠诲姟绫诲瀷<select data-task-filter="taskType"><option value="">鍏ㄩ儴绫诲瀷</option>${TASK_TYPE_OPTIONS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
+        <label>账号<select data-task-filter="account"><option value="">全部账号</option>${taskAccountFilterOptions()}</select></label>
+        <label>平台<select data-task-filter="platform"><option value="">全部平台</option>${taskFilterOptions(state.tasks, (task) => task.platform, (task) => platformLabel(task.platform))}</select></label>
+        <label>状态<select data-task-filter="status"><option value="">全部状态</option>${taskFilterOptions(state.tasks, (task) => task.status, (task) => formatFriendlyMessage(task.status))}</select></label>
+        <label>任务类型<select data-task-filter="taskType"><option value="">全部类型</option>${TASK_TYPE_OPTIONS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
       </div>
       <div class="task-bulk-actions">
-        <label class="task-check-all"><input type="checkbox" data-task-select-all ${visibleIds.length && selectedVisible.length === visibleIds.length ? "checked" : ""}>鍏ㄩ€?/label>
-        <span class="muted">宸查€?${taskSelection.size} 鏉?/span>
-        <button class="btn secondary btn-sm" type="button" data-task-bulk-status="paused" ${taskSelection.size ? "" : "disabled"}>鏆傚仠闃熷垪</button>
-        <button class="btn secondary btn-sm danger-action" type="button" data-task-bulk-delete ${taskSelection.size ? "" : "disabled"}>鍒犻櫎闃熷垪</button>
+        <label class="task-check-all"><input type="checkbox" data-task-select-all ${visibleIds.length && selectedVisible.length === visibleIds.length ? "checked" : ""}>全选</label>
+        <span class="muted">已选 ${taskSelection.size} 条</span>
+        <button class="btn secondary btn-sm" type="button" data-task-bulk-status="paused" ${taskSelection.size ? "" : "disabled"}>暂停队列</button>
+        <button class="btn secondary btn-sm danger-action" type="button" data-task-bulk-delete ${taskSelection.size ? "" : "disabled"}>删除队列</button>
       </div>
     </div>
     ${list.map((task) => {
@@ -1479,17 +1479,17 @@ function renderTasks() {
         </div>
         <span class="task-actions">
           <span class="status-${task.status}">${formatFriendlyMessage(task.status)}</span>
-          <button class="btn secondary task-delete" data-delete-task="${task.id}" type="button">鍒犻櫎闃熷垪</button>
+          <button class="btn secondary task-delete" data-delete-task="${task.id}" type="button">删除队列</button>
         </span>
       </div>
       <div class="task-meta">
-        <span>浠诲姟绫诲瀷锛?{taskTypeLabel(task.task_type)}</span>
-        <span>璐﹀彿锛?{accountLabel}</span>
-        <span>骞冲彴锛?{platformLabel(task.platform)}</span>
+        <span>任务类型：${taskTypeLabel(task.task_type)}</span>
+        <span>账号：${accountLabel}</span>
+        <span>平台：${platformLabel(task.platform)}</span>
       </div>
       <div class="muted">${formatFriendlyMessage(task.summary || task.error || "")}</div>
     </article>`;
-    }).join("") || `<div class="muted">鏆傛棤鍖归厤浠诲姟</div>`}
+    }).join("") || `<div class="muted">暂无匹配任务</div>`}
   `;
   document.querySelectorAll("[data-task-filter]").forEach((select) => {
     select.value = taskFilters[select.dataset.taskFilter] || "";
@@ -1497,7 +1497,7 @@ function renderTasks() {
 }
 
 function terminalColorByIndex(index) {
-  return (state.terminalExecution.colors || [])[index % Math.max(1, (state.terminalExecution.colors || []).length)] || { hex: "#3B82F6", name: "绉戞妧钃? };
+  return (state.terminalExecution.colors || [])[index % Math.max(1, (state.terminalExecution.colors || []).length)] || { hex: "#3B82F6", name: "科技蓝" };
 }
 
 function renderTerminalConfig() {
@@ -1516,10 +1516,10 @@ function renderTerminalConfig() {
     <div class="terminal-config-row ${row.enabled ? "" : "disabled"}" data-terminal-config-row="${row.id}">
       <label class="terminal-config-left">
         <input type="checkbox" class="terminal-checkbox" data-terminal-enabled ${row.enabled ? "checked" : ""}>
-        <span>缁堢 ${String(row.id).padStart(2, "0")}</span>
+        <span>终端 ${String(row.id).padStart(2, "0")}</span>
       </label>
       <select class="terminal-wx-select" data-terminal-operator ${row.enabled ? "" : "disabled"}>
-        ${operators.map((operator) => `<option value="${operator.operator_wechat}" ${operator.operator_wechat === row.operator_wechat ? "selected" : ""}>${operator.operator_wechat}</option>`).join("") || `<option value="">鏆傛棤缁戝畾杩愯惀寰俊</option>`}
+        ${operators.map((operator) => `<option value="${operator.operator_wechat}" ${operator.operator_wechat === row.operator_wechat ? "selected" : ""}>${operator.operator_wechat}</option>`).join("") || `<option value="">暂无绑定运营微信</option>`}
       </select>
       <div class="terminal-swatch-group">
         ${colors.map((color, colorIndex) => `
@@ -1531,7 +1531,7 @@ function renderTerminalConfig() {
 }
 
 function terminalPlaceholderIcon() {
-  return `<svg width="112" height="112" viewBox="0 0 112 112" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="绛夊緟寮€濮嬬櫥褰?>
+  return `<svg width="112" height="112" viewBox="0 0 112 112" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="等待开始登录">
     <rect x="22" y="18" width="68" height="76" rx="12" fill="var(--terminal-glass-bg)" stroke="var(--term-color)" stroke-opacity=".7" stroke-width="2"/>
     <rect x="34" y="30" width="16" height="16" rx="3" stroke="var(--term-color)" stroke-width="2"/>
     <rect x="62" y="30" width="16" height="16" rx="3" stroke="var(--term-color)" stroke-width="2"/>
@@ -1551,7 +1551,7 @@ function renderTerminalExecution() {
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
     startLoginButton.disabled = loginStarted;
-    startLoginButton.textContent = loginStarted ? "鐧诲綍涓? : "寮€濮嬬櫥褰?;
+    startLoginButton.textContent = loginStarted ? "登录中" : "开始登录";
   }
   const progress = document.querySelector("#terminal-global-progress");
   if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
@@ -1567,19 +1567,19 @@ function renderTerminalExecution() {
     const successCount = accounts.filter((account) => account.status === "success").length;
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
-    const qrStatusText = loginStarted ? `姝ｅ湪绛夊緟 [${current.display_name || "-"}] 鎵爜纭` : `绛夊緟鐐瑰嚮寮€濮嬬櫥褰?[${current.display_name || "-"}]`;
+    const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录 [${current.display_name || "-"}]`;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
         <div class="terminal-color-anchor"></div>
         <div class="terminal-col-header">
           <div class="terminal-col-header-top">
-            <span style="font-weight:700;font-size:16px;">缁堢鎵ц绐?${String(window.id).padStart(2, "0")}</span>
-            <span class="terminal-status-badge theme">鑹叉爣: ${window.color_name || ""}</span>
+            <span style="font-weight:700;font-size:16px;">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
+            <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
           </div>
-          <div class="terminal-wx-operator">杩愯惀寰俊: ${window.operator_wechat || "-"}</div>
+          <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="瑙嗛鍙风櫥褰曚簩缁寸爜">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_data_url ? `<img src="${window.qr_data_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
@@ -1588,17 +1588,17 @@ function renderTerminalExecution() {
               <div class="terminal-account-info">
                 <div class="terminal-avatar"></div>
                 <div>
-                  <div class="terminal-acc-name">${account.display_name || account.account_key || `璐﹀彿 ${account.id}`}</div>
-                  <div class="terminal-acc-status">${account.status_text || "鏈櫥褰?}</div>
+                  <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
+                  <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
                 </div>
               </div>
-              <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "鍙戝竷鎴愬姛" : (account.task_id ? `浠诲姟:${account.task_id}` : "-")}</div>
+              <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
             </div>
-          `).join("") || `<div class="muted">鏆傛棤璐﹀彿</div>`}
+          `).join("") || `<div class="muted">暂无账号</div>`}
         </div>
         <div class="terminal-col-footer">
           <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
-          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${!loginStarted || manualWait > 0 ? "disabled" : ""}>${!loginStarted ? "绛夊緟鐧诲綍" : (manualWait > 0 ? `涓诲姩鍙戝竷 (${manualWait}s)` : "涓诲姩鍙戝竷")}</button>
+          <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${!loginStarted || manualWait > 0 ? "disabled" : ""}>${!loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布")}</button>
         </div>
       </div>
     `;
@@ -1613,7 +1613,7 @@ function updateTerminalManualCountdowns() {
     const window = windowById.get(String(button.dataset.terminalManual || ""));
     const manualWait = loginStarted ? Math.max(0, Number(window?.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     button.disabled = !loginStarted || manualWait > 0;
-    button.textContent = !loginStarted ? "绛夊緟鐧诲綍" : (manualWait > 0 ? `涓诲姩鍙戝竷 (${manualWait}s)` : "涓诲姩鍙戝竷");
+    button.textContent = !loginStarted ? "等待登录" : (manualWait > 0 ? `主动发布 (${manualWait}s)` : "主动发布");
   });
 }
 
@@ -1646,14 +1646,14 @@ function startTerminalPolling() {
 function renderStats() {
   const summary = state.summary || {};
   const overview = [
-    ["鐭╅樀璐﹀彿鎬绘暟", summary.accounts || 4, "+8.4%", "up"],
-    ["绱浣滃搧鎬婚噺", 186, "+18.6%", "up"],
-    ["绱鎬绘洕鍏?, "68.4涓?, "+24.8%", "up"],
-    ["绱鎬绘挱鏀?, "28.6涓?, "+19.2%", "up"],
-    ["鐭╅樀鎬荤矇涓?, "4.8涓?, "+9.7%", "up"],
-    ["鍛ㄦ湡鍑€澧炵矇涓?, 3280, "+14.5%", "up"],
-    ["绱浜掑姩閲?, "2.6涓?, "+11.3%", "up"],
-    ["绱绾跨储閲?, 426, "-3.2%", "down"],
+    ["矩阵账号总数", summary.accounts || 4, "+8.4%", "up"],
+    ["累计作品总量", 186, "+18.6%", "up"],
+    ["累计总曝光", "68.4万", "+24.8%", "up"],
+    ["累计总播放", "28.6万", "+19.2%", "up"],
+    ["矩阵总粉丝", "4.8万", "+9.7%", "up"],
+    ["周期净增粉丝", 3280, "+14.5%", "up"],
+    ["累计互动量", "2.6万", "+11.3%", "up"],
+    ["累计线索量", 426, "-3.2%", "down"],
   ];
   document.querySelector("#stats-overview").innerHTML = overview.map(([label, value, change, trend]) => `
     <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
@@ -1666,10 +1666,10 @@ function renderStats() {
       .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
     const currentValue = statsAccountFilter.value;
     const activeOptions = activeAccounts.map((account) => {
-      const label = account.display_name || account.account_key || `璐﹀彿 ${account.id}`;
+      const label = account.display_name || account.account_key || `账号 ${account.id}`;
       return `<option value="${account.id}">#${account.id} ${label}</option>`;
     }).join("");
-    statsAccountFilter.innerHTML = `<option value="">鍏ㄩ儴璐﹀彿</option>${activeOptions}`;
+    statsAccountFilter.innerHTML = `<option value="">全部账号</option>${activeOptions}`;
     if (currentValue && [...statsAccountFilter.options].some((option) => option.value === currentValue)) {
       statsAccountFilter.value = currentValue;
     } else {
@@ -1678,12 +1678,12 @@ function renderStats() {
   }
 
   const accounts = [
-    ["GasGx灏忕豢", "瑙嗛鍙?, "姝ｅ父", "86,200", "18,600", "12,480", "+860", "42.1%", "8.6%", 12, "鐖嗘璐﹀彿", ""],
-    ["GasGx灏忛粍", "鎶栭煶", "姝ｅ父", "72,100", "16,900", "10,220", "+640", "37.8%", "7.9%", 10, "绋冲畾璐﹀彿", ""],
-    ["鍙戠數鏈虹粍妗堜緥", "灏忕孩涔?, "浣庢祦閲?, "18,400", "3,420", "3,180", "+92", "28.4%", "4.1%", 5, "娼滃姏璐﹀彿", "浣庢祦閲?],
-    ["鐕冩皵鍙戝姩鏈虹幇鍦?, "蹇墜", "浼戠湢", "9,860", "1,160", "1,204", "-36", "22.6%", "2.8%", 1, "浣庢晥璐﹀彿", "闀挎湡鏂洿"],
+    ["GasGx小绿", "视频号", "正常", "86,200", "18,600", "12,480", "+860", "42.1%", "8.6%", 12, "爆款账号", ""],
+    ["GasGx小黄", "抖音", "正常", "72,100", "16,900", "10,220", "+640", "37.8%", "7.9%", 10, "稳定账号", ""],
+    ["发电机组案例", "小红书", "低流量", "18,400", "3,420", "3,180", "+92", "28.4%", "4.1%", 5, "潜力账号", "低流量"],
+    ["燃气发动机现场", "快手", "休眠", "9,860", "1,160", "1,204", "-36", "22.6%", "2.8%", 1, "低效账号", "长期断更"],
   ];
-  const accountHeaders = ["璐﹀彿鍚嶇О", "骞冲彴", "鐘舵€?, "鎬绘挱鏀?, "鍛ㄦ湡鎾斁", "绮変笣", "澧炵矇", "瀹屾挱鐜?, "浜掑姩鐜?, "鏇存柊", "鍒嗗眰", "寮傚父"];
+  const accountHeaders = ["账号名称", "平台", "状态", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "分层", "异常"];
   let sortIndex = 0;
   let sortDir = 1;
   const renderAccountTable = () => {
@@ -1694,7 +1694,7 @@ function renderStats() {
     document.querySelector("#account-stats-table").innerHTML = `
       <table><thead><tr>${accountHeaders.map((header, index) => `<th><button type="button" data-account-sort="${index}">${header}</button></th>`).join("")}</tr></thead>
       <tbody>${filtered.map((row) => `<tr>${row.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`).join("")}</tbody></table>
-      <div class="table-pager">绗?1 / 1 椤?路 ${filtered.length} 鏉¤处鍙?/div>
+      <div class="table-pager">第 1 / 1 页 · ${filtered.length} 条账号</div>
     `;
     document.querySelectorAll("[data-account-sort]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1709,25 +1709,25 @@ function renderStats() {
   renderAccountTable();
 
   const works = [
-    ["鐕冩皵鍙戝姩鏈虹粍鐜板満骞舵満", "8.6涓?, "鐖嗘"],
-    ["娌规皵鐢拌嚜鍙戠數鏀归€犳渚?, "6.9涓?, "鐖嗘"],
-    ["鍙戠數鏈虹粍璐熻浇娴嬭瘯", "4.2涓?, "鏅€?],
-    ["鐭垮満鐢ㄧ數鎴愭湰瀵规瘮", "3.8涓?, "鏅€?],
+    ["燃气发动机组现场并机", "8.6万", "爆款"],
+    ["油气田自发电改造案例", "6.9万", "爆款"],
+    ["发电机组负载测试", "4.2万", "普通"],
+    ["矿场用电成本对比", "3.8万", "普通"],
   ];
   document.querySelector("#content-top-list").innerHTML = works.map((item, index) => `
     <article class="rank-row"><span>${index + 1}</span><strong>${item[0]}</strong><em>${item[1]}</em><b>${item[2]}</b></article>
   `).join("");
 
-  const traffic = [["鎺ㄨ崘娴侀噺", "54%"], ["鎼滅储娴侀噺", "18%"], ["涓婚〉娴侀噺", "12%"], ["鍚屽煄娴侀噺", "6%"], ["鍒嗕韩娴侀噺", "7%"], ["浠樿垂娴侀噺", "3%"]];
+  const traffic = [["推荐流量", "54%"], ["搜索流量", "18%"], ["主页流量", "12%"], ["同城流量", "6%"], ["分享流量", "7%"], ["付费流量", "3%"]];
   document.querySelector("#traffic-list").innerHTML = traffic.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
 
-  const conversions = [["涓婚〉璁块棶閲?, "17,860"], ["绉佷俊鍜ㄨ閲?, "1,286"], ["璇勮鍜ㄨ閲?, "824"], ["鏈夋晥绾跨储鏁?, "426"], ["琛ㄥ崟鐣欒祫閲?, "196"], ["绉佸煙寮曟祦鏁?, "158"], ["鎰忓悜瀹㈡埛鏁?, "138"], ["鏁翠綋绾跨储杞寲鐜?, "0.15%"]];
+  const conversions = [["主页访问量", "17,860"], ["私信咨询量", "1,286"], ["评论咨询量", "824"], ["有效线索数", "426"], ["表单留资量", "196"], ["私域引流数", "158"], ["意向客户数", "138"], ["整体线索转化率", "0.15%"]];
   document.querySelector("#conversion-cards").innerHTML = conversions.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
 
-  const ops = [["璁″垝鍙戝竷閲?VS 瀹為檯鍙戝竷閲?, 92], ["鍛ㄦ湡鏂囨浜у嚭鏁?, 84], ["鍓緫浜у嚭鏁?, 78], ["绉佷俊鍥炲澶勭悊閲?, 88], ["璇勮浜掑姩澶勭悊閲?, 76], ["璐﹀彿浼樺寲娆℃暟", 64], ["鍐呭杩唬浼樺寲娆℃暟", 72]];
+  const ops = [["计划发布量 VS 实际发布量", 92], ["周期文案产出数", 84], ["剪辑产出数", 78], ["私信回复处理量", 88], ["评论互动处理量", 76], ["账号优化次数", 64], ["内容迭代优化次数", 72]];
   document.querySelector("#operation-progress").innerHTML = ops.map(([label, value]) => `<div><div><strong>${label}</strong><span>${value}%</span></div><i style="--p:${value}%"></i></div>`).join("");
 
-  const risks = ["杩濊浣滃搧 1 鏉★紝寰呮暣鏀?, "1 涓处鍙锋挱鏀炬柇宕栦笅璺?, "1 涓处鍙烽暱鏈熸柇鏇翠紤鐪?, "楂樻帀绮夎处鍙烽璀?1 涓?];
+  const risks = ["违规作品 1 条，待整改", "1 个账号播放断崖下跌", "1 个账号长期断更休眠", "高掉粉账号预警 1 个"];
   document.querySelector("#risk-list").innerHTML = risks.map((risk) => `<article>${risk}</article>`).join("");
   renderAnalyticsFromDatabase();
 }
@@ -1738,14 +1738,14 @@ function renderAnalyticsFromDatabase() {
   const overview = analytics.overview || [];
   if (overview.length) {
     document.querySelector("#stats-overview").innerHTML = [
-      { label: "鐭╅樀璐﹀彿鎬绘暟", value: state.summary?.accounts || 0, change: "+8.4%", trend: "up" },
+      { label: "矩阵账号总数", value: state.summary?.accounts || 0, change: "+8.4%", trend: "up" },
       ...overview,
     ].map((item) => `<div class="metric client-metric"><span>${item.label}</span><strong>${item.value}</strong><em class="${item.trend || "up"}">${item.change || ""}</em></div>`).join("");
   }
   const accounts = (analytics.account_rank || []).map((item) => item.row).filter(Boolean);
   if (accounts.length) {
-    const headers = ["璐﹀彿鍚嶇О", "骞冲彴", "鐘舵€?, "鎬绘挱鏀?, "鍛ㄦ湡鎾斁", "绮変笣", "澧炵矇", "瀹屾挱鐜?, "浜掑姩鐜?, "鏇存柊", "鍒嗗眰", "寮傚父"];
-    document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${accounts.map((row) => `<tr>${row.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`).join("")}</tbody></table><div class="table-pager">1 / 1 路 ${accounts.length} 鏉¤处鍙?/div>`;
+    const headers = ["账号名称", "平台", "状态", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "分层", "异常"];
+    document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${accounts.map((row) => `<tr>${row.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`).join("")}</tbody></table><div class="table-pager">1 / 1 · ${accounts.length} 条账号</div>`;
   }
   const works = analytics.content_top || [];
   if (works.length) document.querySelector("#content-top-list").innerHTML = works.map((item, index) => `<article class="rank-row"><span>${index + 1}</span><strong>${item.title}</strong><em>${item.value}</em><b>${item.tag}</b></article>`).join("");
@@ -1766,16 +1766,16 @@ function initSystemInitialize() {
   button.addEventListener("click", async () => {
     const password = await confirmSuperAdminPassword();
     if (!password) return;
-    const restoreButton = setButtonLoading(button, "鍒濆鍖栦腑");
-    stateNode.innerHTML = `<div class="muted">姝ｅ湪琛ラ綈鏁版嵁搴撳垵濮嬪寲鏁版嵁...</div>`;
+    const restoreButton = setButtonLoading(button, "初始化中");
+    stateNode.innerHTML = `<div class="muted">正在补齐数据库初始化数据...</div>`;
     try {
       const result = await api("/api/system/initialize", { method: "POST", body: JSON.stringify({ password }) });
-      const inserted = Object.entries(result.inserted || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "鏃?;
-      const skipped = Object.entries(result.skipped || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "鏃?;
-      stateNode.innerHTML = `<div><strong>${result.ok ? "鍒濆鍖栧畬鎴? : "鍒濆鍖栨湭瀹屾垚"}</strong><span>${result.seed_version || result.error || ""}</span></div><div><span>鏂板</span><strong>${inserted}</strong></div><div><span>璺宠繃</span><strong>${skipped}</strong></div>`;
+      const inserted = Object.entries(result.inserted || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "无";
+      const skipped = Object.entries(result.skipped || {}).map(([key, value]) => `${key}: ${value}`).join(" / ") || "无";
+      stateNode.innerHTML = `<div><strong>${result.ok ? "初始化完成" : "初始化未完成"}</strong><span>${result.seed_version || result.error || ""}</span></div><div><span>新增</span><strong>${inserted}</strong></div><div><span>跳过</span><strong>${skipped}</strong></div>`;
       await refresh();
     } catch (error) {
-      stateNode.innerHTML = `<div><strong>鍒濆鍖栧け璐?/strong><span>${error.message}</span></div>`;
+      stateNode.innerHTML = `<div><strong>初始化失败</strong><span>${error.message}</span></div>`;
     } finally {
       restoreButton();
     }
@@ -1806,7 +1806,7 @@ function confirmSuperAdminPassword() {
     const verify = () => {
       const password = input?.value.trim() || "";
       if (!password) {
-        if (error) error.textContent = "璇疯緭鍏ヨ秴绾х鐞嗗憳瀵嗙爜";
+        if (error) error.textContent = "请输入超级管理员密码";
         return;
       }
       close(password);
@@ -1828,7 +1828,7 @@ function initSupabaseReadCacheClear() {
   const stateNode = document.querySelector("#supabase-read-cache-state");
   if (!button) return;
   button.addEventListener("click", async () => {
-    const restoreButton = setButtonLoading(button, "娓呯悊涓?..");
+    const restoreButton = setButtonLoading(button, "清理中...");
     if (stateNode) {
       stateNode.hidden = false;
       stateNode.textContent = "";
@@ -1838,17 +1838,17 @@ function initSupabaseReadCacheClear() {
       const result = await api("/api/system/supabase-read-cache/clear", { method: "POST" });
       if (stateNode) {
         if (result.cleared) {
-          stateNode.textContent = "宸叉竻绌鸿繘绋嬪唴搴旂敤缂撳瓨锛屽悗缁х画璇锋眰灏嗛噸鏂版媺鍙栬繙绔暟鎹€?;
+          stateNode.textContent = "已清空进程内 Supabase 读缓存，后续请求将重新拉取远端数据。";
         } else {
           stateNode.textContent =
             result.backend === "sqlite"
-              ? "褰撳墠鍝佺墝搴撲负 SQLite锛屾湭鍚敤搴旂敤缂撳瓨銆?
-              : "鏈竻鐞嗙紦瀛樸€?";
+              ? "当前品牌库为 SQLite，未启用 Supabase 读缓存。"
+              : "未清理缓存。";
         }
       }
     } catch (error) {
       if (stateNode) {
-        stateNode.textContent = `娓呯悊澶辫触锛?{error.message}`;
+        stateNode.textContent = `清理失败：${error.message}`;
         stateNode.classList.add("danger");
       }
       throw error;
@@ -1863,21 +1863,21 @@ function initSystemDirectoryActions() {
   document.querySelectorAll("[data-system-dir]").forEach((button) => {
     button.addEventListener("click", async () => {
       const label = button.textContent.trim();
-      const restoreButton = setButtonLoading(button, "鎵撳紑涓?..");
+      const restoreButton = setButtonLoading(button, "打开中...");
       if (stateNode) {
-        stateNode.textContent = `姝ｅ湪鎵撳紑锛?{label}`;
+        stateNode.textContent = `正在打开：${label}`;
         stateNode.classList.remove("danger");
         stateNode.removeAttribute("title");
       }
       try {
         const result = await api(`/api/system/open-directory/${encodeURIComponent(button.dataset.systemDir)}`, { method: "POST" });
         if (stateNode) {
-          stateNode.textContent = `宸叉墦寮€锛?{label}`;
+          stateNode.textContent = `已打开：${label}`;
           stateNode.title = result.path || "";
         }
       } catch (error) {
         if (stateNode) {
-          stateNode.textContent = `鎵撳紑澶辫触锛?{error.message}`;
+          stateNode.textContent = `打开失败：${error.message}`;
           stateNode.classList.add("danger");
           stateNode.removeAttribute("title");
         }
@@ -1900,18 +1900,18 @@ function renderMatrixJobStatus() {
   const status = state.matrixJobStatus || {};
   const lastResult = status.last_result || {};
   node.innerHTML = [
-    ["寮€鍏?, status.enabled ? "寮€鍚? : "鍏抽棴"],
-    ["杩愯涓?, status.running ? "鏄? : "鍚?],
-    ["鍚庡彴绾跨▼", status.thread_alive ? "姝ｅ父" : "鏈繍琛?],
-    ["瀹氭椂妯″紡", status.schedule_mode === "daily" ? "姣忓ぉ鍥哄畾鏃堕棿" : "鎸夐棿闅?],
-    ["瀹氭椂鍙傛暟", status.schedule_mode === "daily" ? (status.daily_time || "09:00") : `${status.run_interval_minutes || 1440} 鍒嗛挓`],
-    ["涓嬫鍚姩", formatTime(status.next_run_at)],
-    ["涓婃鍚姩", formatTime(status.last_started_at)],
-    ["涓婃瀹屾垚", formatTime(status.last_finished_at)],
-    ["涓婃缁撴灉", status.last_ok === true ? "鎴愬姛" : status.last_ok === false ? "澶辫触" : "-"],
-    ["鍙戝竷鏁伴噺", lastResult.count ?? "-"],
-    ["涓婃宸℃", formatTime(status.last_login_check_at)],
-    ["宸℃缁撴灉", status.last_login_check_ok === true ? "姝ｅ父" : status.last_login_check_ok === false ? "闇€鎵爜" : "-"],
+    ["开关", status.enabled ? "开启" : "关闭"],
+    ["运行中", status.running ? "是" : "否"],
+    ["后台线程", status.thread_alive ? "正常" : "未运行"],
+    ["定时模式", status.schedule_mode === "daily" ? "每天固定时间" : "按间隔"],
+    ["定时参数", status.schedule_mode === "daily" ? (status.daily_time || "09:00") : `${status.run_interval_minutes || 1440} 分钟`],
+    ["下次启动", formatTime(status.next_run_at)],
+    ["上次启动", formatTime(status.last_started_at)],
+    ["上次完成", formatTime(status.last_finished_at)],
+    ["上次结果", status.last_ok === true ? "成功" : status.last_ok === false ? "失败" : "-"],
+    ["发布数量", lastResult.count ?? "-"],
+    ["上次巡检", formatTime(status.last_login_check_at)],
+    ["巡检结果", status.last_login_check_ok === true ? "正常" : status.last_login_check_ok === false ? "需扫码" : "-"],
   ].map(([label, value]) => `<div class="job-status-item"><span>${label}</span><strong>${value}</strong></div>`).join("");
 }
 
@@ -1927,7 +1927,7 @@ function renderOperationNotifications() {
       const byPlatform = Object.fromEntries(eventRoutes.map((item) => [item.platform, item]));
       const routeButtons = ["telegram", "dingtalk", "wecom"].map((platform) => {
         const enabled = Boolean(byPlatform[platform]?.enabled);
-        return `<button class="btn btn-sm ${enabled ? "primary" : "ghost"}" data-notice-route="${eventType}" data-notice-platform="${platform}" data-notice-enabled="${enabled ? "0" : "1"}">${aiPlatformLabel(platform)} ${enabled ? "寮€鍚? : "鍏抽棴"}</button>`;
+        return `<button class="btn btn-sm ${enabled ? "primary" : "ghost"}" data-notice-route="${eventType}" data-notice-platform="${platform}" data-notice-enabled="${enabled ? "0" : "1"}">${aiPlatformLabel(platform)} ${enabled ? "开启" : "关闭"}</button>`;
       }).join("");
       const severity = first.default_severity || "info";
       const cardClass = severity === "critical" || severity === "blocking" ? "danger" : severity === "warning" || severity === "error" ? "warning" : "info";
@@ -1938,7 +1938,7 @@ function renderOperationNotifications() {
           <div>
             <strong>${first.label || eventType}</strong>
             <p>${first.source || ""}</p>
-            <p>${eventType}${subtypes ? ` 路 ${subtypes}` : ""}</p>
+            <p>${eventType}${subtypes ? ` · ${subtypes}` : ""}</p>
             <div class="inline-actions">${routeButtons}</div>
           </div>
           <time>${severity}</time>
@@ -1958,8 +1958,8 @@ function renderOperationNotifications() {
         <article class="notification-card danger">
           <span class="notification-dot"></span>
           <div>
-            <strong>寰呮壂鐮佹壒娆?${batch.batch_id}</strong>
-            <p>${items.map((item) => `${item.display_name || item.account_key} / port ${item.debug_port}`).join("锛?) || "绛夊緟宸℃缁撴灉"}</p>
+            <strong>待扫码批次 ${batch.batch_id}</strong>
+            <p>${items.map((item) => `${item.display_name || item.account_key} / port ${item.debug_port}`).join("；") || "等待巡检结果"}</p>
           </div>
           <time>${formatTime(batch.created_at)}</time>
         </article>
@@ -1967,8 +1967,8 @@ function renderOperationNotifications() {
     }).join("") : `
       <article class="notification-card success">
         <span class="notification-dot"></span>
-        <div><strong>鏆傛棤寰呮壂鐮佽棰戝彿</strong><p>鐧诲綍宸℃娌℃湁鍙戠幇闇€瑕佽繍钀ユ壂鐮佺殑璐﹀彿銆?/p></div>
-        <time>瀹炴椂</time>
+        <div><strong>暂无待扫码视频号</strong><p>登录巡检没有发现需要运营扫码的账号。</p></div>
+        <time>实时</time>
       </article>
     `;
   }
@@ -1976,9 +1976,9 @@ function renderOperationNotifications() {
 
 function aiPlatformLabel(platform) {
   return {
-    wecom: "浼佷笟寰俊",
-    dingtalk: "閽夐拤",
-    lark: "椋炰功 / Lark",
+    wecom: "企业微信",
+    dingtalk: "钉钉",
+    lark: "飞书 / Lark",
     telegram: "Telegram",
     whatsapp: "WhatsApp",
   }[platform] || platform;
@@ -2002,9 +2002,9 @@ function isWebhookOnlyAiRobot(platform) {
 }
 
 function aiRobotWebhookHint(platform) {
-  if (platform === "dingtalk") return "濉啓閽夐拤缇ゆ満鍣ㄤ汉 Webhook 鍦板潃锛屼繚瀛樺悗鍙嫭绔嬪紑鍚垨鍏抽棴閫氱煡銆?;
-  if (platform === "lark") return "濉啓椋炰功缇ゆ満鍣ㄤ汉 Webhook 鍦板潃锛涗笅鏂瑰洖璋冨湴鍧€鐢ㄤ簬椋炰功浜嬩欢璁㈤槄 URL 楠岃瘉銆?;
-  return "濉啓浼佷笟寰俊缇ゆ満鍣ㄤ汉 Webhook 鍦板潃锛屼繚瀛樺悗鍙嫭绔嬪紑鍚垨鍏抽棴閫氱煡銆?;
+  if (platform === "dingtalk") return "填写钉钉群机器人 Webhook 地址，保存后可独立开启或关闭通知。";
+  if (platform === "lark") return "填写飞书群机器人 Webhook 地址；下方回调地址用于飞书事件订阅 URL 验证。";
+  return "填写企业微信群机器人 Webhook 地址，保存后可独立开启或关闭通知。";
 }
 
 function aiRobotCallbackUrl(platform) {
@@ -2032,13 +2032,13 @@ function syncTelegramSetupVisibility() {
   form.classList.toggle("lark-callback-mode", platform === "lark");
   if (larkCallbackField) larkCallbackField.hidden = platform !== "lark";
   if (larkCallbackInput) larkCallbackInput.value = aiRobotCallbackUrl("lark");
-  if (modeTitle) modeTitle.textContent = isTelegram ? "Telegram 蹇€熼厤缃? : `${aiPlatformLabel(platform)} Webhook 閰嶇疆`;
-  if (modeDesc) modeDesc.textContent = isTelegram ? "濉啓 Bot Token 骞惰幏鍙?Chat ID锛屼繚瀛樺悗鍙嫭绔嬪紑鍚垨鍏抽棴閫氱煡銆? : aiRobotWebhookHint(platform);
+  if (modeTitle) modeTitle.textContent = isTelegram ? "Telegram 快速配置" : `${aiPlatformLabel(platform)} Webhook 配置`;
+  if (modeDesc) modeDesc.textContent = isTelegram ? "填写 Bot Token 并获取 Chat ID，保存后可独立开启或关闭通知。" : aiRobotWebhookHint(platform);
   if (isTelegram && !form.elements.bot_name.value) {
     form.elements.bot_name.value = "GasGx Telegram Bot";
   }
   if (isWebhookOnly && !form.elements.bot_name.value) {
-    form.elements.bot_name.value = `${aiPlatformLabel(form.elements.platform.value)}鏈哄櫒浜篳;
+    form.elements.bot_name.value = `${aiPlatformLabel(form.elements.platform.value)}机器人`;
   }
 }
 
@@ -2148,8 +2148,8 @@ function renderAiRobot() {
   const formHidden = !editingPlatform;
   if (configPanel) configPanel.hidden = formHidden;
   form.hidden = formHidden;
-  saveButton.classList.toggle("hidden", formHidden);
-  sendTestButton.classList.toggle("hidden", formHidden);
+  saveButton?.classList.toggle("hidden", formHidden);
+  sendTestButton?.classList.toggle("hidden", formHidden);
   panelSaveButton?.classList.toggle("hidden", formHidden);
   panelSendTestButton?.classList.toggle("hidden", formHidden);
   form.elements.platform.value = config.platform || "wecom";
@@ -2162,16 +2162,16 @@ function renderAiRobot() {
   if (form.elements.telegram_bot_token) form.elements.telegram_bot_token.value = "";
   if (form.elements.telegram_chat_id) form.elements.telegram_chat_id.value = config.platform === "telegram" ? (config.target_id || "") : "";
   syncTelegramSetupVisibility();
-  document.querySelector("#ai-config-state").textContent = configured.length && !editingPlatform ? "宸查厤缃? : (config.enabled ? "宸插惎鐢? : "鏈惎鐢?);
+  document.querySelector("#ai-config-state").textContent = configured.length && !editingPlatform ? "已配置" : (config.enabled ? "已启用" : "未启用");
   renderBoundAiRobotPlatforms();
   document.querySelector("#ai-channel-grid").innerHTML = visibleAiRobotConfigs().map((item) => `
     <article class="bot-channel-card">
       ${aiRobotLogo(item.platform)}
       <div>
         <strong>${aiPlatformLabel(item.platform)}</strong>
-        <p>${item.webhook_url ? "宸查厤缃? : "鏈厤缃?} 路 ${item.enabled ? "閫氱煡寮€鍚? : "閫氱煡鍏抽棴"} 路 ${item.has_signing_secret ? "楠岀瀵嗛挜宸蹭繚瀛? : "鏃犻渶楠岀瀵嗛挜"}</p>
+        <p>${item.webhook_url ? "已配置" : "未配置"} · ${item.enabled ? "通知开启" : "通知关闭"} · ${item.has_signing_secret ? "验签密钥已保存" : "无需验签密钥"}</p>
       </div>
-      <button class="btn secondary" type="button" data-ai-platform="${item.platform}">閰嶇疆</button>
+      <button class="btn secondary" type="button" data-ai-platform="${item.platform}">配置</button>
     </article>
   `).join("");
   document.querySelectorAll("[data-ai-platform]").forEach((button) => {
@@ -2183,16 +2183,17 @@ function renderAiRobot() {
   });
   const messageList = document.querySelector("#ai-message-list");
   const messageToggle = document.querySelector("#ai-message-toggle");
+  if (!messageList) return;
   messageList.hidden = state.aiRobotMessagesCollapsed;
   if (messageToggle) {
-    messageToggle.textContent = state.aiRobotMessagesCollapsed ? "灞曞紑" : "鏈€杩?100 鏉?;
+    messageToggle.textContent = state.aiRobotMessagesCollapsed ? "展开" : "最近 100 条";
   }
   messageList.innerHTML = state.aiRobotMessages.length
     ? state.aiRobotMessages.map((item) => `<article class="task-row">
         <div><strong>#${item.id} ${aiPlatformLabel(item.platform)}</strong><span>${item.summary || item.message_type}</span></div>
         <span class="task-status">${item.status}</span>
       </article>`).join("")
-    : `<div class="muted">鏆傛棤鏈哄櫒浜烘秷鎭槦鍒椼€?/div>`;
+    : `<div class="muted">暂无机器人消息队列。</div>`;
 }
 
 function renderBoundAiRobotPlatforms() {
@@ -2200,23 +2201,23 @@ function renderBoundAiRobotPlatforms() {
   if (!node) return;
   const bound = state.aiRobotConfigs.filter(isAiRobotBound);
   if (!bound.length) {
-    node.innerHTML = `<div class="bound-empty">杩樻病鏈夐厤缃秷鎭満鍣ㄤ汉銆備紒涓氬井淇°€侀拤閽夈€侀涔﹀～ Webhook 鍦板潃锛汿elegram 濉?Bot Token銆?/div>`;
+    node.innerHTML = `<div class="bound-empty">还没有配置消息机器人。企业微信、钉钉、飞书填 Webhook 地址；Telegram 填 Bot Token。</div>`;
     return;
   }
   node.innerHTML = bound.map((item) => `
     <article class="bound-platform-card">
       ${aiRobotLogo(item.platform)}
       <div>
-        <strong>${aiPlatformLabel(item.platform)} 宸查厤缃?/strong>
-        <p>${item.enabled ? "閫氱煡寮€鍚? : "閫氱煡鍏抽棴"} 路 ${item.target_id ? `鐩爣浼氳瘽 ${item.target_id}` : "Webhook 宸蹭繚瀛?} 路 鍙彂閫佹祴璇曟秷鎭?/p>
+        <strong>${aiPlatformLabel(item.platform)} 已配置</strong>
+        <p>${item.enabled ? "通知开启" : "通知关闭"} · ${item.target_id ? `目标会话 ${item.target_id}` : "Webhook 已保存"} · 可发送测试消息</p>
       </div>
       <div class="bound-platform-actions">
         <button class="notify-switch ${item.enabled ? "enabled" : ""}" type="button" data-ai-toggle="${item.platform}" aria-pressed="${item.enabled ? "true" : "false"}">
-          <span></span><b>${item.enabled ? "閫氱煡寮€" : "閫氱煡鍏?}</b>
+          <span></span><b>${item.enabled ? "通知开" : "通知关"}</b>
         </button>
-        <button class="btn secondary" type="button" data-ai-test="${item.platform}">鍙戦€佹祴璇?/button>
-        <button class="btn secondary" type="button" data-ai-edit="${item.platform}">淇敼</button>
-        <button class="btn secondary danger" type="button" data-ai-delete="${item.platform}">鍒犻櫎</button>
+        <button class="btn secondary" type="button" data-ai-test="${item.platform}">发送测试</button>
+        <button class="btn secondary" type="button" data-ai-edit="${item.platform}">修改</button>
+        <button class="btn secondary danger" type="button" data-ai-delete="${item.platform}">删除</button>
       </div>
     </article>
   `).join("");
@@ -2229,13 +2230,13 @@ function renderBoundAiRobotPlatforms() {
     button.onclick = async () => {
       const platform = button.dataset.aiToggle;
       const config = aiRobotConfigFor(platform);
-      const restoreButton = setButtonLoading(button, config.enabled ? "鍏抽棴涓? : "寮€鍚腑");
+      const restoreButton = setButtonLoading(button, config.enabled ? "关闭中" : "开启中");
       try {
         await api(`/api/ai-robots/${platform}/config`, {
           method: "PUT",
           body: JSON.stringify({
             enabled: !config.enabled,
-            bot_name: config.bot_name || `${aiPlatformLabel(platform)}鏈哄櫒浜篳,
+            bot_name: config.bot_name || `${aiPlatformLabel(platform)}机器人`,
             webhook_url: config.webhook_url || "",
             webhook_secret: "",
             signing_secret: "",
@@ -2260,15 +2261,15 @@ function renderBoundAiRobotPlatforms() {
   node.querySelectorAll("[data-ai-delete]").forEach((button) => {
     button.onclick = async () => {
       const platform = button.dataset.aiDelete;
-      if (!window.confirm(`纭鍒犻櫎 ${aiPlatformLabel(platform)} 鏈哄櫒浜洪厤缃紵鍒犻櫎鍚庨渶瑕侀噸鏂板～鍐?Bot Token銆俙)) return;
-      const restoreButton = setButtonLoading(button, "鍒犻櫎涓?);
+      if (!window.confirm(`确认删除 ${aiPlatformLabel(platform)} 机器人配置？删除后需要重新填写 Bot Token。`)) return;
+      const restoreButton = setButtonLoading(button, "删除中");
       try {
         await api(`/api/ai-robots/${platform}/config`, { method: "DELETE" });
         state.aiRobotConfigs = await api("/api/ai-robots/configs");
         state.aiRobotMessages = await api("/api/ai-robots/messages");
         state.aiRobotEditingPlatform = "";
         renderAiRobot();
-        document.querySelector("#ai-config-state").textContent = "宸插垹闄?;
+        document.querySelector("#ai-config-state").textContent = "已删除";
       } finally {
         restoreButton();
       }
@@ -2283,17 +2284,17 @@ function renderDatabaseDictionary() {
   if (!status || !list) return;
   const localized = Boolean(state.databaseDictionaryLocalized);
   if (toggle) {
-    toggle.textContent = localized ? "鑻辨枃鐗? : "涓枃鐗?;
+    toggle.textContent = localized ? "英文版" : "中文版";
     toggle.setAttribute("aria-pressed", String(localized));
   }
   const dictionary = state.databaseDictionary;
   if (!dictionary) {
-    status.textContent = "鏈姞杞?;
-    list.innerHTML = `<div class="muted">鏆傛棤鏁版嵁搴撳瓧鍏搞€?/div>`;
+    status.textContent = "未加载";
+    list.innerHTML = `<div class="muted">暂无数据库字典。</div>`;
     return;
   }
   const tables = dictionary.tables || [];
-  status.textContent = `${tables.length} 寮犺〃`;
+  status.textContent = `${tables.length} 张表`;
   status.classList.remove("danger");
   list.innerHTML = tables.map((table) => {
     const columns = table.columns || [];
@@ -2304,19 +2305,19 @@ function renderDatabaseDictionary() {
         <button class="db-dictionary-head" type="button" data-db-table="${table.name}" aria-expanded="${expanded}">
           <span class="db-dictionary-head-copy">
             <strong>${tableName}</strong>
-            <small>${localized ? `${columns.length} 涓瓧娈礰 : `${columns.length} 瀛楁`}</small>
+            <small>${localized ? `${columns.length} 个字段` : `${columns.length} 字段`}</small>
           </span>
-          <span class="db-dictionary-table-badge">${expanded ? "鎶樺彔" : "灞曞紑"}</span>
+          <span class="db-dictionary-table-badge">${expanded ? "折叠" : "展开"}</span>
         </button>
         <div class="db-dictionary-shell" ${expanded ? "" : 'hidden aria-hidden="true"'}>
           <div class="db-dictionary-toolbar">
-            <span class="db-dictionary-toolbar-title">${localized ? "瀛楁鍒楄〃" : "Columns"}</span>
-            <button class="db-dictionary-about" type="button" disabled>${localized ? "瀛楁绫诲瀷璇存槑" : "About data types"}</button>
+            <span class="db-dictionary-toolbar-title">${localized ? "字段列表" : "Columns"}</span>
+            <button class="db-dictionary-about" type="button" disabled>${localized ? "字段类型说明" : "About data types"}</button>
           </div>
           <div class="db-dictionary-grid db-dictionary-grid-head" aria-hidden="true">
-            <span>${localized ? "瀛楁鍚? : "Name"}</span>
-            <span>${localized ? "绫诲瀷" : "Type"}</span>
-            <span>${localized ? "榛樿鍊? : "Default Value"}</span>
+            <span>${localized ? "字段名" : "Name"}</span>
+            <span>${localized ? "类型" : "Type"}</span>
+            <span>${localized ? "默认值" : "Default Value"}</span>
           </div>
           <div class="db-dictionary-rows">
             ${columns.map((column) => {
@@ -2351,7 +2352,7 @@ function renderDatabaseDictionary() {
 function healthDetailText(details) {
   return Object.entries(details)
     .map(([key, value]) => `${key}: ${displayDatabaseKeyword(value)}`)
-    .join(" 路 ");
+    .join(" · ");
 }
 
 async function refresh() {
@@ -2447,7 +2448,7 @@ function renderDistributionSettings() {
   const matrixJob = jobs.matrix_wechat_publish || {};
   form.elements["common.material_dir"].value = common.material_dir || "runtime/materials/videos";
   form.elements["common.publish_mode"].value = common.publish_mode || "publish";
-  form.elements["common.topics"].value = common.topics || "#澶╃劧姘?#澶╃劧姘斿彂鐢垫満缁?#鐕冩皵鍙戠數鏈虹粍 #娴峰鍙戠數 #娴峰鎸栫熆";
+  form.elements["common.topics"].value = common.topics || "#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿";
   form.elements["common.upload_timeout"].value = String(common.upload_timeout || 60);
   form.elements["jobs.matrix_wechat_publish.batch_size"].value = String(matrixJob.batch_size || 5);
   form.elements["jobs.matrix_wechat_publish.enabled"].value = String(matrixJob.enabled === true);
@@ -2473,66 +2474,66 @@ function renderDistributionSettings() {
 function renderPlatformSettingsCard(platform) {
   const value = (state.distributionSettings.platforms || {})[platform.key] || {};
   const extra = platform.key === "wechat" ? `
-    <label>鐭爣棰?
+    <label>短标题
       <input name="platforms.${platform.key}.short_title" value="${value.short_title || "GasGx"}" placeholder="GasGx">
     </label>
-    <label>浣嶇疆
-      <input name="platforms.${platform.key}.location" value="${value.location || ""}" placeholder="鐣欑┖鍒欎笉鏄剧ず浣嶇疆">
+    <label>位置
+      <input name="platforms.${platform.key}.location" value="${value.location || ""}" placeholder="留空则不显示位置">
     </label>
-    <label>瑙嗛鍙峰悎闆?
+    <label>视频号合集
       <select name="platforms.${platform.key}.collection_name">
         <option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>
-        <option value="" ${!value.collection_name ? "selected" : ""}>涓嶉€夋嫨鍚堥泦</option>
+        <option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>
       </select>
     </label>
-    <label>鍘熷垱澹版槑
+    <label>原创声明
       <select name="platforms.${platform.key}.declare_original">
-        <option value="false" ${!value.declare_original ? "selected" : ""}>涓嶅０鏄庡師鍒?/option>
-        <option value="true" ${value.declare_original ? "selected" : ""}>澹版槑鍘熷垱</option>
+        <option value="false" ${!value.declare_original ? "selected" : ""}>不声明原创</option>
+        <option value="true" ${value.declare_original ? "selected" : ""}>声明原创</option>
       </select>
     </label>` : "";
   return `<article class="platform-settings-card" data-platform-card="${platform.key}">
     <div class="row-head">
       <strong>${platformName(platform.key)}</strong>
-      <span class="chip">${platform.region === "cn" ? "鍥藉唴" : "鍥藉"}</span>
+      <span class="chip">${platform.region === "cn" ? "国内" : "国外"}</span>
     </div>
-    <label>鍚敤鍙戝竷閰嶇疆
+    <label>启用发布配置
       <select name="platforms.${platform.key}.enabled">
-        <option value="true" ${value.enabled !== false ? "selected" : ""}>鍚敤</option>
-        <option value="false" ${value.enabled === false ? "selected" : ""}>鍋滅敤</option>
+        <option value="true" ${value.enabled !== false ? "selected" : ""}>启用</option>
+        <option value="false" ${value.enabled === false ? "selected" : ""}>停用</option>
       </select>
     </label>
-    <label>鍐呭绫诲瀷
+    <label>内容类型
       <select name="platforms.${platform.key}.content_type">
-        <option value="short_video" ${(value.content_type || "short_video") === "short_video" ? "selected" : ""}>鐭棰?/option>
-        <option value="image_text" ${value.content_type === "image_text" ? "selected" : ""}>鍥炬枃</option>
-        <option value="article" ${value.content_type === "article" ? "selected" : ""}>鏂囩珷</option>
+        <option value="short_video" ${(value.content_type || "short_video") === "short_video" ? "selected" : ""}>短视频</option>
+        <option value="image_text" ${value.content_type === "image_text" ? "selected" : ""}>图文</option>
+        <option value="article" ${value.content_type === "article" ? "selected" : ""}>文章</option>
       </select>
     </label>
-    <label>鍙戝竷鏂瑰紡
+    <label>发布方式
       <select name="platforms.${platform.key}.publish_mode">
-        <option value="inherit" ${(value.publish_mode || "inherit") === "inherit" ? "selected" : ""}>缁ф壙鍏ㄥ眬</option>
-        <option value="publish" ${value.publish_mode === "publish" ? "selected" : ""}>绔嬪嵆鍙戝竷</option>
-        <option value="draft" ${value.publish_mode === "draft" ? "selected" : ""}>淇濆瓨鑽夌</option>
+        <option value="inherit" ${(value.publish_mode || "inherit") === "inherit" ? "selected" : ""}>继承全局</option>
+        <option value="publish" ${value.publish_mode === "publish" ? "selected" : ""}>立即发布</option>
+        <option value="draft" ${value.publish_mode === "draft" ? "selected" : ""}>保存草稿</option>
       </select>
     </label>
-    <label>鍙鑼冨洿
+    <label>可见范围
       <select name="platforms.${platform.key}.visibility">
-        <option value="public" ${(value.visibility || "public") === "public" ? "selected" : ""}>鍏紑</option>
-        <option value="private" ${value.visibility === "private" ? "selected" : ""}>浠呰嚜宸卞彲瑙?/option>
-        <option value="friends" ${value.visibility === "friends" ? "selected" : ""}>濂藉弸/绮変笣鍙</option>
+        <option value="public" ${(value.visibility || "public") === "public" ? "selected" : ""}>公开</option>
+        <option value="private" ${value.visibility === "private" ? "selected" : ""}>仅自己可见</option>
+        <option value="friends" ${value.visibility === "friends" ? "selected" : ""}>好友/粉丝可见</option>
       </select>
     </label>
-    <label>璇勮鏉冮檺
+    <label>评论权限
       <select name="platforms.${platform.key}.comment_permission">
-        <option value="public" ${(value.comment_permission || "public") === "public" ? "selected" : ""}>鍏佽璇勮</option>
-        <option value="closed" ${value.comment_permission === "closed" ? "selected" : ""}>鍏抽棴璇勮</option>
-        <option value="followers" ${value.comment_permission === "followers" ? "selected" : ""}>浠呯矇涓濊瘎璁?/option>
+        <option value="public" ${(value.comment_permission || "public") === "public" ? "selected" : ""}>允许评论</option>
+        <option value="closed" ${value.comment_permission === "closed" ? "selected" : ""}>关闭评论</option>
+        <option value="followers" ${value.comment_permission === "followers" ? "selected" : ""}>仅粉丝评论</option>
       </select>
     </label>
     ${extra}
-    <label class="wide-field">骞冲彴鏂囨
-      <textarea name="platforms.${platform.key}.caption" rows="3" placeholder="鐣欑┖鍒欎娇鐢ㄨ棰戦粯璁ゆ枃妗?>${value.caption || ""}</textarea>
+    <label class="wide-field">平台文案
+      <textarea name="platforms.${platform.key}.caption" rows="3" placeholder="留空则使用视频默认文案">${value.caption || ""}</textarea>
     </label>
   </article>`;
 }
@@ -2542,7 +2543,7 @@ function collectDistributionSettings(form) {
   const common = {
     material_dir: data.get("common.material_dir") || "runtime/materials/videos",
     publish_mode: data.get("common.publish_mode") || "publish",
-    topics: data.get("common.topics") || "#澶╃劧姘?#澶╃劧姘斿彂鐢垫満缁?#鐕冩皵鍙戠數鏈虹粍 #娴峰鍙戠數 #娴峰鎸栫熆",
+    topics: data.get("common.topics") || "#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿",
     upload_timeout: Number(data.get("common.upload_timeout") || 60),
   };
   const jobs = {
@@ -2591,7 +2592,7 @@ function makeAccountKey(displayName, suffix) {
 }
 
 function accountPhone(account) {
-  const match = String(account?.notes || "").match(/璐﹀彿鎵嬫満鍙凤細(\d{11})/);
+  const match = String(account?.notes || "").match(/账号手机号：(\d{11})/);
   return match ? match[1] : "";
 }
 
@@ -2611,7 +2612,7 @@ function updateAccountPhoneHint() {
     hint.classList.remove("warning");
     return;
   }
-  hint.innerHTML = `<svg class="account-phone-hint-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.7 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><span>璇ユ墜鏈哄彿宸茬敤浜?${matches.map((account) => `#${account.id} ${account.display_name}`).join("銆?)}锛屼粛鍙户缁垱寤恒€?/span>`;
+  hint.innerHTML = `<svg class="account-phone-hint-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.7 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><span>该手机号已用于 ${matches.map((account) => `#${account.id} ${account.display_name}`).join("、")}，仍可继续创建。</span>`;
   hint.classList.add("warning");
 }
 
@@ -2632,7 +2633,7 @@ function activateView(view, updateHash = true) {
   } else {
     loadViewData(view).catch((error) => {
       const target = section.querySelector(".loading-inline") || section;
-      target.innerHTML = `<div class="muted">鍔犺浇澶辫触锛?{error.message}</div>`;
+      target.innerHTML = `<div class="muted">加载失败：${error.message}</div>`;
     });
   }
   if (updateHash && window.location.hash !== `#${view}`) {
@@ -2646,12 +2647,12 @@ document.querySelectorAll(".nav-btn").forEach((button) => {
 });
 
 document.querySelector("#refresh")?.addEventListener("click", async (event) => {
-  const restoreButton = setButtonLoading(event.currentTarget, "鍒锋柊涓?);
+  const restoreButton = setButtonLoading(event.currentTarget, "刷新中");
   try {
     state.aiRobotConfigs = await api("/api/ai-robots/configs");
     state.aiRobotMessages = await api("/api/ai-robots/messages");
     renderAiRobot();
-    document.querySelector("#ai-config-state").textContent = "宸蹭繚瀛?;
+    document.querySelector("#ai-config-state").textContent = "已保存";
   } finally {
     restoreButton();
   }
@@ -2659,7 +2660,7 @@ document.querySelector("#refresh")?.addEventListener("click", async (event) => {
 
 document.querySelector("#account-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "鍒涘缓涓?);
+  const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "创建中");
   const data = Object.fromEntries(new FormData(event.target).entries());
   const brandPrefix = String(data.brand_prefix || "").trim();
   const accountName = String(data.account_name || "").trim();
@@ -2667,13 +2668,13 @@ document.querySelector("#account-form").addEventListener("submit", async (event)
   const phone = String(data.phone || "").trim();
   updateAccountPhoneHint();
   if (!operatorWechat || operatorWechat === "__new__") {
-    showTaskState("璇峰厛鍦ㄤ笅鎷変腑鏂板杩愯惀寰俊鍙?, "status-unsupported");
+    showTaskState("请先在下拉中新增运营微信号", "status-unsupported");
     restoreButton();
     return;
   }
   if (!/^\d{11}$/.test(phone)) {
     const phoneInput = event.target.elements.phone;
-    phoneInput?.setCustomValidity("璐﹀彿鎵嬫満鍙烽渶涓?11 浣嶆暟瀛?);
+    phoneInput?.setCustomValidity("账号手机号需为 11 位数字");
     phoneInput?.reportValidity();
     phoneInput?.setCustomValidity("");
     restoreButton();
@@ -2681,8 +2682,8 @@ document.querySelector("#account-form").addEventListener("submit", async (event)
   }
   data.display_name = [brandPrefix, accountName].filter(Boolean).join(" ");
   data.account_key = makeAccountKey(data.display_name, "auto");
-  data.niche = "鐭棰戠煩闃?;
-  data.notes = `缁戝畾杩愯惀寰俊锛?{operatorWechat}锛涜处鍙锋墜鏈哄彿锛?{phone}`;
+  data.niche = "短视频矩阵";
+  data.notes = `绑定运营微信：${operatorWechat}；账号手机号：${phone}`;
   delete data.brand_prefix;
   delete data.account_name;
   delete data.operator_wechat;
@@ -2733,13 +2734,13 @@ document.addEventListener("click", (event) => {
 
 document.querySelector("#task-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "鍔犲叆涓?);
+  const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "加入中");
   const data = Object.fromEntries(new FormData(event.target).entries());
   data.account_id = data.account_id ? Number(data.account_id) : null;
-  showTaskState("鍔犲叆闃熷垪涓?..");
+  showTaskState("加入队列中...");
   try {
     await api("/api/tasks", { method: "POST", body: JSON.stringify(data) });
-    showTaskState("宸插姞鍏ラ槦鍒椼€?);
+    showTaskState("已加入队列。");
     event.target.reset();
     await refresh();
   } catch (error) {
@@ -2790,7 +2791,7 @@ document.querySelector("#terminal-config-list")?.addEventListener("click", (even
 });
 
 document.querySelector("#terminal-start-login")?.addEventListener("click", async (event) => {
-  const restoreButton = setButtonLoading(event.currentTarget, "鍚姩涓?);
+  const restoreButton = setButtonLoading(event.currentTarget, "启动中");
   try {
     if (!state.terminalExecution.initialized || state.terminalConfigOpen) {
       state.terminalExecution = await api("/api/terminal-execution/start", {
@@ -2815,15 +2816,15 @@ document.querySelector("#terminal-edit-config")?.addEventListener("click", () =>
 
 document.querySelector("#distribution-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "淇濆瓨涓?);
+  const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "保存中");
   const stateNode = document.querySelector("#settings-save-state");
-  stateNode.textContent = "淇濆瓨涓?..";
+  stateNode.textContent = "保存中...";
   try {
     await api("/api/settings/distribution", {
       method: "PATCH",
       body: JSON.stringify(collectDistributionSettings(event.target)),
     });
-    stateNode.textContent = "宸蹭繚瀛橈紝涓嬩竴娆＄煩闃靛垎鍙戜細鎸夊叏灞€閰嶇疆鍜屽钩鍙扮嫭绔嬮厤缃墽琛屻€?;
+    stateNode.textContent = "已保存，下一次矩阵分发会按全局配置和平台独立配置执行。";
     await refresh();
   } finally {
     restoreButton();
@@ -2868,10 +2869,10 @@ document.querySelector("#ai-save-config")?.addEventListener("click", async (even
   const button = event.currentTarget;
   const form = document.querySelector("#ai-robot-form");
   const stateNode = document.querySelector("#ai-config-state");
-  stateNode.textContent = "淇濆瓨涓?..";
+  stateNode.textContent = "保存中...";
   stateNode.classList.remove("danger");
   let saved = false;
-  const restoreButton = setButtonLoading(button, "淇濆瓨涓?);
+  const restoreButton = setButtonLoading(button, "保存中");
   try {
     if (form.elements.platform.value === "telegram") {
       const token = String(form.elements.telegram_bot_token?.value || "").trim();
@@ -2896,7 +2897,7 @@ document.querySelector("#ai-save-config")?.addEventListener("click", async (even
     if (isWebhookOnlyAiRobot(platform)) {
       const existing = aiRobotConfigFor(platform);
       data.enabled = existing.webhook_url ? String(existing.enabled === true) : "true";
-      data.bot_name = data.bot_name || `${aiPlatformLabel(platform)}鏈哄櫒浜篳;
+      data.bot_name = data.bot_name || `${aiPlatformLabel(platform)}机器人`;
       data.webhook_secret = "";
       data.signing_secret = "";
       data.target_id = "";
@@ -2911,15 +2912,15 @@ document.querySelector("#ai-save-config")?.addEventListener("click", async (even
     state.aiRobotMessages = await api("/api/ai-robots/messages");
     state.aiRobotEditingPlatform = "";
     renderAiRobot();
-    stateNode.textContent = "宸蹭繚瀛?;
+    stateNode.textContent = "已保存";
     saved = true;
   } catch (error) {
-    stateNode.textContent = error.message || "淇濆瓨澶辫触";
+    stateNode.textContent = error.message || "保存失败";
     stateNode.classList.add("danger");
   } finally {
     restoreButton();
     if (saved) {
-      button.textContent = "宸蹭繚瀛?;
+      button.textContent = "已保存";
     }
   }
 });
@@ -2941,11 +2942,11 @@ document.querySelector("#ai-copy-lark-callback")?.addEventListener("click", asyn
   if (!input) return;
   try {
     await navigator.clipboard.writeText(input.value);
-    event.currentTarget.textContent = "宸插鍒?;
+    event.currentTarget.textContent = "已复制";
   } catch {
     input.select();
     document.execCommand("copy");
-    event.currentTarget.textContent = "宸插鍒?;
+    event.currentTarget.textContent = "已复制";
   }
 });
 
@@ -2955,10 +2956,10 @@ async function sendAiRobotTest(platform, button) {
   const text = form && !form.hidden && form.elements.platform.value === platform
     ? (form.elements.test_text.value || "GasGx AI robot test message")
     : "GasGx AI robot test message";
-  stateNode.textContent = "鍙戦€佷腑...";
+  stateNode.textContent = "发送中...";
   stateNode.classList.remove("danger");
   let finalButtonText = "";
-  const restoreButton = setButtonLoading(button, "鍙戦€佷腑");
+  const restoreButton = setButtonLoading(button, "发送中");
   try {
     const result = await api(`/api/ai-robots/${platform}/test-message`, {
       method: "POST",
@@ -2968,17 +2969,17 @@ async function sendAiRobotTest(platform, button) {
     state.aiRobotMessages = await api("/api/ai-robots/messages");
     renderAiRobot();
     if (result.status === "sent") {
-      stateNode.textContent = "娴嬭瘯娑堟伅宸插彂閫?;
-      finalButtonText = "宸插彂閫?;
+      stateNode.textContent = "测试消息已发送";
+      finalButtonText = "已发送";
       return;
     }
-    stateNode.textContent = `鍙戦€佸け璐ワ細${result.error || result.summary || result.status || "鏈煡閿欒"}`;
+    stateNode.textContent = `发送失败：${result.error || result.summary || result.status || "未知错误"}`;
     stateNode.classList.add("danger");
-    finalButtonText = "鍙戦€佸け璐?;
+    finalButtonText = "发送失败";
   } catch (error) {
-    stateNode.textContent = `鍙戦€佸け璐ワ細${error.message || "鏈煡閿欒"}`;
+    stateNode.textContent = `发送失败：${error.message || "未知错误"}`;
     stateNode.classList.add("danger");
-    finalButtonText = "鍙戦€佸け璐?;
+    finalButtonText = "发送失败";
   } finally {
     restoreButton();
     if (finalButtonText) {
@@ -2988,7 +2989,7 @@ async function sendAiRobotTest(platform, button) {
 }
 
 function renderAiRobotLoading() {
-  const loading = `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>鍔犺浇涓?..</span></div>`;
+  const loading = `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>加载中...</span></div>`;
   const channelGrid = document.querySelector("#ai-channel-grid");
   const messageList = document.querySelector("#ai-message-list");
   if (channelGrid) channelGrid.innerHTML = loading;
@@ -3006,7 +3007,7 @@ document.querySelector("#open-material-dir").addEventListener("click", async (ev
   const materialDir = form.elements["common.material_dir"].value || "runtime/materials/videos";
   const password = await confirmSuperAdminPassword();
   if (!password) return;
-  const restoreButton = setButtonLoading(button, "鎵撳紑涓?..");
+  const restoreButton = setButtonLoading(button, "打开中...");
   try {
     await api("/api/settings/material-dir/open", {
       method: "POST",
@@ -3042,7 +3043,7 @@ document.querySelector("#matrix-run-now").addEventListener("click", async (event
   const button = event.currentTarget;
   const confirmed = await confirmMatrixRunNow();
   if (!confirmed) return;
-  const restoreButton = setButtonLoading(button, "鍚姩涓?);
+  const restoreButton = setButtonLoading(button, "启动中");
   try {
     await api("/api/jobs/matrix-wechat/run-now", { method: "POST" });
     await refresh();
@@ -3067,7 +3068,7 @@ document.addEventListener("click", async (event) => {
     const eventType = routeButton.dataset.noticeRoute;
     const platform = routeButton.dataset.noticePlatform;
     const enabled = routeButton.dataset.noticeEnabled === "1";
-    const restoreButton = setButtonLoading(routeButton, "淇濆瓨涓?);
+    const restoreButton = setButtonLoading(routeButton, "保存中");
     try {
       await api(`/api/notification-routes/${eventType}/${platform}`, {
         method: "POST",
@@ -3084,7 +3085,7 @@ document.addEventListener("click", async (event) => {
   const deleteButton = event.target.closest("[data-delete-task]");
   if (deleteButton) {
     const taskId = deleteButton.dataset.deleteTask;
-    const restoreButton = setButtonLoading(deleteButton, "鍒犻櫎涓?);
+    const restoreButton = setButtonLoading(deleteButton, "删除中");
     try {
       await api(`/api/tasks/${taskId}`, { method: "DELETE" });
       taskSelection.delete(Number(taskId));
@@ -3100,7 +3101,7 @@ document.addEventListener("click", async (event) => {
     const ids = Array.from(taskSelection);
     if (!ids.length) return;
     const status = bulkStatusButton.dataset.taskBulkStatus;
-    const restoreButton = setButtonLoading(bulkStatusButton, "璋冩暣涓?);
+    const restoreButton = setButtonLoading(bulkStatusButton, "调整中");
     try {
       await api("/api/tasks/bulk-status", {
         method: "POST",
@@ -3118,8 +3119,8 @@ document.addEventListener("click", async (event) => {
   if (bulkDeleteButton) {
     const ids = Array.from(taskSelection);
     if (!ids.length) return;
-    if (!window.confirm(`纭鍒犻櫎宸查€?${ids.length} 鏉￠槦鍒椾换鍔★紵`)) return;
-    const restoreButton = setButtonLoading(bulkDeleteButton, "鍒犻櫎涓?);
+    if (!window.confirm(`确认删除已选 ${ids.length} 条队列任务？`)) return;
+    const restoreButton = setButtonLoading(bulkDeleteButton, "删除中");
     try {
       await api("/api/tasks/bulk-delete", {
         method: "POST",
@@ -3135,7 +3136,7 @@ document.addEventListener("click", async (event) => {
 
   const terminalManualButton = event.target.closest("[data-terminal-manual]");
   if (terminalManualButton) {
-    const restoreButton = setButtonLoading(terminalManualButton, "瑙﹀彂涓?);
+    const restoreButton = setButtonLoading(terminalManualButton, "触发中");
     try {
       state.terminalExecution = await api(`/api/terminal-execution/windows/${terminalManualButton.dataset.terminalManual}/manual-publish`, { method: "POST" });
       renderTerminalExecution();
@@ -3149,8 +3150,8 @@ document.addEventListener("click", async (event) => {
   if (deleteAccountButton) {
     const accountId = deleteAccountButton.dataset.deleteAccount;
     const accountName = deleteAccountButton.dataset.accountName || `#${accountId}`;
-    if (!window.confirm(`纭鍒犻櫎鐭╅樀璐﹀彿銆?{accountName}銆嶏紵鐩稿叧骞冲彴銆佹祻瑙堝櫒閰嶇疆鍜屼换鍔¤褰曚細涓€骞跺垹闄ゃ€俙)) return;
-    const restoreButton = setButtonLoading(deleteAccountButton, "鍒犻櫎涓?..");
+    if (!window.confirm(`确认删除矩阵账号「${accountName}」？相关平台、浏览器配置和任务记录会一并删除。`)) return;
+    const restoreButton = setButtonLoading(deleteAccountButton, "删除中...");
     try {
       await api(`/api/accounts/${accountId}`, { method: "DELETE" });
       await refresh();
@@ -3164,10 +3165,10 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const [accountId, platform] = target.dataset.open.split(":");
   const originalText = target.textContent;
-  const successText = `${platformLabel(platform)}宸叉墦寮€`;
+  const successText = `${platformLabel(platform)}已打开`;
   target.disabled = true;
   target.classList.add("loading");
-  target.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span><span>鎵撳紑涓?/span>`;
+  target.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span><span>打开中</span>`;
   try {
     await api(`/api/accounts/${accountId}/platforms/${platform}/open-browser`, { method: "POST" });
     target.classList.add("opened");
@@ -3188,7 +3189,7 @@ document.addEventListener("click", async (event) => {
 });
 
 refresh().catch((error) => {
-  document.querySelector("#summary").innerHTML = `<div class="metric"><span>鍔犺浇澶辫触</span><strong>${error.message}</strong></div>`;
+  document.querySelector("#summary").innerHTML = `<div class="metric"><span>加载失败</span><strong>${error.message}</strong></div>`;
 });
 setViewHeader(document.querySelector(".nav-btn.active")?.dataset.view || "overview");
 renderThemePalette();
@@ -3215,13 +3216,13 @@ const vm = {
 };
 
 const vmCoverFields = [
-  ["name", "妯℃澘鍚嶇О", "text"], ["brand", "鍝佺墝鏂囧瓧", "text"], ["eyebrow", "鐪夋爣鏂囧瓧", "text"], ["cta", "CTA 鎸夐挳鏂囧瓧", "text"],
-  ["align", "瀵归綈鏂瑰紡", "select"], ["brand_y", "鍝佺墝 Y", "range", 0, 420], ["headline_y", "涓绘爣棰?Y", "range", 0, 1320],
-  ["subhead_y", "鍓爣棰?Y", "range", 0, 1500], ["hud_y", "HUD Y", "range", 0, 1780], ["cta_y", "CTA Y", "range", 0, 1840],
-  ["primary_color", "涓绘枃瀛楅鑹?, "color"], ["secondary_color", "杈呭姪鏂囧瓧棰滆壊", "color"], ["accent_color", "寮鸿皟鑹?, "color"],
-  ["tint_color", "搴曡壊", "color"], ["gradient_color", "娓愬彉鑹?, "color"], ["panel_color", "HUD 鑳屾櫙鑹?, "color"],
-  ["tint_opacity", "搴曡壊閫忔槑搴?, "rangeFloat", 0, 1], ["gradient_opacity", "娓愬彉閫忔槑搴?, "rangeFloat", 0, 1],
-  ["panel_opacity", "HUD 鑳屾櫙閫忔槑搴?, "rangeFloat", 0, 1],
+  ["name", "模板名称", "text"], ["brand", "品牌文字", "text"], ["eyebrow", "眉标文字", "text"], ["cta", "CTA 按钮文字", "text"],
+  ["align", "对齐方式", "select"], ["brand_y", "品牌 Y", "range", 0, 420], ["headline_y", "主标题 Y", "range", 0, 1320],
+  ["subhead_y", "副标题 Y", "range", 0, 1500], ["hud_y", "HUD Y", "range", 0, 1780], ["cta_y", "CTA Y", "range", 0, 1840],
+  ["primary_color", "主文字颜色", "color"], ["secondary_color", "辅助文字颜色", "color"], ["accent_color", "强调色", "color"],
+  ["tint_color", "底色", "color"], ["gradient_color", "渐变色", "color"], ["panel_color", "HUD 背景色", "color"],
+  ["tint_opacity", "底色透明度", "rangeFloat", 0, 1], ["gradient_opacity", "渐变透明度", "rangeFloat", 0, 1],
+  ["panel_opacity", "HUD 背景透明度", "rangeFloat", 0, 1],
 ];
 
 function vmNode(id) { return document.querySelector(`#${id}`); }
@@ -3264,7 +3265,7 @@ function renderVideoMatrixSidebar(data) {
   vmNode("vm-video-template").value = vm.selectedVideoTemplate;
   vmNode("vm-video-template").onchange = () => { vm.selectedVideoTemplate = vmNode("vm-video-template").value; };
   vmNode("vm-open-output").onclick = () => vmOpenFolder(vmNode("vm-output-root").value);
-  renderVmRadio("vm-language-group", "vm_copy_language", [["zh", "涓枃"], ["en", "鑻辨枃"], ["ru", "淇勬枃"]], vm.state.copy_language || "zh");
+  renderVmRadio("vm-language-group", "vm_copy_language", [["zh", "中文"], ["en", "英文"], ["ru", "俄文"]], vm.state.copy_language || "zh");
   renderVideoMatrixBgm(data);
   vmNode("video-matrix-save-state").onclick = saveVideoMatrixState;
 }
@@ -3273,19 +3274,19 @@ function renderVideoMatrixSource(data) {
   const total = Object.values(data.category_counts).reduce((sum, value) => sum + value, 0);
   const categories = vmMaterialCategories(data);
   vmNode("video-matrix-metrics").innerHTML = [
-    `<div class="metric"><span>鏈湴绱犳潗</span><strong>${total}</strong></div>`,
-    `<div class="metric"><span>鐢熸垚鏁伴噺</span><strong id="vm-metric-count">${vmNode("vm-output-count").value}</strong></div>`,
-    `<div class="metric"><span>骞惰绾跨▼</span><strong id="vm-metric-workers">${vmNode("vm-max-workers").value}</strong></div>`,
-    `<div class="metric"><span>榛樿姣斾緥</span><strong>1080:1920</strong></div>`,
+    `<div class="metric"><span>本地素材</span><strong>${total}</strong></div>`,
+    `<div class="metric"><span>生成数量</span><strong id="vm-metric-count">${vmNode("vm-output-count").value}</strong></div>`,
+    `<div class="metric"><span>并行线程</span><strong id="vm-metric-workers">${vmNode("vm-max-workers").value}</strong></div>`,
+    `<div class="metric"><span>默认比例</span><strong>1080:1920</strong></div>`,
   ].join("");
   vmNode("vm-source-dirs").innerHTML = categories.map((category) => `
-    <div class="vm-dir-row"><span class="vm-badge">${vmEscape(category.label)}</span><code>${vmEscape(data.source_dirs[category.id] || "")}</code><button class="btn primary" data-vm-open="${vmEscape(data.source_dirs[category.id] || "")}">閹垫挸绱?/button></div>
+    <div class="vm-dir-row"><span class="vm-badge">${vmEscape(category.label)}</span><code>${vmEscape(data.source_dirs[category.id] || "")}</code><button class="btn primary" data-vm-open="${vmEscape(data.source_dirs[category.id] || "")}">鎵撳紑</button></div>
   `).join("");
   vmNode("vm-source-dirs").querySelectorAll("[data-vm-open]").forEach((button) => { button.onclick = () => vmOpenFolder(button.dataset.vmOpen); });
-  vmNode("vm-source-counts").textContent = `瑜版挸澧犵槐鐘虫綏閺佷即鍣洪敍${categories.map((category) => `${category.label}=${data.category_counts[category.id] || 0}`).join(" / ")}`;
-  renderVmRadio("vm-source-mode-group", "vm_source_mode", [["Category folders", "閸掑棛琚惄顔肩秿"], ["Upload files", "閹靛濮╂稉濠佺炊"]], vm.state.source_mode || "Category folders", updateVideoMatrixSourceMode);
+  vmNode("vm-source-counts").textContent = `褰撳墠绱犳潗鏁伴噺锛${categories.map((category) => `${category.label}=${data.category_counts[category.id] || 0}`).join(" / ")}`;
+  renderVmRadio("vm-source-mode-group", "vm_source_mode", [["Category folders", "鍒嗙被鐩綍"], ["Upload files", "鎵嬪姩涓婁紶"]], vm.state.source_mode || "Category folders", updateVideoMatrixSourceMode);
   vmNode("vm-recent-limits").innerHTML = categories.map((category) => `
-    <label>${vmEscape(category.label)} 缁槒顕伴崣鏍ㄦ付閺傛壆绀岄弶?input id="vm-${category.id}" type="range" min="1" max="50" value="${vm.settings.recent_limits[category.id] || 8}"><strong id="vm-${category.id}-value"></strong></label>
+    <label>${vmEscape(category.label)} 绫昏鍙栨渶鏂扮礌鏉?input id="vm-${category.id}" type="range" min="1" max="50" value="${vm.settings.recent_limits[category.id] || 8}"><strong id="vm-${category.id}-value"></strong></label>
   `).join("");
   categories.forEach((category) => vmSyncRange(`vm-${category.id}`));
   updateVideoMatrixSourceMode();
@@ -3313,14 +3314,14 @@ function renderVideoMatrixSelector() {
 function renderVideoMatrixEditor() {
   const template = vm.coverTemplates[vm.selectedCover];
   vmNode("vm-preview-caption").textContent = `${vm.selectedCover} / ${template.name || vm.selectedCover}`;
-  const fields = [`<h3>褰撳墠妯℃澘鐙珛缂栬緫鍖?/h3>`];
+  const fields = [`<h3>当前模板独立编辑区</h3>`];
   vmCoverFields.forEach(([key, label, type, min, max]) => {
     const value = template[key] ?? "";
     if (type === "select") fields.push(`<label>${label}<select data-vm-key="${key}"><option value="left">left</option><option value="center">center</option></select></label>`);
     else if (type === "range" || type === "rangeFloat") fields.push(`<label>${label}<input data-vm-key="${key}" type="range" min="${min}" max="${max}" step="${type === "rangeFloat" ? "0.01" : "1"}" value="${value}"><strong>${value}</strong></label>`);
     else fields.push(`<label>${label}<input data-vm-key="${key}" type="${type}" value="${vmEscape(value)}"></label>`);
   });
-  fields.push(`<button class="btn primary" type="button" id="vm-save-cover">淇濆瓨杩欎釜灏侀潰妯℃澘</button>`);
+  fields.push(`<button class="btn primary" type="button" id="vm-save-cover">保存这个封面模板</button>`);
   vmNode("vm-cover-form").innerHTML = fields.join("");
   vmNode("vm-cover-form").querySelectorAll("[data-vm-key]").forEach((input) => {
     input.value = template[input.dataset.vmKey] ?? input.value;
@@ -3363,13 +3364,13 @@ function vmPreviewPayload(template) {
 async function saveVideoMatrixCoverTemplate() {
   await vmApi(`/cover-templates/${vm.selectedCover}`, { method: "POST", body: JSON.stringify(vm.coverTemplates[vm.selectedCover]) });
   await saveVideoMatrixState();
-  vmLog(`宸蹭繚瀛樺皝闈㈡ā鏉匡細${vm.coverTemplates[vm.selectedCover].name || vm.selectedCover}`);
+  vmLog(`已保存封面模板：${vm.coverTemplates[vm.selectedCover].name || vm.selectedCover}`);
 }
 
 async function saveVideoMatrixState() {
   vm.state = collectVideoMatrixState();
   await vmApi("/state", { method: "POST", body: JSON.stringify(vm.state) });
-  vmLog("宸蹭繚瀛樺綋鍓嶈缃?);
+  vmLog("已保存当前设置");
 }
 
 async function generateVideoMatrix() {
@@ -3388,7 +3389,7 @@ async function pollVideoMatrixJob(jobId) {
   const job = await vmApi(`/jobs/${jobId}`);
   vmNode("vm-progress-bar").style.width = `${Math.round((job.progress || 0) * 100)}%`;
   vmLog(`${job.status}: ${job.message || ""}${job.error ? `\n${job.error}` : ""}`);
-  if (job.status === "complete") vmLog(`瀹屾垚\n${job.assets.map((asset) => asset.video_path).join("\n")}`);
+  if (job.status === "complete") vmLog(`完成\n${job.assets.map((asset) => asset.video_path).join("\n")}`);
   else if (job.status !== "error") setTimeout(() => pollVideoMatrixJob(jobId), 1200);
 }
 
@@ -3409,21 +3410,25 @@ function vmMaterialCategories(data = { settings: vm.settings }) {
   const source = data.settings || vm.settings;
   const categories = Array.isArray(source.material_categories) ? source.material_categories : [];
   return categories.length ? categories : [
-    { id: "category_A", label: "A 绫? },
-    { id: "category_B", label: "B 绫? },
-    { id: "category_C", label: "C 绫? },
+    { id: "category_A", label: "A 类" },
+    { id: "category_B", label: "B 类" },
+    { id: "category_C", label: "C 类" },
   ];
 }
 
 function renderVideoMatrixBgm(data) {
   vmNode("vm-bgm-panel").innerHTML = `<div class="radio-line" id="vm-bgm-source-group"></div><select id="vm-bgm-library"></select><input id="vm-bgm-upload" type="file" accept=".mp3,.wav,.m4a"><div class="muted">${Object.values(data.bgm_library || {}).map((item) => `<a href="${item.download_page}" target="_blank">${item.name}</a>`).join("<br>")}</div>`;
-  renderVmRadio("vm-bgm-source-group", "vm_bgm_source", [["Upload file", "涓婁紶鏂囦欢"], ["Local library", "鏈湴闊充箰搴?]], vm.state.bgm_source || "Upload file", updateVideoMatrixBgmMode);
+  renderVmRadio("vm-bgm-source-group", "vm_bgm_source", [["Upload file", "上传文件"], ["Local library", "本地音乐库"]], vm.state.bgm_source || "Upload file", updateVideoMatrixBgmMode);
   vmNode("vm-bgm-library").innerHTML = data.local_bgm.map((name) => `<option>${name}</option>`).join("");
   vmNode("vm-bgm-library").value = vm.state.bgm_library_id || "";
   updateVideoMatrixBgmMode();
 }
 function updateVideoMatrixBgmMode() { const local = vmRadioValue("vm_bgm_source") === "Local library"; vmNode("vm-bgm-library").classList.toggle("hidden", !local); vmNode("vm-bgm-upload").classList.toggle("hidden", local); }
-function updateVideoMatrixSourceMode() { vmNode("vm-upload-sources-wrap").classList.toggle("hidden", vmRadioValue("vm_source_mode") !== "Upload files"); }
+function updateVideoMatrixSourceMode() {
+  const uploadMode = vmRadioValue("vm_source_mode") === "Upload files";
+  vmNode("vm-source-mode-group")?.classList.remove("hidden");
+  vmNode("vm-upload-sources-wrap")?.classList.toggle("hidden", !uploadMode);
+}
 function renderVmRadio(containerId, name, options, selected, onchange) { vmNode(containerId).innerHTML = options.map(([value, label]) => `<label><input type="radio" name="${name}" value="${value}" ${value === selected ? "checked" : ""}>${label}</label>`).join(""); document.querySelectorAll(`input[name="${name}"]`).forEach((radio) => { radio.onchange = onchange || (() => {}); }); }
 function vmRadioValue(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value || ""; }
 function vmSyncRange(id) { const input = vmNode(id); const output = vmNode(`${id}-value`); if (!input || !output) return; output.textContent = input.value; input.oninput = () => { output.textContent = input.value; const count = document.querySelector("#vm-metric-count"); const workers = document.querySelector("#vm-metric-workers"); if (id === "vm-output-count" && count) count.textContent = input.value; if (id === "vm-max-workers" && workers) workers.textContent = input.value; }; }
@@ -3438,7 +3443,7 @@ function mountVideoMatrixWorkbench() {
   const section = document.querySelector("#video-matrix");
   if (!section || section.dataset.mounted === "true") return;
   section.dataset.mounted = "true";
-  section.innerHTML = `<iframe class="video-matrix-frame" src="/static/video_matrix.html?embed=1" title="GasGx 瑙嗛鐢熸垚宸ヤ綔鍙?></iframe>`;
+  section.innerHTML = `<iframe class="video-matrix-frame" src="/static/video_matrix.html?embed=1" title="GasGx 视频生成工作台"></iframe>`;
   section.querySelector(".video-matrix-frame")?.addEventListener("load", () => {
     const theme = SHELL_THEMES.find((item) => item.id === localStorage.getItem(SHELL_THEME_KEY)) || SHELL_THEMES[0];
     broadcastShellTheme(theme);
@@ -3454,4 +3459,3 @@ window.addEventListener("load", () => {
     setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 300);
   }
 });
-

@@ -622,6 +622,18 @@ def ending_template_file(filename: str) -> FileResponse:
     return FileResponse(target, media_type=media_type, filename=target.name)
 
 
+@router.post("/ending-templates/upload")
+async def upload_ending_template(file: UploadFile = File(...)) -> dict[str, Any]:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix != ".mp4":
+        raise HTTPException(status_code=400, detail="Only MP4 ending templates are supported")
+    ENDING_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+    target = ENDING_TEMPLATE_DIR / Path(file.filename).name
+    content = await file.read()
+    target.write_bytes(content)
+    return {"ok": True, "name": target.name, "path": str(target)}
+
+
 @router.get("/bgm/{filename}")
 def local_bgm_file(filename: str) -> FileResponse:
     target = BGM_DIR / Path(filename).name

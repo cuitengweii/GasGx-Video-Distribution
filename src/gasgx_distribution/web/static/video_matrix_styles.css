@@ -704,7 +704,13 @@ body.bgm-modal-open .sidebar {
   box-shadow: inset 3px 0 0 var(--green);
 }
 .source-panel .section-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
   margin-bottom: 8px;
+  position: relative;
+  z-index: 1;
 }
 .source-panel .add-category-row {
   grid-template-columns: minmax(180px, 1fr) 92px;
@@ -1429,7 +1435,7 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 }
 .ending-template-dir-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(84px, max-content) auto;
   gap: 10px;
   align-items: center;
   justify-items: stretch;
@@ -1453,6 +1459,8 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   display: inline-flex;
   align-items: center;
   min-height: 38px;
+  justify-self: end;
+  padding-inline: 10px;
   color: var(--green);
   font-size: 12px;
   font-weight: 900;
@@ -1465,6 +1473,52 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   margin: 0;
   padding: 8px 12px;
   font-size: 12px;
+}
+.ending-template-upload-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 10px;
+}
+.ending-template-upload-status {
+  margin: 10px 0 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(93,214,44,.22);
+  border-radius: 8px;
+  background: rgba(8, 11, 8, .56);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+.ending-template-upload-status[data-tone="loading"] {
+  color: #dfffd7;
+}
+.ending-template-upload-status[data-tone="success"] {
+  color: var(--green);
+}
+.ending-template-upload-status[data-tone="warn"] {
+  border-color: rgba(255, 176, 46, .30);
+  color: #ffcf73;
+}
+.ending-template-upload-status[data-tone="error"] {
+  border-color: rgba(255, 64, 83, .30);
+  color: #ff8e9a;
+}
+.ending-template-upload {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 360px);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.ending-template-upload span {
+  color: var(--green);
+}
+.ending-template-upload small {
+  line-height: 1.4;
+}
+.ending-template-upload input {
+  width: 100%;
 }
 .ending-material-list {
   display: grid;
