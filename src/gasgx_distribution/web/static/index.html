@@ -196,9 +196,21 @@
           <div class="panel-head">
             <div>
               <h2>全局公共配置</h2>
-              <p class="muted">所有平台默认继承这里的素材目录、发布方式和上传超时。</p>
+              <p class="muted">所有平台默认继承这里的素材目录、发布方式和上传超时。开启「与视频矩阵一致」后，发布扫描目录会随矩阵「最终输出目录」自动对齐。</p>
             </div>
           </div>
+          <fieldset class="material-dir-follow-fieldset">
+            <legend>素材目录策略</legend>
+            <label class="radio-line">
+              <input type="radio" name="common.material_dir_follows_video_matrix" value="true" checked>
+              与视频矩阵最终输出目录保持一致（推荐）
+            </label>
+            <label class="radio-line">
+              <input type="radio" name="common.material_dir_follows_video_matrix" value="false">
+              使用下方自定义路径（多平台分目录时选用）
+            </label>
+          </fieldset>
+          <p id="resolved-material-dir-hint" class="muted" style="margin: 0.35rem 0 0.75rem;"></p>
           <label class="material-dir-field">发布素材目录
             <span class="input-action">
               <input name="common.material_dir" list="material-dir-options" placeholder="runtime/materials/videos">
@@ -518,8 +530,14 @@
 
         <header class="terminal-global-header terminal-glass">
           <div class="terminal-header-title">
-            <h1>MATRIX <span>DISTRIBUTION</span></h1>
-            <p id="terminal-header-subtitle">视频号采用每日登录扫码队列，其它平台采用长会话按需检测。</p>
+            <div class="terminal-route-pill">
+              <button class="terminal-route-back" type="button" id="terminal-route-back">平台枢纽</button>
+              <span class="terminal-route-label" id="terminal-route-label">平台枢纽</span>
+            </div>
+            <h1 id="terminal-shell-title">终端执行</h1>
+            <p id="terminal-shell-desc">先选平台，再进入平台专属子流程。</p>
+            <p id="terminal-header-subtitle">平台枢纽页只列入口卡片，不混排扫码窗。</p>
+            <p class="terminal-route-hint" id="terminal-route-hint">仅列平台入口。</p>
           </div>
           <div class="terminal-global-stats">
             <div class="terminal-stat-item"><span id="terminal-progress-label">总进度:</span> <strong id="terminal-global-progress">0/0</strong></div>
