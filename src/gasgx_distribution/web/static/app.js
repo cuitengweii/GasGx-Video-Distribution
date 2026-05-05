@@ -2141,11 +2141,15 @@ function renderAiRobot() {
   const editingTelegram = editingPlatform === "telegram" || !telegramBound;
   const configured = visibleAiRobotConfigs().filter(isAiRobotBound);
   const config = editingPlatform ? aiRobotConfigFor(editingPlatform) : (configured.length ? configured[0] : selectedAiRobotConfig());
+  const saveButton = document.querySelector("#ai-save-config");
+  const sendTestButton = document.querySelector("#ai-send-test");
   const panelSaveButton = document.querySelector("#ai-save-config-panel");
   const panelSendTestButton = document.querySelector("#ai-send-test-panel");
   const formHidden = !editingPlatform;
   if (configPanel) configPanel.hidden = formHidden;
   form.hidden = formHidden;
+  saveButton.classList.toggle("hidden", formHidden);
+  sendTestButton.classList.toggle("hidden", formHidden);
   panelSaveButton?.classList.toggle("hidden", formHidden);
   panelSendTestButton?.classList.toggle("hidden", formHidden);
   form.elements.platform.value = config.platform || "wecom";
@@ -2860,7 +2864,7 @@ document.querySelector("#telegram-open-updates")?.addEventListener("click", () =
   window.open(`https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates`, "_blank", "noopener,noreferrer");
 });
 
-document.querySelector("#ai-save-config").addEventListener("click", async (event) => {
+document.querySelector("#ai-save-config")?.addEventListener("click", async (event) => {
   const button = event.currentTarget;
   const form = document.querySelector("#ai-robot-form");
   const stateNode = document.querySelector("#ai-config-state");
@@ -2921,11 +2925,15 @@ document.querySelector("#ai-save-config").addEventListener("click", async (event
 });
 
 document.querySelector("#ai-save-config-panel")?.addEventListener("click", () => {
-  document.querySelector("#ai-save-config")?.click();
+  const form = document.querySelector("#ai-robot-form");
+  const button = document.querySelector("#ai-save-config-panel");
+  if (form && button) saveAiRobotConfig(form, button);
 });
 
 document.querySelector("#ai-send-test-panel")?.addEventListener("click", () => {
-  document.querySelector("#ai-send-test")?.click();
+  const form = document.querySelector("#ai-robot-form");
+  const button = document.querySelector("#ai-send-test-panel");
+  if (form && button) sendAiRobotTest(form.elements.platform.value, button);
 });
 
 document.querySelector("#ai-copy-lark-callback")?.addEventListener("click", async (event) => {
@@ -2987,7 +2995,7 @@ function renderAiRobotLoading() {
   if (messageList && !state.aiRobotMessagesCollapsed) messageList.innerHTML = loading;
 }
 
-document.querySelector("#ai-send-test").addEventListener("click", async (event) => {
+document.querySelector("#ai-send-test")?.addEventListener("click", async (event) => {
   const form = document.querySelector("#ai-robot-form");
   await sendAiRobotTest(form.elements.platform.value, event.currentTarget);
 });
