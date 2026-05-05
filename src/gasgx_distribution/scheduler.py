@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .matrix_publish import check_wechat_matrix_login_status, run_wechat_publish
+from .matrix_publish import check_wechat_matrix_login_status, run_matrix_publish
 from .paths import get_paths
 from .public_settings import load_distribution_settings
 
@@ -128,7 +128,7 @@ def _run_once(reason: str = "scheduled") -> dict[str, Any]:
     )
     _write_state(state)
     try:
-        result = run_wechat_publish()
+        result = run_matrix_publish()
         ok = bool(result.get("ok"))
         state.update(
             {

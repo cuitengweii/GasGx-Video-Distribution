@@ -29,7 +29,7 @@ def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
 
 def test_scheduler_run_once_records_state(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr(scheduler, "run_wechat_publish", lambda: {"ok": True, "count": 2})
+    monkeypatch.setattr(scheduler, "run_matrix_publish", lambda: {"ok": True, "count": 2})
 
     result = scheduler._run_once(reason="test")
     status = scheduler.scheduler_status()

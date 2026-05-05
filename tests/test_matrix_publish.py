@@ -15,6 +15,7 @@ from gasgx_distribution.matrix_publish import (
     build_publish_plan,
     list_candidate_videos,
     publish_lock_path,
+    run_matrix_publish,
     run_wechat_publish,
 )
 from gasgx_distribution.public_settings import save_distribution_settings
@@ -336,6 +337,59 @@ def test_wechat_publish_requires_uploaded_record_evidence(monkeypatch, tmp_path:
     assert result["results"][0]["success"] is False
     assert result["results"][0]["evidence_ok"] is False
     assert list_candidate_videos()[0].name == "one.mp4"
+
+
+def test_douyin_publish_invokes_pipeline_without_wechat_flags(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["douyin"]})
+    _write_video(tmp_path / "runtime" / "materials" / "videos" / "one.mp4", int(time.time()))
+    calls: list[list[str]] = []
+
+    def fake_check_login_status(account_id: int, platform: str) -> dict:
+        return {"ok": True, "status": "ready", "platform": platform, "account_id": account_id}
+
+    monkeypatch.setattr(service, "check_login_status", fake_check_login_status)
+
+    def fake_run(cmd: list[str], **kwargs):
+        del kwargs
+        calls.append(cmd)
+        workspaces = list((tmp_path / "runtime" / "matrix_publish_runs").glob("*"))
+        if workspaces:
+            (workspaces[0] / "uploaded_records_douyin.jsonl").write_text('{"ok":true}\n', encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("gasgx_distribution.matrix_publish.subprocess.run", fake_run)
+
+    result = run_matrix_publish()
+
+    assert result["ok"] is True
+    cmd = _pipeline_cmd(calls)
+    assert cmd[cmd.index("--upload-platforms") + 1] == "douyin"
+    assert "--wechat-debug-port" not in cmd
+    assert "--wechat-chrome-user-data-dir" not in cmd
+
+
+def test_matrix_publish_preflight_blocks_non_wechat(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["douyin"]})
+    _write_video(tmp_path / "runtime" / "materials" / "videos" / "one.mp4", int(time.time()))
+
+    def fake_check_login_status(account_id: int, platform: str) -> dict:
+        return {
+            "ok": True,
+            "status": "login_required",
+            "platform": platform,
+            "account_id": account_id,
+            "reason": "login_url",
+        }
+
+    monkeypatch.setattr(service, "check_login_status", fake_check_login_status)
+
+    result = run_matrix_publish()
+
+    assert result.get("skipped") is True
+    assert result.get("reason") == "platform_login_required"
+    assert not (tmp_path / "runtime" / "matrix_publish_runs").exists()
 
 
 def test_wechat_publish_skips_when_lock_is_active(monkeypatch, tmp_path: Path) -> None:

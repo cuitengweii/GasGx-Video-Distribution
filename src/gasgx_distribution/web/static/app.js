@@ -1217,7 +1217,6 @@ function setViewLoading(view) {
     ],
     "terminal-execution": [
       ["#terminal-config-list", "加载运营微信配置..."],
-      ["#terminal-matrix-workspace", "加载终端执行数据..."],
     ],
     "system-settings": [["#supabase-health-list", "加载数据库字典..."]],
   };
@@ -1226,6 +1225,9 @@ function setViewLoading(view) {
     const node = document.querySelector(selector);
     if (node) node.innerHTML = loadingInline(text || label);
   });
+  if (view === "terminal-execution") {
+    document.querySelector("#terminal-init-modal")?.classList.add("hidden");
+  }
 }
 
 function platformLabel(key) {
@@ -1707,11 +1709,11 @@ function renderTerminalConfigPanel() {
     `;
 }
 
-function renderTerminalDailyQrView() {
+function renderTerminalDailyQrView(root) {
   const windows = state.terminalExecution.windows || [];
   const summary = state.terminalExecution.summary || {};
   const loginStarted = Boolean(state.terminalExecution.login_started);
-  const workspace = document.querySelector("#terminal-matrix-workspace");
+  const workspace = root instanceof Element ? root : document.querySelector("#terminal-matrix-workspace");
   if (!workspace) return;
   workspace.innerHTML = windows.map((window) => {
     const accounts = window.accounts || [];
@@ -1851,8 +1853,12 @@ function startTerminalPolling() {
   if (terminalPollTimer) clearInterval(terminalPollTimer);
   terminalPollTimer = setInterval(async () => {
     if (currentView !== "terminal-execution") return;
-    state.terminalExecution = await api("/api/terminal-execution/poll", { method: "POST" });
-    renderTerminalExecution();
+    try {
+      state.terminalExecution = await api("/api/terminal-execution/poll", { method: "POST" });
+      renderTerminalExecution();
+    } catch {
+      /* 保持当前界面，避免轮询失败把页面打回无限加载态 */
+    }
   }, 10000);
   if (terminalCountdownTimer) clearInterval(terminalCountdownTimer);
   terminalCountdownTimer = setInterval(() => {
@@ -1879,6 +1885,9 @@ function renderTerminalExecution() {
   const section = document.querySelector("#terminal-execution");
   if (!section) return;
   const workspace = document.querySelector("#terminal-matrix-workspace");
+  if (!workspace) {
+    return;
+  }
   const initModal = document.querySelector("#terminal-init-modal");
   const loadError = state.terminalExecution.error || "";
   const startLoginButton = document.querySelector("#terminal-start-login");
@@ -1896,7 +1905,7 @@ function renderTerminalExecution() {
   const platforms = (state.platforms || []).filter((item) => ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"].includes(item.key));
   const platformMap = new Map(platforms.map((item) => [item.key, item]));
 
-  if (initModal) initModal.classList.add("hidden");
+  if (initModal) initModal.classList.toggle("hidden", !state.terminalConfigOpen);
   if (backButton) backButton.textContent = route === "hub" ? "平台枢纽" : "返回枢纽";
   if (routeLabel) routeLabel.textContent = route === "hub" ? "平台枢纽" : `${terminalPlatformName(route)} 终端`;
   if (routeHint) routeHint.textContent = route === "wechat"
@@ -1926,6 +1935,9 @@ function renderTerminalExecution() {
   }
 
   if (route === "hub") {
+    if (state.terminalConfigOpen) {
+      renderTerminalConfig();
+    }
     const groups = [
       { title: "视频号", items: ["wechat"] },
       { title: "长会话平台", items: ["douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"] },
@@ -1995,7 +2007,7 @@ function renderTerminalExecution() {
             <button class="btn primary" type="button" data-terminal-start-action="1">开始登录</button>
             <button class="btn secondary" type="button" data-terminal-edit-action="1">修改配置</button>
           </div>
-          <div class="terminal-workspace terminal-workspace-wechat" id="terminal-matrix-workspace"></div>
+          <div class="terminal-workspace terminal-workspace-wechat"></div>
         </section>
         <section class="terminal-log-panel">
           <div class="panel-head"><h2>会话日志</h2><p class="muted">最近错误、重试建议和矩阵衔接信息。</p></div>
@@ -2005,7 +2017,7 @@ function renderTerminalExecution() {
         </section>
       </div>
     `;
-    renderTerminalDailyQrView();
+    renderTerminalDailyQrView(workspace.querySelector(".terminal-workspace-wechat"));
     return;
   }
 
@@ -2919,6 +2931,21 @@ async function loadTasks() {
 async function loadViewData(view, { force = false } = {}) {
   if (!force && loadedViews.has(view)) return;
   setViewLoading(view);
+  if (view === "terminal-execution") {
+    state.terminalQrVisible = false;
+    state.terminalExecution = {
+      colors: [],
+      operators: [],
+      windows: [],
+      summary: {},
+      platform_capabilities: {},
+      profile_by_platform: {},
+      active_platform: "wechat",
+      login_started: false,
+      initialized: false,
+    };
+    renderTerminalExecution();
+  }
   await loadShellData();
 
   if (view === "overview") {
@@ -2946,26 +2973,14 @@ async function loadViewData(view, { force = false } = {}) {
     renderTaskSelects();
     renderTasks();
   } else if (view === "terminal-execution") {
-    state.terminalQrVisible = false;
-    state.terminalExecution = {
-      colors: [],
-      operators: [],
-      windows: [],
-      summary: {},
-      platform_capabilities: {},
-      profile_by_platform: {},
-      active_platform: "wechat",
-      login_started: false,
-      initialized: false,
-    };
-    renderTerminalExecution();
     try {
-      const [platforms, accounts, terminalState] = await Promise.all([
+      await Promise.all([
         loadPlatforms(),
         loadAccounts(),
-        api("/api/terminal-execution/state"),
+        api("/api/terminal-execution/state").then((terminalState) => {
+          state.terminalExecution = terminalState;
+        }),
       ]);
-      state.terminalExecution = terminalState;
       renderTerminalExecution();
     } catch (error) {
       state.terminalExecution = {

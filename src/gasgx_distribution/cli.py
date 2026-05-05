@@ -8,7 +8,7 @@ from pathlib import Path
 import uvicorn
 
 from . import control_plane
-from .matrix_publish import check_wechat_matrix_login_status, run_wechat_publish
+from .matrix_publish import check_wechat_matrix_login_status, run_matrix_publish, run_wechat_publish
 from .service import ensure_database, run_ai_robot_sender_worker
 
 
@@ -22,7 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init-control-db")
     supabase_sql = sub.add_parser("supabase-sql")
     supabase_sql.add_argument("target", choices=["control", "brand", "all"])
-    matrix_publish = sub.add_parser("matrix-publish-wechat")
+    matrix_publish_all = sub.add_parser("matrix-publish", help="Publish planned slots for all enabled platforms.")
+    matrix_publish_all.add_argument("--limit", type=int, default=0)
+    matrix_publish_all.add_argument("--dry-run", action="store_true")
+    matrix_publish = sub.add_parser("matrix-publish-wechat", help="Publish only WeChat slots from the same plan.")
     matrix_publish.add_argument("--limit", type=int, default=0)
     matrix_publish.add_argument("--dry-run", action="store_true")
     matrix_login = sub.add_parser("matrix-wechat-login-check")
@@ -55,6 +58,11 @@ def main() -> int:
             print(f"-- {target}: {path}")
             print(path.read_text(encoding="utf-8"))
         return 0
+    if args.command == "matrix-publish":
+        ensure_database()
+        result = run_matrix_publish(limit=int(args.limit), dry_run=bool(args.dry_run))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if bool(result.get("ok")) else 1
     if args.command == "matrix-publish-wechat":
         ensure_database()
         result = run_wechat_publish(limit=int(args.limit), dry_run=bool(args.dry_run))

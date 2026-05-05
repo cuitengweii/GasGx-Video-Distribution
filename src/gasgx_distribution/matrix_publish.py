@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from .paths import get_paths
-from .public_settings import load_distribution_settings, load_wechat_publish_settings, resolve_material_dir
+from .public_settings import (
+    load_distribution_settings,
+    load_platform_publish_settings,
+    load_wechat_publish_settings,
+    resolve_material_dir,
+)
 from . import service
 from .platforms import get_platform
 
@@ -450,6 +455,40 @@ def _runtime_config_for_wechat(settings: dict[str, Any], workspace: Path) -> Pat
     return path
 
 
+def _runtime_config_for_non_wechat_platform(platform: str, settings: dict[str, Any], workspace: Path) -> Path:
+    token = str(platform or "").strip().lower()
+    draft = str(settings.get("publish_mode") or "publish") == "draft"
+    platform_block: dict[str, Any] = {
+        "save_draft": draft,
+        "publish_now": not draft,
+        "upload_timeout": int(settings.get("upload_timeout") or 60),
+    }
+    collection_name = str(settings.get("collection_name") or "").strip()
+    if collection_name:
+        platform_block["collection_name"] = collection_name
+    config = {
+        "paths": {
+            "runtime_root": str(workspace),
+            "profiles_root": "profiles",
+            "default_profile_dir": "default",
+            "wechat_profile_dir": "wechat",
+            "x_profile_dir": "x_collect",
+        },
+        "publish": {"platforms": {token: platform_block}},
+        "topics": str(settings.get("topics") or ""),
+    }
+    path = workspace / f"matrix_{token}_publish_config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _runtime_publish_config(platform: str, settings: dict[str, Any], workspace: Path) -> Path:
+    if str(platform or "").strip().lower() == "wechat":
+        return _runtime_config_for_wechat(settings, workspace)
+    return _runtime_config_for_non_wechat_platform(platform, settings, workspace)
+
+
 def _caption_with_topics(settings: dict[str, Any]) -> str:
     caption = str(settings.get("caption") or "").strip()
     topics = str(settings.get("topics") or "").strip()
@@ -458,13 +497,18 @@ def _caption_with_topics(settings: dict[str, Any]) -> str:
     return caption or topics
 
 
-def _wechat_publish_evidence_path(workspace: Path) -> Path:
-    return workspace / "uploaded_records_wechat.jsonl"
+def _publish_evidence_path(workspace: Path, platform: str) -> Path:
+    token = str(platform or "wechat").strip().lower() or "wechat"
+    return workspace / f"uploaded_records_{token}.jsonl"
+
+
+def _has_publish_evidence(workspace: Path, platform: str) -> bool:
+    evidence = _publish_evidence_path(workspace, platform)
+    return evidence.exists() and evidence.stat().st_size > 0
 
 
 def _has_wechat_publish_evidence(workspace: Path) -> bool:
-    evidence = _wechat_publish_evidence_path(workspace)
-    return evidence.exists() and evidence.stat().st_size > 0
+    return _has_publish_evidence(workspace, "wechat")
 
 
 def check_wechat_matrix_login_status(
@@ -517,49 +561,99 @@ def check_wechat_matrix_login_status(
     }
 
 
-def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
-    plan = [item for item in build_publish_plan(limit=limit) if item.platform == "wechat"]
+def _login_status_blocks_publish(result: dict[str, Any]) -> bool:
+    status = str(result.get("status") or "").strip().lower()
+    if status == "unsupported":
+        return True
+    if not result.get("ok") and status in {"unavailable", "error", "unknown"}:
+        return True
+    if status in {"login_required", "required"}:
+        return True
+    if bool(result.get("needs_login")):
+        return True
+    if str(result.get("reason") or "").strip().lower() == "login_url":
+        return True
+    return False
+
+
+def check_matrix_publish_preflight(plan: list[PublishPlanItem], *, notify: bool = True) -> dict[str, Any]:
+    wechat_ids = sorted({item.account_id for item in plan if item.platform == "wechat"})
+    wechat_preflight = check_wechat_matrix_login_status(
+        account_ids=wechat_ids,
+        notify=notify,
+    )
+    non_wechat_results: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[int, str]] = set()
+    for item in plan:
+        if item.platform == "wechat":
+            continue
+        key = (item.account_id, item.platform)
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        try:
+            probe = service.check_login_status(item.account_id, item.platform)
+        except Exception as exc:
+            probe = {
+                "ok": False,
+                "status": "error",
+                "platform": item.platform,
+                "account_id": item.account_id,
+                "error": str(exc),
+            }
+        non_wechat_results.append({**probe, "account_id": item.account_id, "platform": item.platform})
+    blocking = [row for row in non_wechat_results if _login_status_blocks_publish(row)]
+    non_wechat_ok = not blocking
+    return {
+        "ok": bool(wechat_preflight.get("ok")) and non_wechat_ok,
+        "wechat_preflight": wechat_preflight,
+        "non_wechat": {
+            "checked": len(non_wechat_results),
+            "results": non_wechat_results,
+            "blocking": blocking,
+        },
+    }
+
+
+def _serialize_plan_item(item: PublishPlanItem) -> dict[str, Any]:
+    return {
+        "account_id": item.account_id,
+        "account_key": item.account_key,
+        "display_name": item.display_name,
+        "platform": item.platform,
+        "video": str(item.source_video),
+        "profile_dir": str(item.profile_dir),
+        "debug_port": item.debug_port,
+        "fingerprint": item.fingerprint,
+        "workspace": str(item.workspace),
+        "batch_index": item.batch_index,
+        "batch_position": item.batch_position,
+    }
+
+
+def run_matrix_publish(
+    *,
+    limit: int = 0,
+    dry_run: bool = False,
+    platforms: frozenset[str] | None = None,
+) -> dict[str, Any]:
+    full_plan = build_publish_plan(limit=limit)
+    if platforms is not None:
+        plan = [item for item in full_plan if item.platform in platforms]
+    else:
+        plan = list(full_plan)
     job_settings = _matrix_wechat_job_settings()
-    settings = load_wechat_publish_settings()
+    wechat_settings = load_wechat_publish_settings()
+    platform_settings = {token: load_platform_publish_settings(token) for token in sorted({item.platform for item in plan})}
     if dry_run:
         return {
             "ok": True,
             "dry_run": True,
-            "settings": settings,
+            "settings": wechat_settings,
+            "platform_settings": platform_settings,
             "job_settings": job_settings,
-            "batches": [
-                [
-                    {
-                        "account_id": item.account_id,
-                        "account_key": item.account_key,
-                        "display_name": item.display_name,
-                        "video": str(item.source_video),
-                        "profile_dir": str(item.profile_dir),
-                        "debug_port": item.debug_port,
-                        "fingerprint": item.fingerprint,
-                        "workspace": str(item.workspace),
-                        "batch_index": item.batch_index,
-                        "batch_position": item.batch_position,
-                    }
-                    for item in batch
-                ]
-                for batch in plan_batches(plan)
-            ],
-            "items": [
-                {
-                    "account_id": item.account_id,
-                    "account_key": item.account_key,
-                    "display_name": item.display_name,
-                    "video": str(item.source_video),
-                    "profile_dir": str(item.profile_dir),
-                    "debug_port": item.debug_port,
-                    "fingerprint": item.fingerprint,
-                    "workspace": str(item.workspace),
-                    "batch_index": item.batch_index,
-                    "batch_position": item.batch_position,
-                }
-                for item in plan
-            ],
+            "batches": [[_serialize_plan_item(item) for item in batch] for batch in plan_batches(plan)],
+            "items": [_serialize_plan_item(item) for item in plan],
         }
 
     locked, lock_payload = _acquire_publish_lock()
@@ -571,30 +665,33 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
     runs = list(state.get("runs", [])) if isinstance(state.get("runs"), list) else []
     results: list[dict[str, Any]] = []
     try:
-        preflight = check_wechat_matrix_login_status(
-            account_ids=[item.account_id for item in plan],
-            notify=True,
-        )
+        if not plan:
+            return {"ok": True, "count": 0, "results": [], "skipped": True, "reason": "empty_plan"}
+        preflight = check_matrix_publish_preflight(plan, notify=True)
         if not preflight.get("ok"):
+            wechat_ok = bool(preflight.get("wechat_preflight", {}).get("ok"))
+            reason = "wechat_login_required" if not wechat_ok else "platform_login_required"
             return {
                 "ok": False,
                 "skipped": True,
-                "reason": "wechat_login_required",
+                "reason": reason,
                 "preflight": preflight,
                 "count": 0,
                 "results": [],
             }
         for item in plan:
+            settings = load_platform_publish_settings(item.platform)
             debug_port = int(item.debug_port)
             prepared = prepare_workspace(item)
-            runtime_config = _runtime_config_for_wechat(settings, item.workspace)
-            cmd = [
+            runtime_config = _runtime_publish_config(item.platform, settings, item.workspace)
+            token = str(item.platform or "wechat").strip().lower() or "wechat"
+            cmd: list[str] = [
                 sys.executable,
                 "-m",
                 "cybercar.pipeline",
                 "--publish-only",
                 "--upload-platforms",
-                "wechat",
+                token,
                 "--limit",
                 "1",
                 "--config",
@@ -603,28 +700,34 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                 str(item.workspace),
                 "--debug-port",
                 str(debug_port),
-                "--wechat-debug-port",
-                str(debug_port),
                 "--chrome-user-data-dir",
                 str(item.profile_dir),
-                "--wechat-chrome-user-data-dir",
-                str(item.profile_dir),
-                "--collection-name",
-                str(settings.get("collection_name") or ""),
                 "--upload-timeout",
                 str(int(settings.get("upload_timeout") or 60)),
             ]
+            if token == "wechat":
+                cmd.extend(
+                    [
+                        "--wechat-debug-port",
+                        str(debug_port),
+                        "--wechat-chrome-user-data-dir",
+                        str(item.profile_dir),
+                        "--collection-name",
+                        str(settings.get("collection_name") or ""),
+                    ]
+                )
             caption = _caption_with_topics(settings)
             if caption:
                 cmd.extend(["--caption", caption])
-            if bool(settings.get("declare_original")):
-                cmd.append("--wechat-declare-original")
-            if str(settings.get("publish_mode") or "publish") == "draft":
-                cmd.append("--wechat-save-draft-only")
-            else:
-                cmd.append("--wechat-publish-now")
+            if token == "wechat":
+                if bool(settings.get("declare_original")):
+                    cmd.append("--wechat-declare-original")
+                if str(settings.get("publish_mode") or "publish") == "draft":
+                    cmd.append("--wechat-save-draft-only")
+                else:
+                    cmd.append("--wechat-publish-now")
             started = time.strftime("%Y-%m-%d %H:%M:%S")
-            log_path = item.workspace / "matrix_wechat_publish.log"
+            log_path = item.workspace / f"matrix_{token}_publish.log"
             with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
                 env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
                 extra_args = service.browser_fingerprint_launch_args(item.fingerprint)
@@ -640,7 +743,7 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                     encoding="utf-8",
                     errors="replace",
                 )
-            evidence_ok = _has_wechat_publish_evidence(item.workspace)
+            evidence_ok = _has_publish_evidence(item.workspace, token)
             success = completed.returncode == 0 and evidence_ok
             record = {
                 "account_id": item.account_id,
@@ -663,7 +766,9 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
                 "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
             if completed.returncode == 0 and not evidence_ok:
-                record["error"] = "wechat publish returned 0 but no uploaded_records_wechat.jsonl evidence was written"
+                record["error"] = (
+                    f"{token} publish returned 0 but no uploaded_records_{token}.jsonl evidence was written"
+                )
             results.append(record)
             runs.append(record)
             if success:
@@ -683,3 +788,7 @@ def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, An
         return {"ok": all(item["success"] for item in results), "count": len(results), "results": results}
     finally:
         _release_publish_lock()
+
+
+def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
+    return run_matrix_publish(limit=limit, dry_run=dry_run, platforms=frozenset({"wechat"}))
