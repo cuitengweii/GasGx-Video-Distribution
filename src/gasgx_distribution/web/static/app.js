@@ -1586,7 +1586,6 @@ function renderTerminalExecution() {
           ${accounts.map((account, index) => `
             <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
               <div class="terminal-account-info">
-                <div class="terminal-avatar"></div>
                 <div>
                   <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
                   <div class="terminal-acc-status">${account.status_text || "未登录"}</div>

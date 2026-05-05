@@ -3793,13 +3793,6 @@ body.video-matrix-active #video-matrix {
   min-width: 0;
 }
 
-.terminal-avatar {
-  width: 32px;
-  height: 32px;
-  background: var(--terminal-glass-border);
-  border-radius: 50%;
-}
-
 .terminal-acc-name {
   font-size: 14px;
   color: var(--terminal-text-main);
