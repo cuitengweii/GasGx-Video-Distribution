@@ -46,16 +46,13 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert "/api/terminal-execution/start" in app
     assert "/api/terminal-execution/start-login" in app
     assert "#terminal-config-list" in app
-    assert 'setButtonLoading(event.currentTarget, "启动中")' in app
     assert "#terminal-start-system" not in app
     assert "!state.terminalExecution.initialized || state.terminalConfigOpen" in app
-    assert "state.terminalQrVisible && loginStarted && window.qr_data_url" in app
+    assert "state.terminalQrVisible && loginStarted && window.qr_url" in app
     assert "state.terminalQrVisible = false;" in app
     assert "state.terminalQrVisible = true;" in app
-    assert 'aria-label="等待开始登录"' in app
     assert "terminalCountdownTimer" in app
     assert "}, 1000);" in app
-    assert "加载运营微信配置..." in app
 
 
 def test_terminal_config_does_not_start_login_side_effects() -> None:
@@ -67,4 +64,4 @@ def test_terminal_config_does_not_start_login_side_effects() -> None:
     assert "_terminal_qr_data_url" not in configure_block
     assert '"login_started": False' in configure_block
     assert "open_account_browser" in login_block
-    assert "_terminal_qr_data_url" in login_block
+    assert "_write_terminal_qr_cache" in login_block

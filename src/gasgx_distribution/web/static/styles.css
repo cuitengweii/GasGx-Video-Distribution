@@ -3751,20 +3751,13 @@ body.video-matrix-active #video-matrix {
   background: var(--term-color);
   top: 0;
   box-shadow: 0 0 10px var(--term-color);
-  animation: terminalScan 2s infinite linear;
+  opacity: 0.18;
 }
 
 .terminal-qr-placeholder img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-}
-
-@keyframes terminalScan {
-  0% { top: 0; opacity: 0; }
-  10% { opacity: 1; }
-  90% { opacity: 1; }
-  100% { top: 100%; opacity: 0; }
 }
 
 .terminal-account-list {

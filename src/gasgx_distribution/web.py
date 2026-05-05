@@ -512,6 +512,13 @@ def create_app() -> FastAPI:
     def terminal_execution_poll() -> dict[str, Any]:
         return service.poll_terminal_execution()
 
+    @app.get("/api/terminal-execution/windows/{window_id}/qr-image")
+    def terminal_execution_qr_image(window_id: int) -> FileResponse:
+        path = service.terminal_qr_image_path(window_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="qr image not found")
+        return FileResponse(path)
+
     @app.post("/api/terminal-execution/windows/{window_id}/manual-publish")
     def terminal_execution_manual_publish(window_id: int) -> dict[str, Any]:
         try:
