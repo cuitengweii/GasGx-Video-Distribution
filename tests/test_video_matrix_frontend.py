@@ -318,6 +318,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "loggedOut: true" in shell_app
     assert "auth-logged-out" in shell_app
     assert 'activateView("overview")' in shell_app
+    assert 'if (!raw) return { view: "overview", route: "hub" };' in shell_app
     assert 'window.history.replaceState(null, "", "#login")' in shell_app
     assert 'authState.currentUserId = ""' in shell_app
     assert 'new Set(["user-center"])' in shell_app

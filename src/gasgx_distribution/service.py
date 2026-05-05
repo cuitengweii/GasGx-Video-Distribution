@@ -1854,6 +1854,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "current_index": 0,
             "qr_path": qr_path,
             "qr_url": "",
+            "qr_sequence": 0,
             "manual_available_at": 0,
             "accounts": accounts,
         }
@@ -1937,6 +1938,7 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
         current["status_text"] = "等待扫码中..."
         qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
         window["qr_path"] = qr_path
+        window["qr_sequence"] = int(window.get("qr_sequence") or 0) + 1 if qr_path else int(window.get("qr_sequence") or 0)
         window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
     except Exception as exc:
         current["status"] = "error"
@@ -1986,6 +1988,7 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
         if not window.get("qr_url"):
             qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
             window["qr_path"] = qr_path
+            window["qr_sequence"] = int(window.get("qr_sequence") or 0) + 1 if qr_path else int(window.get("qr_sequence") or 0)
             window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
         return True
     _clear_terminal_qr_cache(int(window.get("id") or 0))

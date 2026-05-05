@@ -2556,6 +2556,14 @@ def _build_login_qr_rect_script(platform_name: str) -> str:
     platform = str(platform_name or "").strip().lower()
     if platform == "wechat":
         selectors = [
+            "img[alt*='二维码' i]",
+            "canvas[aria-label*='二维码' i]",
+            "img[title*='二维码' i]",
+            "canvas[title*='二维码' i]",
+            "img[alt*='扫码' i]",
+            "canvas[aria-label*='扫码' i]",
+            "img[src*='qrcode' i]",
+            "canvas[class*='qrcode' i]",
             "[class*='qrcode'] img",
             "[class*='qrcode'] canvas",
             "[class*='qr-code'] img",
@@ -2568,8 +2576,6 @@ def _build_login_qr_rect_script(platform_name: str) -> str:
             ".qrcode-area canvas",
             ".login-qrcode-wrap img",
             ".login-qrcode-wrap canvas",
-            "[class*='scan'] img",
-            "[class*='scan'] canvas",
             "img.qrcode",
         ]
     else:
@@ -2612,6 +2618,17 @@ def _build_login_qr_rect_script(platform_name: str) -> str:
           const delta = Math.abs(rect.width - rect.height);
           return delta <= Math.max(28, Math.round(Math.max(rect.width, rect.height) * 0.28));
         }};
+        const isQrRelevant = (node) => {{
+          const text = String(node?.closest?.('body')?.innerText || node?.innerText || node?.textContent || '');
+          const attrs = [
+            node?.getAttribute?.('alt'),
+            node?.getAttribute?.('aria-label'),
+            node?.getAttribute?.('title'),
+            node?.className,
+            node?.id,
+          ].filter(Boolean).join(' ');
+          return /二维码|扫码|qrcode|qr-code|qr_code/i.test(`${{text}} ${{attrs}}`);
+        }};
         const frameOffset = () => {{
           let left = 0;
           let top = 0;
@@ -2639,6 +2656,7 @@ def _build_login_qr_rect_script(platform_name: str) -> str:
             if (!isVisible(node)) continue;
             const rect = node.getBoundingClientRect();
             if (!isSquareEnough(rect)) continue;
+            if (platform === "wechat" && !isQrRelevant(node)) continue;
             const area = Number(rect.width || 0) * Number(rect.height || 0);
             if (!best || area > best.area) {{
               best = {{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, area }};

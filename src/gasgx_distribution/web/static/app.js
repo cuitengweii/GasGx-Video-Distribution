@@ -1541,12 +1541,21 @@ function renderTerminalConfig() {
   const operators = state.terminalExecution.operators || [];
   const colors = state.terminalExecution.colors || [];
   const savedRows = state.terminalExecution.config || [];
-  const defaultRows = savedRows.length ? savedRows : Array.from({ length: 5 }, (_, index) => ({
+  const defaultRows = Array.from({ length: 5 }, (_, index) => ({
     id: index + 1,
-    enabled: Boolean(operators[index] || operators[0]),
+    enabled: false,
     operator_wechat: operators[index]?.operator_wechat || operators[index % Math.max(1, operators.length)]?.operator_wechat || "",
     color: terminalColorByIndex(index).hex,
-  }));
+  })).map((row, index) => {
+    const saved = savedRows[index] || {};
+    return {
+      ...row,
+      id: Number(saved.id || row.id || index + 1),
+      enabled: typeof saved.enabled === "boolean" ? saved.enabled : row.enabled,
+      operator_wechat: String(saved.operator_wechat || row.operator_wechat || ""),
+      color: String(saved.color || row.color || terminalColorByIndex(index).hex),
+    };
+  });
   if (!defaultRows.length) {
     list.innerHTML = `
       <div class="terminal-empty-state">
@@ -1610,8 +1619,10 @@ function terminalQrImageMarkup(window, qrVisible, currentAccountId) {
   if (!qrVisible) return terminalPlaceholderIcon();
   const qrUrl = window.qr_url || "";
   const refreshAccountId = Number(currentAccountId || 0);
+  const qrSequence = Number(window.qr_sequence || 0);
   return `
     <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}">
+      <span class="terminal-qr-sequence">#${qrSequence || 0}</span>
       <img src="${qrUrl}" alt="视频号登录二维码">
     </button>
   `;
@@ -1721,7 +1732,6 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
     } else {
       renderTerminalExecution();
     }
-    await waitForTerminalQrVisible(windowId, accountId);
   } finally {
     restoreButton();
   }
@@ -2026,17 +2036,9 @@ function renderTerminalExecution() {
   }
   const initModal = document.querySelector("#terminal-init-modal");
   const loadError = state.terminalExecution.error || "";
-  const startLoginButton = document.querySelector("#terminal-start-login");
-  const editConfigButton = document.querySelector("#terminal-edit-config");
   const subtitle = document.querySelector("#terminal-header-subtitle");
-  const progressLabel = document.querySelector("#terminal-progress-label");
-  const activeLabel = document.querySelector("#terminal-active-label");
-  const backButton = document.querySelector("#terminal-route-back");
-  const routeLabel = document.querySelector("#terminal-route-label");
   const routeHint = document.querySelector("#terminal-route-hint");
-  const terminalShellTitle = document.querySelector("#terminal-shell-title");
   const terminalShellDesc = document.querySelector("#terminal-shell-desc");
-  const headerActions = document.querySelector("#terminal-execution .terminal-header-actions");
   const platformBar = document.querySelector("#terminal-platform-bar");
   const configPanel = document.querySelector("#terminal-platform-config-panel");
   const loginStarted = Boolean(state.terminalExecution.login_started);
@@ -2046,7 +2048,6 @@ function renderTerminalExecution() {
   const isHubRoute = route === "hub";
   section.dataset.terminalRoute = route;
 
-  if (headerActions) headerActions.classList.toggle("hidden", !isHubRoute);
   if (platformBar) {
     platformBar.classList.toggle("hidden", isHubRoute || route === "wechat");
     if (isHubRoute || route === "wechat") platformBar.innerHTML = "";
@@ -2061,18 +2062,11 @@ function renderTerminalExecution() {
   }
 
   if (initModal) initModal.classList.toggle("hidden", !state.terminalConfigOpen);
-  if (backButton) {
-    backButton.textContent = route === "hub" ? "" : "返回枢纽";
-    backButton.classList.toggle("hidden", route === "hub");
-    backButton.disabled = route === "hub";
-  }
-  if (routeLabel) routeLabel.textContent = route === "hub" ? "平台枢纽" : `${terminalPlatformName(route)} 终端`;
   if (routeHint) routeHint.textContent = route === "wechat"
     ? "视频号独立流程，配置、扫码队列、窗态和矩阵衔接都在本页闭环。"
     : route === "hub"
       ? "仅列平台入口，不混排扫码窗。"
       : "长会话平台统一模板，检测登录后再打开创作者后台。";
-  if (terminalShellTitle) terminalShellTitle.textContent = route === "hub" ? "终端执行" : `${terminalPlatformName(route)} 终端`;
   if (terminalShellDesc) terminalShellDesc.textContent = route === "hub"
     ? "先选平台，再进入平台专属子流程。"
     : "一次登录长期有效；失效后重新检测或重新登录。";
@@ -2081,25 +2075,6 @@ function renderTerminalExecution() {
     : route === "wechat"
       ? "视频号独立流程：配置、获取二维码、扫码、发布、进入下一账号。"
       : "长会话平台：选账号、检测登录、打开创作者后台。";
-  if (progressLabel) progressLabel.textContent = route === "hub" ? "平台数:" : route === "wechat" ? "总进度:" : "账号数:";
-  if (activeLabel) activeLabel.textContent = route === "hub" ? "分组数:" : route === "wechat" ? "运行窗:" : "账号卡:";
-  if (startLoginButton) {
-    startLoginButton.textContent = route === "hub" ? "刷新健康" : route === "wechat" ? "获取登录二维码" : "检测登录";
-    startLoginButton.disabled = false;
-  }
-  if (headerActions) {
-    const editConfigButtonHtml = route === "wechat"
-      ? `<button class="terminal-btn-primary" type="button" id="terminal-edit-config">修改配置</button>`
-      : "";
-    const saveConfigButtonHtml = route === "wechat"
-      ? `<button class="terminal-btn-primary" type="button" id="terminal-save-config">更新配置</button>`
-      : "";
-    headerActions.innerHTML = `
-      <button class="terminal-btn-primary" type="button" id="terminal-start-login">${route === "hub" ? "刷新健康" : route === "wechat" ? "获取登录二维码" : "检测登录"}</button>
-      ${editConfigButtonHtml}
-      ${saveConfigButtonHtml}
-    `;
-  }
 
   if (route === "hub") {
     if (state.terminalConfigOpen) {
@@ -2124,7 +2099,7 @@ function renderTerminalExecution() {
                   <div class="platform-name">${platformLogo(platform)}<strong>${item?.label || terminalPlatformName(platform)}</strong></div>
                   <span class="chip">${terminalSessionPolicyLabel(capability.sessionPolicy || (platform === "wechat" ? "daily_qr" : "persistent"))}</span>
                 </div>
-                <p class="muted">${platform === "wechat" ? "视频号独立流程，进入后只处理扫码、窗态和矩阵衔接。" : "长会话统一模板，进入后只做检测登录与打开创作者后台。"}</p>
+                <p class="muted">${platform === "wechat" ? "视频号独立流程，进入后只处理扫码、窗态和矩阵衔接。" : ""}</p>
                 <div class="terminal-entry-meta">
                   ${terminalStatusChip(platform, health)}
                 </div>
@@ -2170,13 +2145,13 @@ function renderTerminalExecution() {
             <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
           </div>
           <div class="terminal-entry-actions terminal-route-actions">
-            <button class="btn primary" type="button" data-terminal-start-action="1">获取登录二维码</button>
+            <button class="btn primary" type="button" data-terminal-start-action="1">更新所有二维码</button>
             <button class="btn secondary" type="button" data-terminal-edit-action="1">修改配置</button>
           </div>
           <div class="terminal-workspace terminal-workspace-wechat"></div>
         </section>
         <section class="terminal-log-panel">
-          <div class="panel-head"><h2>会话日志</h2><p class="muted">最近错误、重试建议和矩阵衔接信息。</p></div>
+          <div class="panel-head"><h2>会话日志</h2></div>
           <div class="terminal-log-list">
             <div class="muted">当前使用现有矩阵登录与任务状态，日志摘要后续可直接接入运行记录。</div>
           </div>
@@ -2971,7 +2946,8 @@ function terminalSessionPolicyLabel(policy) {
 
 function terminalRouteFromHash(hash = window.location.hash) {
   const raw = String(hash || "").replace(/^#/, "");
-  if (!raw || raw === "terminal-execution") return { view: "terminal-execution", route: "hub" };
+  if (!raw) return { view: "overview", route: "hub" };
+  if (raw === "terminal-execution") return { view: "terminal-execution", route: "hub" };
   if (raw.startsWith("terminal/")) return { view: "terminal-execution", route: raw.slice("terminal/".length) || "hub" };
   return { view: raw, route: "hub" };
 }
@@ -3005,7 +2981,7 @@ function terminalStatusChip(platform, text) {
 }
 
 function terminalCardButtonLabel(platform, health) {
-  if (platform === "wechat") return health === "已登录" ? "进入视频号终端" : "去扫码登录";
+  if (platform === "wechat") return "进入";
   if (health === "已登录") return "进入";
   if (health === "需重新登录") return "检测登录";
   if (health === "未配置浏览器") return "打开创作者后台";
@@ -3048,7 +3024,7 @@ function terminalPlatformCards() {
             </div>
             <span class="chip">${terminalSessionPolicyLabel(capability.sessionPolicy)}</span>
           </div>
-          <p class="muted">${platform === "wechat" ? "视频号独立流程，进入后只处理扫码、窗态和矩阵衔接。" : "长会话统一模板，进入后只做检测登录与打开创作者后台。"}</p>
+          <p class="muted">${platform === "wechat" ? "视频号独立流程，进入后只处理扫码、窗态和矩阵衔接。" : ""}</p>
           <div class="terminal-entry-meta">
             ${terminalStatusChip(platform, health)}
             <span class="system-status">${capability.canOpenBrowser ? "可打开浏览器" : "未配置浏览器"}</span>
@@ -3406,8 +3382,7 @@ function updateAccountPhoneHint() {
 
 function activateView(view, updateHash = true) {
   if (view === "terminal-execution") {
-    const routeInfo = terminalRouteFromHash();
-    state.terminalRoute = routeInfo.route;
+    state.terminalRoute = "hub";
   }
   const button = document.querySelector(`.nav-btn[data-view="${view}"]`);
   const section = document.querySelector(`#${view}`);
@@ -3429,9 +3404,7 @@ function activateView(view, updateHash = true) {
     });
   }
   if (updateHash && window.location.hash !== `#${view}`) {
-    const hash = view === "terminal-execution" && state.terminalRoute && state.terminalRoute !== "hub"
-      ? `#terminal/${state.terminalRoute}`
-      : `#${view}`;
+    const hash = view === "terminal-execution" ? "#terminal-execution" : `#${view}`;
     window.history.replaceState(null, "", hash);
   }
   window.scrollTo({ top: 0, left: 0 });
@@ -4304,14 +4277,11 @@ document.addEventListener("click", async (event) => {
   const configJump = event.target.closest("[data-terminal-config-jump]");
   const longDetect = event.target.closest("[data-terminal-long-detect]");
   const longOpen = event.target.closest("[data-terminal-long-open]");
-  const routeBack = event.target.closest("#terminal-route-back");
-  const terminalStart = event.target.closest("#terminal-start-login");
-  const terminalEdit = event.target.closest("#terminal-edit-config");
   const terminalSave = event.target.closest("#terminal-save-config, [data-terminal-save-config]");
   const embeddedStart = event.target.closest("[data-terminal-start-action]");
   const embeddedEdit = event.target.closest("[data-terminal-edit-action]");
-  if (!enter && !configJump && !longDetect && !longOpen && !terminalStart && !terminalEdit && !terminalSave && !routeBack && !embeddedStart && !embeddedEdit) return;
-  if (terminalStart || terminalEdit || terminalSave || enter || configJump || longDetect || longOpen || routeBack || embeddedStart || embeddedEdit) {
+  if (!enter && !configJump && !longDetect && !longOpen && !terminalSave && !embeddedStart && !embeddedEdit) return;
+  if (terminalSave || enter || configJump || longDetect || longOpen || embeddedStart || embeddedEdit) {
     event.stopImmediatePropagation();
   }
   if (terminalSave) {
@@ -4370,10 +4340,6 @@ document.addEventListener("click", async (event) => {
     }
     const account = terminalLongSessionAccounts(route)[0];
     if (account?.open_url) window.open(account.open_url, "_blank", "noopener,noreferrer");
-    return;
-  }
-  if (routeBack) {
-    terminalSetRoute("hub");
     return;
   }
   if (enter) {
