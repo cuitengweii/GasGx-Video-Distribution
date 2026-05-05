@@ -3635,6 +3635,21 @@ body.video-matrix-active #video-matrix {
   color: #ffb2bd;
 }
 
+.terminal-empty-state {
+  padding: 18px 20px;
+  border: 1px dashed rgba(93, 214, 44, 0.22);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.terminal-empty-state-large {
+  min-height: 220px;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 8px;
+}
+
 .terminal-stat-item span {
   color: var(--terminal-text-sub);
   margin-right: 8px;

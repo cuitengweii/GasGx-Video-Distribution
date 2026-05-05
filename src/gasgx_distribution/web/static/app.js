@@ -1242,6 +1242,10 @@ function platformIcon(key) {
   </span>`;
 }
 
+function platformLogo(key) {
+  return platformIcon(key);
+}
+
 function platformName(key) {
   return `<span class="platform-name">${platformIcon(key)}<span>${platformLabel(key)}</span></span>`;
 }
@@ -1900,13 +1904,35 @@ function renderTerminalExecution() {
   const routeHint = document.querySelector("#terminal-route-hint");
   const terminalShellTitle = document.querySelector("#terminal-shell-title");
   const terminalShellDesc = document.querySelector("#terminal-shell-desc");
+  const headerActions = document.querySelector("#terminal-execution .terminal-header-actions");
+  const platformBar = document.querySelector("#terminal-platform-bar");
+  const configPanel = document.querySelector("#terminal-platform-config-panel");
   const loginStarted = Boolean(state.terminalExecution.login_started);
   const summary = state.terminalExecution.summary || {};
   const platforms = (state.platforms || []).filter((item) => ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"].includes(item.key));
   const platformMap = new Map(platforms.map((item) => [item.key, item]));
+  const isHubRoute = route === "hub";
+
+  if (headerActions) headerActions.classList.toggle("hidden", !isHubRoute);
+  if (platformBar) {
+    platformBar.classList.toggle("hidden", isHubRoute);
+    if (isHubRoute) platformBar.innerHTML = "";
+  }
+  if (configPanel && isHubRoute) {
+    configPanel.classList.add("hidden");
+    configPanel.innerHTML = "";
+  }
+  if (!isHubRoute) {
+    renderTerminalPlatformBar();
+    renderTerminalConfigPanel();
+  }
 
   if (initModal) initModal.classList.toggle("hidden", !state.terminalConfigOpen);
-  if (backButton) backButton.textContent = route === "hub" ? "平台枢纽" : "返回枢纽";
+  if (backButton) {
+    backButton.textContent = route === "hub" ? "" : "返回枢纽";
+    backButton.classList.toggle("hidden", route === "hub");
+    backButton.disabled = route === "hub";
+  }
   if (routeLabel) routeLabel.textContent = route === "hub" ? "平台枢纽" : `${terminalPlatformName(route)} 终端`;
   if (routeHint) routeHint.textContent = route === "wechat"
     ? "视频号独立流程，配置、扫码队列、窗态和矩阵衔接都在本页闭环。"
@@ -1928,11 +1954,10 @@ function renderTerminalExecution() {
   if (activeLabel) activeLabel.textContent = route === "hub" ? "分组数:" : route === "wechat" ? "运行窗:" : "账号卡:";
   if (startLoginButton) {
     startLoginButton.textContent = route === "hub" ? "刷新健康" : route === "wechat" ? (loginStarted ? "登录中" : "开始登录") : "检测登录";
-    startLoginButton.disabled = false;
+    startLoginButton.disabled = route === "wechat" && loginStarted;
   }
   if (editConfigButton) {
     editConfigButton.textContent = route === "hub" ? "进入视频号" : route === "wechat" ? "修改配置" : "打开创作者后台";
-    editConfigButton.classList.toggle("hidden", route === "hub");
   }
 
   if (route === "hub") {
@@ -1940,13 +1965,14 @@ function renderTerminalExecution() {
       renderTerminalConfig();
     }
     const groups = [
-      { title: "视频号", items: ["wechat"] },
+      { title: "短会话平台", items: ["wechat"] },
       { title: "长会话平台", items: ["douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"] },
     ];
+    const hubHasCards = groups.some((group) => group.items.some((platform) => platformMap.has(platform)));
     workspace.innerHTML = `
       <div class="terminal-hub-layout">
         ${loadError ? `<div class="terminal-load-error">${loadError}</div>` : ""}
-        ${groups.map((group) => {
+        ${hubHasCards ? groups.map((group) => {
           const cards = group.items.filter((platform) => platformMap.has(platform)).map((platform) => {
             const item = platformMap.get(platform);
             const capability = state.terminalExecution.platform_capabilities?.[platform] || {};
@@ -1973,13 +1999,13 @@ function renderTerminalExecution() {
               <div class="panel-head">
                 <div>
                   <h2>${group.title}</h2>
-                  <p class="muted">${group.title === "视频号" ? "强调独立流程，不与其它平台混排。" : "统一长会话模板，平台间样式一致。"}</p>
+                  <p class="muted">${group.title === "短会话平台" ? "强调独立流程，不与其它平台混排。" : "统一长会话模板，平台间样式一致。"}</p>
                 </div>
               </div>
               <div class="terminal-entry-grid">${cards}</div>
             </section>
           `;
-        }).join("")}
+        }).join("") : `<div class="terminal-empty-state terminal-empty-state-large"><strong>终端执行暂无平台数据</strong><p class="muted">当前只渲染平台入口卡片。请先点击右上角“刷新健康”或检查平台配置后再进入具体平台。</p></div>`}
       </div>
     `;
     return;
@@ -1987,8 +2013,6 @@ function renderTerminalExecution() {
 
   if (route === "wechat") {
     renderTerminalConfig();
-    renderTerminalPlatformBar();
-    renderTerminalConfigPanel();
     workspace.innerHTML = `
       <div class="terminal-wechat-page">
         ${loadError ? `<div class="terminal-load-error">${loadError}</div>` : ""}
@@ -2005,7 +2029,7 @@ function renderTerminalExecution() {
             <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
           </div>
           <div class="terminal-entry-actions terminal-route-actions">
-            <button class="btn primary" type="button" data-terminal-start-action="1">开始登录</button>
+            <button class="btn primary" type="button" data-terminal-start-action="1" ${loginStarted ? "disabled" : ""}>${loginStarted ? "登录中" : "开始登录"}</button>
             <button class="btn secondary" type="button" data-terminal-edit-action="1">修改配置</button>
           </div>
           <div class="terminal-workspace terminal-workspace-wechat"></div>
@@ -2836,7 +2860,7 @@ function terminalCardButtonLabel(platform, health) {
 }
 
 function terminalPlatformName(platform) {
-  return platformName(platform);
+  return platformLabel(platform);
 }
 
 function terminalPlatformContextFor(platform) {
@@ -3394,7 +3418,7 @@ document.querySelector("#terminal-config-list")?.addEventListener("click", (even
   swatch.classList.add("active");
 });
 
-document.querySelector("#terminal-start-login")?.addEventListener("click", async (event) => {
+document.querySelector("#terminal-start-login-legacy")?.addEventListener("click", async (event) => {
   const restoreButton = setButtonLoading(event.currentTarget, "启动中");
   try {
     if (!state.terminalExecution.initialized || state.terminalConfigOpen) {
@@ -3413,7 +3437,7 @@ document.querySelector("#terminal-start-login")?.addEventListener("click", async
   }
 });
 
-document.querySelector("#terminal-edit-config")?.addEventListener("click", () => {
+document.querySelector("#terminal-edit-config-legacy")?.addEventListener("click", () => {
   state.terminalConfigOpen = true;
   renderTerminalExecution();
 });
