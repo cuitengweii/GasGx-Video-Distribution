@@ -13,10 +13,17 @@ from pydantic import BaseModel, Field
 from . import control_plane, service
 from .platforms import SUPPORTED_PLATFORMS
 from .public_settings import resolve_material_dir
-from .scheduler import scheduler_status, start_scheduler, trigger_matrix_wechat_job, trigger_matrix_wechat_login_check
+from .scheduler import (
+    scheduler_status,
+    start_scheduler,
+    trigger_matrix_wechat_job,
+    trigger_matrix_wechat_login_check,
+    trigger_matrix_wechat_stats_capture,
+)
 from .tenant import bind_tenant_database
 from .video_matrix.ffmpeg_tools import ffmpeg_runtime_health
 from .video_matrix_api import router as video_matrix_router
+from .wechat_stats_capture import capture_status
 
 
 def _model_payload(model: BaseModel, *, exclude_unset: bool = False) -> dict[str, Any]:
@@ -147,6 +154,12 @@ class OperatorWechatPayload(BaseModel):
 
 class SystemInitializePayload(BaseModel):
     password: str = ""
+
+
+class WechatStatsCapturePayload(BaseModel):
+    target_date: str = ""
+    limit: int = 0
+    dry_run: bool = False
 
 
 class OperatorRolePayload(BaseModel):
@@ -503,6 +516,18 @@ def create_app() -> FastAPI:
     def matrix_wechat_login_check() -> dict[str, Any]:
         return trigger_matrix_wechat_login_check()
 
+    @app.get("/api/jobs/matrix-wechat/stats-capture/status")
+    def matrix_wechat_stats_capture_status() -> dict[str, Any]:
+        return capture_status()
+
+    @app.post("/api/jobs/matrix-wechat/stats-capture/run-now")
+    def matrix_wechat_stats_capture_run_now(payload: WechatStatsCapturePayload) -> dict[str, Any]:
+        return trigger_matrix_wechat_stats_capture(
+            target_date=payload.target_date,
+            limit=payload.limit,
+            dry_run=payload.dry_run,
+        )
+
     @app.get("/api/login-qr-batches")
     def login_qr_batches(limit: int = Query(default=20)) -> list[dict[str, Any]]:
         return service.list_login_qr_batches(limit=limit)
@@ -633,8 +658,16 @@ def create_app() -> FastAPI:
         return {"ok": True, "deleted": task_id}
 
     @app.get("/api/stats")
-    def stats(account_id: int | None = Query(default=None), platform: str = Query(default="")) -> list[dict[str, Any]]:
-        return service.list_stats(account_id=account_id, platform=platform)
+    def stats(
+        account_id: int | None = Query(default=None),
+        platform: str = Query(default=""),
+        stat_date: str = Query(default=""),
+    ) -> list[dict[str, Any]]:
+        return service.list_stats(account_id=account_id, platform=platform, stat_date=stat_date)
+
+    @app.get("/api/stats/accounts")
+    def account_stats(account_id: int | None = Query(default=None), stat_date: str = Query(default="")) -> list[dict[str, Any]]:
+        return service.list_wechat_account_stats(account_id=account_id, stat_date=stat_date)
 
     @app.get("/api/stats/analytics")
     def stats_analytics() -> dict[str, list[dict[str, Any]]]:

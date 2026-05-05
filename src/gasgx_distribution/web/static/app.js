@@ -61,6 +61,7 @@ const state = {
   platforms: [],
   tasks: [],
   stats: [],
+  statsCaptureStatus: {},
   summary: {},
   distributionSettings: { common: {}, platforms: {} },
   matrixJobStatus: {},
@@ -2116,6 +2117,18 @@ function renderStats() {
     <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
   `).join("");
 
+  const statsCaptureStatus = state.statsCaptureStatus || {};
+  const statsCaptureNode = document.querySelector("#matrix-stats-capture-status");
+  if (statsCaptureNode) {
+    const latest = statsCaptureStatus.latest_run || {};
+    const lock = statsCaptureStatus.lock || {};
+    const parts = [];
+    if (latest.status) parts.push(latest.status);
+    if (latest.target_date) parts.push(latest.target_date);
+    if (!parts.length && lock.pid) parts.push(`PID ${lock.pid}`);
+    statsCaptureNode.textContent = parts.length ? parts.join(" · ") : "未加载";
+  }
+
   const statsAccountFilter = document.querySelector("#stats-account-filter");
   if (statsAccountFilter) {
     const activeAccounts = (state.accounts || [])
@@ -3002,11 +3015,22 @@ async function loadViewData(view, { force = false } = {}) {
       await Promise.all([
         loadPlatforms(),
         loadAccounts(),
-        api("/api/terminal-execution/state").then((terminalState) => {
-          state.terminalExecution = terminalState;
-        }),
       ]);
       renderTerminalExecution();
+      api("/api/terminal-execution/state")
+        .then((terminalState) => {
+          if (currentView !== "terminal-execution") return;
+          state.terminalExecution = terminalState;
+          renderTerminalExecution();
+        })
+        .catch((error) => {
+          if (currentView !== "terminal-execution") return;
+          state.terminalExecution = {
+            ...(state.terminalExecution || {}),
+            error: error.message || "加载终端执行数据失败",
+          };
+          renderTerminalExecution();
+        });
     } catch (error) {
       state.terminalExecution = {
         ...(state.terminalExecution || {}),
@@ -3020,6 +3044,7 @@ async function loadViewData(view, { force = false } = {}) {
     state.summary = await api("/api/summary");
     state.stats = await api("/api/stats");
     state.analytics = await api("/api/stats/analytics");
+    state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
     renderStats();
   } else if (view === "ai-robot") {
     state.aiRobotConfigs = await api("/api/ai-robots/configs");
@@ -3689,6 +3714,31 @@ setInterval(() => {
     })
     .catch(() => {});
 }, 15000);
+
+setInterval(() => {
+  if (!loadedViews.has("stats")) return;
+  api("/api/jobs/matrix-wechat/stats-capture/status")
+    .then((statsCaptureStatus) => {
+      state.statsCaptureStatus = statsCaptureStatus;
+      if (currentView === "stats") renderStats();
+    })
+    .catch(() => {});
+}, 15000);
+
+document.querySelector("#matrix-stats-capture-run-now")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const restoreButton = setButtonLoading(button, "采集中");
+  try {
+    await api("/api/jobs/matrix-wechat/stats-capture/run-now", {
+      method: "POST",
+      body: JSON.stringify({ target_date: "", limit: 0, dry_run: false }),
+    });
+    state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
+    renderStats();
+  } finally {
+    restoreButton();
+  }
+});
 
 document.addEventListener("click", async (event) => {
   const routeButton = event.target.closest("[data-notice-route]");

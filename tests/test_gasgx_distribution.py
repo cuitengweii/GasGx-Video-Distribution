@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from gasgx_distribution import service
 from gasgx_distribution import db as dist_db
 from gasgx_distribution import matrix_publish
+from gasgx_distribution import wechat_stats_capture
 from gasgx_distribution.db import connect
 from gasgx_distribution.supabase_backend import SupabaseError, SupabaseRestClient
 from gasgx_distribution.video_matrix.ingestion import _select_source_files
@@ -40,9 +41,12 @@ def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr("gasgx_distribution.db.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.service.get_paths", lambda: FakePaths())
+    monkeypatch.setattr("gasgx_distribution.wechat_stats_capture.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.public_settings.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.control_plane.get_paths", lambda: FakePaths())
     monkeypatch.setattr("gasgx_distribution.paths.get_paths", lambda: FakePaths())
+    service._SUPABASE_READ_CACHE.clear()
+    service._SUPABASE_APP_SETTINGS_CACHE.clear()
     dist_db.init_db(FakePaths.database_path)
 
 
@@ -120,6 +124,11 @@ def test_operator_auth_seed_uses_database_and_super_admin_password(monkeypatch, 
 
 def test_operator_auth_api_persists_roles_users_and_permissions(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
+    service._invalidate_terminal_execution_state_cache()
+    service._invalidate_terminal_execution_state_cache()
+    service._invalidate_terminal_execution_state_cache()
+    service._invalidate_terminal_execution_state_cache()
+    service._invalidate_terminal_execution_state_cache()
     client = TestClient(create_app())
 
     login = client.post("/api/auth/login", json={"user_id": "allen", "password": "cuitengwei2023"})
@@ -417,6 +426,94 @@ def test_api_smoke_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None
     assert stats.json()[0]["views"] == 100
 
 
+def test_wechat_stats_account_snapshots_are_idempotent_and_drive_summary(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
+
+    first = service.import_stats(
+        {
+            "account_snapshots": [
+                {
+                    "account_id": account["id"],
+                    "platform": "wechat",
+                    "stat_date": "2026-05-04",
+                    "views": 1000,
+                    "likes": 80,
+                    "comments": 12,
+                    "followers": 300,
+                    "works_count": 2,
+                }
+            ],
+            "video_snapshots": [
+                {"account_id": account["id"], "platform": "wechat", "stat_date": "2026-05-04", "video_ref": "v1", "title": "A", "views": 600},
+                {"account_id": account["id"], "platform": "wechat", "stat_date": "2026-05-04", "video_ref": "v2", "title": "B", "views": 400},
+            ],
+        }
+    )
+    second = service.import_stats(
+        {
+            "account_snapshots": [
+                {
+                    "account_id": account["id"],
+                    "platform": "wechat",
+                    "stat_date": "2026-05-04",
+                    "views": 1200,
+                    "likes": 90,
+                    "comments": 13,
+                    "followers": 310,
+                    "works_count": 2,
+                }
+            ],
+            "video_snapshots": [
+                {"account_id": account["id"], "platform": "wechat", "stat_date": "2026-05-04", "video_ref": "v1", "title": "A", "views": 700},
+            ],
+        }
+    )
+
+    assert first["account_snapshots"] == 1
+    assert second["account_snapshots"] == 1
+    account_stats = service.list_wechat_account_stats(account_id=account["id"], stat_date="2026-05-04")
+    assert len(account_stats) == 1
+    assert account_stats[0]["views"] == 1200
+    video_stats = service.list_stats(account_id=account["id"], platform="wechat", stat_date="2026-05-04")
+    assert sorted(item["video_ref"] for item in video_stats) == ["v1", "v2"]
+    assert next(item for item in video_stats if item["video_ref"] == "v1")["views"] == 700
+    assert service.dashboard_summary()["views"] == 1200
+
+
+def test_wechat_stats_parser_extracts_account_and_work_metrics() -> None:
+    parsed = wechat_stats_capture.parse_wechat_stats_payload(
+        {
+            "text": "播放量 1.2万\n点赞 860\n评论 42\n分享 18\n粉丝数 5000\n新增粉丝 +120\n主页访问量 300\n完播率 41.5%\n互动率 7.2%",
+            "works": [
+                {"title": "燃气机组现场", "video_ref": "feed-1", "views": "8000", "likes": "600"},
+                {"title": "油田自发电", "video_ref": "feed-2", "views": "4000", "comments": "12"},
+            ],
+        },
+        account_id=7,
+        target_date="2026-05-04",
+    )
+
+    assert parsed["account_snapshot"]["views"] == 12000
+    assert parsed["account_snapshot"]["followers"] == 5000
+    assert parsed["account_snapshot"]["completed_rate"] == 41.5
+    assert len(parsed["video_snapshots"]) == 2
+    assert parsed["video_snapshots"][0]["feed_id"] == "feed-1"
+
+
+def test_wechat_stats_capture_dry_run_uses_authorized_wechat_profiles(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
+
+    result = wechat_stats_capture.run_wechat_stats_capture(target_date="2026-05-04", limit=1, dry_run=True)
+
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    assert result["target_date"] == "2026-05-04"
+    assert result["planned_accounts"][0]["debug_port"] >= 12000
+    assert service.latest_wechat_stats_capture_run()["status"] == "completed"
+
+
 def test_delete_account_removes_related_platform_profile_tasks_and_stats(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     client = TestClient(create_app())
@@ -426,6 +523,7 @@ def test_delete_account_removes_related_platform_profile_tasks_and_stats(monkeyp
     ).json()
     task = client.post("/api/tasks", json={"account_id": account["id"], "platform": "wechat", "task_type": "publish"}).json()
     assert client.post("/api/stats/import", json={"account_id": account["id"], "platform": "wechat", "video_ref": "v1", "views": 10}).status_code == 200
+    service.import_stats({"account_snapshots": [{"account_id": account["id"], "platform": "wechat", "stat_date": "2026-05-04", "views": 10}]})
 
     deleted = client.delete(f"/api/accounts/{account['id']}")
 
@@ -438,6 +536,7 @@ def test_delete_account_removes_related_platform_profile_tasks_and_stats(monkeyp
         assert conn.execute("SELECT COUNT(*) AS c FROM account_platforms WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM browser_profiles WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM video_stats_snapshots WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM wechat_stats_account_snapshots WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
 
 
 def test_control_plane_provisions_isolated_brand_databases(monkeypatch, tmp_path: Path) -> None:
@@ -674,6 +773,7 @@ def test_control_plane_can_use_supabase_rest_backend(monkeypatch, tmp_path: Path
     monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.post", fake_post)
     monkeypatch.setattr("gasgx_distribution.supabase_backend.requests.patch", fake_patch)
 
+    service._invalidate_terminal_execution_state_cache()
     client = TestClient(create_app())
     created = client.post(
         "/control/brands",
@@ -809,6 +909,8 @@ def test_brand_supabase_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) ->
         "browser_profiles": [],
         "automation_tasks": [],
         "video_stats_snapshots": [],
+        "wechat_stats_account_snapshots": [],
+        "wechat_stats_capture_runs": [],
     }
     counters = {key: 0 for key in store}
 
@@ -1394,6 +1496,45 @@ def test_terminal_execution_state_exposes_platform_breakdown(monkeypatch, tmp_pa
     assert data["platform_capabilities"]["wechat"]["sessionPolicy"] == "daily_qr"
     assert data["platform_capabilities"]["douyin"]["sessionPolicy"] == "persistent"
     assert data["profile_by_platform"]["wechat"]["browserRuntime"] == "terminal-execution"
+
+
+def test_terminal_execution_state_normalizes_legacy_qr_data_url(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "aamecc",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "qr_data_url": "data:image/png;base64,QUJD",
+                        "accounts": [
+                            {"id": 9, "display_name": "GasGx test07", "account_key": "gasgx-gasgx-test07-2510", "status": "waiting_qr", "status_text": "????...", "task_id": None, "publish_success_count": 0}
+                        ],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    service._invalidate_terminal_execution_state_cache()
+    client = TestClient(create_app())
+    payload = client.get("/api/terminal-execution/state")
+
+    assert payload.status_code == 200
+    data = payload.json()
+    assert data["windows"][0]["qr_url"] == "data:image/png;base64,QUJD"
 
 
 def test_terminal_qr_cache_falls_back_when_account_lookup_times_out(monkeypatch, tmp_path: Path) -> None:

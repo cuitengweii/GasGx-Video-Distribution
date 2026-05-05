@@ -30,6 +30,15 @@ DEFAULT_MATRIX_WECHAT_JOB_SETTINGS: dict[str, Any] = {
     "retry_failed_last": True,
 }
 
+DEFAULT_MATRIX_WECHAT_STATS_CAPTURE_SETTINGS: dict[str, Any] = {
+    "enabled": False,
+    "batch_size": 5,
+    "run_interval_minutes": 1440,
+    "schedule_mode": "daily",
+    "daily_time": "08:30",
+    "limit": 0,
+}
+
 DEFAULT_PLATFORM_SETTINGS: dict[str, Any] = {
     "enabled": True,
     "content_type": "short_video",
@@ -146,10 +155,37 @@ def _normalize_matrix_wechat_job(payload: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _normalize_matrix_wechat_stats_capture_job(payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(DEFAULT_MATRIX_WECHAT_STATS_CAPTURE_SETTINGS)
+    merged.update({key: value for key, value in payload.items() if key in merged})
+    merged["enabled"] = _normalize_bool(merged.get("enabled"))
+    merged["batch_size"] = _normalize_positive_int(merged.get("batch_size"), 5, minimum=1, maximum=30)
+    merged["run_interval_minutes"] = _normalize_positive_int(
+        merged.get("run_interval_minutes"),
+        1440,
+        minimum=5,
+        maximum=10080,
+    )
+    schedule_mode = str(merged.get("schedule_mode") or "daily").strip().lower()
+    merged["schedule_mode"] = "interval" if schedule_mode == "interval" else "daily"
+    raw_daily_time = str(merged.get("daily_time") or "08:30").strip()
+    try:
+        hour_text, minute_text = raw_daily_time.split(":", 1)
+        hour = min(23, max(0, int(hour_text)))
+        minute = min(59, max(0, int(minute_text)))
+    except Exception:
+        hour, minute = 8, 30
+    merged["daily_time"] = f"{hour:02d}:{minute:02d}"
+    merged["limit"] = _normalize_positive_int(merged.get("limit"), 1, minimum=0, maximum=200)
+    return merged
+
+
 def _normalize_jobs(payload: dict[str, Any]) -> dict[str, Any]:
     raw_matrix = payload.get("matrix_wechat_publish")
+    raw_stats = payload.get("matrix_wechat_stats_capture")
     return {
-        "matrix_wechat_publish": _normalize_matrix_wechat_job(raw_matrix if isinstance(raw_matrix, dict) else {})
+        "matrix_wechat_publish": _normalize_matrix_wechat_job(raw_matrix if isinstance(raw_matrix, dict) else {}),
+        "matrix_wechat_stats_capture": _normalize_matrix_wechat_stats_capture_job(raw_stats if isinstance(raw_stats, dict) else {}),
     }
 
 

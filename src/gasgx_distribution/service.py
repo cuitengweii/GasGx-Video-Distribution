@@ -623,6 +623,12 @@ def _seed_analytics_items() -> list[tuple[str, str, dict[str, Any]]]:
 
 def list_analytics_items() -> dict[str, list[dict[str, Any]]]:
     if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        if hasattr(client, "select_where"):
+            real_items = _build_real_analytics_items()
+            if real_items:
+                return real_items
+    if brand_database_backend() == "supabase":
         if _supabase_read_cache_peek("analytics_items"):
             return _supabase_read_cache_get("analytics_items")
         rows = _brand_supabase().select("analytics_items", order="sort_order.asc,id.asc")
@@ -1440,7 +1446,18 @@ def _load_terminal_state() -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {"windows": [], "config": [], "initialized": False, "updated_at": 0}
-    return payload if isinstance(payload, dict) else {"windows": [], "config": [], "initialized": False, "updated_at": 0}
+    if not isinstance(payload, dict):
+        return {"windows": [], "config": [], "initialized": False, "updated_at": 0}
+    windows = payload.get("windows") or []
+    if isinstance(windows, list):
+        for window in windows:
+            if not isinstance(window, dict):
+                continue
+            if not str(window.get("qr_url") or "").strip() and str(window.get("qr_data_url") or "").strip():
+                window["qr_url"] = str(window.get("qr_data_url") or "")
+            if not str(window.get("qr_path") or "").strip() and str(window.get("qr_cache_path") or "").strip():
+                window["qr_path"] = str(window.get("qr_cache_path") or "")
+    return payload
 
 
 def _save_terminal_state(payload: dict[str, Any]) -> None:
@@ -1561,7 +1578,7 @@ def terminal_execution_state() -> dict[str, Any]:
         visible_windows = []
         for window in windows:
             visible_window = dict(window)
-            visible_window["qr_url"] = ""
+            visible_window["qr_url"] = str(window.get("qr_url") or window.get("qr_data_url") or "")
             visible_window["manual_available_at"] = 0
             visible_accounts = []
             for index, account in enumerate(window.get("accounts") or []):
@@ -1734,6 +1751,8 @@ def start_terminal_login() -> dict[str, Any]:
             qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), int(current["id"]))
             window["qr_path"] = qr_path
             window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
+            if not window["qr_url"] and str(window.get("qr_data_url") or "").strip():
+                window["qr_url"] = str(window.get("qr_data_url") or "")
         except Exception as exc:
             current["status"] = "error"
             current["status_text"] = str(exc)
@@ -1778,6 +1797,8 @@ def _advance_terminal_window(window: dict[str, Any]) -> None:
             qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
             window["qr_path"] = qr_path
             window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
+            if not window.get("qr_url") and str(window.get("qr_data_url") or "").strip():
+                window["qr_url"] = str(window.get("qr_data_url") or "")
         return
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     window["qr_path"] = ""
@@ -1808,6 +1829,8 @@ def _advance_terminal_window(window: dict[str, Any]) -> None:
                 qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), int(next_account["id"]))
                 window["qr_path"] = qr_path
                 window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
+                if not window["qr_url"] and str(window.get("qr_data_url") or "").strip():
+                    window["qr_url"] = str(window.get("qr_data_url") or "")
             except Exception as exc:
                 next_account["status"] = "error"
                 next_account["status_text"] = str(exc)
@@ -2522,13 +2545,17 @@ def delete_account(account_id: int) -> bool:
         client.delete("automation_tasks", filters={"account_id": account_id})
         client.delete("video_stats_snapshots", filters={"account_id": account_id})
         try:
+            client.delete("wechat_stats_account_snapshots", filters={"account_id": account_id})
+        except SupabaseError:
+            pass
+        try:
             client.delete("browser_profiles", filters={"account_id": account_id})
         except SupabaseError:
             for platform_id in platform_ids:
                 client.delete("browser_profiles", filters={"account_platform_id": platform_id})
         client.delete("account_platforms", filters={"account_id": account_id})
         client.delete("matrix_accounts", filters={"id": account_id})
-        _invalidate_supabase_read_cache("accounts", "dashboard_summary", "stats:all")
+        _invalidate_supabase_read_cache("accounts", "dashboard_summary", "stats:all", "stats:accounts")
         return True
     ensure_database()
     with connect() as conn:
@@ -2537,6 +2564,7 @@ def delete_account(account_id: int) -> bool:
             return False
         conn.execute("DELETE FROM automation_tasks WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM video_stats_snapshots WHERE account_id = ?", (account_id,))
+        conn.execute("DELETE FROM wechat_stats_account_snapshots WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM browser_profiles WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM account_platforms WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM matrix_accounts WHERE id = ?", (account_id,))
@@ -2888,64 +2916,255 @@ def update_tasks_status(task_ids: list[int], status: str) -> int:
         return int(cursor.rowcount or 0)
 
 
+def _stats_int(value: Any) -> int:
+    try:
+        if isinstance(value, str):
+            cleaned = value.strip().replace(",", "").replace("，", "")
+            if cleaned.endswith("万"):
+                return int(float(cleaned[:-1] or 0) * 10000)
+            return int(float(cleaned or 0))
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _stats_float(value: Any) -> float:
+    try:
+        if isinstance(value, str):
+            return float(value.strip().replace("%", "") or 0)
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def _stats_date(value: Any) -> str:
+    return str(value or "").strip()[:10]
+
+
+def _stats_json(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value if value is not None else {}, ensure_ascii=False)
+
+
+def _normalize_account_stats_snapshot(item: dict[str, Any], *, captured_at: int | None = None) -> dict[str, Any]:
+    ts = now_ts() if captured_at is None else int(captured_at)
+    return {
+        "account_id": int(item.get("account_id") or 0),
+        "platform": normalize_platform(str(item.get("platform") or "wechat")) or "wechat",
+        "stat_date": _stats_date(item.get("stat_date") or item.get("date")),
+        "views": _stats_int(item.get("views")),
+        "likes": _stats_int(item.get("likes")),
+        "comments": _stats_int(item.get("comments")),
+        "shares": _stats_int(item.get("shares")),
+        "messages": _stats_int(item.get("messages")),
+        "followers": _stats_int(item.get("followers")),
+        "follower_delta": _stats_int(item.get("follower_delta")),
+        "profile_visits": _stats_int(item.get("profile_visits")),
+        "leads": _stats_int(item.get("leads")),
+        "completed_rate": _stats_float(item.get("completed_rate")),
+        "interaction_rate": _stats_float(item.get("interaction_rate")),
+        "works_count": _stats_int(item.get("works_count")),
+        "source": str(item.get("source") or "wechat_stats_capture"),
+        "raw_json": _stats_json(item.get("raw_json") if "raw_json" in item else item),
+        "captured_at": int(item.get("captured_at") or ts),
+        "created_at": ts,
+        "updated_at": ts,
+    }
+
+
+def _normalize_video_stats_snapshot(item: dict[str, Any], *, captured_at: int | None = None) -> dict[str, Any]:
+    ts = now_ts() if captured_at is None else int(captured_at)
+    video_ref = str(item.get("video_ref") or item.get("feed_id") or "").strip()
+    return {
+        "account_id": item.get("account_id"),
+        "platform": normalize_platform(str(item.get("platform") or "wechat")),
+        "video_ref": video_ref,
+        "stat_date": _stats_date(item.get("stat_date") or item.get("date")),
+        "title": str(item.get("title") or "").strip(),
+        "feed_id": str(item.get("feed_id") or video_ref).strip(),
+        "views": _stats_int(item.get("views")),
+        "likes": _stats_int(item.get("likes")),
+        "comments": _stats_int(item.get("comments")),
+        "shares": _stats_int(item.get("shares")),
+        "messages": _stats_int(item.get("messages")),
+        "published_at": str(item.get("published_at") or ""),
+        "source": str(item.get("source") or ""),
+        "raw_json": _stats_json(item.get("raw_json") if "raw_json" in item else item),
+        "captured_at": int(item.get("captured_at") or ts),
+    }
+
+
+def upsert_wechat_account_stats_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+    ensure_database()
+    payload = _normalize_account_stats_snapshot(item)
+    if payload["account_id"] <= 0 or not payload["stat_date"]:
+        raise ValueError("account_id and stat_date are required")
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        row = client.upsert(
+            "wechat_stats_account_snapshots",
+            {**payload, "raw_json": _json_payload(payload["raw_json"], {})},
+            on_conflict="account_id,platform,stat_date",
+        )
+        _invalidate_supabase_read_cache("dashboard_summary", "stats:all", "stats:accounts")
+        return row
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO wechat_stats_account_snapshots(
+                account_id, platform, stat_date, views, likes, comments, shares, messages,
+                followers, follower_delta, profile_visits, leads, completed_rate,
+                interaction_rate, works_count, source, raw_json, captured_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id, platform, stat_date) DO UPDATE SET
+                views = excluded.views,
+                likes = excluded.likes,
+                comments = excluded.comments,
+                shares = excluded.shares,
+                messages = excluded.messages,
+                followers = excluded.followers,
+                follower_delta = excluded.follower_delta,
+                profile_visits = excluded.profile_visits,
+                leads = excluded.leads,
+                completed_rate = excluded.completed_rate,
+                interaction_rate = excluded.interaction_rate,
+                works_count = excluded.works_count,
+                source = excluded.source,
+                raw_json = excluded.raw_json,
+                captured_at = excluded.captured_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                payload["account_id"],
+                payload["platform"],
+                payload["stat_date"],
+                payload["views"],
+                payload["likes"],
+                payload["comments"],
+                payload["shares"],
+                payload["messages"],
+                payload["followers"],
+                payload["follower_delta"],
+                payload["profile_visits"],
+                payload["leads"],
+                payload["completed_rate"],
+                payload["interaction_rate"],
+                payload["works_count"],
+                payload["source"],
+                payload["raw_json"],
+                payload["captured_at"],
+                payload["created_at"],
+                payload["updated_at"],
+            ),
+        )
+    return payload
+
+
+def _delete_matching_video_snapshot(client: SupabaseRestClient, payload: dict[str, Any]) -> None:
+    if payload.get("stat_date") and payload.get("video_ref") and payload.get("account_id"):
+        client.delete(
+            "video_stats_snapshots",
+            filters={
+                "account_id": payload["account_id"],
+                "platform": payload["platform"],
+                "stat_date": payload["stat_date"],
+                "video_ref": payload["video_ref"],
+            },
+        )
+
+
+def _insert_video_stats_snapshot_sqlite(conn, payload: dict[str, Any]) -> None:
+    if payload.get("stat_date") and payload.get("video_ref") and payload.get("account_id"):
+        conn.execute(
+            """
+            DELETE FROM video_stats_snapshots
+            WHERE account_id = ? AND platform = ? AND stat_date = ? AND video_ref = ?
+            """,
+            (payload["account_id"], payload["platform"], payload["stat_date"], payload["video_ref"]),
+        )
+    conn.execute(
+        """
+        INSERT INTO video_stats_snapshots(
+            account_id, platform, video_ref, stat_date, title, feed_id, views, likes,
+            comments, shares, messages, published_at, source, raw_json, captured_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["account_id"],
+            payload["platform"],
+            payload["video_ref"],
+            payload["stat_date"],
+            payload["title"],
+            payload["feed_id"],
+            payload["views"],
+            payload["likes"],
+            payload["comments"],
+            payload["shares"],
+            payload["messages"],
+            payload["published_at"],
+            payload["source"],
+            payload["raw_json"],
+            payload["captured_at"],
+        ),
+    )
+
+
 def import_stats(payload: dict[str, Any]) -> dict[str, Any]:
     ensure_database()
     ts = now_ts()
-    rows = payload.get("items")
+    account_rows = payload.get("account_snapshots")
+    if not isinstance(account_rows, list):
+        account_rows = []
+    account_inserted = 0
+    for item in account_rows:
+        if isinstance(item, dict):
+            upsert_wechat_account_stats_snapshot(item)
+            account_inserted += 1
+    rows = payload.get("video_snapshots")
     if not isinstance(rows, list):
-        rows = [payload]
+        rows = payload.get("items")
+    if not isinstance(rows, list):
+        rows = [] if account_rows and "video_ref" not in payload and "views" not in payload else [payload]
     inserted = 0
     if brand_database_backend() == "supabase":
         client = _brand_supabase()
         for item in rows:
             if not isinstance(item, dict):
                 continue
+            if str(item.get("snapshot_type") or "").strip() == "account_daily":
+                upsert_wechat_account_stats_snapshot(item)
+                account_inserted += 1
+                continue
+            normalized = _normalize_video_stats_snapshot(item, captured_at=ts)
+            _delete_matching_video_snapshot(client, normalized)
             client.insert(
                 "video_stats_snapshots",
                 {
-                    "account_id": item.get("account_id"),
-                    "platform": normalize_platform(str(item.get("platform") or "")),
-                    "video_ref": str(item.get("video_ref") or ""),
-                    "views": int(item.get("views") or 0),
-                    "likes": int(item.get("likes") or 0),
-                    "comments": int(item.get("comments") or 0),
-                    "shares": int(item.get("shares") or 0),
-                    "messages": int(item.get("messages") or 0),
-                    "published_at": str(item.get("published_at") or ""),
-                    "captured_at": int(item.get("captured_at") or ts),
+                    **normalized,
+                    "raw_json": _json_payload(normalized["raw_json"], {}),
                 },
             )
             inserted += 1
         if inserted:
-            _invalidate_supabase_read_cache("dashboard_summary", "stats:all")
-        return {"ok": True, "inserted": inserted}
+            _invalidate_supabase_read_cache("dashboard_summary", "stats:all", "stats:accounts")
+        return {"ok": True, "inserted": inserted, "account_snapshots": account_inserted}
     with connect() as conn:
         for item in rows:
             if not isinstance(item, dict):
                 continue
-            conn.execute(
-                """
-                INSERT INTO video_stats_snapshots(account_id, platform, video_ref, views, likes, comments, shares, messages, published_at, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item.get("account_id"),
-                    normalize_platform(str(item.get("platform") or "")),
-                    str(item.get("video_ref") or ""),
-                    int(item.get("views") or 0),
-                    int(item.get("likes") or 0),
-                    int(item.get("comments") or 0),
-                    int(item.get("shares") or 0),
-                    int(item.get("messages") or 0),
-                    str(item.get("published_at") or ""),
-                    int(item.get("captured_at") or ts),
-                ),
-            )
+            if str(item.get("snapshot_type") or "").strip() == "account_daily":
+                upsert_wechat_account_stats_snapshot(item)
+                account_inserted += 1
+                continue
+            _insert_video_stats_snapshot_sqlite(conn, _normalize_video_stats_snapshot(item, captured_at=ts))
             inserted += 1
-    return {"ok": True, "inserted": inserted}
+    return {"ok": True, "inserted": inserted, "account_snapshots": account_inserted}
 
 
-def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[str, Any]]:
+def list_stats(account_id: int | None = None, platform: str = "", stat_date: str = "") -> list[dict[str, Any]]:
     if brand_database_backend() == "supabase":
         params: dict[str, str] = {}
         if account_id:
@@ -2953,10 +3172,27 @@ def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[s
         token = normalize_platform(platform)
         if token:
             params["platform"] = f"eq.{token}"
+        day = _stats_date(stat_date)
+        if day:
+            params["stat_date"] = f"eq.{day}"
         cache_key = "stats:all"
         if not params and _supabase_read_cache_peek(cache_key):
             return _supabase_read_cache_get(cache_key)
-        rows = _brand_supabase().select_where("video_stats_snapshots", params=params, order="captured_at.desc,id.desc")
+        client = _brand_supabase()
+        try:
+            if hasattr(client, "select_where"):
+                rows = client.select_where("video_stats_snapshots", params=params, order="captured_at.desc,id.desc")
+            else:
+                rows = client.select("video_stats_snapshots")
+                if params:
+                    if account_id:
+                        rows = [row for row in rows if int(row.get("account_id") or 0) == int(account_id)]
+                    if token:
+                        rows = [row for row in rows if normalize_platform(str(row.get("platform") or "")) == token]
+                    if day:
+                        rows = [row for row in rows if str(row.get("stat_date") or "") == day]
+        except Exception:
+            rows = []
         if not params:
             _supabase_read_cache_set(cache_key, rows)
         return copy.deepcopy(rows)
@@ -2970,6 +3206,10 @@ def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[s
     if token:
         clauses.append("platform = ?")
         values.append(token)
+    day = _stats_date(stat_date)
+    if day:
+        clauses.append("stat_date = ?")
+        values.append(day)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with connect() as conn:
         return [
@@ -2979,6 +3219,269 @@ def list_stats(account_id: int | None = None, platform: str = "") -> list[dict[s
                 values,
             )
         ]
+
+
+def list_wechat_account_stats(account_id: int | None = None, stat_date: str = "") -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        params: dict[str, str] = {}
+        if account_id:
+            params["account_id"] = f"eq.{account_id}"
+        day = _stats_date(stat_date)
+        if day:
+            params["stat_date"] = f"eq.{day}"
+        cache_key = "stats:accounts" if not params else ""
+        if cache_key and _supabase_read_cache_peek(cache_key):
+            return _supabase_read_cache_get(cache_key)
+        try:
+            client = _brand_supabase()
+            if hasattr(client, "select_where"):
+                rows = client.select_where("wechat_stats_account_snapshots", params=params, order="stat_date.desc,captured_at.desc,id.desc")
+            else:
+                rows = client.select("wechat_stats_account_snapshots")
+                if params:
+                    if account_id:
+                        rows = [row for row in rows if int(row.get("account_id") or 0) == int(account_id)]
+                    if day:
+                        rows = [row for row in rows if str(row.get("stat_date") or "") == day]
+        except Exception:
+            rows = []
+        if cache_key:
+            _supabase_read_cache_set(cache_key, rows)
+        return copy.deepcopy(rows)
+    ensure_database()
+    clauses: list[str] = []
+    values: list[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        values.append(account_id)
+    day = _stats_date(stat_date)
+    if day:
+        clauses.append("stat_date = ?")
+        values.append(day)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with connect() as conn:
+        return [
+            dict_from_row(row)
+            for row in conn.execute(
+                f"SELECT * FROM wechat_stats_account_snapshots {where} ORDER BY stat_date DESC, captured_at DESC, id DESC LIMIT 1000",
+                values,
+            )
+        ]
+
+
+def latest_wechat_account_stats_index() -> dict[int, dict[str, Any]]:
+    rows = list_wechat_account_stats()
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        account_id = int(row.get("account_id") or 0)
+        if account_id > 0 and account_id not in result:
+            result[account_id] = row
+    return result
+
+
+def upsert_wechat_stats_capture_run(payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_database()
+    ts = now_ts()
+    run_id = str(payload.get("run_id") or "").strip()
+    if not run_id:
+        raise ValueError("run_id is required")
+    data = {
+        "run_id": run_id,
+        "target_date": _stats_date(payload.get("target_date")),
+        "status": str(payload.get("status") or "running").strip(),
+        "batch_size": _stats_int(payload.get("batch_size") or 5),
+        "limit_accounts": _stats_int(payload.get("limit_accounts")),
+        "dry_run": 1 if bool(payload.get("dry_run")) else 0,
+        "account_total": _stats_int(payload.get("account_total")),
+        "captured_accounts": _stats_int(payload.get("captured_accounts")),
+        "skipped_accounts": _stats_int(payload.get("skipped_accounts")),
+        "failed_accounts": _stats_int(payload.get("failed_accounts")),
+        "payload_json": _stats_json(payload.get("payload_json") if "payload_json" in payload else payload),
+        "error": str(payload.get("error") or ""),
+        "started_at": int(payload.get("started_at") or ts),
+        "finished_at": payload.get("finished_at"),
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    if brand_database_backend() == "supabase":
+        try:
+            return _brand_supabase().upsert(
+                "wechat_stats_capture_runs",
+                {**data, "payload_json": _json_payload(data["payload_json"], {})},
+                on_conflict="run_id",
+            )
+        except SupabaseError:
+            return data
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO wechat_stats_capture_runs(
+                run_id, target_date, status, batch_size, limit_accounts, dry_run,
+                account_total, captured_accounts, skipped_accounts, failed_accounts,
+                payload_json, error, started_at, finished_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                target_date = excluded.target_date,
+                status = excluded.status,
+                batch_size = excluded.batch_size,
+                limit_accounts = excluded.limit_accounts,
+                dry_run = excluded.dry_run,
+                account_total = excluded.account_total,
+                captured_accounts = excluded.captured_accounts,
+                skipped_accounts = excluded.skipped_accounts,
+                failed_accounts = excluded.failed_accounts,
+                payload_json = excluded.payload_json,
+                error = excluded.error,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                data["run_id"],
+                data["target_date"],
+                data["status"],
+                data["batch_size"],
+                data["limit_accounts"],
+                data["dry_run"],
+                data["account_total"],
+                data["captured_accounts"],
+                data["skipped_accounts"],
+                data["failed_accounts"],
+                data["payload_json"],
+                data["error"],
+                data["started_at"],
+                data["finished_at"],
+                data["created_at"],
+                data["updated_at"],
+            ),
+        )
+    return data
+
+
+def latest_wechat_stats_capture_run() -> dict[str, Any]:
+    if brand_database_backend() == "supabase":
+        try:
+            rows = _brand_supabase().select("wechat_stats_capture_runs", order="started_at.desc,id.desc")
+        except SupabaseError:
+            return {}
+        return copy.deepcopy(rows[0]) if rows else {}
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM wechat_stats_capture_runs ORDER BY started_at DESC, id DESC LIMIT 1").fetchone()
+        return dict_from_row(row) if row else {}
+
+
+def _format_compact_number(value: int) -> str:
+    number = int(value or 0)
+    if abs(number) >= 10000:
+        return f"{number / 10000:.1f}万"
+    return f"{number:,}"
+
+
+def _format_signed(value: int) -> str:
+    number = int(value or 0)
+    return f"+{number:,}" if number >= 0 else f"{number:,}"
+
+
+def _rate_text(value: Any) -> str:
+    rate = _stats_float(value)
+    return f"{rate:.1f}%"
+
+
+def _account_name_index() -> dict[int, dict[str, Any]]:
+    return {int(item.get("id") or 0): item for item in list_accounts()}
+
+
+def _build_real_analytics_items() -> dict[str, list[dict[str, Any]]]:
+    account_rows = list_wechat_account_stats()
+    video_rows = list_stats(platform="wechat")
+    if not account_rows and not video_rows:
+        return {}
+    latest_date = max([str(row.get("stat_date") or "") for row in account_rows if row.get("stat_date")] or [""])
+    if latest_date:
+        account_rows = [row for row in account_rows if str(row.get("stat_date") or "") == latest_date]
+        video_rows_for_date = [row for row in video_rows if str(row.get("stat_date") or "") == latest_date]
+    else:
+        video_rows_for_date = video_rows
+    account_index = _account_name_index()
+    total_views = sum(_stats_int(row.get("views")) for row in account_rows) or sum(_stats_int(row.get("views")) for row in video_rows_for_date)
+    total_likes = sum(_stats_int(row.get("likes")) for row in account_rows) or sum(_stats_int(row.get("likes")) for row in video_rows_for_date)
+    total_comments = sum(_stats_int(row.get("comments")) for row in account_rows) or sum(_stats_int(row.get("comments")) for row in video_rows_for_date)
+    total_shares = sum(_stats_int(row.get("shares")) for row in account_rows) or sum(_stats_int(row.get("shares")) for row in video_rows_for_date)
+    total_messages = sum(_stats_int(row.get("messages")) for row in account_rows)
+    followers = sum(_stats_int(row.get("followers")) for row in account_rows)
+    follower_delta = sum(_stats_int(row.get("follower_delta")) for row in account_rows)
+    works_count = sum(_stats_int(row.get("works_count")) for row in account_rows) or len(video_rows_for_date)
+    overview = [
+        {"label": "统计日期", "value": latest_date or "最新", "change": "", "trend": "up"},
+        {"label": "账号播放量", "value": _format_compact_number(total_views), "change": "", "trend": "up"},
+        {"label": "矩阵总粉丝", "value": _format_compact_number(followers), "change": _format_signed(follower_delta), "trend": "up" if follower_delta >= 0 else "down"},
+        {"label": "作品采集数", "value": works_count, "change": "", "trend": "up"},
+    ]
+    account_rank = []
+    for row in sorted(account_rows, key=lambda item: _stats_int(item.get("views")), reverse=True):
+        account = account_index.get(int(row.get("account_id") or 0), {})
+        views = _stats_int(row.get("views"))
+        interactions = _stats_int(row.get("likes")) + _stats_int(row.get("comments")) + _stats_int(row.get("shares"))
+        tier = "爆款账号" if views >= 50000 else ("稳定账号" if views >= 10000 else "潜力账号")
+        warning = "低流量" if views < 1000 else ""
+        account_rank.append(
+            {
+                "row": [
+                    account.get("display_name") or account.get("account_key") or f"账号 {row.get('account_id')}",
+                    "视频号",
+                    account.get("status") or "active",
+                    _format_compact_number(views),
+                    _format_compact_number(views),
+                    _format_compact_number(_stats_int(row.get("followers"))),
+                    _format_signed(_stats_int(row.get("follower_delta"))),
+                    _rate_text(row.get("completed_rate")),
+                    _rate_text(row.get("interaction_rate") or ((interactions / views * 100) if views else 0)),
+                    _stats_int(row.get("works_count")),
+                    tier,
+                    warning,
+                ]
+            }
+        )
+    content_top = [
+        {
+            "title": str(row.get("title") or row.get("video_ref") or "未命名作品"),
+            "value": _format_compact_number(_stats_int(row.get("views"))),
+            "tag": "高播放" if _stats_int(row.get("views")) >= 10000 else "普通",
+        }
+        for row in sorted(video_rows_for_date, key=lambda item: _stats_int(item.get("views")), reverse=True)[:10]
+    ]
+    conversion = [
+        {"label": "主页访问量", "value": _format_compact_number(sum(_stats_int(row.get("profile_visits")) for row in account_rows))},
+        {"label": "私信咨询量", "value": _format_compact_number(total_messages)},
+        {"label": "有效线索数", "value": _format_compact_number(sum(_stats_int(row.get("leads")) for row in account_rows))},
+        {"label": "整体互动量", "value": _format_compact_number(total_likes + total_comments + total_shares)},
+    ]
+    captured = len(account_rows)
+    active_accounts = len([item for item in account_index.values() if str(item.get("status") or "") == "active"])
+    coverage = round((captured / active_accounts * 100), 1) if active_accounts else 0
+    risks = []
+    low_rows = [row for row in account_rows if _stats_int(row.get("views")) < 1000]
+    if low_rows:
+        risks.append({"text": f"{len(low_rows)} 个账号播放低于 1000，需复盘内容或登录状态"})
+    if coverage < 100 and active_accounts:
+        risks.append({"text": f"本次采集覆盖 {captured}/{active_accounts} 个 active 账号"})
+    if not risks:
+        risks.append({"text": "本次真实采集未发现低流量或覆盖异常"})
+    return {
+        "overview": overview,
+        "account_rank": account_rank,
+        "content_top": content_top,
+        "traffic": [{"label": "授权后台采集", "value": "100%"}],
+        "conversion": conversion,
+        "operation": [
+            {"label": "账号采集覆盖率", "value": min(100, max(0, coverage))},
+            {"label": "作品明细入库完成度", "value": 100 if video_rows_for_date else 0},
+            {"label": "数据写入成功率", "value": 100},
+        ],
+        "risk": risks,
+    }
 
 
 def dashboard_summary() -> dict[str, Any]:
@@ -2991,9 +3494,24 @@ def dashboard_summary() -> dict[str, Any]:
         running = conn.execute("SELECT COUNT(*) AS c FROM automation_tasks WHERE status IN ('pending', 'running')").fetchone()["c"]
         failed = conn.execute("SELECT COUNT(*) AS c FROM automation_tasks WHERE status = 'failed'").fetchone()["c"]
         unsupported = conn.execute("SELECT COUNT(*) AS c FROM automation_tasks WHERE status = 'unsupported'").fetchone()["c"]
-        stats = conn.execute(
-            "SELECT COALESCE(SUM(views), 0) AS views, COALESCE(SUM(likes), 0) AS likes, COALESCE(SUM(comments), 0) AS comments, COALESCE(SUM(messages), 0) AS messages FROM video_stats_snapshots"
-        ).fetchone()
+        latest_stat_date = conn.execute("SELECT MAX(stat_date) AS d FROM wechat_stats_account_snapshots").fetchone()["d"]
+        if latest_stat_date:
+            stats = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(views), 0) AS views,
+                    COALESCE(SUM(likes), 0) AS likes,
+                    COALESCE(SUM(comments), 0) AS comments,
+                    COALESCE(SUM(messages), 0) AS messages
+                FROM wechat_stats_account_snapshots
+                WHERE stat_date = ?
+                """,
+                (latest_stat_date,),
+            ).fetchone()
+        else:
+            stats = conn.execute(
+                "SELECT COALESCE(SUM(views), 0) AS views, COALESCE(SUM(likes), 0) AS likes, COALESCE(SUM(comments), 0) AS comments, COALESCE(SUM(messages), 0) AS messages FROM video_stats_snapshots"
+            ).fetchone()
     return {
         "accounts": int(account_count),
         "platforms": int(platform_count),
@@ -3048,6 +3566,15 @@ def _dashboard_summary_supabase_legacy(client: SupabaseRestClient) -> dict[str, 
     platforms = [item for item in client.select("account_platforms") if bool(item.get("enabled", True))]
     tasks = client.select("automation_tasks")
     stats_rows = client.select("video_stats_snapshots")
+    try:
+        account_stats = client.select("wechat_stats_account_snapshots")
+    except SupabaseError:
+        account_stats = []
+    latest_stat_date = max([str(item.get("stat_date") or "") for item in account_stats if item.get("stat_date")] or [""])
+    if latest_stat_date:
+        summary_rows = [item for item in account_stats if str(item.get("stat_date") or "") == latest_stat_date]
+    else:
+        summary_rows = stats_rows
     return _normalize_dashboard_summary(
         {
             "accounts": len(accounts),
@@ -3056,9 +3583,9 @@ def _dashboard_summary_supabase_legacy(client: SupabaseRestClient) -> dict[str, 
             "failed_tasks": len([item for item in tasks if item.get("status") == "failed"]),
             "unsupported_tasks": len([item for item in tasks if item.get("status") == "unsupported"]),
             "remaining_material_videos": 0,
-            "views": sum(int(item.get("views") or 0) for item in stats_rows),
-            "likes": sum(int(item.get("likes") or 0) for item in stats_rows),
-            "comments": sum(int(item.get("comments") or 0) for item in stats_rows),
-            "messages": sum(int(item.get("messages") or 0) for item in stats_rows),
+            "views": sum(int(item.get("views") or 0) for item in summary_rows),
+            "likes": sum(int(item.get("likes") or 0) for item in summary_rows),
+            "comments": sum(int(item.get("comments") or 0) for item in summary_rows),
+            "messages": sum(int(item.get("messages") or 0) for item in summary_rows),
         }
     )

@@ -110,14 +110,65 @@ CREATE TABLE IF NOT EXISTS video_stats_snapshots (
     account_id INTEGER,
     platform TEXT NOT NULL,
     video_ref TEXT NOT NULL DEFAULT '',
+    stat_date TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    feed_id TEXT NOT NULL DEFAULT '',
     views INTEGER NOT NULL DEFAULT 0,
     likes INTEGER NOT NULL DEFAULT 0,
     comments INTEGER NOT NULL DEFAULT 0,
     shares INTEGER NOT NULL DEFAULT 0,
     messages INTEGER NOT NULL DEFAULT 0,
     published_at TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    raw_json TEXT NOT NULL DEFAULT '{}',
     captured_at INTEGER NOT NULL,
     FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS wechat_stats_account_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'wechat',
+    stat_date TEXT NOT NULL,
+    views INTEGER NOT NULL DEFAULT 0,
+    likes INTEGER NOT NULL DEFAULT 0,
+    comments INTEGER NOT NULL DEFAULT 0,
+    shares INTEGER NOT NULL DEFAULT 0,
+    messages INTEGER NOT NULL DEFAULT 0,
+    followers INTEGER NOT NULL DEFAULT 0,
+    follower_delta INTEGER NOT NULL DEFAULT 0,
+    profile_visits INTEGER NOT NULL DEFAULT 0,
+    leads INTEGER NOT NULL DEFAULT 0,
+    completed_rate REAL NOT NULL DEFAULT 0,
+    interaction_rate REAL NOT NULL DEFAULT 0,
+    works_count INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'wechat_stats_capture',
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    captured_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(account_id, platform, stat_date),
+    FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS wechat_stats_capture_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE,
+    target_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    batch_size INTEGER NOT NULL DEFAULT 5,
+    limit_accounts INTEGER NOT NULL DEFAULT 0,
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    account_total INTEGER NOT NULL DEFAULT 0,
+    captured_accounts INTEGER NOT NULL DEFAULT 0,
+    skipped_accounts INTEGER NOT NULL DEFAULT 0,
+    failed_accounts INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ai_robot_configs (
@@ -270,3 +321,13 @@ def init_db(path: Path | None = None) -> None:
             profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(browser_profiles)")}
         if "fingerprint_json" not in profile_columns:
             conn.execute("ALTER TABLE browser_profiles ADD COLUMN fingerprint_json TEXT NOT NULL DEFAULT '{}'")
+        stats_columns = {row["name"] for row in conn.execute("PRAGMA table_info(video_stats_snapshots)")}
+        for name, ddl in {
+            "stat_date": "ALTER TABLE video_stats_snapshots ADD COLUMN stat_date TEXT NOT NULL DEFAULT ''",
+            "title": "ALTER TABLE video_stats_snapshots ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+            "feed_id": "ALTER TABLE video_stats_snapshots ADD COLUMN feed_id TEXT NOT NULL DEFAULT ''",
+            "source": "ALTER TABLE video_stats_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT ''",
+            "raw_json": "ALTER TABLE video_stats_snapshots ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'",
+        }.items():
+            if name not in stats_columns:
+                conn.execute(ddl)

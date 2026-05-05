@@ -21,10 +21,10 @@ as $$
         (select count(*) from automation_tasks where status = 'failed') as failed_tasks,
         (select count(*) from automation_tasks where status = 'unsupported') as unsupported_tasks,
         0::bigint as remaining_material_videos,
-        coalesce((select sum(views) from video_stats_snapshots), 0)::bigint as views,
-        coalesce((select sum(likes) from video_stats_snapshots), 0)::bigint as likes,
-        coalesce((select sum(comments) from video_stats_snapshots), 0)::bigint as comments,
-        coalesce((select sum(messages) from video_stats_snapshots), 0)::bigint as messages
+        coalesce((select sum(views) from wechat_stats_account_snapshots where stat_date = (select max(stat_date) from wechat_stats_account_snapshots)), (select sum(views) from video_stats_snapshots), 0)::bigint as views,
+        coalesce((select sum(likes) from wechat_stats_account_snapshots where stat_date = (select max(stat_date) from wechat_stats_account_snapshots)), (select sum(likes) from video_stats_snapshots), 0)::bigint as likes,
+        coalesce((select sum(comments) from wechat_stats_account_snapshots where stat_date = (select max(stat_date) from wechat_stats_account_snapshots)), (select sum(comments) from video_stats_snapshots), 0)::bigint as comments,
+        coalesce((select sum(messages) from wechat_stats_account_snapshots where stat_date = (select max(stat_date) from wechat_stats_account_snapshots)), (select sum(messages) from video_stats_snapshots), 0)::bigint as messages
 $$;
 
 create table if not exists brand_members (
@@ -62,6 +62,8 @@ alter table login_qr_batches enable row level security;
 alter table login_qr_items enable row level security;
 alter table automation_tasks enable row level security;
 alter table video_stats_snapshots enable row level security;
+alter table wechat_stats_account_snapshots enable row level security;
+alter table wechat_stats_capture_runs enable row level security;
 alter table ai_robot_configs enable row level security;
 alter table ai_robot_messages enable row level security;
 alter table brand_settings enable row level security;

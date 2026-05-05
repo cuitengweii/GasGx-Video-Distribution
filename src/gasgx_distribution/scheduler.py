@@ -11,11 +11,13 @@ from typing import Any
 from .matrix_publish import check_wechat_matrix_login_status, run_matrix_publish
 from .paths import get_paths
 from .public_settings import load_distribution_settings
+from .wechat_stats_capture import run_wechat_stats_capture
 
 _LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None
 _STOP = threading.Event()
 _RUNNING = threading.Event()
+_STATS_RUNNING = threading.Event()
 
 
 def scheduler_state_path() -> Path:
@@ -41,6 +43,10 @@ def _write_state(payload: dict[str, Any]) -> None:
 
 def _job_settings() -> dict[str, Any]:
     return dict(load_distribution_settings().get("jobs", {}).get("matrix_wechat_publish", {}))
+
+
+def _stats_job_settings() -> dict[str, Any]:
+    return dict(load_distribution_settings().get("jobs", {}).get("matrix_wechat_stats_capture", {}))
 
 
 def _now() -> int:
@@ -85,6 +91,7 @@ def _login_check_interval_seconds(settings: dict[str, Any]) -> int:
 
 def _base_status() -> dict[str, Any]:
     settings = _job_settings()
+    stats_settings = _stats_job_settings()
     state = _read_state()
     return {
         "enabled": bool(settings.get("enabled")),
@@ -102,6 +109,19 @@ def _base_status() -> dict[str, Any]:
         "last_login_check_ok": state.get("last_login_check_ok"),
         "last_login_check_result": state.get("last_login_check_result", {}),
         "pending_login_batch": state.get("pending_login_batch", {}),
+        "stats_capture": {
+            "enabled": bool(stats_settings.get("enabled")),
+            "running": _STATS_RUNNING.is_set(),
+            "batch_size": int(stats_settings.get("batch_size") or 5),
+            "schedule_mode": str(stats_settings.get("schedule_mode") or "daily"),
+            "daily_time": str(stats_settings.get("daily_time") or "08:30"),
+            "last_started_at": state.get("stats_last_started_at"),
+            "last_finished_at": state.get("stats_last_finished_at"),
+            "last_ok": state.get("stats_last_ok"),
+            "last_error": state.get("stats_last_error", ""),
+            "last_result": state.get("stats_last_result", {}),
+            "next_run_at": state.get("stats_next_run_at"),
+        },
     }
 
 
@@ -178,6 +198,58 @@ def _run_login_check_once(reason: str = "scheduled") -> dict[str, Any]:
     return result
 
 
+def _run_stats_capture_once(reason: str = "scheduled") -> dict[str, Any]:
+    if _RUNNING.is_set():
+        return {"ok": False, "skipped": True, "reason": "publish_running"}
+    if _STATS_RUNNING.is_set():
+        return {"ok": False, "skipped": True, "reason": "stats_capture_running"}
+    _STATS_RUNNING.set()
+    settings = _stats_job_settings()
+    state = _read_state()
+    state.update(
+        {
+            "stats_last_started_at": _now(),
+            "stats_last_finished_at": None,
+            "stats_last_ok": None,
+            "stats_last_error": "",
+            "stats_last_reason": reason,
+        }
+    )
+    _write_state(state)
+    try:
+        result = run_wechat_stats_capture(
+            batch_size=max(1, int(settings.get("batch_size") or 5)),
+            limit=max(0, int(settings.get("limit") or 0)),
+            dry_run=False,
+            notify=True,
+        )
+        ok = bool(result.get("ok"))
+        state.update(
+            {
+                "stats_last_finished_at": _now(),
+                "stats_last_ok": ok,
+                "stats_last_error": "" if ok else json.dumps(result, ensure_ascii=False),
+                "stats_last_result": result,
+            }
+        )
+        return result
+    except Exception as exc:
+        result = {"ok": False, "error": f"{exc}\n{traceback.format_exc()}"}
+        state.update(
+            {
+                "stats_last_finished_at": _now(),
+                "stats_last_ok": False,
+                "stats_last_error": result["error"],
+                "stats_last_result": result,
+            }
+        )
+        return result
+    finally:
+        state["stats_next_run_at"] = _next_run_at(_stats_job_settings())
+        _write_state(state)
+        _STATS_RUNNING.clear()
+
+
 def trigger_matrix_wechat_job() -> dict[str, Any]:
     def _runner() -> None:
         _run_once(reason="manual")
@@ -193,9 +265,12 @@ def trigger_matrix_wechat_job() -> dict[str, Any]:
 def _scheduler_loop() -> None:
     while not _STOP.is_set():
         settings = _job_settings()
+        stats_settings = _stats_job_settings()
         enabled = bool(settings.get("enabled"))
+        stats_enabled = bool(stats_settings.get("enabled"))
         state = _read_state()
         next_run_at = int(state.get("next_run_at") or 0)
+        stats_next_run_at = int(state.get("stats_next_run_at") or 0)
         last_login_check_at = int(state.get("last_login_check_at") or 0)
         now = _now()
         if not next_run_at:
@@ -205,11 +280,34 @@ def _scheduler_loop() -> None:
             _run_once(reason="scheduled")
         elif enabled and (not last_login_check_at or now - last_login_check_at >= _login_check_interval_seconds(settings)):
             _run_login_check_once(reason="scheduled")
+        if not stats_next_run_at:
+            state["stats_next_run_at"] = _next_run_at(stats_settings, now=now)
+            _write_state(state)
+        elif stats_enabled and now >= stats_next_run_at and not _STATS_RUNNING.is_set():
+            _run_stats_capture_once(reason="scheduled")
         _STOP.wait(10)
 
 
 def trigger_matrix_wechat_login_check() -> dict[str, Any]:
     return _run_login_check_once(reason="manual")
+
+
+def trigger_matrix_wechat_stats_capture(*, target_date: str = "", limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
+    def _runner() -> None:
+        if _STATS_RUNNING.is_set():
+            return
+        _STATS_RUNNING.set()
+        try:
+            run_wechat_stats_capture(target_date=target_date, limit=limit, dry_run=dry_run, notify=True)
+        finally:
+            _STATS_RUNNING.clear()
+
+    with _LOCK:
+        if _STATS_RUNNING.is_set():
+            return {"ok": False, "status": "already_running"}
+        thread = threading.Thread(target=_runner, name="gasgx-matrix-wechat-stats-manual", daemon=True)
+        thread.start()
+    return {"ok": True, "status": "started"}
 
 
 def start_scheduler() -> None:

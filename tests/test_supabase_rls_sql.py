@@ -14,8 +14,10 @@ def test_brand_baseline_supabase_sql_parts_stay_under_editor_limit() -> None:
     assert [part.name for part in parts] == [
         "01_core_tables.sql",
         "02_app_tables.sql",
+        "02a_stats_capture.sql",
         "03_functions_and_rls.sql",
         "04_account_policies.sql",
+        "04a_stats_capture_policies.sql",
         "05_settings_policies.sql",
         "06_video_seed_policies.sql",
         "07_notifications.sql",
@@ -48,6 +50,8 @@ def test_brand_baseline_supabase_sql_defines_role_based_rls() -> None:
         "login_qr_items",
         "automation_tasks",
         "video_stats_snapshots",
+        "wechat_stats_account_snapshots",
+        "wechat_stats_capture_runs",
         "ai_robot_configs",
         "ai_robot_messages",
         "brand_settings",
@@ -93,3 +97,4 @@ def test_brand_baseline_supabase_sql_defines_dashboard_summary_rpc() -> None:
     assert "from account_platforms where enabled = 1" in sql
     assert "from automation_tasks where status in ('pending', 'running')" in sql
     assert "sum(views) from video_stats_snapshots" in sql
+    assert "sum(views) from wechat_stats_account_snapshots" in sql
