@@ -1603,7 +1603,7 @@ function renderTerminalExecution() {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
@@ -1740,7 +1740,7 @@ function renderTerminalDailyQrView(root) {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${state.terminalQrVisible && loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">

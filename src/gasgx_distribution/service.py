@@ -1457,6 +1457,16 @@ def _load_terminal_state() -> dict[str, Any]:
                 window["qr_url"] = str(window.get("qr_data_url") or "")
             if not str(window.get("qr_path") or "").strip() and str(window.get("qr_cache_path") or "").strip():
                 window["qr_path"] = str(window.get("qr_cache_path") or "")
+            if bool(payload.get("login_started")) and str(window.get("qr_url") or "").strip():
+                qr_path = str(window.get("qr_path") or "").strip()
+                path = Path(qr_path) if qr_path else _terminal_qr_cache_path(int(window.get("id") or 0))
+                try:
+                    if not path.exists() or (time.time() - path.stat().st_mtime) > 120:
+                        window["qr_url"] = ""
+                        window["qr_path"] = ""
+                except Exception:
+                    window["qr_url"] = ""
+                    window["qr_path"] = ""
     return payload
 
 
