@@ -8,7 +8,7 @@ from PIL import Image
 from gasgx_distribution.video_matrix.composition import plan_variants
 from gasgx_distribution.video_matrix.hud import HudPayload
 from gasgx_distribution.video_matrix.models import ClipMetadata
-from gasgx_distribution.video_matrix.pipeline import _beat_duration_hint, _fit_composition_sequence_to_max_duration
+from gasgx_distribution.video_matrix.pipeline import _beat_cache_entry_path, _beat_cache_path, _beat_duration_hint, _fit_composition_sequence_to_max_duration
 from gasgx_distribution.video_matrix import cover as cover_renderer
 from gasgx_distribution.video_matrix import render as video_renderer
 from gasgx_distribution.video_matrix.render import _build_filter_complex
@@ -155,6 +155,26 @@ def test_beat_duration_hint_keeps_configured_max_when_larger() -> None:
     sequence = [{"category_id": "category_A", "duration": 2.0}]
 
     assert _beat_duration_hint(settings, sequence, cover_intro_seconds=1.0, outro_seconds=1.0) == 8.0
+
+
+def test_beat_cache_path_uses_distribution_runtime_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_paths = type("Paths", (), {"runtime_root": tmp_path / "runtime"})()
+    monkeypatch.setattr("gasgx_distribution.video_matrix.pipeline.get_paths", lambda: fake_paths)
+
+    path = _beat_cache_path(_settings())
+
+    assert path == (tmp_path / "runtime" / "video_matrix" / "beat_cache")
+
+
+def test_beat_cache_entry_path_hashes_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_paths = type("Paths", (), {"runtime_root": tmp_path / "runtime"})()
+    monkeypatch.setattr("gasgx_distribution.video_matrix.pipeline.get_paths", lambda: fake_paths)
+
+    path = _beat_cache_entry_path(_settings(), "a|b|c")
+
+    assert path.parent == (tmp_path / "runtime" / "video_matrix" / "beat_cache")
+    assert path.suffix == ".json"
+    assert len(path.stem) == 64
 
 
 def test_fit_composition_sequence_caps_material_duration_without_outro() -> None:

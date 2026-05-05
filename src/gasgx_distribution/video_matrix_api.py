@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
@@ -50,6 +50,7 @@ MODEL_IMAGE_DIR = ROOT / "runtime" / "video_matrix" / "modelimg"
 ENDING_TEMPLATE_DIR = ROOT / "runtime" / "video_matrix" / "ending_template"
 SIGNATURE_HISTORY_PATH = ROOT / "runtime" / "video_matrix" / "signature_history.json"
 TELEMETRY_LOG_ROOT = ROOT / "runtime" / "video_matrix" / "logs"
+JOB_STATE_DIR = ROOT / "runtime" / "video_matrix" / "jobs"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 ENDING_TEMPLATE_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 PIXABAY_INDUSTRY_TRACKS = [
@@ -134,6 +135,60 @@ def _sync_video_matrix_job(job_id: str, payload: dict[str, Any]) -> None:
         # Active render progress is primarily local. A transient Supabase outage
         # must not freeze polling or abort the background render worker.
         return
+
+
+def _job_state_path(job_id: str) -> Path:
+    return JOB_STATE_DIR / f"{job_id}.json"
+
+
+def _normalize_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    data = dict(payload)
+    data["status"] = str(data.get("status") or "queued")
+    data["progress"] = float(data.get("progress") or 0)
+    data["message"] = str(data.get("message") or "")
+    data["error"] = str(data.get("error") or "")
+    data["assets"] = [dict(asset) for asset in data.get("assets") or [] if isinstance(asset, dict)]
+    data["first_asset_ready"] = bool(data.get("first_asset_ready"))
+    if "stage" in data:
+        data["stage"] = str(data.get("stage") or "")
+    if "report_path" in data:
+        data["report_path"] = str(data.get("report_path") or "")
+    if "metrics_summary" in data and isinstance(data.get("metrics_summary"), dict):
+        data["metrics_summary"] = dict(data["metrics_summary"])
+    if "warning" in data:
+        data["warning"] = str(data.get("warning") or "")
+    return data
+
+
+def _write_job_state_file(job_id: str, payload: Mapping[str, Any]) -> None:
+    JOB_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    job_state = _normalize_job_payload(payload)
+    job_state["job_id"] = job_id
+    _job_state_path(job_id).write_text(json.dumps(job_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _read_job_state_file(job_id: str) -> dict[str, Any] | None:
+    path = _job_state_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload["assets"] = [dict(asset) for asset in payload.get("assets") or [] if isinstance(asset, dict)]
+    return _normalize_job_payload(payload)
+
+
+def _persist_job_state(job_id: str) -> None:
+    payload = _jobs.get(job_id)
+    if payload is None:
+        return
+    try:
+        _write_job_state_file(job_id, payload)
+    except Exception:
+        pass
 
 
 def _persist_video_matrix_state(payload: Any) -> None:
@@ -792,6 +847,7 @@ async def generate(
     source_root = await _resolve_source_root(request, temp_root, source_files or [])
     trace = GenerationTrace(job_id, TELEMETRY_LOG_ROOT, _request_telemetry_summary(request, bgm_path, source_root))
     _jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued", "assets": [], "first_asset_ready": False, "error": "", "report_path": str(trace.run_dir / "run_report.md")}
+    _persist_job_state(job_id)
     if service.brand_database_backend() == "supabase":
         try:
             service._brand_supabase().insert(
@@ -808,6 +864,10 @@ async def generate(
 def job_status(job_id: str) -> dict[str, Any]:
     if job_id in _jobs:
         return _jobs[job_id]
+    cached = _read_job_state_file(job_id)
+    if cached is not None:
+        _jobs[job_id] = cached
+        return cached
     if service.brand_database_backend() == "supabase":
         try:
             row = service._brand_supabase().select_one("video_matrix_jobs", filters={"job_key": job_id})
@@ -905,6 +965,7 @@ def _run_generate_job(
             _jobs[job_id].update({"status": "running", "stage": stage, "progress": value, "message": message})
             trace.event("progress", stage, {"progress": value, "message": message})
             _sync_video_matrix_job(job_id, {"status": "running", "stage": stage, "progress": value, "message": message})
+            _persist_job_state(job_id)
 
         def on_asset_ready(asset: Any, completed: int, total: int) -> None:
             payload = {
@@ -918,6 +979,7 @@ def _run_generate_job(
             _jobs[job_id]["first_asset_ready"] = True
             _jobs[job_id]["message"] = f"Rendered video {completed}/{total}"
             _sync_video_matrix_job(job_id, {"status": "running", "assets_json": job_assets, "message": _jobs[job_id]["message"]})
+            _persist_job_state(job_id)
 
         with trace.span("pipeline", "run_pipeline"):
             assets = run_pipeline(
@@ -981,10 +1043,12 @@ def _run_generate_job(
         }
         _jobs[job_id].update(complete_payload)
         _sync_video_matrix_job(job_id, {"status": "complete", "progress": 1, "message": complete_payload["message"], "assets_json": complete_payload["assets"]})
+        _persist_job_state(job_id)
     except Exception as exc:  # pragma: no cover - surfaced through job endpoint
         metrics_summary = trace.finish("error", error=exc)
         _jobs[job_id].update({"status": "error", "error": str(exc), "message": str(exc), "metrics_summary": metrics_summary, "report_path": metrics_summary.get("report_path", "")})
         _sync_video_matrix_job(job_id, {"status": "error", "error": str(exc), "message": str(exc)})
+        _persist_job_state(job_id)
 
 
 async def _resolve_bgm_path(request: dict[str, Any], temp_root: Path, bgm_file: UploadFile | None) -> Path:

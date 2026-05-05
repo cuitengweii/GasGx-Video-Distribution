@@ -211,6 +211,31 @@ def test_video_matrix_job_status_prefers_local_active_job_when_supabase_is_unava
     assert response["assets"][0]["video_path"].endswith("a.mp4")
 
 
+def test_video_matrix_job_status_recovers_from_local_state_file(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(video_matrix_api, "JOB_STATE_DIR", tmp_path / "jobs")
+    monkeypatch.setattr(video_matrix_api.service, "brand_database_backend", lambda: "sqlite")
+    video_matrix_api._jobs.clear()
+    video_matrix_api._write_job_state_file(
+        "file-job",
+        {
+            "status": "complete",
+            "progress": 1,
+            "message": "Completed 1 exports",
+            "assets": [{"video_path": "runtime/video_matrix/out/a.mp4"}],
+            "error": "",
+        },
+    )
+
+    try:
+        response = video_matrix_api.job_status("file-job")
+    finally:
+        video_matrix_api._jobs.pop("file-job", None)
+
+    assert response["status"] == "complete"
+    assert response["progress"] == 1
+    assert response["assets"][0]["video_path"].endswith("a.mp4")
+
+
 def test_video_matrix_progress_sync_failure_does_not_abort_render(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(video_matrix_api.service, "brand_database_backend", lambda: "supabase")
     monkeypatch.setattr(video_matrix_api.service, "_brand_supabase", lambda: FailingJobSupabase())
