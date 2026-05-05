@@ -231,7 +231,7 @@ def create_app() -> FastAPI:
     def get_brand(request: Request) -> dict[str, Any]:
         return {
             "instance": request.state.brand_instance,
-            "settings": service.load_brand_settings(),
+            "settings": service.public_brand_settings(),
         }
 
     @app.get("/api/system/supabase-health")
@@ -307,7 +307,7 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/brand")
     def update_brand(payload: BrandSettingsPayload) -> dict[str, Any]:
-        return service.save_brand_settings(_model_payload(payload, exclude_unset=True))
+        return service.public_brand_settings(service.save_brand_settings(_model_payload(payload, exclude_unset=True)))
 
     @app.get("/api/auth/state")
     def auth_state(current_user_id: str = Query(default="allen"), editing_role_id: str = Query(default="super_admin")) -> dict[str, Any]:

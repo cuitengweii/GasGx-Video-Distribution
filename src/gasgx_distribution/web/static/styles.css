@@ -3888,6 +3888,12 @@ body.video-matrix-active #video-matrix {
   font-size: 13px;
 }
 
+.terminal-config-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+}
+
 .terminal-platform-tab {
   border: 1px solid var(--terminal-glass-border);
   background: rgba(255, 255, 255, 0.03);

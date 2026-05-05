@@ -54,8 +54,8 @@ class SupabaseRestClient:
     def _timeout(self) -> float:
         return float(os.getenv("SUPABASE_REST_TIMEOUT", "8") or 8)
 
-    def select(self, table: str, *, filters: dict[str, Any] | None = None, order: str = "") -> list[dict[str, Any]]:
-        params: dict[str, str] = {"select": "*"}
+    def select(self, table: str, *, filters: dict[str, Any] | None = None, order: str = "", columns: str = "*") -> list[dict[str, Any]]:
+        params: dict[str, str] = {"select": columns or "*"}
         for key, value in (filters or {}).items():
             params[key] = f"eq.{value}"
         if order:
@@ -63,8 +63,8 @@ class SupabaseRestClient:
         response = requests.get(self._endpoint(table), headers=self._headers(), params=params, timeout=self._timeout())
         return self._json_response(response)
 
-    def select_where(self, table: str, *, params: dict[str, str], order: str = "") -> list[dict[str, Any]]:
-        query = {"select": "*", **params}
+    def select_where(self, table: str, *, params: dict[str, str], order: str = "", columns: str = "*") -> list[dict[str, Any]]:
+        query = {"select": columns or "*", **params}
         if order:
             query["order"] = order
         response = requests.get(self._endpoint(table), headers=self._headers(), params=query, timeout=self._timeout())

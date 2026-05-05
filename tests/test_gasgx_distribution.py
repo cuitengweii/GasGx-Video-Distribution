@@ -1534,7 +1534,135 @@ def test_terminal_execution_state_normalizes_legacy_qr_data_url(monkeypatch, tmp
 
     assert payload.status_code == 200
     data = payload.json()
-    assert data["windows"][0]["qr_url"] == "data:image/png;base64,QUJD"
+    assert "qr_data_url" not in data["windows"][0]
+    assert data["windows"][0]["qr_url"] == "/api/terminal-execution/windows/1/qr-image"
+    assert (runtime_dir / "terminal_qr_cache" / "window-01.png").read_bytes() == b"ABC"
+
+
+def test_brand_api_omits_large_inline_logo_asset(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    large_logo = "data:image/png;base64," + ("A" * (service.BRAND_INLINE_ASSET_MAX_CHARS + 1))
+    service.save_brand_settings({"name": "GasGx", "logo_asset_path": large_logo})
+    client = TestClient(create_app())
+
+    response = client.get("/api/brand")
+
+    assert response.status_code == 200
+    settings = response.json()["settings"]
+    assert settings["logo_asset_path"] == ""
+    assert settings["logo_asset_omitted"] is True
+    assert settings["logo_asset_chars"] == len(large_logo)
+    assert service.load_brand_settings()["logo_asset_path"] == large_logo
+
+
+def test_public_brand_settings_supabase_uses_lightweight_columns(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.select_calls: list[dict[str, object]] = []
+            self.select_where_calls: list[dict[str, object]] = []
+
+        def select(self, table: str, *, filters: dict[str, object] | None = None, order: str = "", columns: str = "*"):
+            self.select_calls.append({"table": table, "filters": filters, "columns": columns})
+            assert columns == service.BRAND_PUBLIC_SETTING_COLUMNS
+            return [{
+                "id": 1,
+                "name": "GasGx",
+                "slogan": "Video Distribution",
+                "primary_color": "#5dd62c",
+                "theme_id": "gasgx-green",
+                "default_account_prefix": "GasGx",
+            }]
+
+        def select_where(self, table: str, *, params: dict[str, str], order: str = "", columns: str = "*"):
+            self.select_where_calls.append({"table": table, "params": params, "columns": columns})
+            if params["logo_asset_path"].startswith("not.like"):
+                return []
+            return [{"id": 1}]
+
+    fake = FakeClient()
+    monkeypatch.setattr(service, "_brand_supabase", lambda: fake)
+
+    settings = service.public_brand_settings()
+
+    assert settings["logo_asset_path"] == ""
+    assert settings["logo_asset_omitted"] is True
+    assert fake.select_calls[0]["columns"] != "*"
+    assert {call["columns"] for call in fake.select_where_calls} == {"logo_asset_path", "id"}
+
+
+def test_terminal_poll_probes_one_window_per_interval(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    windows = [
+        {
+            "id": index,
+            "enabled": True,
+            "operator_wechat": f"op{index}",
+            "color": "#3B82F6",
+            "current_index": 0,
+            "manual_available_at": 0,
+            "accounts": [{"id": index, "status": "waiting_qr", "status_text": "等待扫码中...", "task_id": None}],
+        }
+        for index in range(1, 4)
+    ]
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps({"windows": windows, "config": [], "initialized": True, "login_started": True}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    calls: list[int] = []
+    monkeypatch.setattr(service, "check_login_status", lambda account_id, platform: calls.append(account_id) or {"status": "waiting"})
+
+    service._invalidate_terminal_execution_state_cache()
+    service.poll_terminal_execution()
+    service.poll_terminal_execution()
+
+    assert calls == [1]
+    state = json.loads((runtime_dir / "terminal_execution_state.json").read_text(encoding="utf-8"))
+    assert state["probe_cursor"] == 1
+    assert state["next_probe_at"] > 0
+
+
+def test_terminal_start_login_opens_windows_sequentially(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    windows = [
+        {
+            "id": index,
+            "enabled": True,
+            "operator_wechat": f"op{index}",
+            "color": "#3B82F6",
+            "current_index": 0,
+            "manual_available_at": 0,
+            "accounts": [{"id": index, "status": "pending", "status_text": "waiting", "task_id": None}],
+        }
+        for index in range(1, 4)
+    ]
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps({"windows": windows, "config": [], "initialized": True, "login_started": False}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    now = {"value": 100}
+    opened: list[int] = []
+    monkeypatch.setattr(service, "now_ts", lambda: now["value"])
+    monkeypatch.setattr(service, "TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", 10)
+    monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
+    monkeypatch.setattr(service, "_write_terminal_qr_cache", lambda window_id, account_id: str(runtime_dir / f"window-{window_id}.png"))
+
+    service._invalidate_terminal_execution_state_cache()
+    first_state = service.start_terminal_login()
+    service.poll_terminal_execution()
+    now["value"] = 110
+    second_state = service.poll_terminal_execution()
+
+    assert opened == [1, 2]
+    assert first_state["windows"][0]["accounts"][0]["status"] == "waiting_qr"
+    assert first_state["windows"][1]["accounts"][0]["status"] == "pending"
+    assert second_state["windows"][1]["accounts"][0]["status"] == "waiting_qr"
 
 
 def test_terminal_qr_cache_falls_back_when_account_lookup_times_out(monkeypatch, tmp_path: Path) -> None:

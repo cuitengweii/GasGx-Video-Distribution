@@ -1,4 +1,4 @@
-const PLATFORM_LABELS = {
+﻿const PLATFORM_LABELS = {
   wechat: "视频号",
   douyin: "抖音",
   kuaishou: "快手",
@@ -1535,6 +1535,15 @@ function renderTerminalConfig() {
     operator_wechat: operators[index]?.operator_wechat || operators[index % Math.max(1, operators.length)]?.operator_wechat || "",
     color: terminalColorByIndex(index).hex,
   }));
+  if (!defaultRows.length) {
+    list.innerHTML = `
+      <div class="terminal-empty-state">
+        <strong>暂无可编辑配置</strong>
+        <p class="muted">请先确认已加载终端数据，或切换到视频号路由后重新打开配置。</p>
+      </div>
+    `;
+    return;
+  }
   list.innerHTML = defaultRows.map((row, index) => `
     <div class="terminal-config-row ${row.enabled ? "" : "disabled"}" data-terminal-config-row="${row.id}">
       <label class="terminal-config-left">
@@ -1575,7 +1584,7 @@ function renderTerminalExecution() {
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
     startLoginButton.disabled = loginStarted;
-    startLoginButton.textContent = loginStarted ? "登录中" : "开始登录";
+    startLoginButton.textContent = loginStarted ? "等待扫码" : "开始登录";
   }
   const progress = document.querySelector("#terminal-global-progress");
   if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
@@ -1592,6 +1601,7 @@ function renderTerminalExecution() {
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录 [${current.display_name || "-"}]`;
+    const qrVisible = state.terminalQrVisible && loginStarted && window.qr_url;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
         <div class="terminal-color-anchor"></div>
@@ -1603,7 +1613,7 @@ function renderTerminalExecution() {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${qrVisible ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
@@ -1700,6 +1710,9 @@ function renderTerminalConfigPanel() {
         <div>只渲染视频号所需字段组：运营微信、色标、窗口启用。</div>
         <div>切换到其它平台后，会改为长会话配置/检测视图，不复用二维码占位。</div>
       </div>
+      <div class="terminal-config-panel-actions">
+        <button class="btn primary" type="button" id="terminal-save-config">更新配置</button>
+      </div>
     `
     : `
       <div class="terminal-config-panel-head">
@@ -1711,7 +1724,19 @@ function renderTerminalConfigPanel() {
         <div>入口：${context.openUrl || "-"}</div>
         <div>浏览器运行态：${context.profile.browserRuntime || "-"}</div>
       </div>
+      <div class="terminal-config-panel-actions">
+        <button class="btn primary" type="button" id="terminal-save-config">更新配置</button>
+      </div>
     `;
+}
+
+function openTerminalConfigPanel() {
+  state.terminalConfigOpen = true;
+  renderTerminalExecution();
+  const panel = document.querySelector("#terminal-platform-config-panel");
+  if (panel) {
+    panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
 }
 
 function renderTerminalDailyQrView(root) {
@@ -1729,6 +1754,7 @@ function renderTerminalDailyQrView(root) {
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     const qrStatusText = loginStarted ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击开始登录[${current.display_name || "-"}]`;
+    const qrVisible = state.terminalQrVisible && loginStarted && window.qr_url;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
         <div class="terminal-color-anchor"></div>
@@ -1740,7 +1766,7 @@ function renderTerminalDailyQrView(root) {
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
         </div>
         <div class="terminal-qr-section">
-          <div class="terminal-qr-placeholder">${loginStarted && window.qr_url ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
+          <div class="terminal-qr-placeholder">${qrVisible ? `<img src="${window.qr_url}" alt="视频号登录二维码">` : terminalPlaceholderIcon()}</div>
           <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
         </div>
         <div class="terminal-account-list">
@@ -1811,7 +1837,7 @@ function renderTerminalExecution() {
   if (startLoginButton) {
     const loginStarted = Boolean(state.terminalExecution.login_started);
     startLoginButton.disabled = loginStarted || context.platform !== "wechat";
-    startLoginButton.textContent = context.platform === "wechat" ? (loginStarted ? "登录中" : "开始登录") : "检测全部";
+    startLoginButton.textContent = context.platform === "wechat" ? (loginStarted ? "等待扫码" : "开始登录") : "检测全部";
   }
   const subtitle = document.querySelector("#terminal-header-subtitle");
   if (subtitle) {
@@ -1954,11 +1980,21 @@ function renderTerminalExecution() {
   if (progressLabel) progressLabel.textContent = route === "hub" ? "平台数:" : route === "wechat" ? "总进度:" : "账号数:";
   if (activeLabel) activeLabel.textContent = route === "hub" ? "分组数:" : route === "wechat" ? "运行窗:" : "账号卡:";
   if (startLoginButton) {
-    startLoginButton.textContent = route === "hub" ? "刷新健康" : route === "wechat" ? (loginStarted ? "登录中" : "开始登录") : "检测登录";
+    startLoginButton.textContent = route === "hub" ? "刷新健康" : route === "wechat" ? (loginStarted ? "等待扫码" : "开始登录") : "检测登录";
     startLoginButton.disabled = route === "wechat" && loginStarted;
   }
   if (editConfigButton) {
     editConfigButton.textContent = route === "hub" ? "进入视频号" : route === "wechat" ? "修改配置" : "打开创作者后台";
+  }
+  if (headerActions) {
+    const saveConfigButtonHtml = route === "wechat"
+      ? `<button class="terminal-btn-primary" type="button" id="terminal-save-config">更新配置</button>`
+      : "";
+    headerActions.innerHTML = `
+      <button class="terminal-btn-primary" type="button" id="terminal-start-login">${route === "hub" ? "刷新健康" : route === "wechat" ? (loginStarted ? "等待扫码" : "开始登录") : "检测登录"}</button>
+      <button class="terminal-btn-primary" type="button" id="terminal-edit-config">${route === "hub" ? "进入视频号" : route === "wechat" ? "修改配置" : "打开创作者后台"}</button>
+      ${saveConfigButtonHtml}
+    `;
   }
 
   if (route === "hub") {
@@ -2030,7 +2066,7 @@ function renderTerminalExecution() {
             <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
           </div>
           <div class="terminal-entry-actions terminal-route-actions">
-            <button class="btn primary" type="button" data-terminal-start-action="1" ${loginStarted ? "disabled" : ""}>${loginStarted ? "登录中" : "开始登录"}</button>
+            <button class="btn primary" type="button" data-terminal-start-action="1" ${loginStarted ? "disabled" : ""}>${loginStarted ? "等待扫码" : "开始登录"}</button>
             <button class="btn secondary" type="button" data-terminal-edit-action="1">修改配置</button>
           </div>
           <div class="terminal-workspace terminal-workspace-wechat"></div>
@@ -2841,7 +2877,7 @@ function terminalHealthSummary(platform) {
   if (normalized === "wechat") {
     const summary = state.terminalExecution.summary || {};
     if (state.terminalExecution.login_started) {
-      return summary.success === summary.total && summary.total ? "已登录" : "登录中";
+      return summary.success === summary.total && summary.total ? "已登录" : "等待扫码";
     }
     return state.terminalExecution.initialized ? "已配置" : "未检测";
   }
@@ -2969,6 +3005,9 @@ async function loadTasks() {
 async function loadViewData(view, { force = false } = {}) {
   if (!force && loadedViews.has(view)) return;
   setViewLoading(view);
+  if (view !== "video-matrix") {
+    unmountVideoMatrixWorkbench();
+  }
   if (view === "terminal-execution") {
     state.terminalQrVisible = false;
     state.terminalExecution = {
@@ -4128,6 +4167,13 @@ function mountVideoMatrixWorkbench() {
   });
 }
 
+function unmountVideoMatrixWorkbench() {
+  const section = document.querySelector("#video-matrix");
+  if (!section || section.dataset.mounted !== "true") return;
+  section.dataset.mounted = "false";
+  section.innerHTML = "";
+}
+
 document.querySelector('[data-view="video-matrix"]').addEventListener("click", mountVideoMatrixWorkbench);
 
 document.addEventListener("click", async (event) => {
@@ -4138,11 +4184,29 @@ document.addEventListener("click", async (event) => {
   const routeBack = event.target.closest("#terminal-route-back");
   const terminalStart = event.target.closest("#terminal-start-login");
   const terminalEdit = event.target.closest("#terminal-edit-config");
+  const terminalSave = event.target.closest("#terminal-save-config");
   const embeddedStart = event.target.closest("[data-terminal-start-action]");
   const embeddedEdit = event.target.closest("[data-terminal-edit-action]");
-  if (!enter && !configJump && !longDetect && !longOpen && !terminalStart && !terminalEdit && !routeBack && !embeddedStart && !embeddedEdit) return;
-  if (terminalStart || terminalEdit || enter || configJump || longDetect || longOpen || routeBack || embeddedStart || embeddedEdit) {
+  if (!enter && !configJump && !longDetect && !longOpen && !terminalStart && !terminalEdit && !terminalSave && !routeBack && !embeddedStart && !embeddedEdit) return;
+  if (terminalStart || terminalEdit || terminalSave || enter || configJump || longDetect || longOpen || routeBack || embeddedStart || embeddedEdit) {
     event.stopImmediatePropagation();
+  }
+  if (terminalSave) {
+    const route = terminalCurrentRoute();
+    const restoreButton = setButtonLoading(terminalSave, "更新中");
+    try {
+      if (route === "wechat") {
+        state.terminalExecution = await api("/api/terminal-execution/start", {
+          method: "POST",
+          body: JSON.stringify({ windows: readTerminalConfigRows() }),
+        });
+        state.terminalConfigOpen = false;
+        renderTerminalExecution();
+      }
+    } finally {
+      restoreButton();
+    }
+    return;
   }
   if (embeddedStart) {
     const route = terminalCurrentRoute();
@@ -4179,8 +4243,7 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (route === "wechat") {
-      state.terminalConfigOpen = true;
-      renderTerminalExecution();
+      openTerminalConfigPanel();
       return;
     }
     const account = terminalLongSessionAccounts(route)[0];
@@ -4199,8 +4262,7 @@ document.addEventListener("click", async (event) => {
     const platform = configJump.dataset.terminalConfigJump || "";
     if (platform === "wechat") {
       terminalSetRoute("wechat");
-      state.terminalConfigOpen = true;
-      renderTerminalExecution();
+      openTerminalConfigPanel();
     } else {
       terminalSetRoute(platform);
     }

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import copy
 import json
@@ -116,6 +116,9 @@ NOTIFICATION_EVENT_TYPES = {item["event_type"] for item in NOTIFICATION_EVENT_DE
 NOTIFICATION_EVENT_META = {item["event_type"]: item for item in NOTIFICATION_EVENT_DEFINITIONS}
 NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
+BRAND_INLINE_ASSET_MAX_CHARS = int(os.getenv("GASGX_BRAND_INLINE_ASSET_MAX_CHARS", "200000") or 200000)
+BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_account_prefix,created_at,updated_at"
+TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", "60") or 60)
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
 SUPER_ADMIN_PASSWORD = "cuitengwei2023"
 FEATURE_ENTRIES = [
@@ -749,6 +752,39 @@ def load_brand_settings() -> dict[str, Any]:
         return dict_from_row(row)
 
 
+def public_brand_settings(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    if settings is None and brand_database_backend() == "supabase":
+        if _supabase_read_cache_peek("brand_settings_public"):
+            return _supabase_read_cache_get("brand_settings_public")
+        rows = _brand_supabase().select("brand_settings", filters={"id": 1}, columns=BRAND_PUBLIC_SETTING_COLUMNS)
+        if rows:
+            data = dict(rows[0])
+            logo_rows = _brand_supabase().select_where(
+                "brand_settings",
+                params={"id": "eq.1", "logo_asset_path": "not.like.data:%"},
+                columns="logo_asset_path",
+            )
+            data_url_rows = _brand_supabase().select_where(
+                "brand_settings",
+                params={"id": "eq.1", "logo_asset_path": "like.data:%"},
+                columns="id",
+            )
+            data["logo_asset_path"] = str((logo_rows[0] if logo_rows else {}).get("logo_asset_path") or "")
+            data["logo_asset_omitted"] = bool(data_url_rows)
+            data["logo_asset_chars"] = 0
+            return _cache_supabase_read("brand_settings_public", data)
+    data = copy.deepcopy(settings if settings is not None else load_brand_settings())
+    logo = str(data.get("logo_asset_path") or "")
+    if logo.startswith("data:") and len(logo) > BRAND_INLINE_ASSET_MAX_CHARS:
+        data["logo_asset_path"] = ""
+        data["logo_asset_omitted"] = True
+        data["logo_asset_chars"] = len(logo)
+    else:
+        data["logo_asset_omitted"] = False
+        data["logo_asset_chars"] = len(logo)
+    return data
+
+
 def _cache_supabase_read(key: str, value: Any) -> Any:
     _supabase_read_cache_set(key, value)
     return copy.deepcopy(value)
@@ -767,7 +803,7 @@ def save_brand_settings(payload: dict[str, Any]) -> dict[str, Any]:
             "updated_at": now_ts(),
         }
         row = _brand_supabase().update("brand_settings", next_data, filters={"id": 1})
-        _invalidate_supabase_read_cache("brand_settings")
+        _invalidate_supabase_read_cache("brand_settings", "brand_settings_public")
         return row
     ensure_database()
     current = load_brand_settings()
@@ -1430,6 +1466,39 @@ def terminal_qr_image_path(window_id: int) -> str | None:
     return str(path) if path.exists() else None
 
 
+def _terminal_qr_url(window_id: int) -> str:
+    return f"/api/terminal-execution/windows/{int(window_id):d}/qr-image"
+
+
+def _write_terminal_qr_data_url_cache(window_id: int, data_url: str) -> str:
+    if "base64," not in data_url or not data_url.startswith("data:image/"):
+        return ""
+    try:
+        encoded = data_url.split("base64,", 1)[1]
+        photo_bytes = base64.b64decode(encoded)
+    except Exception:
+        return ""
+    if not photo_bytes:
+        return ""
+    cache_path = _terminal_qr_cache_path(window_id)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(photo_bytes)
+    return str(cache_path)
+
+
+def _public_terminal_window(window: dict[str, Any]) -> dict[str, Any]:
+    visible = copy.deepcopy(window)
+    visible.pop("qr_data_url", None)
+    window_id = int(visible.get("id") or 0)
+    qr_path = str(visible.get("qr_path") or "").strip()
+    qr_url = str(visible.get("qr_url") or "").strip()
+    if qr_path:
+        visible["qr_url"] = _terminal_qr_url(window_id)
+    elif qr_url.startswith("data:"):
+        visible["qr_url"] = ""
+    return visible
+
+
 _TERMINAL_EXECUTION_STATE_CACHE: dict[str, Any] = {"expires_at": 0.0, "value": None}
 
 
@@ -1453,8 +1522,17 @@ def _load_terminal_state() -> dict[str, Any]:
         for window in windows:
             if not isinstance(window, dict):
                 continue
-            if not str(window.get("qr_url") or "").strip() and str(window.get("qr_data_url") or "").strip():
-                window["qr_url"] = str(window.get("qr_data_url") or "")
+            qr_data_url = str(window.pop("qr_data_url", "") or "").strip()
+            if qr_data_url:
+                window_id = int(window.get("id") or 0)
+                qr_path = str(window.get("qr_path") or "").strip()
+                if not qr_path or not Path(qr_path).exists():
+                    qr_path = _write_terminal_qr_data_url_cache(window_id, qr_data_url)
+                if qr_path:
+                    window["qr_path"] = qr_path
+                    window["qr_url"] = _terminal_qr_url(window_id)
+            if str(window.get("qr_url") or "").strip().startswith("data:"):
+                window["qr_url"] = ""
             if not str(window.get("qr_path") or "").strip() and str(window.get("qr_cache_path") or "").strip():
                 window["qr_path"] = str(window.get("qr_cache_path") or "")
             if bool(payload.get("login_started")) and str(window.get("qr_url") or "").strip():
@@ -1583,12 +1661,13 @@ def terminal_execution_state() -> dict[str, Any]:
     state = _load_terminal_state()
     login_started = bool(state.get("login_started"))
     windows = state.get("windows") or []
-    visible_windows = windows
+    visible_windows = [_public_terminal_window(window) for window in windows if isinstance(window, dict)]
     if not login_started:
         visible_windows = []
         for window in windows:
-            visible_window = dict(window)
-            visible_window["qr_url"] = str(window.get("qr_url") or window.get("qr_data_url") or "")
+            if not isinstance(window, dict):
+                continue
+            visible_window = _public_terminal_window(window)
             visible_window["manual_available_at"] = 0
             visible_accounts = []
             for index, account in enumerate(window.get("accounts") or []):
@@ -1746,33 +1825,56 @@ def start_terminal_login() -> dict[str, Any]:
     windows = state.get("windows") or []
     if not windows:
         raise ValueError("请先初始化执行矩阵")
-    for window in windows:
+    if bool(state.get("login_started")):
+        return terminal_execution_state()
+    opened_index: int | None = None
+    for index, window in enumerate(windows):
+        if opened_index is None and _open_terminal_window_current_account(window):
+            opened_index = index
+            continue
         accounts = window.get("accounts") or []
         current_index = int(window.get("current_index") or 0)
-        if current_index >= len(accounts):
-            continue
-        current = accounts[current_index]
-        current["status"] = "opening"
-        current["status_text"] = "正在打开浏览器"
-        try:
-            open_account_browser(int(current["id"]), "wechat")
-            current["status"] = "waiting_qr"
-            current["status_text"] = "等待扫码中..."
-            qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), int(current["id"]))
-            window["qr_path"] = qr_path
-            window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
-            if not window["qr_url"] and str(window.get("qr_data_url") or "").strip():
-                window["qr_url"] = str(window.get("qr_data_url") or "")
-        except Exception as exc:
-            current["status"] = "error"
-            current["status_text"] = str(exc)
-            _clear_terminal_qr_cache(int(window.get("id") or 0))
+        if current_index < len(accounts):
+            current = accounts[current_index]
+            if str(current.get("status") or "") not in {"success", "running"}:
+                current["status"] = "pending"
+                current["status_text"] = "等待开始登录"
+                current["task_id"] = None
             window["qr_path"] = ""
             window["qr_url"] = ""
-        window["manual_available_at"] = now_ts() + 60
+            window["manual_available_at"] = 0
     state["login_started"] = True
+    if opened_index is not None:
+        state["probe_cursor"] = (opened_index + 1) % len(windows)
+        state["next_probe_at"] = now_ts() + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
     _save_terminal_state(state)
     return terminal_execution_state()
+
+
+def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
+    accounts = window.get("accounts") or []
+    current_index = int(window.get("current_index") or 0)
+    if current_index >= len(accounts):
+        return False
+    current = accounts[current_index]
+    account_id = int(current.get("id") or 0)
+    current["status"] = "opening"
+    current["status_text"] = "正在打开浏览器"
+    try:
+        open_account_browser(account_id, "wechat")
+        current["status"] = "waiting_qr"
+        current["status_text"] = "等待扫码中..."
+        qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
+        window["qr_path"] = qr_path
+        window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0)) if qr_path else ""
+    except Exception as exc:
+        current["status"] = "error"
+        current["status_text"] = str(exc)
+        _clear_terminal_qr_cache(int(window.get("id") or 0))
+        window["qr_path"] = ""
+        window["qr_url"] = ""
+    window["manual_available_at"] = now_ts() + 60
+    return True
 
 
 def _queue_terminal_draft_task(account_id: int) -> dict[str, Any]:
@@ -1787,29 +1889,34 @@ def _queue_terminal_draft_task(account_id: int) -> dict[str, Any]:
         raise
 
 
-def _advance_terminal_window(window: dict[str, Any]) -> None:
+def _advance_terminal_window(window: dict[str, Any]) -> bool:
     accounts = window.get("accounts") or []
     current_index = int(window.get("current_index") or 0)
     if current_index >= len(accounts):
-        return
+        return False
     current = accounts[current_index]
     account_id = int(current.get("id") or 0)
+    if str(current.get("status") or "") == "pending" and not current.get("task_id") and not window.get("qr_url"):
+        return _open_terminal_window_current_account(window)
+    if not current.get("task_id") and now_ts() < int(window.get("manual_available_at") or 0):
+        if str(current.get("status") or "") != "success":
+            current["status"] = "waiting_qr"
+            current["status_text"] = "等待扫码中..."
+        return False
     try:
         result = check_login_status(account_id, "wechat")
     except Exception as exc:
         current["status"] = "error"
         current["status_text"] = str(exc)
-        return
+        return True
     if str(result.get("status") or "") != "ready":
         current["status"] = "waiting_qr"
         current["status_text"] = "等待扫码中..."
         if not window.get("qr_url"):
             qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
             window["qr_path"] = qr_path
-            window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
-            if not window.get("qr_url") and str(window.get("qr_data_url") or "").strip():
-                window["qr_url"] = str(window.get("qr_data_url") or "")
-        return
+            window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0)) if qr_path else ""
+        return True
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     window["qr_path"] = ""
     window["qr_url"] = ""
@@ -1828,42 +1935,41 @@ def _advance_terminal_window(window: dict[str, Any]) -> None:
             window["qr_url"] = ""
             window["manual_available_at"] = now_ts() + 60
             if next_index >= len(accounts):
-                return
+                return True
             next_account = accounts[next_index]
-            next_account["status"] = "opening"
-            next_account["status_text"] = "正在打开浏览器"
-            try:
-                open_account_browser(int(next_account["id"]), "wechat")
-                next_account["status"] = "waiting_qr"
-                next_account["status_text"] = "等待扫码中..."
-                qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), int(next_account["id"]))
-                window["qr_path"] = qr_path
-                window["qr_url"] = f"/api/terminal-execution/windows/{int(window.get('id') or 0)}/qr-image" if qr_path else ""
-                if not window["qr_url"] and str(window.get("qr_data_url") or "").strip():
-                    window["qr_url"] = str(window.get("qr_data_url") or "")
-            except Exception as exc:
-                next_account["status"] = "error"
-                next_account["status_text"] = str(exc)
+            next_account["status"] = "pending"
+            next_account["status_text"] = "等待开始登录"
         elif task_status in {"failed", "error", "unsupported"}:
             current["status"] = "error"
             current["status_text"] = str(task.get("summary") or task.get("error") or "任务执行失败")
         else:
             current["status"] = "running"
             current["status_text"] = "已登录，草稿任务执行中"
-        return
+        return True
     if not current.get("task_id"):
         task = _queue_terminal_draft_task(account_id)
         current["task_id"] = task.get("id")
     current["status"] = "running"
     current["status_text"] = "已登录，草稿任务已加入队列"
+    return True
 
 
 def poll_terminal_execution() -> dict[str, Any]:
     state = _load_terminal_state()
     if not bool(state.get("login_started")):
         return terminal_execution_state()
-    for window in state.get("windows") or []:
-        _advance_terminal_window(window)
+    now = now_ts()
+    if now < int(state.get("next_probe_at") or 0):
+        return terminal_execution_state()
+    windows = [window for window in (state.get("windows") or []) if isinstance(window, dict)]
+    if windows:
+        start = int(state.get("probe_cursor") or 0) % len(windows)
+        for offset in range(len(windows)):
+            index = (start + offset) % len(windows)
+            if _advance_terminal_window(windows[index]):
+                state["probe_cursor"] = (index + 1) % len(windows)
+                state["next_probe_at"] = now + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
+                break
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -1886,7 +1992,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         current["status"] = "running"
         qr_path = _write_terminal_qr_cache(int(target.get("id") or 0), int(current.get("id") or 0))
         target["qr_path"] = qr_path
-        target["qr_url"] = f"/api/terminal-execution/windows/{int(target.get('id') or 0)}/qr-image" if qr_path else ""
+        target["qr_url"] = _terminal_qr_url(int(target.get("id") or 0)) if qr_path else ""
         current["status_text"] = "已人工触发草稿任务"
     target["manual_available_at"] = now_ts() + 60
     _save_terminal_state(state)
