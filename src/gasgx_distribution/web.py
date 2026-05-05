@@ -265,6 +265,10 @@ def create_app() -> FastAPI:
     def database_dictionary() -> dict[str, Any]:
         return service.database_dictionary()
 
+    @app.post("/api/system/supabase-read-cache/clear")
+    def clear_supabase_read_cache_route() -> dict[str, Any]:
+        return service.clear_supabase_read_cache()
+
     @app.post("/api/system/initialize")
     def system_initialize(payload: SystemInitializePayload) -> dict[str, Any]:
         try:

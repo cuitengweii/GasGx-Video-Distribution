@@ -1806,6 +1806,41 @@ function confirmSuperAdminPassword() {
 
 const confirmSystemInitializePassword = confirmSuperAdminPassword;
 
+function initSupabaseReadCacheClear() {
+  const button = document.querySelector("#clear-supabase-read-cache");
+  const stateNode = document.querySelector("#supabase-read-cache-state");
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    const restoreButton = setButtonLoading(button, "清理中...");
+    if (stateNode) {
+      stateNode.hidden = false;
+      stateNode.textContent = "";
+      stateNode.classList.remove("danger");
+    }
+    try {
+      const result = await api("/api/system/supabase-read-cache/clear", { method: "POST" });
+      if (stateNode) {
+        if (result.cleared) {
+          stateNode.textContent = "已清空进程内 Supabase 读缓存，后续请求将重新拉取远端数据。";
+        } else {
+          stateNode.textContent =
+            result.backend === "sqlite"
+              ? "当前品牌库为 SQLite，未启用 Supabase 读缓存。"
+              : "未清理缓存。";
+        }
+      }
+    } catch (error) {
+      if (stateNode) {
+        stateNode.textContent = `清理失败：${error.message}`;
+        stateNode.classList.add("danger");
+      }
+      throw error;
+    } finally {
+      restoreButton();
+    }
+  });
+}
+
 function initSystemDirectoryActions() {
   const stateNode = document.querySelector("#system-directory-state");
   document.querySelectorAll("[data-system-dir]").forEach((button) => {
@@ -3139,6 +3174,7 @@ renderThemePalette();
 initBrandSettings();
 initSystemInitialize();
 initSystemDirectoryActions();
+initSupabaseReadCacheClear();
 document.querySelector("#database-dictionary-locale-toggle")?.addEventListener("click", toggleDatabaseDictionaryLocale);
 initUserMenu();
 initPermissionGuards();

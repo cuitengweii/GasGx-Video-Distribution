@@ -1292,3 +1292,25 @@ def test_supabase_distribution_settings_roundtrip(monkeypatch, tmp_path: Path) -
 
     assert saved["common"]["publish_mode"] == "draft"
     assert loaded["common"]["material_dir"] == "runtime/a"
+
+
+def test_clear_supabase_read_cache_endpoint_sqlite(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    response = client.post("/api/system/supabase-read-cache/clear")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["cleared"] is False
+    assert body["backend"] == "sqlite"
+
+
+def test_clear_supabase_read_cache_supabase_backend(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "supabase")
+    service._supabase_read_cache_set("dashboard_summary", {"accounts": 3})
+    service._SUPABASE_APP_SETTINGS_CACHE["distribution_settings"] = {"common": {}}
+    cleared = service.clear_supabase_read_cache()
+    assert cleared["cleared"] is True
+    assert not service._supabase_read_cache_peek("dashboard_summary")
+    assert "distribution_settings" not in service._SUPABASE_APP_SETTINGS_CACHE
