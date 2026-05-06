@@ -84,16 +84,24 @@ const state = {
   operatorWechats: ["aamecc", "aalbcc"],
 };
 
-const TERMINAL_ERROR_FLOW_NODES = [
-  {
+const TERMINAL_ERROR_GUIDE_ORDER = ["qr", "login_probe", "publish_start", "publish_run", "confirm", "unknown"];
+const TERMINAL_ERROR_STAGE_GUIDES = {
+  qr: {
     title: "获取二维码",
     items: [
       ["二维码缓存失败", "读取浏览器页源或写入二维码缓存时失败。"],
-      ["打开浏览器失败", "二维码缓存为空后会尝试自动打开浏览器。"],
+      ["二维码为空", "当前会话未拿到可用二维码，请先手动打开浏览器后重试。"],
       ["二维码过期", "二维码已过期，需要刷新后重新扫码。"],
     ],
   },
-  {
+  login_probe: {
+    title: "登录检测",
+    items: [
+      ["登录态异常", "账号会话失效或未完成扫码，登录检测返回未就绪。"],
+      ["网络或接口异常", "登录检测请求超时/失败，导致状态无法确认。"],
+    ],
+  },
+  publish_start: {
     title: "发布启动",
     items: [
       ["无可用素材", "当天素材为空，或已被 consumed 去重。"],
@@ -101,20 +109,27 @@ const TERMINAL_ERROR_FLOW_NODES = [
       ["启动发布子进程失败", "发布进程在创建阶段就报错退出。"],
     ],
   },
-  {
+  publish_run: {
     title: "发布执行",
     items: [
       ["进程无效", "发布子进程 PID 无效或已提前退出。"],
-      ["未检测到发布证据", "进程结束，但没有找到视频号上传证据。"],
+      ["发布未确认", "平台未确认发布成功，需先人工核实后台结果。"],
+      ["未检测到发布证据", "进程结束后未找到上传记录 evidence。"],
     ],
   },
-  {
+  confirm: {
     title: "人工确认",
     items: [
       ["下一账号二维码刷新失败", "发布成功后切下一账号时，二维码未能重新拉起。"],
     ],
   },
-];
+  unknown: {
+    title: "未知异常",
+    items: [
+      ["未分类错误", "错误未命中已知节点，请先查看日志并反馈原始报错。"],
+    ],
+  },
+};
 
 const taskSelection = new Set();
 const taskFilters = { account: "", platform: "", status: "", taskType: "" };
@@ -669,23 +684,50 @@ function terminalErrorStageTitle(stage) {
   const map = {
     load: "终端执行加载失败",
     qr: "获取二维码失败",
+    login_probe: "登录检测失败",
     publish_start: "发布启动失败",
     publish_run: "发布执行失败",
     confirm: "人工确认失败",
+    unknown: "未分类异常",
   };
   return map[stage] || "终端流程错误";
 }
 
 function terminalErrorStageFromMessage(message) {
-  const text = String(message || "");
+  const text = String(message || "").trim();
+  const lowered = text.toLowerCase();
+  if (!text) return "";
   if (text.startsWith("发布启动失败")) return "publish_start";
-  if (text.startsWith("发布失败")) return "publish_run";
+  if (
+    text.startsWith("发布失败") ||
+    lowered.includes("publish_unconfirmed") ||
+    lowered.includes("e_publish_unconfirmed") ||
+    lowered.includes("未检测到发布证据") ||
+    lowered.includes("invalid publish pid")
+  ) return "publish_run";
+  if (
+    lowered.includes("no available material for today") ||
+    lowered.includes("wechat platform config missing") ||
+    lowered.includes("account not found")
+  ) return "publish_start";
   if (/二维码/.test(text)) return "qr";
+  if (/登录|会话|network|connection|timeout|超时|接口/.test(text)) return "login_probe";
   return "";
 }
 
-function terminalErrorFlowMarkup() {
-  return TERMINAL_ERROR_FLOW_NODES.map((section) => `
+function terminalErrorGuideSections(stage, showAll = false) {
+  if (showAll || !stage) {
+    return TERMINAL_ERROR_GUIDE_ORDER
+      .map((key) => TERMINAL_ERROR_STAGE_GUIDES[key])
+      .filter(Boolean);
+  }
+  const primary = TERMINAL_ERROR_STAGE_GUIDES[stage];
+  if (!primary) return [TERMINAL_ERROR_STAGE_GUIDES.unknown];
+  return [primary];
+}
+
+function terminalErrorFlowMarkup(stage, { showAll = false } = {}) {
+  return terminalErrorGuideSections(stage, showAll).map((section) => `
     <section class="terminal-error-flow-section">
       <strong>${escapeHtml(section.title)}</strong>
       <div class="terminal-error-flow-list">
@@ -710,7 +752,6 @@ function terminalErrorSnapshot() {
       title: terminalErrorStageTitle("load"),
       message,
       signature,
-      nodes: TERMINAL_ERROR_FLOW_NODES,
       context: "终端执行数据加载失败",
     };
   }
@@ -723,9 +764,16 @@ function terminalErrorSnapshot() {
     const run = windowItem.publish_run || {};
     const runStatus = String(run.status || "").toLowerCase();
     if (status !== "error" && runStatus !== "failed") continue;
-    const stage = String(current.error_stage || run.error_stage || terminalErrorStageFromMessage(current.status_text || run.error || "") || "").trim() || "qr";
-    const title = String(current.error_title || run.error_title || terminalErrorStageTitle(stage));
     const message = String(current.error_detail || current.status_text || run.error || "终端流程发生错误");
+    const stage = String(
+      current.error_stage
+      || run.error_stage
+      || (runStatus === "failed" ? "publish_run" : "")
+      || terminalErrorStageFromMessage(message)
+      || (status === "error" ? "unknown" : "")
+      || "unknown"
+    ).trim();
+    const title = String(current.error_title || run.error_title || terminalErrorStageTitle(stage));
     const signature = [
       "terminal",
       windowItem.id,
@@ -740,7 +788,6 @@ function terminalErrorSnapshot() {
       title,
       message,
       signature,
-      nodes: TERMINAL_ERROR_FLOW_NODES,
       context: `窗口 #${windowItem.id} · 账号 #${current.id}`,
     };
   }
@@ -759,7 +806,7 @@ function showTerminalErrorModal(payload) {
   if (stageNode) stageNode.textContent = payload.stage ? `错误节点：${terminalErrorStageTitle(payload.stage)}` : "错误节点";
   if (contextNode) contextNode.textContent = payload.context || "";
   if (messageNode) messageNode.textContent = payload.message || "终端流程发生错误";
-  if (flowNode) flowNode.innerHTML = terminalErrorFlowMarkup();
+  if (flowNode) flowNode.innerHTML = terminalErrorFlowMarkup(payload.stage, { showAll: Boolean(payload.showAllGuides) });
   modal.classList.remove("hidden");
 }
 
@@ -788,6 +835,7 @@ function showTerminalFlowGuideModal(platform) {
     message: "以下为该平台流程中的常见错误节点与排查方向。",
     context: `${label} · 每次进入平台时展示`,
     signature: `guide|${token}|${Date.now()}`,
+    showAllGuides: true,
   });
 }
 
@@ -1926,6 +1974,20 @@ function terminalQrLifecycle(window) {
   };
 }
 
+function terminalRunIsManualConfirmableFailure(run) {
+  const runStatus = String(run?.status || "").toLowerCase();
+  if (runStatus !== "failed" && runStatus !== "error") return false;
+  const errorText = `${String(run?.error || "")} ${String(run?.error_title || "")}`.toLowerCase();
+  return (
+    errorText.includes("未检测到视频号发布成功记录")
+    || errorText.includes("未检测到发布证据")
+    || errorText.includes("publish process finished but no wechat evidence")
+    || errorText.includes("publish_unconfirmed")
+    || errorText.includes("publish was not confirmed")
+    || errorText.includes("发布未确认")
+  );
+}
+
 function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
@@ -1935,10 +1997,11 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const runActiveForCurrent = Number(run?.account_id || 0) === Number(current?.id || 0);
   const publishRunning = runActiveForCurrent && runStatus === "running";
   const publishSucceeded = runActiveForCurrent && runStatus === "success";
+  const publishManualConfirmableFailure = runActiveForCurrent && terminalRunIsManualConfirmableFailure(run);
   const qrState = terminalQrLifecycle(window);
   const isSuccess = String(current?.status || "") === "success";
   const canPublish = loginStarted && hasCurrent && qrState.active && !publishRunning && !publishSucceeded && !isSuccess;
-  const canConfirm = loginStarted && hasCurrent && publishSucceeded && !isSuccess;
+  const canConfirm = loginStarted && hasCurrent && (publishSucceeded || publishManualConfirmableFailure) && !isSuccess;
   const hasNext = currentIndex + 1 < accounts.length;
   const publishLabel = !hasCurrent
     ? "全部完成"
@@ -1946,10 +2009,14 @@ function terminalWindowActionButtons(window, current, loginStarted) {
       ? "发布中"
       : publishSucceeded
         ? "已完成待确认"
+        : publishManualConfirmableFailure
+          ? "重新发布"
         : qrState.active
           ? "发布"
           : "先获取二维码";
-  const confirmLabel = hasNext ? "发布成功，下一账号" : "发布成功，完成";
+  const confirmLabel = hasNext
+    ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
+    : (publishManualConfirmableFailure ? "已人工确认成功，完成" : "发布成功，完成");
   return `
     <div class="terminal-window-actions">
       <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${canPublish ? "" : "disabled"}>${publishLabel}</button>
@@ -4262,21 +4329,38 @@ document.querySelector("#terminal-edit-config-legacy")?.addEventListener("click"
   renderTerminalExecution();
 });
 
-document.querySelector("#distribution-settings-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "保存中");
+const distributionSettingsForm = document.querySelector("#distribution-settings-form");
+let distributionSettingsSaving = false;
+
+async function saveDistributionSettingsForm(form, submitter = null) {
+  if (!form || distributionSettingsSaving) return;
+  distributionSettingsSaving = true;
+  const restoreButton = setButtonLoading(submitter || form.querySelector('button[type="submit"]'), "保存中");
   const stateNode = document.querySelector("#settings-save-state");
   stateNode.textContent = "保存中...";
   try {
     await api("/api/settings/distribution", {
       method: "PATCH",
-      body: JSON.stringify(collectDistributionSettings(event.target)),
+      body: JSON.stringify(collectDistributionSettings(form)),
     });
     stateNode.textContent = "已保存，下一次矩阵分发会按全局配置和平台独立配置执行。";
     await refresh();
   } finally {
+    distributionSettingsSaving = false;
     restoreButton();
   }
+}
+
+distributionSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await saveDistributionSettingsForm(event.target, event.submitter || null);
+});
+
+distributionSettingsForm?.querySelectorAll('button[type="submit"]').forEach((button) => {
+  button.addEventListener("click", async (event) => {
+    event.preventDefault();
+    await saveDistributionSettingsForm(distributionSettingsForm, button);
+  });
 });
 
 document.querySelector("#ai-platform-select").addEventListener("change", () => {
