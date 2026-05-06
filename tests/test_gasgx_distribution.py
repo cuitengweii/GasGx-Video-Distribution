@@ -1528,6 +1528,7 @@ def test_terminal_execution_state_normalizes_legacy_qr_data_url(monkeypatch, tmp
         encoding="utf-8",
     )
 
+    monkeypatch.setattr(service, "now_ts", lambda: 1000)
     service._invalidate_terminal_execution_state_cache()
     client = TestClient(create_app())
     payload = client.get("/api/terminal-execution/state")
@@ -1536,6 +1537,7 @@ def test_terminal_execution_state_normalizes_legacy_qr_data_url(monkeypatch, tmp
     data = payload.json()
     assert "qr_data_url" not in data["windows"][0]
     assert data["windows"][0]["qr_url"] == "/api/terminal-execution/windows/1/qr-image"
+    assert data["windows"][0]["qr_expires_at"] == 1060
     assert (runtime_dir / "terminal_qr_cache" / "window-01.png").read_bytes() == b"ABC"
 
 
@@ -1572,6 +1574,7 @@ def test_terminal_execution_state_recovers_existing_qr_cache(monkeypatch, tmp_pa
         encoding="utf-8",
     )
 
+    monkeypatch.setattr(service, "now_ts", lambda: 1000)
     service._invalidate_terminal_execution_state_cache()
     client = TestClient(create_app())
     payload = client.get("/api/terminal-execution/state")
@@ -1580,6 +1583,7 @@ def test_terminal_execution_state_recovers_existing_qr_cache(monkeypatch, tmp_pa
     data = payload.json()
     assert data["windows"][0]["qr_url"] == "/api/terminal-execution/windows/1/qr-image"
     assert data["windows"][0]["qr_path"].endswith("window-01.png")
+    assert data["windows"][0]["qr_expires_at"] == 1060
 
 
 def test_terminal_config_update_preserves_active_qr_for_same_window(monkeypatch, tmp_path: Path) -> None:
@@ -1628,6 +1632,7 @@ def test_terminal_config_update_preserves_active_qr_for_same_window(monkeypatch,
     assert result["login_started"] is True
     assert window["color"] == "#F97316"
     assert str(window["qr_url"]).startswith("/api/terminal-execution/windows/1/qr-image")
+    assert window["qr_expires_at"] == 1560
     assert window["accounts"][0]["status"] == "waiting_qr"
     assert window["manual_available_at"] == 1234
 
@@ -1841,6 +1846,7 @@ def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatc
     assert window["accounts"][0]["status"] == "running"
     assert window["accounts"][0]["status_text"] == "已触发发布，等待人工确认成功"
     assert str(window["qr_url"]).startswith("/api/terminal-execution/windows/1/qr-image")
+    assert window["qr_expires_at"] == 160
 
 
 def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path: Path) -> None:
@@ -1874,6 +1880,7 @@ def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path
         ),
         encoding="utf-8",
     )
+    monkeypatch.setattr(service, "now_ts", lambda: 100)
     opened: list[int] = []
     monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
     def write_qr(window_id: int, account_id: int) -> str:
@@ -1886,10 +1893,101 @@ def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path
     result = service.open_terminal_account_qr(1, 2)
 
     window = result["windows"][0]
-    assert opened == [2]
+    assert opened == []
     assert window["current_index"] == 1
     assert window["accounts"][1]["status"] == "waiting_qr"
     assert window["accounts"][1]["status_text"] == "等待扫码中..."
+    assert str(window["qr_url"]).startswith("/api/terminal-execution/windows/1/qr-image")
+
+
+def test_terminal_qr_cache_uses_current_page_source_first(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        service,
+        "get_account",
+        lambda account_id: {
+            "id": account_id,
+            "platforms": [
+                {
+                    "platform": "wechat",
+                    "debug_port": 9334,
+                    "profile_dir": str(runtime_dir / "profiles" / "wechat"),
+                }
+            ],
+        },
+    )
+
+    connect_calls: list[dict[str, object]] = []
+
+    class FakePage:
+        def refresh(self) -> None:
+            connect_calls.append({"refresh": True})
+
+    monkeypatch.setattr(service.engine, "_connect_chrome", lambda **kwargs: connect_calls.append(kwargs) or FakePage())
+    monkeypatch.setattr(service.engine, "_extract_login_qr_source", lambda page, timeout_seconds=0, platform_name="": "data:image/png;base64,ZmFrZQ==")
+    monkeypatch.setattr(service.engine, "_load_qr_image_source", lambda source: ("image/png", b"fast-qr"))
+
+    path = service._write_terminal_qr_cache(1, 2)
+
+    assert path.endswith("window-01.png")
+    assert Path(path).read_bytes() == b"fast-qr"
+    assert connect_calls and isinstance(connect_calls[0], dict)
+
+
+def test_terminal_open_account_qr_falls_back_to_browser_when_refresh_needs_it(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [
+                            {"id": 1, "status": "pending", "status_text": "待开始", "task_id": None, "publish_success_count": 0},
+                            {"id": 2, "status": "pending", "status_text": "待开始", "task_id": None, "publish_success_count": 0},
+                        ],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    opened: list[int] = []
+    refresh_calls = {"count": 0}
+    monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
+    def write_qr(window_id: int, account_id: int) -> str:
+        refresh_calls["count"] += 1
+        if refresh_calls["count"] == 1:
+            return ""
+        path = runtime_dir / f"window-{window_id}-{account_id}.png"
+        path.write_bytes(b"qr")
+        return str(path)
+
+    monkeypatch.setattr(service, "_write_terminal_qr_cache", write_qr)
+
+    result = service.open_terminal_account_qr(1, 2)
+
+    window = result["windows"][0]
+    assert opened == [2]
+    assert window["current_index"] == 1
+    assert window["accounts"][1]["status"] == "waiting_qr"
     assert str(window["qr_url"]).startswith("/api/terminal-execution/windows/1/qr-image")
 
 

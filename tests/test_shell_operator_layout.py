@@ -11,7 +11,7 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'terminal-init-modal' in html
     assert 'terminal-modal-actions' in html
     assert 'data-terminal-save-config' in html
-    assert 'terminal-platform-bar' in html
+    assert 'terminal-platform-bar' not in html
     assert 'terminal-platform-config-panel' in html
     assert '<div class="page-toolbar">' not in html
     assert 'id="refresh"' not in html
@@ -32,11 +32,16 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'confirm-publish-success' in app
     assert 'data-terminal-confirm-success' in app
     assert 'data-terminal-qr-refresh' in app
+    assert 'data-terminal-qr-countdown' in app
+    assert 'terminalQrLifecycle(window)' in app
+    assert 'terminalExpiredPlaceholderIcon' in app
     assert '#terminal-config-list' in app
     assert '#terminal-save-config, [data-terminal-save-config]' in app
     assert '#terminal-start-system' not in app
     assert '!state.terminalExecution.initialized || state.terminalConfigOpen' in app
-    assert 'const qrVisible = loginStarted && window.qr_url;' in app
+    service = (ROOT / 'src' / 'gasgx_distribution' / 'service.py').read_text(encoding='utf-8')
+    assert 'TERMINAL_QR_EXPIRY_SECONDS' in service
+    assert 'qr_expires_at' in service
     assert 'state.terminalQrVisible && loginStarted && window.qr_url' not in app
     assert '视频号采用每日登录扫码队列；登录后由矩阵调度继续推进。' not in app
     assert '一次登录长期有效；失效后重新检测或重新登录。' in app

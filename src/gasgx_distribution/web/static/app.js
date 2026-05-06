@@ -103,6 +103,7 @@ const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
 const SHELL_AUTH_KEY = "gasgx-shell-auth";
 const DATABASE_DICTIONARY_LOCALE_KEY = "gasgx-db-dictionary-locale";
+const SETTINGS_CARD_KEY = "gasgx-settings-card";
 const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
@@ -193,6 +194,8 @@ function displayDatabaseKeyword(value) {
 }
 
 state.databaseDictionaryLocalized = localStorage.getItem(DATABASE_DICTIONARY_LOCALE_KEY) === "zh";
+let currentSettingsCard = localStorage.getItem(SETTINGS_CARD_KEY) === "platform-publish" ? "platform-publish" : "publish-window";
+let currentTerminalInitCard = "window";
 
 const DATABASE_DICTIONARY_TABLE_LABELS = {
   matrix_accounts: "矩阵账号",
@@ -1516,14 +1519,50 @@ function renderTasks() {
   });
 }
 
-function terminalColorByIndex(index) {
-  return (state.terminalExecution.colors || [])[index % Math.max(1, (state.terminalExecution.colors || []).length)] || { hex: "#3B82F6", name: "科技蓝" };
+function terminalColorByIndex(index, terminalState = state.terminalExecution) {
+  const colors = terminalState?.colors || [];
+  return colors[index % Math.max(1, colors.length)] || { hex: "#3B82F6", name: "科技蓝" };
 }
 
-function renderTerminalConfig() {
-  const list = document.querySelector("#terminal-config-list");
+function readTerminalConfigRows(rootTarget = "#terminal-config-list") {
+  const root = typeof rootTarget === "string" ? document.querySelector(rootTarget) : rootTarget;
+  if (!root) return [];
+  return Array.from(root.querySelectorAll("[data-terminal-config-row]")).map((row) => {
+    const activeSwatch = row.querySelector(".terminal-swatch.active");
+    return {
+      id: Number(row.dataset.terminalConfigRow || 0),
+      enabled: Boolean(row.querySelector("[data-terminal-enabled]")?.checked),
+      operator_wechat: row.querySelector("[data-terminal-operator]")?.value || "",
+      color: activeSwatch?.dataset.terminalColor || terminalColorByIndex(0).hex,
+    };
+  });
+}
+
+function installTerminalConfigInteractions(rootTarget = "#terminal-config-list") {
+  const root = typeof rootTarget === "string" ? document.querySelector(rootTarget) : rootTarget;
+  if (!root || root.dataset.terminalConfigBound === "true") return;
+  root.dataset.terminalConfigBound = "true";
+  root.addEventListener("change", (event) => {
+    const row = event.target.closest("[data-terminal-config-row]");
+    if (!row) return;
+    const enabled = event.target.matches("[data-terminal-enabled]") ? event.target.checked : row.querySelector("[data-terminal-enabled]")?.checked;
+    row.classList.toggle("disabled", !enabled);
+    row.querySelectorAll("[data-terminal-color]").forEach((button) => button.toggleAttribute("disabled", !enabled));
+    row.querySelector("[data-terminal-operator]")?.toggleAttribute("disabled", !enabled);
+  });
+  root.addEventListener("click", (event) => {
+    const swatch = event.target.closest("[data-terminal-color]");
+    if (!swatch) return;
+    const row = swatch.closest("[data-terminal-config-row]");
+    row?.querySelectorAll("[data-terminal-color]").forEach((button) => button.classList.remove("active"));
+    swatch.classList.add("active");
+  });
+}
+
+function renderTerminalConfig(rootTarget = "#terminal-config-list", terminalState = state.terminalExecution) {
+  const list = typeof rootTarget === "string" ? document.querySelector(rootTarget) : rootTarget;
   if (!list) return;
-  const platform = terminalActivePlatform();
+  const platform = String(terminalState?.active_platform || terminalActivePlatform());
   if (platform !== "wechat") {
     list.innerHTML = `
       <div class="terminal-config-row">
@@ -1536,16 +1575,17 @@ function renderTerminalConfig() {
         </div>
       </div>
     `;
+    installTerminalConfigInteractions(list);
     return;
   }
-  const operators = state.terminalExecution.operators || [];
-  const colors = state.terminalExecution.colors || [];
-  const savedRows = state.terminalExecution.config || [];
+  const operators = terminalState?.operators || [];
+  const colors = terminalState?.colors || [];
+  const savedRows = terminalState?.config || [];
   const defaultRows = Array.from({ length: 5 }, (_, index) => ({
     id: index + 1,
     enabled: false,
     operator_wechat: operators[index]?.operator_wechat || operators[index % Math.max(1, operators.length)]?.operator_wechat || "",
-    color: terminalColorByIndex(index).hex,
+    color: terminalColorByIndex(index, terminalState).hex,
   })).map((row, index) => {
     const saved = savedRows[index] || {};
     return {
@@ -1553,7 +1593,7 @@ function renderTerminalConfig() {
       id: Number(saved.id || row.id || index + 1),
       enabled: typeof saved.enabled === "boolean" ? saved.enabled : row.enabled,
       operator_wechat: String(saved.operator_wechat || row.operator_wechat || ""),
-      color: String(saved.color || row.color || terminalColorByIndex(index).hex),
+      color: String(saved.color || row.color || terminalColorByIndex(index, terminalState).hex),
     };
   });
   if (!defaultRows.length) {
@@ -1563,9 +1603,10 @@ function renderTerminalConfig() {
         <p class="muted">请先确认已加载终端数据，或切换到视频号路由后重新打开配置。</p>
       </div>
     `;
+    installTerminalConfigInteractions(list);
     return;
   }
-  list.innerHTML = defaultRows.map((row, index) => `
+  list.innerHTML = defaultRows.map((row) => `
     <div class="terminal-config-row ${row.enabled ? "" : "disabled"}" data-terminal-config-row="${row.id}">
       <label class="terminal-config-left">
         <input type="checkbox" class="terminal-checkbox" data-terminal-enabled ${row.enabled ? "checked" : ""}>
@@ -1575,12 +1616,105 @@ function renderTerminalConfig() {
         ${operators.map((operator) => `<option value="${operator.operator_wechat}" ${operator.operator_wechat === row.operator_wechat ? "selected" : ""}>${operator.operator_wechat}</option>`).join("") || `<option value="">暂无绑定运营微信</option>`}
       </select>
       <div class="terminal-swatch-group">
-        ${colors.map((color, colorIndex) => `
+        ${colors.map((color) => `
           <button class="terminal-swatch ${color.hex === row.color ? "active" : ""}" type="button" data-terminal-color="${color.hex}" title="${color.name}" style="background:${color.hex};color:${color.hex}" ${row.enabled ? "" : "disabled"}></button>
         `).join("")}
       </div>
     </div>
   `).join("");
+  installTerminalConfigInteractions(list);
+}
+
+function renderSettingsPlatformPublishConfig() {
+  const list = document.querySelector("#settings-platform-config-list");
+  if (!list) return;
+  const terminalState = state.terminalExecution || {};
+  if (!terminalState.colors?.length && !terminalState.operators?.length && !terminalState.config?.length) {
+    list.innerHTML = `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>加载平台发布配置...</span></div>`;
+    return;
+  }
+  renderTerminalConfig(list, terminalState);
+}
+
+function renderSettingsCardMode() {
+  const publishWindowContent = document.querySelector("#settings-publish-window-content");
+  const platformPanel = document.querySelector("#settings-platform-publish-panel");
+  document.querySelectorAll("[data-settings-card]").forEach((button) => {
+    const active = button.dataset.settingsCard === currentSettingsCard;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  publishWindowContent?.classList.toggle("hidden", currentSettingsCard !== "publish-window");
+  platformPanel?.classList.toggle("hidden", currentSettingsCard !== "platform-publish");
+  if (currentSettingsCard === "platform-publish") {
+    renderSettingsPlatformPublishConfig();
+  }
+}
+
+function renderTerminalInitCardMode() {
+  const windowContent = document.querySelector("#terminal-init-window-content");
+  const platformContent = document.querySelector("#terminal-init-platform-content");
+  document.querySelectorAll("[data-terminal-init-card]").forEach((button) => {
+    const active = button.dataset.terminalInitCard === currentTerminalInitCard;
+    button.classList.toggle("active", active);
+  });
+  windowContent?.classList.toggle("hidden", currentTerminalInitCard !== "window");
+  platformContent?.classList.toggle("hidden", currentTerminalInitCard !== "platform");
+}
+
+function terminalCurrentPlatformKey() {
+  const route = terminalCurrentRoute();
+  if (PLATFORM_ORDER.includes(route)) return route;
+  const active = String(state.terminalExecution?.active_platform || "");
+  if (PLATFORM_ORDER.includes(active)) return active;
+  return "wechat";
+}
+
+function collectTerminalPlatformSetting(root, platform) {
+  const get = (name, fallback = "") => root.querySelector(`[name="${name}"]`)?.value ?? fallback;
+  const payload = {
+    enabled: get(`platforms.${platform}.enabled`, "true") === "true",
+    content_type: get(`platforms.${platform}.content_type`, "short_video"),
+    publish_mode: get(`platforms.${platform}.publish_mode`, "inherit"),
+    visibility: get(`platforms.${platform}.visibility`, "public"),
+    comment_permission: get(`platforms.${platform}.comment_permission`, "public"),
+    caption: get(`platforms.${platform}.caption`, ""),
+    upload_timeout: Number(state.distributionSettings?.common?.upload_timeout || 60),
+  };
+  if (platform === "wechat") {
+    payload.collection_name = get("platforms.wechat.collection_name", "");
+    payload.declare_original = get("platforms.wechat.declare_original", "false") === "true";
+    payload.short_title = get("platforms.wechat.short_title", "GasGx");
+    payload.location = get("platforms.wechat.location", "");
+  }
+  return payload;
+}
+
+async function renderTerminalPlatformPublishPanel() {
+  const host = document.querySelector("#terminal-platform-publish-list");
+  if (!host) return;
+  if (!state.distributionSettings?.platforms) {
+    state.distributionSettings = await api("/api/settings/distribution");
+  }
+  const key = terminalCurrentPlatformKey();
+  const platform = (state.platforms || []).find((item) => item.key === key) || {
+    key,
+    label: platformName(key),
+    region: "cn",
+  };
+  host.innerHTML = `
+    <section class="platform-settings-region">
+      <div class="region-title">当前平台：${platformName(platform.key)}</div>
+      <div class="platform-settings-grid">${renderPlatformSettingsCard(platform)}</div>
+    </section>
+  `;
+}
+
+function setSettingsCardMode(card) {
+  const nextCard = card === "platform-publish" ? "platform-publish" : "publish-window";
+  currentSettingsCard = nextCard;
+  localStorage.setItem(SETTINGS_CARD_KEY, nextCard);
+  renderSettingsCardMode();
 }
 
 function terminalPlaceholderIcon() {
@@ -1595,17 +1729,59 @@ function terminalPlaceholderIcon() {
   </svg>`;
 }
 
+function terminalExpiredPlaceholderIcon() {
+  return `<svg width="112" height="112" viewBox="0 0 112 112" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="二维码已过期">
+    <rect x="22" y="18" width="68" height="76" rx="12" fill="#f5f7fa" stroke="var(--term-color)" stroke-opacity=".45" stroke-width="2" stroke-dasharray="5 4"/>
+    <path d="M34 34h44M34 52h44M34 70h44" stroke="#94a3b8" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"/>
+    <path d="M38 30l36 36M74 30L38 66" stroke="#ef4444" stroke-opacity=".55" stroke-width="3" stroke-linecap="round"/>
+    <text x="56" y="88" text-anchor="middle" fill="#ef4444" font-size="12" font-weight="700">已过期</text>
+  </svg>`;
+}
+
+function terminalQrLifecycle(window) {
+  const refreshing = Boolean(window?.qr_refreshing);
+  if (refreshing) {
+    return {
+      hasQr: false,
+      expiresAt: 0,
+      remaining: 0,
+      expired: false,
+      active: false,
+      countdownText: "待获取",
+      placeholderState: "idle",
+    };
+  }
+  const hasQr = Boolean(window?.qr_url);
+  let expiresAt = Number(window?.qr_expires_at || 0);
+  if (hasQr && expiresAt <= 0) {
+    expiresAt = Date.now() / 1000 + 60;
+    window.qr_expires_at = expiresAt;
+  }
+  const now = Date.now() / 1000;
+  const remaining = hasQr && expiresAt > 0 ? Math.max(0, expiresAt - now) : 0;
+  const expired = hasQr && expiresAt > 0 && remaining <= 0;
+  return {
+    hasQr,
+    expiresAt,
+    remaining,
+    expired,
+    active: hasQr && !expired,
+    countdownText: !hasQr ? "待获取" : expired ? "已过期" : `${remaining.toFixed(2)}s`,
+    placeholderState: !hasQr ? "idle" : expired ? "expired" : "active",
+  };
+}
+
 function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
   const hasCurrent = Boolean(current && current.id && currentIndex < accounts.length);
   const hasTask = Boolean(current?.task_id);
-  const hasQr = Boolean(window.qr_url);
+  const qrState = terminalQrLifecycle(window);
   const isSuccess = String(current?.status || "") === "success";
-  const canPublish = loginStarted && hasCurrent && hasQr && !hasTask && !isSuccess;
+  const canPublish = loginStarted && hasCurrent && qrState.active && !hasTask && !isSuccess;
   const canConfirm = loginStarted && hasCurrent && hasTask && !isSuccess;
   const hasNext = currentIndex + 1 < accounts.length;
-  const publishLabel = !hasCurrent ? "全部完成" : hasTask ? "发布已触发" : hasQr ? "发布" : "先获取二维码";
+  const publishLabel = !hasCurrent ? "全部完成" : hasTask ? "发布已触发" : qrState.active ? "发布" : "先获取二维码";
   const confirmLabel = hasNext ? "发布成功，下一账号" : "发布成功，完成";
   return `
     <div class="terminal-window-actions">
@@ -1615,17 +1791,43 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   `;
 }
 
-function terminalQrImageMarkup(window, qrVisible, currentAccountId) {
-  if (!qrVisible) return terminalPlaceholderIcon();
+function terminalQrImageMarkup(window, currentAccountId) {
+  const qrState = terminalQrLifecycle(window);
   const qrUrl = window.qr_url || "";
-  const refreshAccountId = Number(currentAccountId || 0);
-  const qrSequence = Number(window.qr_sequence || 0);
+  const fallbackCurrentId = Number(window?.accounts?.[Number(window?.current_index || 0)]?.id || 0);
+  const refreshAccountId = Number(currentAccountId || 0) || fallbackCurrentId;
+  if (!qrState.hasQr) {
+    return `
+      <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="点击获取二维码">
+        ${terminalPlaceholderIcon()}
+      </button>
+    `;
+  }
+  if (qrState.expired) {
+    return `
+      <button class="terminal-qr-image-button expired" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="二维码已过期，点击刷新">
+        ${terminalExpiredPlaceholderIcon()}
+      </button>
+    `;
+  }
   return `
     <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}">
-      <span class="terminal-qr-sequence">#${qrSequence || 0}</span>
       <img src="${qrUrl}" alt="视频号登录二维码">
     </button>
   `;
+}
+
+function terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted) {
+  const qrState = terminalQrLifecycle(window);
+  if (index === currentIndex && loginStarted && String(account.status || "") === "waiting_qr") {
+    if (qrState.hasQr) {
+      return qrState.expired
+        ? `二维码已过期，请刷新`
+        : `正在等待扫码确认`;
+    }
+    return `正在等待扫码确认`;
+  }
+  return account.status_text || "未登录";
 }
 
 function terminalWechatWindowMarkup(window, loginStarted) {
@@ -1635,8 +1837,7 @@ function terminalWechatWindowMarkup(window, loginStarted) {
   const colorDim = `${color}33`;
   const successCount = accounts.filter((account) => account.status === "success").length;
   const current = accounts[currentIndex] || {};
-  const qrStatusText = loginStarted && window.qr_url ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击获取 [${current.display_name || "-"}] 登录二维码`;
-  const qrVisible = loginStarted && window.qr_url;
+  const qrState = terminalQrLifecycle(window);
   return `
     <div class="terminal-task-column terminal-glass" data-terminal-window-id="${window.id}" style="--term-color:${color};--term-color-dim:${colorDim}">
       <div class="terminal-color-anchor"></div>
@@ -1647,9 +1848,9 @@ function terminalWechatWindowMarkup(window, loginStarted) {
         </div>
         <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
       </div>
-      <div class="terminal-qr-section">
-        <div class="terminal-qr-placeholder">${terminalQrImageMarkup(window, qrVisible, current.id)}</div>
-        <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
+      <div class="terminal-qr-section" data-terminal-qr-section="${window.id}" data-terminal-qr-state="${qrState.placeholderState}">
+        <div class="terminal-qr-placeholder" data-terminal-qr-placeholder="${window.id}" data-terminal-qr-placeholder-state="${qrState.placeholderState}">${terminalQrImageMarkup(window, current.id)}</div>
+        <div class="terminal-qr-status-row"><span class="terminal-qr-sequence terminal-qr-countdown ${qrState.expired ? "expired" : qrState.active ? "active" : "idle"}" data-terminal-qr-countdown="${window.id}">${qrState.countdownText}</span></div>
       </div>
       <div class="terminal-account-list">
         ${accounts.map((account, index) => `
@@ -1658,7 +1859,7 @@ function terminalWechatWindowMarkup(window, loginStarted) {
               <div class="terminal-avatar"></div>
               <div>
                 <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
-                <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
+                <div class="terminal-acc-status" ${index === currentIndex ? `data-terminal-current-status="${window.id}"` : ""}>${terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted)}</div>
               </div>
             </div>
             <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
@@ -1720,17 +1921,54 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
   try {
     const refreshRoot = document.querySelector(".terminal-workspace-wechat") || document.querySelector("#terminal-matrix-workspace");
     const targetNode = refreshRoot?.querySelector(`[data-terminal-window-id="${windowId}"]`);
+    const pageScrollX = window.scrollX;
+    const pageScrollY = window.scrollY;
+    const rootScrollLeft = refreshRoot?.scrollLeft ?? 0;
+    const rootScrollTop = refreshRoot?.scrollTop ?? 0;
     targetNode?.querySelectorAll(".terminal-qr-placeholder img[alt='视频号登录二维码']").forEach((img) => img.remove());
+    const currentStateWindows = state.terminalExecution.windows || [];
+    const pendingWindow = currentStateWindows.find((item) => String(item.id) === String(windowId));
+    if (pendingWindow) {
+      pendingWindow.qr_refreshing = true;
+      pendingWindow.qr_url = "";
+      pendingWindow.qr_expires_at = 0;
+      if (refreshRoot && targetNode) {
+        const loginStartedPending = Boolean(state.terminalExecution.login_started);
+        targetNode.outerHTML = terminalWechatWindowMarkup(pendingWindow, loginStartedPending);
+        syncTerminalWechatSummary(state.terminalExecution.summary || {}, currentStateWindows);
+        refreshRoot.scrollLeft = rootScrollLeft;
+        refreshRoot.scrollTop = rootScrollTop;
+        window.scrollTo(pageScrollX, pageScrollY);
+      } else {
+        renderTerminalExecution();
+      }
+    }
 
     const nextState = await api(`/api/terminal-execution/windows/${windowId}/accounts/${accountId}/qr`, { method: "POST" });
     state.terminalExecution = nextState;
+    const now = Date.now() / 1000;
+    (state.terminalExecution.windows || []).forEach((item) => {
+      if (String(item.id) === String(windowId)) {
+        item.qr_refreshing = false;
+        if (item.qr_url) item.qr_expires_at = now + 60;
+      }
+    });
     const loginStarted = Boolean(nextState.login_started);
     const targetWindow = (nextState.windows || []).find((item) => String(item.id) === String(windowId));
+    if (targetWindow) {
+      targetWindow.qr_refreshing = false;
+      if (targetWindow.qr_url) targetWindow.qr_expires_at = now + 60;
+    }
     if (refreshRoot && targetNode && targetWindow) {
       targetNode.outerHTML = terminalWechatWindowMarkup(targetWindow, loginStarted);
       syncTerminalWechatSummary(nextState.summary || {}, nextState.windows || []);
+      refreshRoot.scrollLeft = rootScrollLeft;
+      refreshRoot.scrollTop = rootScrollTop;
+      window.scrollTo(pageScrollX, pageScrollY);
+      startTerminalPolling();
     } else {
       renderTerminalExecution();
+      window.scrollTo(pageScrollX, pageScrollY);
     }
   } finally {
     restoreButton();
@@ -1773,7 +2011,6 @@ function renderTerminalExecution() {
     const successCount = accounts.filter((account) => account.status === "success").length;
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
-    const qrStatusText = loginStarted && window.qr_url ? `正在等待 [${current.display_name || "-"}] 扫码确认` : `等待点击获取 [${current.display_name || "-"}] 登录二维码`;
     const qrVisible = loginStarted && window.qr_url;
     return `
       <div class="terminal-task-column terminal-glass" style="--term-color:${color};--term-color-dim:${colorDim}">
@@ -1787,7 +2024,7 @@ function renderTerminalExecution() {
         </div>
         <div class="terminal-qr-section">
           <div class="terminal-qr-placeholder">${terminalQrImageMarkup(window, qrVisible, current.id)}</div>
-          <div style="font-size:12px;color:var(--terminal-text-sub);">${qrStatusText}</div>
+          <div class="terminal-qr-status-row"><span class="terminal-qr-sequence">#${Number(window.qr_sequence || 0)}</span></div>
         </div>
         <div class="terminal-account-list">
           ${accounts.map((account, index) => `
@@ -1796,7 +2033,7 @@ function renderTerminalExecution() {
                 <div class="terminal-avatar"></div>
                 <div>
                   <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
-                  <div class="terminal-acc-status">${account.status_text || "未登录"}</div>
+                  <div class="terminal-acc-status">${terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted)}</div>
                 </div>
               </div>
             <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
@@ -1845,28 +2082,6 @@ function terminalPlatformContext() {
   };
 }
 
-function renderTerminalPlatformBar() {
-  const bar = document.querySelector("#terminal-platform-bar");
-  if (!bar) return;
-  const activePlatform = terminalActivePlatform();
-  const platforms = terminalPlatformList();
-  bar.innerHTML = platforms.map((platform) => {
-    const active = platform.key === activePlatform;
-    return `
-      <button class="terminal-platform-tab ${active ? "active" : ""}" type="button" data-terminal-platform="${platform.key}">
-        <strong>${platform.label}</strong>
-        <span>${terminalPlatformPolicyLabel(platform.sessionPolicy)}</span>
-      </button>
-    `;
-  }).join("");
-  bar.querySelectorAll("[data-terminal-platform]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.terminalExecution.active_platform = String(button.dataset.terminalPlatform || "wechat");
-      renderTerminalExecution();
-    });
-  });
-}
-
 function renderTerminalConfigPanel() {
   const panel = document.querySelector("#terminal-platform-config-panel");
   if (!panel) return;
@@ -1876,8 +2091,11 @@ function renderTerminalConfigPanel() {
   panel.innerHTML = isWechat
     ? `
       <div class="terminal-config-panel-head">
-        <strong>当前平台配置：视频号</strong>
-        <span class="terminal-status-badge theme">每日登录</span>
+        <div class="terminal-config-panel-head-copy">
+          <strong>当前平台配置：视频号</strong>
+          <span class="terminal-status-badge theme">每日登录</span>
+        </div>
+        <button class="terminal-close-btn" type="button" data-terminal-close-config aria-label="关闭前置配置区">×</button>
       </div>
       <div class="terminal-config-panel-body">
         <div>只渲染视频号所需字段组：运营微信、色标、窗口启用。</div>
@@ -1889,8 +2107,11 @@ function renderTerminalConfigPanel() {
     `
     : `
       <div class="terminal-config-panel-head">
-        <strong>当前平台配置：${context.label}</strong>
-        <span class="terminal-status-badge theme">按需检测</span>
+        <div class="terminal-config-panel-head-copy">
+          <strong>当前平台配置：${context.label}</strong>
+          <span class="terminal-status-badge theme">按需检测</span>
+        </div>
+        <button class="terminal-close-btn" type="button" data-terminal-close-config aria-label="关闭前置配置区">×</button>
       </div>
       <div class="terminal-config-panel-body">
         <div>只展示该平台需要的配置字段，缺失字段不渲染。</div>
@@ -1905,6 +2126,8 @@ function renderTerminalConfigPanel() {
 
 function openTerminalConfigPanel() {
   state.terminalConfigOpen = true;
+  currentTerminalInitCard = "window";
+  renderTerminalInitCardMode();
   renderTerminalExecution();
   const panel = document.querySelector("#terminal-platform-config-panel");
   if (panel) {
@@ -1955,9 +2178,16 @@ function renderTerminalSessionBoardView() {
 
 function renderTerminalExecution() {
   renderTerminalConfig();
-  renderTerminalPlatformBar();
-  renderTerminalConfigPanel();
   const context = terminalPlatformContext();
+  const configPanel = document.querySelector("#terminal-platform-config-panel");
+  if (configPanel) {
+    if (context.platform === "wechat") {
+      renderTerminalConfigPanel();
+    } else {
+      configPanel.classList.add("hidden");
+      configPanel.innerHTML = "";
+    }
+  }
   document.querySelector("#terminal-init-modal")?.classList.toggle("hidden", !state.terminalConfigOpen);
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
@@ -1980,30 +2210,57 @@ function renderTerminalExecution() {
   } else {
     renderTerminalSessionBoardView();
   }
+  startTerminalPolling();
 }
 
 function updateTerminalManualCountdowns() {
   const windows = state.terminalExecution.windows || [];
   const loginStarted = Boolean(state.terminalExecution.login_started);
   const windowById = new Map(windows.map((window) => [String(window.id), window]));
+  const updatedWindows = new Set();
   document.querySelectorAll("[data-terminal-manual]").forEach((button) => {
     const window = windowById.get(String(button.dataset.terminalManual || ""));
-    const manualWait = loginStarted ? Math.max(0, Number(window?.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
-    button.disabled = !loginStarted || manualWait > 0;
-    button.textContent = !loginStarted ? "先获取二维码" : (manualWait > 0 ? `发布 (${manualWait}s)` : "发布");
+    if (!window || updatedWindows.has(String(window.id))) return;
+    const footerNode = button.closest(".terminal-task-column")?.querySelector(".terminal-col-footer");
+    if (!footerNode) return;
+    if (footerNode.querySelector("button.loading")) return;
+    const currentIndex = Number(window.current_index || 0);
+    const current = window.accounts?.[currentIndex] || {};
+    footerNode.innerHTML = terminalWindowActionButtons(window, current, loginStarted);
+    updatedWindows.add(String(window.id));
   });
 }
 
-function readTerminalConfigRows() {
-  return Array.from(document.querySelectorAll("[data-terminal-config-row]")).map((row) => {
-    const activeSwatch = row.querySelector(".terminal-swatch.active");
-    return {
-      id: Number(row.dataset.terminalConfigRow || 0),
-      enabled: Boolean(row.querySelector("[data-terminal-enabled]")?.checked),
-      operator_wechat: row.querySelector("[data-terminal-operator]")?.value || "",
-      color: activeSwatch?.dataset.terminalColor || terminalColorByIndex(0).hex,
-    };
-  });
+function updateTerminalQrCountdowns() {
+  if (terminalCurrentRoute() !== "wechat") return;
+  const windows = state.terminalExecution.windows || [];
+  const workspace = document.querySelector("#terminal-matrix-workspace");
+  if (!workspace) return;
+  const loginStarted = true;
+  for (const window of windows) {
+    const windowNode = workspace.querySelector(`[data-terminal-window-id="${window.id}"]`);
+    if (!windowNode) continue;
+    const qrState = terminalQrLifecycle(window);
+    const currentIndex = Number(window.current_index || 0);
+    const current = window.accounts?.[currentIndex] || {};
+    const countdownNode = windowNode.querySelector(`[data-terminal-qr-countdown="${window.id}"]`);
+    if (countdownNode) {
+      countdownNode.textContent = qrState.countdownText;
+      countdownNode.classList.toggle("expired", qrState.expired);
+      countdownNode.classList.toggle("active", qrState.active);
+      countdownNode.classList.toggle("idle", !qrState.hasQr);
+    }
+    const placeholderNode = windowNode.querySelector(`[data-terminal-qr-placeholder="${window.id}"]`);
+    if (placeholderNode && placeholderNode.dataset.terminalQrPlaceholderState !== qrState.placeholderState) {
+      placeholderNode.dataset.terminalQrPlaceholderState = qrState.placeholderState;
+      placeholderNode.innerHTML = terminalQrImageMarkup(window, current.id);
+    }
+    const currentStatusNode = windowNode.querySelector(`[data-terminal-current-status="${window.id}"]`);
+    if (currentStatusNode) {
+      currentStatusNode.textContent = terminalWechatAccountStatusText(window, current, currentIndex, currentIndex, loginStarted);
+    }
+  }
+  updateTerminalManualCountdowns();
 }
 
 function startTerminalPolling() {
@@ -2011,10 +2268,24 @@ function startTerminalPolling() {
   terminalPollTimer = null;
   if (terminalCountdownTimer) clearInterval(terminalCountdownTimer);
   terminalCountdownTimer = null;
+  if (terminalCurrentRoute() !== "wechat") return;
+  const hasAnyQr = (state.terminalExecution.windows || []).some((window) => Boolean(window?.qr_url));
+  if (!hasAnyQr) return;
+  updateTerminalQrCountdowns();
+  terminalCountdownTimer = window.setInterval(updateTerminalQrCountdowns, 100);
 }
 
 function terminalCurrentRoute() {
   return String(state.terminalRoute || "hub");
+}
+
+function ensureTerminalQrExpiryWindows() {
+  const now = Date.now() / 1000;
+  (state.terminalExecution.windows || []).forEach((window) => {
+    if (window?.qr_url && Number(window.qr_expires_at || 0) <= 0) {
+      window.qr_expires_at = now + 60;
+    }
+  });
 }
 
 function terminalSetRoute(route, { updateHash = true } = {}) {
@@ -2027,6 +2298,7 @@ function terminalSetRoute(route, { updateHash = true } = {}) {
 }
 
 function renderTerminalExecution() {
+  ensureTerminalQrExpiryWindows();
   const route = terminalCurrentRoute();
   const section = document.querySelector("#terminal-execution");
   if (!section) return;
@@ -2039,7 +2311,6 @@ function renderTerminalExecution() {
   const subtitle = document.querySelector("#terminal-header-subtitle");
   const routeHint = document.querySelector("#terminal-route-hint");
   const terminalShellDesc = document.querySelector("#terminal-shell-desc");
-  const platformBar = document.querySelector("#terminal-platform-bar");
   const configPanel = document.querySelector("#terminal-platform-config-panel");
   const loginStarted = Boolean(state.terminalExecution.login_started);
   const summary = state.terminalExecution.summary || {};
@@ -2048,16 +2319,11 @@ function renderTerminalExecution() {
   const isHubRoute = route === "hub";
   section.dataset.terminalRoute = route;
 
-  if (platformBar) {
-    platformBar.classList.toggle("hidden", isHubRoute || route === "wechat");
-    if (isHubRoute || route === "wechat") platformBar.innerHTML = "";
-  }
   if (configPanel && (isHubRoute || route === "wechat")) {
     configPanel.classList.add("hidden");
     configPanel.innerHTML = "";
   }
   if (!isHubRoute && route !== "wechat") {
-    renderTerminalPlatformBar();
     renderTerminalConfigPanel();
   }
 
@@ -2099,7 +2365,7 @@ function renderTerminalExecution() {
                   <div class="platform-name">${platformLogo(platform)}<strong>${item?.label || terminalPlatformName(platform)}</strong></div>
                   <span class="chip">${terminalSessionPolicyLabel(capability.sessionPolicy || (platform === "wechat" ? "daily_qr" : "persistent"))}</span>
                 </div>
-                <p class="muted">${platform === "wechat" ? "视频号独立流程，进入后只处理扫码、窗态和矩阵衔接。" : ""}</p>
+                ${platform === "wechat" ? "" : ""}
                 <div class="terminal-entry-meta">
                   ${terminalStatusChip(platform, health)}
                 </div>
@@ -2124,6 +2390,7 @@ function renderTerminalExecution() {
         }).join("") : `<div class="terminal-empty-state terminal-empty-state-large"><strong>终端执行暂无平台数据</strong><p class="muted">当前只渲染平台入口卡片。请先点击右上角“刷新健康”或检查平台配置后再进入具体平台。</p></div>`}
       </div>
     `;
+    startTerminalPolling();
     return;
   }
 
@@ -2146,19 +2413,13 @@ function renderTerminalExecution() {
           </div>
           <div class="terminal-entry-actions terminal-route-actions">
             <button class="btn primary" type="button" data-terminal-start-action="1">更新所有二维码</button>
-            <button class="btn secondary" type="button" data-terminal-edit-action="1">修改配置</button>
           </div>
           <div class="terminal-workspace terminal-workspace-wechat"></div>
-        </section>
-        <section class="terminal-log-panel">
-          <div class="panel-head"><h2>会话日志</h2></div>
-          <div class="terminal-log-list">
-            <div class="muted">当前使用现有矩阵登录与任务状态，日志摘要后续可直接接入运行记录。</div>
-          </div>
         </section>
       </div>
     `;
     renderTerminalDailyQrView(workspace.querySelector(".terminal-workspace-wechat"));
+    startTerminalPolling();
     return;
   }
 
@@ -2202,6 +2463,7 @@ function renderTerminalExecution() {
       </section>
     </div>
   `;
+  startTerminalPolling();
 }
 
 function updateTerminalManualCountdowns() {
@@ -2967,7 +3229,7 @@ function terminalHealthSummary(platform) {
   });
   if (!accounts.length) return "未配置浏览器";
   if (accounts.some((item) => (item.platforms || []).some((entry) => String(entry.platform || "") === normalized && String(entry.login_status || "").toLowerCase() === "ready"))) {
-    return "已登录";
+    return "已就绪";
   }
   if (accounts.some((item) => (item.platforms || []).some((entry) => String(entry.platform || "") === normalized && String(entry.login_status || "").toLowerCase() === "login_required"))) {
     return "需重新登录";
@@ -2982,7 +3244,7 @@ function terminalStatusChip(platform, text) {
 
 function terminalCardButtonLabel(platform, health) {
   if (platform === "wechat") return "进入";
-  if (health === "已登录") return "进入";
+  if (health === "已登录" || health === "已就绪") return "进入";
   if (health === "需重新登录") return "检测登录";
   if (health === "未配置浏览器") return "打开创作者后台";
   return "检测登录";
@@ -3016,7 +3278,7 @@ function terminalPlatformCards() {
       const actionLabel = terminalCardButtonLabel(platform, health);
       const route = platform === "wechat" ? "wechat" : platform;
       return `
-        <article class="terminal-entry-card ${platform === "wechat" ? "wechat" : "long-session"}">
+        <article class="terminal-entry-card long-session">
           <div class="terminal-entry-head">
             <div class="platform-name">
               ${platformLogo(platform)}
@@ -3121,8 +3383,14 @@ async function loadViewData(view, { force = false } = {}) {
     await loadPlatforms();
     state.distributionSettings = await api("/api/settings/distribution");
     state.matrixJobStatus = await api("/api/jobs/matrix-wechat/status");
+    try {
+      state.terminalExecution = await api("/api/terminal-execution/state");
+    } catch {
+      state.terminalExecution = state.terminalExecution || { colors: [], operators: [], config: [], active_platform: "wechat" };
+    }
     renderDistributionSettings();
     renderMatrixJobStatus();
+    renderSettingsCardMode();
   } else if (view === "tasks") {
     await loadPlatforms();
     await loadAccounts();
@@ -3236,12 +3504,15 @@ function renderDistributionSettings() {
 
 function renderPlatformSettingsCard(platform) {
   const value = (state.distributionSettings.platforms || {})[platform.key] || {};
+  const shortTitle = escapeHtml(value.short_title || "GasGx");
+  const location = escapeHtml(value.location || "");
+  const caption = escapeHtml(value.caption || "");
   const extra = platform.key === "wechat" ? `
     <label>短标题
-      <input name="platforms.${platform.key}.short_title" value="${value.short_title || "GasGx"}" placeholder="GasGx">
+      <input name="platforms.${platform.key}.short_title" value="${shortTitle}" placeholder="GasGx">
     </label>
     <label>位置
-      <input name="platforms.${platform.key}.location" value="${value.location || ""}" placeholder="留空则不显示位置">
+      <input name="platforms.${platform.key}.location" value="${location}" placeholder="留空则不显示位置">
     </label>
     <label>视频号合集
       <select name="platforms.${platform.key}.collection_name">
@@ -3295,8 +3566,8 @@ function renderPlatformSettingsCard(platform) {
       </select>
     </label>
     ${extra}
-    <label class="wide-field">平台文案
-      <textarea name="platforms.${platform.key}.caption" rows="3" placeholder="留空则使用视频默认文案">${value.caption || ""}</textarea>
+    <label class="wide-field">视频描述
+      <textarea name="platforms.${platform.key}.caption" rows="3" placeholder="留空则使用视频默认文案">${caption}</textarea>
     </label>
   </article>`;
 }
@@ -3411,7 +3682,13 @@ function activateView(view, updateHash = true) {
 }
 
 document.querySelectorAll(".nav-btn").forEach((button) => {
-  button.addEventListener("click", () => activateView(button.dataset.view));
+  button.addEventListener("click", () => {
+    if (button.dataset.view === "terminal-execution" && currentView === "terminal-execution") {
+      terminalSetRoute("hub");
+      return;
+    }
+    activateView(button.dataset.view);
+  });
 });
 
 document.querySelector("#refresh")?.addEventListener("click", async (event) => {
@@ -3541,21 +3818,70 @@ document.querySelector("#tasks-list").addEventListener("change", (event) => {
   }
 });
 
-document.querySelector("#terminal-config-list")?.addEventListener("change", (event) => {
-  const row = event.target.closest("[data-terminal-config-row]");
-  if (!row) return;
-  const enabled = Boolean(row.querySelector("[data-terminal-enabled]")?.checked);
-  row.classList.toggle("disabled", !enabled);
-  row.querySelector("[data-terminal-operator]")?.toggleAttribute("disabled", !enabled);
-  row.querySelectorAll("[data-terminal-color]").forEach((button) => button.toggleAttribute("disabled", !enabled));
+installTerminalConfigInteractions("#terminal-config-list");
+installTerminalConfigInteractions("#settings-platform-config-list");
+
+document.querySelectorAll("[data-settings-card]").forEach((button) => {
+  button.addEventListener("click", () => setSettingsCardMode(button.dataset.settingsCard || "publish-window"));
 });
 
-document.querySelector("#terminal-config-list")?.addEventListener("click", (event) => {
-  const swatch = event.target.closest("[data-terminal-color]");
-  if (!swatch || swatch.disabled) return;
-  const row = swatch.closest("[data-terminal-config-row]");
-  row?.querySelectorAll("[data-terminal-color]").forEach((button) => button.classList.remove("active"));
-  swatch.classList.add("active");
+document.querySelectorAll("[data-terminal-init-card]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    currentTerminalInitCard = button.dataset.terminalInitCard === "platform" ? "platform" : "window";
+    if (currentTerminalInitCard === "platform") {
+      await renderTerminalPlatformPublishPanel();
+    }
+    renderTerminalInitCardMode();
+  });
+});
+
+document.querySelector("#settings-platform-save")?.addEventListener("click", async (event) => {
+  const restoreButton = setButtonLoading(event.currentTarget, "更新中");
+  const stateNode = document.querySelector("#settings-platform-save-state");
+  if (stateNode) stateNode.textContent = "保存中...";
+  try {
+    state.terminalExecution = await api("/api/terminal-execution/start", {
+      method: "POST",
+      body: JSON.stringify({ windows: readTerminalConfigRows("#settings-platform-config-list") }),
+    });
+    if (stateNode) stateNode.textContent = "已更新平台发布配置。";
+    renderSettingsPlatformPublishConfig();
+  } catch (error) {
+    if (stateNode) stateNode.textContent = formatFriendlyMessage(error.message);
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("#terminal-save-platform-config")?.addEventListener("click", async (event) => {
+  const restoreButton = setButtonLoading(event.currentTarget, "更新中");
+  try {
+    if (!state.distributionSettings) state.distributionSettings = await api("/api/settings/distribution");
+    const root = document.querySelector("#terminal-platform-publish-list");
+    if (!root) throw new Error("平台配置容器不存在");
+    const platformKey = terminalCurrentPlatformKey();
+    const nextPlatformSetting = collectTerminalPlatformSetting(root, platformKey);
+    const next = {
+      common: state.distributionSettings.common || {},
+      jobs: state.distributionSettings.jobs || {},
+      platforms: {
+        ...(state.distributionSettings.platforms || {}),
+        [platformKey]: nextPlatformSetting,
+      },
+    };
+    // Optimistic local update to avoid immediate UI fallback to stale values.
+    state.distributionSettings = next;
+    await api("/api/settings/distribution", {
+      method: "PATCH",
+      body: JSON.stringify(next),
+    });
+    state.distributionSettings = await api("/api/settings/distribution");
+    await renderTerminalPlatformPublishPanel();
+  } catch (error) {
+    window.alert(`更新平台配置失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
+  } finally {
+    restoreButton();
+  }
 });
 
 document.querySelector("#terminal-start-login-legacy")?.addEventListener("click", async (event) => {
@@ -3941,8 +4267,16 @@ document.addEventListener("click", async (event) => {
   const terminalQrRefreshButton = event.target.closest("[data-terminal-qr-refresh]");
   if (terminalQrRefreshButton) {
     const [windowId, accountId] = String(terminalQrRefreshButton.dataset.terminalQrRefresh || "").split(":");
-    if (!Number(windowId) || !Number(accountId)) return;
-    await refreshTerminalAccountQr(windowId, accountId, terminalQrRefreshButton);
+    const windowIdNumber = Number(windowId);
+    if (!windowIdNumber) return;
+    let accountIdNumber = Number(accountId);
+    if (!accountIdNumber) {
+      const targetWindow = (state.terminalExecution.windows || []).find((item) => Number(item.id) === windowIdNumber);
+      const currentIndex = Number(targetWindow?.current_index || 0);
+      accountIdNumber = Number(targetWindow?.accounts?.[currentIndex]?.id || 0);
+    }
+    if (!accountIdNumber) return;
+    await refreshTerminalAccountQr(windowIdNumber, accountIdNumber, terminalQrRefreshButton);
     return;
   }
 
@@ -4278,17 +4612,36 @@ document.addEventListener("click", async (event) => {
   const longDetect = event.target.closest("[data-terminal-long-detect]");
   const longOpen = event.target.closest("[data-terminal-long-open]");
   const terminalSave = event.target.closest("#terminal-save-config, [data-terminal-save-config]");
+  const terminalCloseInit = event.target.closest("[data-terminal-close-init]");
+  const terminalCloseConfig = event.target.closest("[data-terminal-close-config]");
   const embeddedStart = event.target.closest("[data-terminal-start-action]");
   const embeddedEdit = event.target.closest("[data-terminal-edit-action]");
-  if (!enter && !configJump && !longDetect && !longOpen && !terminalSave && !embeddedStart && !embeddedEdit) return;
-  if (terminalSave || enter || configJump || longDetect || longOpen || embeddedStart || embeddedEdit) {
+  if (!enter && !configJump && !longDetect && !longOpen && !terminalSave && !terminalCloseInit && !terminalCloseConfig && !embeddedStart && !embeddedEdit) return;
+  if (terminalSave || terminalCloseInit || terminalCloseConfig || enter || configJump || longDetect || longOpen || embeddedStart || embeddedEdit) {
     event.stopImmediatePropagation();
+  }
+  if (terminalCloseInit) {
+    state.terminalConfigOpen = false;
+    document.querySelector("#terminal-init-modal")?.classList.add("hidden");
+    return;
+  }
+  if (terminalCloseConfig) {
+    state.terminalConfigOpen = false;
+    renderTerminalExecution();
+    return;
   }
   if (terminalSave) {
     const route = terminalCurrentRoute();
+    const effectiveRoute = route === "hub" ? "wechat" : route;
     const restoreButton = setButtonLoading(terminalSave, "更新中");
     try {
-      if (route === "wechat") {
+      if (effectiveRoute === "wechat") {
+        if (route === "hub") {
+          state.terminalRoute = "wechat";
+          if (window.location.hash !== "#terminal/wechat") {
+            window.history.replaceState(null, "", "#terminal/wechat");
+          }
+        }
         state.terminalExecution = await api("/api/terminal-execution/start", {
           method: "POST",
           body: JSON.stringify({ windows: readTerminalConfigRows() }),

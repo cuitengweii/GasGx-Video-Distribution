@@ -119,6 +119,7 @@ LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 BRAND_INLINE_ASSET_MAX_CHARS = int(os.getenv("GASGX_BRAND_INLINE_ASSET_MAX_CHARS", "200000") or 200000)
 BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_account_prefix,created_at,updated_at"
 TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", "60") or 60)
+TERMINAL_QR_EXPIRY_SECONDS = int(os.getenv("GASGX_TERMINAL_QR_EXPIRY_SECONDS", "60") or 60)
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
 SUPER_ADMIN_PASSWORD = "cuitengwei2023"
 FEATURE_ENTRIES = [
@@ -1553,6 +1554,9 @@ def _load_terminal_state() -> dict[str, Any]:
                 window["qr_path"] = str(_terminal_qr_cache_path(window_id))
                 window["qr_url"] = _terminal_qr_url(window_id)
             if bool(payload.get("login_started")) and str(window.get("qr_url") or "").strip():
+                if int(window.get("qr_expires_at") or 0) <= 0:
+                    window["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS
+            if bool(payload.get("login_started")) and str(window.get("qr_url") or "").strip():
                 qr_path = str(window.get("qr_path") or "").strip()
                 path = Path(qr_path) if qr_path else _terminal_qr_cache_path(window_id)
                 try:
@@ -1590,19 +1594,33 @@ def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
     platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
     if not platform:
         return ""
+    wechat_platform = get_platform("wechat")
+    if wechat_platform is None:
+        return ""
+    page = None
     try:
-        result = engine._prepare_platform_login_qr_notice(  # type: ignore[attr-defined]
-            platform_name="wechat",
-            open_url=get_platform("wechat").open_url,  # type: ignore[union-attr]
+        page = engine._connect_chrome(  # type: ignore[attr-defined]
             debug_port=int(platform.get("debug_port") or 0),
-            chrome_user_data_dir=str(platform.get("profile_dir") or ""),
             auto_open_chrome=False,
-            refresh_page=True,
-            allow_navigation=False,
+            chrome_user_data_dir=str(platform.get("profile_dir") or ""),
+            startup_url=wechat_platform.open_url,
         )
     except Exception:
-        return ""
-    photo_bytes = result.get("photo_bytes") if isinstance(result, dict) else b""
+        page = None
+    photo_bytes = b""
+    if page is not None:
+        try:
+            try:
+                page.refresh()
+            except Exception:
+                pass
+            qr_source = engine._extract_login_qr_source(page, timeout_seconds=2.5, platform_name="wechat")  # type: ignore[attr-defined]
+            if qr_source:
+                _, photo_bytes = engine._load_qr_image_source(qr_source)  # type: ignore[attr-defined]
+        except Exception:
+            photo_bytes = b""
+        # Do not fallback to page screenshot: it can capture logo/loading overlays instead of real QR.
+        # If QR source extraction fails, caller should surface refresh failure and retry.
     if not isinstance(photo_bytes, (bytes, bytearray)) or not photo_bytes:
         return ""
     cache_path = _terminal_qr_cache_path(window_id)
@@ -1812,6 +1830,7 @@ def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, A
         window["qr_path"] = qr_path
         window["qr_url"] = str(previous.get("qr_url") or _terminal_qr_url(int(window.get("id") or 0)))
         window["manual_available_at"] = int(previous.get("manual_available_at") or 0)
+        window["qr_expires_at"] = int(previous.get("qr_expires_at") or 0) or (now_ts() + TERMINAL_QR_EXPIRY_SECONDS)
         return True
     return False
 
@@ -1855,6 +1874,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "qr_path": qr_path,
             "qr_url": "",
             "qr_sequence": 0,
+            "qr_expires_at": 0,
             "manual_available_at": 0,
             "accounts": accounts,
         }
@@ -1914,6 +1934,7 @@ def start_terminal_login() -> dict[str, Any]:
                 current["task_id"] = None
                 window["qr_path"] = ""
                 window["qr_url"] = ""
+                window["qr_expires_at"] = 0
                 window["manual_available_at"] = 0
     state["login_started"] = True
     state["probe_cursor"] = 0
@@ -1940,12 +1961,14 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
         window["qr_path"] = qr_path
         window["qr_sequence"] = int(window.get("qr_sequence") or 0) + 1 if qr_path else int(window.get("qr_sequence") or 0)
         window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
+        window["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS if qr_path else 0
     except Exception as exc:
         current["status"] = "error"
         current["status_text"] = str(exc)
         _clear_terminal_qr_cache(int(window.get("id") or 0))
         window["qr_path"] = ""
         window["qr_url"] = ""
+        window["qr_expires_at"] = 0
     window["manual_available_at"] = 0
     return True
 
@@ -1990,10 +2013,12 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
             window["qr_path"] = qr_path
             window["qr_sequence"] = int(window.get("qr_sequence") or 0) + 1 if qr_path else int(window.get("qr_sequence") or 0)
             window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
+            window["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS if qr_path else 0
         return True
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     window["qr_path"] = ""
     window["qr_url"] = ""
+    window["qr_expires_at"] = 0
     if current.get("task_id"):
         task = get_task(int(current.get("task_id") or 0)) or {}
         task_status = str(task.get("status") or "").lower()
@@ -2007,6 +2032,7 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
             _clear_terminal_qr_cache(int(window.get("id") or 0))
             window["qr_path"] = ""
             window["qr_url"] = ""
+            window["qr_expires_at"] = 0
             window["manual_available_at"] = now_ts() + 60
             if next_index >= len(accounts):
                 return True
@@ -2078,6 +2104,7 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
         raise KeyError("account not found")
     target["current_index"] = next_index
     target["manual_available_at"] = 0
+    target["qr_expires_at"] = 0
     _clear_terminal_qr_cache(int(target.get("id") or 0))
     for account in accounts:
         if int(account.get("id") or 0) == int(account_id):
@@ -2085,7 +2112,19 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
             account["status_text"] = "等待获取登录二维码"
             account["task_id"] = None
             break
-    _open_terminal_window_current_account(target)
+    qr_path = _write_terminal_qr_cache(int(target.get("id") or 0), account_id)
+    if qr_path:
+        for account in accounts:
+            if int(account.get("id") or 0) == int(account_id):
+                account["status"] = "waiting_qr"
+                account["status_text"] = "等待扫码中..."
+                break
+        target["qr_path"] = qr_path
+        target["qr_sequence"] = int(target.get("qr_sequence") or 0) + 1
+        target["qr_url"] = _terminal_qr_url(int(target.get("id") or 0), _terminal_qr_cache_bust())
+        target["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS
+    else:
+        _open_terminal_window_current_account(target)
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -2110,6 +2149,7 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
     _clear_terminal_qr_cache(int(target.get("id") or 0))
     target["qr_path"] = ""
     target["qr_url"] = ""
+    target["qr_expires_at"] = 0
     target["manual_available_at"] = 0
     next_index = current_index + 1
     target["current_index"] = next_index

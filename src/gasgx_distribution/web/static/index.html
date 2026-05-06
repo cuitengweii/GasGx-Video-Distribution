@@ -39,6 +39,7 @@
         <strong id="brand-name">GasGx</strong>
         <small id="brand-slogan">Video Distribution</small>
       </div>
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="隐藏左侧栏" aria-expanded="true">‹</button>
     </div>
     <nav>
       <span class="nav-group-label">业务工作台</span>
@@ -75,7 +76,6 @@
   <main class="workspace">
     <header class="topbar">
       <div class="topbar-title">
-        <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="隐藏左侧栏" aria-expanded="true">‹</button>
         <div>
           <h1 id="page-title">账号矩阵维护系统</h1>
           <p id="page-description">独立账号、独立浏览器、发布/评论/私信/统计任务入口</p>
@@ -192,6 +192,17 @@
 
     <section id="settings" class="view">
       <form id="distribution-settings-form" class="settings-layout">
+        <div class="settings-card-switcher operation-route-grid" id="settings-card-switcher">
+          <button class="operation-route-card settings-card-button active" type="button" data-settings-card="publish-window">
+            <strong>发布窗口配置</strong>
+            <span>继续编辑公共设置、平台独立配置和矩阵发布作业。</span>
+          </button>
+          <button class="operation-route-card settings-card-button" type="button" data-settings-card="platform-publish">
+            <strong>平台发布配置</strong>
+            <span>切换到终端前置配置区，按窗口分配运营微信和色标。</span>
+          </button>
+        </div>
+        <div id="settings-publish-window-content" class="settings-publish-window-content">
         <section class="panel form-panel settings-common">
           <div class="panel-head">
             <div>
@@ -363,6 +374,22 @@
           <div id="platform-settings-list" class="platform-settings-list"></div>
           <div id="settings-save-state" class="muted"></div>
         </section>
+        </div>
+
+        <section class="panel form-panel settings-platform-publish hidden" id="settings-platform-publish-panel">
+          <div class="panel-head">
+            <div>
+              <h2>平台发布配置</h2>
+              <p class="muted">对应终端前置配置区，按窗口分配运营微信和物理防呆色标。</p>
+            </div>
+            <span class="system-status">终端前置配置区</span>
+          </div>
+          <div class="terminal-config-list" id="settings-platform-config-list"></div>
+          <div class="settings-platform-save-state muted" id="settings-platform-save-state"></div>
+          <div class="terminal-modal-actions">
+            <button class="btn primary" id="settings-platform-save" type="button">更新配置</button>
+          </div>
+        </section>
       </form>
     </section>
 
@@ -521,17 +548,37 @@
         <div class="terminal-init-modal" id="terminal-init-modal">
           <div class="terminal-glass terminal-modal-content">
             <div class="terminal-modal-header">
-              <h2>终端前置配置区</h2>
-              <p>默认5个执行窗口，请为每个窗口指派运营微信及对应的物理防呆色标</p>
+              <div class="terminal-modal-header-copy">
+                <h2>终端前置配置区</h2>
+                <p>默认5个执行窗口，请为每个窗口指派运营微信及对应的物理防呆色标</p>
+                <div class="terminal-init-card-switcher">
+                  <button class="operation-route-card settings-card-button active" type="button" data-terminal-init-card="window">
+                    <strong>发布窗口配置</strong>
+                    <span>终端执行窗口、运营微信和色标。</span>
+                  </button>
+                  <button class="operation-route-card settings-card-button" type="button" data-terminal-init-card="platform">
+                    <strong>平台发布配置</strong>
+                    <span>公共设置中的平台发布策略卡片。</span>
+                  </button>
+                </div>
+              </div>
+              <button class="terminal-close-btn" type="button" data-terminal-close-init aria-label="关闭前置配置区">×</button>
             </div>
-            <div class="terminal-config-list" id="terminal-config-list"></div>
-            <div class="terminal-modal-actions">
-              <button class="btn primary" type="button" data-terminal-save-config>更新配置</button>
+            <div id="terminal-init-window-content">
+              <div class="terminal-config-list" id="terminal-config-list"></div>
+              <div class="terminal-modal-actions">
+                <button class="btn primary" type="button" data-terminal-save-config>更新配置</button>
+              </div>
+            </div>
+            <div id="terminal-init-platform-content" class="hidden">
+              <div id="terminal-platform-publish-list" class="platform-settings-list"></div>
+              <div class="terminal-modal-actions">
+                <button class="btn primary" type="button" id="terminal-save-platform-config">更新配置</button>
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="terminal-platform-bar terminal-glass" id="terminal-platform-bar"></div>
         <div class="terminal-config-panel terminal-glass hidden" id="terminal-platform-config-panel"></div>
         <div class="terminal-workspace" id="terminal-matrix-workspace"></div>
       </div>

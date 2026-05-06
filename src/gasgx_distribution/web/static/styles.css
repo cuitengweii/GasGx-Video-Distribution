@@ -115,6 +115,14 @@ body.sidebar-collapsed .sidebar {
   transform: translateX(-260px);
 }
 
+body.sidebar-collapsed .sidebar-toggle {
+  position: fixed;
+  left: 12px;
+  top: 25px;
+  z-index: 60;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -123,7 +131,7 @@ body.sidebar-collapsed .sidebar {
 }
 
 .sidebar-toggle {
-  position: static;
+  margin-left: auto;
   flex: 0 0 auto;
   width: 34px;
   height: 34px;
@@ -1931,6 +1939,41 @@ select option {
   gap: 18px;
 }
 
+.settings-card-switcher {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-card-switcher,
+.settings-publish-window-content,
+.settings-platform-publish {
+  grid-column: 1 / -1;
+}
+
+.settings-publish-window-content {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-card-button {
+  min-height: 108px;
+}
+
+.settings-card-button.active,
+.settings-card-button[aria-pressed="true"] {
+  border-color: rgba(93, 214, 44, 0.42);
+  background: linear-gradient(145deg, rgba(21, 31, 20, 0.92), rgba(12, 18, 14, 0.96));
+  box-shadow: inset 0 0 0 1px rgba(93, 214, 44, 0.18), 0 16px 30px rgba(0, 0, 0, 0.18);
+}
+
+.settings-card-button strong {
+  font-size: 18px;
+}
+
+.settings-card-button span {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .settings-common {
   max-width: none;
   grid-template-columns: repeat(3, minmax(180px, 1fr));
@@ -1955,6 +1998,25 @@ select option {
 .settings-job .job-layout,
 .settings-job .panel-head {
   grid-column: 1 / -1;
+}
+
+.settings-platform-publish {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.settings-platform-publish .panel-head {
+  align-items: flex-start;
+}
+
+.settings-platform-publish .terminal-config-list {
+  margin-bottom: 10px;
+}
+
+.settings-platform-save-state {
+  min-height: 20px;
+  margin-top: -4px;
 }
 
 .job-layout {
@@ -3637,11 +3699,6 @@ body.video-matrix-active #video-matrix {
   background: linear-gradient(180deg, rgba(18, 18, 18, 0.96), rgba(11, 18, 13, 0.9));
 }
 
-.terminal-entry-card.wechat {
-  border-color: rgba(93, 214, 44, 0.28);
-  box-shadow: inset 0 0 0 1px rgba(93, 214, 44, 0.08);
-}
-
 .terminal-entry-head,
 .terminal-entry-meta,
 .terminal-entry-actions,
@@ -3681,8 +3738,17 @@ body.video-matrix-active #video-matrix {
 }
 
 #terminal-execution[data-terminal-route="wechat"] .terminal-wechat-page {
+  height: 100%;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 8px;
   padding-top: 8px;
+  padding-bottom: 10px;
+}
+
+#terminal-execution[data-terminal-route="wechat"] .terminal-group-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 #terminal-execution[data-terminal-route="wechat"] .terminal-group-panel > .panel-head {
@@ -3785,8 +3851,9 @@ body.video-matrix-active #video-matrix {
   backdrop-filter: blur(5px);
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
   padding: 28px;
+  overflow-y: auto;
   pointer-events: none;
 }
 
@@ -3801,15 +3868,43 @@ body.sidebar-collapsed .terminal-init-modal {
 .terminal-modal-content {
   padding: 32px;
   width: min(580px, calc(100vw - 48px));
-  max-height: calc(100vh - 56px);
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   border-radius: 12px;
   pointer-events: auto;
 }
 
 .terminal-modal-header {
-  text-align: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
   margin-bottom: 24px;
+}
+
+.terminal-modal-header-copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-config-panel-head-copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-close-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(93, 214, 44, 0.22);
+  border-radius: 6px;
+  background: #101010;
+  color: var(--accent-aurora);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .terminal-modal-header h2 {
@@ -3820,6 +3915,13 @@ body.sidebar-collapsed .terminal-init-modal {
 .terminal-modal-header p {
   color: var(--terminal-text-sub);
   font-size: 14px;
+}
+
+.terminal-init-card-switcher {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .terminal-config-list {
@@ -3918,19 +4020,15 @@ body.sidebar-collapsed .terminal-init-modal {
 .terminal-workspace.terminal-workspace-wechat {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   gap: 8px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1;
   padding: 8px 0 0;
-  overflow-x: hidden;
-  overflow-y: visible;
-}
-
-.terminal-platform-bar {
-  display: flex;
-  gap: 10px;
-  padding: 12px 28px 0;
-  margin-bottom: 6px;
-  flex-wrap: wrap;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  margin-bottom: 10px;
 }
 
 .terminal-config-panel {
@@ -3948,6 +4046,10 @@ body.sidebar-collapsed .terminal-init-modal {
   gap: 12px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.terminal-config-panel-head .terminal-close-btn {
+  margin-top: -2px;
 }
 
 .terminal-config-panel-body {
@@ -4025,7 +4127,7 @@ body.sidebar-collapsed .terminal-init-modal {
 }
 
 .terminal-workspace-wechat .terminal-task-column {
-  height: auto;
+  height: 100%;
   min-height: 0;
 }
 
@@ -4098,12 +4200,13 @@ body.sidebar-collapsed .terminal-init-modal {
   display: flex;
   flex-direction: column;
   align-items: center;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--terminal-glass-border);
   background: rgba(0, 0, 0, 0.2);
 }
 
 .terminal-workspace-wechat .terminal-qr-section {
-  padding: 8px 8px;
+  padding: 6px 8px 6px;
 }
 
 .terminal-qr-placeholder {
@@ -4116,14 +4219,14 @@ body.sidebar-collapsed .terminal-init-modal {
   align-items: center;
   margin-bottom: 12px;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .terminal-workspace-wechat .terminal-qr-placeholder {
-  width: min(96px, 100%);
+  width: min(112px, 100%);
   height: auto;
   aspect-ratio: 1 / 1;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .terminal-workspace-wechat .terminal-qr-placeholder svg {
@@ -4148,16 +4251,42 @@ body.sidebar-collapsed .terminal-init-modal {
   object-fit: contain;
 }
 
+.terminal-qr-status-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.terminal-qr-countdown {
+  min-width: 44px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.terminal-qr-countdown.expired {
+  color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.55), 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.terminal-qr-countdown.idle {
+  color: var(--terminal-text-sub);
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.35), 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
 .terminal-account-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 12px;
+  overflow-x: hidden;
+  padding: 10px 12px;
 }
 
 .terminal-workspace-wechat .terminal-account-list {
-  max-height: 92px;
-  min-height: 56px;
+  max-height: none;
+  min-height: 0;
   padding: 8px;
+  overflow-x: hidden;
 }
 
 .terminal-account-item {
@@ -4216,11 +4345,17 @@ body.sidebar-collapsed .terminal-init-modal {
   cursor: pointer;
 }
 
+.terminal-qr-image-button.expired {
+  cursor: pointer;
+}
+
+.terminal-qr-image-button.expired svg {
+  display: block;
+}
+
 .terminal-qr-sequence {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 1;
+  position: static;
+  flex: 0 0 auto;
   padding: 2px 6px;
   border-radius: 999px;
   background: rgba(15, 15, 15, 0.72);
@@ -4229,18 +4364,32 @@ body.sidebar-collapsed .terminal-init-modal {
   font-weight: 800;
   line-height: 1;
   pointer-events: none;
+  box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 
 .terminal-qr-image-button img {
   display: block;
   max-width: 100%;
   height: auto;
+  padding: 4px;
+  box-sizing: border-box;
+  background: #fff;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  filter: grayscale(1) contrast(1.45) brightness(1.03);
 }
 
 .terminal-workspace-wechat .terminal-avatar {
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
+}
+
+.terminal-acc-status {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .terminal-workspace-wechat .terminal-acc-name {
@@ -4288,12 +4437,12 @@ body.sidebar-collapsed .terminal-init-modal {
 }
 
 .terminal-col-footer {
-  padding: 16px 20px;
+  padding: 10px 12px 12px;
   border-top: 1px solid var(--terminal-glass-border);
 }
 
 .terminal-workspace-wechat .terminal-col-footer {
-  padding: 8px;
+  padding: 8px 8px 10px;
 }
 
 .terminal-window-actions {

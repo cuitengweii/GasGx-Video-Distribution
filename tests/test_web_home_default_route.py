@@ -9,3 +9,5 @@ def test_web_home_defaults_to_overview_on_empty_hash() -> None:
 
     assert 'if (!raw) return { view: "overview", route: "hub" };' in app_js
     assert 'if (raw === "terminal-execution") return { view: "terminal-execution", route: "hub" };' in app_js
+    assert 'data-terminal-close-config' in app_js
+    assert 'terminal-close-btn' in app_js
