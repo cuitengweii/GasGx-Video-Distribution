@@ -70,7 +70,7 @@ const state = {
   notificationRoutes: [],
   notificationEvents: [],
   loginQrBatches: [],
-  terminalExecution: { colors: [], operators: [], windows: [], summary: {}, platform_capabilities: {}, profile_by_platform: {}, active_platform: "wechat" },
+  terminalExecution: { colors: [], operators: [], windows: [], summary: {}, platform_capabilities: {}, profile_by_platform: {}, active_platform: "wechat", loading: false },
   terminalRoute: "hub",
   terminalQrVisible: false,
   terminalConfigOpen: false,
@@ -1162,8 +1162,21 @@ function initAuthCenter() {
 }
 
 function initUserMenu() {
+  const isMobileNavViewport = () => window.matchMedia("(max-width: 920px)").matches;
+  const setMobileNavOpen = (open) => {
+    const visible = Boolean(open && isMobileNavViewport());
+    document.body.classList.toggle("mobile-nav-open", visible);
+    const mobileToggle = document.querySelector("#mobile-nav-toggle");
+    mobileToggle?.setAttribute("aria-expanded", visible ? "true" : "false");
+  };
+  const closeMobileNavigation = () => setMobileNavOpen(false);
   const toggle = document.querySelector("#user-menu-toggle");
   const menu = document.querySelector("#sidebar-user-actions");
+  const mobileToggle = document.querySelector("#mobile-nav-toggle");
+  mobileToggle?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setMobileNavOpen(!document.body.classList.contains("mobile-nav-open"));
+  });
   if (toggle && menu) toggle.addEventListener("click", () => {
     const open = menu.classList.toggle("hidden") === false;
     toggle.setAttribute("aria-expanded", String(open));
@@ -1186,6 +1199,10 @@ function initUserMenu() {
       topMenu.classList.remove("open");
       topToggle.setAttribute("aria-expanded", "false");
     }
+    const sidebar = document.querySelector(".sidebar");
+    if (isMobileNavViewport() && document.body.classList.contains("mobile-nav-open") && sidebar && !sidebar.contains(event.target)) {
+      closeMobileNavigation();
+    }
   });
   document.querySelectorAll("[data-quick-view]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1194,6 +1211,7 @@ function initUserMenu() {
       toggle?.setAttribute("aria-expanded", "false");
       topMenu?.classList.remove("open");
       topToggle?.setAttribute("aria-expanded", "false");
+      closeMobileNavigation();
     });
   });
   const sidebarToggle = document.querySelector("#sidebar-toggle");
@@ -1203,6 +1221,10 @@ function initUserMenu() {
     sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
     sidebarToggle.setAttribute("aria-label", collapsed ? "显示左侧栏" : "隐藏左侧栏");
   });
+  window.addEventListener("resize", () => {
+    if (!isMobileNavViewport()) closeMobileNavigation();
+  });
+  closeMobileNavigation();
 }
 
 function shouldBlockPermissionAction(target) {
@@ -1770,6 +1792,11 @@ function terminalColorByIndex(index, terminalState = state.terminalExecution) {
   return colors[index % Math.max(1, colors.length)] || { hex: "#3B82F6", name: "科技蓝" };
 }
 
+function terminalSlotLabel(slotIndex) {
+  const normalized = Number(slotIndex) || 0;
+  return String.fromCharCode(65 + Math.max(0, normalized));
+}
+
 function readTerminalConfigRows(rootTarget = "#terminal-config-list") {
   const root = typeof rootTarget === "string" ? document.querySelector(rootTarget) : rootTarget;
   if (!root) return [];
@@ -1826,23 +1853,38 @@ function renderTerminalConfig(rootTarget = "#terminal-config-list", terminalStat
   }
   const operators = terminalState?.operators || [];
   const colors = terminalState?.colors || [];
-  const savedRows = terminalState?.config || [];
-  const defaultRows = Array.from({ length: 5 }, (_, index) => ({
-    id: index + 1,
+  const savedRows = Array.isArray(terminalState?.config) ? terminalState.config : [];
+  const slotRows = Array.from({ length: 5 }, (_, index) => ({
+    slot_id: index + 1,
+    slot_label: terminalSlotLabel(index),
     enabled: false,
     operator_wechat: operators[index]?.operator_wechat || operators[index % Math.max(1, operators.length)]?.operator_wechat || "",
     color: terminalColorByIndex(index, terminalState).hex,
-  })).map((row, index) => {
-    const saved = savedRows[index] || {};
-    return {
-      ...row,
-      id: Number(saved.id || row.id || index + 1),
-      enabled: typeof saved.enabled === "boolean" ? saved.enabled : row.enabled,
-      operator_wechat: String(saved.operator_wechat || row.operator_wechat || ""),
-      color: String(saved.color || row.color || terminalColorByIndex(index, terminalState).hex),
-    };
+  }));
+  const applySavedRow = (row, saved, index) => ({
+    ...row,
+    enabled: typeof saved?.enabled === "boolean" ? saved.enabled : row.enabled,
+    operator_wechat: String(saved?.operator_wechat || row.operator_wechat || ""),
+    color: String(saved?.color || row.color || terminalColorByIndex(index, terminalState).hex),
   });
-  if (!defaultRows.length) {
+  const usedSlots = new Set();
+  const consumedSavedIndexes = new Set();
+  savedRows.forEach((saved, savedIndex) => {
+    const slotId = Number(saved?.id || 0);
+    if (slotId < 1 || slotId > slotRows.length || usedSlots.has(slotId)) return;
+    const slotIndex = slotId - 1;
+    slotRows[slotIndex] = applySavedRow(slotRows[slotIndex], saved, slotIndex);
+    usedSlots.add(slotId);
+    consumedSavedIndexes.add(savedIndex);
+  });
+  const unslottedSavedRows = savedRows.filter((_saved, savedIndex) => !consumedSavedIndexes.has(savedIndex));
+  unslottedSavedRows.forEach((saved) => {
+    const slotIndex = slotRows.findIndex((row) => !usedSlots.has(Number(row.slot_id || 0)));
+    if (slotIndex < 0) return;
+    slotRows[slotIndex] = applySavedRow(slotRows[slotIndex], saved, slotIndex);
+    usedSlots.add(Number(slotRows[slotIndex].slot_id || 0));
+  });
+  if (!slotRows.length) {
     list.innerHTML = `
       <div class="terminal-empty-state">
         <strong>暂无可编辑配置</strong>
@@ -1852,11 +1894,11 @@ function renderTerminalConfig(rootTarget = "#terminal-config-list", terminalStat
     installTerminalConfigInteractions(list);
     return;
   }
-  list.innerHTML = defaultRows.map((row) => `
-    <div class="terminal-config-row ${row.enabled ? "" : "disabled"}" data-terminal-config-row="${row.id}">
+  list.innerHTML = slotRows.map((row) => `
+    <div class="terminal-config-row ${row.enabled ? "" : "disabled"}" data-terminal-config-row="${row.slot_id}">
       <label class="terminal-config-left">
         <input type="checkbox" class="terminal-checkbox" data-terminal-enabled ${row.enabled ? "checked" : ""}>
-        <span>终端 ${String(row.id).padStart(2, "0")}</span>
+        <span>终端 ${row.slot_label}</span>
       </label>
       <select class="terminal-wx-select" data-terminal-operator ${row.enabled ? "" : "disabled"}>
         ${operators.map((operator) => `<option value="${operator.operator_wechat}" ${operator.operator_wechat === row.operator_wechat ? "selected" : ""}>${operator.operator_wechat}</option>`).join("") || `<option value="">暂无绑定运营微信</option>`}
@@ -2787,11 +2829,13 @@ function startTerminalPolling() {
   if (terminalCountdownTimer) clearInterval(terminalCountdownTimer);
   terminalCountdownTimer = null;
   if (terminalCurrentRoute() !== "wechat") return;
+  if (state.terminalConfigOpen) return;
   const shouldPoll = Boolean(state.terminalExecution?.login_started);
   if (shouldPoll) {
     const pollOnce = async () => {
       if (terminalPollRequestInFlight) return;
       if (currentView !== "terminal-execution" || terminalCurrentRoute() !== "wechat") return;
+      if (state.terminalConfigOpen) return;
       if (!state.terminalExecution?.login_started) return;
       terminalPollRequestInFlight = true;
       try {
@@ -2855,7 +2899,21 @@ function renderTerminalExecution() {
   const platforms = (state.platforms || []).filter((item) => ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"].includes(item.key));
   const platformMap = new Map(platforms.map((item) => [item.key, item]));
   const isHubRoute = route === "hub";
+  const isLoading = Boolean(state.terminalExecution.loading);
   section.dataset.terminalRoute = route;
+
+  if (isLoading) {
+    workspace.innerHTML = `
+      <div class="terminal-loading-state terminal-glass">
+        <div class="loading-inline terminal-loading-inline">
+          <span class="btn-spinner" aria-hidden="true"></span>
+          <span>终端执行加载中，请稍候...</span>
+        </div>
+        <p class="muted">正在同步窗口状态、账号进度和二维码缓存。</p>
+      </div>
+    `;
+    return;
+  }
 
   if (configPanel && (isHubRoute || route === "wechat")) {
     configPanel.classList.add("hidden");
@@ -3989,6 +4047,7 @@ async function loadViewData(view, { force = false } = {}) {
         active_platform: "wechat",
         login_started: false,
         initialized: false,
+        loading: true,
       };
       renderTerminalExecution();
     }
@@ -4029,7 +4088,7 @@ async function loadViewData(view, { force = false } = {}) {
         await loadPlatforms();
         const terminalState = await api("/api/terminal-execution/state");
         if (currentView === "terminal-execution") {
-          state.terminalExecution = terminalState;
+          state.terminalExecution = { ...terminalState, loading: false };
         }
         renderTerminalExecution();
         loadAccounts()
@@ -4044,6 +4103,7 @@ async function loadViewData(view, { force = false } = {}) {
       } catch (error) {
         state.terminalExecution = {
           ...(state.terminalExecution || {}),
+          loading: false,
           error: error.message || "加载终端执行数据失败",
         };
         renderTerminalExecution();
@@ -4363,6 +4423,8 @@ function activateView(view, updateHash = true) {
   section.classList.add("active");
   currentView = view;
   document.body.classList.toggle("video-matrix-active", view === "video-matrix");
+  document.body.classList.remove("mobile-nav-open");
+  document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", "false");
   setViewHeader(view);
   applyPermissionLimitedState();
   if (view === "video-matrix") {
@@ -4385,6 +4447,8 @@ document.querySelectorAll(".nav-btn").forEach((button) => {
   button.addEventListener("click", () => {
     if (button.dataset.view === "terminal-execution" && currentView === "terminal-execution") {
       terminalSetRoute("hub");
+      document.body.classList.remove("mobile-nav-open");
+      document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", "false");
       return;
     }
     activateView(button.dataset.view);

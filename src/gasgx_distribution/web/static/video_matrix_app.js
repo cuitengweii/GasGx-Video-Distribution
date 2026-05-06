@@ -170,6 +170,43 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function bindMobileSidebarToggle() {
+  const toggle = $("mobileSidebarToggle");
+  if (!toggle) return;
+  const media = window.matchMedia("(max-width: 920px)");
+  const sync = () => {
+    if (!media.matches) {
+      document.body.classList.remove("mobile-sidebar-open");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.textContent = "展开参数";
+      return;
+    }
+    const open = document.body.classList.contains("mobile-sidebar-open");
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.textContent = open ? "收起参数" : "展开参数";
+  };
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    const next = !document.body.classList.contains("mobile-sidebar-open");
+    document.body.classList.toggle("mobile-sidebar-open", next);
+    sync();
+  };
+  document.addEventListener("click", (event) => {
+    if (!media.matches || !document.body.classList.contains("mobile-sidebar-open")) return;
+    const sidebar = document.querySelector(".sidebar");
+    if (sidebar && !sidebar.contains(event.target)) {
+      document.body.classList.remove("mobile-sidebar-open");
+      sync();
+    }
+  });
+  if (typeof media.addEventListener === "function") {
+    media.addEventListener("change", sync);
+  } else if (typeof media.addListener === "function") {
+    media.addListener(sync);
+  }
+  sync();
+}
+
 function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="loading-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
@@ -233,6 +270,7 @@ function setInitialLoading() {
 }
 
 async function init() {
+  bindMobileSidebarToggle();
   setInitialLoading();
   const data = await api("/api/video-matrix/state");
   state = data.ui_state; templates = data.templates; coverTemplates = data.cover_templates; settings = data.settings;

@@ -35,9 +35,11 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'data-terminal-qr-countdown' in app
     assert 'terminalQrLifecycle(window)' in app
     assert 'terminalExpiredPlaceholderIcon' in app
+    assert 'function terminalSlotLabel' in app
     assert '#terminal-config-list' in app
     assert '#terminal-save-config, [data-terminal-save-config]' in app
     assert '#terminal-start-system' not in app
+    assert 'if (state.terminalConfigOpen) return;' in app
     assert '!state.terminalExecution.initialized || state.terminalConfigOpen' in app
     service = (ROOT / 'src' / 'gasgx_distribution' / 'service.py').read_text(encoding='utf-8')
     assert 'TERMINAL_QR_EXPIRY_SECONDS' in service
