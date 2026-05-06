@@ -2479,6 +2479,7 @@ function installGlobalButtonLoading() {
   document.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button || button.disabled || button.classList.contains("loading")) return;
+    if (String(button.getAttribute("type") || "").toLowerCase() === "submit") return;
     if (button.dataset.noGlobalLoading === "1") return;
     if (button.matches("[data-terminal-manual], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route]")) return;
     pulseButtonLoading(button, "处理中");
@@ -4350,8 +4351,10 @@ document.querySelector("#account-form").addEventListener("submit", async (event)
     const created = await api("/api/accounts", { method: "POST", body: JSON.stringify(data) });
     event.target.reset();
     setOperatorWechatValue("aamecc");
-    await refresh();
     showAccountCreatedToast(created);
+    refresh().catch((error) => {
+      showAccountCreateErrorToast(formatFriendlyMessage(error.message));
+    });
   } catch (error) {
     showAccountCreateErrorToast(formatFriendlyMessage(error.message));
   } finally {
