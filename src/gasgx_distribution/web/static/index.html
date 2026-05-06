@@ -39,7 +39,6 @@
         <strong id="brand-name">GasGx</strong>
         <small id="brand-slogan">Video Distribution</small>
       </div>
-      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="隐藏左侧栏" aria-expanded="true">‹</button>
     </div>
     <nav>
       <span class="nav-group-label">业务工作台</span>
@@ -192,16 +191,6 @@
 
     <section id="settings" class="view">
       <form id="distribution-settings-form" class="settings-layout">
-        <div class="settings-card-switcher operation-route-grid" id="settings-card-switcher">
-          <button class="operation-route-card settings-card-button active" type="button" data-settings-card="publish-window">
-            <strong>发布窗口配置</strong>
-            <span>继续编辑公共设置、平台独立配置和矩阵发布作业。</span>
-          </button>
-          <button class="operation-route-card settings-card-button" type="button" data-settings-card="platform-publish">
-            <strong>平台发布配置</strong>
-            <span>切换到终端前置配置区，按窗口分配运营微信和色标。</span>
-          </button>
-        </div>
         <div id="settings-publish-window-content" class="settings-publish-window-content">
         <section class="panel form-panel settings-common">
           <div class="panel-head">
@@ -210,48 +199,96 @@
               <p class="muted">所有平台默认继承这里的素材目录、发布方式和上传超时。开启「与视频矩阵一致」后，发布扫描目录会随矩阵「最终输出目录」自动对齐。</p>
             </div>
           </div>
-          <fieldset class="material-dir-follow-fieldset">
-            <legend>素材目录策略</legend>
-            <label class="radio-line">
-              <input type="radio" name="common.material_dir_follows_video_matrix" value="true" checked>
-              与视频矩阵最终输出目录保持一致（推荐）
+          <div class="settings-common-main">
+            <fieldset class="material-dir-follow-fieldset">
+              <legend>素材目录策略</legend>
+              <label class="radio-line">
+                <input type="radio" name="common.material_dir_follows_video_matrix" value="true" checked>
+                与视频矩阵最终输出目录保持一致（推荐）
+              </label>
+              <label class="radio-line">
+                <input type="radio" name="common.material_dir_follows_video_matrix" value="false">
+                使用下方自定义路径（多平台分目录时选用）
+              </label>
+            </fieldset>
+            <p id="resolved-material-dir-hint" class="muted" style="margin: 0.35rem 0 0.75rem;"></p>
+            <label class="material-dir-field">发布素材目录
+              <span class="input-action">
+                <input name="common.material_dir" list="material-dir-options" placeholder="runtime/materials/videos">
+                <button class="btn secondary icon-btn" id="open-material-dir" type="button" title="修改素材目录">修改</button>
+              </span>
+              <datalist id="material-dir-options">
+                <option value="runtime/materials/videos"></option>
+                <option value="runtime/materials/douyin"></option>
+                <option value="runtime/materials/wechat"></option>
+                <option value="runtime/materials/global"></option>
+              </datalist>
             </label>
-            <label class="radio-line">
-              <input type="radio" name="common.material_dir_follows_video_matrix" value="false">
-              使用下方自定义路径（多平台分目录时选用）
+            <label>默认发布方式
+              <select name="common.publish_mode">
+                <option value="publish">立即发布</option>
+                <option value="draft">保存草稿</option>
+              </select>
             </label>
+            <label>全局话题
+              <input name="common.topics" placeholder="#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿">
+            </label>
+            <label>全局上传超时
+              <select name="common.upload_timeout">
+                <option value="60">60 秒</option>
+                <option value="120">120 秒</option>
+                <option value="180">180 秒</option>
+                <option value="300">300 秒</option>
+              </select>
+            </label>
+          </div>
+          <fieldset class="wechat-defaults-fieldset">
+            <p class="muted">平台默认项放在这里，终端执行里的平台独立配置可覆盖；短标题默认 GasGx燃气发电挖矿，位置留空表示不显示位置，视频描述不会覆盖短标题。</p>
+            <div class="wechat-defaults-grid">
+              <label>内容类型
+                <select name="common.wechat_content_type">
+                  <option value="short_video">短视频</option>
+                  <option value="image_text">图文</option>
+                  <option value="article">文章</option>
+                </select>
+              </label>
+              <label>可见范围
+                <select name="common.wechat_visibility">
+                  <option value="public">公开</option>
+                  <option value="private">仅自己可见</option>
+                  <option value="friends">好友/粉丝可见</option>
+                </select>
+              </label>
+              <label>评论权限
+                <select name="common.wechat_comment_permission">
+                  <option value="public">允许评论</option>
+                  <option value="closed">关闭评论</option>
+                  <option value="followers">仅粉丝评论</option>
+                </select>
+              </label>
+              <label>视频号合集
+                <select name="common.wechat_collection_name">
+                  <option value="GasGx">GasGx</option>
+                  <option value="">不选择合集</option>
+                </select>
+              </label>
+              <label>原创声明
+                <select name="common.wechat_declare_original">
+                  <option value="false">不声明原创</option>
+                  <option value="true">声明原创</option>
+                </select>
+              </label>
+              <label>短标题
+                <input name="common.wechat_short_title" placeholder="GasGx燃气发电挖矿">
+              </label>
+              <label>位置
+                <input name="common.wechat_location" placeholder="留空则不显示位置">
+              </label>
+              <label class="wide-field">视频描述
+                <textarea name="common.wechat_caption" rows="3" placeholder="留空则使用视频默认文案"></textarea>
+              </label>
+            </div>
           </fieldset>
-          <p id="resolved-material-dir-hint" class="muted" style="margin: 0.35rem 0 0.75rem;"></p>
-          <label class="material-dir-field">发布素材目录
-            <span class="input-action">
-              <input name="common.material_dir" list="material-dir-options" placeholder="runtime/materials/videos">
-              <button class="btn secondary icon-btn" id="open-material-dir" type="button" title="修改素材目录">修改</button>
-            </span>
-            <datalist id="material-dir-options">
-              <option value="runtime/materials/videos"></option>
-              <option value="runtime/materials/douyin"></option>
-              <option value="runtime/materials/wechat"></option>
-              <option value="runtime/materials/global"></option>
-            </datalist>
-          </label>
-          <label>默认发布方式
-            <select name="common.publish_mode">
-              <option value="publish">立即发布</option>
-              <option value="draft">保存草稿</option>
-            </select>
-          </label>
-          <label>默认上传超时
-            <span>全局话题</span>
-            <input name="common.topics" placeholder="#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿">
-          </label>
-          <label>全局上传超时
-            <select name="common.upload_timeout">
-              <option value="60">60 秒</option>
-              <option value="120">120 秒</option>
-              <option value="180">180 秒</option>
-              <option value="300">300 秒</option>
-            </select>
-          </label>
         </section>
 
         <section class="panel form-panel settings-job">
@@ -367,7 +404,7 @@
             <div>
               <h2>平台独立配置</h2>
               <p class="muted">每个平台可以单独配置文案、权限和发布策略；视频号有额外合集和原创声明。</p>
-              <p class="muted">配置优先级：平台独立配置 &gt; 继承全局时使用全局公共配置 &gt; 代码默认值。视频号短标题优先使用平台独立配置（默认 GasGx）；位置留空表示不显示位置；视频描述不会覆盖短标题。</p>
+              <p class="muted">配置优先级：平台独立配置 &gt; 继承全局时使用全局公共配置 &gt; 代码默认值。视频号短标题优先使用平台独立配置（默认 GasGx燃气发电挖矿）；位置留空表示不显示位置；视频描述不会覆盖短标题。</p>
             </div>
             <button class="btn primary" type="submit">保存全部设置</button>
           </div>
@@ -376,20 +413,6 @@
         </section>
         </div>
 
-        <section class="panel form-panel settings-platform-publish hidden" id="settings-platform-publish-panel">
-          <div class="panel-head">
-            <div>
-              <h2>平台发布配置</h2>
-              <p class="muted">对应终端前置配置区，按窗口分配运营微信和物理防呆色标。</p>
-            </div>
-            <span class="system-status">终端前置配置区</span>
-          </div>
-          <div class="terminal-config-list" id="settings-platform-config-list"></div>
-          <div class="settings-platform-save-state muted" id="settings-platform-save-state"></div>
-          <div class="terminal-modal-actions">
-            <button class="btn primary" id="settings-platform-save" type="button">更新配置</button>
-          </div>
-        </section>
       </form>
     </section>
 
@@ -1040,6 +1063,31 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=20260429-ai-queue-closed"></script>
+  <div id="terminalErrorModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="terminalErrorTitle">
+    <div class="confirm-panel terminal-error-panel">
+      <div class="confirm-head">
+        <div>
+          <span>TERMINAL ERROR</span>
+          <strong id="terminalErrorTitle">终端流程错误</strong>
+        </div>
+        <button id="terminalErrorClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="confirm-body terminal-error-body">
+        <div class="confirm-message terminal-error-summary">
+          <strong id="terminalErrorStage">错误节点</strong>
+          <p id="terminalErrorMessage"></p>
+          <p class="terminal-error-context" id="terminalErrorContext"></p>
+        </div>
+        <div class="terminal-error-flow">
+          <strong class="terminal-error-flow-title">流程错误节点</strong>
+          <div id="terminalErrorFlow" class="terminal-error-flow-grid"></div>
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button id="terminalErrorDismiss" class="btn primary" type="button">知道了</button>
+      </div>
+    </div>
+  </div>
+  <script src="/static/app.js?v=20260506-terminal-error-modal"></script>
 </body>
 </html>

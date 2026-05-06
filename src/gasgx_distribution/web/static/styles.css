@@ -107,12 +107,12 @@ body.sidebar-collapsed {
   top: 0;
   left: 0;
   overflow: hidden;
-  transition: transform 0.18s ease;
+  transition: margin-left 0.18s ease;
   z-index: 35;
 }
 
 body.sidebar-collapsed .sidebar {
-  transform: translateX(-260px);
+  margin-left: -260px;
 }
 
 body.sidebar-collapsed .sidebar-toggle {
@@ -1976,8 +1976,9 @@ select option {
 
 .settings-common {
   max-width: none;
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
-  align-items: end;
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 0.9fr);
+  align-items: start;
+  gap: 16px;
 }
 
 .settings-job {
@@ -1988,6 +1989,19 @@ select option {
 
 .settings-common .panel-head,
 .settings-job .panel-head {
+  grid-column: 1 / -1;
+}
+
+.settings-common-main {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.settings-common-main .material-dir-follow-fieldset,
+.settings-common-main #resolved-material-dir-hint,
+.settings-common-main .material-dir-field {
   grid-column: 1 / -1;
 }
 
@@ -2117,6 +2131,31 @@ select option {
   grid-column: 1 / -1;
 }
 
+.wechat-defaults-fieldset {
+  margin-top: 0;
+  padding: 14px;
+  border: 1px solid rgba(93, 214, 44, 0.22);
+  border-radius: 8px;
+  background: rgba(8, 12, 10, 0.48);
+  align-self: stretch;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.wechat-defaults-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 0;
+}
+
+.platform-settings-card .field-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .job-monitor {
   grid-column: 1 / -1;
   border: 1px solid var(--border-line);
@@ -2153,6 +2192,14 @@ select option {
 }
 
 @media (max-width: 920px) {
+  .settings-common {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-common-main {
+    grid-template-columns: 1fr;
+  }
+
   .settings-common,
   .platform-settings-card,
   .dashboard-filters,
@@ -2580,6 +2627,86 @@ select option {
 
 .password-confirm-panel {
   width: min(460px, 94vw);
+}
+
+.terminal-error-panel {
+  width: min(760px, 94vw);
+  border-color: rgba(255, 51, 102, 0.26);
+}
+
+.terminal-error-body {
+  display: grid;
+  gap: 16px;
+}
+
+.terminal-error-summary {
+  border-color: rgba(255, 51, 102, 0.18);
+}
+
+.terminal-error-summary strong {
+  color: var(--danger);
+}
+
+.terminal-error-context {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.terminal-error-flow {
+  display: grid;
+  gap: 10px;
+}
+
+.terminal-error-flow-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.terminal-error-flow-grid {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.terminal-error-flow-section {
+  display: grid;
+  gap: 8px;
+}
+
+.terminal-error-flow-section > strong {
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.terminal-error-flow-list {
+  display: grid;
+  gap: 8px;
+}
+
+.terminal-error-flow-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 51, 102, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.terminal-error-flow-item strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.terminal-error-flow-item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .password-confirm-field {
@@ -3528,6 +3655,10 @@ select option {
   .brand-settings-grid {
     grid-template-columns: 1fr;
   }
+
+  .wechat-defaults-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .video-matrix-frame {
@@ -4292,7 +4423,7 @@ body.sidebar-collapsed .terminal-init-modal {
 .terminal-account-item {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   padding: 11px 10px;
   background: rgba(255, 255, 255, 0.02);
   border-radius: 8px;
@@ -4313,8 +4444,9 @@ body.sidebar-collapsed .terminal-init-modal {
 
 .terminal-account-info {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -4448,7 +4580,10 @@ body.sidebar-collapsed .terminal-init-modal {
   color: var(--terminal-text-sub);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.25;
+  max-height: calc(1.25em * 2);
 }
 
 .terminal-status-badge {
@@ -4456,6 +4591,8 @@ body.sidebar-collapsed .terminal-init-modal {
   padding: 4px 8px;
   border-radius: 4px;
   background: var(--terminal-glass-bg);
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .terminal-status-badge.success {

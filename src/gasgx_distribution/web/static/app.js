@@ -84,6 +84,38 @@ const state = {
   operatorWechats: ["aamecc", "aalbcc"],
 };
 
+const TERMINAL_ERROR_FLOW_NODES = [
+  {
+    title: "获取二维码",
+    items: [
+      ["二维码缓存失败", "读取浏览器页源或写入二维码缓存时失败。"],
+      ["打开浏览器失败", "二维码缓存为空后会尝试自动打开浏览器。"],
+      ["二维码过期", "二维码已过期，需要刷新后重新扫码。"],
+    ],
+  },
+  {
+    title: "发布启动",
+    items: [
+      ["无可用素材", "当天素材为空，或已被 consumed 去重。"],
+      ["发布配置缺失", "未读取到视频号发布配置或调试端口配置。"],
+      ["启动发布子进程失败", "发布进程在创建阶段就报错退出。"],
+    ],
+  },
+  {
+    title: "发布执行",
+    items: [
+      ["进程无效", "发布子进程 PID 无效或已提前退出。"],
+      ["未检测到发布证据", "进程结束，但没有找到视频号上传证据。"],
+    ],
+  },
+  {
+    title: "人工确认",
+    items: [
+      ["下一账号二维码刷新失败", "发布成功后切下一账号时，二维码未能重新拉起。"],
+    ],
+  },
+];
+
 const taskSelection = new Set();
 const taskFilters = { account: "", platform: "", status: "", taskType: "" };
 const TASK_TYPE_OPTIONS = [
@@ -98,6 +130,8 @@ const loadedViews = new Set();
 let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "overview";
 let terminalPollTimer = null;
 let terminalCountdownTimer = null;
+let terminalPollRequestInFlight = false;
+let terminalErrorModalSignature = "";
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
@@ -628,6 +662,120 @@ function showAccountCreatedToast(account) {
   showAccountCreatedToast.timer = setTimeout(() => {
     toast.classList.remove("show");
   }, 2600);
+}
+
+function terminalErrorStageTitle(stage) {
+  const map = {
+    load: "终端执行加载失败",
+    qr: "获取二维码失败",
+    publish_start: "发布启动失败",
+    publish_run: "发布执行失败",
+    confirm: "人工确认失败",
+  };
+  return map[stage] || "终端流程错误";
+}
+
+function terminalErrorStageFromMessage(message) {
+  const text = String(message || "");
+  if (text.startsWith("发布启动失败")) return "publish_start";
+  if (text.startsWith("发布失败")) return "publish_run";
+  if (/二维码/.test(text)) return "qr";
+  return "";
+}
+
+function terminalErrorFlowMarkup() {
+  return TERMINAL_ERROR_FLOW_NODES.map((section) => `
+    <section class="terminal-error-flow-section">
+      <strong>${escapeHtml(section.title)}</strong>
+      <div class="terminal-error-flow-list">
+        ${section.items.map(([label, desc]) => `
+          <article class="terminal-error-flow-item">
+            <strong>${escapeHtml(label)}</strong>
+            <p>${escapeHtml(desc)}</p>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `).join("");
+}
+
+function terminalErrorSnapshot() {
+  const terminal = state.terminalExecution || {};
+  if (terminal.error) {
+    const message = String(terminal.error || "");
+    const signature = `load|${message}`;
+    return {
+      stage: "load",
+      title: terminalErrorStageTitle("load"),
+      message,
+      signature,
+      nodes: TERMINAL_ERROR_FLOW_NODES,
+      context: "终端执行数据加载失败",
+    };
+  }
+  for (const windowItem of terminal.windows || []) {
+    const accounts = windowItem?.accounts || [];
+    const currentIndex = Number(windowItem?.current_index || 0);
+    const current = accounts[currentIndex];
+    if (!current) continue;
+    const status = String(current.status || "").toLowerCase();
+    const run = windowItem.publish_run || {};
+    const runStatus = String(run.status || "").toLowerCase();
+    if (status !== "error" && runStatus !== "failed") continue;
+    const stage = String(current.error_stage || run.error_stage || terminalErrorStageFromMessage(current.status_text || run.error || "") || "").trim() || "qr";
+    const title = String(current.error_title || run.error_title || terminalErrorStageTitle(stage));
+    const message = String(current.error_detail || current.status_text || run.error || "终端流程发生错误");
+    const signature = [
+      "terminal",
+      windowItem.id,
+      current.id,
+      stage,
+      title,
+      message,
+      runStatus,
+    ].join("|");
+    return {
+      stage,
+      title,
+      message,
+      signature,
+      nodes: TERMINAL_ERROR_FLOW_NODES,
+      context: `窗口 #${windowItem.id} · 账号 #${current.id}`,
+    };
+  }
+  return null;
+}
+
+function showTerminalErrorModal(payload) {
+  const modal = document.querySelector("#terminalErrorModal");
+  if (!modal) return;
+  const titleNode = modal.querySelector("#terminalErrorTitle");
+  const stageNode = modal.querySelector("#terminalErrorStage");
+  const contextNode = modal.querySelector("#terminalErrorContext");
+  const messageNode = modal.querySelector("#terminalErrorMessage");
+  const flowNode = modal.querySelector("#terminalErrorFlow");
+  if (titleNode) titleNode.textContent = payload.title || "终端流程错误";
+  if (stageNode) stageNode.textContent = payload.stage ? `错误节点：${terminalErrorStageTitle(payload.stage)}` : "错误节点";
+  if (contextNode) contextNode.textContent = payload.context || "";
+  if (messageNode) messageNode.textContent = payload.message || "终端流程发生错误";
+  if (flowNode) flowNode.innerHTML = terminalErrorFlowMarkup();
+  modal.classList.remove("hidden");
+}
+
+function hideTerminalErrorModal() {
+  document.querySelector("#terminalErrorModal")?.classList.add("hidden");
+}
+
+function syncTerminalErrorModal() {
+  const payload = terminalErrorSnapshot();
+  if (!payload) {
+    terminalErrorModalSignature = "";
+    hideTerminalErrorModal();
+    return;
+  }
+  if (payload.signature === terminalErrorModalSignature) return;
+  terminalErrorModalSignature = payload.signature;
+  showTerminalErrorModal(payload);
 }
 
 function applyPermissionLimitedState() {
@@ -1638,17 +1786,7 @@ function renderSettingsPlatformPublishConfig() {
 
 function renderSettingsCardMode() {
   const publishWindowContent = document.querySelector("#settings-publish-window-content");
-  const platformPanel = document.querySelector("#settings-platform-publish-panel");
-  document.querySelectorAll("[data-settings-card]").forEach((button) => {
-    const active = button.dataset.settingsCard === currentSettingsCard;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  publishWindowContent?.classList.toggle("hidden", currentSettingsCard !== "publish-window");
-  platformPanel?.classList.toggle("hidden", currentSettingsCard !== "platform-publish");
-  if (currentSettingsCard === "platform-publish") {
-    renderSettingsPlatformPublishConfig();
-  }
+  publishWindowContent?.classList.remove("hidden");
 }
 
 function renderTerminalInitCardMode() {
@@ -1684,7 +1822,7 @@ function collectTerminalPlatformSetting(root, platform) {
   if (platform === "wechat") {
     payload.collection_name = get("platforms.wechat.collection_name", "");
     payload.declare_original = get("platforms.wechat.declare_original", "false") === "true";
-    payload.short_title = get("platforms.wechat.short_title", "GasGx");
+    payload.short_title = get("platforms.wechat.short_title", "GasGx燃气发电挖矿");
     payload.location = get("platforms.wechat.location", "");
   }
   return payload;
@@ -1711,9 +1849,8 @@ async function renderTerminalPlatformPublishPanel() {
 }
 
 function setSettingsCardMode(card) {
-  const nextCard = card === "platform-publish" ? "platform-publish" : "publish-window";
-  currentSettingsCard = nextCard;
-  localStorage.setItem(SETTINGS_CARD_KEY, nextCard);
+  currentSettingsCard = "publish-window";
+  localStorage.setItem(SETTINGS_CARD_KEY, "publish-window");
   renderSettingsCardMode();
 }
 
@@ -1775,13 +1912,25 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
   const hasCurrent = Boolean(current && current.id && currentIndex < accounts.length);
-  const hasTask = Boolean(current?.task_id);
+  const run = window?.publish_run || {};
+  const runStatus = String(run?.status || "").toLowerCase();
+  const runActiveForCurrent = Number(run?.account_id || 0) === Number(current?.id || 0);
+  const publishRunning = runActiveForCurrent && runStatus === "running";
+  const publishSucceeded = runActiveForCurrent && runStatus === "success";
   const qrState = terminalQrLifecycle(window);
   const isSuccess = String(current?.status || "") === "success";
-  const canPublish = loginStarted && hasCurrent && qrState.active && !hasTask && !isSuccess;
-  const canConfirm = loginStarted && hasCurrent && hasTask && !isSuccess;
+  const canPublish = loginStarted && hasCurrent && qrState.active && !publishRunning && !publishSucceeded && !isSuccess;
+  const canConfirm = loginStarted && hasCurrent && publishSucceeded && !isSuccess;
   const hasNext = currentIndex + 1 < accounts.length;
-  const publishLabel = !hasCurrent ? "全部完成" : hasTask ? "发布已触发" : qrState.active ? "发布" : "先获取二维码";
+  const publishLabel = !hasCurrent
+    ? "全部完成"
+    : publishRunning
+      ? "发布中"
+      : publishSucceeded
+        ? "已完成待确认"
+        : qrState.active
+          ? "发布"
+          : "先获取二维码";
   const confirmLabel = hasNext ? "发布成功，下一账号" : "发布成功，完成";
   return `
     <div class="terminal-window-actions">
@@ -1952,6 +2101,8 @@ function waitForTerminalQrVisible(windowId, accountId, timeoutMs = 20000) {
 
 async function refreshTerminalAccountQr(windowId, accountId, button) {
   const restoreButton = setButtonLoading(button, "刷新中");
+  terminalErrorModalSignature = "";
+  hideTerminalErrorModal();
   try {
     const refreshRoot = document.querySelector(".terminal-workspace-wechat") || document.querySelector("#terminal-matrix-workspace");
     const targetNode = refreshRoot?.querySelector(`[data-terminal-window-id="${windowId}"]`);
@@ -2004,6 +2155,20 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
       renderTerminalExecution();
       window.scrollTo(pageScrollX, pageScrollY);
     }
+  } catch (error) {
+    const currentStateWindows = state.terminalExecution.windows || [];
+    const pendingWindow = currentStateWindows.find((item) => String(item.id) === String(windowId));
+    if (pendingWindow) {
+      pendingWindow.qr_refreshing = false;
+    }
+    renderTerminalExecution();
+    showTerminalErrorModal({
+      stage: "qr",
+      title: "二维码刷新失败",
+      message: error.message || "二维码刷新失败",
+      context: `窗口 #${windowId} · 账号 #${accountId}`,
+      signature: `qr-network|${windowId}|${accountId}|${error.message || "unknown"}`,
+    });
   } finally {
     restoreButton();
   }
@@ -2260,7 +2425,20 @@ function updateTerminalManualCountdowns() {
     if (footerNode.querySelector("button.loading")) return;
     const currentIndex = Number(window.current_index || 0);
     const current = window.accounts?.[currentIndex] || {};
-    footerNode.innerHTML = terminalWindowActionButtons(window, current, loginStarted);
+    const nextActionsMarkup = terminalWindowActionButtons(window, current, loginStarted).trim();
+    const actionsNode = footerNode.querySelector(".terminal-window-actions");
+    if (actionsNode) {
+      if (actionsNode.outerHTML.trim() !== nextActionsMarkup) {
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = nextActionsMarkup;
+        const nextActionsNode = wrapper.firstElementChild;
+        if (nextActionsNode) {
+          actionsNode.replaceWith(nextActionsNode);
+        }
+      }
+    } else {
+      footerNode.insertAdjacentHTML("beforeend", nextActionsMarkup);
+    }
     updatedWindows.add(String(window.id));
   });
 }
@@ -2300,9 +2478,30 @@ function updateTerminalQrCountdowns() {
 function startTerminalPolling() {
   if (terminalPollTimer) clearInterval(terminalPollTimer);
   terminalPollTimer = null;
+  terminalPollRequestInFlight = false;
   if (terminalCountdownTimer) clearInterval(terminalCountdownTimer);
   terminalCountdownTimer = null;
   if (terminalCurrentRoute() !== "wechat") return;
+  const shouldPoll = Boolean(state.terminalExecution?.login_started);
+  if (shouldPoll) {
+    const pollOnce = async () => {
+      if (terminalPollRequestInFlight) return;
+      if (currentView !== "terminal-execution" || terminalCurrentRoute() !== "wechat") return;
+      if (!state.terminalExecution?.login_started) return;
+      terminalPollRequestInFlight = true;
+      try {
+        const nextState = await api("/api/terminal-execution/poll", { method: "POST" });
+        if (currentView !== "terminal-execution" || terminalCurrentRoute() !== "wechat") return;
+        state.terminalExecution = nextState;
+        renderTerminalExecution();
+      } catch (_) {
+        // Keep UI responsive even if one poll fails.
+      } finally {
+        terminalPollRequestInFlight = false;
+      }
+    };
+    terminalPollTimer = window.setInterval(pollOnce, 1200);
+  }
   const hasAnyQr = (state.terminalExecution.windows || []).some((window) => Boolean(window?.qr_url));
   if (!hasAnyQr) return;
   updateTerminalQrCountdowns();
@@ -2424,6 +2623,7 @@ function renderTerminalExecution() {
         }).join("") : `<div class="terminal-empty-state terminal-empty-state-large"><strong>终端执行暂无平台数据</strong><p class="muted">当前只渲染平台入口卡片。请先点击右上角“刷新健康”或检查平台配置后再进入具体平台。</p></div>`}
       </div>
     `;
+    syncTerminalErrorModal();
     startTerminalPolling();
     return;
   }
@@ -2453,6 +2653,7 @@ function renderTerminalExecution() {
       </div>
     `;
     renderTerminalDailyQrView(workspace.querySelector(".terminal-workspace-wechat"));
+    syncTerminalErrorModal();
     startTerminalPolling();
     return;
   }
@@ -2497,6 +2698,7 @@ function renderTerminalExecution() {
       </section>
     </div>
   `;
+  syncTerminalErrorModal();
   startTerminalPolling();
 }
 
@@ -3515,6 +3717,14 @@ function renderDistributionSettings() {
   form.elements["common.publish_mode"].value = common.publish_mode || "publish";
   form.elements["common.topics"].value = common.topics || "#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿";
   form.elements["common.upload_timeout"].value = String(common.upload_timeout || 60);
+  form.elements["common.wechat_content_type"].value = common.wechat_content_type || "short_video";
+  form.elements["common.wechat_visibility"].value = common.wechat_visibility || "public";
+  form.elements["common.wechat_comment_permission"].value = common.wechat_comment_permission || "public";
+  form.elements["common.wechat_collection_name"].value = common.wechat_collection_name ?? "GasGx";
+  form.elements["common.wechat_declare_original"].value = String(common.wechat_declare_original === true);
+  form.elements["common.wechat_short_title"].value = common.wechat_short_title || "GasGx燃气发电挖矿";
+  form.elements["common.wechat_location"].value = common.wechat_location || "";
+  form.elements["common.wechat_caption"].value = common.wechat_caption || "";
   form.elements["jobs.matrix_wechat_publish.batch_size"].value = String(matrixJob.batch_size || 5);
   form.elements["jobs.matrix_wechat_publish.enabled"].value = String(matrixJob.enabled === true);
   form.elements["jobs.matrix_wechat_publish.schedule_mode"].value = matrixJob.schedule_mode || "interval";
@@ -3537,25 +3747,29 @@ function renderDistributionSettings() {
 }
 
 function renderPlatformSettingsCard(platform) {
+  const common = state.distributionSettings.common || {};
   const value = (state.distributionSettings.platforms || {})[platform.key] || {};
-  const shortTitle = escapeHtml(value.short_title || "GasGx");
+  const shortTitle = escapeHtml(value.short_title || common.wechat_short_title || "GasGx燃气发电挖矿");
   const location = escapeHtml(value.location || "");
-  const caption = escapeHtml(value.caption || "");
+  const caption = escapeHtml(value.caption || common.wechat_caption || "");
+  const isWechat = platform.key === "wechat";
   const extra = platform.key === "wechat" ? `
     <label>短标题
-      <input name="platforms.${platform.key}.short_title" value="${shortTitle}" placeholder="GasGx">
+      <input name="platforms.${platform.key}.short_title" value="${shortTitle}" placeholder="GasGx燃气发电挖矿">
     </label>
     <label>位置
       <input name="platforms.${platform.key}.location" value="${location}" placeholder="留空则不显示位置">
     </label>
     <label>视频号合集
       <select name="platforms.${platform.key}.collection_name">
+        <option value="inherit" ${value.collection_name === "inherit" ? "selected" : ""}>默认：继承全局</option>
         <option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>
         <option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>
       </select>
     </label>
     <label>原创声明
       <select name="platforms.${platform.key}.declare_original">
+        <option value="inherit" ${value.declare_original === "inherit" ? "selected" : ""}>默认：继承全局</option>
         <option value="false" ${!value.declare_original ? "selected" : ""}>不声明原创</option>
         <option value="true" ${value.declare_original ? "selected" : ""}>声明原创</option>
       </select>
@@ -3573,6 +3787,7 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>内容类型
       <select name="platforms.${platform.key}.content_type">
+        ${isWechat ? `<option value="inherit" ${value.content_type === "inherit" ? "selected" : ""}>默认：继承全局</option>` : ""}
         <option value="short_video" ${(value.content_type || "short_video") === "short_video" ? "selected" : ""}>短视频</option>
         <option value="image_text" ${value.content_type === "image_text" ? "selected" : ""}>图文</option>
         <option value="article" ${value.content_type === "article" ? "selected" : ""}>文章</option>
@@ -3580,13 +3795,14 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>发布方式
       <select name="platforms.${platform.key}.publish_mode">
-        <option value="inherit" ${(value.publish_mode || "inherit") === "inherit" ? "selected" : ""}>继承全局</option>
+        <option value="inherit" ${(value.publish_mode || "inherit") === "inherit" ? "selected" : ""}>默认：继承全局</option>
         <option value="publish" ${value.publish_mode === "publish" ? "selected" : ""}>立即发布</option>
         <option value="draft" ${value.publish_mode === "draft" ? "selected" : ""}>保存草稿</option>
       </select>
     </label>
     <label>可见范围
       <select name="platforms.${platform.key}.visibility">
+        ${isWechat ? `<option value="inherit" ${value.visibility === "inherit" ? "selected" : ""}>默认：继承全局</option>` : ""}
         <option value="public" ${(value.visibility || "public") === "public" ? "selected" : ""}>公开</option>
         <option value="private" ${value.visibility === "private" ? "selected" : ""}>仅自己可见</option>
         <option value="friends" ${value.visibility === "friends" ? "selected" : ""}>好友/粉丝可见</option>
@@ -3594,6 +3810,7 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>评论权限
       <select name="platforms.${platform.key}.comment_permission">
+        ${isWechat ? `<option value="inherit" ${value.comment_permission === "inherit" ? "selected" : ""}>默认：继承全局</option>` : ""}
         <option value="public" ${(value.comment_permission || "public") === "public" ? "selected" : ""}>允许评论</option>
         <option value="closed" ${value.comment_permission === "closed" ? "selected" : ""}>关闭评论</option>
         <option value="followers" ${value.comment_permission === "followers" ? "selected" : ""}>仅粉丝评论</option>
@@ -3614,6 +3831,14 @@ function collectDistributionSettings(form) {
     publish_mode: data.get("common.publish_mode") || "publish",
     topics: data.get("common.topics") || "#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿",
     upload_timeout: Number(data.get("common.upload_timeout") || 60),
+    wechat_content_type: data.get("common.wechat_content_type") || "short_video",
+    wechat_visibility: data.get("common.wechat_visibility") || "public",
+    wechat_comment_permission: data.get("common.wechat_comment_permission") || "public",
+    wechat_collection_name: data.get("common.wechat_collection_name") || "",
+    wechat_declare_original: data.get("common.wechat_declare_original") === "true",
+    wechat_short_title: data.get("common.wechat_short_title") || "GasGx燃气发电挖矿",
+    wechat_location: data.get("common.wechat_location") || "",
+    wechat_caption: data.get("common.wechat_caption") || "",
   };
   const jobs = {
     matrix_wechat_publish: {
@@ -3642,8 +3867,8 @@ function collectDistributionSettings(form) {
     };
     if (platform === "wechat") {
       platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || "";
-      platforms[platform].declare_original = data.get("platforms.wechat.declare_original") === "true";
-      platforms[platform].short_title = data.get("platforms.wechat.short_title") || "GasGx";
+      platforms[platform].declare_original = data.get("platforms.wechat.declare_original") || "inherit";
+      platforms[platform].short_title = data.get("platforms.wechat.short_title") || "GasGx燃气发电挖矿";
       platforms[platform].location = data.get("platforms.wechat.location") || "";
     }
   });
@@ -3855,10 +4080,6 @@ document.querySelector("#tasks-list").addEventListener("change", (event) => {
 installTerminalConfigInteractions("#terminal-config-list");
 installTerminalConfigInteractions("#settings-platform-config-list");
 
-document.querySelectorAll("[data-settings-card]").forEach((button) => {
-  button.addEventListener("click", () => setSettingsCardMode(button.dataset.settingsCard || "publish-window"));
-});
-
 document.querySelectorAll("[data-terminal-init-card]").forEach((button) => {
   button.addEventListener("click", async () => {
     currentTerminalInitCard = button.dataset.terminalInitCard === "platform" ? "platform" : "window";
@@ -3869,23 +4090,6 @@ document.querySelectorAll("[data-terminal-init-card]").forEach((button) => {
   });
 });
 
-document.querySelector("#settings-platform-save")?.addEventListener("click", async (event) => {
-  const restoreButton = setButtonLoading(event.currentTarget, "更新中");
-  const stateNode = document.querySelector("#settings-platform-save-state");
-  if (stateNode) stateNode.textContent = "保存中...";
-  try {
-    state.terminalExecution = await api("/api/terminal-execution/start", {
-      method: "POST",
-      body: JSON.stringify({ windows: readTerminalConfigRows("#settings-platform-config-list") }),
-    });
-    if (stateNode) stateNode.textContent = "已更新平台发布配置。";
-    renderSettingsPlatformPublishConfig();
-  } catch (error) {
-    if (stateNode) stateNode.textContent = formatFriendlyMessage(error.message);
-  } finally {
-    restoreButton();
-  }
-});
 
 document.querySelector("#terminal-save-platform-config")?.addEventListener("click", async (event) => {
   const restoreButton = setButtonLoading(event.currentTarget, "更新中");
@@ -4166,6 +4370,12 @@ function confirmMatrixRunNow() {
   });
 }
 
+document.querySelector("#terminalErrorClose")?.addEventListener("click", hideTerminalErrorModal);
+document.querySelector("#terminalErrorDismiss")?.addEventListener("click", hideTerminalErrorModal);
+document.querySelector("#terminalErrorModal")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) hideTerminalErrorModal();
+});
+
 document.querySelector("#matrix-run-now").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   const confirmed = await confirmMatrixRunNow();
@@ -4289,9 +4499,19 @@ document.addEventListener("click", async (event) => {
   const terminalManualButton = event.target.closest("[data-terminal-manual]");
   if (terminalManualButton) {
     const restoreButton = setButtonLoading(terminalManualButton, "发布中");
+    terminalErrorModalSignature = "";
+    hideTerminalErrorModal();
     try {
       state.terminalExecution = await api(`/api/terminal-execution/windows/${terminalManualButton.dataset.terminalManual}/manual-publish`, { method: "POST" });
       renderTerminalExecution();
+    } catch (error) {
+      showTerminalErrorModal({
+        stage: "publish_start",
+        title: "发布请求失败",
+        message: error.message || "发布请求失败",
+        context: `窗口 #${terminalManualButton.dataset.terminalManual}`,
+        signature: `publish-request|manual|${terminalManualButton.dataset.terminalManual}|${error.message || "unknown"}`,
+      });
     } finally {
       restoreButton();
     }
@@ -4317,9 +4537,19 @@ document.addEventListener("click", async (event) => {
   const terminalConfirmButton = event.target.closest("[data-terminal-confirm-success]");
   if (terminalConfirmButton) {
     const restoreButton = setButtonLoading(terminalConfirmButton, "进入下一个");
+    terminalErrorModalSignature = "";
+    hideTerminalErrorModal();
     try {
       state.terminalExecution = await api(`/api/terminal-execution/windows/${terminalConfirmButton.dataset.terminalConfirmSuccess}/confirm-publish-success`, { method: "POST" });
       renderTerminalExecution();
+    } catch (error) {
+      showTerminalErrorModal({
+        stage: "confirm",
+        title: "确认请求失败",
+        message: error.message || "确认请求失败",
+        context: `窗口 #${terminalConfirmButton.dataset.terminalConfirmSuccess}`,
+        signature: `publish-request|confirm|${terminalConfirmButton.dataset.terminalConfirmSuccess}|${error.message || "unknown"}`,
+      });
     } finally {
       restoreButton();
     }
