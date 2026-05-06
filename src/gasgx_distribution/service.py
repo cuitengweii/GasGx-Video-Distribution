@@ -1274,6 +1274,31 @@ def route_operation_notification(event_type: str, payload: dict[str, Any] | None
     }
 
 
+def send_notification_route_probe(event_type: str, platform: str) -> dict[str, Any]:
+    event = str(event_type or "").strip()
+    if event not in NOTIFICATION_EVENT_TYPES:
+        raise ValueError("unsupported notification event_type")
+    token = _normalize_ai_platform(platform)
+    if token not in NOTIFICATION_PLATFORMS:
+        raise ValueError("notification platform must be telegram, dingtalk, or wecom")
+    meta = NOTIFICATION_EVENT_META[event]
+    payload: dict[str, Any] = {
+        "message_type": event,
+        "subtype": "route_probe",
+        "severity": meta.get("default_severity") or "info",
+        "title": f"通知链路联调：{meta.get('label') or event}",
+        "summary": f"通知路由已开启（{event} -> {token}）",
+        "platform": token,
+        "event_type": event,
+        "route_probe": True,
+    }
+    payload["text"] = _notification_text(event, payload)
+    queued = enqueue_ai_robot_message(token, payload, test=False)
+    if str(queued.get("status") or "") == "unsupported":
+        return queued
+    return send_ai_robot_message_now(queued)
+
+
 def _qr_fingerprint(item: dict[str, Any]) -> str:
     source = "|".join(
         [
@@ -1827,22 +1852,19 @@ def terminal_execution_state() -> dict[str, Any]:
         _save_terminal_state(state)
     visible_windows = [_public_terminal_window(window) for window in windows if isinstance(window, dict)]
     if not login_started:
-        visible_windows = []
-        for window in windows:
-            if not isinstance(window, dict):
+        for visible_window in visible_windows:
+            if not isinstance(visible_window, dict):
                 continue
-            visible_window = _public_terminal_window(window)
             visible_window["manual_available_at"] = 0
             visible_accounts = []
-            for index, account in enumerate(window.get("accounts") or []):
+            for index, account in enumerate(visible_window.get("accounts") or []):
                 visible_account = dict(account)
-                if index == int(window.get("current_index") or 0) and str(visible_account.get("status") or "") != "success":
+                if index == int(visible_window.get("current_index") or 0) and str(visible_account.get("status") or "") != "success":
                     visible_account["status"] = "pending"
                     visible_account["status_text"] = "等待开始登录"
                     visible_account["task_id"] = None
                 visible_accounts.append(visible_account)
             visible_window["accounts"] = visible_accounts
-            visible_windows.append(visible_window)
     for window in visible_windows:
         if not isinstance(window, dict):
             continue
@@ -1917,7 +1939,15 @@ def _close_wechat_browser_for_account(account_id: int) -> None:
     if not platform:
         return
     try:
-        pid = engine._find_debug_chrome_process_pid(int(platform.get("debug_port") or 0), str(platform.get("profile_dir") or ""))  # type: ignore[attr-defined]
+        debug_port = int(platform.get("debug_port") or 0)
+    except Exception:
+        debug_port = 0
+    profile_dir = str(platform.get("profile_dir") or "")
+    if debug_port <= 0 or not profile_dir:
+        return
+    try:
+        process_rows = _list_windows_chrome_processes() if os.name == "nt" else []
+        pid = _find_windows_chrome_pid_by_debug_port(debug_port, profile_dir, processes=process_rows)
         if pid:
             engine._terminate_windows_process_tree(int(pid))  # type: ignore[attr-defined]
     except Exception:
@@ -1940,15 +1970,10 @@ def _terminal_browser_runtime_for_account(account_id: int, platform_name: str = 
         return {}
     browser_open: bool | None = None
     try:
-        pid = engine._find_debug_chrome_process_pid(debug_port, profile_dir)  # type: ignore[attr-defined]
-        browser_open = bool(pid)
+        # Hot path: probe CDP port first to avoid expensive per-window WMI process scans.
+        browser_open = bool(engine._is_chrome_debug_port_ready(debug_port, timeout=0.2))  # type: ignore[attr-defined]
     except Exception:
         browser_open = None
-    if browser_open is None:
-        try:
-            browser_open = bool(engine._is_chrome_debug_port_ready(debug_port, timeout=0.25))  # type: ignore[attr-defined]
-        except Exception:
-            browser_open = None
     return {
         "browser_open": browser_open,
         "debug_port": debug_port,
@@ -1966,9 +1991,9 @@ def _windows_colorref_from_hex(value: str) -> int | None:
     return red | (green << 8) | (blue << 16)
 
 
-def _find_windows_chrome_pid_by_debug_port(debug_port: int) -> int:
-    if os.name != "nt" or int(debug_port or 0) <= 0:
-        return 0
+def _list_windows_chrome_processes() -> list[dict[str, Any]]:
+    if os.name != "nt":
+        return []
     try:
         result = subprocess.run(
             [
@@ -1987,34 +2012,84 @@ def _find_windows_chrome_pid_by_debug_port(debug_port: int) -> int:
         payload = json.loads(result.stdout or "[]")
         if isinstance(payload, dict):
             payload = [payload]
-        marker = f"--remote-debugging-port={int(debug_port)}"
-        for item in payload:
-            command_line = str(item.get("CommandLine") or "")
-            if not command_line or "--type=" in command_line:
-                continue
-            if marker not in command_line:
-                continue
-            process_id = item.get("ProcessId")
-            if process_id is None:
-                continue
-            return int(process_id)
     except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        command_line = str(item.get("CommandLine") or "")
+        if not command_line:
+            continue
+        process_id = item.get("ProcessId")
+        if process_id is None:
+            continue
+        try:
+            process_id_value = int(process_id)
+        except Exception:
+            continue
+        debug_port_raw = engine._extract_cli_flag_value(command_line, "remote-debugging-port")  # type: ignore[attr-defined]
+        user_data_dir_raw = engine._extract_cli_flag_value(command_line, "user-data-dir")  # type: ignore[attr-defined]
+        try:
+            parsed_debug_port = int(debug_port_raw) if debug_port_raw else 0
+        except Exception:
+            parsed_debug_port = 0
+        rows.append(
+            {
+                "process_id": process_id_value,
+                "command_line": command_line,
+                "is_child": "--type=" in command_line,
+                "debug_port": parsed_debug_port,
+                "user_data_dir": str(user_data_dir_raw or ""),
+                "normalized_user_data_dir": engine._normalize_user_data_dir(str(user_data_dir_raw or "")) if user_data_dir_raw else "",  # type: ignore[attr-defined]
+            }
+        )
+    return rows
+
+
+def _find_windows_chrome_pid_by_debug_port(
+    debug_port: int,
+    profile_dir: str = "",
+    *,
+    processes: list[dict[str, Any]] | None = None,
+) -> int:
+    if os.name != "nt" or int(debug_port or 0) <= 0:
         return 0
+    rows = processes if isinstance(processes, list) else _list_windows_chrome_processes()
+    target_dir = engine._normalize_user_data_dir(profile_dir) if profile_dir else ""  # type: ignore[attr-defined]
+    browser_rows = [
+        row
+        for row in rows
+        if int(row.get("debug_port") or 0) == int(debug_port) and not bool(row.get("is_child"))
+    ]
+    if target_dir:
+        for row in browser_rows:
+            if str(row.get("normalized_user_data_dir") or "") == target_dir:
+                return int(row.get("process_id") or 0)
+    for row in browser_rows:
+        return int(row.get("process_id") or 0)
+    if target_dir:
+        for row in rows:
+            if int(row.get("debug_port") or 0) != int(debug_port):
+                continue
+            if str(row.get("normalized_user_data_dir") or "") == target_dir:
+                return int(row.get("process_id") or 0)
     return 0
 
 
-def _apply_windows_chrome_window_color(debug_port: int, profile_dir: str, color: str) -> bool:
+def _apply_windows_chrome_window_color(
+    debug_port: int,
+    profile_dir: str,
+    color: str,
+    *,
+    chrome_processes: list[dict[str, Any]] | None = None,
+) -> bool:
     if os.name != "nt":
         return False
     colorref = _windows_colorref_from_hex(color)
     if colorref is None:
         return False
-    try:
-        pid = int(engine._find_debug_chrome_process_pid(int(debug_port), str(profile_dir)) or 0)  # type: ignore[attr-defined]
-    except Exception:
-        pid = 0
-    if pid <= 0:
-        pid = _find_windows_chrome_pid_by_debug_port(debug_port)
+    pid = _find_windows_chrome_pid_by_debug_port(debug_port, profile_dir, processes=chrome_processes)
     if pid <= 0:
         return False
     try:
@@ -2077,8 +2152,19 @@ def _apply_account_browser_window_color(open_result: dict[str, Any], color: str)
     if debug_port <= 0 or not profile_dir:
         return False
     deadline = time.monotonic() + 3.0
+    cached_processes: list[dict[str, Any]] = []
+    next_refresh_at = 0.0
     while time.monotonic() < deadline:
-        if _apply_windows_chrome_window_color(debug_port, profile_dir, color):
+        now = time.monotonic()
+        if os.name == "nt" and now >= next_refresh_at:
+            cached_processes = _list_windows_chrome_processes()
+            next_refresh_at = now + 0.8
+        if _apply_windows_chrome_window_color(
+            debug_port,
+            profile_dir,
+            color,
+            chrome_processes=cached_processes if os.name == "nt" else None,
+        ):
             return True
         time.sleep(0.2)
     return False
@@ -2175,16 +2261,13 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
     }
     windows = []
     saved_config = []
-    executable_window_count = 0
     retained_window_ids: set[int] = set()
     for index, raw in enumerate(payload.get("windows") or [], start=1):
         enabled = bool(raw.get("enabled", True))
         if not enabled:
             continue
         operator = str(raw.get("operator_wechat") or "").strip()
-        if operator not in groups:
-            continue
-        group = groups[operator]
+        group = groups.get(operator) or {"accounts": []}
         accounts = _terminal_account_cards(group.get("accounts") or [])
         color = str(raw.get("color") or TERMINAL_COLORS[(index - 1) % len(TERMINAL_COLORS)]["hex"])
         qr_path = ""
@@ -2204,7 +2287,6 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "accounts": accounts,
         }
         if accounts:
-            executable_window_count += 1
             current = accounts[0]
             current["status"] = "pending"
             current["status_text"] = "等待开始登录"
@@ -2222,7 +2304,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "operator_wechat": operator,
             "color": color,
         })
-    if not windows or executable_window_count <= 0:
+    if not windows:
         raise ValueError("至少需要启用一个已绑定运营微信的终端")
     if previous_login_started:
         for previous_id in previous_windows:
@@ -2249,6 +2331,8 @@ def start_terminal_login() -> dict[str, Any]:
     windows = state.get("windows") or []
     if not windows:
         raise ValueError("请先初始化执行矩阵")
+    if not any(int(window.get("current_index") or 0) < len(window.get("accounts") or []) for window in windows if isinstance(window, dict)):
+        raise ValueError("当前配置下没有可登录账号，请先绑定运营微信与账号")
     opened_count = 0
     for window in windows:
         accounts = window.get("accounts") or []

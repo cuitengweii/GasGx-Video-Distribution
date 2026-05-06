@@ -59,4 +59,4 @@ def test_terminal_config_does_not_start_login_side_effects() -> None:
     assert '_write_terminal_qr_cache' not in configure_block
     assert 'previous_login_started' in configure_block
     assert 'open_account_browser' in login_block
-    assert '_write_terminal_qr_cache' in login_block
+    assert '_open_terminal_window_current_account' in login_block

@@ -799,62 +799,14 @@
         <div class="panel-head">
           <div>
             <h2>消息与提醒</h2>
-            <p class="muted">预留生成完成、发布失败、账号登录失效和素材不足提醒。</p>
+            <p class="muted">集中展示通知路由状态、待扫码批次和最近外发记录。</p>
           </div>
-          <span class="system-status">6 条未读</span>
+          <span class="system-status" id="notification-unread-count">0 条待处理</span>
         </div>
         <div id="operation-notice-routes" class="notification-list"></div>
+        <div id="notification-route-state" class="muted"></div>
         <div id="login-qr-batches" class="notification-list"></div>
-        <div class="notification-list">
-          <article class="notification-card success">
-            <span class="notification-dot"></span>
-            <div>
-              <strong>视频生成完成</strong>
-              <p>燃气发电机组案例矩阵已导出 12 条 9:16 短视频，封面、文案和 MP4 文件已写入本地输出目录。</p>
-            </div>
-            <time>2 分钟前</time>
-          </article>
-          <article class="notification-card danger">
-            <span class="notification-dot"></span>
-            <div>
-              <strong>视频号发布失败</strong>
-              <p>账号 Allen - WeChat Channels 上传第 3 条视频时登录态失效，需要重新扫码后继续发布队列。</p>
-            </div>
-            <time>12 分钟前</time>
-          </article>
-          <article class="notification-card warning">
-            <span class="notification-dot"></span>
-            <div>
-              <strong>素材分类不足</strong>
-              <p>“燃气机组现场”目录今天只有 2 个可用片段，低于批量生成建议的 8 个片段。</p>
-            </div>
-            <time>28 分钟前</time>
-          </article>
-          <article class="notification-card info">
-            <span class="notification-dot"></span>
-            <div>
-              <strong>企业微信群机器人已发送日报</strong>
-              <p>今日生成 18 条、成功发布 11 条、待人工确认 4 条，运营摘要已推送到 GasGx 内容运营群。</p>
-            </div>
-            <time>09:30</time>
-          </article>
-          <article class="notification-card warning">
-            <span class="notification-dot"></span>
-            <div>
-              <strong>本地背景音乐库偏少</strong>
-              <p>可随机使用的 MP3 只有 5 首，建议补充工业节奏、展会现场和项目案例三类音乐。</p>
-            </div>
-            <time>昨天</time>
-          </article>
-          <article class="notification-card info">
-            <span class="notification-dot"></span>
-            <div>
-              <strong>发布前审核等待确认</strong>
-              <p>抖音矩阵账号有 4 条视频已生成预览图，等待运营确认标题和首屏 CTA 后发布。</p>
-            </div>
-            <time>昨天</time>
-          </article>
-        </div>
+        <div id="notification-history" class="notification-list"></div>
       </div>
     </section>
 
@@ -862,7 +814,7 @@
       <div class="system-grid">
         <section class="panel system-card">
           <div class="panel-head"><h2>部署环境</h2><span class="system-status">本地</span></div>
-          <div class="system-kv"><span>运行地址</span><strong>127.0.0.1:8790</strong></div>
+          <div class="system-kv"><span>运行地址</span><strong id="runtime-address">127.0.0.1:8790</strong></div>
         </section>
         <section class="panel system-card">
           <div class="panel-head"><h2>存储与缓存</h2><span class="system-status">预留</span></div>
@@ -1096,6 +1048,14 @@
       </div>
     </div>
   </div>
+  <script>
+    (function () {
+      var node = document.getElementById("runtime-address");
+      if (!node) return;
+      var host = window.location && window.location.host ? window.location.host : "";
+      if (host) node.textContent = host;
+    })();
+  </script>
   <script src="/static/app.js?v=20260506-terminal-full-loading-fix1"></script>
 </body>
 </html>

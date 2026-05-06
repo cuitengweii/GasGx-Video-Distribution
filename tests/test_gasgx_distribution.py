@@ -336,6 +336,48 @@ def test_notification_events_api_exposes_route_metadata(monkeypatch, tmp_path: P
     assert any(item["event_type"] == "ops_summary" and "daily_sent" in item["subtypes"] for item in payload)
 
 
+def test_notification_route_api_can_send_probe_message(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    sent: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    def fake_post(url: str, json: dict[str, object], headers: dict[str, str], timeout: float) -> FakeResponse:
+        sent.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("gasgx_distribution.service.requests.post", fake_post)
+
+    config = client.put(
+        "/api/ai-robots/telegram/config",
+        json={
+            "enabled": True,
+            "bot_name": "GasGx Bot",
+            "webhook_url": "https://example.test/bot",
+            "target_id": "chat-1",
+        },
+    )
+    assert config.status_code == 200
+
+    route = client.post(
+        "/api/notification-routes/action_required/telegram",
+        json={"enabled": True, "send_probe": True},
+    )
+    assert route.status_code == 200
+    payload = route.json()
+    assert payload["enabled"] is True
+    assert payload["probe"]["status"] == "sent"
+    assert sent[-1]["url"] == "https://example.test/bot"
+    assert sent[-1]["json"]["chat_id"] == "chat-1"
+    assert "action_required" in str(sent[-1]["json"]["text"])
+
+
 def test_accounts_include_matrix_publish_success_count(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     first = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
@@ -1862,6 +1904,27 @@ def test_terminal_config_update_keeps_enabled_windows_even_when_operator_account
     assert any(issue["code"] == "no_current_account" for issue in (second.get("publish_precheck", {}).get("issues", {}).get("p0") or []))
 
 
+def test_terminal_config_update_keeps_unknown_operator_windows(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        service,
+        "_terminal_operator_groups",
+        lambda: [{"operator_wechat": "op-a", "accounts": []}],
+    )
+
+    result = service.start_terminal_execution(
+        {
+            "windows": [
+                {"id": 1, "enabled": True, "operator_wechat": "op-a", "color": "#3B82F6"},
+                {"id": 2, "enabled": True, "operator_wechat": "op-b", "color": "#F97316"},
+            ]
+        }
+    )
+
+    assert [int(item.get("id") or 0) for item in result["windows"]] == [1, 2]
+    assert [item.get("operator_wechat") for item in result["config"]] == ["op-a", "op-b"]
+
+
 def test_brand_api_omits_large_inline_logo_asset(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     large_logo = "data:image/png;base64," + ("A" * (service.BRAND_INLINE_ASSET_MAX_CHARS + 1))
@@ -1986,6 +2049,34 @@ def test_terminal_start_login_opens_all_windows_for_current_batch(monkeypatch, t
     assert [item["manual_available_at"] for item in first_state["windows"]] == [0, 0, 0]
 
 
+def test_terminal_start_login_rejects_when_no_executable_accounts(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {"id": 1, "enabled": True, "operator_wechat": "op-a", "color": "#3B82F6", "current_index": 0, "accounts": []},
+                    {"id": 2, "enabled": True, "operator_wechat": "op-b", "color": "#F97316", "current_index": 0, "accounts": []},
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    service._invalidate_terminal_execution_state_cache()
+    try:
+        service.start_terminal_login()
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "当前配置下没有可登录账号" in str(exc)
+
+
 def test_terminal_start_login_applies_window_color_to_browser(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
@@ -2077,6 +2168,107 @@ def test_terminal_state_marks_ready_account_browser_closed(monkeypatch, tmp_path
     assert current["browser_open"] is False
     assert window["browser_open"] is False
     assert any(item["code"] == "browser_closed" for item in window["publish_precheck"]["issues"]["p0"])
+
+
+def test_terminal_execution_state_does_not_duplicate_runtime_probe_before_login(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [
+                            {
+                                "id": 101,
+                                "display_name": "A",
+                                "status": "waiting_qr",
+                                "status_text": "waiting",
+                                "task_id": None,
+                                "publish_success_count": 0,
+                            }
+                        ],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "_terminal_operator_groups", lambda: [])
+    calls = {"count": 0}
+    monkeypatch.setattr(
+        service,
+        "_terminal_browser_runtime_for_account",
+        lambda *_args, **_kwargs: calls.__setitem__("count", calls["count"] + 1) or {},
+    )
+
+    service._invalidate_terminal_execution_state_cache()
+    result = service.terminal_execution_state()
+
+    assert calls["count"] == 1
+    assert result["windows"][0]["accounts"][0]["status"] == "pending"
+
+
+def test_terminal_execution_state_runtime_probe_prefers_debug_port_health(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-port-probe", "display_name": "Probe Port", "platforms": ["wechat"]})
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "accounts": [
+                            {
+                                "id": int(account["id"]),
+                                "display_name": "Probe Port",
+                                "status": "ready",
+                                "status_text": "已登录",
+                                "task_id": None,
+                                "publish_success_count": 0,
+                            }
+                        ],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        service.engine,
+        "_find_debug_chrome_process_pid",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pid scan should not run in terminal state probe")),
+    )
+    monkeypatch.setattr(service.engine, "_is_chrome_debug_port_ready", lambda *_args, **_kwargs: True)
+
+    service._invalidate_terminal_execution_state_cache()
+    result = service.terminal_execution_state()
+
+    assert result["windows"][0]["accounts"][0]["browser_open"] is True
 
 
 def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatch, tmp_path: Path) -> None:

@@ -600,7 +600,11 @@ def create_app() -> FastAPI:
     @app.post("/api/notification-routes/{event_type}/{platform}")
     def save_notification_route(event_type: str, platform: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            return service.save_notification_route(event_type, platform, bool(payload.get("enabled")))
+            enabled = bool(payload.get("enabled"))
+            route = service.save_notification_route(event_type, platform, enabled)
+            if enabled and bool(payload.get("send_probe")):
+                route["probe"] = service.send_notification_route_probe(event_type, platform)
+            return route
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

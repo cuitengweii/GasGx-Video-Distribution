@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,13 +13,16 @@ from .matrix_publish import check_wechat_matrix_login_status, run_matrix_publish
 from .service import ensure_database, run_ai_robot_sender_worker
 from .wechat_stats_capture import run_wechat_stats_capture
 
+FIXED_WEB_PORT = 8790
+ALLOW_NON_FIXED_WEB_PORT_ENV = "GASGX_ALLOW_NON_FIXED_WEB_PORT"
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GasGx Video Distribution local console.")
     sub = parser.add_subparsers(dest="command", required=True)
     web = sub.add_parser("web")
     web.add_argument("--host", default="127.0.0.1")
-    web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--port", type=int, default=8790)
     sub.add_parser("init-db")
     sub.add_parser("init-control-db")
     supabase_sql = sub.add_parser("supabase-sql")
@@ -97,7 +101,17 @@ def main() -> int:
         return 0 if bool(result.get("ok")) else 1
     if args.command == "web":
         ensure_database()
-        uvicorn.run("gasgx_distribution.web:app", host=str(args.host), port=int(args.port), reload=False)
+        requested_port = int(args.port)
+        allow_non_fixed_port = str(os.getenv(ALLOW_NON_FIXED_WEB_PORT_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
+        if requested_port != FIXED_WEB_PORT and not allow_non_fixed_port:
+            print(
+                f"[GasGx] web port is locked to {FIXED_WEB_PORT}. requested={requested_port}. "
+                f"set {ALLOW_NON_FIXED_WEB_PORT_ENV}=1 to bypass.",
+                file=sys.stderr,
+            )
+            return 2
+        effective_port = requested_port if allow_non_fixed_port else FIXED_WEB_PORT
+        uvicorn.run("gasgx_distribution.web:app", host=str(args.host), port=effective_port, reload=False)
         return 0
     parser.error(f"unsupported command: {args.command}")
     return 2

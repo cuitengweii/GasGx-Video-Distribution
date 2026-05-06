@@ -18,7 +18,7 @@ python -m pip install -e ".[dev]"
 
 CI 里跑 pytest 也应先安装 `.[dev]`。
 
-Default URL: `http://127.0.0.1:8765/`
+Default URL: `http://127.0.0.1:8790/`
 
 The console stores its SQLite database at `runtime/gasgx_distribution.db` and creates per-account browser state under `profiles/matrix/<account_key>/<platform>/`. Phase 1 keeps existing CyberCar CLI behavior intact and exposes unsupported deep automations for LinkedIn, Facebook, YouTube, VK, and Instagram as explicit `unsupported` task records instead of pretending they are production-ready.
 

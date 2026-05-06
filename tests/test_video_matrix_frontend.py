@@ -164,7 +164,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     app_shell = ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js"
     shell_app = app_shell.read_text(encoding="utf-8")
     shell_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "6 条未读" in shell_html
+    assert 'id="notification-unread-count"' in shell_html
+    assert "0 条待处理" in shell_html
+    assert 'id="notification-route-state"' in shell_html
+    assert 'id="notification-history"' in shell_html
     assert "matrixRunConfirmModal" in shell_html
     assert "确认立即启动矩阵发布作业" in shell_html
     assert "确认启动" in shell_html
