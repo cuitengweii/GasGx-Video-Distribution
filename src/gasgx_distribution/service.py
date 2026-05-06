@@ -2164,6 +2164,10 @@ def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, r
         return {"ok": False, "issues": issues, "selected_video": ""}
     if not login_started:
         issues["p0"].append(_terminal_precheck_issue("login_not_started", "尚未启动登录流程", "请先点击“获取登录二维码”并完成扫码登录。"))
+    if not require_login_probe:
+        if current_status not in {"ready", "running", "success"}:
+            issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并等待状态变为“已登录”。"))
+        return {"ok": not issues["p0"], "issues": issues, "selected_video": ""}
     account = get_account(account_id) or {}
     if not account:
         issues["p0"].append(_terminal_precheck_issue("account_not_found", "账号不存在", "账号记录不存在或已被删除。"))
@@ -2176,16 +2180,12 @@ def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, r
         profile_dir = str(platform_row.get("profile_dir") or "").strip()
         if debug_port <= 0 or not profile_dir:
             issues["p0"].append(_terminal_precheck_issue("wechat_platform_invalid", "视频号配置不完整", "请检查 profile_dir 与 debug_port 配置。"))
-    if require_login_probe:
-        try:
-            probe = check_login_status(account_id, "wechat")
-            if str(probe.get("status") or "").strip().lower() != "ready":
-                issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并确认登录状态。"))
-        except Exception as exc:
-            issues["p0"].append(_terminal_precheck_issue("login_probe_failed", "登录检测失败", f"登录检测失败：{exc}"))
-    else:
-        if current_status not in {"ready", "running", "success"}:
-            issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并等待状态变为“已登录”。"))
+    try:
+        probe = check_login_status(account_id, "wechat")
+        if str(probe.get("status") or "").strip().lower() != "ready":
+            issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并确认登录状态。"))
+    except Exception as exc:
+        issues["p0"].append(_terminal_precheck_issue("login_probe_failed", "登录检测失败", f"登录检测失败：{exc}"))
     selected_video = ""
     try:
         from . import matrix_publish as mp

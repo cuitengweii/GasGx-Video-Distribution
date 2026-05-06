@@ -1968,8 +1968,8 @@ function terminalQrLifecycle(window) {
       remaining: 0,
       expired: false,
       active: false,
-      countdownText: "待获取",
-      placeholderState: "idle",
+      countdownText: "获取中...",
+      placeholderState: "refreshing",
     };
   }
   const hasQr = Boolean(window?.qr_url);
@@ -2079,6 +2079,14 @@ function terminalQrImageMarkup(window, currentAccountId) {
   const fallbackCurrentId = Number(accounts?.[currentIndex]?.id || 0);
   const firstAccountId = Number(accounts?.[0]?.id || 0);
   const refreshAccountId = Number(currentAccountId || 0) || fallbackCurrentId || firstAccountId;
+  if (qrState.placeholderState === "refreshing") {
+    return `
+      <button class="terminal-qr-image-button loading-state" type="button" disabled aria-busy="true" aria-label="正在获取二维码">
+        <span class="btn-spinner" aria-hidden="true"></span>
+        <span class="terminal-qr-loading-text">获取中...</span>
+      </button>
+    `;
+  }
   if (!qrState.hasQr) {
     return `
       <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="点击获取二维码">
@@ -2106,10 +2114,17 @@ function terminalWechatAccountStatusText(window, account, index, currentIndex, l
   }
   const qrState = terminalQrLifecycle(window);
   if (index === currentIndex && loginStarted && String(account.status || "") === "waiting_qr") {
+    if (qrState.placeholderState === "refreshing") {
+      return "正在获取二维码...";
+    }
     if (qrState.hasQr) {
       return qrState.expired
         ? `二维码已过期，请刷新`
         : `正在等待扫码确认`;
+    }
+    const rawStatus = sanitizeTerminalStatusText(account.status_text, account.status);
+    if (/(失败|异常|重试|手动|网络连接异常|未导入|未配置|未找到)/.test(rawStatus)) {
+      return rawStatus;
     }
     return `未获取二维码，请先点击获取二维码`;
   }

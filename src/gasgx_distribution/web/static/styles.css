@@ -4533,6 +4533,33 @@ body.sidebar-collapsed .terminal-init-modal {
   cursor: pointer;
 }
 
+.terminal-qr-image-button.loading-state {
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  border: 1px dashed rgba(148, 163, 184, 0.45);
+  background: rgba(255, 255, 255, 0.88);
+  color: #334155;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  cursor: wait;
+}
+
+.terminal-qr-image-button.loading-state .btn-spinner {
+  width: 18px;
+  height: 18px;
+  border-color: rgba(51, 65, 85, 0.22);
+  border-top-color: var(--term-color);
+}
+
+.terminal-qr-loading-text {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .terminal-qr-image-button.expired {
   cursor: pointer;
 }
