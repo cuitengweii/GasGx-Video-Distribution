@@ -122,7 +122,7 @@ NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 BRAND_INLINE_ASSET_MAX_CHARS = int(os.getenv("GASGX_BRAND_INLINE_ASSET_MAX_CHARS", "200000") or 200000)
 BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_account_prefix,created_at,updated_at"
-TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", "60") or 60)
+TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", "5") or 5)
 TERMINAL_QR_EXPIRY_SECONDS = int(os.getenv("GASGX_TERMINAL_QR_EXPIRY_SECONDS", "60") or 60)
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
 SUPER_ADMIN_PASSWORD = "cuitengwei2023"
@@ -161,6 +161,41 @@ def _account_slug(account_key: str) -> str:
     if not token:
         raise ValueError("account_key is required")
     return token[:80]
+
+
+def _looks_like_mojibake(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if "?" in value and not re.search(r"[\u4e00-\u9fff]", value):
+        return True
+    mojibake_markers = ("澶", "鐕", "鍙", "鎸", "娴", "彂", "æ", "ç", "å")
+    return any(marker in value for marker in mojibake_markers)
+
+
+def _normalize_account_display_name(account: dict[str, Any], *, fallback_prefix: str = "账号") -> str:
+    account_id = int(account.get("id") or 0)
+    account_key = str(account.get("account_key") or "").strip()
+    raw = str(account.get("display_name") or "").strip()
+    if raw and not _looks_like_mojibake(raw):
+        return raw
+    if account_key and not _looks_like_mojibake(account_key):
+        return account_key
+    return f"{fallback_prefix} {account_id}" if account_id > 0 else fallback_prefix
+
+
+def _normalize_account_niche(account: dict[str, Any]) -> str:
+    raw = str(account.get("niche") or "").strip()
+    if not raw or _looks_like_mojibake(raw):
+        return ""
+    return raw
+
+
+def _normalize_account_runtime(account: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(account)
+    normalized["display_name"] = _normalize_account_display_name(normalized)
+    normalized["niche"] = _normalize_account_niche(normalized)
+    return normalized
 
 
 def _stable_int(seed: str, modulo: int) -> int:
@@ -1978,6 +2013,12 @@ def _write_terminal_qr_data_url_cache(window_id: int, data_url: str) -> str:
 def _public_terminal_window(window: dict[str, Any]) -> dict[str, Any]:
     visible = copy.deepcopy(window)
     visible.pop("qr_data_url", None)
+    accounts = visible.get("accounts") or []
+    if isinstance(accounts, list):
+        visible["accounts"] = [
+            _normalize_account_runtime(account) if isinstance(account, dict) else account
+            for account in accounts
+        ]
     window_id = int(visible.get("id") or 0)
     qr_path = str(visible.get("qr_path") or "").strip()
     qr_url = str(visible.get("qr_url") or "").strip()
@@ -2053,6 +2094,11 @@ def _load_terminal_state() -> dict[str, Any]:
                 except Exception:
                     window["qr_url"] = ""
                     window["qr_path"] = ""
+            accounts = window.get("accounts") or []
+            if isinstance(accounts, list):
+                for account in accounts:
+                    if isinstance(account, dict):
+                        account.update(_normalize_account_runtime(account))
     return payload
 
 
@@ -2510,6 +2556,31 @@ def _find_windows_chrome_pid_by_debug_port(
     return 0
 
 
+def _raise_windows_chrome_window(debug_port: int, profile_dir: str) -> bool:
+    if os.name != "nt" or int(debug_port or 0) <= 0:
+        return False
+    try:
+        process_rows = _list_windows_chrome_processes()
+        pid = _find_windows_chrome_pid_by_debug_port(debug_port, profile_dir, processes=process_rows)
+        if pid <= 0:
+            return False
+        return bool(engine._set_windows_process_window_mode(int(pid), "normal"))  # type: ignore[attr-defined]
+    except Exception:
+        return False
+
+
+def _raise_account_browser_window(account_id: int, platform_name: str = "wechat") -> bool:
+    runtime = _terminal_browser_runtime_for_account(account_id, platform_name)
+    try:
+        debug_port = int(runtime.get("debug_port") or 0)
+    except Exception:
+        debug_port = 0
+    profile_dir = str(runtime.get("profile_dir") or "").strip()
+    if debug_port <= 0 or not profile_dir:
+        return False
+    return _raise_windows_chrome_window(debug_port, profile_dir)
+
+
 def _apply_windows_chrome_window_color(
     debug_port: int,
     profile_dir: str,
@@ -2615,7 +2686,7 @@ def _terminal_color_title_badge(color: str) -> str:
     return mapping.get(token, "")
 
 
-def _inject_terminal_account_browser_marker(account_id: int, platform: str, color: str) -> bool:
+def _inject_terminal_account_browser_marker(account_id: int, platform: str, color: str, terminal_window_id: int = 0) -> bool:
     account = get_account(account_id)
     if account is None:
         return False
@@ -2632,6 +2703,7 @@ def _inject_terminal_account_browser_marker(account_id: int, platform: str, colo
         capability,
         accent_override=color,
         title_badge=_terminal_color_title_badge(color),
+        terminal_window_id=terminal_window_id,
     )
 
 
@@ -2807,7 +2879,8 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
     try:
         open_result = open_account_browser(account_id, "wechat")
         _apply_account_browser_window_color(open_result, str(window.get("color") or ""))
-        _inject_terminal_account_browser_marker(account_id, "wechat", str(window.get("color") or ""))
+        _inject_terminal_account_browser_marker(account_id, "wechat", str(window.get("color") or ""), int(window.get("id") or 0))
+        _raise_windows_chrome_window(int(open_result.get("debug_port") or 0), str(open_result.get("profile_dir") or ""))
         current["status"] = "waiting_qr"
         current["status_text"] = "请在已打开浏览器扫码"
     except Exception as exc:
@@ -2936,7 +3009,17 @@ def _normalize_terminal_window_runtime(window: dict[str, Any]) -> bool:
         changed = True
     for index, account in enumerate(accounts):
         if not isinstance(account, dict) or not _terminal_account_has_legacy_manual_confirm_failure(account):
+            if isinstance(account, dict):
+                normalized_account = _normalize_account_runtime(account)
+                if normalized_account != account:
+                    accounts[index] = normalized_account
+                    changed = True
             continue
+        normalized_account = _normalize_account_runtime(account)
+        if normalized_account != account:
+            accounts[index] = normalized_account
+            account = normalized_account
+            changed = True
         if index < current_index:
             _clear_terminal_account_error(account)
             account["status"] = "success"
@@ -3277,6 +3360,87 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
     return True
 
 
+def _poll_terminal_publish_runs(windows: list[dict[str, Any]]) -> bool:
+    changed = False
+    for window in windows:
+        run = window.get("publish_run")
+        if not isinstance(run, dict) or str(run.get("status") or "").strip().lower() != "running":
+            continue
+        pid = int(run.get("pid") or 0)
+        current_index = int(window.get("current_index") or 0)
+        accounts = window.get("accounts") or []
+        if current_index >= len(accounts):
+            _clear_terminal_publish_run(window)
+            changed = True
+            continue
+        current = accounts[current_index]
+        if not _terminal_run_matches_current(run, current):
+            _clear_terminal_publish_run(window)
+            changed = True
+            continue
+
+        evidence_ok = False
+        try:
+            from . import matrix_publish as mp
+            evidence_ok = mp._has_publish_evidence(Path(str(run.get("workspace") or "")), "wechat")
+        except Exception:
+            evidence_ok = False
+        run["evidence_ok"] = evidence_ok
+        success_inferred_from_log = _terminal_publish_log_has_success_marker(run)
+        run["success_inferred_from_log"] = success_inferred_from_log
+        if evidence_ok or success_inferred_from_log:
+            run["status"] = "success"
+            run["finished_at"] = now_ts()
+            run.pop("error_stage", None)
+            run.pop("error_title", None)
+            run.pop("error", None)
+            _clear_terminal_account_error(current)
+            current["status"] = "running"
+            current["status_text"] = "发布完成，等待人工确认"
+            changed = True
+            continue
+
+        if pid <= 0:
+            run["status"] = "failed"
+            run["finished_at"] = now_ts()
+            run["error"] = "invalid publish pid"
+            run["error_stage"] = "publish_run"
+            run["error_title"] = "发布执行失败"
+            _set_terminal_account_error(
+                current,
+                stage="publish_run",
+                title="发布执行失败",
+                message="发布失败：进程无效",
+            )
+            changed = True
+            continue
+        if _pid_is_running(pid):
+            _clear_terminal_account_error(current)
+            current["status"] = "running"
+            current["status_text"] = "发布执行中..."
+            changed = True
+            continue
+
+        run["finished_at"] = now_ts()
+        reason = _terminal_publish_failure_reason(run) if isinstance(run, dict) else "未检测到发布证据"
+        run["status"] = "failed"
+        run["error"] = reason if reason != "未检测到发布证据" else "发布流程已执行，但未检测到视频号发布成功记录"
+        run["error_stage"] = "publish_run"
+        if _terminal_run_is_manual_confirmable(run):
+            run["error_title"] = "发布结果待人工确认"
+            _set_terminal_account_waiting_publish_confirm(current)
+        else:
+            run["error_title"] = "发布执行失败"
+            _set_terminal_account_error(
+                current,
+                stage="publish_run",
+                title="发布执行失败",
+                message=f"发布失败：{reason}",
+            )
+        changed = True
+    return changed
+
+
 def poll_terminal_execution() -> dict[str, Any]:
     state = _load_terminal_state()
     if not bool(state.get("login_started")):
@@ -3286,77 +3450,16 @@ def poll_terminal_execution() -> dict[str, Any]:
     normalized = False
     for window in windows:
         normalized = _normalize_terminal_window_runtime(window) or normalized
-    if now < int(state.get("next_probe_at") or 0):
-        if normalized:
+    publish_changed = _poll_terminal_publish_runs(windows)
+    next_probe_at = int(state.get("next_probe_at") or 0)
+    if next_probe_at and next_probe_at - now > TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS:
+        state["next_probe_at"] = 0
+        next_probe_at = 0
+    if now < next_probe_at:
+        if normalized or publish_changed:
             _save_terminal_state(state)
         return terminal_execution_state()
     if windows:
-        for window in windows:
-            run = window.get("publish_run")
-            if not isinstance(run, dict) or str(run.get("status") or "").strip().lower() != "running":
-                continue
-            pid = int(run.get("pid") or 0)
-            current_index = int(window.get("current_index") or 0)
-            accounts = window.get("accounts") or []
-            if current_index >= len(accounts):
-                _clear_terminal_publish_run(window)
-                continue
-            current = accounts[current_index]
-            if not _terminal_run_matches_current(run, current):
-                _clear_terminal_publish_run(window)
-                continue
-            if pid <= 0:
-                run["status"] = "failed"
-                run["finished_at"] = now_ts()
-                run["error"] = "invalid publish pid"
-                run["error_stage"] = "publish_run"
-                run["error_title"] = "发布执行失败"
-                _set_terminal_account_error(
-                    current,
-                    stage="publish_run",
-                    title="发布执行失败",
-                    message="发布失败：进程无效",
-                )
-                continue
-            if _pid_is_running(pid):
-                _clear_terminal_account_error(current)
-                current["status"] = "running"
-                current["status_text"] = "发布执行中..."
-                continue
-            evidence_ok = False
-            try:
-                from . import matrix_publish as mp
-                evidence_ok = mp._has_publish_evidence(Path(str(run.get("workspace") or "")), "wechat")
-            except Exception:
-                evidence_ok = False
-            run["evidence_ok"] = evidence_ok
-            success_inferred_from_log = _terminal_publish_log_has_success_marker(run)
-            run["success_inferred_from_log"] = success_inferred_from_log
-            run["finished_at"] = now_ts()
-            if evidence_ok or success_inferred_from_log:
-                run["status"] = "success"
-                run.pop("error_stage", None)
-                run.pop("error_title", None)
-                run.pop("error", None)
-                _clear_terminal_account_error(current)
-                current["status"] = "running"
-                current["status_text"] = "发布完成，等待人工确认"
-            else:
-                reason = _terminal_publish_failure_reason(run) if isinstance(run, dict) else "未检测到发布证据"
-                run["status"] = "failed"
-                run["error"] = reason if reason != "未检测到发布证据" else "发布流程已执行，但未检测到视频号发布成功记录"
-                run["error_stage"] = "publish_run"
-                if _terminal_run_is_manual_confirmable(run):
-                    run["error_title"] = "发布结果待人工确认"
-                    _set_terminal_account_waiting_publish_confirm(current)
-                else:
-                    run["error_title"] = "发布执行失败"
-                    _set_terminal_account_error(
-                        current,
-                        stage="publish_run",
-                        title="发布执行失败",
-                        message=f"发布失败：{reason}",
-                    )
         for window in windows:
             _advance_terminal_window(window)
         state["probe_cursor"] = 0
@@ -3450,6 +3553,19 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
     next_index = next((index for index, item in enumerate(accounts) if int(item.get("id") or 0) == int(account_id)), -1)
     if next_index < 0:
         raise KeyError("account not found")
+    if current is not None and int(current.get("id") or 0) == int(account_id):
+        runtime = _terminal_browser_runtime_for_account(int(account_id), "wechat")
+        if runtime.get("browser_open") is True:
+            _inject_terminal_account_browser_marker(int(account_id), "wechat", str(target.get("color") or ""), int(target.get("id") or 0))
+            _raise_account_browser_window(int(account_id), "wechat")
+            _clear_terminal_account_error(current)
+            current["status"] = "waiting_qr"
+            current["status_text"] = "请在已打开浏览器扫码"
+            current["task_id"] = None
+            target["manual_available_at"] = 0
+            state["next_probe_at"] = 0
+            _save_terminal_state(state)
+            return terminal_execution_state()
     _clear_terminal_publish_run(target)
     target.pop("completed", None)
     target["current_index"] = next_index
@@ -4093,6 +4209,7 @@ def list_accounts() -> list[dict[str, Any]]:
     with connect() as conn:
         accounts = [dict_from_row(row) for row in conn.execute("SELECT * FROM matrix_accounts ORDER BY id DESC")]
         for account in accounts:
+            account.update(_normalize_account_runtime(account))
             platforms = conn.execute(
                 """
                 SELECT ap.*, bp.profile_dir, bp.debug_port, bp.fingerprint_json
@@ -4132,6 +4249,7 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         if row is None:
             return None
         account = dict_from_row(row)
+        account.update(_normalize_account_runtime(account))
         account["publish_success_count"] = _matrix_publish_success_counts().get(int(account_id), 0)
         account["platforms"] = [
             _decode_platform_profile(dict_from_row(item))
@@ -4174,7 +4292,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "account_key": account_key,
                 "display_name": display_name,
-                "niche": str(payload.get("niche") or "").strip(),
+                "niche": _normalize_account_niche({"niche": payload.get("niche")}),
                 "status": str(payload.get("status") or "active").strip() or "active",
                 "notes": str(payload.get("notes") or "").strip(),
                 "created_at": ts,
@@ -4239,7 +4357,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             "id": account_id,
             "account_key": account_key,
             "display_name": display_name,
-            "niche": str(payload.get("niche") or "").strip(),
+            "niche": _normalize_account_niche({"niche": payload.get("niche")}),
             "status": str(payload.get("status") or "active").strip() or "active",
             "notes": str(payload.get("notes") or "").strip(),
             "created_at": account.get("created_at", ts),
@@ -4264,7 +4382,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
                 (
                     account_key,
                     display_name,
-                    str(payload.get("niche") or "").strip(),
+                    _normalize_account_niche({"niche": payload.get("niche")}),
                     str(payload.get("status") or "active").strip() or "active",
                     str(payload.get("notes") or "").strip(),
                     ts,
@@ -4355,6 +4473,7 @@ def repair_account_configs() -> dict[str, Any]:
     with connect() as conn:
         accounts = conn.execute("SELECT id FROM matrix_accounts ORDER BY id ASC").fetchall()
         for account in accounts:
+            account.update(_normalize_account_runtime(account))
             account_id = int(account["id"])
             checked_accounts += 1
             existing_platforms = {
@@ -4575,20 +4694,14 @@ def _account_browser_marker_payload(
     capability: Any,
     accent_override: str | None = None,
     title_badge: str = "",
+    terminal_window_id: int = 0,
 ) -> dict[str, Any]:
     account_id = int(account.get("id") or 0)
     display_name = str(account.get("display_name") or account.get("account_key") or f"Account {account_id}").strip()
     account_key = str(account.get("account_key") or "").strip()
-    handle = str(platform_profile.get("handle") or "").strip()
     platform_label = str(getattr(capability, "label", "") or getattr(capability, "key", "") or "").strip()
-    operator = _account_operator_wechat(account)
-    details = [f"ID {account_id}"]
-    if account_key and account_key != display_name:
-        details.append(account_key)
-    if handle:
-        details.append(handle if handle.startswith("@") else f"@{handle}")
-    if operator and operator != "未绑定运营微信":
-        details.append(f"运营微信 {operator}")
+    window_id = int(terminal_window_id or 0)
+    window_label = f"终端执行窗口 {window_id:02d}" if window_id > 0 else ""
     palette = ["#3B82F6", "#F97316", "#A855F7", "#22C55E", "#EAB308", "#06B6D4"]
     seed = account_id or sum(ord(ch) for ch in account_key or display_name)
     accent = str(accent_override or "").strip()
@@ -4598,9 +4711,10 @@ def _account_browser_marker_payload(
         "account_id": account_id,
         "title": display_name,
         "platform": platform_label,
-        "meta": " · ".join(details),
+        "meta": "",
         "accent": accent,
         "title_badge": str(title_badge or "").strip(),
+        "window_label": window_label,
     }
 
 
@@ -4612,7 +4726,7 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const install = () => {{
     const parent = document.body || document.documentElement;
     if (!parent) return false;
-    const markerKey = `v2:${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.meta || ''}}`;
+    const markerKey = `v3:${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.window_label || ''}}`;
     let el = document.getElementById('gasgx-account-marker');
     if (!el) {{
       el = document.createElement('div');
@@ -4642,7 +4756,8 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     ].join(';');
     el.innerHTML = '';
     const brand = document.createElement('div');
-    brand.textContent = marker.platform ? `当前账号 · GasGx · ${{marker.platform}}` : '当前账号 · GasGx';
+    const topLabel = marker.window_label || '当前账号';
+    brand.textContent = marker.platform ? `${{topLabel}} · GasGx · ${{marker.platform}}` : `${{topLabel}} · GasGx`;
     brand.style.cssText = [
       `color:${{marker.accent || '#5dd62c'}}`,
       'font-size:13px',
@@ -4748,6 +4863,7 @@ def _inject_account_browser_marker(
     capability: Any,
     accent_override: str | None = None,
     title_badge: str = "",
+    terminal_window_id: int = 0,
 ) -> bool:
     try:
         debug_port = int(platform_profile.get("debug_port") or 0)
@@ -4761,6 +4877,7 @@ def _inject_account_browser_marker(
         capability,
         accent_override=accent_override,
         title_badge=title_badge,
+        terminal_window_id=terminal_window_id,
     )
     script = _account_browser_marker_script(payload)
     applied = False

@@ -1382,13 +1382,82 @@ function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
 
-function setTerminalFullLoading(active, message = "终端执行页面加载中，请稍候...") {
+function terminalActiveWindowCount(terminalState = state.terminalExecution) {
+  return (terminalState?.windows || []).filter((window) => {
+    const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
+    return Number(window?.current_index || 0) < accounts.length;
+  }).length;
+}
+
+function terminalBrowserLoadingTitle(terminalState = state.terminalExecution) {
+  const count = terminalActiveWindowCount(terminalState);
+  return count > 0 ? `正在打开 ${count} 个登录浏览器，请稍候...` : "正在打开登录浏览器，请稍候...";
+}
+
+function terminalBrowserLoadingDetail() {
+  return "Chrome 窗口会依次弹出，全部拉起后再显示扫码队列，请不要重复点击。";
+}
+
+function terminalNeedsBrowserWarmup(terminalState = state.terminalExecution) {
+  if (terminalCurrentRoute() !== "wechat") return false;
+  if (!terminalState?.login_started) return false;
+  return (terminalState.windows || []).some((window) => {
+    const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
+    const current = accounts[Number(window?.current_index || 0)] || {};
+    const status = String(current?.status || "").toLowerCase();
+    return status === "pending" || status === "opening";
+  });
+}
+
+async function warmTerminalBrowsersBeforeRender(message = "") {
+  if (!terminalNeedsBrowserWarmup()) return false;
+  setTerminalFullLoading(true, message || terminalBrowserLoadingTitle(), terminalBrowserLoadingDetail());
+  try {
+    const nextState = await api("/api/terminal-execution/poll", { method: "POST" });
+    state.terminalExecution = { ...nextState, loading: false };
+    return true;
+  } finally {
+    setTerminalFullLoading(false);
+  }
+}
+
+async function startTerminalWechatLoginWithLoading(button = null) {
+  const restoreButton = setButtonLoading(button, "打开中");
+  setTerminalFullLoading(true, terminalBrowserLoadingTitle(), terminalBrowserLoadingDetail());
+  try {
+    if (!state.terminalExecution.initialized || state.terminalConfigOpen) {
+      state.terminalExecution = await api("/api/terminal-execution/start", {
+        method: "POST",
+        body: JSON.stringify({ windows: readTerminalConfigRows() }),
+      });
+      updateTerminalFullLoading(terminalBrowserLoadingTitle(), terminalBrowserLoadingDetail());
+    }
+    state.terminalExecution = await api("/api/terminal-execution/start-login", { method: "POST" });
+    state.terminalQrVisible = true;
+    state.terminalConfigOpen = false;
+    renderTerminalExecution();
+    return state.terminalExecution;
+  } finally {
+    restoreButton();
+    setTerminalFullLoading(false);
+  }
+}
+
+function updateTerminalFullLoading(message, detail = "") {
   const mask = document.querySelector("#terminal-full-loading");
   if (!mask) return;
   const textNode = mask.querySelector("[data-terminal-loading-text]");
+  const detailNode = mask.querySelector("[data-terminal-loading-detail]");
+  if (textNode && message) textNode.textContent = message;
+  if (detailNode && detail) detailNode.textContent = detail;
+}
+
+function setTerminalFullLoading(active, message = "终端执行页面加载中，请稍候...", detail = "正在同步窗口状态、账号进度和二维码缓存。") {
+  const mask = document.querySelector("#terminal-full-loading");
+  if (!mask) return;
   if (active) {
     terminalFullLoadingCount += 1;
-    if (textNode) textNode.textContent = message;
+    updateTerminalFullLoading(message, detail);
     mask.classList.remove("hidden");
     mask.setAttribute("aria-hidden", "false");
     return;
@@ -2065,7 +2134,11 @@ function terminalColorByIndex(index, terminalState = state.terminalExecution) {
 
 function terminalSlotLabel(slotIndex) {
   const normalized = Number(slotIndex) || 0;
-  return String.fromCharCode(65 + Math.max(0, normalized));
+  return String(Math.max(0, normalized) + 1).padStart(2, "0");
+}
+
+function terminalWindowLabel(windowId) {
+  return `终端执行窗口 ${String(Number(windowId) || 0).padStart(2, "0")}`;
 }
 
 function readTerminalConfigRows(rootTarget = "#terminal-config-list") {
@@ -2169,7 +2242,7 @@ function renderTerminalConfig(rootTarget = "#terminal-config-list", terminalStat
     <div class="terminal-config-row ${row.enabled ? "" : "disabled"}" data-terminal-config-row="${row.slot_id}">
       <label class="terminal-config-left">
         <input type="checkbox" class="terminal-checkbox" data-terminal-enabled ${row.enabled ? "checked" : ""}>
-        <span>终端 ${row.slot_label}</span>
+        <span>终端执行窗口 ${row.slot_label}</span>
       </label>
       <select class="terminal-wx-select" data-terminal-operator ${row.enabled ? "" : "disabled"}>
         ${operators.map((operator) => `<option value="${operator.operator_wechat}" ${operator.operator_wechat === row.operator_wechat ? "selected" : ""}>${operator.operator_wechat}</option>`).join("") || `<option value="">暂无绑定运营微信</option>`}
@@ -2527,9 +2600,9 @@ function terminalQrImageMarkup(window, currentAccountId) {
   }
   if (qrState.placeholderState === "browser") {
     return `
-      <button class="terminal-qr-image-button browser-state" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="打开登录浏览器">
+      <button class="terminal-qr-image-button browser-state" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="已打开浏览器，点击显示窗口">
         ${terminalPlaceholderIcon()}
-        <span class="terminal-qr-loading-text">请在已打开浏览器扫码</span>
+        <span class="terminal-qr-loading-text">已打开浏览器<br>点击显示窗口</span>
       </button>
     `;
   }
@@ -2628,7 +2701,7 @@ function terminalWechatWindowMarkup(window, loginStarted) {
       <div class="terminal-color-anchor"></div>
       <div class="terminal-col-header">
         <div class="terminal-col-header-top">
-          <span style="font-weight:700;font-size:16px;">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
+          <span style="font-weight:700;font-size:16px;">${terminalWindowLabel(window.id)}</span>
           <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
         </div>
         <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
@@ -4457,8 +4530,9 @@ async function loadViewData(view, { force = false } = {}) {
         const terminalState = await api("/api/terminal-execution/state");
         if (currentView === "terminal-execution") {
           state.terminalExecution = { ...terminalState, loading: false };
+          await warmTerminalBrowsersBeforeRender("正在恢复登录浏览器，请稍候...");
+          renderTerminalExecution();
         }
-        renderTerminalExecution();
         loadAccounts()
           .then(() => {
             if (currentView === "terminal-execution") {
@@ -5008,20 +5082,10 @@ document.querySelector("#terminal-save-platform-config")?.addEventListener("clic
 });
 
 document.querySelector("#terminal-start-login-legacy")?.addEventListener("click", async (event) => {
-  const restoreButton = setButtonLoading(event.currentTarget, "启动中");
   try {
-    if (!state.terminalExecution.initialized || state.terminalConfigOpen) {
-      state.terminalExecution = await api("/api/terminal-execution/start", {
-        method: "POST",
-        body: JSON.stringify({ windows: readTerminalConfigRows() }),
-      });
-    }
-    state.terminalExecution = await api("/api/terminal-execution/start-login", { method: "POST" });
-    state.terminalQrVisible = true;
-    state.terminalConfigOpen = false;
-    renderTerminalExecution();
-  } finally {
-    restoreButton();
+    await startTerminalWechatLoginWithLoading(event.currentTarget);
+  } catch (error) {
+    window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
   }
 });
 
@@ -5849,8 +5913,10 @@ document.addEventListener("click", async (event) => {
   const terminalCloseConfig = event.target.closest("[data-terminal-close-config]");
   const embeddedStart = event.target.closest("[data-terminal-start-action]");
   const embeddedEdit = event.target.closest("[data-terminal-edit-action]");
-  if (!enter && !configJump && !longDetect && !longOpen && !terminalSave && !terminalCloseInit && !terminalCloseConfig && !embeddedStart && !embeddedEdit) return;
-  if (terminalSave || terminalCloseInit || terminalCloseConfig || enter || configJump || longDetect || longOpen || embeddedStart || embeddedEdit) {
+  const terminalStart = event.target.closest("#terminal-start-login");
+  const terminalEdit = event.target.closest("#terminal-edit-config");
+  if (!enter && !configJump && !longDetect && !longOpen && !terminalSave && !terminalCloseInit && !terminalCloseConfig && !embeddedStart && !embeddedEdit && !terminalStart && !terminalEdit) return;
+  if (terminalSave || terminalCloseInit || terminalCloseConfig || enter || configJump || longDetect || longOpen || embeddedStart || embeddedEdit || terminalStart || terminalEdit) {
     event.stopImmediatePropagation();
   }
   if (terminalCloseInit) {
@@ -5898,16 +5964,11 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (route === "wechat") {
-      if (!state.terminalExecution.initialized || state.terminalConfigOpen) {
-        state.terminalExecution = await api("/api/terminal-execution/start", {
-          method: "POST",
-          body: JSON.stringify({ windows: readTerminalConfigRows() }),
-        });
+      try {
+        await startTerminalWechatLoginWithLoading(embeddedStart);
+      } catch (error) {
+        window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
       }
-      state.terminalExecution = await api("/api/terminal-execution/start-login", { method: "POST" });
-      state.terminalQrVisible = true;
-      state.terminalConfigOpen = false;
-      renderTerminalExecution();
       return;
     }
     const account = terminalLongSessionAccounts(route)[0];
@@ -5935,11 +5996,23 @@ document.addEventListener("click", async (event) => {
   if (enter) {
     const nextRoute = enter.dataset.terminalEnter || "hub";
     const fromHubRoute = window.location.hash === "#terminal-execution";
+    const warmAfterEnter = nextRoute === "wechat" && Boolean(state.terminalExecution?.login_started);
+    if (warmAfterEnter) {
+      setTerminalFullLoading(true, "正在恢复登录浏览器，请稍候...", terminalBrowserLoadingDetail());
+    }
     terminalSetRoute(nextRoute);
-    const shouldShowGuide = fromHubRoute
-      && nextRoute !== "hub"
-      && Boolean(enter.closest(".terminal-entry-card .terminal-entry-actions"));
-    if (shouldShowGuide) showTerminalFlowGuideModal(nextRoute);
+    try {
+      if (warmAfterEnter) {
+        await warmTerminalBrowsersBeforeRender("正在恢复登录浏览器，请稍候...");
+        renderTerminalExecution();
+      }
+      const shouldShowGuide = fromHubRoute
+        && nextRoute !== "hub"
+        && Boolean(enter.closest(".terminal-entry-card .terminal-entry-actions"));
+      if (shouldShowGuide) showTerminalFlowGuideModal(nextRoute);
+    } finally {
+      if (warmAfterEnter) setTerminalFullLoading(false);
+    }
     return;
   }
   if (configJump) {
@@ -5977,16 +6050,11 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (route === "wechat") {
-      if (!state.terminalExecution.initialized || state.terminalConfigOpen) {
-        state.terminalExecution = await api("/api/terminal-execution/start", {
-          method: "POST",
-          body: JSON.stringify({ windows: readTerminalConfigRows() }),
-        });
+      try {
+        await startTerminalWechatLoginWithLoading(terminalStart);
+      } catch (error) {
+        window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
       }
-      state.terminalExecution = await api("/api/terminal-execution/start-login", { method: "POST" });
-      state.terminalQrVisible = true;
-      state.terminalConfigOpen = false;
-      renderTerminalExecution();
       return;
     }
     const account = terminalLongSessionAccounts(route)[0];

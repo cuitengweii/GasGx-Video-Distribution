@@ -1631,6 +1631,7 @@ def test_account_browser_marker_uses_cdp_current_and_future_documents(monkeypatc
         {"id": 7, "account_key": "gasgx-test", "display_name": "GasGx test", "notes": "运营微信: aamecc"},
         {"debug_port": 12007, "handle": "wechat-handle"},
         FakeCapability(),
+        terminal_window_id=3,
     )
 
     assert ok is True
@@ -1639,7 +1640,8 @@ def test_account_browser_marker_uses_cdp_current_and_future_documents(monkeypatc
     assert "Runtime.evaluate" in methods
     source = next(item["params"]["source"] for item in sent if item["method"] == "Page.addScriptToEvaluateOnNewDocument")
     assert "GasGx test" in source
-    assert "aamecc" in source
+    assert "终端执行窗口 03" in source
+    assert "aamecc" not in source
     assert "当前账号" in source
     assert "GasGx-" in source
 
@@ -1889,6 +1891,58 @@ def test_terminal_execution_state_exposes_platform_breakdown(monkeypatch, tmp_pa
     assert data["platform_capabilities"]["wechat"]["sessionPolicy"] == "daily_qr"
     assert data["platform_capabilities"]["douyin"]["sessionPolicy"] == "persistent"
     assert data["profile_by_platform"]["wechat"]["browserRuntime"] == "terminal-execution"
+
+
+def test_terminal_account_names_fall_back_when_legacy_data_contains_question_marks(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-legacy-01", "display_name": "GasGx Legacy 01", "platforms": ["wechat"]})
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE matrix_accounts SET display_name = ?, niche = ? WHERE id = ?",
+            ("GasGx ????", "?????", account["id"]),
+        )
+        conn.commit()
+
+    service._invalidate_terminal_execution_state_cache()
+
+    accounts = service.list_accounts()
+    updated = next(item for item in accounts if int(item["id"]) == int(account["id"]))
+    assert updated["display_name"] == "gasgx-legacy-01"
+    assert updated["niche"] == ""
+
+    runtime_dir = tmp_path / "runtime"
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "current_index": 0,
+                        "accounts": [
+                            {
+                                "id": int(account["id"]),
+                                "account_key": "gasgx-legacy-01",
+                                "display_name": "GasGx ????",
+                                "status": "waiting_qr",
+                                "status_text": "等待扫码",
+                                "task_id": None,
+                            }
+                        ],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service._invalidate_terminal_execution_state_cache()
+    terminal_state = service.terminal_execution_state()
+    terminal_account = terminal_state["windows"][0]["accounts"][0]
+    assert terminal_account["display_name"] == "gasgx-legacy-01"
 
 
 def test_terminal_execution_state_normalizes_legacy_qr_data_url(monkeypatch, tmp_path: Path) -> None:
@@ -2569,7 +2623,7 @@ def test_terminal_poll_resolves_publish_run_success(monkeypatch, tmp_path: Path)
                 "config": [],
                 "initialized": True,
                 "login_started": True,
-                "next_probe_at": 0,
+                "next_probe_at": 999,
             },
             ensure_ascii=False,
         ),
@@ -3065,6 +3119,7 @@ def test_terminal_poll_ignores_stale_publish_run_for_current_account(monkeypatch
         encoding="utf-8",
     )
     monkeypatch.setattr(service, "now_ts", lambda: 100)
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: {"status": "login_required"})
 
     result = service.poll_terminal_execution()
 
@@ -3072,7 +3127,7 @@ def test_terminal_poll_ignores_stale_publish_run_for_current_account(monkeypatch
     assert window["current_index"] == 1
     assert window["publish_run"] == {}
     assert window["accounts"][1]["status"] == "waiting_qr"
-    assert window["accounts"][1]["status_text"] == "waiting qr"
+    assert window["accounts"][1]["status_text"] == "请在已打开浏览器扫码"
 
 
 def test_terminal_confirm_ignores_stale_publish_run(monkeypatch, tmp_path: Path) -> None:

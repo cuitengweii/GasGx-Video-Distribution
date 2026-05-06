@@ -33,9 +33,13 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert 'data-terminal-confirm-success' in app
     assert 'data-terminal-qr-refresh' in app
     assert 'data-terminal-qr-countdown' in app
+    assert '已打开浏览器<br>点击显示窗口' in app
+    assert '已打开浏览器，点击显示窗口' in app
     assert 'terminalQrLifecycle(window)' in app
     assert 'terminalExpiredPlaceholderIcon' in app
     assert 'function terminalSlotLabel' in app
+    assert '终端执行窗口 ${row.slot_label}' in app
+    assert 'function terminalWindowLabel' in app
     assert '#terminal-config-list' in app
     assert '#terminal-save-config, [data-terminal-save-config]' in app
     assert '#terminal-start-system' not in app
@@ -49,6 +53,7 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert '一次登录长期有效；失效后重新检测或重新登录。' in app
     assert 'setInterval(async' not in app
     assert 'installGlobalButtonLoading' in app
+    assert '_raise_account_browser_window' in service
 
 
 def test_terminal_config_does_not_start_login_side_effects() -> None:
