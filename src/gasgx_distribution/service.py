@@ -4047,6 +4047,23 @@ def _profile_for_account_from_rows(account_id: int, platforms: list[dict[str, An
     return None
 
 
+def _profile_dir_matches_account(profile_dir: str, account_key: str) -> bool:
+    expected = str(profile_dir_for(account_key))
+    actual = str(profile_dir or "").strip()
+    if not actual:
+        return False
+    try:
+        expected_norm = engine._normalize_user_data_dir(expected)  # type: ignore[attr-defined]
+        actual_norm = engine._normalize_user_data_dir(actual)  # type: ignore[attr-defined]
+    except Exception:
+        expected_norm = expected.rstrip("\\/")
+        actual_norm = actual.rstrip("\\/")
+        if os.name == "nt":
+            expected_norm = expected_norm.lower()
+            actual_norm = actual_norm.lower()
+    return actual_norm == expected_norm
+
+
 def _video_key(path: Path) -> str:
     stat = path.stat()
     return f"{path.name}|{stat.st_size}|{int(stat.st_mtime)}"
@@ -4443,18 +4460,19 @@ def repair_account_configs() -> dict[str, Any]:
             profile = profiles_by_account.get(account_id)
             profile_missing = profile is None
             profile_fingerprint_missing = bool(profile) and not _json_payload(profile.get("fingerprint_json"), {})
-            if not missing_platforms and not profile_missing and not profile_fingerprint_missing:
+            profile_dir_mismatch = bool(profile) and not _profile_dir_matches_account(str(profile.get("profile_dir") or ""), str(account.get("account_key") or ""))
+            if not missing_platforms and not profile_missing and not profile_fingerprint_missing and not profile_dir_mismatch:
                 continue
             repaired_accounts += 1
             repaired_account_ids.append(account_id)
             for platform in missing_platforms:
                 ensure_account_platform(None, account_id, platform)
                 created_platforms += 1
-            if (profile_missing or profile_fingerprint_missing) and not missing_platforms:
+            if (profile_missing or profile_fingerprint_missing or profile_dir_mismatch) and not missing_platforms:
                 ensure_account_platform(None, account_id, next(iter(existing_platforms), required_platforms[0]))
             if profile_missing:
                 created_profiles += 1
-            elif profile_fingerprint_missing:
+            elif profile_fingerprint_missing or profile_dir_mismatch:
                 updated_profiles += 1
         if repaired_accounts:
             _invalidate_supabase_read_cache("accounts", "dashboard_summary")
@@ -4471,7 +4489,7 @@ def repair_account_configs() -> dict[str, Any]:
 
     ensure_database()
     with connect() as conn:
-        accounts = conn.execute("SELECT id FROM matrix_accounts ORDER BY id ASC").fetchall()
+        accounts = conn.execute("SELECT id, account_key, display_name, niche FROM matrix_accounts ORDER BY id ASC").fetchall()
         for raw_account in accounts:
             account = _normalize_account_runtime(dict(raw_account))
             account_id = int(account["id"])
@@ -4484,18 +4502,19 @@ def repair_account_configs() -> dict[str, Any]:
             profile = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
             profile_missing = profile is None
             profile_fingerprint_missing = bool(profile) and not _json_payload(profile["fingerprint_json"], {})
-            if not missing_platforms and not profile_missing and not profile_fingerprint_missing:
+            profile_dir_mismatch = bool(profile) and not _profile_dir_matches_account(str(profile["profile_dir"] or ""), str(account.get("account_key") or ""))
+            if not missing_platforms and not profile_missing and not profile_fingerprint_missing and not profile_dir_mismatch:
                 continue
             repaired_accounts += 1
             repaired_account_ids.append(account_id)
             for platform in missing_platforms:
                 ensure_account_platform(conn, account_id, platform)
                 created_platforms += 1
-            if (profile_missing or profile_fingerprint_missing) and not missing_platforms:
+            if (profile_missing or profile_fingerprint_missing or profile_dir_mismatch) and not missing_platforms:
                 ensure_account_platform(conn, account_id, next(iter(existing_platforms), required_platforms[0]))
             if profile_missing:
                 created_profiles += 1
-            elif profile_fingerprint_missing:
+            elif profile_fingerprint_missing or profile_dir_mismatch:
                 updated_profiles += 1
     return {
         "ok": True,
@@ -4635,13 +4654,18 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
                     },
                 )
             dirty = True
-        elif not _json_payload(profile.get("fingerprint_json"), {}):
-            update = {"fingerprint_json": fingerprint, "updated_at": ts}
-            if profile.get("account_id") == account_id:
-                client.update("browser_profiles", update, filters={"account_id": account_id})
-            else:
-                client.update("browser_profiles", update, filters={"id": profile["id"]})
-            dirty = True
+        else:
+            update: dict[str, Any] = {"updated_at": ts}
+            if not _json_payload(profile.get("fingerprint_json"), {}):
+                update["fingerprint_json"] = fingerprint
+            if not _profile_dir_matches_account(str(profile.get("profile_dir") or ""), str(account["account_key"])):
+                update["profile_dir"] = str(profile_dir)
+            if len(update) > 1:
+                if profile.get("account_id") == account_id:
+                    client.update("browser_profiles", update, filters={"account_id": account_id})
+                else:
+                    client.update("browser_profiles", update, filters={"id": profile["id"]})
+                dirty = True
         if dirty:
             _invalidate_supabase_read_cache("accounts")
         return ap
@@ -4678,6 +4702,12 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
         "UPDATE browser_profiles SET fingerprint_json = ? WHERE account_id = ? AND (fingerprint_json IS NULL OR fingerprint_json = '' OR fingerprint_json = '{}')",
         (json.dumps(fingerprint, ensure_ascii=False), account_id),
     )
+    profile = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
+    if profile is not None and not _profile_dir_matches_account(str(profile["profile_dir"] or ""), str(ap["account_key"])):
+        conn.execute(
+            "UPDATE browser_profiles SET profile_dir = ?, updated_at = ? WHERE account_id = ?",
+            (str(profile_dir), ts, account_id),
+        )
     profile_dir.mkdir(parents=True, exist_ok=True)
     _enqueue_sync_row(conn, "account_platforms", "account_id = ? AND platform = ?", (account_id, token))
     _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
@@ -4700,6 +4730,7 @@ def _account_browser_marker_payload(
     display_name = str(account.get("display_name") or account.get("account_key") or f"Account {account_id}").strip()
     account_key = str(account.get("account_key") or "").strip()
     platform_label = str(getattr(capability, "label", "") or getattr(capability, "key", "") or "").strip()
+    operator_wechat = _account_operator_wechat(account)
     window_id = int(terminal_window_id or 0)
     window_label = f"终端执行窗口 {window_id:02d}" if window_id > 0 else ""
     palette = ["#3B82F6", "#F97316", "#A855F7", "#22C55E", "#EAB308", "#06B6D4"]
@@ -4711,6 +4742,7 @@ def _account_browser_marker_payload(
         "account_id": account_id,
         "title": display_name,
         "platform": platform_label,
+        "operator_wechat": operator_wechat,
         "meta": "",
         "accent": accent,
         "title_badge": str(title_badge or "").strip(),
@@ -4726,7 +4758,7 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const install = () => {{
     const parent = document.body || document.documentElement;
     if (!parent) return false;
-    const markerKey = `v3:${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.window_label || ''}}`;
+    const markerKey = `v3:${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.window_label || ''}}:${{marker.operator_wechat || ''}}`;
     let el = document.getElementById('gasgx-account-marker');
     if (!el) {{
       el = document.createElement('div');
@@ -4757,12 +4789,13 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     el.innerHTML = '';
     const brand = document.createElement('div');
     const topLabel = marker.window_label || '当前账号';
-    brand.textContent = marker.platform ? `${{topLabel}} · GasGx · ${{marker.platform}}` : `${{topLabel}} · GasGx`;
+    const operatorWechat = String(marker.operator_wechat || '').trim();
+    const contextLabel = operatorWechat ? `运营微信: ${{operatorWechat}}` : (marker.platform ? `GasGx · ${{marker.platform}}` : 'GasGx');
+    brand.textContent = `${{topLabel}} · ${{contextLabel}}`;
     brand.style.cssText = [
       `color:${{marker.accent || '#5dd62c'}}`,
       'font-size:13px',
       'font-weight:900',
-      'text-transform:uppercase',
       'margin-bottom:5px'
     ].join(';');
     const title = document.createElement('div');

@@ -2548,14 +2548,10 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const confirmLabel = hasNext
     ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
     : (publishManualConfirmableFailure ? "已人工确认成功，完成" : "发布成功，完成");
-  const precheckNote = primaryIssue
-    ? `<div class="terminal-precheck-note ${primaryIssue.level}">${primaryIssue.level.toUpperCase()} · ${escapeHtml(primaryIssue.item?.label || "")}：${escapeHtml(primaryIssue.item?.message || "")}</div>`
-    : "";
   return `
     <div class="terminal-window-actions">
       <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${canPublish ? "" : "disabled"}>${publishLabel}</button>
       <button class="terminal-col-btn secondary" type="button" data-terminal-confirm-success="${window.id}" ${canConfirm ? "" : "disabled"}>${confirmLabel}</button>
-      ${precheckNote}
     </div>
   `;
 }
@@ -2688,6 +2684,18 @@ function terminalAccountTaskBadge(account) {
   return "";
 }
 
+function terminalProgressMarkup(accounts, successCount) {
+  const total = Array.isArray(accounts) ? accounts.length : 0;
+  const done = Math.max(0, Number(successCount) || 0);
+  const percent = total ? Math.round((done / total) * 100) : 0;
+  return `
+    <div class="terminal-progress-bar" aria-label="窗口进度 ${done}/${total}">
+      <div class="terminal-progress-fill" style="width:${percent}%;"></div>
+      <span class="terminal-progress-label">${done}/${total}</span>
+    </div>
+  `;
+}
+
 function terminalWechatWindowMarkup(window, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
@@ -2728,7 +2736,7 @@ function terminalWechatWindowMarkup(window, loginStarted) {
         }).join("") || `<div class="muted">暂无账号</div>`}
       </div>
       <div class="terminal-col-footer">
-        <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
+        ${terminalProgressMarkup(accounts, successCount)}
         ${terminalWindowActionButtons(window, current, loginStarted)}
       </div>
     </div>
@@ -2931,7 +2939,7 @@ function renderTerminalExecution() {
           }).join("") || `<div class="muted">暂无账号</div>`}
         </div>
         <div class="terminal-col-footer">
-          <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
+          ${terminalProgressMarkup(accounts, successCount)}
           ${terminalWindowActionButtons(window, current, loginStarted)}
         </div>
       </div>

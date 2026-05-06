@@ -779,6 +779,23 @@ def test_repair_account_configs_api_fills_missing_platforms_and_profile(monkeypa
     assert second["created_platforms"] == 0
     assert second["created_profiles"] == 0
 
+    wrong_profile_dir = tmp_path / "profiles" / "matrix" / "wrong-account"
+    with connect() as conn:
+        before = conn.execute("SELECT debug_port FROM browser_profiles WHERE account_id = ?", (account["id"],)).fetchone()
+        conn.execute("UPDATE browser_profiles SET profile_dir = ? WHERE account_id = ?", (str(wrong_profile_dir), account["id"]))
+        conn.commit()
+
+    third = client.post("/api/accounts/repair-config").json()
+    assert third["repaired_accounts"] == 1
+    assert third["updated_profiles"] == 1
+    with connect() as conn:
+        profile = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account["id"],)).fetchone()
+        assert profile["profile_dir"] == str(service.profile_dir_for(account["account_key"]))
+        assert profile["debug_port"] == before["debug_port"]
+
+    fourth = client.post("/api/accounts/repair-config").json()
+    assert fourth["repaired_accounts"] == 0
+
 
 def test_control_plane_provisions_isolated_brand_databases(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
@@ -1641,7 +1658,8 @@ def test_account_browser_marker_uses_cdp_current_and_future_documents(monkeypatc
     source = next(item["params"]["source"] for item in sent if item["method"] == "Page.addScriptToEvaluateOnNewDocument")
     assert "GasGx test" in source
     assert "终端执行窗口 03" in source
-    assert "aamecc" not in source
+    assert '"operator_wechat": "aamecc"' in source
+    assert "运营微信:" in source
     assert "当前账号" in source
     assert "GasGx-" in source
 
