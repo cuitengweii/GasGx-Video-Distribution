@@ -15,6 +15,14 @@ DEFAULT_COMMON_SETTINGS: dict[str, Any] = {
     "topics": "#天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿",
     "upload_timeout": 60,
     "operator_wechats": ["aamecc", "aalbcc"],
+    "wechat_content_type": "short_video",
+    "wechat_visibility": "public",
+    "wechat_comment_permission": "public",
+    "wechat_collection_name": "GasGx",
+    "wechat_declare_original": False,
+    "wechat_short_title": "GasGx燃气发电挖矿",
+    "wechat_location": "",
+    "wechat_caption": "",
 }
 
 DEFAULT_MATRIX_WECHAT_JOB_SETTINGS: dict[str, Any] = {
@@ -51,9 +59,9 @@ DEFAULT_PLATFORM_SETTINGS: dict[str, Any] = {
 
 DEFAULT_WECHAT_PLATFORM_SETTINGS: dict[str, Any] = {
     **DEFAULT_PLATFORM_SETTINGS,
-    "collection_name": "赛博皮卡天津港现车",
+    "collection_name": "GasGx",
     "declare_original": False,
-    "short_title": "GasGx",
+    "short_title": "GasGx燃气发电挖矿",
     "location": "",
 }
 
@@ -103,6 +111,14 @@ def _normalize_common(payload: dict[str, Any]) -> dict[str, Any]:
     merged["topics"] = str(merged.get("topics") or DEFAULT_COMMON_SETTINGS["topics"]).strip()
     merged["upload_timeout"] = _normalize_timeout(merged.get("upload_timeout"))
     raw_operators = merged.get("operator_wechats")
+    merged["wechat_content_type"] = str(merged.get("wechat_content_type") or DEFAULT_COMMON_SETTINGS["wechat_content_type"]).strip()
+    merged["wechat_visibility"] = str(merged.get("wechat_visibility") or DEFAULT_COMMON_SETTINGS["wechat_visibility"]).strip()
+    merged["wechat_comment_permission"] = str(merged.get("wechat_comment_permission") or DEFAULT_COMMON_SETTINGS["wechat_comment_permission"]).strip()
+    merged["wechat_collection_name"] = str(merged.get("wechat_collection_name") or DEFAULT_COMMON_SETTINGS["wechat_collection_name"]).strip()
+    merged["wechat_declare_original"] = _normalize_bool(merged.get("wechat_declare_original", DEFAULT_COMMON_SETTINGS["wechat_declare_original"]))
+    merged["wechat_short_title"] = str(merged.get("wechat_short_title") or DEFAULT_COMMON_SETTINGS["wechat_short_title"]).strip() or DEFAULT_COMMON_SETTINGS["wechat_short_title"]
+    merged["wechat_location"] = str(merged.get("wechat_location") or DEFAULT_COMMON_SETTINGS["wechat_location"]).strip()
+    merged["wechat_caption"] = str(merged.get("wechat_caption") or DEFAULT_COMMON_SETTINGS["wechat_caption"]).strip()
     if not isinstance(raw_operators, list):
         raw_operators = DEFAULT_COMMON_SETTINGS["operator_wechats"]
     operators = []
@@ -208,10 +224,23 @@ def _normalize_platform(platform: str, payload: dict[str, Any]) -> dict[str, Any
     merged["upload_timeout"] = _normalize_timeout(merged.get("upload_timeout"))
     if platform == "wechat":
         merged["collection_name"] = str(merged.get("collection_name") or "").strip()
-        merged["declare_original"] = _normalize_bool(merged.get("declare_original"))
-        merged["short_title"] = str(merged.get("short_title") or "GasGx").strip() or "GasGx"
+        declare_original = merged.get("declare_original")
+        if str(declare_original or "").strip().lower() == "inherit":
+            merged["declare_original"] = "inherit"
+        else:
+            merged["declare_original"] = _normalize_bool(declare_original)
+        merged["short_title"] = str(merged.get("short_title") or "GasGx燃气发电挖矿").strip() or "GasGx燃气发电挖矿"
         merged["location"] = str(merged.get("location") or "").strip()
     return merged
+
+
+def _resolve_wechat_common_value(value: Any, fallback: Any, *, blank_is_fallback: bool = True) -> Any:
+    if value is None:
+        return fallback
+    text = str(value).strip().lower()
+    if text == "inherit" or (blank_is_fallback and text == ""):
+        return fallback
+    return value
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -280,6 +309,17 @@ def load_platform_publish_settings(platform: str) -> dict[str, Any]:
     upload_timeout = platform_settings.get("upload_timeout")
     if upload_timeout == DEFAULT_PLATFORM_SETTINGS["upload_timeout"]:
         upload_timeout = common["upload_timeout"]
+    if platform == "wechat":
+        platform_settings = {
+            **platform_settings,
+            "content_type": _resolve_wechat_common_value(platform_settings.get("content_type"), common.get("wechat_content_type", "short_video")),
+            "visibility": _resolve_wechat_common_value(platform_settings.get("visibility"), common.get("wechat_visibility", "public")),
+            "comment_permission": _resolve_wechat_common_value(platform_settings.get("comment_permission"), common.get("wechat_comment_permission", "public")),
+            "collection_name": _resolve_wechat_common_value(platform_settings.get("collection_name"), common.get("wechat_collection_name", "GasGx"), blank_is_fallback=False),
+            "declare_original": _resolve_wechat_common_value(platform_settings.get("declare_original"), common.get("wechat_declare_original", False)),
+            "short_title": _resolve_wechat_common_value(platform_settings.get("short_title"), common.get("wechat_short_title", DEFAULT_COMMON_SETTINGS["wechat_short_title"])),
+            "caption": _resolve_wechat_common_value(platform_settings.get("caption"), common.get("wechat_caption", "")),
+        }
     return {
         **platform_settings,
         "material_dir": common["material_dir"],

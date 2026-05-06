@@ -1795,12 +1795,16 @@ def test_terminal_start_login_opens_all_windows_for_current_batch(monkeypatch, t
     monkeypatch.setattr(service, "now_ts", lambda: now["value"])
     monkeypatch.setattr(service, "TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", 10)
     monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
-    monkeypatch.setattr(service, "_write_terminal_qr_cache", lambda window_id, account_id: str(runtime_dir / f"window-{window_id}.png"))
+    monkeypatch.setattr(
+        service,
+        "_write_terminal_qr_cache",
+        lambda window_id, account_id, **_kwargs: str(runtime_dir / f"window-{window_id}.png"),
+    )
 
     service._invalidate_terminal_execution_state_cache()
     first_state = service.start_terminal_login()
 
-    assert opened == [1, 2, 3]
+    assert opened == []
     assert [item["accounts"][0]["status"] for item in first_state["windows"]] == ["waiting_qr", "waiting_qr", "waiting_qr"]
     assert first_state["login_started"] is True
     assert [item["manual_available_at"] for item in first_state["windows"]] == [0, 0, 0]
@@ -1837,16 +1841,216 @@ def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatc
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(service, "_queue_terminal_draft_task", lambda account_id: {"id": 55})
+    monkeypatch.setattr(
+        service,
+        "_start_terminal_wechat_publish",
+        lambda window, current: {
+            "run_id": "run-1",
+            "status": "running",
+            "pid": 1234,
+            "account_id": 1,
+            "workspace": str(runtime_dir / "terminal_publish_runs" / "run-1"),
+            "asset_key": "v1.mp4",
+            "publish_date": "2026-05-06",
+            "log_path": str(runtime_dir / "terminal_publish_runs" / "run-1" / "terminal_wechat_publish.log"),
+        },
+    )
 
     result = service.manual_terminal_publish(1)
 
     window = result["windows"][0]
-    assert window["accounts"][0]["task_id"] == 55
     assert window["accounts"][0]["status"] == "running"
-    assert window["accounts"][0]["status_text"] == "已触发发布，等待人工确认成功"
+    assert window["accounts"][0]["status_text"] == "已启动发布，执行中..."
     assert str(window["qr_url"]).startswith("/api/terminal-execution/windows/1/qr-image")
-    assert window["qr_expires_at"] == 160
+    assert window["qr_expires_at"] > 0
+
+
+def test_terminal_poll_resolves_publish_run_success(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [{"id": 1, "status": "running", "status_text": "?????...", "task_id": None}],
+                        "publish_run": {"status": "running", "pid": 555, "workspace": str(runtime_dir / "w1"), "account_id": 1},
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+                "next_probe_at": 0,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "now_ts", lambda: 100)
+    monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: True)
+    result = service.poll_terminal_execution()
+    window = result["windows"][0]
+    assert window["publish_run"]["status"] == "success"
+    assert window["accounts"][0]["status"] == "running"
+    assert "等待人工确认" in window["accounts"][0]["status_text"]
+
+
+def test_terminal_open_account_qr_sets_error_stage_on_failure(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [{"id": 1, "status": "pending", "status_text": "等待开始登录", "task_id": None, "publish_success_count": 0}],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "_write_terminal_qr_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(service, "open_account_browser", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("browser failed")))
+
+    result = service.open_terminal_account_qr(1, 1)
+
+    window = result["windows"][0]
+    account = window["accounts"][0]
+    assert account["status"] == "error"
+    assert account["error_stage"] == "qr"
+    assert account["error_title"] == "获取二维码失败"
+    assert "browser failed" in account["status_text"]
+
+
+def test_terminal_manual_publish_sets_error_stage_on_missing_material(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [{"id": 1, "status": "waiting_qr", "status_text": "等待扫码中...", "task_id": None, "publish_success_count": 0}],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        service,
+        "get_account",
+        lambda account_id: {
+            "id": account_id,
+            "account_key": "acc-1",
+            "display_name": "acc-1",
+            "platforms": [
+                {
+                    "platform": "wechat",
+                    "profile_dir": str(runtime_dir / "profiles" / "wechat"),
+                    "debug_port": 9333,
+                    "fingerprint": {},
+                }
+            ],
+        },
+    )
+    import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [])
+
+    result = service.manual_terminal_publish(1)
+
+    window = result["windows"][0]
+    account = window["accounts"][0]
+    assert account["status"] == "error"
+    assert account["error_stage"] == "publish_start"
+    assert account["error_title"] == "发布启动失败"
+    assert "no available material for today" in account["status_text"]
+
+
+def test_terminal_poll_marks_publish_run_failure_with_error_stage(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [{"id": 1, "status": "running", "status_text": "发布执行中...", "task_id": None, "publish_success_count": 0}],
+                        "publish_run": {"status": "running", "pid": 555, "workspace": str(runtime_dir / "w1"), "account_id": 1},
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+                "next_probe_at": 0,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "now_ts", lambda: 100)
+    monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: False)
+
+    result = service.poll_terminal_execution()
+
+    window = result["windows"][0]
+    account = window["accounts"][0]
+    assert window["publish_run"]["status"] == "failed"
+    assert account["status"] == "error"
+    assert account["error_stage"] == "publish_run"
+    assert account["error_title"] == "发布执行失败"
+    assert "未检测到发布证据" in account["status_text"]
 
 
 def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path: Path) -> None:
@@ -1929,6 +2133,7 @@ def test_terminal_qr_cache_uses_current_page_source_first(monkeypatch, tmp_path:
     monkeypatch.setattr(service.engine, "_connect_chrome", lambda **kwargs: connect_calls.append(kwargs) or FakePage())
     monkeypatch.setattr(service.engine, "_extract_login_qr_source", lambda page, timeout_seconds=0, platform_name="": "data:image/png;base64,ZmFrZQ==")
     monkeypatch.setattr(service.engine, "_load_qr_image_source", lambda source: ("image/png", b"fast-qr"))
+    monkeypatch.setattr(service, "_looks_like_terminal_qr_image", lambda _b: True)
 
     path = service._write_terminal_qr_cache(1, 2)
 
@@ -1972,9 +2177,9 @@ def test_terminal_open_account_qr_falls_back_to_browser_when_refresh_needs_it(mo
     opened: list[int] = []
     refresh_calls = {"count": 0}
     monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
-    def write_qr(window_id: int, account_id: int) -> str:
+    def write_qr(window_id: int, account_id: int, **_kwargs) -> str:
         refresh_calls["count"] += 1
-        if refresh_calls["count"] == 1:
+        if refresh_calls["count"] <= 2:
             return ""
         path = runtime_dir / f"window-{window_id}-{account_id}.png"
         path.write_bytes(b"qr")
@@ -2026,7 +2231,7 @@ def test_terminal_confirm_success_opens_next_account_qr(monkeypatch, tmp_path: P
     opened: list[int] = []
     monkeypatch.setattr(service, "_close_wechat_browser_for_account", lambda account_id: closed.append(account_id))
     monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
-    def write_qr(window_id: int, account_id: int) -> str:
+    def write_qr(window_id: int, account_id: int, **_kwargs) -> str:
         path = runtime_dir / f"window-{window_id}-{account_id}.png"
         path.write_bytes(b"next-qr")
         return str(path)
@@ -2037,7 +2242,7 @@ def test_terminal_confirm_success_opens_next_account_qr(monkeypatch, tmp_path: P
 
     window = result["windows"][0]
     assert closed == [1]
-    assert opened == [2]
+    assert opened == []
     assert window["current_index"] == 1
     assert window["accounts"][0]["status"] == "success"
     assert window["accounts"][0]["publish_success_count"] == 1

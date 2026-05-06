@@ -12,6 +12,8 @@ import base64
 from io import BytesIO
 import sqlite3
 import time
+import uuid
+from datetime import datetime
 from threading import Lock
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
@@ -28,7 +30,7 @@ from cybercar.settings import apply_runtime_environment as apply_cybercar_enviro
 from .db import connect, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
 from .platforms import DEBUG_PORT_END, DEBUG_PORT_START, SUPPORTED_PLATFORMS, get_platform, normalize_platform, stable_debug_port
-from .public_settings import load_distribution_settings, resolve_material_dir
+from .public_settings import load_distribution_settings, load_platform_publish_settings, resolve_material_dir
 from .public_settings import save_distribution_settings as save_local_distribution_settings
 from .supabase_backend import SupabaseError, SupabaseRestClient
 from .video_matrix.cover_templates import load_cover_templates
@@ -567,11 +569,25 @@ def load_wechat_publish_settings_db() -> dict[str, Any]:
     settings = load_distribution_settings_db()
     common = settings["common"]
     platform = settings["platforms"].get("wechat", {})
+    def resolve(value: Any, fallback: Any, *, blank_is_fallback: bool = True) -> Any:
+        if value is None:
+            return fallback
+        text = str(value).strip().lower()
+        if text == "inherit" or (blank_is_fallback and text == ""):
+            return fallback
+        return value
     return {
         **platform,
         "material_dir": common.get("material_dir", ""),
         "publish_mode": common.get("publish_mode", "publish") if platform.get("publish_mode") == "inherit" else platform.get("publish_mode", "publish"),
         "topics": common.get("topics", ""),
+        "content_type": resolve(platform.get("content_type"), common.get("wechat_content_type", "short_video")),
+        "visibility": resolve(platform.get("visibility"), common.get("wechat_visibility", "public")),
+        "comment_permission": resolve(platform.get("comment_permission"), common.get("wechat_comment_permission", "public")),
+        "collection_name": resolve(platform.get("collection_name"), common.get("wechat_collection_name", "GasGx"), blank_is_fallback=False),
+        "declare_original": resolve(platform.get("declare_original"), common.get("wechat_declare_original", False)),
+        "short_title": resolve(platform.get("short_title"), common.get("wechat_short_title", "GasGx燃气发电挖矿")),
+        "caption": resolve(platform.get("caption"), common.get("wechat_caption", "")),
         "upload_timeout": platform.get("upload_timeout") or common.get("upload_timeout", 60),
     }
 
@@ -1656,7 +1672,13 @@ def _looks_like_terminal_qr_image(photo_bytes: bytes) -> bool:
     return True
 
 
-def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
+def _write_terminal_qr_cache(
+    window_id: int,
+    account_id: int,
+    *,
+    refresh_page: bool = True,
+    timeout_seconds: float = 2.5,
+) -> str:
     try:
         account = get_account(account_id) or {}
     except (SupabaseError, requests.RequestException, OSError, TimeoutError):
@@ -1680,11 +1702,16 @@ def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
     photo_bytes = b""
     if page is not None:
         try:
-            try:
-                page.refresh()
-            except Exception:
-                pass
-            qr_source = engine._extract_login_qr_source(page, timeout_seconds=2.5, platform_name="wechat")  # type: ignore[attr-defined]
+            if refresh_page:
+                try:
+                    page.refresh()
+                except Exception:
+                    pass
+            qr_source = engine._extract_login_qr_source(
+                page,
+                timeout_seconds=max(0.6, float(timeout_seconds)),
+                platform_name="wechat",
+            )  # type: ignore[attr-defined]
             if qr_source:
                 _, photo_bytes = engine._load_qr_image_source(qr_source)  # type: ignore[attr-defined]
         except Exception:
@@ -1699,6 +1726,18 @@ def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(bytes(photo_bytes))
     return str(cache_path)
+
+
+def _set_terminal_window_qr(window: dict[str, Any], qr_path: str) -> None:
+    window_id = int(window.get("id") or 0)
+    window["qr_path"] = qr_path
+    if qr_path:
+        window["qr_sequence"] = int(window.get("qr_sequence") or 0) + 1
+        window["qr_url"] = _terminal_qr_url(window_id, _terminal_qr_cache_bust())
+        window["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS
+        return
+    window["qr_url"] = ""
+    window["qr_expires_at"] = 0
 
 
 def _account_operator_wechat(account: dict[str, Any]) -> str:
@@ -1892,7 +1931,7 @@ def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, A
         previous_account = previous_by_id.get(int(account.get("id") or 0))
         if not previous_account:
             continue
-        for key in ("status", "status_text", "task_id"):
+        for key in ("status", "status_text", "task_id", "error_stage", "error_title", "error_detail"):
             account[key] = previous_account.get(key)
     next_current = accounts[next_current_index]
     if int(next_current.get("id") or 0) != previous_current_id:
@@ -2001,6 +2040,7 @@ def start_terminal_login() -> dict[str, Any]:
                 _open_terminal_window_current_account(window)
                 opened_count += 1
             elif str(current.get("status") or "") not in {"success", "running"}:
+                _clear_terminal_account_error(current)
                 current["status"] = "pending"
                 current["status_text"] = "等待获取登录二维码"
                 current["task_id"] = None
@@ -2023,26 +2063,216 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
         return False
     current = accounts[current_index]
     account_id = int(current.get("id") or 0)
+    _clear_terminal_account_error(current)
     current["status"] = "opening"
-    current["status_text"] = "正在打开浏览器"
+    current["status_text"] = "正在获取二维码"
     try:
-        open_account_browser(account_id, "wechat")
         current["status"] = "waiting_qr"
         current["status_text"] = "等待扫码中..."
-        qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
-        window["qr_path"] = qr_path
-        window["qr_sequence"] = int(window.get("qr_sequence") or 0) + 1 if qr_path else int(window.get("qr_sequence") or 0)
-        window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
-        window["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS if qr_path else 0
+        qr_path = _write_terminal_qr_cache(
+            int(window.get("id") or 0),
+            account_id,
+            refresh_page=False,
+            timeout_seconds=0.9,
+        )
+        if not qr_path:
+            current["status"] = "opening"
+            current["status_text"] = "正在打开浏览器"
+            open_account_browser(account_id, "wechat")
+            current["status"] = "waiting_qr"
+            current["status_text"] = "等待扫码中..."
+            qr_path = _write_terminal_qr_cache(
+                int(window.get("id") or 0),
+                account_id,
+                refresh_page=True,
+                timeout_seconds=1.8,
+            )
+        _set_terminal_window_qr(window, qr_path)
     except Exception as exc:
-        current["status"] = "error"
-        current["status_text"] = str(exc)
+        _set_terminal_account_error(
+            current,
+            stage="qr",
+            title="获取二维码失败",
+            message=str(exc),
+        )
         _clear_terminal_qr_cache(int(window.get("id") or 0))
-        window["qr_path"] = ""
-        window["qr_url"] = ""
-        window["qr_expires_at"] = 0
+        _set_terminal_window_qr(window, "")
     window["manual_available_at"] = 0
     return True
+
+
+def _terminal_publish_runs_root() -> Path:
+    path = get_paths().runtime_root / "terminal_publish_runs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _clear_terminal_publish_run(window: dict[str, Any]) -> None:
+    window["publish_run"] = {}
+
+
+def _is_terminal_publish_running(window: dict[str, Any]) -> bool:
+    run = window.get("publish_run")
+    if not isinstance(run, dict):
+        return False
+    return str(run.get("status") or "").strip().lower() == "running"
+
+
+def _clear_terminal_account_error(account: dict[str, Any]) -> None:
+    for key in ("error_stage", "error_title", "error_detail"):
+        account.pop(key, None)
+
+
+def _set_terminal_account_error(account: dict[str, Any], *, stage: str, title: str, message: str) -> None:
+    account["status"] = "error"
+    account["status_text"] = message
+    account["error_stage"] = stage
+    account["error_title"] = title
+    account["error_detail"] = message
+
+
+def _friendly_terminal_run_error(message: str) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return "发布流程失败，请重试"
+    normalized = text.lower()
+    if "publish process finished but no wechat evidence" in normalized:
+        return "发布流程已执行，但未检测到视频号发布成功记录"
+    if "invalid publish pid" in normalized:
+        return "发布进程异常，请重试"
+    if "wechat_login_required" in normalized:
+        return "账号登录已失效，请先重新扫码登录"
+    if "platform_login_required" in normalized:
+        return "平台登录状态异常，请先完成登录检测"
+    return text
+
+
+def _build_terminal_publish_plan_item(account: dict[str, Any], platform_row: dict[str, Any], source_video: Path) -> Any:
+    from . import matrix_publish as mp
+
+    run_token = datetime.now().strftime("%Y%m%d_%H%M%S")
+    workspace = _terminal_publish_runs_root() / f"{run_token}_{str(account.get('account_key') or account.get('id') or 'account')}"
+    return mp.PublishPlanItem(
+        account_id=int(account.get("id") or 0),
+        account_key=str(account.get("account_key") or ""),
+        display_name=str(account.get("display_name") or account.get("account_key") or ""),
+        profile_dir=Path(str(platform_row.get("profile_dir") or "")),
+        debug_port=int(platform_row.get("debug_port") or 0),
+        fingerprint=platform_row.get("fingerprint") or {},
+        source_video=source_video,
+        workspace=workspace,
+        batch_index=0,
+        batch_position=0,
+        platform="wechat",
+        publish_date=datetime.now().astimezone().date().isoformat(),
+    )
+
+
+def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    from . import matrix_publish as mp
+
+    account_id = int(current.get("id") or 0)
+    account = get_account(account_id)
+    if not account:
+        raise RuntimeError("account not found")
+    platform_row = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == "wechat"), None)
+    if not platform_row:
+        raise RuntimeError("wechat platform config missing")
+    candidates = mp.list_candidate_videos()
+    publish_date = datetime.now().astimezone().date().isoformat()
+    used = mp._consumed_index(today=publish_date)
+    source_video: Path | None = None
+    for path in candidates:
+        asset_key = mp._relative_asset_key(path)
+        if (asset_key, account_id, "wechat", publish_date) in used:
+            continue
+        source_video = path
+        break
+    if source_video is None:
+        raise RuntimeError("no available material for today")
+    item = _build_terminal_publish_plan_item(account, platform_row, source_video)
+    settings = load_platform_publish_settings("wechat")
+    prepared = mp.prepare_workspace(item)
+    runtime_config = mp._runtime_publish_config("wechat", settings, item.workspace)
+    token = "wechat"
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "cybercar.pipeline",
+        "--publish-only",
+        "--upload-platforms",
+        token,
+        "--limit",
+        "1",
+        "--config",
+        str(runtime_config),
+        "--workspace",
+        str(item.workspace),
+        "--debug-port",
+        str(int(item.debug_port)),
+        "--chrome-user-data-dir",
+        str(item.profile_dir),
+        "--upload-timeout",
+        str(int(settings.get("upload_timeout") or 60)),
+        "--wechat-debug-port",
+        str(int(item.debug_port)),
+        "--wechat-chrome-user-data-dir",
+        str(item.profile_dir),
+        "--collection-name",
+        str(settings.get("collection_name") or ""),
+    ]
+    caption = mp._caption_with_topics(settings)
+    if caption:
+        cmd.extend(["--caption", caption])
+    if bool(settings.get("declare_original")):
+        cmd.append("--wechat-declare-original")
+    if str(settings.get("publish_mode") or "publish") == "draft":
+        cmd.append("--wechat-save-draft-only")
+    else:
+        cmd.append("--wechat-publish-now")
+    env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
+    extra_args = browser_fingerprint_launch_args(item.fingerprint)
+    if extra_args:
+        env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
+    log_path = Path(item.workspace) / "terminal_wechat_publish.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stream = log_path.open("w", encoding="utf-8", errors="replace")
+    creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    process = subprocess.Popen(
+        cmd,
+        cwd=str(get_paths().repo_root),
+        env=env,
+        stdout=stream,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        creationflags=creationflags,
+    )
+    stream.close()
+    run_id = uuid.uuid4().hex
+    return {
+        "run_id": run_id,
+        "status": "running",
+        "pid": int(process.pid),
+        "started_at": now_ts(),
+        "account_id": account_id,
+        "platform": "wechat",
+        "workspace": str(item.workspace),
+        "prepared_video": str(prepared),
+        "video": str(source_video),
+        "asset_key": mp._relative_asset_key(source_video),
+        "publish_date": publish_date,
+        "log_path": str(log_path),
+    }
 
 
 def _queue_terminal_draft_task(account_id: int) -> dict[str, Any]:
@@ -2063,6 +2293,21 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
     if current_index >= len(accounts):
         return False
     current = accounts[current_index]
+    run = window.get("publish_run")
+    run_status = str((run or {}).get("status") or "").strip().lower() if isinstance(run, dict) else ""
+    if run_status == "running":
+        current["status"] = "running"
+        current["status_text"] = "发布执行中..."
+        return True
+    if run_status == "success":
+        current["status"] = "running"
+        current["status_text"] = "发布完成，等待人工确认"
+        return True
+    if run_status == "failed":
+        reason = _friendly_terminal_run_error(str((run or {}).get("error") or "").strip()) if isinstance(run, dict) else ""
+        current["status"] = "error"
+        current["status_text"] = f"发布失败：{reason}" if reason else "发布失败"
+        return True
     account_id = int(current.get("id") or 0)
     if str(current.get("status") or "") == "pending" and not current.get("task_id") and not window.get("qr_url"):
         return _open_terminal_window_current_account(window)
@@ -2081,48 +2326,20 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
         current["status"] = "waiting_qr"
         current["status_text"] = "等待扫码中..."
         if not window.get("qr_url"):
-            qr_path = _write_terminal_qr_cache(int(window.get("id") or 0), account_id)
-            window["qr_path"] = qr_path
-            window["qr_sequence"] = int(window.get("qr_sequence") or 0) + 1 if qr_path else int(window.get("qr_sequence") or 0)
-            window["qr_url"] = _terminal_qr_url(int(window.get("id") or 0), _terminal_qr_cache_bust()) if qr_path else ""
-            window["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS if qr_path else 0
+            qr_path = _write_terminal_qr_cache(
+                int(window.get("id") or 0),
+                account_id,
+                refresh_page=False,
+                timeout_seconds=1.2,
+            )
+            _set_terminal_window_qr(window, qr_path)
         return True
     _clear_terminal_qr_cache(int(window.get("id") or 0))
-    window["qr_path"] = ""
-    window["qr_url"] = ""
-    window["qr_expires_at"] = 0
+    _set_terminal_window_qr(window, "")
     if current.get("task_id"):
-        task = get_task(int(current.get("task_id") or 0)) or {}
-        task_status = str(task.get("status") or "").lower()
-        if task_status in {"success", "completed", "published"}:
-            current["status"] = "success"
-            current["status_text"] = "发布成功"
-            current["publish_success_count"] = int(current.get("publish_success_count") or 0) + 1
-            _close_wechat_browser_for_account(account_id)
-            next_index = current_index + 1
-            window["current_index"] = next_index
-            _clear_terminal_qr_cache(int(window.get("id") or 0))
-            window["qr_path"] = ""
-            window["qr_url"] = ""
-            window["qr_expires_at"] = 0
-            window["manual_available_at"] = now_ts() + 60
-            if next_index >= len(accounts):
-                return True
-            next_account = accounts[next_index]
-            next_account["status"] = "pending"
-            next_account["status_text"] = "等待开始登录"
-        elif task_status in {"failed", "error", "unsupported"}:
-            current["status"] = "error"
-            current["status_text"] = str(task.get("summary") or task.get("error") or "任务执行失败")
-        else:
-            current["status"] = "running"
-            current["status_text"] = "已登录，草稿任务执行中"
-        return True
-    if not current.get("task_id"):
-        task = _queue_terminal_draft_task(account_id)
-        current["task_id"] = task.get("id")
-    current["status"] = "running"
-    current["status_text"] = "已登录，草稿任务已加入队列"
+        current["task_id"] = None
+    current["status"] = "ready"
+    current["status_text"] = "已登录，等待手动发布"
     return True
 
 
@@ -2135,6 +2352,62 @@ def poll_terminal_execution() -> dict[str, Any]:
         return terminal_execution_state()
     windows = [window for window in (state.get("windows") or []) if isinstance(window, dict)]
     if windows:
+        for window in windows:
+            run = window.get("publish_run")
+            if not isinstance(run, dict) or str(run.get("status") or "").strip().lower() != "running":
+                continue
+            pid = int(run.get("pid") or 0)
+            current_index = int(window.get("current_index") or 0)
+            accounts = window.get("accounts") or []
+            if current_index >= len(accounts):
+                _clear_terminal_publish_run(window)
+                continue
+            current = accounts[current_index]
+            if pid <= 0:
+                run["status"] = "failed"
+                run["finished_at"] = now_ts()
+                run["error"] = "invalid publish pid"
+                run["error_stage"] = "publish_run"
+                run["error_title"] = "发布执行失败"
+                _set_terminal_account_error(
+                    current,
+                    stage="publish_run",
+                    title="发布执行失败",
+                    message="发布失败：进程无效",
+                )
+                continue
+            if _pid_is_running(pid):
+                _clear_terminal_account_error(current)
+                current["status"] = "running"
+                current["status_text"] = "发布执行中..."
+                continue
+            evidence_ok = False
+            try:
+                from . import matrix_publish as mp
+                evidence_ok = mp._has_publish_evidence(Path(str(run.get("workspace") or "")), "wechat")
+            except Exception:
+                evidence_ok = False
+            run["evidence_ok"] = evidence_ok
+            run["finished_at"] = now_ts()
+            if evidence_ok:
+                run["status"] = "success"
+                run.pop("error_stage", None)
+                run.pop("error_title", None)
+                run.pop("error", None)
+                _clear_terminal_account_error(current)
+                current["status"] = "running"
+                current["status_text"] = "发布完成，等待人工确认"
+            else:
+                run["status"] = "failed"
+                run["error"] = "发布流程已执行，但未检测到视频号发布成功记录"
+                run["error_stage"] = "publish_run"
+                run["error_title"] = "发布执行失败"
+                _set_terminal_account_error(
+                    current,
+                    stage="publish_run",
+                    title="发布执行失败",
+                    message="发布失败：未检测到发布证据",
+                )
         for window in windows:
             _advance_terminal_window(window)
         state["probe_cursor"] = 0
@@ -2156,10 +2429,27 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
     current_index = int(target.get("current_index") or 0)
     if current_index < len(accounts):
         current = accounts[current_index]
-        task = _queue_terminal_draft_task(int(current.get("id") or 0))
-        current["task_id"] = task.get("id")
-        current["status"] = "running"
-        current["status_text"] = "已触发发布，等待人工确认成功"
+        _clear_terminal_account_error(current)
+        if current.get("task_id"):
+            current["task_id"] = None
+        if _is_terminal_publish_running(target):
+            current["status"] = "running"
+            current["status_text"] = "发布执行中..."
+            _save_terminal_state(state)
+            return terminal_execution_state()
+        try:
+            run = _start_terminal_wechat_publish(target, current)
+            target["publish_run"] = run
+            current["task_id"] = None
+            current["status"] = "running"
+            current["status_text"] = "已启动发布，执行中..."
+        except Exception as exc:
+            _set_terminal_account_error(
+                current,
+                stage="publish_start",
+                title="发布启动失败",
+                message=f"发布启动失败：{exc}",
+            )
     target["manual_available_at"] = 0
     _save_terminal_state(state)
     return terminal_execution_state()
@@ -2180,6 +2470,7 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
     _clear_terminal_qr_cache(int(target.get("id") or 0))
     for account in accounts:
         if int(account.get("id") or 0) == int(account_id):
+            _clear_terminal_account_error(account)
             account["status"] = "pending"
             account["status_text"] = "等待获取登录二维码"
             account["task_id"] = None
@@ -2188,13 +2479,11 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
     if qr_path:
         for account in accounts:
             if int(account.get("id") or 0) == int(account_id):
+                _clear_terminal_account_error(account)
                 account["status"] = "waiting_qr"
                 account["status_text"] = "等待扫码中..."
                 break
-        target["qr_path"] = qr_path
-        target["qr_sequence"] = int(target.get("qr_sequence") or 0) + 1
-        target["qr_url"] = _terminal_qr_url(int(target.get("id") or 0), _terminal_qr_cache_bust())
-        target["qr_expires_at"] = now_ts() + TERMINAL_QR_EXPIRY_SECONDS
+        _set_terminal_window_qr(target, qr_path)
     else:
         _open_terminal_window_current_account(target)
     _save_terminal_state(state)
@@ -2214,9 +2503,31 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
         return terminal_execution_state()
     current = accounts[current_index]
     if str(current.get("status") or "") != "success":
+        _clear_terminal_account_error(current)
         current["status"] = "success"
         current["status_text"] = "发布成功"
         current["publish_success_count"] = int(current.get("publish_success_count") or 0) + 1
+    run = target.get("publish_run")
+    if isinstance(run, dict) and str(run.get("status") or "").strip().lower() == "success":
+        try:
+            from . import matrix_publish as mp
+            state_payload = mp._load_state()
+            consumed = list(state_payload.get("consumed", [])) if isinstance(state_payload.get("consumed"), list) else []
+            consumed.append(
+                {
+                    "asset_key": str(run.get("asset_key") or ""),
+                    "account_id": int(run.get("account_id") or 0),
+                    "platform": "wechat",
+                    "publish_date": str(run.get("publish_date") or datetime.now().astimezone().date().isoformat()),
+                    "success": True,
+                    "finished_at": int(time.time()),
+                }
+            )
+            state_payload["consumed"] = consumed[-500:]
+            mp._save_state(state_payload)
+        except Exception:
+            pass
+    _clear_terminal_publish_run(target)
     _close_wechat_browser_for_account(int(current.get("id") or 0))
     _clear_terminal_qr_cache(int(target.get("id") or 0))
     target["qr_path"] = ""
@@ -2227,6 +2538,7 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
     target["current_index"] = next_index
     if next_index < len(accounts):
         next_account = accounts[next_index]
+        _clear_terminal_account_error(next_account)
         next_account["status"] = "pending"
         next_account["status_text"] = "等待获取登录二维码"
         next_account["task_id"] = None

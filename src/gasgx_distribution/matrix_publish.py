@@ -434,7 +434,7 @@ def _runtime_config_for_wechat(settings: dict[str, Any], workspace: Path) -> Pat
             "platforms": {
                 "wechat": {
                     "collection_name": str(settings.get("collection_name") or ""),
-                    "short_title": str(settings.get("short_title") or "GasGx"),
+                    "short_title": str(settings.get("short_title") or "GasGx燃气发电挖矿"),
                     "location": str(settings.get("location") or ""),
                     "save_draft": str(settings.get("publish_mode") or "publish") == "draft",
                     "publish_now": str(settings.get("publish_mode") or "publish") != "draft",
@@ -445,7 +445,7 @@ def _runtime_config_for_wechat(settings: dict[str, Any], workspace: Path) -> Pat
             },
         },
         "collection_name": str(settings.get("collection_name") or ""),
-        "short_title": str(settings.get("short_title") or "GasGx"),
+        "short_title": str(settings.get("short_title") or "GasGx燃气发电挖矿"),
         "location": str(settings.get("location") or ""),
         "topics": str(settings.get("topics") or ""),
     }

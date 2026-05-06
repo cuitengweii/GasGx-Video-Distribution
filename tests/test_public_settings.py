@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from gasgx_distribution import db as dist_db
 from gasgx_distribution.public_settings import (
     load_distribution_settings,
+    load_platform_publish_settings,
     load_wechat_publish_settings,
     resolve_material_dir,
     save_distribution_settings,
@@ -114,6 +115,14 @@ def test_distribution_settings_store_common_and_platforms(monkeypatch, tmp_path:
                 "publish_mode": "draft",
                 "topics": "#gas #power",
                 "upload_timeout": 120,
+                "wechat_content_type": "image_text",
+                "wechat_visibility": "friends",
+                "wechat_comment_permission": "followers",
+                "wechat_collection_name": "test collection",
+                "wechat_declare_original": True,
+                "wechat_short_title": "GasGx Matrix",
+                "wechat_location": "上海",
+                "wechat_caption": "common caption",
             },
             "jobs": {
                 "matrix_wechat_publish": {
@@ -148,6 +157,13 @@ def test_distribution_settings_store_common_and_platforms(monkeypatch, tmp_path:
 
     assert saved["common"]["publish_mode"] == "draft"
     assert saved["common"]["topics"] == "#gas #power"
+    assert saved["common"]["wechat_content_type"] == "image_text"
+    assert saved["common"]["wechat_visibility"] == "friends"
+    assert saved["common"]["wechat_comment_permission"] == "followers"
+    assert saved["common"]["wechat_collection_name"] == "test collection"
+    assert saved["common"]["wechat_declare_original"] is True
+    assert saved["common"]["wechat_short_title"] == "GasGx Matrix"
+    assert saved["common"]["wechat_caption"] == "common caption"
     assert saved["jobs"]["matrix_wechat_publish"]["batch_size"] == 5
     assert saved["jobs"]["matrix_wechat_publish"]["enabled"] is True
     assert saved["jobs"]["matrix_wechat_publish"]["schedule_mode"] == "daily"
@@ -181,6 +197,43 @@ def test_distribution_settings_api(monkeypatch, tmp_path: Path) -> None:
     assert result.json()["jobs"]["matrix_wechat_publish"]["enabled"] is True
     assert result.json()["platforms"]["tiktok"]["caption"] == "TikTok caption"
     assert client.get("/api/settings/distribution").json()["common"]["upload_timeout"] == 180
+
+
+def test_wechat_platform_inherit_values_resolve_to_common(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    save_distribution_settings(
+        {
+            "common": {
+                "wechat_content_type": "image_text",
+                "wechat_visibility": "friends",
+                "wechat_comment_permission": "followers",
+                "wechat_collection_name": "test collection",
+                "wechat_declare_original": True,
+                "wechat_short_title": "GasGx Matrix",
+                "wechat_caption": "common caption",
+            },
+            "platforms": {
+                "wechat": {
+                    "content_type": "inherit",
+                    "visibility": "inherit",
+                    "comment_permission": "inherit",
+                    "collection_name": "inherit",
+                    "declare_original": "inherit",
+                    "short_title": "inherit",
+                    "caption": "inherit",
+                },
+            },
+        }
+    )
+
+    resolved = load_platform_publish_settings("wechat")
+    assert resolved["content_type"] == "image_text"
+    assert resolved["visibility"] == "friends"
+    assert resolved["comment_permission"] == "followers"
+    assert resolved["collection_name"] == "test collection"
+    assert resolved["declare_original"] is True
+    assert resolved["short_title"] == "GasGx Matrix"
+    assert resolved["caption"] == "common caption"
 
 
 def test_operator_wechats_api_persists_to_distribution_settings(monkeypatch, tmp_path: Path) -> None:

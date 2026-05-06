@@ -267,6 +267,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert '<option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>' in shell_app
     assert '<option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>' in shell_app
     assert 'platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || ""' in shell_app
+    assert 'class="field-hint">默认：继承全局</span>' in shell_app
+    assert 'class="field-hint">默认：继承全局文案，可在此追加</span>' in shell_app
+    assert "GasGx燃气发电挖矿" in shell_app
     assert "platform-chip" not in shell_app
     assert "platform-inline-status" in shell_app
     assert "${platformLabel(p.platform)}浏览器" not in shell_app
@@ -723,6 +726,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "@media (max-width: 1180px)" in css
     assert "videoTemplateCaption" not in html
     assert "videoTemplateCaption" not in app
+    assert "wechat-defaults-fieldset" in html
+    assert "common.wechat_short_title" in html
     assert html.index('id="videoTemplateBackgrounds"') < html.index('class="cover-workbench"') < html.index('class="video-template-workbench"')
     assert html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"')
     assert 'id="videoTemplateSelector"' not in html
@@ -733,6 +738,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "--preview-phone-width: 479.25px" in css
     assert "width: 479.25px" in css
     assert "minmax(360px, 1fr)" in css
+    assert ".wechat-defaults-grid" in css
+    assert ".platform-settings-card .field-hint" in css
     assert "justify-content:stretch" in css
     assert "max-width: none" in css
     assert "hud_bar_width" in preview

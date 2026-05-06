@@ -778,6 +778,18 @@ function syncTerminalErrorModal() {
   showTerminalErrorModal(payload);
 }
 
+function showTerminalFlowGuideModal(platform) {
+  const token = String(platform || "wechat");
+  const label = terminalPlatformName(token);
+  showTerminalErrorModal({
+    stage: "",
+    title: `${label}流程错误节点`,
+    message: "以下为该平台流程中的常见错误节点与排查方向。",
+    context: `${label} · 每次进入平台时展示`,
+    signature: `guide|${token}|${Date.now()}`,
+  });
+}
+
 function applyPermissionLimitedState() {
   document.querySelectorAll(".view").forEach((section) => {
     const locked = isPermissionLimitedView(section.id);
@@ -2623,7 +2635,6 @@ function renderTerminalExecution() {
         }).join("") : `<div class="terminal-empty-state terminal-empty-state-large"><strong>终端执行暂无平台数据</strong><p class="muted">当前只渲染平台入口卡片。请先点击右上角“刷新健康”或检查平台配置后再进入具体平台。</p></div>`}
       </div>
     `;
-    syncTerminalErrorModal();
     startTerminalPolling();
     return;
   }
@@ -2653,7 +2664,6 @@ function renderTerminalExecution() {
       </div>
     `;
     renderTerminalDailyQrView(workspace.querySelector(".terminal-workspace-wechat"));
-    syncTerminalErrorModal();
     startTerminalPolling();
     return;
   }
@@ -2698,7 +2708,6 @@ function renderTerminalExecution() {
       </section>
     </div>
   `;
-  syncTerminalErrorModal();
   startTerminalPolling();
 }
 
@@ -4960,16 +4969,20 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (enter) {
-    terminalSetRoute(enter.dataset.terminalEnter || "hub");
+    const nextRoute = enter.dataset.terminalEnter || "hub";
+    terminalSetRoute(nextRoute);
+    if (nextRoute !== "hub") showTerminalFlowGuideModal(nextRoute);
     return;
   }
   if (configJump) {
     const platform = configJump.dataset.terminalConfigJump || "";
     if (platform === "wechat") {
       terminalSetRoute("wechat");
+      showTerminalFlowGuideModal("wechat");
       openTerminalConfigPanel();
     } else {
       terminalSetRoute(platform);
+      if (platform) showTerminalFlowGuideModal(platform);
     }
     return;
   }

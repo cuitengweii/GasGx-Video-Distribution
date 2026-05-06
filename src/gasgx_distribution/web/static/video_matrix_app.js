@@ -239,6 +239,19 @@ async function init() {
   sourcePreviewVideos = Array.isArray(data.source_videos) ? data.source_videos : [];
   selectedCover = state.cover_template_id || Object.keys(coverTemplates)[0];
   selectedVideoTemplate = state.template_id || Object.keys(templates)[0];
+  const coverFallback = Object.keys(coverTemplates)[0] || "";
+  const templateFallback = Object.keys(templates)[0] || "";
+  let normalizedSelection = false;
+  if (!coverTemplates[selectedCover] && coverFallback) {
+    selectedCover = coverFallback;
+    state.cover_template_id = coverFallback;
+    normalizedSelection = true;
+  }
+  if (!templates[selectedVideoTemplate] && templateFallback) {
+    selectedVideoTemplate = templateFallback;
+    state.template_id = templateFallback;
+    normalizedSelection = true;
+  }
   renderSidebar(data);
   renderSource(data);
   renderComposition(data);
@@ -249,6 +262,10 @@ async function init() {
   renderEndingTemplatePanel(data);
   await loadModelImages();
   await refreshAllPreviews();
+  if (normalizedSelection) {
+    scheduleStateSave();
+    log("已自动回退到可用模板，旧模板 ID 不存在。");
+  }
 }
 
 function renderSidebar(data) {
@@ -640,6 +657,12 @@ async function selectVideoTemplate(templateId, options = {}) {
 
 function renderCoverEditor() {
   const t = coverTemplates[selectedCover];
+  if (!t) {
+    clearImageLoading("coverPreview");
+    $("previewCaption").textContent = "第一屏模板缺失，请切换到可用模板";
+    $("coverForm").innerHTML = `<div class="muted">当前模板不存在，请从左侧“第一屏封面模板”重新选择。</div>`;
+    return;
+  }
   applyIndependentCoverDefaults(t);
   const independentCover = isIndependentCover(t);
   $("previewCaption").textContent = `${selectedCover} / ${coverTemplateDisplayName(selectedCover, t)}${independentCover ? " / 独立视频封面" : ""}`;
@@ -1588,7 +1611,10 @@ function renderVideoTemplateBackgrounds() {
 
 async function refreshVideoTemplatePreview() {
   const template = templates[selectedVideoTemplate];
-  if (!template) return;
+  if (!template) {
+    clearImageLoading("videoTemplatePreview");
+    return;
+  }
   refreshPhonePreviewFrame("videoTemplatePreview", videoTemplatePreviewPayload(template));
   clearImageLoading("videoTemplatePreview");
 }
@@ -1838,7 +1864,10 @@ function nextCoverTemplateMeta(templateMap) {
 
 async function refreshMainPreview() {
   const template = coverTemplates[selectedCover];
-  if (!template) return;
+  if (!template) {
+    clearImageLoading("coverPreview");
+    return;
+  }
   applyIndependentCoverDefaults(template);
   refreshPhonePreviewFrame("coverPreview", {
     template,
