@@ -2481,7 +2481,7 @@ function installGlobalButtonLoading() {
     if (!button || button.disabled || button.classList.contains("loading")) return;
     if (String(button.getAttribute("type") || "").toLowerCase() === "submit") return;
     if (button.dataset.noGlobalLoading === "1") return;
-    if (button.matches("[data-terminal-manual], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route]")) return;
+    if (button.matches("[data-terminal-manual], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], #user-menu-toggle, #top-user-toggle")) return;
     pulseButtonLoading(button, "处理中");
   }, true);
 }
@@ -3306,9 +3306,49 @@ function renderMatrixJobStatus() {
   ].map(([label, value]) => `<div class="job-status-item"><span>${label}</span><strong>${value}</strong></div>`).join("");
 }
 
+function notificationEventLabel(eventType) {
+  const token = String(eventType || "").trim();
+  const matched = (state.notificationEvents || []).find((item) => item.event_type === token);
+  return String(matched?.label || token || "通知");
+}
+
+function setNotificationRouteState(message, tone = "") {
+  const node = document.querySelector("#notification-route-state");
+  if (!node) return;
+  node.textContent = String(message || "");
+  node.classList.toggle("danger", tone === "danger");
+}
+
+function notificationMessagePayload(message) {
+  const raw = message?.payload_json;
+  if (raw && typeof raw === "object") return raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw || "{}");
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch (_error) {}
+  }
+  return {};
+}
+
+function notificationCardTone(status) {
+  const token = String(status || "").trim().toLowerCase();
+  if (token === "sent") return "success";
+  if (token === "failed" || token === "retry") return "danger";
+  if (token === "pending" || token === "sending" || token === "unsupported") return "warning";
+  return "info";
+}
+
 function renderOperationNotifications() {
   const routeNode = document.querySelector("#operation-notice-routes");
   const batchNode = document.querySelector("#login-qr-batches");
+  const historyNode = document.querySelector("#notification-history");
+  const unreadNode = document.querySelector("#notification-unread-count");
+  const messageQueue = state.aiRobotMessages || [];
+  const pendingStatuses = new Set(["pending", "retry", "failed", "sending"]);
+  const pendingMessages = messageQueue.filter((item) => pendingStatuses.has(String(item.status || "").toLowerCase())).length;
+  const unreadCount = pendingMessages + (state.loginQrBatches || []).length;
+  if (unreadNode) unreadNode.textContent = `${unreadCount} 条待处理`;
   if (routeNode) {
     const routes = state.notificationRoutes || [];
     const eventTypes = Array.from(new Set(routes.map((item) => item.event_type)));
@@ -3327,12 +3367,12 @@ function renderOperationNotifications() {
         <article class="notification-card ${cardClass}">
           <span class="notification-dot"></span>
           <div>
-            <strong>${first.label || eventType}</strong>
-            <p>${first.source || ""}</p>
-            <p>${eventType}${subtypes ? ` · ${subtypes}` : ""}</p>
+            <strong>${escapeHtml(first.label || eventType)}</strong>
+            <p>${escapeHtml(first.source || "")}</p>
+            <p>${escapeHtml(eventType)}${subtypes ? ` · ${escapeHtml(subtypes)}` : ""}</p>
             <div class="inline-actions">${routeButtons}</div>
           </div>
-          <time>${severity}</time>
+          <time>${escapeHtml(severity)}</time>
         </article>
       `;
     }).join("");
@@ -3349,8 +3389,8 @@ function renderOperationNotifications() {
         <article class="notification-card danger">
           <span class="notification-dot"></span>
           <div>
-            <strong>待扫码批次 ${batch.batch_id}</strong>
-            <p>${items.map((item) => `${item.display_name || item.account_key} / port ${item.debug_port}`).join("；") || "等待巡检结果"}</p>
+            <strong>待扫码批次 ${escapeHtml(batch.batch_id)}</strong>
+            <p>${escapeHtml(items.map((item) => `${item.display_name || item.account_key} / port ${item.debug_port}`).join("；") || "等待巡检结果")}</p>
           </div>
           <time>${formatTime(batch.created_at)}</time>
         </article>
@@ -3359,6 +3399,44 @@ function renderOperationNotifications() {
       <article class="notification-card success">
         <span class="notification-dot"></span>
         <div><strong>暂无待扫码视频号</strong><p>登录巡检没有发现需要运营扫码的账号。</p></div>
+        <time>实时</time>
+      </article>
+    `;
+  }
+  if (historyNode) {
+    const items = (state.aiRobotMessages || []).slice(0, 8);
+    historyNode.innerHTML = items.length ? items.map((item) => {
+      const payload = notificationMessagePayload(item);
+      const eventType = String(item.message_type || payload.message_type || "text").trim();
+      const platform = String(item.platform || payload.platform || "").trim();
+      const status = String(item.status || "").trim().toLowerCase();
+      const cardTone = notificationCardTone(status);
+      const statusLabel = {
+        sent: "已发送",
+        failed: "发送失败",
+        retry: "重试中",
+        pending: "待发送",
+        sending: "发送中",
+        unsupported: "未启用",
+      }[status] || status || "未知";
+      const rawText = String(payload.text || payload.summary || item.summary || "").trim() || "暂无正文";
+      const content = rawText.length > 280 ? `${rawText.slice(0, 280)}...` : rawText;
+      const title = `${notificationEventLabel(eventType)} · ${platform ? aiPlatformLabel(platform) : "通用"}`;
+      return `
+        <article class="notification-card ${cardTone}">
+          <span class="notification-dot"></span>
+          <div>
+            <strong>${escapeHtml(title)}</strong>
+            <p>${escapeHtml(content)}</p>
+            <p>${escapeHtml(eventType)} · ${escapeHtml(statusLabel)}</p>
+          </div>
+          <time>${formatTime(item.updated_at || item.created_at)}</time>
+        </article>
+      `;
+    }).join("") : `
+      <article class="notification-card info">
+        <span class="notification-dot"></span>
+        <div><strong>暂无外发记录</strong><p>先配置机器人并触发一次测试或业务事件。</p></div>
         <time>实时</time>
       </article>
     `;
@@ -3948,15 +4026,21 @@ async function loadViewData(view, { force = false } = {}) {
       renderTasks();
     } else if (view === "terminal-execution") {
       try {
-        await Promise.all([
-          loadPlatforms(),
-          loadAccounts(),
-        ]);
+        await loadPlatforms();
         const terminalState = await api("/api/terminal-execution/state");
         if (currentView === "terminal-execution") {
           state.terminalExecution = terminalState;
         }
         renderTerminalExecution();
+        loadAccounts()
+          .then(() => {
+            if (currentView === "terminal-execution") {
+              renderTerminalExecution();
+            }
+          })
+          .catch(() => {
+            // Keep terminal first-screen fast even if account list refresh fails.
+          });
       } catch (error) {
         state.terminalExecution = {
           ...(state.terminalExecution || {}),
@@ -3979,6 +4063,7 @@ async function loadViewData(view, { force = false } = {}) {
       state.notificationEvents = await api("/api/notification-events");
       state.notificationRoutes = await api("/api/notification-routes");
       state.loginQrBatches = await api("/api/login-qr-batches");
+      state.aiRobotMessages = await api("/api/ai-robots/messages");
       renderOperationNotifications();
     } else if (view === "system-settings") {
       state.databaseDictionary = await api("/api/system/database-dictionary");
@@ -4817,11 +4902,24 @@ document.addEventListener("click", async (event) => {
     const enabled = routeButton.dataset.noticeEnabled === "1";
     const restoreButton = setButtonLoading(routeButton, "保存中");
     try {
-      await api(`/api/notification-routes/${eventType}/${platform}`, {
+      const result = await api(`/api/notification-routes/${eventType}/${platform}`, {
         method: "POST",
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, send_probe: enabled }),
       });
       state.notificationRoutes = await api("/api/notification-routes");
+      state.aiRobotMessages = await api("/api/ai-robots/messages");
+      if (!enabled) {
+        setNotificationRouteState(`${notificationEventLabel(eventType)} · ${aiPlatformLabel(platform)} 已关闭`);
+      } else {
+        const probe = result?.probe || {};
+        const probeStatus = String(probe.status || "").toLowerCase();
+        if (probeStatus === "sent") {
+          setNotificationRouteState(`${notificationEventLabel(eventType)} · ${aiPlatformLabel(platform)} 联调通知已发送`);
+        } else {
+          const detail = String(probe.error || probe.summary || probe.status || "未发送").trim();
+          setNotificationRouteState(`${notificationEventLabel(eventType)} · ${aiPlatformLabel(platform)} 联调失败：${detail}`, "danger");
+        }
+      }
       renderOperationNotifications();
     } finally {
       restoreButton();
@@ -5291,14 +5389,13 @@ document.addEventListener("click", async (event) => {
   if (terminalSave) {
     const route = terminalCurrentRoute();
     const effectiveRoute = route === "hub" ? "wechat" : route;
+    const fromWindowConfigModal = terminalSave.matches("[data-terminal-save-config]");
     const restoreButton = setButtonLoading(terminalSave, "更新中");
     try {
-      if (effectiveRoute === "wechat") {
-        if (route === "hub") {
-          state.terminalRoute = "wechat";
-          if (window.location.hash !== "#terminal/wechat") {
-            window.history.replaceState(null, "", "#terminal/wechat");
-          }
+      if (effectiveRoute === "wechat" || fromWindowConfigModal) {
+        state.terminalRoute = "wechat";
+        if (window.location.hash !== "#terminal/wechat") {
+          window.history.replaceState(null, "", "#terminal/wechat");
         }
         state.terminalExecution = await api("/api/terminal-execution/start", {
           method: "POST",
@@ -5306,7 +5403,12 @@ document.addEventListener("click", async (event) => {
         });
         state.terminalConfigOpen = false;
         renderTerminalExecution();
+      } else {
+        state.terminalConfigOpen = false;
+        renderTerminalExecution();
       }
+    } catch (error) {
+      window.alert(`更新配置失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
     } finally {
       restoreButton();
     }
