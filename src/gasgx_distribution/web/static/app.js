@@ -3764,9 +3764,18 @@ function renderDistributionSettings() {
 function renderPlatformSettingsCard(platform) {
   const common = state.distributionSettings.common || {};
   const value = (state.distributionSettings.platforms || {})[platform.key] || {};
-  const shortTitleInherit = value.short_title === "inherit";
-  const locationInherit = value.location === "inherit";
-  const captionInherit = value.caption === "inherit";
+  const hasOwn = (key) => Object.prototype.hasOwnProperty.call(value, key);
+  const declareOriginalRaw = value.declare_original;
+  const declareOriginalInherit = !hasOwn("declare_original") || String(declareOriginalRaw || "").toLowerCase() === "inherit";
+  const declareOriginalTrue = declareOriginalRaw === true || String(declareOriginalRaw || "").toLowerCase() === "true";
+  const declareOriginalFalse = !declareOriginalInherit && !declareOriginalTrue;
+  const shortTitleInherit = !hasOwn("short_title") || value.short_title === "inherit";
+  const locationInherit = !hasOwn("location") || value.location === "inherit";
+  const captionInherit = !hasOwn("caption") || value.caption === "inherit";
+  const collectionInherit = !hasOwn("collection_name") || value.collection_name === "inherit";
+  const contentTypeInherit = !hasOwn("content_type") || value.content_type === "inherit";
+  const visibilityInherit = !hasOwn("visibility") || value.visibility === "inherit";
+  const commentPermissionInherit = !hasOwn("comment_permission") || value.comment_permission === "inherit";
   const shortTitle = escapeHtml(shortTitleInherit ? "" : (value.short_title || common.wechat_short_title || "GasGx燃气发电挖矿"));
   const location = escapeHtml(locationInherit ? "" : (value.location || ""));
   const caption = escapeHtml(captionInherit ? "" : (value.caption || common.wechat_caption || ""));
@@ -3788,16 +3797,16 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>视频号合集
       <select name="platforms.${platform.key}.collection_name">
-        <option value="inherit" ${value.collection_name === "inherit" ? "selected" : ""}>继承全局</option>
+        <option value="inherit" ${collectionInherit ? "selected" : ""}>继承全局</option>
         <option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>
-        <option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>
+        <option value="" ${value.collection_name === "" ? "selected" : ""}>不选择合集</option>
       </select>
     </label>
     <label>原创声明
       <select name="platforms.${platform.key}.declare_original">
-        <option value="inherit" ${value.declare_original === "inherit" ? "selected" : ""}>继承全局</option>
-        <option value="false" ${!value.declare_original ? "selected" : ""}>不声明原创</option>
-        <option value="true" ${value.declare_original ? "selected" : ""}>声明原创</option>
+        <option value="inherit" ${declareOriginalInherit ? "selected" : ""}>继承全局</option>
+        <option value="false" ${declareOriginalFalse ? "selected" : ""}>不声明原创</option>
+        <option value="true" ${declareOriginalTrue ? "selected" : ""}>声明原创</option>
       </select>
     </label>` : "";
   return `<article class="platform-settings-card" data-platform-card="${platform.key}">
@@ -3813,8 +3822,8 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>内容类型
       <select name="platforms.${platform.key}.content_type">
-        ${isWechat ? `<option value="inherit" ${value.content_type === "inherit" ? "selected" : ""}>继承全局</option>` : ""}
-        <option value="short_video" ${(value.content_type || "short_video") === "short_video" ? "selected" : ""}>短视频</option>
+        ${isWechat ? `<option value="inherit" ${contentTypeInherit ? "selected" : ""}>继承全局</option>` : ""}
+        <option value="short_video" ${(!isWechat && (value.content_type || "short_video") === "short_video") || (isWechat && !contentTypeInherit && value.content_type === "short_video") ? "selected" : ""}>短视频</option>
         <option value="image_text" ${value.content_type === "image_text" ? "selected" : ""}>图文</option>
         <option value="article" ${value.content_type === "article" ? "selected" : ""}>文章</option>
       </select>
@@ -3828,16 +3837,16 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>可见范围
       <select name="platforms.${platform.key}.visibility">
-        ${isWechat ? `<option value="inherit" ${value.visibility === "inherit" ? "selected" : ""}>继承全局</option>` : ""}
-        <option value="public" ${(value.visibility || "public") === "public" ? "selected" : ""}>公开</option>
+        ${isWechat ? `<option value="inherit" ${visibilityInherit ? "selected" : ""}>继承全局</option>` : ""}
+        <option value="public" ${(!isWechat && (value.visibility || "public") === "public") || (isWechat && !visibilityInherit && value.visibility === "public") ? "selected" : ""}>公开</option>
         <option value="private" ${value.visibility === "private" ? "selected" : ""}>仅自己可见</option>
         <option value="friends" ${value.visibility === "friends" ? "selected" : ""}>好友/粉丝可见</option>
       </select>
     </label>
     <label>评论权限
       <select name="platforms.${platform.key}.comment_permission">
-        ${isWechat ? `<option value="inherit" ${value.comment_permission === "inherit" ? "selected" : ""}>继承全局</option>` : ""}
-        <option value="public" ${(value.comment_permission || "public") === "public" ? "selected" : ""}>允许评论</option>
+        ${isWechat ? `<option value="inherit" ${commentPermissionInherit ? "selected" : ""}>继承全局</option>` : ""}
+        <option value="public" ${(!isWechat && (value.comment_permission || "public") === "public") || (isWechat && !commentPermissionInherit && value.comment_permission === "public") ? "selected" : ""}>允许评论</option>
         <option value="closed" ${value.comment_permission === "closed" ? "selected" : ""}>关闭评论</option>
         <option value="followers" ${value.comment_permission === "followers" ? "selected" : ""}>仅粉丝评论</option>
       </select>
@@ -5023,7 +5032,7 @@ document.addEventListener("click", async (event) => {
   }
   if (enter) {
     const nextRoute = enter.dataset.terminalEnter || "hub";
-    const fromHubRoute = terminalCurrentRoute() === "hub";
+    const fromHubRoute = window.location.hash === "#terminal-execution";
     terminalSetRoute(nextRoute);
     const shouldShowGuide = fromHubRoute
       && nextRoute !== "hub"

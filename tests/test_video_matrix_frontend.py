@@ -265,7 +265,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "数据监控员" in shell_app
     assert "function applyPermissions()" in shell_app
     assert '<option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>' in shell_app
-    assert '<option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>' in shell_app
+    assert '<option value="" ${value.collection_name === "" ? "selected" : ""}>不选择合集</option>' in shell_app
     assert 'platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || ""' in shell_app
     assert ">继承全局</option>" in shell_app
     assert "platforms.wechat.short_title_mode" in shell_app

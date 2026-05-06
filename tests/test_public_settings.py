@@ -239,6 +239,20 @@ def test_wechat_platform_inherit_values_resolve_to_common(monkeypatch, tmp_path:
     assert resolved["caption"] == "common caption"
 
 
+def test_distribution_settings_default_wechat_platform_uses_inherit(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    saved = save_distribution_settings({})
+    wechat = saved["platforms"]["wechat"]
+    assert wechat["content_type"] == "inherit"
+    assert wechat["visibility"] == "inherit"
+    assert wechat["comment_permission"] == "inherit"
+    assert wechat["collection_name"] == "inherit"
+    assert wechat["declare_original"] == "inherit"
+    assert wechat["short_title"] == "inherit"
+    assert wechat["location"] == "inherit"
+    assert wechat["caption"] == "inherit"
+
+
 def test_operator_wechats_api_persists_to_distribution_settings(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     client = TestClient(create_app())
