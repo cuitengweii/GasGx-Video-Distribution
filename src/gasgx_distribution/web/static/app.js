@@ -1832,10 +1832,14 @@ function collectTerminalPlatformSetting(root, platform) {
     upload_timeout: Number(state.distributionSettings?.common?.upload_timeout || 60),
   };
   if (platform === "wechat") {
+    const shortTitleMode = get("platforms.wechat.short_title_mode", "custom");
+    const locationMode = get("platforms.wechat.location_mode", "custom");
+    const captionMode = get("platforms.wechat.caption_mode", "custom");
     payload.collection_name = get("platforms.wechat.collection_name", "");
-    payload.declare_original = get("platforms.wechat.declare_original", "false") === "true";
-    payload.short_title = get("platforms.wechat.short_title", "GasGx燃气发电挖矿");
-    payload.location = get("platforms.wechat.location", "");
+    payload.declare_original = get("platforms.wechat.declare_original", "inherit");
+    payload.short_title = shortTitleMode === "inherit" ? "inherit" : get("platforms.wechat.short_title", "GasGx燃气发电挖矿");
+    payload.location = locationMode === "inherit" ? "inherit" : get("platforms.wechat.location", "");
+    payload.caption = captionMode === "inherit" ? "inherit" : get("platforms.wechat.caption", "");
   }
   return payload;
 }
@@ -1858,6 +1862,7 @@ async function renderTerminalPlatformPublishPanel() {
       <div class="platform-settings-grid">${renderPlatformSettingsCard(platform)}</div>
     </section>
   `;
+  syncWechatInheritModeInputs(host);
 }
 
 function setSettingsCardMode(card) {
@@ -3753,32 +3758,44 @@ function renderDistributionSettings() {
       <div class="platform-settings-grid">${items.map(renderPlatformSettingsCard).join("")}</div>
     </section>`;
   }).join("");
+  syncWechatInheritModeInputs(document.querySelector("#distribution-settings-form") || document);
 }
 
 function renderPlatformSettingsCard(platform) {
   const common = state.distributionSettings.common || {};
   const value = (state.distributionSettings.platforms || {})[platform.key] || {};
-  const shortTitle = escapeHtml(value.short_title || common.wechat_short_title || "GasGx燃气发电挖矿");
-  const location = escapeHtml(value.location || "");
-  const caption = escapeHtml(value.caption || common.wechat_caption || "");
+  const shortTitleInherit = value.short_title === "inherit";
+  const locationInherit = value.location === "inherit";
+  const captionInherit = value.caption === "inherit";
+  const shortTitle = escapeHtml(shortTitleInherit ? "" : (value.short_title || common.wechat_short_title || "GasGx燃气发电挖矿"));
+  const location = escapeHtml(locationInherit ? "" : (value.location || ""));
+  const caption = escapeHtml(captionInherit ? "" : (value.caption || common.wechat_caption || ""));
   const isWechat = platform.key === "wechat";
   const extra = platform.key === "wechat" ? `
     <label>短标题
-      <input name="platforms.${platform.key}.short_title" value="${shortTitle}" placeholder="GasGx燃气发电挖矿">
+      <select name="platforms.${platform.key}.short_title_mode">
+        <option value="inherit" ${shortTitleInherit ? "selected" : ""}>继承全局</option>
+        <option value="custom" ${!shortTitleInherit ? "selected" : ""}>自定义</option>
+      </select>
+      <input name="platforms.${platform.key}.short_title" value="${shortTitle}" placeholder="GasGx燃气发电挖矿" ${shortTitleInherit ? "disabled" : ""}>
     </label>
     <label>位置
-      <input name="platforms.${platform.key}.location" value="${location}" placeholder="留空则不显示位置">
+      <select name="platforms.${platform.key}.location_mode">
+        <option value="inherit" ${locationInherit ? "selected" : ""}>继承全局</option>
+        <option value="custom" ${!locationInherit ? "selected" : ""}>自定义</option>
+      </select>
+      <input name="platforms.${platform.key}.location" value="${location}" placeholder="留空则不显示位置" ${locationInherit ? "disabled" : ""}>
     </label>
     <label>视频号合集
       <select name="platforms.${platform.key}.collection_name">
-        <option value="inherit" ${value.collection_name === "inherit" ? "selected" : ""}>默认：继承全局</option>
+        <option value="inherit" ${value.collection_name === "inherit" ? "selected" : ""}>继承全局</option>
         <option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>
         <option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>
       </select>
     </label>
     <label>原创声明
       <select name="platforms.${platform.key}.declare_original">
-        <option value="inherit" ${value.declare_original === "inherit" ? "selected" : ""}>默认：继承全局</option>
+        <option value="inherit" ${value.declare_original === "inherit" ? "selected" : ""}>继承全局</option>
         <option value="false" ${!value.declare_original ? "selected" : ""}>不声明原创</option>
         <option value="true" ${value.declare_original ? "selected" : ""}>声明原创</option>
       </select>
@@ -3796,7 +3813,7 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>内容类型
       <select name="platforms.${platform.key}.content_type">
-        ${isWechat ? `<option value="inherit" ${value.content_type === "inherit" ? "selected" : ""}>默认：继承全局</option>` : ""}
+        ${isWechat ? `<option value="inherit" ${value.content_type === "inherit" ? "selected" : ""}>继承全局</option>` : ""}
         <option value="short_video" ${(value.content_type || "short_video") === "short_video" ? "selected" : ""}>短视频</option>
         <option value="image_text" ${value.content_type === "image_text" ? "selected" : ""}>图文</option>
         <option value="article" ${value.content_type === "article" ? "selected" : ""}>文章</option>
@@ -3804,14 +3821,14 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>发布方式
       <select name="platforms.${platform.key}.publish_mode">
-        <option value="inherit" ${(value.publish_mode || "inherit") === "inherit" ? "selected" : ""}>默认：继承全局</option>
+        <option value="inherit" ${(value.publish_mode || "inherit") === "inherit" ? "selected" : ""}>继承全局</option>
         <option value="publish" ${value.publish_mode === "publish" ? "selected" : ""}>立即发布</option>
         <option value="draft" ${value.publish_mode === "draft" ? "selected" : ""}>保存草稿</option>
       </select>
     </label>
     <label>可见范围
       <select name="platforms.${platform.key}.visibility">
-        ${isWechat ? `<option value="inherit" ${value.visibility === "inherit" ? "selected" : ""}>默认：继承全局</option>` : ""}
+        ${isWechat ? `<option value="inherit" ${value.visibility === "inherit" ? "selected" : ""}>继承全局</option>` : ""}
         <option value="public" ${(value.visibility || "public") === "public" ? "selected" : ""}>公开</option>
         <option value="private" ${value.visibility === "private" ? "selected" : ""}>仅自己可见</option>
         <option value="friends" ${value.visibility === "friends" ? "selected" : ""}>好友/粉丝可见</option>
@@ -3819,7 +3836,7 @@ function renderPlatformSettingsCard(platform) {
     </label>
     <label>评论权限
       <select name="platforms.${platform.key}.comment_permission">
-        ${isWechat ? `<option value="inherit" ${value.comment_permission === "inherit" ? "selected" : ""}>默认：继承全局</option>` : ""}
+        ${isWechat ? `<option value="inherit" ${value.comment_permission === "inherit" ? "selected" : ""}>继承全局</option>` : ""}
         <option value="public" ${(value.comment_permission || "public") === "public" ? "selected" : ""}>允许评论</option>
         <option value="closed" ${value.comment_permission === "closed" ? "selected" : ""}>关闭评论</option>
         <option value="followers" ${value.comment_permission === "followers" ? "selected" : ""}>仅粉丝评论</option>
@@ -3827,9 +3844,31 @@ function renderPlatformSettingsCard(platform) {
     </label>
     ${extra}
     <label class="wide-field">视频描述
-      <textarea name="platforms.${platform.key}.caption" rows="3" placeholder="留空则使用视频默认文案">${caption}</textarea>
+      ${isWechat ? `<select name="platforms.${platform.key}.caption_mode">
+        <option value="inherit" ${captionInherit ? "selected" : ""}>继承全局</option>
+        <option value="custom" ${!captionInherit ? "selected" : ""}>自定义</option>
+      </select>` : ""}
+      <textarea name="platforms.${platform.key}.caption" rows="3" placeholder="留空则使用视频默认文案" ${isWechat && captionInherit ? "disabled" : ""}>${caption}</textarea>
     </label>
   </article>`;
+}
+
+function syncWechatInheritModeInputs(root = document) {
+  const configs = [
+    { mode: "platforms.wechat.short_title_mode", field: 'input[name="platforms.wechat.short_title"]' },
+    { mode: "platforms.wechat.location_mode", field: 'input[name="platforms.wechat.location"]' },
+    { mode: "platforms.wechat.caption_mode", field: 'textarea[name="platforms.wechat.caption"]' },
+  ];
+  configs.forEach(({ mode, field }) => {
+    const selector = `select[name="${mode}"]`;
+    root.querySelectorAll(selector).forEach((modeSelect) => {
+      const label = modeSelect.closest("label");
+      const target = label?.querySelector(field) || root.querySelector(field);
+      if (!target) return;
+      const inherit = String(modeSelect.value || "").toLowerCase() === "inherit";
+      target.disabled = inherit;
+    });
+  });
 }
 
 function collectDistributionSettings(form) {
@@ -3875,10 +3914,14 @@ function collectDistributionSettings(form) {
       upload_timeout: common.upload_timeout,
     };
     if (platform === "wechat") {
+      const shortTitleMode = data.get("platforms.wechat.short_title_mode") || "custom";
+      const locationMode = data.get("platforms.wechat.location_mode") || "custom";
+      const captionMode = data.get("platforms.wechat.caption_mode") || "custom";
       platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || "";
       platforms[platform].declare_original = data.get("platforms.wechat.declare_original") || "inherit";
-      platforms[platform].short_title = data.get("platforms.wechat.short_title") || "GasGx燃气发电挖矿";
-      platforms[platform].location = data.get("platforms.wechat.location") || "";
+      platforms[platform].short_title = shortTitleMode === "inherit" ? "inherit" : (data.get("platforms.wechat.short_title") || "GasGx燃气发电挖矿");
+      platforms[platform].location = locationMode === "inherit" ? "inherit" : (data.get("platforms.wechat.location") || "");
+      platforms[platform].caption = captionMode === "inherit" ? "inherit" : (data.get("platforms.wechat.caption") || "");
     }
   });
   return { common, jobs, platforms };
@@ -4088,6 +4131,16 @@ document.querySelector("#tasks-list").addEventListener("change", (event) => {
 
 installTerminalConfigInteractions("#terminal-config-list");
 installTerminalConfigInteractions("#settings-platform-config-list");
+
+document.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  const name = String(target.name || "");
+  if (!name.endsWith("_mode")) return;
+  if (!name.startsWith("platforms.wechat.")) return;
+  const root = target.closest("form, .platform-settings-grid, .platform-settings-card") || document;
+  syncWechatInheritModeInputs(root);
+});
 
 document.querySelectorAll("[data-terminal-init-card]").forEach((button) => {
   button.addEventListener("click", async () => {
@@ -4970,8 +5023,12 @@ document.addEventListener("click", async (event) => {
   }
   if (enter) {
     const nextRoute = enter.dataset.terminalEnter || "hub";
+    const fromHubRoute = terminalCurrentRoute() === "hub";
     terminalSetRoute(nextRoute);
-    if (nextRoute !== "hub") showTerminalFlowGuideModal(nextRoute);
+    const shouldShowGuide = fromHubRoute
+      && nextRoute !== "hub"
+      && Boolean(enter.closest(".terminal-entry-card .terminal-entry-actions"));
+    if (shouldShowGuide) showTerminalFlowGuideModal(nextRoute);
     return;
   }
   if (configJump) {

@@ -267,8 +267,10 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert '<option value="GasGx" ${value.collection_name === "GasGx" ? "selected" : ""}>GasGx</option>' in shell_app
     assert '<option value="" ${!value.collection_name ? "selected" : ""}>不选择合集</option>' in shell_app
     assert 'platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || ""' in shell_app
-    assert 'class="field-hint">默认：继承全局</span>' in shell_app
-    assert 'class="field-hint">默认：继承全局文案，可在此追加</span>' in shell_app
+    assert ">继承全局</option>" in shell_app
+    assert "platforms.wechat.short_title_mode" in shell_app
+    assert "platforms.wechat.location_mode" in shell_app
+    assert "platforms.wechat.caption_mode" in shell_app
     assert "GasGx燃气发电挖矿" in shell_app
     assert "platform-chip" not in shell_app
     assert "platform-inline-status" in shell_app

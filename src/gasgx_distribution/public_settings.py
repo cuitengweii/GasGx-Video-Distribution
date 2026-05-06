@@ -59,10 +59,14 @@ DEFAULT_PLATFORM_SETTINGS: dict[str, Any] = {
 
 DEFAULT_WECHAT_PLATFORM_SETTINGS: dict[str, Any] = {
     **DEFAULT_PLATFORM_SETTINGS,
-    "collection_name": "GasGx",
-    "declare_original": False,
-    "short_title": "GasGx燃气发电挖矿",
-    "location": "",
+    "content_type": "inherit",
+    "caption": "inherit",
+    "visibility": "inherit",
+    "comment_permission": "inherit",
+    "collection_name": "inherit",
+    "declare_original": "inherit",
+    "short_title": "inherit",
+    "location": "inherit",
 }
 
 SUPPORTED_PLATFORM_KEYS = tuple(item.key for item in SUPPORTED_PLATFORMS)
@@ -229,8 +233,16 @@ def _normalize_platform(platform: str, payload: dict[str, Any]) -> dict[str, Any
             merged["declare_original"] = "inherit"
         else:
             merged["declare_original"] = _normalize_bool(declare_original)
-        merged["short_title"] = str(merged.get("short_title") or "GasGx燃气发电挖矿").strip() or "GasGx燃气发电挖矿"
-        merged["location"] = str(merged.get("location") or "").strip()
+        short_title = merged.get("short_title")
+        if str(short_title or "").strip().lower() == "inherit":
+            merged["short_title"] = "inherit"
+        else:
+            merged["short_title"] = str(short_title or "GasGx燃气发电挖矿").strip() or "GasGx燃气发电挖矿"
+        location = merged.get("location")
+        if str(location or "").strip().lower() == "inherit":
+            merged["location"] = "inherit"
+        else:
+            merged["location"] = str(location or "").strip()
     return merged
 
 
@@ -318,6 +330,7 @@ def load_platform_publish_settings(platform: str) -> dict[str, Any]:
             "collection_name": _resolve_wechat_common_value(platform_settings.get("collection_name"), common.get("wechat_collection_name", "GasGx"), blank_is_fallback=False),
             "declare_original": _resolve_wechat_common_value(platform_settings.get("declare_original"), common.get("wechat_declare_original", False)),
             "short_title": _resolve_wechat_common_value(platform_settings.get("short_title"), common.get("wechat_short_title", DEFAULT_COMMON_SETTINGS["wechat_short_title"])),
+            "location": _resolve_wechat_common_value(platform_settings.get("location"), common.get("wechat_location", "")),
             "caption": _resolve_wechat_common_value(platform_settings.get("caption"), common.get("wechat_caption", "")),
         }
     return {

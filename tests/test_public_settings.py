@@ -210,6 +210,7 @@ def test_wechat_platform_inherit_values_resolve_to_common(monkeypatch, tmp_path:
                 "wechat_collection_name": "test collection",
                 "wechat_declare_original": True,
                 "wechat_short_title": "GasGx Matrix",
+                "wechat_location": "上海",
                 "wechat_caption": "common caption",
             },
             "platforms": {
@@ -220,6 +221,7 @@ def test_wechat_platform_inherit_values_resolve_to_common(monkeypatch, tmp_path:
                     "collection_name": "inherit",
                     "declare_original": "inherit",
                     "short_title": "inherit",
+                    "location": "inherit",
                     "caption": "inherit",
                 },
             },
@@ -233,6 +235,7 @@ def test_wechat_platform_inherit_values_resolve_to_common(monkeypatch, tmp_path:
     assert resolved["collection_name"] == "test collection"
     assert resolved["declare_original"] is True
     assert resolved["short_title"] == "GasGx Matrix"
+    assert resolved["location"] == "上海"
     assert resolved["caption"] == "common caption"
 
 

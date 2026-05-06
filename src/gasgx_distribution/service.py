@@ -524,7 +524,11 @@ def load_distribution_settings_db() -> dict[str, Any]:
         return load_distribution_settings()
     payload = _app_setting("distribution_settings")
     if isinstance(payload, dict):
-        return payload
+        # Normalize historical/remote payload shapes before returning to UI.
+        settings = save_local_distribution_settings(payload)
+        if settings != payload:
+            _save_app_setting("distribution_settings", settings)
+        return settings
     settings = load_distribution_settings()
     _save_app_setting("distribution_settings", settings)
     return settings
@@ -587,6 +591,7 @@ def load_wechat_publish_settings_db() -> dict[str, Any]:
         "collection_name": resolve(platform.get("collection_name"), common.get("wechat_collection_name", "GasGx"), blank_is_fallback=False),
         "declare_original": resolve(platform.get("declare_original"), common.get("wechat_declare_original", False)),
         "short_title": resolve(platform.get("short_title"), common.get("wechat_short_title", "GasGx燃气发电挖矿")),
+        "location": resolve(platform.get("location"), common.get("wechat_location", "")),
         "caption": resolve(platform.get("caption"), common.get("wechat_caption", "")),
         "upload_timeout": platform.get("upload_timeout") or common.get("upload_timeout", 60),
     }
