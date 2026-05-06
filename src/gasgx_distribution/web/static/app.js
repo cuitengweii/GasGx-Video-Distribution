@@ -148,6 +148,7 @@ let terminalCountdownTimer = null;
 let terminalPollRequestInFlight = false;
 let terminalErrorModalSignature = "";
 const terminalAutoConfirmInFlight = new Set();
+let terminalFullLoadingCount = 0;
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
@@ -1304,6 +1305,23 @@ function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
 
+function setTerminalFullLoading(active, message = "终端执行页面加载中，请稍候...") {
+  const mask = document.querySelector("#terminal-full-loading");
+  if (!mask) return;
+  const textNode = mask.querySelector("[data-terminal-loading-text]");
+  if (active) {
+    terminalFullLoadingCount += 1;
+    if (textNode) textNode.textContent = message;
+    mask.classList.remove("hidden");
+    mask.setAttribute("aria-hidden", "false");
+    return;
+  }
+  terminalFullLoadingCount = Math.max(0, terminalFullLoadingCount - 1);
+  if (terminalFullLoadingCount > 0) return;
+  mask.classList.add("hidden");
+  mask.setAttribute("aria-hidden", "true");
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
@@ -1988,6 +2006,26 @@ function terminalRunIsManualConfirmableFailure(run) {
   );
 }
 
+function terminalCurrentIsManualConfirmable(window, account, index, currentIndex) {
+  if (!window || !account) return false;
+  if (Number(index) !== Number(currentIndex)) return false;
+  const run = window?.publish_run || {};
+  const runActiveForCurrent = Number(run?.account_id || 0) === Number(account?.id || 0);
+  return runActiveForCurrent && terminalRunIsManualConfirmableFailure(run);
+}
+
+function terminalPrecheckPrimaryIssue(window) {
+  const precheck = window?.publish_precheck || {};
+  const issues = precheck?.issues || {};
+  const p0 = Array.isArray(issues.p0) ? issues.p0 : [];
+  const p1 = Array.isArray(issues.p1) ? issues.p1 : [];
+  const p2 = Array.isArray(issues.p2) ? issues.p2 : [];
+  if (p0.length) return { level: "p0", item: p0[0] };
+  if (p1.length) return { level: "p1", item: p1[0] };
+  if (p2.length) return { level: "p2", item: p2[0] };
+  return null;
+}
+
 function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
@@ -2000,7 +2038,9 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const publishManualConfirmableFailure = runActiveForCurrent && terminalRunIsManualConfirmableFailure(run);
   const qrState = terminalQrLifecycle(window);
   const isSuccess = String(current?.status || "") === "success";
-  const canPublish = loginStarted && hasCurrent && qrState.active && !publishRunning && !publishSucceeded && !isSuccess;
+  const primaryIssue = terminalPrecheckPrimaryIssue(window);
+  const hasP0Issue = Boolean(primaryIssue && primaryIssue.level === "p0");
+  const canPublish = loginStarted && hasCurrent && qrState.active && !publishRunning && !publishSucceeded && !isSuccess && !hasP0Issue;
   const canConfirm = loginStarted && hasCurrent && (publishSucceeded || publishManualConfirmableFailure) && !isSuccess;
   const hasNext = currentIndex + 1 < accounts.length;
   const publishLabel = !hasCurrent
@@ -2011,16 +2051,22 @@ function terminalWindowActionButtons(window, current, loginStarted) {
         ? "已完成待确认"
         : publishManualConfirmableFailure
           ? "重新发布"
+        : hasP0Issue
+          ? "预检未通过"
         : qrState.active
           ? "发布"
           : "先获取二维码";
   const confirmLabel = hasNext
     ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
     : (publishManualConfirmableFailure ? "已人工确认成功，完成" : "发布成功，完成");
+  const precheckNote = primaryIssue
+    ? `<div class="terminal-precheck-note ${primaryIssue.level}">${primaryIssue.level.toUpperCase()} · ${escapeHtml(primaryIssue.item?.label || "")}：${escapeHtml(primaryIssue.item?.message || "")}</div>`
+    : "";
   return `
     <div class="terminal-window-actions">
       <button class="terminal-col-btn" type="button" data-terminal-manual="${window.id}" ${canPublish ? "" : "disabled"}>${publishLabel}</button>
       <button class="terminal-col-btn secondary" type="button" data-terminal-confirm-success="${window.id}" ${canConfirm ? "" : "disabled"}>${confirmLabel}</button>
+      ${precheckNote}
     </div>
   `;
 }
@@ -2028,8 +2074,11 @@ function terminalWindowActionButtons(window, current, loginStarted) {
 function terminalQrImageMarkup(window, currentAccountId) {
   const qrState = terminalQrLifecycle(window);
   const qrUrl = window.qr_url || "";
-  const fallbackCurrentId = Number(window?.accounts?.[Number(window?.current_index || 0)]?.id || 0);
-  const refreshAccountId = Number(currentAccountId || 0) || fallbackCurrentId;
+  const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
+  const currentIndex = Number(window?.current_index || 0);
+  const fallbackCurrentId = Number(accounts?.[currentIndex]?.id || 0);
+  const firstAccountId = Number(accounts?.[0]?.id || 0);
+  const refreshAccountId = Number(currentAccountId || 0) || fallbackCurrentId || firstAccountId;
   if (!qrState.hasQr) {
     return `
       <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="点击获取二维码">
@@ -2052,6 +2101,9 @@ function terminalQrImageMarkup(window, currentAccountId) {
 }
 
 function terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted) {
+  if (terminalCurrentIsManualConfirmable(window, account, index, currentIndex)) {
+    return "发布成功";
+  }
   const qrState = terminalQrLifecycle(window);
   if (index === currentIndex && loginStarted && String(account.status || "") === "waiting_qr") {
     if (qrState.hasQr) {
@@ -2059,7 +2111,7 @@ function terminalWechatAccountStatusText(window, account, index, currentIndex, l
         ? `二维码已过期，请刷新`
         : `正在等待扫码确认`;
     }
-    return `正在等待扫码确认`;
+    return `未获取二维码，请先点击获取二维码`;
   }
   return sanitizeTerminalStatusText(account.status_text, account.status);
 }
@@ -2108,9 +2160,6 @@ function terminalAccountStatusAvatar(account) {
 
 function terminalAccountTaskBadge(account) {
   const taskId = String(account?.task_id || "").trim();
-  if (String(account?.status || "") === "success") {
-    return `<div class="terminal-status-badge success">发布成功</div>`;
-  }
   if (taskId) {
     return `<div class="terminal-status-badge">任务:${taskId}</div>`;
   }
@@ -2140,18 +2189,23 @@ function terminalWechatWindowMarkup(window, loginStarted) {
         <div class="terminal-qr-status-row"><span class="terminal-qr-sequence terminal-qr-countdown ${qrState.expired ? "expired" : qrState.active ? "active" : "idle"}" data-terminal-qr-countdown="${window.id}">${qrState.countdownText}</span></div>
       </div>
       <div class="terminal-account-list">
-        ${accounts.map((account, index) => `
+        ${accounts.map((account, index) => {
+          const displayAccount = terminalCurrentIsManualConfirmable(window, account, index, currentIndex)
+            ? { ...account, status: "success", status_text: "发布成功" }
+            : account;
+          return `
           <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
             <div class="terminal-account-info">
-              ${terminalAccountStatusAvatar(account)}
+              ${terminalAccountStatusAvatar(displayAccount)}
               <div>
-                <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
-                <div class="terminal-acc-status" ${index === currentIndex ? `data-terminal-current-status="${window.id}"` : ""}>${terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted)}</div>
+                <div class="terminal-acc-name">${displayAccount.display_name || displayAccount.account_key || `账号 ${displayAccount.id}`}</div>
+                <div class="terminal-acc-status" ${index === currentIndex ? `data-terminal-current-status="${window.id}"` : ""}>${terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted)}</div>
               </div>
             </div>
-            ${terminalAccountTaskBadge(account)}
+            ${terminalAccountTaskBadge(displayAccount)}
           </div>
-        `).join("") || `<div class="muted">暂无账号</div>`}
+        `;
+        }).join("") || `<div class="muted">暂无账号</div>`}
       </div>
       <div class="terminal-col-footer">
         <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
@@ -2457,7 +2511,9 @@ async function maybeAutoConfirmTerminalSuccess() {
     const currentIndex = Number(window?.current_index || 0);
     const current = window?.accounts?.[currentIndex];
     if (!current) continue;
-    if (String(current.status || "").toLowerCase() !== "success") continue;
+    const isSuccess = String(current.status || "").toLowerCase() === "success";
+    const isManualConfirmable = terminalCurrentIsManualConfirmable(window, current, currentIndex, currentIndex);
+    if (!isSuccess && !isManualConfirmable) continue;
     const key = `${window.id}:${current.id}`;
     if (terminalAutoConfirmInFlight.has(key)) continue;
     terminalAutoConfirmInFlight.add(key);
@@ -3709,107 +3765,107 @@ async function loadTasks() {
 async function loadViewData(view, { force = false } = {}) {
   if (!force && loadedViews.has(view)) return;
   setViewLoading(view);
+  const showTerminalLoading = view === "terminal-execution";
+  if (showTerminalLoading) {
+    setTerminalFullLoading(true, "终端执行页面加载中，请稍候...");
+  }
   if (view !== "video-matrix") {
     unmountVideoMatrixWorkbench();
   }
-  if (view === "terminal-execution") {
-    state.terminalQrVisible = false;
-    state.terminalExecution = {
-      colors: [],
-      operators: [],
-      windows: [],
-      summary: {},
-      platform_capabilities: {},
-      profile_by_platform: {},
-      active_platform: "wechat",
-      login_started: false,
-      initialized: false,
-    };
-    renderTerminalExecution();
-  }
-  await loadShellData();
-
-  if (view === "overview") {
-    await loadPlatforms();
-    state.summary = await api("/api/summary");
-    renderSummary();
-    renderPlatforms();
-  } else if (view === "accounts") {
-    await loadPlatforms();
-    await loadOperatorWechats();
-    await loadAccounts();
-    renderOperatorWechatPicker();
-    updateAccountPhoneHint();
-    renderAccounts();
-  } else if (view === "settings") {
-    await loadPlatforms();
-    state.distributionSettings = await api("/api/settings/distribution");
-    state.matrixJobStatus = await api("/api/jobs/matrix-wechat/status");
-    try {
-      state.terminalExecution = await api("/api/terminal-execution/state");
-    } catch {
-      state.terminalExecution = state.terminalExecution || { colors: [], operators: [], config: [], active_platform: "wechat" };
-    }
-    renderDistributionSettings();
-    renderMatrixJobStatus();
-    renderSettingsCardMode();
-  } else if (view === "tasks") {
-    await loadPlatforms();
-    await loadAccounts();
-    await loadTasks();
-    renderTaskSelects();
-    renderTasks();
-  } else if (view === "terminal-execution") {
-    try {
-      await Promise.all([
-        loadPlatforms(),
-        loadAccounts(),
-      ]);
-      renderTerminalExecution();
-      api("/api/terminal-execution/state")
-        .then((terminalState) => {
-          if (currentView !== "terminal-execution") return;
-          state.terminalExecution = terminalState;
-          renderTerminalExecution();
-        })
-        .catch((error) => {
-          if (currentView !== "terminal-execution") return;
-          state.terminalExecution = {
-            ...(state.terminalExecution || {}),
-            error: error.message || "加载终端执行数据失败",
-          };
-          renderTerminalExecution();
-        });
-    } catch (error) {
+  try {
+    if (view === "terminal-execution") {
+      state.terminalQrVisible = false;
       state.terminalExecution = {
-        ...(state.terminalExecution || {}),
-        error: error.message || "加载终端执行数据失败",
+        colors: [],
+        operators: [],
+        windows: [],
+        summary: {},
+        platform_capabilities: {},
+        profile_by_platform: {},
+        active_platform: "wechat",
+        login_started: false,
+        initialized: false,
       };
       renderTerminalExecution();
     }
-  } else if (view === "stats") {
-    await loadAccounts();
-    state.summary = await api("/api/summary");
-    state.stats = await api("/api/stats");
-    state.analytics = await api("/api/stats/analytics");
-    state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
-    renderStats();
-  } else if (view === "ai-robot") {
-    state.aiRobotConfigs = await api("/api/ai-robots/configs");
-    state.aiRobotMessages = await api("/api/ai-robots/messages");
-    renderAiRobot();
-  } else if (view === "notifications") {
-    state.notificationEvents = await api("/api/notification-events");
-    state.notificationRoutes = await api("/api/notification-routes");
-    state.loginQrBatches = await api("/api/login-qr-batches");
-    renderOperationNotifications();
-  } else if (view === "system-settings") {
-    state.databaseDictionary = await api("/api/system/database-dictionary");
-    renderDatabaseDictionary();
-  } else if (view === "video-matrix") {
-    mountVideoMatrixWorkbench();
+    await loadShellData();
+
+    if (view === "overview") {
+      await loadPlatforms();
+      state.summary = await api("/api/summary");
+      renderSummary();
+      renderPlatforms();
+    } else if (view === "accounts") {
+      await loadPlatforms();
+      await loadOperatorWechats();
+      await loadAccounts();
+      renderOperatorWechatPicker();
+      updateAccountPhoneHint();
+      renderAccounts();
+    } else if (view === "settings") {
+      await loadPlatforms();
+      state.distributionSettings = await api("/api/settings/distribution");
+      state.matrixJobStatus = await api("/api/jobs/matrix-wechat/status");
+      try {
+        state.terminalExecution = await api("/api/terminal-execution/state");
+      } catch {
+        state.terminalExecution = state.terminalExecution || { colors: [], operators: [], config: [], active_platform: "wechat" };
+      }
+      renderDistributionSettings();
+      renderMatrixJobStatus();
+      renderSettingsCardMode();
+    } else if (view === "tasks") {
+      await loadPlatforms();
+      await loadAccounts();
+      await loadTasks();
+      renderTaskSelects();
+      renderTasks();
+    } else if (view === "terminal-execution") {
+      try {
+        await Promise.all([
+          loadPlatforms(),
+          loadAccounts(),
+        ]);
+        const terminalState = await api("/api/terminal-execution/state");
+        if (currentView === "terminal-execution") {
+          state.terminalExecution = terminalState;
+        }
+        renderTerminalExecution();
+      } catch (error) {
+        state.terminalExecution = {
+          ...(state.terminalExecution || {}),
+          error: error.message || "加载终端执行数据失败",
+        };
+        renderTerminalExecution();
+      }
+    } else if (view === "stats") {
+      await loadAccounts();
+      state.summary = await api("/api/summary");
+      state.stats = await api("/api/stats");
+      state.analytics = await api("/api/stats/analytics");
+      state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
+      renderStats();
+    } else if (view === "ai-robot") {
+      state.aiRobotConfigs = await api("/api/ai-robots/configs");
+      state.aiRobotMessages = await api("/api/ai-robots/messages");
+      renderAiRobot();
+    } else if (view === "notifications") {
+      state.notificationEvents = await api("/api/notification-events");
+      state.notificationRoutes = await api("/api/notification-routes");
+      state.loginQrBatches = await api("/api/login-qr-batches");
+      renderOperationNotifications();
+    } else if (view === "system-settings") {
+      state.databaseDictionary = await api("/api/system/database-dictionary");
+      renderDatabaseDictionary();
+    } else if (view === "video-matrix") {
+      mountVideoMatrixWorkbench();
+    }
+    loadedViews.add(view);
+  } finally {
+    if (showTerminalLoading) {
+      setTerminalFullLoading(false);
+    }
   }
-  loadedViews.add(view);
 }
 
 function renderDistributionSettings() {
@@ -4725,12 +4781,21 @@ document.addEventListener("click", async (event) => {
     const windowIdNumber = Number(windowId);
     if (!windowIdNumber) return;
     let accountIdNumber = Number(accountId);
+    const targetWindow = (state.terminalExecution.windows || []).find((item) => Number(item.id) === windowIdNumber);
     if (!accountIdNumber) {
-      const targetWindow = (state.terminalExecution.windows || []).find((item) => Number(item.id) === windowIdNumber);
       const currentIndex = Number(targetWindow?.current_index || 0);
-      accountIdNumber = Number(targetWindow?.accounts?.[currentIndex]?.id || 0);
+      accountIdNumber = Number(targetWindow?.accounts?.[currentIndex]?.id || 0) || Number(targetWindow?.accounts?.[0]?.id || 0);
     }
-    if (!accountIdNumber) return;
+    if (!accountIdNumber) {
+      showTerminalErrorModal({
+        stage: "qr",
+        title: "二维码获取失败",
+        message: "当前窗口没有可用账号，无法获取二维码。请先在配置中添加账号后重试。",
+        context: `窗口 #${windowIdNumber}`,
+        signature: `qr-refresh|empty-account|${windowIdNumber}`,
+      });
+      return;
+    }
     await refreshTerminalAccountQr(windowIdNumber, accountIdNumber, terminalQrRefreshButton);
     return;
   }

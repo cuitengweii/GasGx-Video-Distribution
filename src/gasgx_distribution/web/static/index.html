@@ -605,6 +605,13 @@
 
         <div class="terminal-config-panel terminal-glass hidden" id="terminal-platform-config-panel"></div>
         <div class="terminal-workspace" id="terminal-matrix-workspace"></div>
+        <div id="terminal-full-loading" class="terminal-full-loading hidden" aria-hidden="true">
+          <div class="terminal-full-loading-panel">
+            <span class="btn-spinner" aria-hidden="true"></span>
+            <strong data-terminal-loading-text>终端执行页面加载中，请稍候...</strong>
+            <p>正在同步窗口状态、账号进度和二维码缓存。</p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1089,6 +1096,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=20260506-terminal-confirm-fallback-fix1"></script>
+  <script src="/static/app.js?v=20260506-terminal-full-loading-fix1"></script>
 </body>
 </html>

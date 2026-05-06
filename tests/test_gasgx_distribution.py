@@ -1855,6 +1855,30 @@ def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatc
             "log_path": str(runtime_dir / "terminal_publish_runs" / "run-1" / "terminal_wechat_publish.log"),
         },
     )
+    monkeypatch.setattr(
+        service,
+        "get_account",
+        lambda account_id: {
+            "id": account_id,
+            "account_key": "acc-1",
+            "display_name": "acc-1",
+            "platforms": [
+                {
+                    "platform": "wechat",
+                    "profile_dir": str(runtime_dir / "profiles" / "wechat"),
+                    "debug_port": 9333,
+                    "fingerprint": {},
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(service, "check_login_status", lambda account_id, platform: {"status": "ready", "ok": True})
+    import gasgx_distribution.matrix_publish as mp
+    sample = runtime_dir / "materials" / "videos" / "one.mp4"
+    sample.parent.mkdir(parents=True, exist_ok=True)
+    sample.write_bytes(b"video")
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [sample])
+    monkeypatch.setattr(mp, "_consumed_index", lambda today=None: set())
 
     result = service.manual_terminal_publish(1)
 
@@ -1990,6 +2014,7 @@ def test_terminal_manual_publish_sets_error_stage_on_missing_material(monkeypatc
         },
     )
     import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(service, "check_login_status", lambda account_id, platform: {"status": "ready", "ok": True})
     monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [])
 
     result = service.manual_terminal_publish(1)
@@ -1999,7 +2024,7 @@ def test_terminal_manual_publish_sets_error_stage_on_missing_material(monkeypatc
     assert account["status"] == "error"
     assert account["error_stage"] == "publish_start"
     assert account["error_title"] == "发布启动失败"
-    assert "no available material for today" in account["status_text"]
+    assert "当前账号当天没有可用视频素材" in account["status_text"]
 
 
 def test_terminal_poll_marks_publish_run_failure_with_error_stage(monkeypatch, tmp_path: Path) -> None:
@@ -2100,6 +2125,61 @@ def test_terminal_poll_marks_publish_run_unconfirmed_from_log(monkeypatch, tmp_p
     assert account["status"] == "error"
     assert "发布未确认" in account["status_text"]
     assert "发布未确认" in str(run.get("error") or "")
+
+
+def test_terminal_poll_marks_publish_run_success_from_log_marker_without_evidence(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    workspace = runtime_dir / "w1"
+    workspace.mkdir(parents=True, exist_ok=True)
+    log_path = workspace / "terminal_wechat_publish.log"
+    log_path.write_text(
+        "[Uploader:wechat] Clicked publish button by primary selector.\n"
+        "[Success:wechat] 发布已确认。\n",
+        encoding="utf-8",
+    )
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [{"id": 1, "status": "running", "status_text": "running", "task_id": None, "publish_success_count": 0}],
+                        "publish_run": {"status": "running", "pid": 555, "workspace": str(workspace), "account_id": 1, "log_path": str(log_path)},
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+                "next_probe_at": 0,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "now_ts", lambda: 100)
+    monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: False)
+
+    result = service.poll_terminal_execution()
+
+    account = result["windows"][0]["accounts"][0]
+    run = result["windows"][0]["publish_run"]
+    assert run["status"] == "success"
+    assert run["evidence_ok"] is False
+    assert run["success_inferred_from_log"] is True
+    assert account["status"] == "running"
+    assert "\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4" in account["status_text"]
 
 
 def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path: Path) -> None:

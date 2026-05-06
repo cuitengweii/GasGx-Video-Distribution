@@ -1830,6 +1830,14 @@ def terminal_execution_state() -> dict[str, Any]:
                 visible_accounts.append(visible_account)
             visible_window["accounts"] = visible_accounts
             visible_windows.append(visible_window)
+    for window in visible_windows:
+        if not isinstance(window, dict):
+            continue
+        window["publish_precheck"] = _terminal_publish_precheck(
+            window,
+            login_started=login_started,
+            require_login_probe=False,
+        )
     result = {
         "ok": True,
         "colors": TERMINAL_COLORS,
@@ -2137,6 +2145,66 @@ def _set_terminal_account_error(account: dict[str, Any], *, stage: str, title: s
     account["error_detail"] = message
 
 
+def _terminal_precheck_issue(code: str, label: str, message: str) -> dict[str, str]:
+    return {"code": code, "label": label, "message": message}
+
+
+def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, require_login_probe: bool = False) -> dict[str, Any]:
+    issues: dict[str, list[dict[str, str]]] = {"p0": [], "p1": [], "p2": []}
+    accounts = window.get("accounts") or []
+    current_index = int(window.get("current_index") or 0)
+    if current_index >= len(accounts):
+        issues["p0"].append(_terminal_precheck_issue("no_current_account", "当前账号缺失", "当前窗口没有可发布账号。"))
+        return {"ok": False, "issues": issues, "selected_video": ""}
+    current = accounts[current_index]
+    current_status = str(current.get("status") or "").strip().lower()
+    account_id = int(current.get("id") or 0)
+    if account_id <= 0:
+        issues["p0"].append(_terminal_precheck_issue("account_invalid", "账号信息缺失", "当前账号 ID 无效，无法启动发布。"))
+        return {"ok": False, "issues": issues, "selected_video": ""}
+    if not login_started:
+        issues["p0"].append(_terminal_precheck_issue("login_not_started", "尚未启动登录流程", "请先点击“获取登录二维码”并完成扫码登录。"))
+    account = get_account(account_id) or {}
+    if not account:
+        issues["p0"].append(_terminal_precheck_issue("account_not_found", "账号不存在", "账号记录不存在或已被删除。"))
+        return {"ok": False, "issues": issues, "selected_video": ""}
+    platform_row = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == "wechat"), None)
+    if not platform_row:
+        issues["p0"].append(_terminal_precheck_issue("wechat_platform_missing", "视频号配置缺失", "账号未配置视频号平台，无法发布。"))
+    else:
+        debug_port = int(platform_row.get("debug_port") or 0)
+        profile_dir = str(platform_row.get("profile_dir") or "").strip()
+        if debug_port <= 0 or not profile_dir:
+            issues["p0"].append(_terminal_precheck_issue("wechat_platform_invalid", "视频号配置不完整", "请检查 profile_dir 与 debug_port 配置。"))
+    if require_login_probe:
+        try:
+            probe = check_login_status(account_id, "wechat")
+            if str(probe.get("status") or "").strip().lower() != "ready":
+                issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并确认登录状态。"))
+        except Exception as exc:
+            issues["p0"].append(_terminal_precheck_issue("login_probe_failed", "登录检测失败", f"登录检测失败：{exc}"))
+    else:
+        if current_status not in {"ready", "running", "success"}:
+            issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并等待状态变为“已登录”。"))
+    selected_video = ""
+    try:
+        from . import matrix_publish as mp
+        publish_date = datetime.now().astimezone().date().isoformat()
+        candidates = mp.list_candidate_videos()
+        used = mp._consumed_index(today=publish_date)
+        for path in candidates:
+            asset_key = mp._relative_asset_key(path)
+            if (asset_key, account_id, "wechat", publish_date) in used:
+                continue
+            selected_video = str(path)
+            break
+        if not selected_video:
+            issues["p0"].append(_terminal_precheck_issue("no_material", "当天无可用素材", "当前账号当天没有可用视频素材。"))
+    except Exception as exc:
+        issues["p1"].append(_terminal_precheck_issue("material_check_failed", "素材检查失败", f"素材预检失败：{exc}"))
+    return {"ok": not issues["p0"], "issues": issues, "selected_video": selected_video}
+
+
 def _friendly_terminal_run_error(message: str) -> str:
     text = str(message or "").strip()
     if not text:
@@ -2171,6 +2239,23 @@ def _terminal_publish_failure_reason(run: dict[str, Any]) -> str:
     if "draft fallback attempt failed" in lowered:
         return "发布未确认且草稿回退失败，请先在视频号后台人工核实"
     return "未检测到发布证据"
+
+
+def _terminal_publish_log_has_success_marker(run: dict[str, Any]) -> bool:
+    log_path = str(run.get("log_path") or "").strip()
+    if not log_path:
+        return False
+    try:
+        raw = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    lowered = raw.lower()
+    success_markers = (
+        "[success:wechat]",
+        "[success] 草稿已保存",
+        "draft save success marker detected",
+    )
+    return any(marker in lowered for marker in success_markers)
 
 
 def _build_terminal_publish_plan_item(account: dict[str, Any], platform_row: dict[str, Any], source_video: Path) -> Any:
@@ -2404,8 +2489,10 @@ def poll_terminal_execution() -> dict[str, Any]:
             except Exception:
                 evidence_ok = False
             run["evidence_ok"] = evidence_ok
+            success_inferred_from_log = _terminal_publish_log_has_success_marker(run)
+            run["success_inferred_from_log"] = success_inferred_from_log
             run["finished_at"] = now_ts()
-            if evidence_ok:
+            if evidence_ok or success_inferred_from_log:
                 run["status"] = "success"
                 run.pop("error_stage", None)
                 run.pop("error_title", None)
@@ -2446,6 +2533,28 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
     current_index = int(target.get("current_index") or 0)
     if current_index < len(accounts):
         current = accounts[current_index]
+        precheck = _terminal_publish_precheck(
+            target,
+            login_started=bool(state.get("login_started")),
+            require_login_probe=True,
+        )
+        target["publish_precheck"] = precheck
+        if not bool(precheck.get("ok")):
+            issue = ((precheck.get("issues") or {}).get("p0") or [{}])[0]
+            issue_code = str(issue.get("code") or "")
+            title = "发布启动失败"
+            stage = "publish_start"
+            if issue_code.startswith("login_"):
+                title = "登录检测失败"
+                stage = "login_probe"
+            _set_terminal_account_error(
+                current,
+                stage=stage,
+                title=title,
+                message=f"{title}：{str(issue.get('message') or '预检未通过')}",
+            )
+            _save_terminal_state(state)
+            return terminal_execution_state()
         _clear_terminal_account_error(current)
         if current.get("task_id"):
             current["task_id"] = None
