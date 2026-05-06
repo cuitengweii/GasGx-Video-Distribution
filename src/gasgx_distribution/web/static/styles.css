@@ -4450,6 +4450,11 @@ body.sidebar-collapsed .terminal-init-modal {
   min-width: 0;
 }
 
+.terminal-account-info > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .terminal-account-actions {
   display: flex;
   align-items: center;

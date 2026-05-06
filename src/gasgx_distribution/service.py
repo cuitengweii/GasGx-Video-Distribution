@@ -2081,17 +2081,8 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
             timeout_seconds=0.9,
         )
         if not qr_path:
-            current["status"] = "opening"
-            current["status_text"] = "正在打开浏览器"
-            open_account_browser(account_id, "wechat")
             current["status"] = "waiting_qr"
-            current["status_text"] = "等待扫码中..."
-            qr_path = _write_terminal_qr_cache(
-                int(window.get("id") or 0),
-                account_id,
-                refresh_page=True,
-                timeout_seconds=1.8,
-            )
+            current["status_text"] = "二维码获取失败，请手动打开浏览器后重试"
         _set_terminal_window_qr(window, qr_path)
     except Exception as exc:
         _set_terminal_account_error(
@@ -2159,7 +2150,27 @@ def _friendly_terminal_run_error(message: str) -> str:
         return "账号登录已失效，请先重新扫码登录"
     if "platform_login_required" in normalized:
         return "平台登录状态异常，请先完成登录检测"
+    if "publish_unconfirmed" in normalized or "发布未确认" in normalized:
+        return "发布未确认，请先在视频号后台核实发布结果"
     return text
+
+
+def _terminal_publish_failure_reason(run: dict[str, Any]) -> str:
+    log_path = str(run.get("log_path") or "").strip()
+    if not log_path:
+        return "未检测到发布证据"
+    try:
+        raw = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return "未检测到发布证据"
+    lowered = raw.lower()
+    if "e_publish_unconfirmed_draft_saved" in lowered:
+        return "发布未确认，草稿回退也未确认，请先在视频号后台人工核实"
+    if "publish was not confirmed" in lowered:
+        return "发布未确认，请先在视频号后台人工核实"
+    if "draft fallback attempt failed" in lowered:
+        return "发布未确认且草稿回退失败，请先在视频号后台人工核实"
+    return "未检测到发布证据"
 
 
 def _build_terminal_publish_plan_item(account: dict[str, Any], platform_row: dict[str, Any], source_video: Path) -> Any:
@@ -2403,15 +2414,16 @@ def poll_terminal_execution() -> dict[str, Any]:
                 current["status"] = "running"
                 current["status_text"] = "发布完成，等待人工确认"
             else:
+                reason = _terminal_publish_failure_reason(run) if isinstance(run, dict) else "未检测到发布证据"
                 run["status"] = "failed"
-                run["error"] = "发布流程已执行，但未检测到视频号发布成功记录"
+                run["error"] = reason if reason != "未检测到发布证据" else "发布流程已执行，但未检测到视频号发布成功记录"
                 run["error_stage"] = "publish_run"
                 run["error_title"] = "发布执行失败"
                 _set_terminal_account_error(
                     current,
                     stage="publish_run",
                     title="发布执行失败",
-                    message="发布失败：未检测到发布证据",
+                    message=f"发布失败：{reason}",
                 )
         for window in windows:
             _advance_terminal_window(window)

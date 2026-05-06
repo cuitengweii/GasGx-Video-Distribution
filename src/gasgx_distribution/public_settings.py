@@ -113,14 +113,24 @@ def _normalize_common(payload: dict[str, Any]) -> dict[str, Any]:
         merged.get("material_dir_follows_video_matrix", DEFAULT_COMMON_SETTINGS["material_dir_follows_video_matrix"])
     )
     merged["topics"] = str(merged.get("topics") or DEFAULT_COMMON_SETTINGS["topics"]).strip()
+    if _looks_like_mojibake(merged["topics"]):
+        merged["topics"] = DEFAULT_COMMON_SETTINGS["topics"]
     merged["upload_timeout"] = _normalize_timeout(merged.get("upload_timeout"))
     raw_operators = merged.get("operator_wechats")
     merged["wechat_content_type"] = str(merged.get("wechat_content_type") or DEFAULT_COMMON_SETTINGS["wechat_content_type"]).strip()
     merged["wechat_visibility"] = str(merged.get("wechat_visibility") or DEFAULT_COMMON_SETTINGS["wechat_visibility"]).strip()
     merged["wechat_comment_permission"] = str(merged.get("wechat_comment_permission") or DEFAULT_COMMON_SETTINGS["wechat_comment_permission"]).strip()
-    merged["wechat_collection_name"] = str(merged.get("wechat_collection_name") or DEFAULT_COMMON_SETTINGS["wechat_collection_name"]).strip()
+    raw_collection_name = merged.get("wechat_collection_name")
+    if raw_collection_name is None:
+        merged["wechat_collection_name"] = DEFAULT_COMMON_SETTINGS["wechat_collection_name"]
+    else:
+        merged["wechat_collection_name"] = str(raw_collection_name).strip()
     merged["wechat_declare_original"] = _normalize_bool(merged.get("wechat_declare_original", DEFAULT_COMMON_SETTINGS["wechat_declare_original"]))
-    merged["wechat_short_title"] = str(merged.get("wechat_short_title") or DEFAULT_COMMON_SETTINGS["wechat_short_title"]).strip() or DEFAULT_COMMON_SETTINGS["wechat_short_title"]
+    merged["wechat_short_title"] = str(
+        merged.get("wechat_short_title") or DEFAULT_COMMON_SETTINGS["wechat_short_title"]
+    ).strip() or DEFAULT_COMMON_SETTINGS["wechat_short_title"]
+    if _looks_like_mojibake(merged["wechat_short_title"]):
+        merged["wechat_short_title"] = DEFAULT_COMMON_SETTINGS["wechat_short_title"]
     merged["wechat_location"] = str(merged.get("wechat_location") or DEFAULT_COMMON_SETTINGS["wechat_location"]).strip()
     merged["wechat_caption"] = str(merged.get("wechat_caption") or DEFAULT_COMMON_SETTINGS["wechat_caption"]).strip()
     if not isinstance(raw_operators, list):
@@ -132,6 +142,24 @@ def _normalize_common(payload: dict[str, Any]) -> dict[str, Any]:
             operators.append(value)
     merged["operator_wechats"] = operators or list(DEFAULT_COMMON_SETTINGS["operator_wechats"])
     return merged
+
+
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _looks_like_mojibake(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if "�" in value:
+        return True
+    if value.count("?") >= 3 and not _contains_cjk(value):
+        return True
+    mojibake_markers = ("澶", "鐕", "鍙", "鎸", "娴", "彂", "æ", "ç", "å")
+    return any(marker in value for marker in mojibake_markers)
 
 
 def _normalize_matrix_wechat_job(payload: dict[str, Any]) -> dict[str, Any]:
@@ -237,7 +265,9 @@ def _normalize_platform(platform: str, payload: dict[str, Any]) -> dict[str, Any
         if str(short_title or "").strip().lower() == "inherit":
             merged["short_title"] = "inherit"
         else:
-            merged["short_title"] = str(short_title or "GasGx燃气发电挖矿").strip() or "GasGx燃气发电挖矿"
+            merged["short_title"] = str(short_title or DEFAULT_COMMON_SETTINGS["wechat_short_title"]).strip() or DEFAULT_COMMON_SETTINGS["wechat_short_title"]
+            if _looks_like_mojibake(merged["short_title"]):
+                merged["short_title"] = DEFAULT_COMMON_SETTINGS["wechat_short_title"]
         location = merged.get("location")
         if str(location or "").strip().lower() == "inherit":
             merged["location"] = "inherit"

@@ -225,6 +225,20 @@ def _consumed_slots(today: str) -> set[tuple[int, str, str]]:
     return slots
 
 
+def _consumed_asset_locks(today: str) -> dict[int, str]:
+    """Return today's locked asset per account (latest record wins)."""
+    locks: dict[int, str] = {}
+    for item in _consumed_records():
+        publish_date = str(item.get("publish_date") or "").strip()
+        if publish_date != today:
+            continue
+        account_id = int(item.get("account_id") or 0)
+        asset_key = str(item.get("asset_key") or "").strip()
+        if account_id > 0 and asset_key:
+            locks[account_id] = asset_key
+    return locks
+
+
 def _scan_material_candidates(root: Path) -> list[Path]:
     videos: list[Path] = []
     for path in root.iterdir():
@@ -367,13 +381,45 @@ def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
     slots = _account_platform_slots(ordered_accounts)
     today = _today_date(_load_timezone()).isoformat()
     consumed = _consumed_slots(today)
-    plan_slots = []
+    locked_assets = _consumed_asset_locks(today)
+    pending_by_account: dict[int, list[dict[str, Any]]] = {}
     for account, platform in slots:
-        key = (int(account.get("id") or 0), str(platform.get("platform") or ""), today)
+        account_id = int(account.get("id") or 0)
+        key = (account_id, str(platform.get("platform") or ""), today)
         if key in consumed:
             continue
-        plan_slots.append((account, platform))
-    count = min(len(plan_slots), len(videos))
+        pending_by_account.setdefault(account_id, []).append(platform)
+    video_by_key = {_relative_asset_key(path): path for path in videos}
+    assigned_video_by_account: dict[int, Path] = {}
+    assigned_asset_keys: set[str] = set()
+    materials_root = materials_video_dir()
+    for account in ordered_accounts:
+        account_id = int(account.get("id") or 0)
+        if not pending_by_account.get(account_id):
+            continue
+        locked_key = str(locked_assets.get(account_id) or "").strip()
+        if locked_key:
+            locked_path = video_by_key.get(locked_key)
+            if locked_path is None:
+                candidate = materials_root / locked_key
+                if candidate.exists() and candidate.is_file():
+                    locked_path = candidate
+            if locked_path is None:
+                continue
+            assigned_video_by_account[account_id] = locked_path
+            assigned_asset_keys.add(locked_key)
+            continue
+        selected: Path | None = None
+        for path in videos:
+            asset_key = _relative_asset_key(path)
+            if asset_key in assigned_asset_keys:
+                continue
+            selected = path
+            assigned_asset_keys.add(asset_key)
+            break
+        if selected is None:
+            break
+        assigned_video_by_account[account_id] = selected
     account_batch_lookup = {
         int(account["id"]): (batch_index, batch_position)
         for batch_index, batch in enumerate(account_batches, start=1)
@@ -382,26 +428,32 @@ def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     root = get_paths().runtime_root / "matrix_publish_runs"
     plan: list[PublishPlanItem] = []
-    for (account, platform), video in zip(plan_slots[:count], videos[:count]):
+    for account in ordered_accounts:
+        account_id = int(account.get("id") or 0)
+        platforms = pending_by_account.get(account_id) or []
+        video = assigned_video_by_account.get(account_id)
+        if not platforms or video is None:
+            continue
         account_key = str(account.get("account_key") or f"account-{account.get('id')}").strip()
         workspace = root / f"{timestamp}_{account_key}"
         batch_index, batch_position = account_batch_lookup.get(int(account["id"]), (1, len(plan) + 1))
-        plan.append(
-            PublishPlanItem(
-                account_id=int(account["id"]),
-                account_key=account_key,
-                display_name=str(account.get("display_name") or account_key),
-                profile_dir=Path(str(platform.get("profile_dir") or account.get("wechat_profile_dir") or "")),
-                debug_port=int(platform.get("debug_port") or account.get("wechat_debug_port") or 0),
-                fingerprint=dict(platform.get("fingerprint") or account.get("wechat_fingerprint") or {}),
-                source_video=video,
-                workspace=workspace,
-                batch_index=batch_index,
-                batch_position=batch_position,
-                platform=str(platform.get("platform") or "wechat"),
-                publish_date=today,
+        for platform in platforms:
+            plan.append(
+                PublishPlanItem(
+                    account_id=int(account["id"]),
+                    account_key=account_key,
+                    display_name=str(account.get("display_name") or account_key),
+                    profile_dir=Path(str(platform.get("profile_dir") or account.get("wechat_profile_dir") or "")),
+                    debug_port=int(platform.get("debug_port") or account.get("wechat_debug_port") or 0),
+                    fingerprint=dict(platform.get("fingerprint") or account.get("wechat_fingerprint") or {}),
+                    source_video=video,
+                    workspace=workspace,
+                    batch_index=batch_index,
+                    batch_position=batch_position,
+                    platform=str(platform.get("platform") or "wechat"),
+                    publish_date=today,
+                )
             )
-        )
     return plan
 
 

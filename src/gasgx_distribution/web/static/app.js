@@ -132,6 +132,7 @@ let terminalPollTimer = null;
 let terminalCountdownTimer = null;
 let terminalPollRequestInFlight = false;
 let terminalErrorModalSignature = "";
+const terminalAutoConfirmInFlight = new Set();
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
@@ -1993,7 +1994,26 @@ function terminalWechatAccountStatusText(window, account, index, currentIndex, l
     }
     return `正在等待扫码确认`;
   }
-  return account.status_text || "未登录";
+  return sanitizeTerminalStatusText(account.status_text, account.status);
+}
+
+function sanitizeTerminalStatusText(statusText, status) {
+  const raw = String(statusText || "").trim();
+  if (!raw) return "未登录";
+  const lowered = raw.toLowerCase();
+  if (
+    lowered.includes("httpsconnectionpool(") ||
+    lowered.includes("max retries exceeded") ||
+    lowered.includes("traceback") ||
+    lowered.includes("connection aborted") ||
+    lowered.includes("name or service not known")
+  ) {
+    return "网络连接异常，请稍后重试";
+  }
+  if ((String(status || "").toLowerCase() === "error" || String(status || "").toLowerCase() === "failed") && raw.length > 64) {
+    return "执行异常，请查看日志";
+  }
+  return raw;
 }
 
 function terminalAccountStatusToken(account) {
@@ -2359,6 +2379,31 @@ function renderTerminalDailyQrView(root) {
   if (!workspace) return;
   workspace.innerHTML = windows.map((window) => terminalWechatWindowMarkup(window, loginStarted)).join("");
   syncTerminalWechatSummary(summary, windows);
+  maybeAutoConfirmTerminalSuccess();
+}
+
+async function maybeAutoConfirmTerminalSuccess() {
+  if (terminalCurrentRoute() !== "wechat") return;
+  if (!state.terminalExecution?.login_started) return;
+  const windows = state.terminalExecution.windows || [];
+  for (const window of windows) {
+    const currentIndex = Number(window?.current_index || 0);
+    const current = window?.accounts?.[currentIndex];
+    if (!current) continue;
+    if (String(current.status || "").toLowerCase() !== "success") continue;
+    const key = `${window.id}:${current.id}`;
+    if (terminalAutoConfirmInFlight.has(key)) continue;
+    terminalAutoConfirmInFlight.add(key);
+    try {
+      state.terminalExecution = await api(`/api/terminal-execution/windows/${window.id}/confirm-publish-success`, { method: "POST" });
+      renderTerminalExecution();
+      return;
+    } catch (_) {
+      // Ignore and retry on next render/poll cycle.
+    } finally {
+      terminalAutoConfirmInFlight.delete(key);
+    }
+  }
 }
 
 function renderTerminalSessionBoardView() {
@@ -3778,7 +3823,7 @@ function renderPlatformSettingsCard(platform) {
   const commentPermissionInherit = !hasOwn("comment_permission") || value.comment_permission === "inherit";
   const shortTitle = escapeHtml(shortTitleInherit ? "" : (value.short_title || common.wechat_short_title || "GasGx燃气发电挖矿"));
   const location = escapeHtml(locationInherit ? "" : (value.location || ""));
-  const caption = escapeHtml(captionInherit ? "" : (value.caption || common.wechat_caption || ""));
+  const caption = escapeHtml(captionInherit ? (common.wechat_caption || "") : (value.caption || common.wechat_caption || ""));
   const isWechat = platform.key === "wechat";
   const extra = platform.key === "wechat" ? `
     <label>短标题
@@ -3989,7 +4034,8 @@ function activateView(view, updateHash = true) {
   if (view === "video-matrix") {
     mountVideoMatrixWorkbench();
   } else {
-    loadViewData(view).catch((error) => {
+    const forceReload = view === "settings";
+    loadViewData(view, { force: forceReload }).catch((error) => {
       const target = section.querySelector(".loading-inline") || section;
       target.innerHTML = `<div class="muted">加载失败：${error.message}</div>`;
     });

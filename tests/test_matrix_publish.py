@@ -160,25 +160,27 @@ def test_list_candidate_videos_includes_batch_subdirectories_and_filters_previou
     base = tmp_path / "runtime" / "materials" / "videos"
     today = int(time.time())
     yesterday = today - 86400
-    _write_video(base / "20260505_120000_abcd1234" / "today.mp4", today)
+    today_prefix = time.strftime("%Y%m%d", time.localtime(today))
+    yesterday_prefix = time.strftime("%Y%m%d", time.localtime(yesterday))
+    _write_video(base / f"{today_prefix}_120000_abcd1234" / "today.mp4", today)
     _write_video(base / "plain.mp4", today)
-    _write_video(base / "20260504_120000_abcd1234" / "old.mp4", yesterday)
+    _write_video(base / f"{yesterday_prefix}_120000_abcd1234" / "old.mp4", yesterday)
 
     candidates = list_candidate_videos()
 
     assert {item.name for item in candidates} == {"today.mp4", "plain.mp4"}
-    assert asset_day(base / "20260505_120000_abcd1234" / "today.mp4").isoformat() == time.strftime("%Y-%m-%d", time.localtime(today))
+    assert asset_day(base / f"{today_prefix}_120000_abcd1234" / "today.mp4").isoformat() == time.strftime("%Y-%m-%d", time.localtime(today))
 
 
-def test_publish_plan_allows_same_day_multi_platform_slots(monkeypatch, tmp_path: Path) -> None:
+def test_publish_plan_allows_same_day_multi_platform_slots_with_same_video(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat", "douyin"]})
     base = tmp_path / "runtime" / "materials" / "videos"
     _write_video(base / "one.mp4", int(time.time()))
     plan = build_publish_plan()
 
-    assert [item.platform for item in plan] == ["douyin"]
-    assert [item.source_video.name for item in plan] == ["one.mp4"]
+    assert [item.platform for item in plan] == ["douyin", "wechat"]
+    assert [item.source_video.name for item in plan] == ["one.mp4", "one.mp4"]
 
     state_path = tmp_path / "runtime" / "matrix_publish_state.json"
     state_path.write_text(
@@ -204,6 +206,39 @@ def test_publish_plan_allows_same_day_multi_platform_slots(monkeypatch, tmp_path
 
     assert [item.platform for item in plan] == ["wechat"]
     assert [item.source_video.name for item in plan] == ["one.mp4"]
+
+
+def test_publish_plan_reuses_locked_asset_for_remaining_platforms(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat", "douyin"]})
+    base = tmp_path / "runtime" / "materials" / "videos"
+    now = int(time.time())
+    _write_video(base / "old.mp4", now - 10)
+    _write_video(base / "new.mp4", now)
+    state_path = tmp_path / "runtime" / "matrix_publish_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "consumed": [
+                    {
+                        "asset_key": "old.mp4",
+                        "account_id": 1,
+                        "platform": "wechat",
+                        "publish_date": time.strftime("%Y-%m-%d"),
+                        "success": True,
+                        "finished_at": int(time.time()),
+                    }
+                ],
+                "runs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = build_publish_plan()
+
+    assert [item.platform for item in plan] == ["douyin"]
+    assert [item.source_video.name for item in plan] == ["old.mp4"]
 
 
 def test_publish_plan_skips_same_account_same_platform_same_day(monkeypatch, tmp_path: Path) -> None:

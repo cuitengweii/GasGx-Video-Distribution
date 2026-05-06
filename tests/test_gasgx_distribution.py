@@ -1936,16 +1936,12 @@ def test_terminal_open_account_qr_sets_error_stage_on_failure(monkeypatch, tmp_p
         encoding="utf-8",
     )
     monkeypatch.setattr(service, "_write_terminal_qr_cache", lambda *args, **kwargs: "")
-    monkeypatch.setattr(service, "open_account_browser", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("browser failed")))
-
     result = service.open_terminal_account_qr(1, 1)
 
     window = result["windows"][0]
     account = window["accounts"][0]
-    assert account["status"] == "error"
-    assert account["error_stage"] == "qr"
-    assert account["error_title"] == "获取二维码失败"
-    assert "browser failed" in account["status_text"]
+    assert account["status"] == "waiting_qr"
+    assert account["status_text"] == "二维码获取失败，请手动打开浏览器后重试"
 
 
 def test_terminal_manual_publish_sets_error_stage_on_missing_material(monkeypatch, tmp_path: Path) -> None:
@@ -2053,6 +2049,59 @@ def test_terminal_poll_marks_publish_run_failure_with_error_stage(monkeypatch, t
     assert "未检测到发布证据" in account["status_text"]
 
 
+def test_terminal_poll_marks_publish_run_unconfirmed_from_log(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    workspace = runtime_dir / "w1"
+    workspace.mkdir(parents=True, exist_ok=True)
+    log_path = workspace / "terminal_wechat_publish.log"
+    log_path.write_text(
+        "[Uploader:wechat] publish was not confirmed, fallback to save draft.\n"
+        "[Scheduler:wechat] Publish failed: ... E_PUBLISH_UNCONFIRMED_DRAFT_SAVED ...\n",
+        encoding="utf-8",
+    )
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [{"id": 1, "status": "running", "status_text": "发布执行中...", "task_id": None, "publish_success_count": 0}],
+                        "publish_run": {"status": "running", "pid": 555, "workspace": str(workspace), "account_id": 1, "log_path": str(log_path)},
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+                "next_probe_at": 0,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "now_ts", lambda: 100)
+    monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: False)
+
+    result = service.poll_terminal_execution()
+
+    account = result["windows"][0]["accounts"][0]
+    run = result["windows"][0]["publish_run"]
+    assert account["status"] == "error"
+    assert "发布未确认" in account["status_text"]
+    assert "发布未确认" in str(run.get("error") or "")
+
+
 def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
@@ -2142,7 +2191,7 @@ def test_terminal_qr_cache_uses_current_page_source_first(monkeypatch, tmp_path:
     assert connect_calls and isinstance(connect_calls[0], dict)
 
 
-def test_terminal_open_account_qr_falls_back_to_browser_when_refresh_needs_it(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_open_account_qr_does_not_fall_back_to_browser_when_refresh_needs_it(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2190,10 +2239,11 @@ def test_terminal_open_account_qr_falls_back_to_browser_when_refresh_needs_it(mo
     result = service.open_terminal_account_qr(1, 2)
 
     window = result["windows"][0]
-    assert opened == [2]
+    assert opened == []
     assert window["current_index"] == 1
     assert window["accounts"][1]["status"] == "waiting_qr"
-    assert str(window["qr_url"]).startswith("/api/terminal-execution/windows/1/qr-image")
+    assert window["accounts"][1]["status_text"] == "二维码获取失败，请手动打开浏览器后重试"
+    assert window["qr_url"] == ""
 
 
 def test_terminal_confirm_success_opens_next_account_qr(monkeypatch, tmp_path: Path) -> None:
