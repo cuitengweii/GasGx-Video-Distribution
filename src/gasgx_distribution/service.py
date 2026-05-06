@@ -4472,8 +4472,8 @@ def repair_account_configs() -> dict[str, Any]:
     ensure_database()
     with connect() as conn:
         accounts = conn.execute("SELECT id FROM matrix_accounts ORDER BY id ASC").fetchall()
-        for account in accounts:
-            account.update(_normalize_account_runtime(account))
+        for raw_account in accounts:
+            account = _normalize_account_runtime(dict(raw_account))
             account_id = int(account["id"])
             checked_accounts += 1
             existing_platforms = {
