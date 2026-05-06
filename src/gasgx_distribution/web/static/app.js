@@ -78,6 +78,7 @@ const state = {
   aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
   databaseDictionary: null,
+  syncStatus: null,
   databaseDictionaryExpanded: {},
   databaseDictionaryLocalized: false,
   analytics: {},
@@ -240,7 +241,7 @@ const VIEW_HEADERS = {
 };
 
 function displayDatabaseKeyword(value) {
-  return String(value ?? "").replaceAll("Supabase", "数据库");
+  return String(value ?? "").replace(/supabase/gi, "☁️云端数据库");
 }
 
 state.databaseDictionaryLocalized = localStorage.getItem(DATABASE_DICTIONARY_LOCALE_KEY) === "zh";
@@ -259,6 +260,8 @@ const DATABASE_DICTIONARY_TABLE_LABELS = {
   ai_robot_configs: "AI 机器人配置",
   ai_robot_messages: "AI 机器人消息",
   brand_settings: "品牌设置",
+  sync_outbox: "同步队列",
+  sync_conflicts: "同步冲突日志",
   schema_migrations: "数据库迁移",
   app_settings: "应用设置",
   analytics_items: "分析条目",
@@ -277,6 +280,16 @@ const DATABASE_DICTIONARY_COLUMN_LABELS = {
   display_name: "显示名称",
   niche: "领域",
   status: "状态",
+  table_name: "表名",
+  entity_type: "实体类型",
+  entity_id: "实体编号",
+  operation: "操作",
+  last_attempt_at: "最后尝试时间",
+  synced_at: "同步时间",
+  local_payload_json: "本地数据",
+  remote_payload_json: "云端数据",
+  resolution: "处理策略",
+  warning: "警告",
   notes: "备注",
   created_at: "创建时间",
   updated_at: "更新时间",
@@ -302,7 +315,6 @@ const DATABASE_DICTIONARY_COLUMN_LABELS = {
   summary: "摘要",
   error: "错误",
   retry_count: "重试次数",
-  last_attempt_at: "最后尝试时间",
   sent_at: "发送时间",
   video_ref: "视频引用",
   views: "播放量",
@@ -696,6 +708,30 @@ function showAccountCreateErrorToast(message) {
   showAccountCreateErrorToast.timer = setTimeout(() => {
     toast.classList.remove("show");
   }, 3000);
+}
+
+function showAccountRepairToast(result) {
+  let toast = document.querySelector("#account-repair-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "account-repair-toast";
+    toast.className = "permission-denied-toast account-created-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    document.body.appendChild(toast);
+  }
+  const repaired = Number(result?.repaired_accounts || 0);
+  const platforms = Number(result?.created_platforms || 0);
+  const profiles = Number(result?.created_profiles || 0) + Number(result?.updated_profiles || 0);
+  const detail = repaired
+    ? `已修复 ${repaired} 个账号，补齐 ${platforms} 个平台配置、${profiles} 个浏览器配置`
+    : "所有账号配置已完整";
+  toast.innerHTML = `<strong>账号配置修复完成</strong><span>${escapeHtml(detail)}</span>`;
+  toast.classList.add("show");
+  clearTimeout(showAccountRepairToast.timer);
+  showAccountRepairToast.timer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 3200);
 }
 
 function terminalErrorStageTitle(stage) {
@@ -1469,6 +1505,7 @@ function setPageLoading(label = "加载中...") {
     ["#matrix-job-status", "加载作业..."],
     ["#operation-notice-routes", "加载通知..."],
     ["#login-qr-batches", "加载登录批次..."],
+    ["#sync-action-state", "加载同步状态..."],
     ["#supabase-health-list", "加载数据库字典..."],
   ];
   targets.forEach(([selector, text]) => {
@@ -1502,7 +1539,10 @@ function setViewLoading(view) {
     "terminal-execution": [
       ["#terminal-config-list", "加载运营微信配置..."],
     ],
-    "system-settings": [["#supabase-health-list", "加载数据库字典..."]],
+    "system-settings": [
+      ["#sync-action-state", "加载同步状态..."],
+      ["#supabase-health-list", "加载数据库字典..."],
+    ],
   };
   if (view === "ai-robot") renderAiRobotLoading();
   (targets[view] || []).forEach(([selector, text]) => {
@@ -1630,7 +1670,7 @@ function renderPlatforms() {
 function renderTaskSelects() {
   const accountSelect = document.querySelector("#task-account-select");
   accountSelect.innerHTML = state.accounts.length
-    ? state.accounts.map((account) => `<option value="${account.id}">#${account.id} ${account.display_name}</option>`).join("")
+    ? state.accounts.map((account) => `<option value="${account.id}">#${account.id} ${cleanAccountDisplayName(account)}</option>`).join("")
     : `<option value="">请先创建账号</option>`;
 
   const platformSelect = document.querySelector("#task-platform-select");
@@ -1661,31 +1701,262 @@ function renderPlatformStatusGroup(platforms, region) {
 }
 
 function accountOperatorWechat(account) {
-  const match = String(account?.notes || "").match(/绑定运营微信：([^；;]+)/);
+  const match = String(account?.notes || "").match(/绑定运营微信[:：]\s*([^；;]+)/);
   return match ? match[1].trim() : "";
 }
 
+function accountPhone(account) {
+  const match = String(account?.notes || "").match(/账号手机号[:：]\s*(\d{11})/);
+  return match ? match[1] : "";
+}
+
+function accountSubtitle(account) {
+  const key = String(account?.account_key || "").trim();
+  const niche = String(account?.niche || "").trim();
+  const cleanNiche = /^\?+$/.test(niche) ? "" : niche;
+  return [key, cleanNiche].filter(Boolean).join(" · ");
+}
+
+function accountStatusLabel(status) {
+  const normalized = String(status || "").toLowerCase();
+  const labels = {
+    active: "启用",
+    warmup: "养号",
+    paused: "暂停",
+  };
+  return labels[normalized] || status || "未知";
+}
+
+function accountStatusEnabled(account) {
+  return String(account?.status || "").toLowerCase() === "active";
+}
+
+function cleanAccountDisplayName(account) {
+  const raw = String(account?.display_name || "").trim();
+  const cleaned = raw
+    .split(/\s+/)
+    .filter((part) => !/^\?+$/.test(part))
+    .join(" ")
+    .trim();
+  return cleaned || String(account?.account_key || "").trim() || "未命名账号";
+}
+
+function accountSearchText(account) {
+  return [
+    account?.id,
+    account?.display_name,
+    cleanAccountDisplayName(account),
+    account?.account_key,
+    account?.niche,
+    account?.status,
+    accountStatusLabel(account?.status),
+    accountOperatorWechat(account),
+    accountPhone(account),
+    account?.notes,
+  ].map((value) => String(value || "").toLowerCase()).join(" ");
+}
+
+function filteredAccounts() {
+  const keyword = String(document.querySelector("#account-search-input")?.value || "").trim().toLowerCase();
+  if (!keyword) return state.accounts || [];
+  return (state.accounts || []).filter((account) => accountSearchText(account).includes(keyword));
+}
+
+function accountEditIcon() {
+  return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21l-4 1 1-4Z"/></svg>`;
+}
+
+function accountDeleteIcon() {
+  return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>`;
+}
+
+function accountOperatorWechatOptions(current = "") {
+  const values = [
+    ...(state.operatorWechats || []),
+    ...(state.accounts || []).map(accountOperatorWechat),
+    current,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function accountNotesWith(account, updates = {}) {
+  const notes = String(account?.notes || "");
+  const operatorWechat = updates.operatorWechat ?? accountOperatorWechat(account);
+  const phone = updates.phone ?? accountPhone(account);
+  const extras = notes
+    .split(/[；;]/)
+    .map((part) => part.trim())
+    .filter((part) => part && !/^绑定运营微信[:：]/.test(part) && !/^账号手机号[:：]/.test(part));
+  const fields = [];
+  if (operatorWechat) fields.push(`绑定运营微信：${operatorWechat}`);
+  if (phone) fields.push(`账号手机号：${phone}`);
+  return [...fields, ...extras].join("；");
+}
+
 function renderAccounts() {
-  document.querySelector("#accounts-list").innerHTML = state.accounts.map((account) => {
+  const accounts = filteredAccounts();
+  const keyword = String(document.querySelector("#account-search-input")?.value || "").trim();
+  document.querySelector("#accounts-list").innerHTML = accounts.map((account) => {
     const platforms = account.platforms || [];
     const operatorWechat = accountOperatorWechat(account);
-    return `<article class="account-row">
+    const phone = accountPhone(account);
+    const displayName = cleanAccountDisplayName(account);
+    const title = `#${account.id} ${displayName}`;
+    return `<article class="account-row" data-account-id="${account.id}">
       <div class="row-head">
         <div class="account-title-wrap">
-          <strong class="account-title">#${account.id} ${account.display_name}</strong>
-          <div class="account-subtitle">${account.account_key} · ${account.niche || ""}</div>
-          <div class="account-operator-wechat">绑定运营微信：<strong>${operatorWechat || "-"}</strong></div>
+          <div class="account-title-line">
+            <strong class="account-title">${escapeHtml(title)}</strong>
+            <button class="account-edit-btn" type="button" title="修改账号名称" aria-label="修改账号名称" data-no-global-loading="1" data-account-edit="name">${accountEditIcon()}</button>
+          </div>
+          <div class="account-subtitle">${escapeHtml(accountSubtitle(account))}</div>
+          <div class="account-meta-row">
+            <div class="account-operator-wechat"><span>运营微信</span><strong>${escapeHtml(operatorWechat || "-")}</strong><button class="account-edit-btn compact" type="button" title="修改绑定运营微信" aria-label="修改绑定运营微信" data-no-global-loading="1" data-account-edit="operator">${accountEditIcon()}</button></div>
+            <div class="account-phone-line"><span>手机号</span><strong>${escapeHtml(phone || "-")}</strong><button class="account-edit-btn compact" type="button" title="修改账号手机号" aria-label="修改账号手机号" data-no-global-loading="1" data-account-edit="phone">${accountEditIcon()}</button></div>
+          </div>
         </div>
         <div class="account-badges">
-          <span class="chip">${account.status}</span>
-          <span class="chip success-chip">发布成功 ${account.publish_success_count || 0}</span>
-          <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${account.display_name}">删除账号</button>
+          <button class="account-status-toggle ${accountStatusEnabled(account) ? "enabled" : "paused"}" type="button" data-no-global-loading="1" data-account-status-toggle="${account.id}" aria-pressed="${accountStatusEnabled(account)}" title="${accountStatusEnabled(account) ? "点击暂停账号" : "点击启用账号"}">
+            <span class="account-status-toggle-knob" aria-hidden="true"></span>
+            <span>${escapeHtml(accountStatusLabel(account.status))}</span>
+          </button>
+          <span class="chip success-chip" title="基于真实发布成功记录去重统计">已发布成功 ${account.publish_success_count || 0}</span>
+          <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${escapeHtml(displayName)}">${accountDeleteIcon()}<span>删除账号</span></button>
         </div>
       </div>
       ${renderPlatformStatusGroup(platforms, "cn")}
       ${renderPlatformStatusGroup(platforms, "global")}
     </article>`;
-  }).join("") || `<div class="muted">暂无账号</div>`;
+  }).join("") || `<div class="muted">${keyword ? "没有匹配的账号" : "暂无账号"}</div>`;
+}
+
+function accountById(accountId) {
+  return (state.accounts || []).find((account) => Number(account.id) === Number(accountId));
+}
+
+function replaceAccountInState(updated) {
+  const index = (state.accounts || []).findIndex((account) => Number(account.id) === Number(updated?.id));
+  if (index >= 0) state.accounts[index] = updated;
+}
+
+async function repairAccountConfigs(button) {
+  if (!window.confirm("确认检索并修复所有账号的矩阵配置？缺失的平台和浏览器配置会自动补齐。")) return;
+  const restoreButton = setButtonLoading(button, "修复中");
+  try {
+    const result = await api("/api/accounts/repair-config", { method: "POST" });
+    await loadAccounts();
+    renderAccounts();
+    loadedViews.delete("overview");
+    loadedViews.delete("tasks");
+    loadedViews.delete("terminal-execution");
+    showAccountRepairToast(result);
+  } catch (error) {
+    showAccountCreateErrorToast(formatFriendlyMessage(error.message));
+  } finally {
+    restoreButton();
+  }
+}
+
+function accountInlineActions(field) {
+  return `<span class="account-inline-actions">
+    <button class="btn secondary btn-sm" type="button" data-no-global-loading="1" data-account-save="${field}">保存</button>
+    <button class="btn ghost btn-sm" type="button" data-no-global-loading="1" data-account-cancel>取消</button>
+  </span>`;
+}
+
+function startAccountNameEdit(row, account) {
+  const target = row.querySelector(".account-title-line");
+  if (!target) return;
+  target.innerHTML = `<div class="account-inline-edit account-name-edit">
+    <input class="account-inline-input" type="text" value="${escapeHtml(account.display_name || "")}" aria-label="账号名称">
+    ${accountInlineActions("name")}
+  </div>`;
+  const input = target.querySelector("input");
+  input?.focus();
+  input?.select();
+}
+
+function startAccountOperatorEdit(row, account) {
+  const target = row.querySelector(".account-operator-wechat");
+  if (!target) return;
+  const current = accountOperatorWechat(account);
+  const options = accountOperatorWechatOptions(current);
+  target.innerHTML = `绑定运营微信：<span class="account-inline-edit">
+    <select class="account-inline-select" aria-label="绑定运营微信">
+      ${options.map((value) => `<option value="${escapeHtml(value)}" ${value === current ? "selected" : ""}>${escapeHtml(value)}</option>`).join("") || `<option value="">暂无绑定运营微信</option>`}
+    </select>
+    ${accountInlineActions("operator")}
+  </span>`;
+  target.querySelector("select")?.focus();
+}
+
+function startAccountPhoneEdit(row, account) {
+  const target = row.querySelector(".account-phone-line");
+  if (!target) return;
+  target.innerHTML = `账号手机号：<span class="account-inline-edit">
+    <input class="account-inline-input phone" type="text" inputmode="numeric" maxlength="11" value="${escapeHtml(accountPhone(account))}" aria-label="账号手机号">
+    ${accountInlineActions("phone")}
+  </span>`;
+  const input = target.querySelector("input");
+  input?.focus();
+  input?.select();
+}
+
+async function saveAccountInlineEdit(button) {
+  const row = button.closest("[data-account-id]");
+  const field = button.dataset.accountSave;
+  const account = accountById(row?.dataset.accountId);
+  if (!row || !account || !field) return;
+  const payload = {};
+  if (field === "name") {
+    const value = row.querySelector(".account-title-line input")?.value.trim();
+    if (!value) {
+      showAccountCreateErrorToast("账号名称不能为空");
+      return;
+    }
+    payload.display_name = value;
+  } else if (field === "operator") {
+    const value = row.querySelector(".account-operator-wechat select")?.value.trim();
+    if (!value) {
+      showAccountCreateErrorToast("请选择绑定运营微信");
+      return;
+    }
+    payload.notes = accountNotesWith(account, { operatorWechat: value });
+  } else if (field === "phone") {
+    const value = row.querySelector(".account-phone-line input")?.value.trim();
+    if (!/^\d{11}$/.test(value || "")) {
+      showAccountCreateErrorToast("账号手机号需为 11 位数字");
+      return;
+    }
+    payload.notes = accountNotesWith(account, { phone: value });
+  }
+  const restoreButton = setButtonLoading(button, "保存中");
+  try {
+    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+    replaceAccountInState(updated);
+    renderAccounts();
+    updateAccountPhoneHint();
+  } catch (error) {
+    showAccountCreateErrorToast(formatFriendlyMessage(error.message));
+  } finally {
+    restoreButton();
+  }
+}
+
+async function toggleAccountStatus(button) {
+  const account = accountById(button?.dataset.accountStatusToggle);
+  if (!account) return;
+  const nextStatus = accountStatusEnabled(account) ? "paused" : "active";
+  const restoreButton = setButtonLoading(button, nextStatus === "active" ? "启用中" : "暂停中");
+  try {
+    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }) });
+    replaceAccountInState(updated);
+    renderAccounts();
+  } catch (error) {
+    showAccountCreateErrorToast(formatFriendlyMessage(error.message));
+  } finally {
+    restoreButton();
+  }
 }
 
 function taskTypeLabel(type) {
@@ -1696,7 +1967,7 @@ function taskAccountLabel(task) {
   const accountId = Number(task.account_id || 0);
   const account = state.accounts.find((item) => Number(item.id) === accountId);
   return account
-    ? `#${account.id} ${account.display_name || account.account_key || "未命名账号"}`
+    ? `#${account.id} ${cleanAccountDisplayName(account)}`
     : (accountId ? `#${accountId} 未知账号` : "未指定账号");
 }
 
@@ -1726,7 +1997,7 @@ function taskAccountFilterOptions() {
     const value = String(account.id || "");
     if (!value || seen.has(value)) return "";
     seen.add(value);
-    return `<option value="${value}">#${account.id} ${account.display_name || account.account_key || "Unnamed Account"}</option>`;
+    return `<option value="${value}">#${account.id} ${cleanAccountDisplayName(account)}</option>`;
   }).join("");
   const taskOnlyOptions = state.tasks.map((task) => {
     const value = String(task.account_id || "");
@@ -3284,15 +3555,16 @@ function initSupabaseReadCacheClear() {
       stateNode.classList.remove("danger");
     }
     try {
-      const result = await api("/api/system/supabase-read-cache/clear", { method: "POST" });
+      const result = await api("/api/system/cache/clear", { method: "POST" });
       if (stateNode) {
-        if (result.cleared) {
-          stateNode.textContent = "已清空进程内 Supabase 读缓存，后续请求将重新拉取远端数据。";
+        const supabase = result.supabase_read_cache || {};
+        if (supabase.cleared) {
+          stateNode.textContent = "已清空进程内应用缓存，后续请求将重新读取。";
         } else {
           stateNode.textContent =
             result.backend === "sqlite"
-              ? "当前品牌库为 SQLite，未启用 Supabase 读缓存。"
-              : "未清理缓存。";
+              ? "当前本地 SQLite 模式无远端读缓存，已完成本地缓存刷新。"
+              : "已执行缓存刷新。";
         }
       }
     } catch (error) {
@@ -3321,7 +3593,7 @@ function initSystemDirectoryActions() {
       try {
         const result = await api(`/api/system/open-directory/${encodeURIComponent(button.dataset.systemDir)}`, { method: "POST" });
         if (stateNode) {
-          stateNode.textContent = `已打开：${label}`;
+          stateNode.textContent = `已请求打开：${label}`;
           stateNode.title = result.path || "";
         }
       } catch (error) {
@@ -3804,6 +4076,102 @@ function renderBoundAiRobotPlatforms() {
   });
 }
 
+function formatSyncTime(value) {
+  const raw = Number(value || 0);
+  if (!raw) return "暂无成功同步";
+  return new Date(raw * 1000).toLocaleString();
+}
+
+function renderSyncStatus() {
+  const status = state.syncStatus || {};
+  const badge = document.querySelector("#sync-status-badge");
+  const localBackend = document.querySelector("#sync-local-backend");
+  const pending = document.querySelector("#sync-pending-count");
+  const failed = document.querySelector("#sync-failed-count");
+  const actionState = document.querySelector("#sync-action-state");
+  if (badge) {
+    const failedCount = Number(status.failed || 0);
+    const pendingCount = Number(status.pending || 0);
+    badge.textContent = failedCount ? "待重试" : pendingCount ? "待同步" : "已就绪";
+    badge.classList.toggle("danger", failedCount > 0);
+  }
+  if (localBackend) localBackend.textContent = String(status.backend || "sqlite").toUpperCase();
+  if (pending) pending.textContent = `${Number(status.pending || 0)} 条`;
+  if (failed) failed.textContent = `${Number(status.failed || 0)} / ${Number(status.conflicts || 0)}`;
+  if (actionState) {
+    const cloud = status.supabase_configured ? "☁️云端数据库已配置" : "☁️云端数据库未配置";
+    const last = formatSyncTime(status.last_synced_at);
+    const error = status.last_error ? `；最近错误：${displayDatabaseKeyword(status.last_error)}` : "";
+    actionState.textContent = `${cloud}；最近成功：${last}${error}`;
+    actionState.classList.toggle("danger", Number(status.failed || 0) > 0);
+  }
+}
+
+async function loadSyncStatus() {
+  state.syncStatus = await api("/api/sync/status");
+  renderSyncStatus();
+  return state.syncStatus;
+}
+
+function initSyncActions() {
+  const stateNode = document.querySelector("#sync-action-state");
+  const pullButton = document.querySelector("#sync-pull-supabase");
+  const pushButton = document.querySelector("#sync-push-supabase");
+  const retryButton = document.querySelector("#sync-retry-failed");
+  pullButton?.addEventListener("click", async () => {
+    const restoreButton = setButtonLoading(pullButton, "导入中...");
+    try {
+      const result = await api("/api/sync/supabase/pull", { method: "POST" });
+      state.syncStatus = result.status || await api("/api/sync/status");
+      renderSyncStatus();
+      loadedViews.delete("accounts");
+      if (currentView === "accounts") {
+        await loadViewData("accounts", { force: true });
+      }
+      if (stateNode) {
+        stateNode.textContent = `已导入账号 ${result.accounts || 0} 个，平台 ${result.platforms || 0} 条，浏览器配置 ${result.profiles || 0} 条。`;
+        stateNode.classList.remove("danger");
+      }
+    } catch (error) {
+      if (stateNode) {
+        stateNode.textContent = `导入失败：${displayDatabaseKeyword(error.message)}`;
+        stateNode.classList.add("danger");
+      }
+      throw error;
+    } finally {
+      restoreButton();
+    }
+  });
+  pushButton?.addEventListener("click", async () => {
+    const restoreButton = setButtonLoading(pushButton, "推送中...");
+    try {
+      const result = await api("/api/sync/supabase/push", { method: "POST" });
+      state.syncStatus = result.status || await api("/api/sync/status");
+      renderSyncStatus();
+      if (stateNode) stateNode.textContent = `推送完成：成功 ${result.pushed || 0}，失败 ${result.failed || 0}。`;
+    } catch (error) {
+      if (stateNode) {
+        stateNode.textContent = `推送失败：${displayDatabaseKeyword(error.message)}`;
+        stateNode.classList.add("danger");
+      }
+      throw error;
+    } finally {
+      restoreButton();
+    }
+  });
+  retryButton?.addEventListener("click", async () => {
+    const restoreButton = setButtonLoading(retryButton, "重试中...");
+    try {
+      const result = await api("/api/sync/retry", { method: "POST" });
+      state.syncStatus = result.status || await api("/api/sync/status");
+      renderSyncStatus();
+      if (stateNode) stateNode.textContent = `已重新排队 ${result.retried || 0} 条失败同步。`;
+    } finally {
+      restoreButton();
+    }
+  });
+}
+
 function renderDatabaseDictionary() {
   const status = document.querySelector("#supabase-health-state");
   const list = document.querySelector("#supabase-health-list");
@@ -4126,6 +4494,7 @@ async function loadViewData(view, { force = false } = {}) {
       state.aiRobotMessages = await api("/api/ai-robots/messages");
       renderOperationNotifications();
     } else if (view === "system-settings") {
+      await loadSyncStatus();
       state.databaseDictionary = await api("/api/system/database-dictionary");
       renderDatabaseDictionary();
     } else if (view === "video-matrix") {
@@ -4385,11 +4754,6 @@ function makeAccountKey(displayName, suffix) {
   return `gasgx-${slug || "account"}-${seq}`;
 }
 
-function accountPhone(account) {
-  const match = String(account?.notes || "").match(/账号手机号：(\d{11})/);
-  return match ? match[1] : "";
-}
-
 function updateAccountPhoneHint() {
   const input = document.querySelector('#account-form input[name="phone"]');
   const hint = document.querySelector("#account-phone-hint");
@@ -4536,6 +4900,10 @@ document.querySelector("#operator-wechat-add-input")?.addEventListener("keydown"
   }
 });
 document.querySelector('#account-form input[name="phone"]')?.addEventListener("input", updateAccountPhoneHint);
+document.querySelector("#account-search-input")?.addEventListener("input", renderAccounts);
+document.querySelector("#accounts-repair-config")?.addEventListener("click", (event) => {
+  repairAccountConfigs(event.currentTarget);
+});
 document.addEventListener("click", (event) => {
   const picker = document.querySelector("#operator-wechat-select");
   if (!picker || picker.contains(event.target)) return;
@@ -5112,6 +5480,34 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const accountStatusButton = event.target.closest("[data-account-status-toggle]");
+  if (accountStatusButton) {
+    await toggleAccountStatus(accountStatusButton);
+    return;
+  }
+
+  const saveAccountButton = event.target.closest("[data-account-save]");
+  if (saveAccountButton) {
+    await saveAccountInlineEdit(saveAccountButton);
+    return;
+  }
+
+  if (event.target.closest("[data-account-cancel]")) {
+    renderAccounts();
+    return;
+  }
+
+  const editAccountButton = event.target.closest("[data-account-edit]");
+  if (editAccountButton) {
+    const row = editAccountButton.closest("[data-account-id]");
+    const account = accountById(row?.dataset.accountId);
+    if (!row || !account) return;
+    if (editAccountButton.dataset.accountEdit === "name") startAccountNameEdit(row, account);
+    if (editAccountButton.dataset.accountEdit === "operator") startAccountOperatorEdit(row, account);
+    if (editAccountButton.dataset.accountEdit === "phone") startAccountPhoneEdit(row, account);
+    return;
+  }
+
   const deleteAccountButton = event.target.closest("[data-delete-account]");
   if (deleteAccountButton) {
     const accountId = deleteAccountButton.dataset.deleteAccount;
@@ -5154,6 +5550,22 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+document.addEventListener("keydown", (event) => {
+  const editor = event.target.closest?.(".account-inline-edit");
+  if (!editor) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    renderAccounts();
+  }
+  if (event.key === "Enter") {
+    const saveButton = editor.querySelector("[data-account-save]");
+    if (saveButton) {
+      event.preventDefault();
+      saveButton.click();
+    }
+  }
+});
+
 refresh().catch((error) => {
   document.querySelector("#summary").innerHTML = `<div class="metric"><span>加载失败</span><strong>${error.message}</strong></div>`;
 });
@@ -5163,6 +5575,7 @@ initBrandSettings();
 initSystemInitialize();
 initSystemDirectoryActions();
 initSupabaseReadCacheClear();
+initSyncActions();
 document.querySelector("#database-dictionary-locale-toggle")?.addEventListener("click", toggleDatabaseDictionaryLocale);
 initUserMenu();
 initPermissionGuards();

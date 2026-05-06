@@ -52,7 +52,7 @@ class SupabaseRestClient:
         return f"{self.url}/rest/v1/{quote(table, safe='')}"
 
     def _timeout(self) -> float:
-        return float(os.getenv("SUPABASE_REST_TIMEOUT", "20") or 20)
+        return float(os.getenv("SUPABASE_REST_TIMEOUT", "5") or 5)
 
     def select(self, table: str, *, filters: dict[str, Any] | None = None, order: str = "", columns: str = "*") -> list[dict[str, Any]]:
         params: dict[str, str] = {"select": columns or "*"}

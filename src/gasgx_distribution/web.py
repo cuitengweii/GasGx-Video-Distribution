@@ -246,13 +246,18 @@ def create_app() -> FastAPI:
                 return
             checks.append({"name": name, "ok": True, "details": details})
 
-        record(
-            "control_plane",
-            lambda: {
-                "backend": control_plane.control_backend(),
-                "brand_count": len(control_plane.list_brand_instances()),
-            },
-        )
+        control_backend = control_plane.control_backend()
+        brand_backend = service.brand_database_backend()
+        if control_backend == "supabase":
+            record(
+                "control_plane",
+                lambda: {
+                    "backend": control_backend,
+                    "brand_count": len(control_plane.list_brand_instances()),
+                },
+            )
+        else:
+            record("control_plane", lambda: {"backend": control_backend, "brand_count": "local"})
         record(
             "tenant",
             lambda: {
@@ -261,20 +266,18 @@ def create_app() -> FastAPI:
                 "status": request.state.brand_instance.get("status"),
             },
         )
-        record(
-            "brand_database",
-            lambda: {
-                "backend": service.brand_database_backend(),
-                "brand_name": service.load_brand_settings().get("name"),
-            },
-        )
-        record(
-            "ai_robot_queue",
-            lambda: {
-                "config_count": len(service.list_ai_robot_configs()),
-                "queued_message_count": len(service.list_ai_robot_messages()),
-            },
-        )
+        record("brand_database", lambda: {"backend": brand_backend, "brand_name": service.load_brand_settings().get("name")})
+        record("sync_outbox", service.sync_status)
+        if brand_backend == "sqlite":
+            record(
+                "ai_robot_queue",
+                lambda: {
+                    "config_count": len(service.list_ai_robot_configs()),
+                    "queued_message_count": len(service.list_ai_robot_messages()),
+                },
+            )
+        else:
+            record("ai_robot_queue", lambda: {"backend": brand_backend, "remote_check": "skipped"})
 
         ok = all(item["ok"] for item in checks)
         return {
@@ -296,6 +299,26 @@ def create_app() -> FastAPI:
     @app.post("/api/system/supabase-read-cache/clear")
     def clear_supabase_read_cache_route() -> dict[str, Any]:
         return service.clear_supabase_read_cache()
+
+    @app.post("/api/system/cache/clear")
+    def clear_runtime_cache_route() -> dict[str, Any]:
+        return service.clear_runtime_caches()
+
+    @app.get("/api/sync/status")
+    def sync_status_route() -> dict[str, Any]:
+        return service.sync_status()
+
+    @app.post("/api/sync/supabase/push")
+    def push_sync_supabase_route(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        return service.push_sync_outbox_to_supabase(limit=limit)
+
+    @app.post("/api/sync/supabase/pull")
+    def pull_sync_supabase_route() -> dict[str, Any]:
+        return service.pull_accounts_from_supabase_to_sqlite()
+
+    @app.post("/api/sync/retry")
+    def retry_sync_route() -> dict[str, Any]:
+        return service.retry_sync_outbox()
 
     @app.post("/api/system/initialize")
     def system_initialize(payload: SystemInitializePayload) -> dict[str, Any]:
@@ -618,6 +641,10 @@ def create_app() -> FastAPI:
             return service.create_account(_model_payload(payload))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/repair-config")
+    def repair_account_configs() -> dict[str, Any]:
+        return service.repair_account_configs()
 
     @app.patch("/api/accounts/{account_id}")
     def update_account(account_id: int, payload: AccountPayload) -> dict[str, Any]:

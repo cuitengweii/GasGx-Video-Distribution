@@ -415,7 +415,7 @@ function renderSource(data) {
   });
   $("addCategory").onclick = addMaterialCategory;
   $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；每次按照目录把最新拍摄的短视频上传进对应的目录；勾选素材目录并设置最新素材数量后，系统会自动计算片段时长并按行顺序组合混剪。";
-  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"], ["Upload files", "手动上传"]], state.source_mode || "Category folders", () => {
+  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], "Category folders", () => {
     updateSourceMode();
     scheduleStateSave();
   });
@@ -2624,7 +2624,7 @@ function collectState() {
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: state.copy_language || settings.copy_language || "zh",
     template_config: activeVideoTemplateSnapshot(),
     cover_template_config: activeCoverTemplateSnapshot(),
-    source_mode: radioValue("source_mode") || "Category folders",
+    source_mode: "Category folders",
     headline: $("headline").value, subhead: $("subhead").value,
     follow_text: endingCopyText, hud_text: $("hudText").value,
     ending_template_mode: endingTemplateMode(),
@@ -2819,8 +2819,7 @@ function toggleBgmLibrarySize() {
 function updateSourceMode() {
   const wrap = $("uploadSourcesWrap");
   if (!wrap) return;
-  const uploadMode = radioValue("source_mode") === "Upload files";
-  wrap.classList.toggle("hidden", !uploadMode);
+  wrap.classList.add("hidden");
 }
 function renderRadio(containerId, name, options, selected, onchange) {
   $(containerId).innerHTML = options.map(([value, label]) => `<label><input type="radio" name="${name}" value="${value}" ${value === selected ? "checked" : ""}>${label}</label>`).join("");

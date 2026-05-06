@@ -27,7 +27,7 @@ from PIL import Image, ImageStat
 from cybercar import engine
 from cybercar.settings import apply_runtime_environment as apply_cybercar_environment
 
-from .db import connect, dict_from_row, init_db, now_ts, use_database
+from .db import connect, database_path, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
 from .platforms import DEBUG_PORT_END, DEBUG_PORT_START, SUPPORTED_PLATFORMS, get_platform, normalize_platform, stable_debug_port
 from .public_settings import load_distribution_settings, load_platform_publish_settings, resolve_material_dir
@@ -261,7 +261,7 @@ def brand_database_backend() -> str:
 
 def _brand_supabase() -> SupabaseRestClient:
     instance = _brand_runtime.get() or {}
-    if not instance:
+    if not instance or not instance.get("supabase_url") or not instance.get("service_key_ref"):
         return SupabaseRestClient.from_env(prefix="BRAND_SUPABASE")
     return SupabaseRestClient.from_instance(instance)
 
@@ -280,6 +280,12 @@ def clear_supabase_read_cache() -> dict[str, Any]:
         _SUPABASE_READ_CACHE.clear()
         _SUPABASE_APP_SETTINGS_CACHE.clear()
     return {"ok": True, "backend": "supabase", "cleared": True}
+
+
+def clear_runtime_caches() -> dict[str, Any]:
+    """Clear process-local caches without requiring Supabase to be on the request path."""
+    supabase = clear_supabase_read_cache()
+    return {"ok": True, "backend": brand_database_backend(), "supabase_read_cache": supabase}
 
 
 def _invalidate_supabase_read_cache(*keys: str) -> None:
@@ -322,6 +328,413 @@ def _json_payload(value: Any, default: Any = None) -> Any:
         except json.JSONDecodeError:
             return default
     return value
+
+
+SYNC_TABLE_CONFLICT_KEYS = {
+    "matrix_accounts": "id",
+    "account_platforms": "account_id,platform",
+    "browser_profiles": "account_id",
+    "brand_settings": "id",
+    "notification_routes": "event_type,platform",
+    "automation_tasks": "id",
+    "video_stats_snapshots": "id",
+    "wechat_stats_account_snapshots": "account_id,platform,stat_date",
+    "ai_robot_configs": "platform",
+    "ai_robot_messages": "id",
+    "app_settings": "setting_key",
+}
+SYNC_JSON_FIELDS = {"payload_json", "fingerprint_json", "raw_json"}
+SYNC_BOOLEAN_FIELDS = {"enabled"}
+
+
+def _sync_outbox_enabled() -> bool:
+    return brand_database_backend() == "sqlite"
+
+
+def _sync_entity_id(table_name: str, payload: dict[str, Any]) -> str:
+    keys = [key.strip() for key in SYNC_TABLE_CONFLICT_KEYS.get(table_name, "id").split(",") if key.strip()]
+    parts = [f"{key}={payload.get(key)}" for key in keys if payload.get(key) is not None]
+    return "|".join(parts) or str(payload.get("id") or "")
+
+
+def _enqueue_sync_payload(
+    conn,
+    table_name: str,
+    operation: str,
+    payload: dict[str, Any],
+    *,
+    entity_id: str | None = None,
+) -> None:
+    if not _sync_outbox_enabled() or table_name not in SYNC_TABLE_CONFLICT_KEYS:
+        return
+    ts = now_ts()
+    conn.execute(
+        """
+        INSERT INTO sync_outbox(entity_type, table_name, entity_id, operation, payload_json, status, retry_count, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+        """,
+        (
+            table_name,
+            table_name,
+            entity_id or _sync_entity_id(table_name, payload),
+            operation,
+            json.dumps(payload, ensure_ascii=False, default=str),
+            ts,
+            ts,
+        ),
+    )
+
+
+def _enqueue_sync_row(conn, table_name: str, where_sql: str, params: tuple[Any, ...], *, entity_id: str | None = None) -> None:
+    if not _sync_outbox_enabled():
+        return
+    row = conn.execute(f"SELECT * FROM {table_name} WHERE {where_sql}", params).fetchone()
+    if row is not None:
+        _enqueue_sync_payload(conn, table_name, "upsert", dict_from_row(row), entity_id=entity_id)
+
+
+def _enqueue_sync_delete(conn, table_name: str, filters: dict[str, Any], *, entity_id: str | None = None) -> None:
+    _enqueue_sync_payload(conn, table_name, "delete", {"filters": filters}, entity_id=entity_id or _sync_entity_id(table_name, filters))
+
+
+def _enqueue_account_sync_rows(conn, account_id: int) -> None:
+    _enqueue_sync_row(conn, "matrix_accounts", "id = ?", (account_id,))
+    for row in conn.execute("SELECT * FROM account_platforms WHERE account_id = ?", (account_id,)):
+        _enqueue_sync_payload(conn, "account_platforms", "upsert", dict_from_row(row))
+    _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
+
+
+def sync_status() -> dict[str, Any]:
+    ensure_database()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM sync_outbox
+            GROUP BY status
+            """
+        ).fetchall()
+        counts = {str(row["status"]): int(row["count"]) for row in rows}
+        last_synced = conn.execute("SELECT MAX(synced_at) AS value FROM sync_outbox WHERE status = 'synced'").fetchone()["value"]
+        last_error = conn.execute(
+            """
+            SELECT error FROM sync_outbox
+            WHERE status = 'failed' AND error <> ''
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        conflict_count = conn.execute("SELECT COUNT(*) AS count FROM sync_conflicts").fetchone()["count"]
+    pending = counts.get("pending", 0)
+    failed = counts.get("failed", 0)
+    return {
+        "ok": True,
+        "backend": brand_database_backend(),
+        "mode": "local_first",
+        "local_database": str(database_path()),
+        "supabase_configured": bool(os.getenv("SUPABASE_URL") and os.getenv("BRAND_SUPABASE_SERVICE_KEY")),
+        "pending": pending,
+        "failed": failed,
+        "synced": counts.get("synced", 0),
+        "queued": pending + failed,
+        "conflicts": int(conflict_count or 0),
+        "last_synced_at": last_synced,
+        "last_error": str(last_error["error"] or "") if last_error else "",
+    }
+
+
+def retry_sync_outbox() -> dict[str, Any]:
+    ensure_database()
+    ts = now_ts()
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE sync_outbox
+            SET status = 'pending', error = '', updated_at = ?
+            WHERE status = 'failed'
+            """,
+            (ts,),
+        )
+        retried = int(cursor.rowcount or 0)
+    return {"ok": True, "retried": retried, "status": sync_status()}
+
+
+def _sync_payload_for_supabase(table_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    data = copy.deepcopy(payload)
+    for field in SYNC_JSON_FIELDS:
+        if field in data:
+            default = [] if str(data.get(field) or "").strip().startswith("[") else {}
+            data[field] = _json_payload(data.get(field), default)
+    for field in SYNC_BOOLEAN_FIELDS:
+        if field in data:
+            data[field] = bool(data.get(field))
+    return data
+
+
+def _sync_filters_for_payload(table_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    keys = [key.strip() for key in SYNC_TABLE_CONFLICT_KEYS.get(table_name, "id").split(",") if key.strip()]
+    return {key: payload[key] for key in keys if key in payload and payload[key] is not None}
+
+
+def _record_sync_conflict(conn, table_name: str, entity_id: str, local_payload: dict[str, Any], remote_payload: dict[str, Any]) -> None:
+    ts = now_ts()
+    conn.execute(
+        """
+        INSERT INTO sync_conflicts(table_name, entity_id, local_payload_json, remote_payload_json, resolution, warning, created_at)
+        VALUES (?, ?, ?, ?, 'local_overwrite', ?, ?)
+        """,
+        (
+            table_name,
+            entity_id,
+            json.dumps(local_payload, ensure_ascii=False, default=str),
+            json.dumps(remote_payload, ensure_ascii=False, default=str),
+            "remote row was newer; local row overwrote remote by policy",
+            ts,
+        ),
+    )
+
+
+def _detect_sync_conflict(conn, client: SupabaseRestClient, table_name: str, entity_id: str, payload: dict[str, Any]) -> None:
+    filters = _sync_filters_for_payload(table_name, payload)
+    if not filters or not hasattr(client, "select_one"):
+        return
+    try:
+        remote = client.select_one(table_name, filters=filters)
+    except Exception:
+        return
+    if not isinstance(remote, dict) or not remote:
+        return
+    try:
+        remote_updated = int(remote.get("updated_at") or 0)
+        local_updated = int(payload.get("updated_at") or payload.get("created_at") or 0)
+    except Exception:
+        return
+    if remote_updated > local_updated:
+        _record_sync_conflict(conn, table_name, entity_id, payload, remote)
+
+
+def push_sync_outbox_to_supabase(*, limit: int = 100) -> dict[str, Any]:
+    ensure_database()
+    limit = max(1, min(int(limit or 100), 500))
+    pushed = 0
+    failed = 0
+    skipped = 0
+    errors: list[str] = []
+    try:
+        client = _brand_supabase()
+    except Exception as exc:
+        error = str(exc)
+        ts = now_ts()
+        with connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE sync_outbox
+                SET status = 'failed', retry_count = retry_count + 1, last_attempt_at = ?, updated_at = ?, error = ?
+                WHERE id IN (
+                    SELECT id FROM sync_outbox
+                    WHERE status IN ('pending', 'failed')
+                    ORDER BY id ASC
+                    LIMIT ?
+                )
+                """,
+                (ts, ts, error[:1000], limit),
+            )
+            failed = int(cursor.rowcount or 0)
+        return {"ok": False, "pushed": 0, "failed": failed, "skipped": 0, "errors": [error], "status": sync_status()}
+    with connect() as conn:
+        rows = [
+            dict_from_row(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM sync_outbox
+                WHERE status IN ('pending', 'failed')
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        ]
+        for row in rows:
+            ts = now_ts()
+            table_name = str(row.get("table_name") or "")
+            operation = str(row.get("operation") or "")
+            try:
+                payload = _json_payload(row.get("payload_json"), {})
+                if table_name not in SYNC_TABLE_CONFLICT_KEYS or not isinstance(payload, dict):
+                    skipped += 1
+                    conn.execute(
+                        "UPDATE sync_outbox SET status = 'synced', synced_at = ?, updated_at = ?, error = ? WHERE id = ?",
+                        (ts, ts, "skipped unsupported sync item", row["id"]),
+                    )
+                    continue
+                if operation == "delete":
+                    filters = payload.get("filters")
+                    if not isinstance(filters, dict) or not filters:
+                        raise ValueError("delete sync item missing filters")
+                    client.delete(table_name, filters=filters)
+                elif operation == "upsert":
+                    supabase_payload = _sync_payload_for_supabase(table_name, payload)
+                    _detect_sync_conflict(conn, client, table_name, str(row.get("entity_id") or ""), supabase_payload)
+                    client.upsert(table_name, supabase_payload, on_conflict=SYNC_TABLE_CONFLICT_KEYS[table_name])
+                else:
+                    raise ValueError(f"unsupported sync operation: {operation}")
+                pushed += 1
+                conn.execute(
+                    "UPDATE sync_outbox SET status = 'synced', synced_at = ?, updated_at = ?, error = '' WHERE id = ?",
+                    (ts, ts, row["id"]),
+                )
+            except Exception as exc:
+                failed += 1
+                error = str(exc)[:1000]
+                errors.append(error)
+                conn.execute(
+                    """
+                    UPDATE sync_outbox
+                    SET status = 'failed', retry_count = retry_count + 1, last_attempt_at = ?, updated_at = ?, error = ?
+                    WHERE id = ?
+                    """,
+                    (ts, ts, error, row["id"]),
+                )
+    return {"ok": failed == 0, "pushed": pushed, "failed": failed, "skipped": skipped, "errors": errors[:5], "status": sync_status()}
+
+
+def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
+    """Import remote matrix account metadata into the local SQLite database without making Supabase the page backend."""
+    ensure_database()
+    client = _brand_supabase()
+    accounts = client.select("matrix_accounts", order="id.asc")
+    platforms = client.select("account_platforms", order="account_id.asc,platform.asc")
+    try:
+        profiles = client.select("browser_profiles")
+    except Exception:
+        profiles = []
+    ts = now_ts()
+    imported_accounts = 0
+    skipped_accounts = 0
+    imported_platforms = 0
+    imported_profiles = 0
+    with connect() as conn:
+        for account in accounts:
+            account_id = int(account.get("id") or 0)
+            account_key = _account_slug(str(account.get("account_key") or account.get("display_name") or ""))
+            if account_id <= 0 or not account_key:
+                skipped_accounts += 1
+                continue
+            remote_updated = int(account.get("updated_at") or account.get("created_at") or ts)
+            existing = conn.execute("SELECT * FROM matrix_accounts WHERE id = ? OR account_key = ?", (account_id, account_key)).fetchone()
+            if existing is not None and int(existing["updated_at"] or 0) > remote_updated:
+                skipped_accounts += 1
+                continue
+            conn.execute(
+                """
+                INSERT INTO matrix_accounts(id, account_key, display_name, niche, status, notes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    account_key = excluded.account_key,
+                    display_name = excluded.display_name,
+                    niche = excluded.niche,
+                    status = excluded.status,
+                    notes = excluded.notes,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    account_id,
+                    account_key,
+                    str(account.get("display_name") or account_key).strip(),
+                    str(account.get("niche") or "").strip(),
+                    str(account.get("status") or "active").strip() or "active",
+                    str(account.get("notes") or "").strip(),
+                    int(account.get("created_at") or remote_updated or ts),
+                    remote_updated or ts,
+                ),
+            )
+            imported_accounts += 1
+        local_account_ids = {int(row["id"]) for row in conn.execute("SELECT id FROM matrix_accounts")}
+        for platform in platforms:
+            account_id = int(platform.get("account_id") or 0)
+            if account_id not in local_account_ids:
+                continue
+            token = normalize_platform(str(platform.get("platform") or ""))
+            if not token:
+                continue
+            remote_updated = int(platform.get("updated_at") or platform.get("created_at") or ts)
+            conn.execute(
+                """
+                INSERT INTO account_platforms(account_id, platform, handle, enabled, capability_status, login_status, last_checked_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id, platform) DO UPDATE SET
+                    handle = excluded.handle,
+                    enabled = excluded.enabled,
+                    capability_status = excluded.capability_status,
+                    login_status = excluded.login_status,
+                    last_checked_at = excluded.last_checked_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    account_id,
+                    token,
+                    str(platform.get("handle") or "").strip(),
+                    1 if bool(platform.get("enabled", True)) else 0,
+                    str(platform.get("capability_status") or "registered").strip() or "registered",
+                    str(platform.get("login_status") or "unknown").strip() or "unknown",
+                    platform.get("last_checked_at"),
+                    int(platform.get("created_at") or remote_updated or ts),
+                    remote_updated or ts,
+                ),
+            )
+            imported_platforms += 1
+        for profile in profiles:
+            account_id = int(profile.get("account_id") or 0)
+            if account_id <= 0 and profile.get("account_platform_id"):
+                platform_row = conn.execute("SELECT account_id FROM account_platforms WHERE id = ?", (int(profile.get("account_platform_id") or 0),)).fetchone()
+                account_id = int(platform_row["account_id"]) if platform_row else 0
+            if account_id not in local_account_ids:
+                continue
+            account = conn.execute("SELECT account_key FROM matrix_accounts WHERE id = ?", (account_id,)).fetchone()
+            profile_dir = str(profile.get("profile_dir") or profile_dir_for(str(account["account_key"] if account else account_id)))
+            debug_port = int(profile.get("debug_port") or _profile_debug_port_from_seed(conn, str(account["account_key"] if account else account_id)))
+            fingerprint = profile.get("fingerprint_json")
+            if not isinstance(fingerprint, str):
+                fingerprint = json.dumps(fingerprint or build_browser_fingerprint(str(account["account_key"] if account else account_id), "account"), ensure_ascii=False)
+            remote_updated = int(profile.get("updated_at") or profile.get("created_at") or ts)
+            conn.execute(
+                """
+                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    profile_dir = excluded.profile_dir,
+                    debug_port = excluded.debug_port,
+                    fingerprint_json = excluded.fingerprint_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    account_id,
+                    profile_dir,
+                    debug_port,
+                    fingerprint,
+                    int(profile.get("created_at") or remote_updated or ts),
+                    remote_updated or ts,
+                ),
+            )
+            Path(profile_dir).mkdir(parents=True, exist_ok=True)
+            imported_profiles += 1
+        for account in accounts:
+            account_id = int(account.get("id") or 0)
+            if account_id > 0:
+                _enqueue_sync_payload(conn, "matrix_accounts", "upsert", {**account, "id": account_id}, entity_id=str(account_id))
+        conn.execute(
+            "UPDATE sync_outbox SET status = 'synced', synced_at = ?, updated_at = ?, error = '' WHERE status = 'pending' AND table_name IN ('matrix_accounts', 'account_platforms', 'browser_profiles')",
+            (ts, ts),
+        )
+    clear_supabase_read_cache()
+    return {
+        "ok": True,
+        "accounts": imported_accounts,
+        "skipped_accounts": skipped_accounts,
+        "platforms": imported_platforms,
+        "profiles": imported_profiles,
+        "status": sync_status(),
+    }
 
 
 def _password_hash(password: str) -> str:
@@ -510,13 +923,15 @@ def _app_setting(key: str, default: Any = None) -> Any:
 
 
 def _save_app_setting(key: str, payload: Any) -> dict[str, Any]:
-    if brand_database_backend() == "supabase":
+    client = _brand_supabase()
+    data = {"setting_key": key, "payload_json": payload, "updated_at": now_ts()}
+    if hasattr(client, "upsert"):
         _invalidate_supabase_app_settings_cache(key)
-    return _brand_supabase().upsert(
-        "app_settings",
-        {"setting_key": key, "payload_json": payload, "updated_at": now_ts()},
-        on_conflict="setting_key",
-    )
+        return client.upsert("app_settings", data, on_conflict="setting_key")
+    if hasattr(client, "insert"):
+        _invalidate_supabase_app_settings_cache(key)
+        return client.insert("app_settings", data)
+    return data
 
 
 def load_distribution_settings_db() -> dict[str, Any]:
@@ -536,7 +951,17 @@ def load_distribution_settings_db() -> dict[str, Any]:
 
 def save_distribution_settings_db(payload: dict[str, Any]) -> dict[str, Any]:
     if brand_database_backend() != "supabase":
-        return save_local_distribution_settings(payload)
+        settings = save_local_distribution_settings(payload)
+        ensure_database()
+        with connect() as conn:
+            _enqueue_sync_payload(
+                conn,
+                "app_settings",
+                "upsert",
+                {"setting_key": "distribution_settings", "payload_json": settings, "updated_at": now_ts()},
+                entity_id="distribution_settings",
+            )
+        return settings
     settings = save_local_distribution_settings(payload)
     _save_app_setting("distribution_settings", settings)
     return settings
@@ -840,6 +1265,7 @@ def save_brand_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "default_account_prefix": str(payload.get("default_account_prefix") or current.get("default_account_prefix") or "GasGx").strip() or "GasGx",
     }
     with connect() as conn:
+        ts = now_ts()
         conn.execute(
             """
             UPDATE brand_settings
@@ -853,9 +1279,10 @@ def save_brand_settings(payload: dict[str, Any]) -> dict[str, Any]:
                 next_data["primary_color"],
                 next_data["theme_id"],
                 next_data["default_account_prefix"],
-                now_ts(),
+                ts,
             ),
         )
+        _enqueue_sync_row(conn, "brand_settings", "id = 1", ())
     return load_brand_settings()
 
 
@@ -940,7 +1367,10 @@ def delete_ai_robot_config(platform: str) -> bool:
     ensure_database()
     with connect() as conn:
         cursor = conn.execute("DELETE FROM ai_robot_configs WHERE platform = ?", (token,))
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+        if deleted:
+            _enqueue_sync_delete(conn, "ai_robot_configs", {"platform": token}, entity_id=token)
+        return deleted
 
 
 def save_ai_robot_config(platform: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1011,6 +1441,7 @@ def save_ai_robot_config(platform: str, payload: dict[str, Any]) -> dict[str, An
                     token,
                 ),
             )
+        _enqueue_sync_row(conn, "ai_robot_configs", "platform = ?", (token,), entity_id=token)
     return get_ai_robot_config(token) or {}
 
 
@@ -1095,6 +1526,7 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
             ),
         )
         message_id = int(cursor.lastrowid)
+        _enqueue_sync_row(conn, "ai_robot_messages", "id = ?", (message_id,))
     return get_ai_robot_message(message_id) or {}
 
 
@@ -1179,6 +1611,7 @@ def save_notification_route(event_type: str, platform: str, enabled: bool) -> di
             """,
             (event, token, 1 if enabled else 0, ts, ts),
         )
+        _enqueue_sync_row(conn, "notification_routes", "event_type = ? AND platform = ?", (event, token))
     return {"event_type": event, "platform": token, "enabled": bool(enabled)}
 
 
@@ -3154,6 +3587,7 @@ def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
             )
             row["status"] = "sending"
             row["last_attempt_at"] = ts
+            _enqueue_sync_row(conn, "ai_robot_messages", "id = ?", (int(row["id"]),))
         return rows
 
 
@@ -3274,6 +3708,7 @@ def _mark_ai_robot_message_sending(message: dict[str, Any]) -> dict[str, Any]:
             """,
             (payload["status"], payload["summary"], payload["last_attempt_at"], payload["updated_at"], message["id"]),
         )
+        _enqueue_sync_row(conn, "ai_robot_messages", "id = ?", (int(message["id"]),))
     return get_ai_robot_message(int(message["id"])) or {**message, **payload}
 
 
@@ -3293,6 +3728,7 @@ def _mark_ai_robot_message_sent(message: dict[str, Any]) -> dict[str, Any]:
             """,
             (payload["status"], payload["summary"], payload["error"], payload["sent_at"], payload["updated_at"], message["id"]),
         )
+        _enqueue_sync_row(conn, "ai_robot_messages", "id = ?", (int(message["id"]),))
     return get_ai_robot_message(int(message["id"])) or {}
 
 
@@ -3323,6 +3759,7 @@ def _mark_ai_robot_message_failed(message: dict[str, Any], error: str) -> dict[s
             """,
             (status, summary, error[:1000], retry_count, ts, ts, message["id"]),
         )
+        _enqueue_sync_row(conn, "ai_robot_messages", "id = ?", (int(message["id"]),))
     return get_ai_robot_message(int(message["id"])) or {}
 
 
@@ -3382,18 +3819,56 @@ def _matrix_publish_success_counts() -> dict[int, int]:
         return {}
     runs = payload.get("runs") if isinstance(payload, dict) else []
     if not isinstance(runs, list):
-        return {}
+        runs = []
+    consumed = payload.get("consumed") if isinstance(payload, dict) else []
+    if not isinstance(consumed, list):
+        consumed = []
     counts: dict[int, int] = {}
-    for item in runs:
-        if not isinstance(item, dict) or not bool(item.get("success")):
-            continue
+    seen: set[tuple[int, str, str, str]] = set()
+
+    def success_key(item: dict[str, Any]) -> tuple[int, str, str, str] | None:
         try:
             account_id = int(item.get("account_id") or 0)
         except Exception:
             account_id = 0
         if account_id <= 0:
+            return None
+        platform = str(item.get("platform") or "wechat").strip() or "wechat"
+        publish_date = str(item.get("publish_date") or item.get("finished_at") or "").strip()
+        asset_key = str(item.get("asset_key") or item.get("prepared_video") or item.get("video") or item.get("workspace") or "").strip()
+        return (account_id, platform, publish_date, asset_key)
+
+    def record_has_publish_evidence(item: dict[str, Any]) -> bool:
+        if item.get("evidence_ok") is True:
+            return True
+        workspace = str(item.get("workspace") or "").strip()
+        if not workspace:
+            return not consumed and "asset_key" not in item and "prepared_video" not in item and "video" not in item
+        platform = str(item.get("platform") or "wechat").strip() or "wechat"
+        token = "wechat" if platform == "wechat" else platform
+        evidence = Path(workspace) / f"uploaded_records_{token}.jsonl"
+        try:
+            return evidence.exists() and evidence.stat().st_size > 0
+        except OSError:
+            return False
+
+    for item in consumed:
+        if not isinstance(item, dict) or not bool(item.get("success")):
             continue
-        counts[account_id] = counts.get(account_id, 0) + 1
+        key = success_key(item)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        counts[key[0]] = counts.get(key[0], 0) + 1
+
+    for item in runs:
+        if not isinstance(item, dict) or not bool(item.get("success")) or not record_has_publish_evidence(item):
+            continue
+        key = success_key(item)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        counts[key[0]] = counts.get(key[0], 0) + 1
     return counts
 
 
@@ -3710,20 +4185,20 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
         if account_id <= 0:
             raise RuntimeError("supabase create_account did not return account id")
         first_platform_id = 0
-        platform_rows = [
-            {
-                "account_id": account_id,
-                "platform": platform,
-                "handle": "",
-                "capability_status": "registered",
-                "created_at": ts,
-                "updated_at": ts,
-            }
-            for platform in normalized_platforms
-        ]
-        if platform_rows:
-            first_platform = client.insert("account_platforms", platform_rows)
-            first_platform_id = int(first_platform.get("id") or 0)
+        for platform in normalized_platforms:
+            platform_row = client.insert(
+                "account_platforms",
+                {
+                    "account_id": account_id,
+                    "platform": platform,
+                    "handle": "",
+                    "capability_status": "registered",
+                    "created_at": ts,
+                    "updated_at": ts,
+                },
+            )
+            if first_platform_id <= 0:
+                first_platform_id = int(platform_row.get("id") or 0)
         if first_platform_id <= 0 and normalized_platforms:
             first_platform = client.select_one(
                 "account_platforms",
@@ -3760,7 +4235,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
                 },
             )
         _invalidate_supabase_read_cache("accounts", "dashboard_summary")
-        return {
+        return get_account(account_id) or {
             "id": account_id,
             "account_key": account_key,
             "display_name": display_name,
@@ -3804,7 +4279,115 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             account_id = int(existing["id"])
         for platform in platforms:
             ensure_account_platform(conn, account_id, str(platform))
+        _enqueue_sync_row(conn, "matrix_accounts", "id = ?", (account_id,))
     return get_account(account_id) or {}
+
+
+def repair_account_configs() -> dict[str, Any]:
+    required_platforms = [item.key for item in SUPPORTED_PLATFORMS]
+    checked_accounts = 0
+    repaired_accounts = 0
+    created_platforms = 0
+    created_profiles = 0
+    updated_profiles = 0
+    repaired_account_ids: list[int] = []
+
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        accounts = client.select("matrix_accounts", order="id.asc")
+        platform_rows = client.select("account_platforms", order="account_id.asc,platform.asc")
+        profile_rows = client.select("browser_profiles")
+        platforms_by_account: dict[int, set[str]] = {}
+        platform_id_to_account: dict[int, int] = {}
+        for row in platform_rows:
+            account_id = int(row.get("account_id") or 0)
+            if account_id <= 0:
+                continue
+            token = normalize_platform(str(row.get("platform") or ""))
+            if token:
+                platforms_by_account.setdefault(account_id, set()).add(token)
+            if row.get("id") is not None:
+                platform_id_to_account[int(row["id"])] = account_id
+        profiles_by_account: dict[int, dict[str, Any]] = {}
+        for row in profile_rows:
+            account_id = int(row.get("account_id") or 0)
+            if account_id <= 0 and row.get("account_platform_id") is not None:
+                account_id = platform_id_to_account.get(int(row["account_platform_id"]), 0)
+            if account_id > 0:
+                profiles_by_account[account_id] = row
+        for account in accounts:
+            account_id = int(account.get("id") or 0)
+            if account_id <= 0:
+                continue
+            checked_accounts += 1
+            existing_platforms = platforms_by_account.get(account_id, set())
+            missing_platforms = [platform for platform in required_platforms if platform not in existing_platforms]
+            profile = profiles_by_account.get(account_id)
+            profile_missing = profile is None
+            profile_fingerprint_missing = bool(profile) and not _json_payload(profile.get("fingerprint_json"), {})
+            if not missing_platforms and not profile_missing and not profile_fingerprint_missing:
+                continue
+            repaired_accounts += 1
+            repaired_account_ids.append(account_id)
+            for platform in missing_platforms:
+                ensure_account_platform(None, account_id, platform)
+                created_platforms += 1
+            if (profile_missing or profile_fingerprint_missing) and not missing_platforms:
+                ensure_account_platform(None, account_id, next(iter(existing_platforms), required_platforms[0]))
+            if profile_missing:
+                created_profiles += 1
+            elif profile_fingerprint_missing:
+                updated_profiles += 1
+        if repaired_accounts:
+            _invalidate_supabase_read_cache("accounts", "dashboard_summary")
+        return {
+            "ok": True,
+            "checked_accounts": checked_accounts,
+            "repaired_accounts": repaired_accounts,
+            "created_platforms": created_platforms,
+            "created_profiles": created_profiles,
+            "updated_profiles": updated_profiles,
+            "required_platforms": len(required_platforms),
+            "repaired_account_ids": repaired_account_ids,
+        }
+
+    ensure_database()
+    with connect() as conn:
+        accounts = conn.execute("SELECT id FROM matrix_accounts ORDER BY id ASC").fetchall()
+        for account in accounts:
+            account_id = int(account["id"])
+            checked_accounts += 1
+            existing_platforms = {
+                normalize_platform(str(row["platform"] or ""))
+                for row in conn.execute("SELECT platform FROM account_platforms WHERE account_id = ?", (account_id,))
+            }
+            missing_platforms = [platform for platform in required_platforms if platform not in existing_platforms]
+            profile = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
+            profile_missing = profile is None
+            profile_fingerprint_missing = bool(profile) and not _json_payload(profile["fingerprint_json"], {})
+            if not missing_platforms and not profile_missing and not profile_fingerprint_missing:
+                continue
+            repaired_accounts += 1
+            repaired_account_ids.append(account_id)
+            for platform in missing_platforms:
+                ensure_account_platform(conn, account_id, platform)
+                created_platforms += 1
+            if (profile_missing or profile_fingerprint_missing) and not missing_platforms:
+                ensure_account_platform(conn, account_id, next(iter(existing_platforms), required_platforms[0]))
+            if profile_missing:
+                created_profiles += 1
+            elif profile_fingerprint_missing:
+                updated_profiles += 1
+    return {
+        "ok": True,
+        "checked_accounts": checked_accounts,
+        "repaired_accounts": repaired_accounts,
+        "created_platforms": created_platforms,
+        "created_profiles": created_profiles,
+        "updated_profiles": updated_profiles,
+        "required_platforms": len(required_platforms),
+        "repaired_account_ids": repaired_account_ids,
+    }
 
 
 def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -3830,6 +4413,7 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
         values.append(account_id)
         with connect() as conn:
             conn.execute(f"UPDATE matrix_accounts SET {', '.join(assignments)} WHERE id = ?", values)
+            _enqueue_sync_row(conn, "matrix_accounts", "id = ?", (account_id,))
     return get_account(account_id)
 
 
@@ -3867,6 +4451,12 @@ def delete_account(account_id: int) -> bool:
         conn.execute("DELETE FROM browser_profiles WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM account_platforms WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM matrix_accounts WHERE id = ?", (account_id,))
+        _enqueue_sync_delete(conn, "automation_tasks", {"account_id": account_id}, entity_id=f"account_id={account_id}")
+        _enqueue_sync_delete(conn, "video_stats_snapshots", {"account_id": account_id}, entity_id=f"account_id={account_id}")
+        _enqueue_sync_delete(conn, "wechat_stats_account_snapshots", {"account_id": account_id}, entity_id=f"account_id={account_id}")
+        _enqueue_sync_delete(conn, "browser_profiles", {"account_id": account_id}, entity_id=f"account_id={account_id}")
+        _enqueue_sync_delete(conn, "account_platforms", {"account_id": account_id}, entity_id=f"account_id={account_id}")
+        _enqueue_sync_delete(conn, "matrix_accounts", {"id": account_id}, entity_id=str(account_id))
     return True
 
 
@@ -3970,6 +4560,8 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
         (json.dumps(fingerprint, ensure_ascii=False), account_id),
     )
     profile_dir.mkdir(parents=True, exist_ok=True)
+    _enqueue_sync_row(conn, "account_platforms", "account_id = ? AND platform = ?", (account_id, token))
+    _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
     return dict_from_row(ap)
 
 
@@ -4281,6 +4873,7 @@ def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
             "UPDATE account_platforms SET login_status = ?, last_checked_at = ?, updated_at = ? WHERE account_id = ? AND platform = ?",
             (status, now_ts(), now_ts(), account_id, token),
         )
+        _enqueue_sync_row(conn, "account_platforms", "account_id = ? AND platform = ?", (account_id, token))
     return result
 
 
@@ -4369,6 +4962,7 @@ def create_task(payload: dict[str, Any]) -> dict[str, Any]:
             ),
         )
         task_id = int(cursor.lastrowid)
+        _enqueue_sync_row(conn, "automation_tasks", "id = ?", (task_id,))
     return get_task(task_id) or {}
 
 
@@ -4398,7 +4992,10 @@ def delete_task(task_id: int) -> bool:
     ensure_database()
     with connect() as conn:
         cursor = conn.execute("DELETE FROM automation_tasks WHERE id = ?", (task_id,))
-        return bool(cursor.rowcount)
+        deleted = bool(cursor.rowcount)
+        if deleted:
+            _enqueue_sync_delete(conn, "automation_tasks", {"id": task_id}, entity_id=str(task_id))
+        return deleted
 
 
 def delete_tasks(task_ids: list[int]) -> int:
@@ -4418,7 +5015,11 @@ def delete_tasks(task_ids: list[int]) -> int:
     placeholders = ",".join("?" for _ in ids)
     with connect() as conn:
         cursor = conn.execute(f"DELETE FROM automation_tasks WHERE id IN ({placeholders})", ids)
-        return int(cursor.rowcount or 0)
+        deleted = int(cursor.rowcount or 0)
+        if deleted:
+            for task_id in ids:
+                _enqueue_sync_delete(conn, "automation_tasks", {"id": task_id}, entity_id=str(task_id))
+        return deleted
 
 
 def update_tasks_status(task_ids: list[int], status: str) -> int:
@@ -4446,7 +5047,11 @@ def update_tasks_status(task_ids: list[int], status: str) -> int:
             f"UPDATE automation_tasks SET status = ?, updated_at = ? WHERE id IN ({placeholders})",
             [normalized, ts, *ids],
         )
-        return int(cursor.rowcount or 0)
+        updated = int(cursor.rowcount or 0)
+        if updated:
+            for task_id in ids:
+                _enqueue_sync_row(conn, "automation_tasks", "id = ?", (task_id,))
+        return updated
 
 
 def _stats_int(value: Any) -> int:
@@ -4592,6 +5197,12 @@ def upsert_wechat_account_stats_snapshot(item: dict[str, Any]) -> dict[str, Any]
                 payload["updated_at"],
             ),
         )
+        _enqueue_sync_row(
+            conn,
+            "wechat_stats_account_snapshots",
+            "account_id = ? AND platform = ? AND stat_date = ?",
+            (payload["account_id"], payload["platform"], payload["stat_date"]),
+        )
     return payload
 
 
@@ -4608,7 +5219,7 @@ def _delete_matching_video_snapshot(client: SupabaseRestClient, payload: dict[st
         )
 
 
-def _insert_video_stats_snapshot_sqlite(conn, payload: dict[str, Any]) -> None:
+def _insert_video_stats_snapshot_sqlite(conn, payload: dict[str, Any]) -> int:
     if payload.get("stat_date") and payload.get("video_ref") and payload.get("account_id"):
         conn.execute(
             """
@@ -4617,7 +5228,7 @@ def _insert_video_stats_snapshot_sqlite(conn, payload: dict[str, Any]) -> None:
             """,
             (payload["account_id"], payload["platform"], payload["stat_date"], payload["video_ref"]),
         )
-    conn.execute(
+    cursor = conn.execute(
         """
         INSERT INTO video_stats_snapshots(
             account_id, platform, video_ref, stat_date, title, feed_id, views, likes,
@@ -4643,6 +5254,7 @@ def _insert_video_stats_snapshot_sqlite(conn, payload: dict[str, Any]) -> None:
             payload["captured_at"],
         ),
     )
+    return int(cursor.lastrowid)
 
 
 def import_stats(payload: dict[str, Any]) -> dict[str, Any]:
@@ -4692,7 +5304,8 @@ def import_stats(payload: dict[str, Any]) -> dict[str, Any]:
                 upsert_wechat_account_stats_snapshot(item)
                 account_inserted += 1
                 continue
-            _insert_video_stats_snapshot_sqlite(conn, _normalize_video_stats_snapshot(item, captured_at=ts))
+            snapshot_id = _insert_video_stats_snapshot_sqlite(conn, _normalize_video_stats_snapshot(item, captured_at=ts))
+            _enqueue_sync_row(conn, "video_stats_snapshots", "id = ?", (snapshot_id,))
             inserted += 1
     return {"ok": True, "inserted": inserted, "account_snapshots": account_inserted}
 

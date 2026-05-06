@@ -51,6 +51,14 @@
       <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
       <div class="sidebar-radio-field"><span>生成速度</span><div class="radio-row" id="renderSpeedModeGroup"></div></div>
       <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option></select></label>
+      <fieldset class="wechat-defaults-fieldset platform-settings-card hidden">
+        <legend>视频号默认发布参数</legend>
+        <div class="wechat-defaults-grid">
+          <label>短标题<input name="common.wechat_short_title" type="text" /></label>
+          <label>位置<input name="common.wechat_location" type="text" /></label>
+        </div>
+        <p class="field-hint">用于视频生成后衔接视频号发布参数。</p>
+      </fieldset>
       <label>最终视频生成目录<input id="outputRoot" /></label>
       <button id="openOutput">打开输出目录</button>
       <div class="library-action">

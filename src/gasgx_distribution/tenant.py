@@ -22,7 +22,8 @@ def resolve_brand_instance(request: Request) -> dict[str, Any]:
     host_name = str(host or "").split(":", 1)[0].lower()
     if not brand_id and host_name in {"127.0.0.1", "localhost"}:
         brand_id = os.getenv("LOCAL_BRAND_INSTANCE", "gasgx")
-    if brand_id == "gasgx" and os.getenv("SUPABASE_URL") and os.getenv("BRAND_SUPABASE_SERVICE_KEY"):
+    brand_backend = os.getenv("BRAND_DATABASE_BACKEND", "").strip().lower()
+    if brand_id == "gasgx" and brand_backend != "sqlite" and os.getenv("SUPABASE_URL") and os.getenv("BRAND_SUPABASE_SERVICE_KEY"):
         return {
             "id": "gasgx",
             "name": "GasGx",

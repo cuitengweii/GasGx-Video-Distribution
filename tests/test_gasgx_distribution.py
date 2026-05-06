@@ -16,6 +16,7 @@ from gasgx_distribution import db as dist_db
 from gasgx_distribution import matrix_publish
 from gasgx_distribution import wechat_stats_capture
 from gasgx_distribution.db import connect
+from gasgx_distribution.platforms import SUPPORTED_PLATFORMS
 from gasgx_distribution.supabase_backend import SupabaseError, SupabaseRestClient
 from gasgx_distribution.video_matrix.ingestion import _select_source_files
 from gasgx_distribution.web import create_app
@@ -386,11 +387,15 @@ def test_accounts_include_matrix_publish_success_count(monkeypatch, tmp_path: Pa
     state_path.write_text(
         json.dumps(
             {
+                "consumed": [
+                    {"account_id": first["id"], "platform": "wechat", "asset_key": "a.mp4", "publish_date": "2026-05-06", "success": True},
+                    {"account_id": first["id"], "platform": "wechat", "asset_key": "a.mp4", "publish_date": "2026-05-06", "success": True},
+                    {"account_id": first["id"], "platform": "wechat", "asset_key": "b.mp4", "publish_date": "2026-05-06", "success": True},
+                    {"account_id": second["id"], "platform": "wechat", "asset_key": "c.mp4", "publish_date": "2026-05-06", "success": True},
+                ],
                 "runs": [
                     {"account_id": first["id"], "success": True},
-                    {"account_id": first["id"], "success": True},
-                    {"account_id": first["id"], "success": False},
-                    {"account_id": second["id"], "success": True},
+                    {"account_id": second["id"], "success": True, "evidence_ok": False},
                 ]
             }
         ),
@@ -466,6 +471,169 @@ def test_api_smoke_accounts_tasks_and_stats(monkeypatch, tmp_path: Path) -> None
     stats = client.get(f"/api/stats?account_id={account['id']}&platform=wechat")
     assert stats.status_code == 200
     assert stats.json()[0]["views"] == 100
+
+
+def test_local_first_api_does_not_touch_supabase_when_config_is_bad(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("SUPABASE_URL", "https://invalid.local.supabase.co")
+    monkeypatch.setenv("BRAND_SUPABASE_SERVICE_KEY", "bad-service-key")
+
+    def fail_supabase():
+        raise AssertionError("local-first endpoints must not create a Supabase client")
+
+    monkeypatch.setattr(service, "_brand_supabase", fail_supabase)
+    client = TestClient(create_app())
+
+    assert client.get("/api/summary").status_code == 200
+    assert client.get("/api/accounts").status_code == 200
+    assert client.get("/api/tasks").status_code == 200
+    status = client.get("/api/sync/status")
+    assert status.status_code == 200
+    assert status.json()["backend"] == "sqlite"
+
+
+def test_local_writes_enqueue_sync_outbox(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account({"account_key": "gasgx-sync-01", "display_name": "GasGx Sync 01", "platforms": ["wechat"]})
+    service.create_task({"account_id": account["id"], "platform": "wechat", "task_type": "publish", "payload": {"source": "test"}})
+    service.save_brand_settings({"name": "GasGx Sync"})
+
+    with connect() as conn:
+        tables = [row["table_name"] for row in conn.execute("SELECT table_name FROM sync_outbox WHERE status = 'pending'")]
+
+    assert "matrix_accounts" in tables
+    assert "account_platforms" in tables
+    assert "browser_profiles" in tables
+    assert "automation_tasks" in tables
+    assert "brand_settings" in tables
+
+
+def test_sync_push_marks_outbox_items_synced(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-sync-02", "display_name": "GasGx Sync 02", "platforms": ["wechat"]})
+    service.create_task({"account_id": account["id"], "platform": "wechat", "task_type": "publish", "payload": {"source": "test"}})
+
+    class FakeSyncClient:
+        def __init__(self) -> None:
+            self.upserts: list[tuple[str, dict[str, Any], str]] = []
+            self.deletes: list[tuple[str, dict[str, Any]]] = []
+
+        def select_one(self, table: str, *, filters: dict[str, Any]) -> dict[str, Any] | None:
+            return None
+
+        def upsert(self, table: str, payload: dict[str, Any], *, on_conflict: str) -> dict[str, Any]:
+            self.upserts.append((table, payload, on_conflict))
+            return payload
+
+        def delete(self, table: str, *, filters: dict[str, Any]) -> bool:
+            self.deletes.append((table, filters))
+            return True
+
+    fake = FakeSyncClient()
+    monkeypatch.setattr(service, "_brand_supabase", lambda: fake)
+    client = TestClient(create_app())
+
+    response = client.post("/api/sync/supabase/push")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["pushed"] >= 1
+    assert payload["status"]["pending"] == 0
+    assert payload["status"]["synced"] >= payload["pushed"]
+    assert {item[0] for item in fake.upserts} >= {"matrix_accounts", "automation_tasks"}
+
+
+def test_sync_push_failure_keeps_local_api_available(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "gasgx-sync-fail", "display_name": "GasGx Sync Fail", "platforms": ["wechat"]})
+
+    class FailingSyncClient:
+        def select_one(self, table: str, *, filters: dict[str, Any]) -> dict[str, Any] | None:
+            return None
+
+        def upsert(self, table: str, payload: dict[str, Any], *, on_conflict: str) -> dict[str, Any]:
+            raise TimeoutError("supabase timeout")
+
+        def delete(self, table: str, *, filters: dict[str, Any]) -> bool:
+            raise TimeoutError("supabase timeout")
+
+    monkeypatch.setattr(service, "_brand_supabase", lambda: FailingSyncClient())
+    client = TestClient(create_app())
+
+    pushed = client.post("/api/sync/supabase/push")
+    assert pushed.status_code == 200
+    assert pushed.json()["ok"] is False
+    assert pushed.json()["status"]["failed"] >= 1
+    assert client.get("/api/accounts").status_code == 200
+    retry = client.post("/api/sync/retry")
+    assert retry.status_code == 200
+    assert retry.json()["retried"] >= 1
+
+
+def test_sync_pull_imports_remote_accounts_to_sqlite(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    class FakePullClient:
+        def select(self, table: str, *, order: str = "", filters: dict[str, Any] | None = None, columns: str = "*") -> list[dict[str, Any]]:
+            del order, filters, columns
+            if table == "matrix_accounts":
+                return [
+                    {
+                        "id": 31,
+                        "account_key": "gasgx-remote-31",
+                        "display_name": "GasGx Remote 31",
+                        "niche": "gas",
+                        "status": "active",
+                        "notes": "remote",
+                        "created_at": 100,
+                        "updated_at": 200,
+                    }
+                ]
+            if table == "account_platforms":
+                return [
+                    {
+                        "id": 3101,
+                        "account_id": 31,
+                        "platform": "wechat",
+                        "handle": "remote31",
+                        "enabled": True,
+                        "capability_status": "registered",
+                        "login_status": "ready",
+                        "created_at": 100,
+                        "updated_at": 200,
+                    }
+                ]
+            if table == "browser_profiles":
+                return [
+                    {
+                        "id": 31001,
+                        "account_id": 31,
+                        "profile_dir": str(tmp_path / "profiles" / "matrix" / "gasgx-remote-31"),
+                        "debug_port": 12331,
+                        "fingerprint_json": {"provider": "remote"},
+                        "created_at": 100,
+                        "updated_at": 200,
+                    }
+                ]
+            raise AssertionError(f"unexpected table {table}")
+
+    monkeypatch.setattr(service, "_brand_supabase", lambda: FakePullClient())
+    client = TestClient(create_app())
+
+    response = client.post("/api/sync/supabase/pull")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accounts"] == 1
+    assert payload["platforms"] == 1
+    assert payload["profiles"] == 1
+    account = service.get_account(31)
+    assert account is not None
+    assert account["display_name"] == "GasGx Remote 31"
+    assert account["platforms"][0]["platform"] == "wechat"
+    assert account["platforms"][0]["debug_port"] == 12331
 
 
 def test_wechat_stats_account_snapshots_are_idempotent_and_drive_summary(monkeypatch, tmp_path: Path) -> None:
@@ -579,6 +747,37 @@ def test_delete_account_removes_related_platform_profile_tasks_and_stats(monkeyp
         assert conn.execute("SELECT COUNT(*) AS c FROM browser_profiles WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM video_stats_snapshots WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM wechat_stats_account_snapshots WHERE account_id = ?", (account["id"],)).fetchone()["c"] == 0
+
+
+def test_repair_account_configs_api_fills_missing_platforms_and_profile(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    account = client.post(
+        "/api/accounts",
+        json={"account_key": "repair-01", "display_name": "Repair 01", "platforms": ["wechat"]},
+    ).json()
+    with connect() as conn:
+        conn.execute("DELETE FROM browser_profiles WHERE account_id = ?", (account["id"],))
+
+    repaired = client.post("/api/accounts/repair-config")
+
+    assert repaired.status_code == 200
+    payload = repaired.json()
+    assert payload["checked_accounts"] == 1
+    assert payload["repaired_accounts"] == 1
+    assert payload["created_platforms"] == len(SUPPORTED_PLATFORMS) - 1
+    assert payload["created_profiles"] == 1
+    account_after = client.get("/api/accounts").json()[0]
+    assert {item["platform"] for item in account_after["platforms"]} == {item.key for item in SUPPORTED_PLATFORMS}
+    with connect() as conn:
+        profile = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account["id"],)).fetchone()
+        assert profile is not None
+        assert profile["fingerprint_json"] not in {"", "{}"}
+
+    second = client.post("/api/accounts/repair-config").json()
+    assert second["repaired_accounts"] == 0
+    assert second["created_platforms"] == 0
+    assert second["created_profiles"] == 0
 
 
 def test_control_plane_provisions_isolated_brand_databases(monkeypatch, tmp_path: Path) -> None:

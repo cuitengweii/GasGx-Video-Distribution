@@ -211,6 +211,35 @@ CREATE TABLE IF NOT EXISTS brand_settings (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sync_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '',
+    operation TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER,
+    synced_at INTEGER,
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_outbox_status ON sync_outbox(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS sync_conflicts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '',
+    local_payload_json TEXT NOT NULL DEFAULT '{}',
+    remote_payload_json TEXT NOT NULL DEFAULT '{}',
+    resolution TEXT NOT NULL DEFAULT 'local_overwrite',
+    warning TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS operator_roles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

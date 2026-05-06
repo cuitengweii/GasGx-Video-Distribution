@@ -187,7 +187,7 @@ body {
 }
 .embed-mode .sidebar-radio-field .radio-row label {
   justify-content: center;
-  min-height: clamp(28px, 3.2vh, 34px);
+  min-height: clamp(28px, 3.5vh, 34px);
   padding: 4px 6px;
 }
 .embed-mode .library-action {
@@ -956,6 +956,18 @@ code, input, select, textarea {
 textarea { min-height: 96px; resize: vertical; }
 label { display:block; margin:14px 0; font-weight:700; font-size:14px; }
 label > input, label > select, label > textarea { margin-top:8px; }
+.wechat-defaults-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  justify-content:stretch;
+  max-width: none;
+}
+.platform-settings-card .field-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
 .input-with-unit {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 34px;
@@ -1583,13 +1595,14 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   background: rgba(8, 11, 8, .52);
 }
 .ending-material-row {
+  position: relative;
   display: grid !important;
-  grid-template-columns: 18px minmax(0, 1fr) auto 42px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-height: 34px;
   margin: 0 !important;
-  padding: 7px 8px;
+  padding: 7px 8px 7px 34px;
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 7px;
   background: rgba(16, 16, 16, .82);
@@ -1599,6 +1612,10 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
   background: rgba(93,214,44,.10);
 }
 .ending-material-row input {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 16px !important;
   min-height: 16px !important;
   margin: 0 !important;

@@ -4,6 +4,93 @@
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_account_subtitle_filters_question_mark_mojibake() -> None:
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function accountSubtitle(account)" in app
+    assert r"/^\?+$/.test(niche)" in app
+    assert '${account.account_key} · ${account.niche || ""}' not in app
+    assert "${escapeHtml(accountSubtitle(account))}" in app
+    assert "white-space: nowrap;" in css
+    assert "text-overflow: ellipsis;" in css
+    assert "font-size: 11px;" in css
+
+
+def test_account_status_chip_uses_chinese_label() -> None:
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function accountStatusLabel(status)" in app
+    assert 'active: "启用"' in app
+    assert 'warmup: "养号"' in app
+    assert 'paused: "暂停"' in app
+    assert '<span class="chip">${account.status}</span>' not in app
+    assert "function accountStatusEnabled(account)" in app
+    assert "data-account-status-toggle" in app
+    assert "async function toggleAccountStatus(button)" in app
+    assert 'JSON.stringify({ status: nextStatus })' in app
+    assert ".account-status-toggle" in css
+    assert ".account-status-toggle-knob" in css
+
+
+def test_account_title_filters_question_mark_mojibake() -> None:
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "function cleanAccountDisplayName(account)" in app
+    assert ".filter((part) => !/^\\?+$/.test(part))" in app
+    assert "const displayName = cleanAccountDisplayName(account)" in app
+    assert 'const title = `#${account.id} ${displayName}`' in app
+    assert 'data-account-name="${escapeHtml(displayName)}"' in app
+
+
+def test_account_rows_support_inline_editing_name_operator_and_phone() -> None:
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'data-account-edit="name"' in app
+    assert 'data-account-edit="operator"' in app
+    assert 'data-account-edit="phone"' in app
+    assert "function startAccountNameEdit(row, account)" in app
+    assert "function startAccountOperatorEdit(row, account)" in app
+    assert "function startAccountPhoneEdit(row, account)" in app
+    assert "function saveAccountInlineEdit(button)" in app
+    assert 'api(`/api/accounts/${account.id}`, { method: "PATCH"' in app
+    assert "accountOperatorWechatOptions(current)" in app
+    assert "accountNotesWith(account, { operatorWechat: value })" in app
+    assert "accountNotesWith(account, { phone: value })" in app
+    assert "账号手机号需为 11 位数字" in app
+    assert "已发布成功" in app
+    assert "function accountDeleteIcon()" in app
+    assert "${accountDeleteIcon()}<span>删除账号</span>" in app
+    assert "基于真实发布成功记录去重统计" in app
+    assert ".account-title-line" in css
+    assert ".account-edit-btn" in css
+    assert ".account-phone-line" in css
+    assert ".account-inline-edit" in css
+
+
+def test_account_list_has_keyword_search_filter() -> None:
+    html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="account-search-input" type="search"' in html
+    assert "关键词搜索" in html
+    assert 'id="accounts-repair-config"' in html
+    assert "一键修复" in html
+    assert "function accountSearchText(account)" in app
+    assert "function filteredAccounts()" in app
+    assert "async function repairAccountConfigs(button)" in app
+    assert "确认检索并修复所有账号的矩阵配置" in app
+    assert 'api("/api/accounts/repair-config", { method: "POST" })' in app
+    assert "document.querySelector(\"#account-search-input\")?.addEventListener(\"input\", renderAccounts)" in app
+    assert "document.querySelector(\"#accounts-repair-config\")?.addEventListener(\"click\"" in app
+    assert "没有匹配的账号" in app
+    assert ".account-list-tools" in css
+    assert ".account-search-field" in css
+
+
 def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> None:
     app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_app.js").read_text(encoding="utf-8")
     css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_styles.css").read_text(encoding="utf-8")
@@ -284,6 +371,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'data.niche = "短视频矩阵"' in shell_app
     assert "绑定运营微信：" in shell_app
     assert "function accountOperatorWechat(account)" in shell_app
+    assert "function accountSubtitle(account)" in shell_app
+    assert r"/^\?+$/.test(niche)" in shell_app
     assert "account-operator-wechat" in shell_app
     assert "function addOperatorWechatOptionFromMenu()" in shell_app
     assert "function renderOperatorWechatPicker()" in shell_app

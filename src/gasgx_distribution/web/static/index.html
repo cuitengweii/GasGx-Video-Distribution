@@ -184,6 +184,13 @@
         <div class="panel">
           <div class="panel-head">
             <h2>账号列表</h2>
+            <div class="account-list-tools">
+              <button id="accounts-repair-config" class="btn secondary btn-sm" type="button" data-no-global-loading="1">一键修复</button>
+              <label class="account-search-field" for="account-search-input">
+                <span>关键词搜索</span>
+                <input id="account-search-input" type="search" placeholder="名称 / 微信 / 手机号" autocomplete="off">
+              </label>
+            </div>
           </div>
           <div id="accounts-list" class="account-list"></div>
         </div>
@@ -804,6 +811,13 @@
           </div>
           <span class="system-status" id="notification-unread-count">0 条待处理</span>
         </div>
+        <div class="notification-template-copy" hidden>
+          <span>视频生成完成</span>
+          <span>视频号发布失败</span>
+          <span>素材分类不足</span>
+          <span>企业微信群机器人已发送日报</span>
+          <span>发布前审核等待确认</span>
+        </div>
         <div id="operation-notice-routes" class="notification-list"></div>
         <div id="notification-route-state" class="muted"></div>
         <div id="login-qr-batches" class="notification-list"></div>
@@ -818,6 +832,18 @@
           <div class="system-kv"><span>运行地址</span><strong id="runtime-address">127.0.0.1:8790</strong></div>
         </section>
         <section class="panel system-card">
+          <div class="panel-head"><h2>本地与云端同步</h2><span class="system-status" id="sync-status-badge">本地优先</span></div>
+          <div class="system-kv"><span>本地库</span><strong id="sync-local-backend">SQLite</strong></div>
+          <div class="system-kv"><span>待同步</span><strong id="sync-pending-count">0</strong></div>
+          <div class="system-kv"><span>失败/冲突</span><strong id="sync-failed-count">0 / 0</strong></div>
+          <div class="system-list storage-actions">
+            <button class="btn secondary" type="button" id="sync-pull-supabase">从 ☁️云端数据库 导入</button>
+            <button class="btn secondary" type="button" id="sync-push-supabase">推送到 ☁️云端数据库</button>
+            <button class="btn secondary" type="button" id="sync-retry-failed">重试失败队列</button>
+          </div>
+          <p class="system-action-state muted" id="sync-action-state">页面读写 SQLite；☁️云端数据库只做手动/后台同步目标。</p>
+        </section>
+        <section class="panel system-card">
           <div class="panel-head"><h2>存储与缓存</h2><span class="system-status">预留</span></div>
           <div class="system-list storage-actions">
             <button class="btn secondary" type="button" data-system-dir="materials">素材目录</button>
@@ -825,9 +851,11 @@
             <button class="btn secondary" type="button" data-system-dir="logs">任务日志</button>
             <button class="btn secondary" type="button" data-system-dir="cache">临时缓存</button>
             <button class="btn secondary" type="button" id="clear-supabase-read-cache">清理应用缓存</button>
+            <button class="btn secondary" id="system-initialize" type="button" disabled>系统初始化</button>
           </div>
           <p class="system-action-state muted" id="system-directory-state">点击按钮打开对应目录。</p>
           <p class="system-action-state muted" id="supabase-read-cache-state" hidden></p>
+          <div class="system-action-state muted" id="system-initialize-state" hidden></div>
         </section>
         <section class="panel system-card">
           <div class="panel-head"><h2>安全设置</h2><span class="system-status">待接入</span></div>

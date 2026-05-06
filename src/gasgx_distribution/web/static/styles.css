@@ -306,6 +306,12 @@ nav {
   background: rgba(255, 51, 102, 0.08);
 }
 
+.danger-action svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
 .topbar-actions,
 .signed-user-badge {
   display: inline-flex;
@@ -730,7 +736,41 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 14px;
+}
+
+.account-list-tools {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.account-search-field {
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+  max-width: 280px;
+  font-size: 12px;
+}
+
+.account-search-field input {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #2b2b2b;
+  border-radius: 6px;
+  background: #0f0f0f;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.account-search-field input:focus {
+  border-color: rgba(93, 214, 44, 0.55);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(93, 214, 44, 0.12);
 }
 
 .split {
@@ -1641,53 +1681,174 @@ select option {
 
 .account-title-wrap {
   display: grid;
-  gap: 5px;
+  min-width: 0;
+  gap: 6px;
+}
+
+.account-title-line {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  gap: 6px;
 }
 
 .account-badges {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: auto auto;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  justify-items: end;
   gap: 8px;
+  min-width: 168px;
 }
 
 .account-title {
   display: inline-flex;
   align-items: center;
-  width: fit-content;
-  min-height: 34px;
-  padding: 5px 12px;
+  width: auto;
+  max-width: min(100%, 360px);
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 11px;
   border-left: 4px solid var(--accent-aurora);
   border-radius: 6px;
   background: rgba(93, 214, 44, 0.12);
   color: #f3f7f0;
   font-size: 18px;
   line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   box-shadow: 0 0 0 1px rgba(93, 214, 44, 0.18);
 }
 
 .account-subtitle {
+  min-width: 0;
+  max-width: min(100%, 360px);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 11px;
+  line-height: 1.2;
+  opacity: 0.78;
 }
 
+.account-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.account-phone-line,
 .account-operator-wechat {
   display: inline-flex;
   align-items: center;
+  min-height: 26px;
   width: fit-content;
-  gap: 4px;
+  gap: 6px;
   padding: 4px 8px;
-  border: 1px solid rgba(93, 214, 44, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 6px;
   color: var(--text-secondary);
-  background: rgba(93, 214, 44, 0.06);
+  background: rgba(255, 255, 255, 0.035);
   font-size: 12px;
   font-weight: 700;
 }
 
+.account-phone-line span,
+.account-operator-wechat span {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.account-phone-line strong {
+  color: var(--text-primary);
+}
+
+.account-operator-wechat {
+  border: 1px solid rgba(93, 214, 44, 0.2);
+  background: rgba(93, 214, 44, 0.06);
+}
+
 .account-operator-wechat strong {
   color: var(--accent-aurora);
+}
+
+.account-edit-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  min-height: 13px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 4px;
+  color: var(--accent-aurora);
+  background: transparent;
+  cursor: pointer;
+}
+
+.account-edit-btn:hover {
+  border: 0;
+  background: transparent;
+}
+
+.account-edit-btn svg {
+  width: 7px;
+  height: 7px;
+}
+
+.account-edit-btn.compact {
+  width: 11px;
+  height: 11px;
+  min-height: 11px;
+}
+
+.account-inline-edit {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.account-name-edit {
+  width: min(100%, 390px);
+}
+
+.account-inline-input,
+.account-inline-select {
+  min-height: 32px;
+  border: 1px solid #2b2b2b;
+  border-radius: 6px;
+  background: #0f0f0f;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.account-inline-input {
+  width: min(280px, 100%);
+  padding: 6px 9px;
+}
+
+.account-inline-input.phone {
+  width: 140px;
+}
+
+.account-inline-select {
+  min-width: 132px;
+  padding: 6px 28px 6px 9px;
+}
+
+.account-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .row-head {
@@ -1696,6 +1857,21 @@ select option {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
+}
+
+.account-row > .row-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.account-row .danger-action {
+  grid-column: 1 / -1;
+  justify-self: end;
 }
 
 .chips {
@@ -1717,6 +1893,58 @@ select option {
   color: var(--accent-aurora);
   border-color: rgba(93, 214, 44, 0.42);
   background: rgba(93, 214, 44, 0.12);
+}
+
+.account-status-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 58px;
+  min-height: 28px;
+  padding: 4px 8px 4px 5px;
+  border: 1px solid rgba(93, 214, 44, 0.32);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.account-status-toggle.enabled {
+  color: var(--accent-aurora);
+  background: rgba(93, 214, 44, 0.11);
+}
+
+.account-status-toggle.paused {
+  color: var(--text-secondary);
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.account-status-toggle-knob {
+  position: relative;
+  width: 22px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.account-status-toggle-knob::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  transition: transform 0.16s ease;
+}
+
+.account-status-toggle.enabled .account-status-toggle-knob::after {
+  transform: translateX(10px);
 }
 
 .account-platform-group {
@@ -2810,7 +3038,7 @@ select option {
 }
 
 #user-center .system-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(220px, 0.8fr) minmax(280px, 1fr) minmax(360px, 1.35fr);
 }
 
 #system-settings .system-grid {
@@ -3168,6 +3396,10 @@ select option {
   line-height: 1.5;
 }
 
+#system-settings .system-action-state.danger {
+  color: #ff6b7a;
+}
+
 #user-center .system-card:not(.wide-system-card) {
   align-content: start;
   min-height: 160px;
@@ -3269,7 +3501,7 @@ select option {
 }
 
 .role-admin-card .role-tabs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(118px, 1fr));
 }
 
 .role-tab {
@@ -4950,14 +5182,28 @@ body.sidebar-collapsed .terminal-init-modal {
     flex: 1 1 100%;
   }
 
+  #system-settings .system-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  #system-settings .wide-system-card {
+    grid-column: auto;
+  }
+
+  #system-settings .system-card,
+  #system-settings .system-card:not(.wide-system-card) {
+    min-height: auto;
+    gap: 14px;
+  }
+
   #system-settings .system-kv {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+    gap: 12px;
   }
 
   #system-settings .system-kv strong {
-    text-align: left;
+    max-width: 64%;
+    text-align: right;
     white-space: normal;
     overflow-wrap: anywhere;
   }
@@ -4968,6 +5214,18 @@ body.sidebar-collapsed .terminal-init-modal {
 
   #system-settings .storage-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #system-settings .storage-actions .btn {
+    min-height: 40px;
+    padding-inline: 10px;
+    white-space: normal;
+    line-height: 1.25;
+  }
+
+  #system-settings .system-action-state {
+    max-width: 100%;
+    line-height: 1.55;
   }
 
   .confirm-modal {
@@ -5166,6 +5424,17 @@ body.sidebar-collapsed .terminal-init-modal {
 @media (max-width: 720px) {
   .confirm-actions .btn {
     flex: 1 1 100%;
+  }
+
+  #system-settings .system-kv {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  #system-settings .system-kv strong {
+    max-width: 100%;
+    text-align: left;
   }
 
   #system-settings .storage-actions {
