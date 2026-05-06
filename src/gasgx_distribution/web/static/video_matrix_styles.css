@@ -2561,6 +2561,20 @@ button .loading-spinner,
     --preview-phone-height: 695px;
   }
 
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .embed-mode body {
+    height: auto;
+    min-height: 100vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .sidebar,
   .embed-mode .sidebar {
     position: sticky;
@@ -2581,6 +2595,12 @@ button .loading-spinner,
     display: inline-flex;
   }
 
+  body.mobile-sidebar-open .mobile-sidebar-toggle {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+
   .sidebar > :not(.brand):not(.mobile-sidebar-toggle) {
     display: none;
   }
@@ -2597,12 +2617,133 @@ button .loading-spinner,
     display: grid;
   }
 
+  body.mobile-sidebar-open .sidebar,
+  .embed-mode body.mobile-sidebar-open .sidebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    justify-content: stretch;
+    max-height: calc(100vh - 12px);
+    gap: 10px;
+  }
+
+  body.mobile-sidebar-open .sidebar > label,
+  body.mobile-sidebar-open .sidebar > .sidebar-radio-field,
+  body.mobile-sidebar-open .sidebar > .library-action,
+  body.mobile-sidebar-open .sidebar > button,
+  body.mobile-sidebar-open .sidebar > a,
+  .embed-mode body.mobile-sidebar-open .sidebar > label,
+  .embed-mode body.mobile-sidebar-open .sidebar > .sidebar-radio-field,
+  .embed-mode body.mobile-sidebar-open .sidebar > .library-action,
+  .embed-mode body.mobile-sidebar-open .sidebar > button,
+  .embed-mode body.mobile-sidebar-open .sidebar > a {
+    flex: none;
+    min-height: auto;
+    margin: 0;
+  }
+
+  body.mobile-sidebar-open .sidebar label,
+  .embed-mode body.mobile-sidebar-open .sidebar label {
+    display: block;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  body.mobile-sidebar-open .sidebar label > input,
+  body.mobile-sidebar-open .sidebar label > select,
+  body.mobile-sidebar-open .sidebar label > textarea,
+  .embed-mode body.mobile-sidebar-open .sidebar label > input,
+  .embed-mode body.mobile-sidebar-open .sidebar label > select,
+  .embed-mode body.mobile-sidebar-open .sidebar label > textarea {
+    margin-top: 6px;
+  }
+
+  body.mobile-sidebar-open .sidebar input,
+  body.mobile-sidebar-open .sidebar select,
+  .embed-mode body.mobile-sidebar-open .sidebar input,
+  .embed-mode body.mobile-sidebar-open .sidebar select {
+    min-height: 38px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  body.mobile-sidebar-open .sidebar button,
+  .embed-mode body.mobile-sidebar-open .sidebar button {
+    min-height: 40px;
+    padding: 9px 10px;
+    font-size: 13px;
+  }
+
+  body.mobile-sidebar-open .range-with-value,
+  .embed-mode body.mobile-sidebar-open .range-with-value {
+    min-height: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 42px;
+    align-items: center;
+    gap: 8px;
+  }
+
+  body.mobile-sidebar-open .sidebar-radio-field,
+  .embed-mode body.mobile-sidebar-open .sidebar-radio-field {
+    display: grid;
+    gap: 7px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  body.mobile-sidebar-open .sidebar-radio-field .radio-row,
+  .embed-mode body.mobile-sidebar-open .sidebar-radio-field .radio-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    margin: 0;
+  }
+
+  body.mobile-sidebar-open .sidebar-radio-field .radio-row label,
+  .embed-mode body.mobile-sidebar-open .sidebar-radio-field .radio-row label {
+    display: flex;
+    justify-content: center;
+    min-height: 36px;
+    padding: 8px 10px;
+  }
+
+  body.mobile-sidebar-open .library-action,
+  .embed-mode body.mobile-sidebar-open .library-action {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    min-height: auto;
+  }
+
+  body.mobile-sidebar-open #openPreviewVideo,
+  .embed-mode body.mobile-sidebar-open #openPreviewVideo {
+    margin-bottom: 0;
+  }
+
   .workspace,
   .embed-mode .workspace {
     margin-left: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     height: auto;
     padding: 14px 14px 26px;
-    overflow: visible;
+    overflow: hidden;
+  }
+
+  .editor-grid,
+  .source-panel,
+  .composition-panel,
+  .model-image-workbench,
+  .video-template-workbench,
+  .cover-workbench,
+  .ending-workbench,
+  .side-editor,
+  .metrics article {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .hero {
@@ -2633,11 +2774,111 @@ button .loading-spinner,
   }
 
   .source-panel-grid,
+  .source-library-column,
+  .source-panel .source-config-group,
+  .source-panel .source-composition-group,
   .template-preview-editor,
   .cover-editor,
   .ending-editor {
     grid-template-columns: 1fr;
     gap: 14px;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .source-library-column,
+  .source-panel .source-composition-group {
+    padding: 9px;
+  }
+
+  .source-panel .add-category-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .source-panel .dir-list,
+  .source-panel .composition-rows {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .source-panel .dir-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .source-panel .source-composition-row {
+    grid-template-columns: minmax(0, 1fr) minmax(76px, auto);
+    gap: 8px;
+    min-height: auto;
+    padding: 8px;
+    align-items: stretch;
+  }
+
+  .source-panel .source-composition-row .category-toggle,
+  .source-panel .source-composition-row [data-category-label],
+  .source-panel .source-composition-row .composition-unit-field {
+    grid-column: 1 / -1;
+  }
+
+  .source-panel .source-composition-row .category-toggle {
+    min-width: 0;
+  }
+
+  .source-panel .source-composition-row .badge,
+  .source-panel .source-composition-row [data-category-label] {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .source-panel .source-composition-row .composition-unit-field {
+    grid-template-columns: auto minmax(56px, 1fr) auto;
+    padding: 0 7px;
+  }
+
+  .source-panel .source-total-count {
+    grid-column: 1 / 2;
+    align-self: center;
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.35;
+  }
+
+  .source-panel .source-composition-row button {
+    grid-column: 2 / 3;
+    align-self: center;
+    min-height: 28px;
+  }
+
+  .template-background-strip,
+  .cover-gallery {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    padding-bottom: 12px;
+  }
+
+  .template-background-strip > *,
+  .cover-gallery > * {
+    flex-shrink: 0;
+  }
+
+  .model-image-chip {
+    flex-basis: clamp(102px, 32vw, 124px);
+  }
+
+  .cover-card,
+  .video-template-thumb,
+  .cover-card img,
+  .cover-card video {
+    width: clamp(126px, 40vw, 154px);
+  }
+
+  .cover-card {
+    flex-basis: clamp(126px, 40vw, 154px);
   }
 
   .template-preview-editor {
@@ -2650,6 +2891,8 @@ button .loading-spinner,
     width: min(100%, calc(var(--preview-phone-width) + 20px));
     justify-self: center;
     justify-items: center;
+    min-height: auto;
+    padding: 10px;
   }
 
   .phone-preview-frame {
@@ -2671,10 +2914,92 @@ button .loading-spinner,
   #endingTemplateForm,
   .control-panel {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     height: auto;
     max-height: none;
     overflow: visible;
     padding-right: 0;
+  }
+
+  .visual-toolbar-panel,
+  .visual-control-section,
+  .font-sample-picker,
+  .visual-target-tabs,
+  .template-actions,
+  .form-row,
+  .preview-caption-row,
+  .preview-caption-actions,
+  .cover-template-switcher,
+  .job-status-card {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .visual-toolbar-panel {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .visual-control-section {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .visual-section-title,
+  .visual-target-tabs,
+  .font-sample-picker,
+  .visual-opacity-control,
+  .visual-effect-control,
+  .visual-toolbar-panel select {
+    grid-column: 1 / -1;
+  }
+
+  .visual-toolbar-panel button,
+  .visual-toolbar-panel select,
+  .visual-effect-control,
+  .visual-opacity-control {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .visual-text-controls > select[data-visual-command="font-family"] {
+    max-width: none;
+  }
+
+  .visual-effect-control {
+    grid-template-columns: minmax(64px, auto) minmax(0, 1fr);
+  }
+
+  .visual-effect-control select {
+    max-width: none;
+  }
+
+  .font-sample-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-row,
+  .template-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-caption-row {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-caption-row small {
+    white-space: normal;
+  }
+
+  .preview-caption-actions {
+    width: 100%;
+  }
+
+  .preview-caption-actions .compact-toggle,
+  .cover-template-switcher,
+  .cover-template-switcher .compact-toggle {
+    width: 100%;
   }
 
   .library-action {
@@ -2706,6 +3031,41 @@ button .loading-spinner,
 
   .confirm-summary {
     grid-template-columns: 1fr;
+  }
+
+  .confirm-body table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .preflight-body {
+    gap: 10px;
+  }
+
+  .preflight-step {
+    grid-template-columns: 24px minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .preflight-step strong {
+    font-size: 13px;
+  }
+
+  .preflight-config {
+    overflow-wrap: anywhere;
+  }
+
+  .preflight-badge {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .preflight-progress-wrap {
+    grid-template-columns: minmax(0, 1fr) 52px;
   }
 
   .confirm-actions {

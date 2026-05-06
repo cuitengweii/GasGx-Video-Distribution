@@ -5112,6 +5112,45 @@ body.sidebar-collapsed .terminal-init-modal {
     overflow: visible;
   }
 
+  body.video-matrix-active .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    margin: -14px -14px 0;
+    padding: 14px 14px 12px;
+    position: static;
+  }
+
+  body.video-matrix-active .topbar-title,
+  body.video-matrix-active .topbar-title > div {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  body.video-matrix-active #page-title {
+    font-size: 24px;
+    line-height: 1.16;
+    letter-spacing: 0;
+    white-space: normal;
+    word-break: keep-all;
+  }
+
+  body.video-matrix-active #page-description {
+    max-width: 100%;
+    margin-top: 6px;
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  body.video-matrix-active .topbar-actions {
+    display: none;
+  }
+
   body.video-matrix-active #video-matrix {
     margin: -10px -14px -16px;
     height: calc(100vh - 170px);
