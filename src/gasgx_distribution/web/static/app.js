@@ -84,14 +84,14 @@ const state = {
   operatorWechats: ["aamecc", "aalbcc"],
 };
 
-const TERMINAL_ERROR_GUIDE_ORDER = ["qr", "login_probe", "publish_start", "publish_run", "confirm", "unknown"];
+const TERMINAL_ERROR_GUIDE_ORDER = ["login_browser", "login_probe", "publish_start", "publish_run", "confirm", "unknown"];
 const TERMINAL_ERROR_STAGE_GUIDES = {
-  qr: {
-    title: "获取二维码",
+  login_browser: {
+    title: "打开登录浏览器",
     items: [
-      ["二维码缓存失败", "读取浏览器页源或写入二维码缓存时失败。"],
-      ["二维码为空", "当前会话未拿到可用二维码，请先手动打开浏览器后重试。"],
-      ["二维码过期", "二维码已过期，需要刷新后重新扫码。"],
+      ["浏览器启动失败", "Chrome profile 被占用、调试端口冲突，或 Chrome 未能在超时内启动。"],
+      ["账号配置缺失", "账号没有视频号平台配置、profile_dir 或 debug_port。"],
+      ["扫码未完成", "浏览器已打开，但后端登录检测仍未返回 ready。"],
     ],
   },
   login_probe: {
@@ -120,7 +120,7 @@ const TERMINAL_ERROR_STAGE_GUIDES = {
   confirm: {
     title: "人工确认",
     items: [
-      ["下一账号二维码刷新失败", "发布成功后切下一账号时，二维码未能重新拉起。"],
+      ["下一账号浏览器打开失败", "发布成功后切下一账号时，登录浏览器未能打开。"],
     ],
   },
   unknown: {
@@ -147,7 +147,6 @@ let terminalPollTimer = null;
 let terminalCountdownTimer = null;
 let terminalPollRequestInFlight = false;
 let terminalErrorModalSignature = "";
-const terminalAutoConfirmInFlight = new Set();
 let terminalFullLoadingCount = 0;
 
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -681,10 +680,29 @@ function showAccountCreatedToast(account) {
   }, 2600);
 }
 
+function showAccountCreateErrorToast(message) {
+  let toast = document.querySelector("#account-create-error-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "account-create-error-toast";
+    toast.className = "permission-denied-toast";
+    toast.setAttribute("role", "alert");
+    toast.setAttribute("aria-live", "assertive");
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message || "账号创建失败";
+  toast.classList.add("show");
+  clearTimeout(showAccountCreateErrorToast.timer);
+  showAccountCreateErrorToast.timer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 3000);
+}
+
 function terminalErrorStageTitle(stage) {
   const map = {
     load: "终端执行加载失败",
-    qr: "获取二维码失败",
+    login_browser: "打开登录浏览器失败",
+    qr: "打开登录浏览器失败",
     login_probe: "登录检测失败",
     publish_start: "发布启动失败",
     publish_run: "发布执行失败",
@@ -711,7 +729,7 @@ function terminalErrorStageFromMessage(message) {
     lowered.includes("wechat platform config missing") ||
     lowered.includes("account not found")
   ) return "publish_start";
-  if (/二维码/.test(text)) return "qr";
+  if (/二维码|浏览器/.test(text)) return "login_browser";
   if (/登录|会话|network|connection|timeout|超时|接口/.test(text)) return "login_probe";
   return "";
 }
@@ -766,6 +784,7 @@ function terminalErrorSnapshot() {
     const runStatus = String(run.status || "").toLowerCase();
     if (status !== "error" && runStatus !== "failed") continue;
     const message = String(current.error_detail || current.status_text || run.error || "终端流程发生错误");
+    if (terminalRunIsManualConfirmableFailure(run) || terminalTextIsManualConfirmableFailure(message)) continue;
     const stage = String(
       current.error_stage
       || run.error_stage
@@ -1797,7 +1816,7 @@ function renderTerminalConfig(rootTarget = "#terminal-config-list", terminalStat
           <span>当前平台仅展示按需检测配置</span>
         </div>
         <div class="terminal-session-card-body">
-          <div>该平台不使用视频号矩阵窗位、运营微信绑定和二维码队列。</div>
+          <div>该平台不使用视频号矩阵窗位、运营微信绑定和扫码浏览器队列。</div>
           <div>请在页面顶部切换平台后，再通过“当前平台配置”查看对应字段组。</div>
         </div>
       </div>
@@ -1960,7 +1979,23 @@ function terminalExpiredPlaceholderIcon() {
 }
 
 function terminalQrLifecycle(window) {
+  if (terminalWindowIsCompleted(window)) {
+    return {
+      hasQr: false,
+      expiresAt: 0,
+      remaining: 0,
+      expired: false,
+      active: false,
+      countdownText: "完成",
+      placeholderState: "completed",
+    };
+  }
   const refreshing = Boolean(window?.qr_refreshing);
+  const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
+  const currentIndex = Number(window?.current_index || 0);
+  const current = accounts[currentIndex] || {};
+  const currentStatus = String(current?.status || "").toLowerCase();
+  const browserClosed = current?.browser_open === false || window?.browser_open === false;
   if (refreshing) {
     return {
       hasQr: false,
@@ -1968,27 +2003,51 @@ function terminalQrLifecycle(window) {
       remaining: 0,
       expired: false,
       active: false,
-      countdownText: "获取中...",
-      placeholderState: "refreshing",
+      countdownText: "打开中...",
+      placeholderState: "opening",
     };
   }
-  const hasQr = Boolean(window?.qr_url);
-  let expiresAt = Number(window?.qr_expires_at || 0);
-  if (hasQr && expiresAt <= 0) {
-    expiresAt = Date.now() / 1000 + 60;
-    window.qr_expires_at = expiresAt;
+  if (currentStatus === "ready" && browserClosed) {
+    return {
+      hasQr: false,
+      expiresAt: 0,
+      remaining: 0,
+      expired: false,
+      active: false,
+      countdownText: "浏览器已关闭",
+      placeholderState: "browser_closed",
+    };
   }
-  const now = Date.now() / 1000;
-  const remaining = hasQr && expiresAt > 0 ? Math.max(0, expiresAt - now) : 0;
-  const expired = hasQr && expiresAt > 0 && remaining <= 0;
+  if (currentStatus === "ready") {
+    return {
+      hasQr: false,
+      expiresAt: 0,
+      remaining: 0,
+      expired: false,
+      active: false,
+      countdownText: "已登录",
+      placeholderState: "ready",
+    };
+  }
+  if (currentStatus === "waiting_qr" || currentStatus === "opening") {
+    return {
+      hasQr: false,
+      expiresAt: 0,
+      remaining: 0,
+      expired: false,
+      active: false,
+      countdownText: currentStatus === "opening" ? "打开中..." : "扫码中",
+      placeholderState: "browser",
+    };
+  }
   return {
-    hasQr,
-    expiresAt,
-    remaining,
-    expired,
-    active: hasQr && !expired,
-    countdownText: !hasQr ? "待获取" : expired ? "已过期" : `${remaining.toFixed(2)}s`,
-    placeholderState: !hasQr ? "idle" : expired ? "expired" : "active",
+    hasQr: false,
+    expiresAt: 0,
+    remaining: 0,
+    expired: false,
+    active: false,
+    countdownText: "待打开",
+    placeholderState: "idle",
   };
 }
 
@@ -1996,6 +2055,11 @@ function terminalRunIsManualConfirmableFailure(run) {
   const runStatus = String(run?.status || "").toLowerCase();
   if (runStatus !== "failed" && runStatus !== "error") return false;
   const errorText = `${String(run?.error || "")} ${String(run?.error_title || "")}`.toLowerCase();
+  return terminalTextIsManualConfirmableFailure(errorText);
+}
+
+function terminalTextIsManualConfirmableFailure(text) {
+  const errorText = String(text || "").toLowerCase();
   return (
     errorText.includes("未检测到视频号发布成功记录")
     || errorText.includes("未检测到发布证据")
@@ -2006,12 +2070,39 @@ function terminalRunIsManualConfirmableFailure(run) {
   );
 }
 
+function terminalAccountHasLegacyManualConfirmFailure(account) {
+  const status = String(account?.status || "").toLowerCase();
+  if (status !== "error" && status !== "failed") return false;
+  return terminalTextIsManualConfirmableFailure(`${String(account?.status_text || "")} ${String(account?.error_detail || "")} ${String(account?.error_title || "")}`);
+}
+
 function terminalCurrentIsManualConfirmable(window, account, index, currentIndex) {
   if (!window || !account) return false;
   if (Number(index) !== Number(currentIndex)) return false;
   const run = window?.publish_run || {};
   const runActiveForCurrent = Number(run?.account_id || 0) === Number(account?.id || 0);
   return runActiveForCurrent && terminalRunIsManualConfirmableFailure(run);
+}
+
+function terminalDisplayAccount(window, account, index, currentIndex) {
+  if (terminalCurrentIsManualConfirmable(window, account, index, currentIndex)) {
+    return { ...account, status: "running", status_text: "发布已执行，等待人工确认" };
+  }
+  if (terminalAccountHasLegacyManualConfirmFailure(account)) {
+    if (Number(index) < Number(currentIndex)) {
+      return { ...account, status: "success", status_text: "发布成功" };
+    }
+    if (Number(index) === Number(currentIndex)) {
+      return { ...account, status: "running", status_text: "发布已执行，等待人工确认" };
+    }
+  }
+  return account;
+}
+
+function terminalWindowIsCompleted(window) {
+  const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
+  const currentIndex = Number(window?.current_index || 0);
+  return Boolean(window?.completed) || (accounts.length > 0 && currentIndex >= accounts.length);
 }
 
 function terminalPrecheckPrimaryIssue(window) {
@@ -2029,6 +2120,14 @@ function terminalPrecheckPrimaryIssue(window) {
 function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
+  const completed = terminalWindowIsCompleted(window);
+  if (completed) {
+    return `
+      <div class="terminal-window-actions">
+        <button class="terminal-col-btn" type="button" disabled>全部完成</button>
+      </div>
+    `;
+  }
   const hasCurrent = Boolean(current && current.id && currentIndex < accounts.length);
   const run = window?.publish_run || {};
   const runStatus = String(run?.status || "").toLowerCase();
@@ -2038,9 +2137,11 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const publishManualConfirmableFailure = runActiveForCurrent && terminalRunIsManualConfirmableFailure(run);
   const qrState = terminalQrLifecycle(window);
   const isSuccess = String(current?.status || "") === "success";
+  const isReady = String(current?.status || "").toLowerCase() === "ready";
+  const browserClosed = qrState.placeholderState === "browser_closed";
   const primaryIssue = terminalPrecheckPrimaryIssue(window);
   const hasP0Issue = Boolean(primaryIssue && primaryIssue.level === "p0");
-  const canPublish = loginStarted && hasCurrent && qrState.active && !publishRunning && !publishSucceeded && !isSuccess && !hasP0Issue;
+  const canPublish = loginStarted && hasCurrent && isReady && !browserClosed && !publishRunning && !publishSucceeded && !isSuccess && !hasP0Issue;
   const canConfirm = loginStarted && hasCurrent && (publishSucceeded || publishManualConfirmableFailure) && !isSuccess;
   const hasNext = currentIndex + 1 < accounts.length;
   const publishLabel = !hasCurrent
@@ -2053,9 +2154,11 @@ function terminalWindowActionButtons(window, current, loginStarted) {
           ? "重新发布"
         : hasP0Issue
           ? "预检未通过"
-        : qrState.active
+        : browserClosed
+          ? "先打开浏览器"
+        : isReady
           ? "发布"
-          : "先获取二维码";
+          : "等待登录";
   const confirmLabel = hasNext
     ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
     : (publishManualConfirmableFailure ? "已人工确认成功，完成" : "发布成功，完成");
@@ -2073,60 +2176,75 @@ function terminalWindowActionButtons(window, current, loginStarted) {
 
 function terminalQrImageMarkup(window, currentAccountId) {
   const qrState = terminalQrLifecycle(window);
-  const qrUrl = window.qr_url || "";
   const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
   const currentIndex = Number(window?.current_index || 0);
   const fallbackCurrentId = Number(accounts?.[currentIndex]?.id || 0);
   const firstAccountId = Number(accounts?.[0]?.id || 0);
   const refreshAccountId = Number(currentAccountId || 0) || fallbackCurrentId || firstAccountId;
-  if (qrState.placeholderState === "refreshing") {
+  if (qrState.placeholderState === "completed") {
     return `
-      <button class="terminal-qr-image-button loading-state" type="button" disabled aria-busy="true" aria-label="正在获取二维码">
-        <span class="btn-spinner" aria-hidden="true"></span>
-        <span class="terminal-qr-loading-text">获取中...</span>
-      </button>
-    `;
-  }
-  if (!qrState.hasQr) {
-    return `
-      <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="点击获取二维码">
+      <button class="terminal-qr-image-button" type="button" disabled aria-label="全部完成">
         ${terminalPlaceholderIcon()}
       </button>
     `;
   }
-  if (qrState.expired) {
+  if (qrState.placeholderState === "ready") {
     return `
-      <button class="terminal-qr-image-button expired" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="二维码已过期，点击刷新">
-        ${terminalExpiredPlaceholderIcon()}
+      <button class="terminal-qr-image-button browser-state" type="button" disabled aria-label="已登录，无需扫码">
+        ${terminalPlaceholderIcon()}
+        <span class="terminal-qr-loading-text">已登录，无需扫码</span>
+      </button>
+    `;
+  }
+  if (qrState.placeholderState === "browser_closed") {
+    return `
+      <button class="terminal-qr-image-button browser-state" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="浏览器已关闭，点击重新打开">
+        ${terminalPlaceholderIcon()}
+        <span class="terminal-qr-loading-text">浏览器已关闭<br>点击重新打开</span>
+      </button>
+    `;
+  }
+  if (qrState.placeholderState === "opening") {
+    return `
+      <button class="terminal-qr-image-button loading-state" type="button" disabled aria-busy="true" aria-label="正在打开登录浏览器">
+        <span class="btn-spinner" aria-hidden="true"></span>
+        <span class="terminal-qr-loading-text">正在打开浏览器</span>
+      </button>
+    `;
+  }
+  if (qrState.placeholderState === "browser") {
+    return `
+      <button class="terminal-qr-image-button browser-state" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="打开登录浏览器">
+        ${terminalPlaceholderIcon()}
+        <span class="terminal-qr-loading-text">请在已打开浏览器扫码</span>
       </button>
     `;
   }
   return `
-    <button class="terminal-qr-image-button" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}">
-      <img src="${qrUrl}" alt="视频号登录二维码">
+    <button class="terminal-qr-image-button browser-state" type="button" data-terminal-qr-refresh="${window.id}:${refreshAccountId}" aria-label="打开登录浏览器">
+      ${terminalPlaceholderIcon()}
+      <span class="terminal-qr-loading-text">打开浏览器扫码</span>
     </button>
   `;
 }
 
 function terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted) {
   if (terminalCurrentIsManualConfirmable(window, account, index, currentIndex)) {
-    return "发布成功";
+    return "发布已执行，等待人工确认";
   }
   const qrState = terminalQrLifecycle(window);
   if (index === currentIndex && loginStarted && String(account.status || "") === "waiting_qr") {
-    if (qrState.placeholderState === "refreshing") {
-      return "正在获取二维码...";
-    }
-    if (qrState.hasQr) {
-      return qrState.expired
-        ? `二维码已过期，请刷新`
-        : `正在等待扫码确认`;
+    if (qrState.placeholderState === "opening") {
+      return "正在打开登录浏览器...";
     }
     const rawStatus = sanitizeTerminalStatusText(account.status_text, account.status);
-    if (/(失败|异常|重试|手动|网络连接异常|未导入|未配置|未找到)/.test(rawStatus)) {
+    if (rawStatus && rawStatus !== "未登录") {
       return rawStatus;
     }
-    return `未获取二维码，请先点击获取二维码`;
+    return `请在已打开浏览器扫码`;
+  }
+  if (index === currentIndex && loginStarted && String(account.status || "").toLowerCase() === "ready" && terminalQrLifecycle(window).placeholderState === "browser_closed") {
+    return "已登录，浏览器已关闭";
   }
   return sanitizeTerminalStatusText(account.status_text, account.status);
 }
@@ -2134,6 +2252,9 @@ function terminalWechatAccountStatusText(window, account, index, currentIndex, l
 function sanitizeTerminalStatusText(statusText, status) {
   const raw = String(statusText || "").trim();
   if (!raw) return "未登录";
+  if (terminalTextIsManualConfirmableFailure(raw)) {
+    return "发布已执行，等待人工确认";
+  }
   const lowered = raw.toLowerCase();
   if (
     lowered.includes("httpsconnectionpool(") ||
@@ -2205,9 +2326,7 @@ function terminalWechatWindowMarkup(window, loginStarted) {
       </div>
       <div class="terminal-account-list">
         ${accounts.map((account, index) => {
-          const displayAccount = terminalCurrentIsManualConfirmable(window, account, index, currentIndex)
-            ? { ...account, status: "success", status_text: "发布成功" }
-            : account;
+          const displayAccount = terminalDisplayAccount(window, account, index, currentIndex);
           return `
           <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
             <div class="terminal-account-info">
@@ -2272,17 +2391,24 @@ function waitForTerminalQrVisible(windowId, accountId, timeoutMs = 20000) {
   });
 }
 
+function replaceTerminalWindowNode(refreshRoot, windowId, windowData, loginStarted) {
+  const liveNode = refreshRoot?.querySelector(`[data-terminal-window-id="${windowId}"]`);
+  if (!liveNode || !liveNode.parentNode) return false;
+  liveNode.outerHTML = terminalWechatWindowMarkup(windowData, loginStarted);
+  return true;
+}
+
 async function refreshTerminalAccountQr(windowId, accountId, button) {
-  const restoreButton = setButtonLoading(button, "刷新中");
+  const restoreButton = setButtonLoading(button, "打开中");
   terminalErrorModalSignature = "";
   hideTerminalErrorModal();
   try {
     const refreshRoot = document.querySelector(".terminal-workspace-wechat") || document.querySelector("#terminal-matrix-workspace");
-    const targetNode = refreshRoot?.querySelector(`[data-terminal-window-id="${windowId}"]`);
     const pageScrollX = window.scrollX;
     const pageScrollY = window.scrollY;
     const rootScrollLeft = refreshRoot?.scrollLeft ?? 0;
     const rootScrollTop = refreshRoot?.scrollTop ?? 0;
+    const targetNode = refreshRoot?.querySelector(`[data-terminal-window-id="${windowId}"]`);
     targetNode?.querySelectorAll(".terminal-qr-placeholder img[alt='视频号登录二维码']").forEach((img) => img.remove());
     const currentStateWindows = state.terminalExecution.windows || [];
     const pendingWindow = currentStateWindows.find((item) => String(item.id) === String(windowId));
@@ -2290,13 +2416,16 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
       pendingWindow.qr_refreshing = true;
       pendingWindow.qr_url = "";
       pendingWindow.qr_expires_at = 0;
-      if (refreshRoot && targetNode) {
+      if (refreshRoot) {
         const loginStartedPending = Boolean(state.terminalExecution.login_started);
-        targetNode.outerHTML = terminalWechatWindowMarkup(pendingWindow, loginStartedPending);
-        syncTerminalWechatSummary(state.terminalExecution.summary || {}, currentStateWindows);
-        refreshRoot.scrollLeft = rootScrollLeft;
-        refreshRoot.scrollTop = rootScrollTop;
-        window.scrollTo(pageScrollX, pageScrollY);
+        if (replaceTerminalWindowNode(refreshRoot, windowId, pendingWindow, loginStartedPending)) {
+          syncTerminalWechatSummary(state.terminalExecution.summary || {}, currentStateWindows);
+          refreshRoot.scrollLeft = rootScrollLeft;
+          refreshRoot.scrollTop = rootScrollTop;
+          window.scrollTo(pageScrollX, pageScrollY);
+        } else {
+          renderTerminalExecution();
+        }
       } else {
         renderTerminalExecution();
       }
@@ -2317,8 +2446,7 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
       targetWindow.qr_refreshing = false;
       if (targetWindow.qr_url) targetWindow.qr_expires_at = now + 60;
     }
-    if (refreshRoot && targetNode && targetWindow) {
-      targetNode.outerHTML = terminalWechatWindowMarkup(targetWindow, loginStarted);
+    if (refreshRoot && targetWindow && replaceTerminalWindowNode(refreshRoot, windowId, targetWindow, loginStarted)) {
       syncTerminalWechatSummary(nextState.summary || {}, nextState.windows || []);
       refreshRoot.scrollLeft = rootScrollLeft;
       refreshRoot.scrollTop = rootScrollTop;
@@ -2336,11 +2464,11 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
     }
     renderTerminalExecution();
     showTerminalErrorModal({
-      stage: "qr",
-      title: "二维码刷新失败",
-      message: error.message || "二维码刷新失败",
+      stage: "login_browser",
+      title: "登录浏览器打开失败",
+      message: error.message || "登录浏览器打开失败",
       context: `窗口 #${windowId} · 账号 #${accountId}`,
-      signature: `qr-network|${windowId}|${accountId}|${error.message || "unknown"}`,
+      signature: `login-browser|${windowId}|${accountId}|${error.message || "unknown"}`,
     });
   } finally {
     restoreButton();
@@ -2367,7 +2495,7 @@ function renderTerminalExecution() {
   const startLoginButton = document.querySelector("#terminal-start-login");
   if (startLoginButton) {
     startLoginButton.disabled = false;
-    startLoginButton.textContent = "获取登录二维码";
+    startLoginButton.textContent = "打开登录浏览器";
   }
   const progress = document.querySelector("#terminal-global-progress");
   if (progress) progress.textContent = `${summary.success || 0}/${summary.total || 0}`;
@@ -2399,18 +2527,21 @@ function renderTerminalExecution() {
           <div class="terminal-qr-status-row"><span class="terminal-qr-sequence">#${Number(window.qr_sequence || 0)}</span></div>
         </div>
         <div class="terminal-account-list">
-          ${accounts.map((account, index) => `
+          ${accounts.map((account, index) => {
+            const displayAccount = terminalDisplayAccount(window, account, index, currentIndex);
+            return `
             <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
               <div class="terminal-account-info">
-                ${terminalAccountStatusAvatar(account)}
+                ${terminalAccountStatusAvatar(displayAccount)}
                 <div>
-                  <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
-                  <div class="terminal-acc-status">${terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted)}</div>
+                  <div class="terminal-acc-name">${displayAccount.display_name || displayAccount.account_key || `账号 ${displayAccount.id}`}</div>
+                  <div class="terminal-acc-status">${terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted)}</div>
                 </div>
               </div>
-            ${terminalAccountTaskBadge(account)}
+            ${terminalAccountTaskBadge(displayAccount)}
           </div>
-        `).join("") || `<div class="muted">暂无账号</div>`}
+        `;
+          }).join("") || `<div class="muted">暂无账号</div>`}
         </div>
         <div class="terminal-col-footer">
           <div class="terminal-progress-bar"><div class="terminal-progress-fill" style="width:${accounts.length ? Math.round((successCount / accounts.length) * 100) : 0}%;"></div></div>
@@ -2471,7 +2602,7 @@ function renderTerminalConfigPanel() {
       </div>
       <div class="terminal-config-panel-body">
         <div>只渲染视频号所需字段组：运营微信、色标、窗口启用。</div>
-        <div>切换到其它平台后，会改为长会话配置/检测视图，不复用二维码占位。</div>
+        <div>切换到其它平台后，会改为长会话配置/检测视图，不复用扫码浏览器占位。</div>
       </div>
       <div class="terminal-config-panel-actions">
         <button class="btn primary" type="button" id="terminal-save-config">更新配置</button>
@@ -2515,33 +2646,6 @@ function renderTerminalDailyQrView(root) {
   if (!workspace) return;
   workspace.innerHTML = windows.map((window) => terminalWechatWindowMarkup(window, loginStarted)).join("");
   syncTerminalWechatSummary(summary, windows);
-  maybeAutoConfirmTerminalSuccess();
-}
-
-async function maybeAutoConfirmTerminalSuccess() {
-  if (terminalCurrentRoute() !== "wechat") return;
-  if (!state.terminalExecution?.login_started) return;
-  const windows = state.terminalExecution.windows || [];
-  for (const window of windows) {
-    const currentIndex = Number(window?.current_index || 0);
-    const current = window?.accounts?.[currentIndex];
-    if (!current) continue;
-    const isSuccess = String(current.status || "").toLowerCase() === "success";
-    const isManualConfirmable = terminalCurrentIsManualConfirmable(window, current, currentIndex, currentIndex);
-    if (!isSuccess && !isManualConfirmable) continue;
-    const key = `${window.id}:${current.id}`;
-    if (terminalAutoConfirmInFlight.has(key)) continue;
-    terminalAutoConfirmInFlight.add(key);
-    try {
-      state.terminalExecution = await api(`/api/terminal-execution/windows/${window.id}/confirm-publish-success`, { method: "POST" });
-      renderTerminalExecution();
-      return;
-    } catch (_) {
-      // Ignore and retry on next render/poll cycle.
-    } finally {
-      terminalAutoConfirmInFlight.delete(key);
-    }
-  }
 }
 
 function renderTerminalSessionBoardView() {
@@ -2592,7 +2696,7 @@ function renderTerminalExecution() {
   if (startLoginButton) {
     const loginStarted = Boolean(state.terminalExecution.login_started);
     startLoginButton.disabled = context.platform !== "wechat";
-    startLoginButton.textContent = context.platform === "wechat" ? "获取登录二维码" : "检测全部";
+    startLoginButton.textContent = context.platform === "wechat" ? "打开登录浏览器" : "检测全部";
   }
   const subtitle = document.querySelector("#terminal-header-subtitle");
   if (subtitle) {
@@ -2772,7 +2876,7 @@ function renderTerminalExecution() {
   if (subtitle) subtitle.textContent = route === "hub"
     ? "平台枢纽页只列入口卡片，不混排视频号多窗。"
     : route === "wechat"
-      ? "视频号独立流程：配置、获取二维码、扫码、发布、进入下一账号。"
+      ? "视频号独立流程：配置、打开登录浏览器、扫码、发布、进入下一账号。"
       : "长会话平台：选账号、检测登录、打开创作者后台。";
 
   if (route === "hub") {
@@ -2845,7 +2949,7 @@ function renderTerminalExecution() {
             <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
           </div>
           <div class="terminal-entry-actions terminal-route-actions">
-            <button class="btn primary" type="button" data-terminal-start-action="1">更新所有二维码</button>
+            <button class="btn primary" type="button" data-terminal-start-action="1">打开所有登录浏览器</button>
           </div>
           <div class="terminal-workspace terminal-workspace-wechat"></div>
         </section>
@@ -2906,8 +3010,14 @@ function updateTerminalManualCountdowns() {
   document.querySelectorAll("[data-terminal-manual]").forEach((button) => {
     const window = windowById.get(String(button.dataset.terminalManual || ""));
     const manualWait = loginStarted ? Math.max(0, Number(window?.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
-    button.disabled = !loginStarted || manualWait > 0;
-    button.textContent = !loginStarted ? "先获取二维码" : (manualWait > 0 ? `发布 (${manualWait}s)` : "发布");
+    const currentIndex = Number(window?.current_index || 0);
+    const currentStatus = String(window?.accounts?.[currentIndex]?.status || "").toLowerCase();
+    button.disabled = !loginStarted || manualWait > 0 || currentStatus !== "ready";
+    button.textContent = !loginStarted
+      ? "先打开登录浏览器"
+      : currentStatus !== "ready"
+        ? "等待登录"
+        : (manualWait > 0 ? `发布 (${manualWait}s)` : "发布");
   });
 }
 
@@ -4210,40 +4320,40 @@ document.querySelector("#refresh")?.addEventListener("click", async (event) => {
 document.querySelector("#account-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const restoreButton = setButtonLoading(event.submitter || event.target.querySelector('button[type="submit"]'), "创建中");
-  const data = Object.fromEntries(new FormData(event.target).entries());
-  const brandPrefix = String(data.brand_prefix || "").trim();
-  const accountName = String(data.account_name || "").trim();
-  const operatorWechat = String(data.operator_wechat || "").trim();
-  const phone = String(data.phone || "").trim();
-  updateAccountPhoneHint();
-  if (!operatorWechat || operatorWechat === "__new__") {
-    showTaskState("请先在下拉中新增运营微信号", "status-unsupported");
-    restoreButton();
-    return;
-  }
-  if (!/^\d{11}$/.test(phone)) {
-    const phoneInput = event.target.elements.phone;
-    phoneInput?.setCustomValidity("账号手机号需为 11 位数字");
-    phoneInput?.reportValidity();
-    phoneInput?.setCustomValidity("");
-    restoreButton();
-    return;
-  }
-  data.display_name = [brandPrefix, accountName].filter(Boolean).join(" ");
-  data.account_key = makeAccountKey(data.display_name, "auto");
-  data.niche = "短视频矩阵";
-  data.notes = `绑定运营微信：${operatorWechat}；账号手机号：${phone}`;
-  delete data.brand_prefix;
-  delete data.account_name;
-  delete data.operator_wechat;
-  delete data.phone;
-  data.platforms = PLATFORM_ORDER;
   try {
+    const data = Object.fromEntries(new FormData(event.target).entries());
+    const brandPrefix = String(data.brand_prefix || "").trim();
+    const accountName = String(data.account_name || "").trim();
+    const operatorWechat = String(data.operator_wechat || "").trim();
+    const phone = String(data.phone || "").trim();
+    updateAccountPhoneHint();
+    if (!operatorWechat || operatorWechat === "__new__") {
+      showAccountCreateErrorToast("请先在下拉中新增运营微信号");
+      return;
+    }
+    if (!/^\d{11}$/.test(phone)) {
+      const phoneInput = event.target.elements.phone;
+      phoneInput?.setCustomValidity("账号手机号需为 11 位数字");
+      phoneInput?.reportValidity();
+      phoneInput?.setCustomValidity("");
+      return;
+    }
+    data.display_name = [brandPrefix, accountName].filter(Boolean).join(" ");
+    data.account_key = makeAccountKey(data.display_name, "auto");
+    data.niche = "短视频矩阵";
+    data.notes = `绑定运营微信：${operatorWechat}；账号手机号：${phone}`;
+    delete data.brand_prefix;
+    delete data.account_name;
+    delete data.operator_wechat;
+    delete data.phone;
+    data.platforms = PLATFORM_ORDER;
     const created = await api("/api/accounts", { method: "POST", body: JSON.stringify(data) });
     event.target.reset();
     setOperatorWechatValue("aamecc");
     await refresh();
     showAccountCreatedToast(created);
+  } catch (error) {
+    showAccountCreateErrorToast(formatFriendlyMessage(error.message));
   } finally {
     restoreButton();
   }
@@ -4803,11 +4913,11 @@ document.addEventListener("click", async (event) => {
     }
     if (!accountIdNumber) {
       showTerminalErrorModal({
-        stage: "qr",
-        title: "二维码获取失败",
-        message: "当前窗口没有可用账号，无法获取二维码。请先在配置中添加账号后重试。",
+        stage: "login_browser",
+        title: "登录浏览器打开失败",
+        message: "当前窗口没有可用账号，无法打开登录浏览器。请先在配置中添加账号后重试。",
         context: `窗口 #${windowIdNumber}`,
-        signature: `qr-refresh|empty-account|${windowIdNumber}`,
+        signature: `login-browser|empty-account|${windowIdNumber}`,
       });
       return;
     }

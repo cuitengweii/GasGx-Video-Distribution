@@ -140,3 +140,18 @@ def test_resolve_platform_runtime_context_can_prefer_login_entry(monkeypatch) ->
     runtime_ctx = engine.resolve_platform_runtime_context("wechat", prefer_login_entry=True)
 
     assert runtime_ctx["open_url"] == str(engine.PLATFORM_LOGIN_ENTRY_URLS.get("wechat") or "")
+
+
+def test_extract_cli_flag_value_supports_wrapped_flag_token() -> None:
+    command = (
+        "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" "
+        "--remote-debugging-port=21288 "
+        "\"--user-data-dir=G:\\GasGx Video Distribution\\profiles\\matrix\\gasgx-demo\" "
+        "https://channels.weixin.qq.com/platform/post/create"
+    )
+
+    user_dir = engine._extract_cli_flag_value(command, "user-data-dir")
+    debug_port = engine._extract_cli_flag_value(command, "remote-debugging-port")
+
+    assert user_dir == r"G:\GasGx Video Distribution\profiles\matrix\gasgx-demo"
+    assert debug_port == "21288"

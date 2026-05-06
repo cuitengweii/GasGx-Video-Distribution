@@ -1530,6 +1530,12 @@ def _public_terminal_window(window: dict[str, Any]) -> dict[str, Any]:
             visible["qr_url"] = qr_url
     elif qr_url.startswith("data:"):
         visible["qr_url"] = ""
+    current = _terminal_current_account(visible)
+    if isinstance(current, dict):
+        runtime = _terminal_browser_runtime_for_account(int(current.get("id") or 0), "wechat")
+        if runtime:
+            current.update(runtime)
+            visible["browser_open"] = runtime.get("browser_open")
     return visible
 
 
@@ -1918,6 +1924,198 @@ def _close_wechat_browser_for_account(account_id: int) -> None:
         return
 
 
+def _terminal_browser_runtime_for_account(account_id: int, platform_name: str = "wechat") -> dict[str, Any]:
+    if account_id <= 0:
+        return {}
+    account = get_account(account_id) or {}
+    platform = next((item for item in account.get("platforms", []) if item.get("platform") == platform_name), None)
+    if not platform:
+        return {}
+    try:
+        debug_port = int(platform.get("debug_port") or 0)
+    except Exception:
+        debug_port = 0
+    profile_dir = str(platform.get("profile_dir") or "").strip()
+    if debug_port <= 0 or not profile_dir:
+        return {}
+    browser_open: bool | None = None
+    try:
+        pid = engine._find_debug_chrome_process_pid(debug_port, profile_dir)  # type: ignore[attr-defined]
+        browser_open = bool(pid)
+    except Exception:
+        browser_open = None
+    if browser_open is None:
+        try:
+            browser_open = bool(engine._is_chrome_debug_port_ready(debug_port, timeout=0.25))  # type: ignore[attr-defined]
+        except Exception:
+            browser_open = None
+    return {
+        "browser_open": browser_open,
+        "debug_port": debug_port,
+        "profile_dir": profile_dir,
+    }
+
+
+def _windows_colorref_from_hex(value: str) -> int | None:
+    color = str(value or "").strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        return None
+    red = int(color[1:3], 16)
+    green = int(color[3:5], 16)
+    blue = int(color[5:7], 16)
+    return red | (green << 8) | (blue << 16)
+
+
+def _find_windows_chrome_pid_by_debug_port(debug_port: int) -> int:
+    if os.name != "nt" or int(debug_port or 0) <= 0:
+        return 0
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                "Select-Object ProcessId,CommandLine | ConvertTo-Json -Depth 3",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            check=False,
+        )
+        payload = json.loads(result.stdout or "[]")
+        if isinstance(payload, dict):
+            payload = [payload]
+        marker = f"--remote-debugging-port={int(debug_port)}"
+        for item in payload:
+            command_line = str(item.get("CommandLine") or "")
+            if not command_line or "--type=" in command_line:
+                continue
+            if marker not in command_line:
+                continue
+            process_id = item.get("ProcessId")
+            if process_id is None:
+                continue
+            return int(process_id)
+    except Exception:
+        return 0
+    return 0
+
+
+def _apply_windows_chrome_window_color(debug_port: int, profile_dir: str, color: str) -> bool:
+    if os.name != "nt":
+        return False
+    colorref = _windows_colorref_from_hex(color)
+    if colorref is None:
+        return False
+    try:
+        pid = int(engine._find_debug_chrome_process_pid(int(debug_port), str(profile_dir)) or 0)  # type: ignore[attr-defined]
+    except Exception:
+        pid = 0
+    if pid <= 0:
+        pid = _find_windows_chrome_pid_by_debug_port(debug_port)
+    if pid <= 0:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return False
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+    enum_windows = user32.EnumWindows
+    enum_windows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+    enum_windows.restype = wintypes.BOOL
+    get_window_thread_process_id = user32.GetWindowThreadProcessId
+    get_window_thread_process_id.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    get_window_thread_process_id.restype = wintypes.DWORD
+    is_window_visible = user32.IsWindowVisible
+    is_window_visible.argtypes = [wintypes.HWND]
+    is_window_visible.restype = wintypes.BOOL
+    set_window_attribute = dwmapi.DwmSetWindowAttribute
+    set_window_attribute.argtypes = [wintypes.HWND, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    set_window_attribute.restype = ctypes.c_long
+
+    hwnds: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _callback(hwnd: int, _lparam: int) -> bool:
+        window_pid = wintypes.DWORD()
+        get_window_thread_process_id(hwnd, ctypes.byref(window_pid))
+        if int(window_pid.value) == pid and bool(is_window_visible(hwnd)):
+            hwnds.append(int(hwnd))
+        return True
+
+    try:
+        enum_windows(_callback, 0)
+    except Exception:
+        return False
+    if not hwnds:
+        return False
+
+    applied = False
+    color_value = wintypes.DWORD(colorref)
+    size = ctypes.sizeof(color_value)
+    for hwnd in hwnds:
+        for attribute in (34, 35):
+            try:
+                if set_window_attribute(wintypes.HWND(hwnd), attribute, ctypes.byref(color_value), size) == 0:
+                    applied = True
+            except Exception:
+                continue
+    return applied
+
+
+def _apply_account_browser_window_color(open_result: dict[str, Any], color: str) -> bool:
+    try:
+        debug_port = int(open_result.get("debug_port") or 0)
+    except Exception:
+        debug_port = 0
+    profile_dir = str(open_result.get("profile_dir") or "").strip()
+    if debug_port <= 0 or not profile_dir:
+        return False
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if _apply_windows_chrome_window_color(debug_port, profile_dir, color):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _terminal_color_title_badge(color: str) -> str:
+    token = str(color or "").strip().lower()
+    mapping = {
+        "#3b82f6": "🔵",
+        "#f97316": "🟠",
+        "#a855f7": "🟣",
+        "#ec4899": "🩷",
+        "#eab308": "🟡",
+    }
+    return mapping.get(token, "")
+
+
+def _inject_terminal_account_browser_marker(account_id: int, platform: str, color: str) -> bool:
+    account = get_account(account_id)
+    if account is None:
+        return False
+    token = normalize_platform(platform)
+    capability = get_platform(token)
+    if capability is None:
+        return False
+    profile = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == token), None)
+    if not isinstance(profile, dict):
+        return False
+    return _inject_account_browser_marker(
+        account,
+        profile,
+        capability,
+        accent_override=color,
+        title_badge=_terminal_color_title_badge(color),
+    )
+
+
 def _terminal_account_cards(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -1977,6 +2175,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
     }
     windows = []
     saved_config = []
+    executable_window_count = 0
     retained_window_ids: set[int] = set()
     for index, raw in enumerate(payload.get("windows") or [], start=1):
         enabled = bool(raw.get("enabled", True))
@@ -1987,12 +2186,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         group = groups[operator]
         accounts = _terminal_account_cards(group.get("accounts") or [])
-        if not accounts:
-            continue
         color = str(raw.get("color") or TERMINAL_COLORS[(index - 1) % len(TERMINAL_COLORS)]["hex"])
-        current = accounts[0]
-        current["status"] = "pending"
-        current["status_text"] = "等待开始登录"
         qr_path = ""
         window_id = int(raw.get("id") or index)
         window = {
@@ -2009,6 +2203,11 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "manual_available_at": 0,
             "accounts": accounts,
         }
+        if accounts:
+            executable_window_count += 1
+            current = accounts[0]
+            current["status"] = "pending"
+            current["status_text"] = "等待开始登录"
         previous_window = previous_windows.get(window_id)
         if previous_login_started and previous_window and str(previous_window.get("operator_wechat") or "") == operator:
             retained_window_ids.add(window_id)
@@ -2023,7 +2222,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "operator_wechat": operator,
             "color": color,
         })
-    if not windows:
+    if not windows or executable_window_count <= 0:
         raise ValueError("至少需要启用一个已绑定运营微信的终端")
     if previous_login_started:
         for previous_id in previous_windows:
@@ -2089,7 +2288,9 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     _set_terminal_window_qr(window, "")
     try:
-        open_account_browser(account_id, "wechat")
+        open_result = open_account_browser(account_id, "wechat")
+        _apply_account_browser_window_color(open_result, str(window.get("color") or ""))
+        _inject_terminal_account_browser_marker(account_id, "wechat", str(window.get("color") or ""))
         current["status"] = "waiting_qr"
         current["status_text"] = "请在已打开浏览器扫码"
     except Exception as exc:
@@ -2146,13 +2347,8 @@ def _terminal_run_matches_current(run: dict[str, Any] | None, current: dict[str,
     return run_account_id > 0 and run_account_id == current_account_id
 
 
-def _terminal_run_is_manual_confirmable(run: dict[str, Any] | None) -> bool:
-    if not isinstance(run, dict):
-        return False
-    run_status = str(run.get("status") or "").strip().lower()
-    if run_status not in {"failed", "error"}:
-        return False
-    error_text = f"{run.get('error') or ''} {run.get('error_title') or ''}".lower()
+def _terminal_message_is_manual_confirmable_failure(message: str) -> bool:
+    error_text = str(message or "").lower()
     return any(
         marker in error_text
         for marker in (
@@ -2166,8 +2362,35 @@ def _terminal_run_is_manual_confirmable(run: dict[str, Any] | None) -> bool:
     )
 
 
+def _terminal_run_is_manual_confirmable(run: dict[str, Any] | None) -> bool:
+    if not isinstance(run, dict):
+        return False
+    run_status = str(run.get("status") or "").strip().lower()
+    if run_status not in {"failed", "error"}:
+        return False
+    return _terminal_message_is_manual_confirmable_failure(f"{run.get('error') or ''} {run.get('error_title') or ''}")
+
+
+def _terminal_account_has_legacy_manual_confirm_failure(account: dict[str, Any]) -> bool:
+    status = str(account.get("status") or "").strip().lower()
+    if status not in {"error", "failed"}:
+        return False
+    return _terminal_message_is_manual_confirmable_failure(
+        f"{account.get('status_text') or ''} {account.get('error_detail') or ''} {account.get('error_title') or ''}"
+    )
+
+
+def _set_terminal_account_waiting_publish_confirm(account: dict[str, Any]) -> None:
+    _clear_terminal_account_error(account)
+    account["status"] = "running"
+    account["status_text"] = "发布已执行，等待人工确认"
+
+
 def _normalize_terminal_window_runtime(window: dict[str, Any]) -> bool:
     changed = False
+    accounts = window.get("accounts") or []
+    current_index = int(window.get("current_index") or 0)
+    run = window.get("publish_run")
     if _terminal_window_is_completed(window):
         if not bool(window.get("completed")):
             window["completed"] = True
@@ -2187,10 +2410,25 @@ def _normalize_terminal_window_runtime(window: dict[str, Any]) -> bool:
         window.pop("completed", None)
         changed = True
     current = _terminal_current_account(window)
-    run = window.get("publish_run")
+    if current is not None and _terminal_run_matches_current(run if isinstance(run, dict) else None, current) and _terminal_run_is_manual_confirmable(run):
+        if str(current.get("status") or "") != "running" or str(current.get("status_text") or "") != "发布已执行，等待人工确认":
+            _set_terminal_account_waiting_publish_confirm(current)
+            changed = True
     if isinstance(run, dict) and run and current is not None and not _terminal_run_matches_current(run, current):
         _clear_terminal_publish_run(window)
         changed = True
+    for index, account in enumerate(accounts):
+        if not isinstance(account, dict) or not _terminal_account_has_legacy_manual_confirm_failure(account):
+            continue
+        if index < current_index:
+            _clear_terminal_account_error(account)
+            account["status"] = "success"
+            account["status_text"] = "发布成功"
+            account["publish_success_count"] = max(1, int(account.get("publish_success_count") or 0))
+            changed = True
+        elif index == current_index and not (isinstance(run, dict) and run):
+            _set_terminal_account_waiting_publish_confirm(account)
+            changed = True
     return changed
 
 
@@ -2239,6 +2477,8 @@ def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, r
     if not require_login_probe:
         if current_status not in {"ready", "running", "success"}:
             issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并等待状态变为“已登录”。"))
+        if current_status == "ready" and current.get("browser_open") is False:
+            issues["p0"].append(_terminal_precheck_issue("browser_closed", "浏览器已关闭", "账号已登录，但对应 Chrome 浏览器已关闭，请先重新打开浏览器。"))
         return {"ok": not issues["p0"], "issues": issues, "selected_video": ""}
     account = get_account(account_id) or {}
     if not account:
@@ -2483,6 +2723,9 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
         current["status_text"] = "发布完成，等待人工确认"
         return True
     if run_status == "failed":
+        if _terminal_run_is_manual_confirmable(run if isinstance(run, dict) else None):
+            _set_terminal_account_waiting_publish_confirm(current)
+            return True
         reason = _friendly_terminal_run_error(str((run or {}).get("error") or "").strip()) if isinstance(run, dict) else ""
         current["status"] = "error"
         current["status_text"] = f"发布失败：{reason}" if reason else "发布失败"
@@ -2586,13 +2829,17 @@ def poll_terminal_execution() -> dict[str, Any]:
                 run["status"] = "failed"
                 run["error"] = reason if reason != "未检测到发布证据" else "发布流程已执行，但未检测到视频号发布成功记录"
                 run["error_stage"] = "publish_run"
-                run["error_title"] = "发布执行失败"
-                _set_terminal_account_error(
-                    current,
-                    stage="publish_run",
-                    title="发布执行失败",
-                    message=f"发布失败：{reason}",
-                )
+                if _terminal_run_is_manual_confirmable(run):
+                    run["error_title"] = "发布结果待人工确认"
+                    _set_terminal_account_waiting_publish_confirm(current)
+                else:
+                    run["error_title"] = "发布执行失败"
+                    _set_terminal_account_error(
+                        current,
+                        stage="publish_run",
+                        title="发布执行失败",
+                        message=f"发布失败：{reason}",
+                    )
         for window in windows:
             _advance_terminal_window(window)
         state["probe_cursor"] = 0
@@ -3351,6 +3598,17 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
         platforms = payload.get("platforms")
         if not isinstance(platforms, list) or not platforms:
             platforms = ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x"]
+        normalized_platforms: list[str] = []
+        seen_platforms: set[str] = set()
+        for platform in platforms:
+            token = normalize_platform(str(platform))
+            capability = get_platform(token)
+            if capability is None:
+                raise ValueError(f"unsupported platform: {platform}")
+            if token in seen_platforms:
+                continue
+            seen_platforms.add(token)
+            normalized_platforms.append(token)
         client = _brand_supabase()
         account = client.insert(
             "matrix_accounts",
@@ -3364,10 +3622,72 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
                 "updated_at": ts,
             },
         )
-        for platform in platforms:
-            ensure_account_platform(None, int(account["id"]), str(platform))
+        account_id = int(account.get("id") or 0)
+        if account_id <= 0:
+            raise RuntimeError("supabase create_account did not return account id")
+        first_platform_id = 0
+        platform_rows = [
+            {
+                "account_id": account_id,
+                "platform": platform,
+                "handle": "",
+                "capability_status": "registered",
+                "created_at": ts,
+                "updated_at": ts,
+            }
+            for platform in normalized_platforms
+        ]
+        if platform_rows:
+            first_platform = client.insert("account_platforms", platform_rows)
+            first_platform_id = int(first_platform.get("id") or 0)
+        if first_platform_id <= 0 and normalized_platforms:
+            first_platform = client.select_one(
+                "account_platforms",
+                filters={
+                    "account_id": account_id,
+                    "platform": normalized_platforms[0],
+                },
+            )
+            first_platform_id = int((first_platform or {}).get("id") or 0)
+        profile_dir = profile_dir_for(account_key)
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        profile_payload = {
+            "account_id": account_id,
+            "profile_dir": str(profile_dir),
+            "debug_port": _profile_debug_port_supabase(account_key),
+            "fingerprint_json": build_browser_fingerprint(account_key, "account"),
+            "created_at": ts,
+            "updated_at": ts,
+        }
+        try:
+            client.insert("browser_profiles", profile_payload)
+        except SupabaseError:
+            if first_platform_id <= 0:
+                raise
+            client.insert(
+                "browser_profiles",
+                {
+                    "account_platform_id": first_platform_id,
+                    "profile_dir": profile_payload["profile_dir"],
+                    "debug_port": profile_payload["debug_port"],
+                    "fingerprint_json": profile_payload["fingerprint_json"],
+                    "created_at": ts,
+                    "updated_at": ts,
+                },
+            )
         _invalidate_supabase_read_cache("accounts", "dashboard_summary")
-        return get_account(int(account["id"])) or {}
+        return {
+            "id": account_id,
+            "account_key": account_key,
+            "display_name": display_name,
+            "niche": str(payload.get("niche") or "").strip(),
+            "status": str(payload.get("status") or "active").strip() or "active",
+            "notes": str(payload.get("notes") or "").strip(),
+            "created_at": account.get("created_at", ts),
+            "updated_at": account.get("updated_at", ts),
+            "platforms": [],
+            "publish_success_count": 0,
+        }
     ensure_database()
     ts = now_ts()
     account_key = _account_slug(str(payload.get("account_key") or payload.get("display_name") or ""))
@@ -3577,6 +3897,8 @@ def _account_browser_marker_payload(
     account: dict[str, Any],
     platform_profile: dict[str, Any],
     capability: Any,
+    accent_override: str | None = None,
+    title_badge: str = "",
 ) -> dict[str, Any]:
     account_id = int(account.get("id") or 0)
     display_name = str(account.get("display_name") or account.get("account_key") or f"Account {account_id}").strip()
@@ -3593,12 +3915,16 @@ def _account_browser_marker_payload(
         details.append(f"运营微信 {operator}")
     palette = ["#3B82F6", "#F97316", "#A855F7", "#22C55E", "#EAB308", "#06B6D4"]
     seed = account_id or sum(ord(ch) for ch in account_key or display_name)
+    accent = str(accent_override or "").strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
+        accent = palette[seed % len(palette)]
     return {
         "account_id": account_id,
         "title": display_name,
         "platform": platform_label,
         "meta": " · ".join(details),
-        "accent": palette[seed % len(palette)],
+        "accent": accent,
+        "title_badge": str(title_badge or "").strip(),
     }
 
 
@@ -3610,7 +3936,7 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const install = () => {{
     const parent = document.body || document.documentElement;
     if (!parent) return false;
-    const markerKey = `${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.meta || ''}}`;
+    const markerKey = `v2:${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.meta || ''}}`;
     let el = document.getElementById('gasgx-account-marker');
     if (!el) {{
       el = document.createElement('div');
@@ -3622,40 +3948,61 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     el.setAttribute('aria-label', `GasGx account marker ${{marker.title || ''}}`);
     el.style.cssText = [
       'position:fixed',
-      'left:14px',
-      'bottom:14px',
+      'right:18px',
+      'top:18px',
       'z-index:2147483647',
       'pointer-events:none',
-      'max-width:360px',
-      'padding:10px 12px',
-      'border-radius:12px',
-      `border:1px solid ${{marker.accent || '#5dd62c'}}`,
-      'background:rgba(12,16,14,.92)',
-      `box-shadow:0 0 0 1px rgba(255,255,255,.08),0 10px 28px ${{marker.accent || '#5dd62c'}}44`,
-      'color:#f8fafc',
-      'font:600 13px/1.35 "Microsoft YaHei",Arial,sans-serif',
-      'letter-spacing:.01em'
+      'min-width:260px',
+      'max-width:420px',
+      'padding:14px 16px',
+      'border-radius:16px',
+      `border:3px solid ${{marker.accent || '#5dd62c'}}`,
+      'background:linear-gradient(135deg,rgba(5,10,8,.96),rgba(18,24,22,.94))',
+      `box-shadow:0 0 0 4px rgba(255,255,255,.82),0 0 0 8px ${{marker.accent || '#5dd62c'}}55,0 16px 46px rgba(0,0,0,.42)`,
+      'color:#fff',
+      'font:800 15px/1.35 "Microsoft YaHei",Arial,sans-serif',
+      'letter-spacing:.01em',
+      'text-align:left'
     ].join(';');
     el.innerHTML = '';
     const brand = document.createElement('div');
-    brand.textContent = marker.platform ? `GasGx · ${{marker.platform}}` : 'GasGx';
+    brand.textContent = marker.platform ? `当前账号 · GasGx · ${{marker.platform}}` : '当前账号 · GasGx';
     brand.style.cssText = [
       `color:${{marker.accent || '#5dd62c'}}`,
-      'font-size:11px',
-      'font-weight:800',
+      'font-size:13px',
+      'font-weight:900',
       'text-transform:uppercase',
-      'margin-bottom:3px'
+      'margin-bottom:5px'
     ].join(';');
     const title = document.createElement('div');
     title.textContent = marker.title || '';
-    title.style.cssText = 'font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    title.style.cssText = 'font-size:22px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     const meta = document.createElement('div');
     meta.textContent = marker.meta || '';
-    meta.style.cssText = 'margin-top:2px;color:#cbd5e1;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    meta.style.cssText = 'margin-top:5px;color:#e5e7eb;font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    const ribbon = document.createElement('div');
+    ribbon.textContent = '请确认这是当前要操作的账号';
+    ribbon.style.cssText = [
+      'margin-top:10px',
+      'padding:6px 8px',
+      `background:${{marker.accent || '#5dd62c'}}`,
+      'color:#07110a',
+      'border-radius:9px',
+      'font-size:13px',
+      'font-weight:900',
+      'text-align:center'
+    ].join(';');
     el.appendChild(brand);
     el.appendChild(title);
     if (marker.meta) el.appendChild(meta);
+    el.appendChild(ribbon);
     if (el.parentNode !== parent) parent.appendChild(el);
+    const badge = String(marker.title_badge || '').trim();
+    const base = marker.title ? `GasGx-${{marker.title}}` : 'GasGx';
+    const prefix = badge ? `[${{badge}} ${{base}}] ` : `[${{base}}] `;
+    if (document.title && !document.title.startsWith(prefix)) {{
+      document.title = `${{prefix}}${{document.title.replace(/^\\[[^\\]]+\\]\\s*/, '')}}`;
+    }}
     return true;
   }};
   if (!install()) document.addEventListener('DOMContentLoaded', install, {{ once: true }});
@@ -3723,6 +4070,8 @@ def _inject_account_browser_marker(
     account: dict[str, Any],
     platform_profile: dict[str, Any],
     capability: Any,
+    accent_override: str | None = None,
+    title_badge: str = "",
 ) -> bool:
     try:
         debug_port = int(platform_profile.get("debug_port") or 0)
@@ -3730,35 +4079,49 @@ def _inject_account_browser_marker(
         return False
     if debug_port <= 0:
         return False
-    payload = _account_browser_marker_payload(account, platform_profile, capability)
+    payload = _account_browser_marker_payload(
+        account,
+        platform_profile,
+        capability,
+        accent_override=accent_override,
+        title_badge=title_badge,
+    )
     script = _account_browser_marker_script(payload)
     applied = False
-    targets: list[dict[str, Any]] = []
-    for attempt in range(3):
+    seen_targets: set[str] = set()
+    deadline = time.monotonic() + 3.0
+    idle_rounds = 0
+    while time.monotonic() < deadline:
         targets = _chrome_cdp_page_targets(debug_port)
-        if targets:
-            break
-        if attempt < 2:
-            time.sleep(0.25)
-    for target in targets:
-        ws_url = str(target.get("webSocketDebuggerUrl") or "")
-        if not ws_url:
-            continue
-        ws = None
-        try:
-            ws = _create_chrome_cdp_connection(ws_url, debug_port)
-            _cdp_send(ws, 1, "Page.enable")
-            _cdp_send(ws, 2, "Page.addScriptToEvaluateOnNewDocument", {"source": script})
-            _cdp_send(ws, 3, "Runtime.evaluate", {"expression": script, "returnByValue": True})
-            applied = True
-        except Exception:
-            continue
-        finally:
-            if ws is not None:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
+        injected_this_round = False
+        for target in targets:
+            ws_url = str(target.get("webSocketDebuggerUrl") or "")
+            if not ws_url or ws_url in seen_targets:
+                continue
+            ws = None
+            try:
+                ws = _create_chrome_cdp_connection(ws_url, debug_port)
+                _cdp_send(ws, 1, "Page.enable")
+                _cdp_send(ws, 2, "Page.addScriptToEvaluateOnNewDocument", {"source": script})
+                _cdp_send(ws, 3, "Runtime.evaluate", {"expression": script, "returnByValue": True})
+                applied = True
+                injected_this_round = True
+                seen_targets.add(ws_url)
+            except Exception:
+                continue
+            finally:
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+        if not injected_this_round:
+            idle_rounds += 1
+            if applied and idle_rounds >= 2:
+                break
+        else:
+            idle_rounds = 0
+        time.sleep(0.2)
     return applied
 
 

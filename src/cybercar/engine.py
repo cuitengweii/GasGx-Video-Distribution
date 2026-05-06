@@ -14577,13 +14577,20 @@ def _normalize_user_data_dir(path_value: str) -> str:
 
 
 def _extract_cli_flag_value(command_line: str, flag_name: str) -> Optional[str]:
-    pattern = rf"--{re.escape(flag_name)}=(\"[^\"]+\"|'[^']+'|[^\s]+)"
-    matched = re.search(pattern, command_line)
-    if not matched:
-        return None
-    value = matched.group(1).strip()
-    if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
-        value = value[1:-1]
+    wrapped_pattern = rf"[\"']--{re.escape(flag_name)}=(.+?)[\"']"
+    wrapped = re.search(wrapped_pattern, command_line)
+    if wrapped:
+        value = wrapped.group(1).strip()
+    else:
+        pattern = rf"--{re.escape(flag_name)}=(\"[^\"]+\"|'[^']+'|[^\s]+)"
+        matched = re.search(pattern, command_line)
+        if not matched:
+            return None
+        value = matched.group(1).strip()
+    if value and value[0] in "\"'":
+        value = value[1:]
+    if value and value[-1] in "\"'":
+        value = value[:-1]
     return value.strip()
 
 
