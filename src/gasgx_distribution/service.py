@@ -1681,6 +1681,7 @@ def _write_terminal_qr_cache(
     window_id: int,
     account_id: int,
     *,
+    auto_open_browser: bool = False,
     refresh_page: bool = True,
     timeout_seconds: float = 2.5,
 ) -> str:
@@ -1698,7 +1699,7 @@ def _write_terminal_qr_cache(
     try:
         page = engine._connect_chrome(  # type: ignore[attr-defined]
             debug_port=int(platform.get("debug_port") or 0),
-            auto_open_chrome=False,
+            auto_open_chrome=bool(auto_open_browser),
             chrome_user_data_dir=str(platform.get("profile_dir") or ""),
             startup_url=wechat_platform.open_url,
         )
@@ -1812,6 +1813,12 @@ def terminal_execution_state() -> dict[str, Any]:
     state = _load_terminal_state()
     login_started = bool(state.get("login_started"))
     windows = state.get("windows") or []
+    normalized = False
+    for window in windows:
+        if isinstance(window, dict):
+            normalized = _normalize_terminal_window_runtime(window) or normalized
+    if normalized:
+        _save_terminal_state(state)
     visible_windows = [_public_terminal_window(window) for window in windows if isinstance(window, dict)]
     if not login_started:
         visible_windows = []
@@ -2055,7 +2062,7 @@ def start_terminal_login() -> dict[str, Any]:
             elif str(current.get("status") or "") not in {"success", "running"}:
                 _clear_terminal_account_error(current)
                 current["status"] = "pending"
-                current["status_text"] = "等待获取登录二维码"
+                current["status_text"] = "等待打开登录浏览器"
                 current["task_id"] = None
                 window["qr_path"] = ""
                 window["qr_url"] = ""
@@ -2078,29 +2085,20 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
     account_id = int(current.get("id") or 0)
     _clear_terminal_account_error(current)
     current["status"] = "opening"
-    current["status_text"] = "正在获取二维码"
+    current["status_text"] = "正在打开登录浏览器"
+    _clear_terminal_qr_cache(int(window.get("id") or 0))
+    _set_terminal_window_qr(window, "")
     try:
+        open_account_browser(account_id, "wechat")
         current["status"] = "waiting_qr"
-        current["status_text"] = "等待扫码中..."
-        qr_path = _write_terminal_qr_cache(
-            int(window.get("id") or 0),
-            account_id,
-            refresh_page=False,
-            timeout_seconds=0.9,
-        )
-        if not qr_path:
-            current["status"] = "waiting_qr"
-            current["status_text"] = "二维码获取失败，请手动打开浏览器后重试"
-        _set_terminal_window_qr(window, qr_path)
+        current["status_text"] = "请在已打开浏览器扫码"
     except Exception as exc:
         _set_terminal_account_error(
             current,
-            stage="qr",
-            title="获取二维码失败",
+            stage="login_browser",
+            title="打开登录浏览器失败",
             message=str(exc),
         )
-        _clear_terminal_qr_cache(int(window.get("id") or 0))
-        _set_terminal_window_qr(window, "")
     window["manual_available_at"] = 0
     return True
 
@@ -2125,11 +2123,83 @@ def _clear_terminal_publish_run(window: dict[str, Any]) -> None:
     window["publish_run"] = {}
 
 
+def _terminal_window_is_completed(window: dict[str, Any]) -> bool:
+    accounts = window.get("accounts") or []
+    current_index = int(window.get("current_index") or 0)
+    return bool(accounts) and current_index >= len(accounts)
+
+
+def _terminal_current_account(window: dict[str, Any]) -> dict[str, Any] | None:
+    accounts = window.get("accounts") or []
+    current_index = int(window.get("current_index") or 0)
+    if current_index < 0 or current_index >= len(accounts):
+        return None
+    current = accounts[current_index]
+    return current if isinstance(current, dict) else None
+
+
+def _terminal_run_matches_current(run: dict[str, Any] | None, current: dict[str, Any] | None) -> bool:
+    if not isinstance(run, dict) or not isinstance(current, dict):
+        return False
+    run_account_id = int(run.get("account_id") or 0)
+    current_account_id = int(current.get("id") or 0)
+    return run_account_id > 0 and run_account_id == current_account_id
+
+
+def _terminal_run_is_manual_confirmable(run: dict[str, Any] | None) -> bool:
+    if not isinstance(run, dict):
+        return False
+    run_status = str(run.get("status") or "").strip().lower()
+    if run_status not in {"failed", "error"}:
+        return False
+    error_text = f"{run.get('error') or ''} {run.get('error_title') or ''}".lower()
+    return any(
+        marker in error_text
+        for marker in (
+            "未检测到视频号发布成功记录",
+            "未检测到发布证据",
+            "publish process finished but no wechat evidence",
+            "publish_unconfirmed",
+            "publish was not confirmed",
+            "发布未确认",
+        )
+    )
+
+
+def _normalize_terminal_window_runtime(window: dict[str, Any]) -> bool:
+    changed = False
+    if _terminal_window_is_completed(window):
+        if not bool(window.get("completed")):
+            window["completed"] = True
+            changed = True
+        if window.get("publish_run"):
+            _clear_terminal_publish_run(window)
+            changed = True
+        if str(window.get("qr_path") or "") or str(window.get("qr_url") or "") or int(window.get("qr_expires_at") or 0):
+            _clear_terminal_qr_cache(int(window.get("id") or 0))
+            _set_terminal_window_qr(window, "")
+            changed = True
+        if int(window.get("manual_available_at") or 0):
+            window["manual_available_at"] = 0
+            changed = True
+        return changed
+    if bool(window.get("completed")):
+        window.pop("completed", None)
+        changed = True
+    current = _terminal_current_account(window)
+    run = window.get("publish_run")
+    if isinstance(run, dict) and run and current is not None and not _terminal_run_matches_current(run, current):
+        _clear_terminal_publish_run(window)
+        changed = True
+    return changed
+
+
 def _is_terminal_publish_running(window: dict[str, Any]) -> bool:
     run = window.get("publish_run")
     if not isinstance(run, dict):
         return False
-    return str(run.get("status") or "").strip().lower() == "running"
+    current = _terminal_current_account(window)
+    return _terminal_run_matches_current(run, current) and str(run.get("status") or "").strip().lower() == "running"
 
 
 def _clear_terminal_account_error(account: dict[str, Any]) -> None:
@@ -2153,6 +2223,8 @@ def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, r
     issues: dict[str, list[dict[str, str]]] = {"p0": [], "p1": [], "p2": []}
     accounts = window.get("accounts") or []
     current_index = int(window.get("current_index") or 0)
+    if _terminal_window_is_completed(window):
+        return {"ok": False, "issues": issues, "selected_video": ""}
     if current_index >= len(accounts):
         issues["p0"].append(_terminal_precheck_issue("no_current_account", "当前账号缺失", "当前窗口没有可发布账号。"))
         return {"ok": False, "issues": issues, "selected_video": ""}
@@ -2163,7 +2235,7 @@ def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, r
         issues["p0"].append(_terminal_precheck_issue("account_invalid", "账号信息缺失", "当前账号 ID 无效，无法启动发布。"))
         return {"ok": False, "issues": issues, "selected_video": ""}
     if not login_started:
-        issues["p0"].append(_terminal_precheck_issue("login_not_started", "尚未启动登录流程", "请先点击“获取登录二维码”并完成扫码登录。"))
+        issues["p0"].append(_terminal_precheck_issue("login_not_started", "尚未启动登录流程", "请先打开登录浏览器并完成扫码登录。"))
     if not require_login_probe:
         if current_status not in {"ready", "running", "success"}:
             issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未就绪", "账号未完成登录，请先扫码并等待状态变为“已登录”。"))
@@ -2389,13 +2461,19 @@ def _queue_terminal_draft_task(account_id: int) -> dict[str, Any]:
 
 
 def _advance_terminal_window(window: dict[str, Any]) -> bool:
+    if _normalize_terminal_window_runtime(window):
+        return True
     accounts = window.get("accounts") or []
     current_index = int(window.get("current_index") or 0)
     if current_index >= len(accounts):
         return False
     current = accounts[current_index]
     run = window.get("publish_run")
-    run_status = str((run or {}).get("status") or "").strip().lower() if isinstance(run, dict) else ""
+    run_status = (
+        str(run.get("status") or "").strip().lower()
+        if _terminal_run_matches_current(run if isinstance(run, dict) else None, current)
+        else ""
+    )
     if run_status == "running":
         current["status"] = "running"
         current["status_text"] = "发布执行中..."
@@ -2415,7 +2493,7 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
     if not current.get("task_id") and now_ts() < int(window.get("manual_available_at") or 0):
         if str(current.get("status") or "") != "success":
             current["status"] = "waiting_qr"
-            current["status_text"] = "等待扫码中..."
+            current["status_text"] = "请在已打开浏览器扫码"
         return False
     try:
         result = check_login_status(account_id, "wechat")
@@ -2425,15 +2503,10 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
         return True
     if str(result.get("status") or "") != "ready":
         current["status"] = "waiting_qr"
-        current["status_text"] = "等待扫码中..."
-        if not window.get("qr_url"):
-            qr_path = _write_terminal_qr_cache(
-                int(window.get("id") or 0),
-                account_id,
-                refresh_page=False,
-                timeout_seconds=1.2,
-            )
-            _set_terminal_window_qr(window, qr_path)
+        current["status_text"] = "请在已打开浏览器扫码"
+        if window.get("qr_url") or window.get("qr_path"):
+            _clear_terminal_qr_cache(int(window.get("id") or 0))
+            _set_terminal_window_qr(window, "")
         return True
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     _set_terminal_window_qr(window, "")
@@ -2449,9 +2522,14 @@ def poll_terminal_execution() -> dict[str, Any]:
     if not bool(state.get("login_started")):
         return terminal_execution_state()
     now = now_ts()
-    if now < int(state.get("next_probe_at") or 0):
-        return terminal_execution_state()
     windows = [window for window in (state.get("windows") or []) if isinstance(window, dict)]
+    normalized = False
+    for window in windows:
+        normalized = _normalize_terminal_window_runtime(window) or normalized
+    if now < int(state.get("next_probe_at") or 0):
+        if normalized:
+            _save_terminal_state(state)
+        return terminal_execution_state()
     if windows:
         for window in windows:
             run = window.get("publish_run")
@@ -2464,6 +2542,9 @@ def poll_terminal_execution() -> dict[str, Any]:
                 _clear_terminal_publish_run(window)
                 continue
             current = accounts[current_index]
+            if not _terminal_run_matches_current(run, current):
+                _clear_terminal_publish_run(window)
+                continue
             if pid <= 0:
                 run["status"] = "failed"
                 run["finished_at"] = now_ts()
@@ -2527,6 +2608,10 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         raise KeyError("window not found")
     if not bool(state.get("login_started")):
         return terminal_execution_state()
+    if _normalize_terminal_window_runtime(target):
+        _save_terminal_state(state)
+        if _terminal_window_is_completed(target):
+            return terminal_execution_state()
     if now_ts() < int(target.get("manual_available_at") or 0):
         return terminal_execution_state()
     accounts = target.get("accounts") or []
@@ -2586,10 +2671,23 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
     target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
     if target is None:
         raise KeyError("window not found")
+    if _normalize_terminal_window_runtime(target):
+        _save_terminal_state(state)
+        if _terminal_window_is_completed(target):
+            return terminal_execution_state()
+    current = _terminal_current_account(target)
+    run = target.get("publish_run")
+    run_status = str((run or {}).get("status") or "").strip().lower() if isinstance(run, dict) else ""
+    if _terminal_run_matches_current(run if isinstance(run, dict) else None, current) and (
+        run_status in {"running", "success"} or _terminal_run_is_manual_confirmable(run)
+    ):
+        return terminal_execution_state()
     accounts = target.get("accounts") or []
     next_index = next((index for index, item in enumerate(accounts) if int(item.get("id") or 0) == int(account_id)), -1)
     if next_index < 0:
         raise KeyError("account not found")
+    _clear_terminal_publish_run(target)
+    target.pop("completed", None)
     target["current_index"] = next_index
     target["manual_available_at"] = 0
     target["qr_expires_at"] = 0
@@ -2598,20 +2696,11 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
         if int(account.get("id") or 0) == int(account_id):
             _clear_terminal_account_error(account)
             account["status"] = "pending"
-            account["status_text"] = "等待获取登录二维码"
+            account["status_text"] = "等待打开登录浏览器"
             account["task_id"] = None
             break
-    qr_path = _write_terminal_qr_cache(int(target.get("id") or 0), account_id)
-    if qr_path:
-        for account in accounts:
-            if int(account.get("id") or 0) == int(account_id):
-                _clear_terminal_account_error(account)
-                account["status"] = "waiting_qr"
-                account["status_text"] = "等待扫码中..."
-                break
-        _set_terminal_window_qr(target, qr_path)
-    else:
-        _open_terminal_window_current_account(target)
+    _open_terminal_window_current_account(target)
+    state["next_probe_at"] = 0
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -2623,18 +2712,30 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
         raise KeyError("window not found")
     if not bool(state.get("login_started")):
         return terminal_execution_state()
+    normalized = _normalize_terminal_window_runtime(target)
+    if _terminal_window_is_completed(target):
+        if normalized:
+            _save_terminal_state(state)
+        return terminal_execution_state()
     accounts = target.get("accounts") or []
     current_index = int(target.get("current_index") or 0)
     if current_index >= len(accounts):
         return terminal_execution_state()
     current = accounts[current_index]
+    run = target.get("publish_run")
+    run_status = str((run or {}).get("status") or "").strip().lower() if isinstance(run, dict) else ""
+    run_matches_current = _terminal_run_matches_current(run if isinstance(run, dict) else None, current)
+    can_confirm = run_matches_current and (run_status == "success" or _terminal_run_is_manual_confirmable(run))
+    if not can_confirm:
+        if normalized:
+            _save_terminal_state(state)
+        return terminal_execution_state()
     if str(current.get("status") or "") != "success":
         _clear_terminal_account_error(current)
         current["status"] = "success"
         current["status_text"] = "发布成功"
         current["publish_success_count"] = int(current.get("publish_success_count") or 0) + 1
-    run = target.get("publish_run")
-    if isinstance(run, dict) and str(run.get("status") or "").strip().lower() == "success":
+    if isinstance(run, dict):
         try:
             from . import matrix_publish as mp
             state_payload = mp._load_state()
@@ -2664,11 +2765,15 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
     target["current_index"] = next_index
     if next_index < len(accounts):
         next_account = accounts[next_index]
+        target.pop("completed", None)
         _clear_terminal_account_error(next_account)
         next_account["status"] = "pending"
-        next_account["status_text"] = "等待获取登录二维码"
+        next_account["status_text"] = "等待打开登录浏览器"
         next_account["task_id"] = None
         _open_terminal_window_current_account(target)
+        state["next_probe_at"] = 0
+    else:
+        target["completed"] = True
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -3042,7 +3147,7 @@ def _remaining_material_video_count() -> int:
         except Exception:
             used = set()
     remaining = 0
-    for path in material_dir.iterdir():
+    for path in material_dir.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
             continue
         try:
@@ -3468,6 +3573,195 @@ def profile_dir_for(account_key: str, platform: str | None = None) -> Path:
     return get_paths().profiles_root / _account_slug(account_key)
 
 
+def _account_browser_marker_payload(
+    account: dict[str, Any],
+    platform_profile: dict[str, Any],
+    capability: Any,
+) -> dict[str, Any]:
+    account_id = int(account.get("id") or 0)
+    display_name = str(account.get("display_name") or account.get("account_key") or f"Account {account_id}").strip()
+    account_key = str(account.get("account_key") or "").strip()
+    handle = str(platform_profile.get("handle") or "").strip()
+    platform_label = str(getattr(capability, "label", "") or getattr(capability, "key", "") or "").strip()
+    operator = _account_operator_wechat(account)
+    details = [f"ID {account_id}"]
+    if account_key and account_key != display_name:
+        details.append(account_key)
+    if handle:
+        details.append(handle if handle.startswith("@") else f"@{handle}")
+    if operator and operator != "未绑定运营微信":
+        details.append(f"运营微信 {operator}")
+    palette = ["#3B82F6", "#F97316", "#A855F7", "#22C55E", "#EAB308", "#06B6D4"]
+    seed = account_id or sum(ord(ch) for ch in account_key or display_name)
+    return {
+        "account_id": account_id,
+        "title": display_name,
+        "platform": platform_label,
+        "meta": " · ".join(details),
+        "accent": palette[seed % len(palette)],
+    }
+
+
+def _account_browser_marker_script(payload: dict[str, Any]) -> str:
+    marker = json.dumps(payload, ensure_ascii=False)
+    return f"""
+(() => {{
+  const marker = {marker};
+  const install = () => {{
+    const parent = document.body || document.documentElement;
+    if (!parent) return false;
+    const markerKey = `${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.meta || ''}}`;
+    let el = document.getElementById('gasgx-account-marker');
+    if (!el) {{
+      el = document.createElement('div');
+      el.id = 'gasgx-account-marker';
+    }}
+    if (el.parentNode === parent && el.getAttribute('data-marker-key') === markerKey) return true;
+    el.setAttribute('data-account-id', String(marker.account_id || ''));
+    el.setAttribute('data-marker-key', markerKey);
+    el.setAttribute('aria-label', `GasGx account marker ${{marker.title || ''}}`);
+    el.style.cssText = [
+      'position:fixed',
+      'left:14px',
+      'bottom:14px',
+      'z-index:2147483647',
+      'pointer-events:none',
+      'max-width:360px',
+      'padding:10px 12px',
+      'border-radius:12px',
+      `border:1px solid ${{marker.accent || '#5dd62c'}}`,
+      'background:rgba(12,16,14,.92)',
+      `box-shadow:0 0 0 1px rgba(255,255,255,.08),0 10px 28px ${{marker.accent || '#5dd62c'}}44`,
+      'color:#f8fafc',
+      'font:600 13px/1.35 "Microsoft YaHei",Arial,sans-serif',
+      'letter-spacing:.01em'
+    ].join(';');
+    el.innerHTML = '';
+    const brand = document.createElement('div');
+    brand.textContent = marker.platform ? `GasGx · ${{marker.platform}}` : 'GasGx';
+    brand.style.cssText = [
+      `color:${{marker.accent || '#5dd62c'}}`,
+      'font-size:11px',
+      'font-weight:800',
+      'text-transform:uppercase',
+      'margin-bottom:3px'
+    ].join(';');
+    const title = document.createElement('div');
+    title.textContent = marker.title || '';
+    title.style.cssText = 'font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    const meta = document.createElement('div');
+    meta.textContent = marker.meta || '';
+    meta.style.cssText = 'margin-top:2px;color:#cbd5e1;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    el.appendChild(brand);
+    el.appendChild(title);
+    if (marker.meta) el.appendChild(meta);
+    if (el.parentNode !== parent) parent.appendChild(el);
+    return true;
+  }};
+  if (!install()) document.addEventListener('DOMContentLoaded', install, {{ once: true }});
+  if (!window.__gasgxAccountMarkerObserver) {{
+    let markerTimer = 0;
+    const scheduleInstall = () => {{
+      if (markerTimer) return;
+      markerTimer = window.setTimeout(() => {{
+        markerTimer = 0;
+        install();
+      }}, 250);
+    }};
+    window.__gasgxAccountMarkerObserver = new MutationObserver(scheduleInstall);
+    window.__gasgxAccountMarkerObserver.observe(document.documentElement || document, {{ childList: true, subtree: true }});
+  }}
+}})();
+""".strip()
+
+
+def _chrome_cdp_page_targets(debug_port: int) -> list[dict[str, Any]]:
+    for endpoint in (f"http://127.0.0.1:{debug_port}/json/list", f"http://127.0.0.1:{debug_port}/json"):
+        try:
+            response = requests.get(endpoint, timeout=1.5)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            continue
+        targets = [
+            item
+            for item in payload
+            if isinstance(item, dict)
+            and str(item.get("type") or "") == "page"
+            and str(item.get("webSocketDebuggerUrl") or "")
+        ]
+        if targets:
+            return targets
+    return []
+
+
+def _create_chrome_cdp_connection(ws_url: str, debug_port: int) -> Any:
+    import websocket  # type: ignore[import-untyped]
+
+    try:
+        return websocket.create_connection(ws_url, timeout=1.5, origin=f"http://127.0.0.1:{debug_port}")
+    except TypeError:
+        return websocket.create_connection(ws_url, timeout=1.5)
+
+
+def _cdp_send(ws: Any, message_id: int, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    ws.send(json.dumps({"id": message_id, "method": method, "params": params or {}}, ensure_ascii=False))
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+        raw = ws.recv()
+        payload = json.loads(raw)
+        if isinstance(payload, dict) and payload.get("id") == message_id:
+            return payload
+    return {}
+
+
+def _inject_account_browser_marker(
+    account: dict[str, Any],
+    platform_profile: dict[str, Any],
+    capability: Any,
+) -> bool:
+    try:
+        debug_port = int(platform_profile.get("debug_port") or 0)
+    except Exception:
+        return False
+    if debug_port <= 0:
+        return False
+    payload = _account_browser_marker_payload(account, platform_profile, capability)
+    script = _account_browser_marker_script(payload)
+    applied = False
+    targets: list[dict[str, Any]] = []
+    for attempt in range(3):
+        targets = _chrome_cdp_page_targets(debug_port)
+        if targets:
+            break
+        if attempt < 2:
+            time.sleep(0.25)
+    for target in targets:
+        ws_url = str(target.get("webSocketDebuggerUrl") or "")
+        if not ws_url:
+            continue
+        ws = None
+        try:
+            ws = _create_chrome_cdp_connection(ws_url, debug_port)
+            _cdp_send(ws, 1, "Page.enable")
+            _cdp_send(ws, 2, "Page.addScriptToEvaluateOnNewDocument", {"source": script})
+            _cdp_send(ws, 3, "Runtime.evaluate", {"expression": script, "returnByValue": True})
+            applied = True
+        except Exception:
+            continue
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+    return applied
+
+
 def open_account_browser(account_id: int, platform: str) -> dict[str, Any]:
     account = get_account(account_id)
     if account is None:
@@ -3491,6 +3785,7 @@ def open_account_browser(account_id: int, platform: str) -> dict[str, Any]:
             chrome_user_data_dir=str(profile_dir),
             startup_url=capability.open_url,
         )
+    marker_applied = _inject_account_browser_marker(refreshed, ap, capability)
     return {
         "ok": True,
         "platform": token,
@@ -3498,6 +3793,7 @@ def open_account_browser(account_id: int, platform: str) -> dict[str, Any]:
         "profile_dir": str(profile_dir),
         "open_url": capability.open_url,
         "fingerprint": ap.get("fingerprint") or {},
+        "marker_applied": marker_applied,
     }
 
 
