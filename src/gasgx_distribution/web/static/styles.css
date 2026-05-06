@@ -4401,6 +4401,38 @@ body.sidebar-collapsed .terminal-init-modal {
   height: 32px;
   background: var(--terminal-glass-border);
   border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(189, 199, 214, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.terminal-avatar svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: currentColor;
+}
+
+.terminal-avatar-waiting {
+  color: #5dd62c;
+}
+
+.terminal-avatar-success {
+  color: #5dd62c;
+  background: rgba(93, 214, 44, 0.16);
+  border-color: rgba(93, 214, 44, 0.45);
+}
+
+.terminal-avatar-error {
+  color: #ff5f66;
+  background: rgba(255, 95, 102, 0.12);
+  border-color: rgba(255, 95, 102, 0.45);
+}
+
+.terminal-avatar-pending {
+  color: #f2c14b;
 }
 
 .terminal-acc-name {

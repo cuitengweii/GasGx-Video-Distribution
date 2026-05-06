@@ -1830,6 +1830,40 @@ function terminalWechatAccountStatusText(window, account, index, currentIndex, l
   return account.status_text || "未登录";
 }
 
+function terminalAccountStatusToken(account) {
+  const status = String(account?.status || "").toLowerCase();
+  if (status === "success") return "success";
+  if (status === "error" || status === "failed") return "error";
+  if (status === "waiting_qr" || status === "opening" || status === "running") return "waiting";
+  if (status === "pending") return "pending";
+  return "idle";
+}
+
+function terminalAccountStatusAvatar(account) {
+  const token = terminalAccountStatusToken(account);
+  const icon = token === "success"
+    ? `<svg viewBox="0 0 24 24" role="img" aria-label="发布成功"><path d="M9.6 16.8 5.9 13.1l-1.4 1.4 5.1 5.1L19.5 9.7l-1.4-1.4z"/></svg>`
+    : token === "error"
+      ? `<svg viewBox="0 0 24 24" role="img" aria-label="状态异常"><path d="M12 3 2.5 20h19zM11 9h2v6h-2zm0 7h2v2h-2z"/></svg>`
+      : token === "waiting"
+        ? `<svg viewBox="0 0 24 24" role="img" aria-label="等待扫码"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8z"/><path d="M11 6h2v7h5v2h-7z"/></svg>`
+        : token === "pending"
+          ? `<svg viewBox="0 0 24 24" role="img" aria-label="待处理"><path d="M12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6z"/></svg>`
+          : `<svg viewBox="0 0 24 24" role="img" aria-label="未登录"><path d="M12 5a7 7 0 1 0 7 7h-2a5 5 0 1 1-5-5z"/></svg>`;
+  return `<div class="terminal-avatar terminal-avatar-${token}">${icon}</div>`;
+}
+
+function terminalAccountTaskBadge(account) {
+  const taskId = String(account?.task_id || "").trim();
+  if (String(account?.status || "") === "success") {
+    return `<div class="terminal-status-badge success">发布成功</div>`;
+  }
+  if (taskId) {
+    return `<div class="terminal-status-badge">任务:${taskId}</div>`;
+  }
+  return "";
+}
+
 function terminalWechatWindowMarkup(window, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
@@ -1856,13 +1890,13 @@ function terminalWechatWindowMarkup(window, loginStarted) {
         ${accounts.map((account, index) => `
           <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
             <div class="terminal-account-info">
-              <div class="terminal-avatar"></div>
+              ${terminalAccountStatusAvatar(account)}
               <div>
                 <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
                 <div class="terminal-acc-status" ${index === currentIndex ? `data-terminal-current-status="${window.id}"` : ""}>${terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted)}</div>
               </div>
             </div>
-            <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
+            ${terminalAccountTaskBadge(account)}
           </div>
         `).join("") || `<div class="muted">暂无账号</div>`}
       </div>
@@ -2030,13 +2064,13 @@ function renderTerminalExecution() {
           ${accounts.map((account, index) => `
             <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
               <div class="terminal-account-info">
-                <div class="terminal-avatar"></div>
+                ${terminalAccountStatusAvatar(account)}
                 <div>
                   <div class="terminal-acc-name">${account.display_name || account.account_key || `账号 ${account.id}`}</div>
                   <div class="terminal-acc-status">${terminalWechatAccountStatusText(window, account, index, currentIndex, loginStarted)}</div>
                 </div>
               </div>
-            <div class="terminal-status-badge ${account.status === "success" ? "success" : ""}">${account.status === "success" ? "发布成功" : (account.task_id ? `任务:${account.task_id}` : "-")}</div>
+            ${terminalAccountTaskBadge(account)}
           </div>
         `).join("") || `<div class="muted">暂无账号</div>`}
         </div>

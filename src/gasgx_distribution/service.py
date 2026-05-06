@@ -9,6 +9,7 @@ import sys
 import hmac
 import hashlib
 import base64
+from io import BytesIO
 import sqlite3
 import time
 from threading import Lock
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import requests
+from PIL import Image, ImageStat
 
 from cybercar import engine
 from cybercar.settings import apply_runtime_environment as apply_cybercar_environment
@@ -1586,6 +1588,74 @@ def _clear_terminal_qr_cache(window_id: int) -> None:
         return
 
 
+def _looks_like_terminal_qr_image(photo_bytes: bytes) -> bool:
+    if not isinstance(photo_bytes, (bytes, bytearray)) or not photo_bytes:
+        return False
+    try:
+        image = Image.open(BytesIO(bytes(photo_bytes))).convert("L")
+    except Exception:
+        return False
+    width, height = image.size
+    if width < 120 or height < 120:
+        return False
+    pixels = image.load()
+    if pixels is None:
+        return False
+    sample_step = max(1, min(width, height) // 120)
+    row_lines = [int(height * ratio) for ratio in (0.2, 0.35, 0.5, 0.65, 0.8)]
+    col_lines = [int(width * ratio) for ratio in (0.2, 0.35, 0.5, 0.65, 0.8)]
+    dark = 0
+    bright = 0
+    total = 0
+    transitions = 0
+
+    def _bin(value: int) -> int:
+        return 1 if value < 128 else 0
+
+    for y in row_lines:
+        yy = max(0, min(height - 1, y))
+        prev = None
+        for x in range(0, width, sample_step):
+            v = int(pixels[x, yy])
+            total += 1
+            if v <= 95:
+                dark += 1
+            elif v >= 170:
+                bright += 1
+            bit = _bin(v)
+            if prev is not None and bit != prev:
+                transitions += 1
+            prev = bit
+
+    for x in col_lines:
+        xx = max(0, min(width - 1, x))
+        prev = None
+        for y in range(0, height, sample_step):
+            v = int(pixels[xx, y])
+            total += 1
+            if v <= 95:
+                dark += 1
+            elif v >= 170:
+                bright += 1
+            bit = _bin(v)
+            if prev is not None and bit != prev:
+                transitions += 1
+            prev = bit
+
+    if total <= 0:
+        return False
+    dark_ratio = dark / total
+    bright_ratio = bright / total
+    contrast = float(ImageStat.Stat(image).stddev[0] or 0.0)
+    if dark_ratio < 0.12 or bright_ratio < 0.08:
+        return False
+    if contrast < 34.0:
+        return False
+    if transitions < 110:
+        return False
+    return True
+
+
 def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
     try:
         account = get_account(account_id) or {}
@@ -1622,6 +1692,8 @@ def _write_terminal_qr_cache(window_id: int, account_id: int) -> str:
         # Do not fallback to page screenshot: it can capture logo/loading overlays instead of real QR.
         # If QR source extraction fails, caller should surface refresh failure and retry.
     if not isinstance(photo_bytes, (bytes, bytearray)) or not photo_bytes:
+        return ""
+    if not _looks_like_terminal_qr_image(bytes(photo_bytes)):
         return ""
     cache_path = _terminal_qr_cache_path(window_id)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
