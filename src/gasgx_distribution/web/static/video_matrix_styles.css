@@ -153,10 +153,10 @@ body {
 }
 .embed-mode .range-with-value {
   min-height: 22px;
-  flex: 1 1 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
 }
 .embed-mode .range-with-value input {
   min-height: 18px;
@@ -197,6 +197,27 @@ body {
 .embed-mode .library-action button {
   margin: 0;
   min-height: 0;
+}
+
+.embed-mode .sidebar-group {
+  gap: 6px;
+  padding: 8px;
+}
+
+.embed-mode .sidebar-group h2 {
+  font-size: 10px;
+}
+
+.embed-mode .sidebar .sidebar-group input,
+.embed-mode .sidebar .sidebar-group select {
+  min-height: 29px;
+  padding: 5px 8px;
+}
+
+.embed-mode .sidebar .sidebar-group label > input,
+.embed-mode .sidebar .sidebar-group label > select,
+.embed-mode .sidebar .sidebar-group label > textarea {
+  margin-top: 3px;
 }
 
 .embed-mode #openPreviewVideo {
@@ -279,9 +300,8 @@ body.bgm-modal-open .sidebar {
 }
 .source-panel, .composition-panel, .model-image-workbench, .video-template-workbench, .cover-workbench, .side-editor { padding:18px; margin-bottom:18px; }
 .generation-panel {
-  position: sticky;
-  top: 0;
-  z-index: 24;
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
   align-items: stretch;
