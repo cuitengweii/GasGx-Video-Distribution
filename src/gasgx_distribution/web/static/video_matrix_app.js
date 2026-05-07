@@ -2191,7 +2191,7 @@ async function resolvePreviewVideoPath() {
   try {
     const payload = await api(`/api/video-matrix/preview-files?path=${encodeURIComponent(root)}`);
     const firstVideo = Array.isArray(payload.videos) ? payload.videos[0] : null;
-    return firstVideo?.path || "";
+    return payload.current || firstVideo?.path || "";
   } catch {
     return "";
   }
@@ -2199,6 +2199,9 @@ async function resolvePreviewVideoPath() {
 
 async function openPreviewVideoPage() {
   const path = await resolvePreviewVideoPath();
+  if (!path) {
+    log("没有找到可预览的视频。请先生成视频，或确认最终视频生成目录里有 MP4。");
+  }
   const url = path
     ? `/static/video_matrix_preview.html?path=${encodeURIComponent(path)}`
     : "/static/video_matrix_preview.html";

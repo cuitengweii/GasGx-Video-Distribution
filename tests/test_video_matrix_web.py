@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from io import BytesIO
 from pathlib import Path
 
@@ -721,6 +722,33 @@ def test_video_matrix_preview_files_lists_sibling_videos(tmp_path: Path) -> None
     assert payload["current"] == str(first)
     assert {item["name"] for item in payload["videos"]} == {first.name, second.name}
     assert all(item["name"] != ignored.name for item in payload["videos"])
+
+
+def test_video_matrix_preview_files_resolves_latest_nested_batch(tmp_path: Path) -> None:
+    old = tmp_path / "20260506_141156_vibe_01.mp4"
+    old.write_bytes(b"old")
+    batch = tmp_path / "20260508_034912_6e388d4f"
+    batch.mkdir()
+    first = batch / "vibe_01.mp4"
+    second = batch / "vibe_02.mp4"
+    first.write_bytes(b"video-1")
+    second.write_bytes(b"video-2")
+    hidden_dir = batch / ".render_tmp"
+    hidden_dir.mkdir()
+    (hidden_dir / ".vibe_01_main.mp4").write_bytes(b"hidden")
+    os.utime(old, (100, 100))
+    os.utime(first, (200, 200))
+    os.utime(second, (300, 300))
+
+    client = TestClient(create_app())
+    response = client.get("/api/video-matrix/preview-files", params={"path": str(tmp_path)})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["directory"] == str(batch)
+    assert payload["current"] == str(first)
+    assert [item["name"] for item in payload["videos"]] == [first.name, second.name]
+    assert ".vibe_01_main.mp4" not in {item["name"] for item in payload["videos"]}
 
 
 def test_video_matrix_state_lists_ending_templates(monkeypatch, tmp_path) -> None:

@@ -1219,11 +1219,15 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
 
 def test_video_matrix_sidebar_preview_button_resolves_output_directory_video() -> None:
     app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_app.js").read_text(encoding="utf-8")
+    html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix.html").read_text(encoding="utf-8")
     preview_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
 
     assert "async function resolvePreviewVideoPath()" in app
     assert "`/api/video-matrix/preview-files?path=${encodeURIComponent(root)}`" in app
-    assert "firstVideo?.path || \"\"" in app
+    assert "payload.current || firstVideo?.path || \"\"" in app
+    assert "没有找到可预览的视频" in app
+    assert "预览最新视频" in html
+    assert "最新批次" in html
     assert "previewGridCount = 3" in preview_html
     assert "sourceItems.slice(0, previewGridCount)" in preview_html
     assert "playAllPreviewVideos" in preview_html

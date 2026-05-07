@@ -720,22 +720,80 @@ def preview_file(path: str) -> FileResponse:
     return FileResponse(video_path, media_type="video/mp4", filename=video_path.name)
 
 
+def _preview_sort_key(path: Path) -> list[Any]:
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
+
+
+def _is_hidden_preview_path(path: Path, root: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        relative = path
+    return any(part.startswith(".") for part in relative.parts)
+
+
+def _iter_preview_video_files(root: Path, *, max_depth: int = 3) -> list[Path]:
+    files: list[Path] = []
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    while stack:
+        directory, depth = stack.pop()
+        if _is_hidden_preview_path(directory, root):
+            continue
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            continue
+        for item in entries:
+            if _is_hidden_preview_path(item, root):
+                continue
+            if item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS:
+                files.append(item)
+            elif item.is_dir() and depth < max_depth:
+                stack.append((item, depth + 1))
+    return files
+
+
+def _direct_preview_video_files(directory: Path) -> list[Path]:
+    try:
+        return sorted(
+            [
+                item
+                for item in directory.iterdir()
+                if item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS and not item.name.startswith(".")
+            ],
+            key=_preview_sort_key,
+        )
+    except OSError:
+        return []
+
+
+def _resolve_preview_directory(directory: Path) -> Path:
+    candidates = _iter_preview_video_files(directory)
+    if not candidates:
+        return directory
+    latest = max(candidates, key=lambda target: target.stat().st_mtime)
+    return latest.parent
+
+
 @router.get("/preview-files")
 def preview_files(path: str) -> dict[str, Any]:
     if not path:
         raise HTTPException(status_code=400, detail="path is required")
     video_path = Path(path).expanduser().resolve()
-    directory = video_path.parent if video_path.suffix else video_path
+    requested_file = video_path if video_path.exists() and video_path.is_file() else None
+    if requested_file is not None:
+        directory = requested_file.parent
+    elif video_path.exists() and video_path.is_dir():
+        directory = _resolve_preview_directory(video_path)
+    else:
+        directory = video_path.parent if video_path.suffix else video_path
     if not directory.exists() or not directory.is_dir():
         raise HTTPException(status_code=404, detail="Preview directory not found")
-    videos = [
-        item
-        for item in sorted(directory.iterdir(), key=lambda target: target.stat().st_mtime, reverse=True)
-        if item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS
-    ]
+    videos = _direct_preview_video_files(directory)
+    current = requested_file if requested_file is not None and requested_file.exists() else (videos[0] if videos else None)
     return {
         "directory": str(directory),
-        "current": str(video_path) if video_path.exists() else "",
+        "current": str(current) if current else "",
         "videos": [{"name": item.name, "path": str(item)} for item in videos[:36]],
     }
 
