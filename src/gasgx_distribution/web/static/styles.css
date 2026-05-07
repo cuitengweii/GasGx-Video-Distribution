@@ -4156,6 +4156,17 @@ body.video-matrix-active .topbar {
   position: static;
   flex: 0 0 auto;
   margin-bottom: 0;
+  min-height: 82px;
+  padding-top: 20px;
+  padding-bottom: 12px;
+}
+
+body.video-matrix-active #page-title {
+  line-height: 1.1;
+}
+
+body.video-matrix-active #page-description {
+  margin-top: 5px;
 }
 
 body.video-matrix-active .topbar #refresh {
@@ -4165,7 +4176,7 @@ body.video-matrix-active .topbar #refresh {
 body.video-matrix-active #video-matrix {
   flex: 1 1 auto;
   min-height: 0;
-  margin: 0 -28px -44px;
+  margin: 0 -28px -36px;
 }
 
 .terminal-console {
