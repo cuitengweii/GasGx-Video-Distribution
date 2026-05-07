@@ -731,7 +731,6 @@
               <h2>账号分配</h2>
               <p class="muted">超级管理员创建本地账号，并给账号分配角色。</p>
             </div>
-            <span class="system-status">无注册</span>
           </div>
           <form class="account-assign-form" id="operator-account-form">
             <label>姓名<input id="operator-name-input" placeholder="例如：Mia"></label>
@@ -790,8 +789,12 @@
             <label>Slogan
               <input id="brand-slogan-input" maxlength="42" placeholder="Video Distribution">
             </label>
-            <label>图片 Logo
-              <input id="brand-logo-upload" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml">
+            <label class="brand-logo-field">图片 Logo
+              <input class="hidden" id="brand-logo-upload" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml">
+              <div class="brand-logo-upload-shell">
+                <button class="btn secondary brand-logo-upload-trigger" id="brand-logo-upload-trigger" type="button">选择图片</button>
+                <span class="brand-logo-upload-name" id="brand-logo-upload-name">未选择文件</span>
+              </div>
             </label>
             <div class="brand-preview-box">
               <span class="brand-mark preview-mark" id="brand-preview-mark"></span>

@@ -232,6 +232,7 @@ const SHELL_THEMES = [
   { id: "solar-orange", name: "Solar Orange", accent: "#ff7a00", soft: "rgba(255, 122, 0, 0.16)" },
   { id: "royal-purple", name: "Royal Purple", accent: "#b026ff", soft: "rgba(176, 38, 255, 0.16)" },
   { id: "hot-coral", name: "Hot Coral", accent: "#ff4f3a", soft: "rgba(255, 79, 58, 0.16)" },
+  { id: "arctic-mint", name: "Arctic Mint", accent: "#66ffd1", soft: "rgba(102, 255, 209, 0.16)" },
 ];
 
 const VIEW_HEADERS = {
@@ -582,16 +583,26 @@ function initBrandSettings() {
   const nameInput = document.querySelector("#brand-name-input");
   const sloganInput = document.querySelector("#brand-slogan-input");
   const upload = document.querySelector("#brand-logo-upload");
+  const uploadTrigger = document.querySelector("#brand-logo-upload-trigger");
+  const uploadName = document.querySelector("#brand-logo-upload-name");
+  const syncUploadName = () => {
+    if (!uploadName) return;
+    const file = upload.files?.[0];
+    uploadName.textContent = file?.name || "未选择文件";
+  };
   const syncPreview = () => applyShellBrand({ ...readStoredBrand(), name: nameInput.value, slogan: sloganInput.value });
   nameInput.addEventListener("input", syncPreview);
   sloganInput.addEventListener("input", syncPreview);
+  uploadTrigger?.addEventListener("click", () => upload.click());
   upload.addEventListener("change", () => {
     const file = upload.files?.[0];
+    syncUploadName();
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => applyShellBrand({ name: nameInput.value, slogan: sloganInput.value, logoDataUrl: String(reader.result || "") });
     reader.readAsDataURL(file);
   });
+  syncUploadName();
   document.querySelector("#save-brand-settings").addEventListener("click", async (event) => {
     const restoreButton = setButtonLoading(event.currentTarget, "保存中...");
     const currentLogo = document.querySelector("#brand-logo-image").src || "";
@@ -614,6 +625,7 @@ function initBrandSettings() {
     const restoreButton = setButtonLoading(event.currentTarget, "恢复中...");
     localStorage.removeItem(SHELL_BRAND_KEY);
     upload.value = "";
+    syncUploadName();
     applyShellBrand({});
     window.setTimeout(restoreButton, 160);
   });
@@ -1573,23 +1585,36 @@ async function openHelpDocument(path) {
   const body = document.querySelector("#help-reader-body");
   if (!reader || !body) return;
   reader.classList.remove("hidden");
+  setWorkspaceLoading(true, "加载帮助文档...", "正在读取知识库内容。");
   body.innerHTML = loadingInline("加载帮助文档...");
-  const doc = await api(`/api/help-docs/${encodeURIComponent(docName)}`);
-  const firstTitle = String(doc.content || "").split(/\r?\n/).find((line) => line.startsWith("# "));
-  document.querySelector("#help-reader-title").textContent = firstTitle ? firstTitle.replace(/^#\s*/, "") : doc.name;
-  body.innerHTML = renderHelpMarkdown(doc.content);
-  reader.scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    const doc = await api(`/api/help-docs/${encodeURIComponent(docName)}`);
+    const firstTitle = String(doc.content || "").split(/\r?\n/).find((line) => line.startsWith("# "));
+    document.querySelector("#help-reader-title").textContent = firstTitle ? firstTitle.replace(/^#\s*/, "") : doc.name;
+    body.innerHTML = renderHelpMarkdown(doc.content);
+    reader.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    body.innerHTML = `<div class="muted">加载失败：${escapeHtml(error?.message || "unknown error")}</div>`;
+  } finally {
+    setWorkspaceLoading(false);
+  }
 }
 
 function initHelpCenter() {
   document.querySelectorAll(".help-doc-card").forEach((card) => {
+    const docPath = (card.querySelector("code")?.textContent || "").trim();
+    const docName = docPath.split("/").pop();
     card.setAttribute("tabindex", "0");
     card.setAttribute("role", "button");
-    card.addEventListener("click", () => openHelpDocument(card.querySelector("code")?.textContent || ""));
+    card.addEventListener("click", () => {
+      if (!docName) return;
+      openHelpDocument(docPath);
+    });
     card.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        openHelpDocument(card.querySelector("code")?.textContent || "");
+        if (!docName) return;
+        openHelpDocument(docPath);
       }
     });
   });
