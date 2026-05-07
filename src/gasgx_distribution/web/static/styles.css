@@ -494,6 +494,54 @@ nav {
 .workspace {
   min-width: 0;
   padding: 28px;
+  position: relative;
+}
+
+.workspace-loading {
+  position: fixed;
+  inset: 110px 28px 28px 288px;
+  z-index: 80;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding-top: 18px;
+  pointer-events: none;
+}
+
+.workspace-loading.hidden {
+  display: none;
+}
+
+.workspace-loading-panel {
+  width: min(520px, 100%);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 16px 18px;
+  border: 1px solid rgba(93, 214, 44, 0.22);
+  border-radius: 8px;
+  background: rgba(24, 28, 25, 0.72);
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(14px);
+}
+
+.workspace-loading-panel .btn-spinner {
+  width: 22px;
+  height: 22px;
+  border-width: 3px;
+}
+
+.workspace-loading-panel strong {
+  display: block;
+  line-height: 1.35;
+}
+
+.workspace-loading-panel p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .topbar {
@@ -2195,6 +2243,11 @@ select option {
   .topbar {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .workspace-loading {
+    inset: 102px 12px 18px;
+    padding-top: 12px;
   }
 
   .page-toolbar {

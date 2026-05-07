@@ -157,6 +157,7 @@ const terminalAutoPublishWindowIds = new Set();
 const terminalAutoPublishStageByWindowId = new Map();
 let terminalErrorModalSignature = "";
 let terminalFullLoadingCount = 0;
+let workspaceLoadingCount = 0;
 
 const TERMINAL_BROWSER_WARMUP_TIMEOUT_MS = 12000;
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -1398,6 +1399,30 @@ function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
 
+function workspaceLoadingTitle(view) {
+  const entry = FEATURE_ENTRIES.find((item) => item.id === view);
+  return entry ? `${entry.label}加载中，请稍候...` : "页面加载中，请稍候...";
+}
+
+function setWorkspaceLoading(active, message = "页面加载中，请稍候...", detail = "正在同步右侧面板数据。") {
+  const mask = document.querySelector("#workspace-loading");
+  if (!mask) return;
+  if (active) {
+    workspaceLoadingCount += 1;
+    const textNode = mask.querySelector("[data-workspace-loading-text]");
+    const detailNode = mask.querySelector("[data-workspace-loading-detail]");
+    if (textNode) textNode.textContent = message;
+    if (detailNode) detailNode.textContent = detail;
+    mask.classList.remove("hidden");
+    mask.setAttribute("aria-hidden", "false");
+    return;
+  }
+  workspaceLoadingCount = Math.max(0, workspaceLoadingCount - 1);
+  if (workspaceLoadingCount > 0) return;
+  mask.classList.add("hidden");
+  mask.setAttribute("aria-hidden", "true");
+}
+
 function terminalPublishLoadingInline(label = "发布中") {
   return `<span class="terminal-publish-loading-inline"><span class="btn-spinner" aria-hidden="true"></span><span>${label}</span><span class="terminal-publish-dots" aria-hidden="true">...</span></span>`;
 }
@@ -1578,58 +1603,11 @@ function initHelpCenter() {
 }
 
 function setPageLoading(label = "加载中...") {
-  const targets = [
-    ["#summary", "加载概览..."],
-    ["#platforms", "加载平台..."],
-    ["#accounts-list", "加载账号..."],
-    ["#tasks-list", "加载任务..."],
-    ["#stats-overview", "加载统计..."],
-    ["#operation-progress", "加载进度..."],
-    ["#matrix-job-status", "加载作业..."],
-    ["#operation-notice-routes", "加载通知..."],
-    ["#login-qr-batches", "加载登录批次..."],
-    ["#sync-action-state", "加载同步状态..."],
-    ["#supabase-health-list", "加载数据库字典..."],
-  ];
-  targets.forEach(([selector, text]) => {
-    const node = document.querySelector(selector);
-    if (node) node.innerHTML = loadingInline(text || label);
-  });
-  renderAiRobotLoading();
+  setWorkspaceLoading(true, label, "正在同步右侧面板数据。");
 }
 
 function setViewLoading(view) {
-  if (view === "terminal-execution" && terminalCurrentRoute() === "hub") return;
-  const targets = {
-    overview: [
-      ["#summary", "加载概览..."],
-      ["#platforms", "加载平台..."],
-    ],
-    accounts: [["#accounts-list", "加载账号..."]],
-    settings: [["#matrix-job-status", "加载作业..."]],
-    tasks: [["#tasks-list", "加载任务..."]],
-    stats: [
-      ["#stats-overview", "加载统计..."],
-      ["#operation-progress", "加载进度..."],
-    ],
-    "ai-robot": [],
-    notifications: [
-      ["#operation-notice-routes", "加载通知..."],
-      ["#login-qr-batches", "加载登录批次..."],
-    ],
-    "terminal-execution": [
-      ["#terminal-config-list", "加载运营微信配置..."],
-    ],
-    "system-settings": [
-      ["#sync-action-state", "加载同步状态..."],
-      ["#supabase-health-list", "加载数据库字典..."],
-    ],
-  };
-  if (view === "ai-robot") renderAiRobotLoading();
-  (targets[view] || []).forEach(([selector, text]) => {
-    const node = document.querySelector(selector);
-    if (node) node.innerHTML = loadingInline(text || label);
-  });
+  setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在同步右侧面板数据。");
   if (view === "terminal-execution") {
     document.querySelector("#terminal-init-modal")?.classList.add("hidden");
   }
@@ -4843,6 +4821,7 @@ async function loadViewData(view, { force = false } = {}) {
     if (showTerminalLoading) {
       setTerminalFullLoading(false);
     }
+    setWorkspaceLoading(false);
   }
 }
 
