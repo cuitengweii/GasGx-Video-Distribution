@@ -3487,9 +3487,6 @@ function renderTerminalExecution() {
             <div class="metric"><span>总账号数</span><strong>${summary.total || 0}</strong></div>
             <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
           </div>
-          <div class="terminal-entry-actions terminal-route-actions">
-            <button class="btn primary" type="button" data-terminal-start-action="1">打开所有登录浏览器</button>
-          </div>
           <div class="terminal-workspace terminal-workspace-wechat"></div>
         </section>
       </div>
