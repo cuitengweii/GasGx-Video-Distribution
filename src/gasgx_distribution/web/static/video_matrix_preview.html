@@ -186,6 +186,12 @@
             transform: translateY(-24px);
         }
 
+        /* Decorative top overlay should not block text-layer hit testing. */
+        .status-scale,
+        .back-control {
+            pointer-events: none;
+        }
+
         .vm-template-layer {
             position: absolute;
             inset: 0;
