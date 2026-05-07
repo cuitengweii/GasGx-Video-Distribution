@@ -1607,6 +1607,7 @@ function setPageLoading(label = "加载中...") {
 }
 
 function setViewLoading(view) {
+  if (view === "terminal-execution" && terminalCurrentRoute() === "hub") return;
   setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在同步右侧面板数据。");
   if (view === "terminal-execution") {
     document.querySelector("#terminal-init-modal")?.classList.add("hidden");
@@ -5085,6 +5086,9 @@ function activateView(view, updateHash = true) {
     setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在加载视频生成工作台。");
     mountVideoMatrixWorkbench();
   } else {
+    if (view === "terminal-execution" && terminalCurrentRoute() === "hub") {
+      setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在同步右侧面板数据。");
+    }
     const forceReload = view === "settings";
     loadViewData(view, { force: forceReload }).catch((error) => {
       const target = section.querySelector(".loading-inline") || section;
