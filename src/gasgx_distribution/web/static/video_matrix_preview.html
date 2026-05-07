@@ -42,8 +42,14 @@
             width: 479.25px;
             height: 852px;
             border-radius: 55px;
-            border: 0;
-            box-shadow: 0 0 0 14px #1a1a1a, 0 0 0 16px #333, 0 20px 40px rgba(0,0,0,0.8);
+            border: 2px solid rgba(60, 165, 255, .92);
+            outline: 1px solid rgba(196, 232, 255, .38);
+            outline-offset: -6px;
+            box-shadow:
+                0 0 0 9px rgba(10, 16, 24, .92),
+                0 0 0 12px rgba(92, 128, 162, .52),
+                0 18px 40px rgba(0,0,0,0.74),
+                0 0 24px rgba(60, 165, 255, .18);
             position: relative;
             overflow: hidden;
             background-color: #050505;
@@ -1208,10 +1214,13 @@
             position: relative;
             aspect-ratio: 9 / 16;
             overflow: hidden;
-            border: 1px solid rgba(93,214,44,.28);
+            border: 1px solid rgba(60, 165, 255, .72);
             border-radius: 22px;
             background: #000;
-            box-shadow: 0 10px 26px rgba(0,0,0,.42);
+            box-shadow:
+                0 0 0 2px rgba(7, 18, 32, .82),
+                0 10px 26px rgba(0,0,0,.42),
+                0 0 18px rgba(60, 165, 255, .16);
         }
 
         .preview-grid-phone.is-playing {
@@ -1280,11 +1289,11 @@
             }
 
             body.preview-browser-mode .preview-stage {
-                min-height: 720px;
+                min-height: min(82vh, 720px);
             }
 
             body.preview-browser-mode .preview-device-wrap {
-                transform: scale(min(calc((100vw - 42px) / 520), .86));
+                transform: scale(var(--device-fit-scale, 1));
             }
 
             body.preview-browser-mode .preview-side-panel {
@@ -1690,9 +1699,13 @@
         wrap.style.setProperty("--device-height", `${device.height}px`);
         wrap.style.setProperty("--device-scale-width", `${device.width + 96}`);
         wrap.style.setProperty("--device-scale-height", `${device.height + 48}`);
-        const widthScale = (window.innerWidth - 420) / (device.width + 96);
-        const heightScale = (window.innerHeight - 96) / (device.height + 48);
-        wrap.style.setProperty("--device-fit-scale", String(Math.max(.2, Math.min(widthScale, heightScale, 1))));
+        const compact = window.matchMedia("(max-width: 900px)").matches;
+        const widthPadding = compact ? 36 : 420;
+        const heightPadding = compact ? 92 : 96;
+        const widthScale = (window.innerWidth - widthPadding) / (device.width + 96);
+        const heightScale = (window.innerHeight - heightPadding) / (device.height + 48);
+        const maxScale = compact ? 1.04 : 1;
+        wrap.style.setProperty("--device-fit-scale", String(Math.max(.2, Math.min(widthScale, heightScale, maxScale))));
       }
       function allPreviewVideos() {
         return [video, ...document.querySelectorAll("#previewGridStage video")].filter(Boolean);
