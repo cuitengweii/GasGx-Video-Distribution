@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import html
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -237,6 +238,127 @@ def create_app() -> FastAPI:
             "path": f"docs/help/{safe_name}",
             "content": path.read_text(encoding="utf-8"),
         }
+
+    @app.get("/help-docs/{doc_name}")
+    def help_doc_page(doc_name: str) -> HTMLResponse:
+        safe_name = Path(doc_name).name
+        if safe_name != doc_name or not safe_name.endswith(".md"):
+            raise HTTPException(status_code=404, detail="help doc not found")
+        path = Path(__file__).resolve().parents[2] / "docs" / "help" / safe_name
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="help doc not found")
+
+        markdown = path.read_text(encoding="utf-8")
+        title = safe_name
+        for line in markdown.splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()
+                break
+
+        lines = markdown.splitlines()
+        body_parts: list[str] = []
+        list_open = False
+        code_open = False
+
+        def close_list() -> None:
+            nonlocal list_open
+            if list_open:
+                body_parts.append("</ul>")
+                list_open = False
+
+        for raw in lines:
+            line = raw.rstrip("\n")
+            trimmed = line.strip()
+            if trimmed.startswith("```"):
+                close_list()
+                body_parts.append("</code></pre>" if code_open else "<pre><code>")
+                code_open = not code_open
+                continue
+            if code_open:
+                body_parts.append(html.escape(line))
+                continue
+            if not trimmed:
+                close_list()
+                continue
+            if trimmed.startswith("# "):
+                close_list()
+                body_parts.append(f"<h1>{html.escape(trimmed[2:])}</h1>")
+                continue
+            if trimmed.startswith("## "):
+                close_list()
+                body_parts.append(f"<h2>{html.escape(trimmed[3:])}</h2>")
+                continue
+            if trimmed.startswith("### "):
+                close_list()
+                body_parts.append(f"<h3>{html.escape(trimmed[4:])}</h3>")
+                continue
+            if trimmed.startswith("- "):
+                if not list_open:
+                    body_parts.append("<ul>")
+                    list_open = True
+                body_parts.append(f"<li>{html.escape(trimmed[2:])}</li>")
+                continue
+            close_list()
+            body_parts.append(f"<p>{html.escape(trimmed)}</p>")
+        close_list()
+        if code_open:
+            body_parts.append("</code></pre>")
+
+        page_html = f"""<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{html.escape(title)} - GasGx 帮助文档</title>
+    <style>
+      :root {{ color-scheme: dark; }}
+      body {{
+        margin: 0;
+        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        background: #06090f;
+        color: #e6ecf8;
+      }}
+      .wrap {{ max-width: 960px; margin: 0 auto; padding: 28px 20px 48px; }}
+      .bar {{ margin-bottom: 18px; display: flex; gap: 12px; align-items: center; }}
+      .back {{
+        display: inline-block;
+        text-decoration: none;
+        border: 1px solid #2a3244;
+        color: #b9c3d7;
+        padding: 8px 12px;
+        border-radius: 10px;
+      }}
+      .doc {{
+        border: 1px solid #243040;
+        border-radius: 14px;
+        padding: 22px;
+        background: #0b111b;
+      }}
+      h1, h2, h3 {{ color: #f4f7ff; margin: 14px 0 10px; }}
+      p, li {{ line-height: 1.75; color: #c8d2e8; }}
+      ul {{ padding-left: 22px; }}
+      pre {{
+        background: #0f1727;
+        border: 1px solid #2c3b56;
+        border-radius: 10px;
+        padding: 14px;
+        overflow: auto;
+      }}
+      code {{ font-family: Consolas, "Courier New", monospace; }}
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="bar">
+        <a class="back" href="/#help-center">返回帮助文档列表</a>
+      </div>
+      <article class="doc">
+        {''.join(body_parts)}
+      </article>
+    </main>
+  </body>
+</html>"""
+        return HTMLResponse(content=page_html)
 
     @app.get("/api/brand")
     def get_brand(request: Request) -> dict[str, Any]:
