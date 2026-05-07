@@ -73,6 +73,9 @@ const state = {
   aiRobotMessages: [],
   notificationRoutes: [],
   notificationEvents: [],
+  notificationPolicies: [],
+  notificationIncidents: [],
+  notificationSla: {},
   loginQrBatches: [],
   terminalExecution: { colors: [], operators: [], windows: [], summary: {}, platform_capabilities: {}, profile_by_platform: {}, active_platform: "wechat", loading: false },
   terminalRoute: "hub",
@@ -150,6 +153,8 @@ const loadedViews = new Set();
 let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "overview";
 let terminalCountdownTimer = null;
 const terminalConfirmingWindowIds = new Set();
+const terminalAutoPublishWindowIds = new Set();
+const terminalAutoPublishStageByWindowId = new Map();
 let terminalErrorModalSignature = "";
 let terminalFullLoadingCount = 0;
 
@@ -257,6 +262,9 @@ const DATABASE_DICTIONARY_TABLE_LABELS = {
   account_platforms: "账号平台",
   browser_profiles: "浏览器配置",
   notification_routes: "通知路由",
+  notification_policies: "通知策略",
+  notification_incidents: "通知事件",
+  notification_actions: "通知处理动作",
   login_qr_batches: "登录二维码批次",
   login_qr_items: "登录二维码明细",
   automation_tasks: "自动化任务",
@@ -2137,7 +2145,7 @@ function renderTasks() {
 
 function terminalColorByIndex(index, terminalState = state.terminalExecution) {
   const colors = terminalState?.colors || [];
-  return colors[index % Math.max(1, colors.length)] || { hex: "#3B82F6", name: "科技蓝" };
+  return colors[index % Math.max(1, colors.length)] || { hex: "#EF4444", name: "标准红" };
 }
 
 function terminalSlotLabel(slotIndex) {
@@ -2511,7 +2519,43 @@ function terminalDisplayAccount(window, account, index, currentIndex) {
 function terminalWindowIsCompleted(window) {
   const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
   const currentIndex = Number(window?.current_index || 0);
-  return Boolean(window?.completed) || (accounts.length > 0 && currentIndex >= accounts.length);
+  const successCount = accounts.filter((account) => String(account?.status || "").toLowerCase() === "success").length;
+  const allSucceeded = accounts.length > 0 && successCount >= accounts.length;
+  return Boolean(window?.completed) || (accounts.length > 0 && currentIndex >= accounts.length) || allSucceeded;
+}
+
+function terminalAutoPublishStageFromStatusText(statusText) {
+  const text = String(statusText || "").trim();
+  if (!text) return "";
+  if (text.includes("登录")) return "confirm_login";
+  if (text.includes("准备")) return "prepare_publish";
+  if (text.includes("发布")) return "publishing";
+  return "";
+}
+
+function terminalAutoPublishStageLabel(stage) {
+  switch (String(stage || "")) {
+    case "confirm_login":
+      return "登录中";
+    case "prepare_publish":
+      return "准备中";
+    case "publishing":
+      return "发布中";
+    case "stopping":
+      return "停止中";
+    default:
+      return "";
+  }
+}
+
+function terminalPublishLoadingLabelFromText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  if (raw.includes("停止中")) return "停止中";
+  if (raw.includes("登录中")) return "登录中";
+  if (raw.includes("准备中")) return "准备中";
+  if (raw.includes("发布中")) return "发布中";
+  return "";
 }
 
 function terminalPrecheckPrimaryIssue(window) {
@@ -2528,13 +2572,14 @@ function terminalPrecheckPrimaryIssue(window) {
 
 function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
+  const windowIdText = String(window?.id || "").trim();
   const currentIndex = Number(window.current_index || 0);
   const confirmingNext = Boolean(window?.confirming_next);
   const completed = terminalWindowIsCompleted(window);
   if (completed) {
     return `
       <div class="terminal-window-actions">
-        <button class="terminal-col-btn" type="button" disabled>全部完成</button>
+        <button class="terminal-col-btn completed" type="button" disabled>全部完成</button>
       </div>
     `;
   }
@@ -2553,28 +2598,32 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const isReady = currentStatus === "ready" || isPreparingByText;
   const primaryIssue = terminalPrecheckPrimaryIssue(window);
   const hasP0Issue = Boolean(primaryIssue && primaryIssue.level === "p0");
-  const canLoginConfirm = loginStarted && hasCurrent && !isReady && !isSuccess && !publishRunning && !publishSucceeded && !confirmingNext;
-  const canPublish = loginStarted && hasCurrent && isReady && !publishRunning && !publishStopping && !publishSucceeded && !isSuccess && !hasP0Issue && !confirmingNext;
+  const localAutoPublishStage = terminalAutoPublishStageByWindowId.get(windowIdText) || "";
+  const runningAutoPublishStage = publishRunning ? (terminalAutoPublishStageFromStatusText(currentStatusText) || "publishing") : "";
+  const autoPublishStage = publishStopping
+    ? "stopping"
+    : (runningAutoPublishStage || localAutoPublishStage);
+  const inFlightAutoPublish = terminalAutoPublishWindowIds.has(windowIdText);
+  const canAutoPublish = loginStarted && hasCurrent && !publishRunning && !publishStopping && !publishSucceeded && !isSuccess && !confirmingNext && !inFlightAutoPublish;
   const canConfirm = loginStarted && hasCurrent && (publishRunning || publishSucceeded || publishManualConfirmableFailure) && !isSuccess && !confirmingNext;
   const hasNext = currentIndex + 1 < accounts.length;
-  const publishButtonLoading = publishRunning || publishStopping;
-  const publishLoadingLabel = publishStopping ? "停止中" : "准备中";
-  const loginLabel = isReady ? "已登录" : "我已登录";
+  const stageLoadingLabel = terminalAutoPublishStageLabel(autoPublishStage);
+  const publishTextLoadingLabel = terminalPublishLoadingLabelFromText(currentStatusText);
+  const publishButtonLoading = Boolean(stageLoadingLabel || publishTextLoadingLabel);
+  const publishLoadingLabel = stageLoadingLabel || publishTextLoadingLabel;
   const publishLabel = !hasCurrent
     ? "全部完成"
-    : publishStopping
-      ? "停止中"
-    : publishRunning
-      ? "准备中"
+    : isSuccess
+      ? "已完成"
+    : publishButtonLoading
+      ? publishLoadingLabel
       : publishSucceeded
         ? "待人工发布"
         : publishManualConfirmableFailure
           ? "重新准备"
         : hasP0Issue
-          ? "先确认登录"
-        : isReady
-          ? "准备发布页"
-          : "等待登录";
+          ? "我已登录，点击发布"
+          : "我已登录，点击发布";
   const confirmReadyLabel = hasNext
     ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
     : (publishManualConfirmableFailure ? "已人工确认成功，完成" : "发布成功，完成");
@@ -2585,8 +2634,7 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const publishButtonContent = publishButtonLoading ? terminalPublishLoadingInline(publishLoadingLabel) : publishLabel;
   return `
     <div class="terminal-window-actions">
-      <button class="terminal-col-btn secondary" type="button" data-terminal-confirm-login="${window.id}" ${canLoginConfirm ? "" : "disabled"}>${loginLabel}</button>
-      <button class="${publishButtonClass}" type="button" data-terminal-manual="${window.id}" ${canPublish ? "" : "disabled"} aria-busy="${publishButtonBusy}">${publishButtonContent}</button>
+      <button class="${publishButtonClass}" type="button" data-terminal-auto-publish="${window.id}" ${canAutoPublish ? "" : "disabled"} aria-busy="${publishButtonBusy}">${publishButtonContent}</button>
       <button class="terminal-col-btn secondary ${confirmingNext ? "loading strong-loading" : ""}" type="button" data-terminal-confirm-success="${window.id}" ${canConfirm ? "" : "disabled"} aria-busy="${confirmingNext ? "true" : "false"}">${confirmingNext ? `${loadingInline("正在进入下一个...")}` : confirmLabel}</button>
     </div>
   `;
@@ -2786,9 +2834,9 @@ function terminalProgressMarkup(accounts, successCount) {
 function terminalWechatWindowMarkup(window, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
-  const color = window.color || "#3B82F6";
+  const color = window.color || "#EF4444";
   const colorDim = `${color}33`;
-  const successCount = accounts.filter((account) => account.status === "success").length;
+  const successCount = accounts.filter((account) => String(account?.status || "").toLowerCase() === "success").length;
   const current = accounts[currentIndex] || {};
   const qrState = terminalQrLifecycle(window);
   return `
@@ -2966,7 +3014,7 @@ function installGlobalButtonLoading() {
     if (!button || button.disabled || button.classList.contains("loading")) return;
     if (String(button.getAttribute("type") || "").toLowerCase() === "submit") return;
     if (button.dataset.noGlobalLoading === "1") return;
-    if (button.matches("[data-terminal-manual], [data-terminal-confirm-login], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], #user-menu-toggle, #top-user-toggle")) return;
+    if (button.matches("[data-terminal-auto-publish], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], [data-save-notification-policy], [data-incident-action], #user-menu-toggle, #top-user-toggle")) return;
     pulseButtonLoading(button, "处理中");
   }, true);
 }
@@ -2992,9 +3040,9 @@ function renderTerminalExecution() {
   workspace.innerHTML = windows.map((window) => {
     const accounts = window.accounts || [];
     const currentIndex = Number(window.current_index || 0);
-    const color = window.color || "#3B82F6";
+    const color = window.color || "#EF4444";
     const colorDim = `${color}33`;
-    const successCount = accounts.filter((account) => account.status === "success").length;
+    const successCount = accounts.filter((account) => String(account?.status || "").toLowerCase() === "success").length;
     const current = accounts[currentIndex] || {};
     const manualWait = loginStarted ? Math.max(0, Number(window.manual_available_at || 0) - Math.floor(Date.now() / 1000)) : 0;
     const qrVisible = loginStarted && window.qr_url;
@@ -3211,8 +3259,8 @@ function updateTerminalManualCountdowns() {
   const loginStarted = Boolean(state.terminalExecution.login_started);
   const windowById = new Map(windows.map((window) => [String(window.id), window]));
   const updatedWindows = new Set();
-  document.querySelectorAll("[data-terminal-manual]").forEach((button) => {
-    const window = windowById.get(String(button.dataset.terminalManual || ""));
+  document.querySelectorAll("[data-terminal-auto-publish]").forEach((button) => {
+    const window = windowById.get(String(button.dataset.terminalAutoPublish || ""));
     if (!window || updatedWindows.has(String(window.id))) return;
     const footerNode = button.closest(".terminal-task-column")?.querySelector(".terminal-col-footer");
     if (!footerNode) return;
@@ -3593,6 +3641,7 @@ function renderStats() {
   const risks = ["违规作品 1 条，待整改", "1 个账号播放断崖下跌", "1 个账号长期断更休眠", "高掉粉账号预警 1 个"];
   document.querySelector("#risk-list").innerHTML = risks.map((risk) => `<article>${risk}</article>`).join("");
   renderAnalyticsFromDatabase();
+  renderNotificationSlaStats();
 }
 
 function renderAnalyticsFromDatabase() {
@@ -3620,6 +3669,29 @@ function renderAnalyticsFromDatabase() {
   if (ops.length) document.querySelector("#operation-progress").innerHTML = ops.map((item) => `<div><div><strong>${item.label}</strong><span>${item.value}%</span></div><i style="--p:${item.value}%"></i></div>`).join("");
   const risksFromDb = analytics.risk || [];
   if (risksFromDb.length) document.querySelector("#risk-list").innerHTML = risksFromDb.map((item) => `<article>${item.text}</article>`).join("");
+}
+
+function renderNotificationSlaStats() {
+  const sla = state.notificationSla || {};
+  const cardNode = document.querySelector("#notification-sla-cards");
+  const topNode = document.querySelector("#notification-sla-top");
+  if (cardNode) {
+    const cards = [
+      ["未闭环", sla.open_count || 0],
+      ["未确认", sla.unacknowledged_count || 0],
+      ["平均确认", notificationDuration(sla.avg_ack_seconds || 0)],
+      ["平均关闭", notificationDuration(sla.avg_resolve_seconds || 0)],
+      ["升级次数", sla.escalation_count || 0],
+      ["送达失败率", `${sla.delivery_failed_rate || 0}%`],
+    ];
+    cardNode.innerHTML = cards.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+  }
+  if (topNode) {
+    const top = sla.top_events || [];
+    topNode.innerHTML = top.length
+      ? top.map((item) => `<article>${escapeHtml(item.label || item.event_type)} · ${Number(item.count || 0)} 次</article>`).join("")
+      : `<article>暂无通知事件</article>`;
+  }
 }
 
 function initSystemInitialize() {
@@ -3812,15 +3884,50 @@ function notificationCardTone(status) {
   return "info";
 }
 
+function notificationSeverityTone(severity) {
+  const token = String(severity || "").trim().toLowerCase();
+  if (token === "critical" || token === "blocking" || token === "error") return "danger";
+  if (token === "warning") return "warning";
+  if (token === "resolved" || token === "sent") return "success";
+  return "info";
+}
+
+function notificationIncidentStatusLabel(status) {
+  return {
+    open: "未确认",
+    acknowledged: "已确认",
+    assigned: "处理中",
+    resolved: "已关闭",
+    ignored: "已忽略",
+  }[String(status || "").toLowerCase()] || status || "未知";
+}
+
+function notificationActorName() {
+  const user = (authState.users || []).find((item) => item.id === authState.currentUserId);
+  return user?.name || "Allen";
+}
+
+function notificationDuration(seconds) {
+  const value = Math.max(0, Number(seconds || 0));
+  if (value >= 86400) return `${Math.round(value / 86400)} 天`;
+  if (value >= 3600) return `${Math.round(value / 3600)} 小时`;
+  if (value >= 60) return `${Math.round(value / 60)} 分钟`;
+  return `${Math.round(value)} 秒`;
+}
+
 function renderOperationNotifications() {
   const routeNode = document.querySelector("#operation-notice-routes");
+  const policyNode = document.querySelector("#notification-policy-list");
+  const incidentNode = document.querySelector("#notification-incident-list");
   const batchNode = document.querySelector("#login-qr-batches");
   const historyNode = document.querySelector("#notification-history");
   const unreadNode = document.querySelector("#notification-unread-count");
   const messageQueue = state.aiRobotMessages || [];
+  const incidents = state.notificationIncidents || [];
   const pendingStatuses = new Set(["pending", "retry", "failed", "sending"]);
   const pendingMessages = messageQueue.filter((item) => pendingStatuses.has(String(item.status || "").toLowerCase())).length;
-  const unreadCount = pendingMessages + (state.loginQrBatches || []).length;
+  const openIncidents = incidents.filter((item) => ["open", "acknowledged", "assigned"].includes(String(item.status || "").toLowerCase()));
+  const unreadCount = pendingMessages + openIncidents.length + (state.loginQrBatches || []).length;
   if (unreadNode) unreadNode.textContent = `${unreadCount} 条待处理`;
   if (routeNode) {
     const routes = state.notificationRoutes || [];
@@ -3849,6 +3956,72 @@ function renderOperationNotifications() {
         </article>
       `;
     }).join("");
+  }
+  if (policyNode) {
+    const policies = (state.notificationPolicies || []).filter((item) => !item.platform && !item.account_scope);
+    policyNode.innerHTML = policies.length ? policies.map((policy) => {
+      const targets = new Set(policy.target_platforms || []);
+      const escalationTargets = new Set(policy.escalation_platforms || []);
+      const platformToggles = ["telegram", "dingtalk", "wecom"].map((platform) => `
+        <label class="notification-check"><input type="checkbox" data-policy-target="${platform}" ${targets.has(platform) ? "checked" : ""}>${aiPlatformLabel(platform)}</label>
+      `).join("");
+      const escalationToggles = ["telegram", "dingtalk", "wecom"].map((platform) => `
+        <label class="notification-check"><input type="checkbox" data-policy-escalation-target="${platform}" ${escalationTargets.has(platform) ? "checked" : ""}>${aiPlatformLabel(platform)}</label>
+      `).join("");
+      return `
+        <article class="notification-card ${notificationSeverityTone(policy.severity)} notification-policy-card" data-policy-card="${escapeHtml(policy.event_type)}" data-policy-severity="${escapeHtml(policy.severity)}">
+          <span class="notification-dot"></span>
+          <div>
+            <strong>${escapeHtml(policy.label || notificationEventLabel(policy.event_type))} · 策略</strong>
+            <p>默认 ${escapeHtml(policy.severity)} · 空目标表示跟随上方路由开关。</p>
+            <div class="notification-policy-grid">
+              <label>启用<select data-policy-enabled><option value="true" ${policy.enabled ? "selected" : ""}>启用</option><option value="false" ${!policy.enabled ? "selected" : ""}>停用外发</option></select></label>
+              <label>冷却秒数<input type="number" min="0" data-policy-cooldown value="${Number(policy.cooldown_seconds || 0)}"></label>
+              <label>静默开始<input type="time" data-policy-quiet-start value="${escapeHtml(policy.quiet_start || "")}"></label>
+              <label>静默结束<input type="time" data-policy-quiet-end value="${escapeHtml(policy.quiet_end || "")}"></label>
+              <label>升级分钟<input type="number" min="0" data-policy-escalation-minutes value="${Number(policy.escalation_minutes || 0)}"></label>
+              <label>负责人<input data-policy-owner value="${escapeHtml(policy.owner_hint || "")}" placeholder="可选"></label>
+            </div>
+            <div class="notification-check-row"><span>目标</span>${platformToggles}</div>
+            <div class="notification-check-row"><span>升级</span>${escalationToggles}</div>
+            <div class="inline-actions"><button class="btn btn-sm primary" type="button" data-save-notification-policy>保存策略</button></div>
+          </div>
+          <time>${escapeHtml(policy.event_type)}</time>
+        </article>
+      `;
+    }).join("") : "";
+  }
+  if (incidentNode) {
+    incidentNode.innerHTML = incidents.length ? incidents.slice(0, 12).map((incident) => {
+      const status = String(incident.status || "open").toLowerCase();
+      const tone = status === "resolved" || status === "ignored" ? "success" : notificationSeverityTone(incident.severity);
+      const summary = String(incident.summary || incident.payload?.summary || "").trim() || "暂无摘要";
+      const owner = incident.assigned_to || incident.owner_hint || "未指派";
+      return `
+        <article class="notification-card ${tone}">
+          <span class="notification-dot"></span>
+          <div>
+            <strong>${escapeHtml(incident.title || notificationEventLabel(incident.event_type))}</strong>
+            <p>${escapeHtml(summary)}</p>
+            <p>${escapeHtml(notificationIncidentStatusLabel(status))} · ${escapeHtml(incident.event_type)} · ${escapeHtml(incident.platform || "通用")} · ${Number(incident.occurrence_count || 1)} 次 · ${escapeHtml(owner)}</p>
+            <div class="inline-actions">
+              <button class="btn btn-sm ghost" type="button" data-incident-action="ack" data-incident-id="${incident.id}" ${status !== "open" ? "disabled" : ""}>确认</button>
+              <button class="btn btn-sm ghost" type="button" data-incident-action="assign" data-incident-id="${incident.id}" ${status === "resolved" || status === "ignored" ? "disabled" : ""}>指派给我</button>
+              <button class="btn btn-sm primary" type="button" data-incident-action="resolve" data-incident-id="${incident.id}" ${status === "resolved" || status === "ignored" ? "disabled" : ""}>关闭</button>
+              <button class="btn btn-sm ghost" type="button" data-incident-action="ignore" data-incident-id="${incident.id}" ${status === "resolved" || status === "ignored" ? "disabled" : ""}>忽略</button>
+              <button class="btn btn-sm ghost" type="button" data-incident-action="resend" data-incident-id="${incident.id}">重发</button>
+            </div>
+          </div>
+          <time>${formatTime(incident.updated_at || incident.last_seen_at || incident.created_at)}</time>
+        </article>
+      `;
+    }).join("") : `
+      <article class="notification-card success">
+        <span class="notification-dot"></span>
+        <div><strong>暂无待处理事件</strong><p>通知事件会在这里聚合、确认、指派和关闭。</p></div>
+        <time>实时</time>
+      </article>
+    `;
   }
   if (batchNode) {
     const batches = state.loginQrBatches || [];
@@ -4625,6 +4798,7 @@ async function loadViewData(view, { force = false } = {}) {
       state.summary = await api("/api/summary");
       state.stats = await api("/api/stats");
       state.analytics = await api("/api/stats/analytics");
+      state.notificationSla = await api("/api/stats/notification-sla");
       state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
       renderStats();
     } else if (view === "ai-robot") {
@@ -4634,6 +4808,9 @@ async function loadViewData(view, { force = false } = {}) {
     } else if (view === "notifications") {
       state.notificationEvents = await api("/api/notification-events");
       state.notificationRoutes = await api("/api/notification-routes");
+      state.notificationPolicies = await api("/api/notification-policies");
+      state.notificationIncidents = await api("/api/notification-incidents");
+      state.notificationSla = await api("/api/stats/notification-sla");
       state.loginQrBatches = await api("/api/login-qr-batches");
       state.aiRobotMessages = await api("/api/ai-robots/messages");
       renderOperationNotifications();
@@ -5493,6 +5670,61 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const policyButton = event.target.closest("[data-save-notification-policy]");
+  if (policyButton) {
+    const card = policyButton.closest("[data-policy-card]");
+    if (!card) return;
+    const policy = {
+      event_type: card.dataset.policyCard || "",
+      severity: card.dataset.policySeverity || "",
+      enabled: card.querySelector("[data-policy-enabled]")?.value === "true",
+      cooldown_seconds: Number(card.querySelector("[data-policy-cooldown]")?.value || 0),
+      quiet_start: card.querySelector("[data-policy-quiet-start]")?.value || "",
+      quiet_end: card.querySelector("[data-policy-quiet-end]")?.value || "",
+      escalation_enabled: Number(card.querySelector("[data-policy-escalation-minutes]")?.value || 0) > 0,
+      escalation_minutes: Number(card.querySelector("[data-policy-escalation-minutes]")?.value || 0),
+      owner_hint: card.querySelector("[data-policy-owner]")?.value || "",
+      target_platforms: [...card.querySelectorAll("[data-policy-target]:checked")].map((input) => input.dataset.policyTarget),
+      escalation_platforms: [...card.querySelectorAll("[data-policy-escalation-target]:checked")].map((input) => input.dataset.policyEscalationTarget),
+    };
+    const restoreButton = setButtonLoading(policyButton, "保存中");
+    try {
+      state.notificationPolicies = await api("/api/notification-policies", {
+        method: "PUT",
+        body: JSON.stringify({ policies: [policy] }),
+      });
+      setNotificationRouteState(`${notificationEventLabel(policy.event_type)} 策略已保存`);
+      renderOperationNotifications();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
+  const incidentButton = event.target.closest("[data-incident-action]");
+  if (incidentButton) {
+    const incidentId = incidentButton.dataset.incidentId;
+    const action = incidentButton.dataset.incidentAction;
+    const restoreButton = setButtonLoading(incidentButton, "处理中");
+    try {
+      await api(`/api/notification-incidents/${incidentId}/${action}`, {
+        method: "POST",
+        body: JSON.stringify({
+          actor: notificationActorName(),
+          assigned_to: notificationActorName(),
+        }),
+      });
+      state.notificationIncidents = await api("/api/notification-incidents");
+      state.notificationSla = await api("/api/stats/notification-sla");
+      state.aiRobotMessages = await api("/api/ai-robots/messages");
+      renderOperationNotifications();
+      if (currentView === "stats") renderNotificationSlaStats();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
   const deleteButton = event.target.closest("[data-delete-task]");
   if (deleteButton) {
     const taskId = deleteButton.dataset.deleteTask;
@@ -5545,48 +5777,40 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  const terminalManualButton = event.target.closest("[data-terminal-manual]");
-  if (terminalManualButton) {
-    const restoreButton = setButtonLoading(terminalManualButton, "准备中");
-    terminalErrorModalSignature = "";
-    hideTerminalErrorModal();
-    try {
-      state.terminalExecution = await api(`/api/terminal-execution/windows/${terminalManualButton.dataset.terminalManual}/manual-publish`, { method: "POST" });
-      renderTerminalExecution();
-    } catch (error) {
-      showTerminalErrorModal({
-        stage: "publish_start",
-        title: "发布请求失败",
-        message: error.message || "发布请求失败",
-        context: `窗口 #${terminalManualButton.dataset.terminalManual}`,
-        signature: `publish-request|manual|${terminalManualButton.dataset.terminalManual}|${error.message || "unknown"}`,
-      });
-    } finally {
-      restoreButton();
-    }
-    return;
-  }
-
-  const terminalConfirmLoginButton = event.target.closest("[data-terminal-confirm-login]");
-  if (terminalConfirmLoginButton) {
-    const windowId = String(terminalConfirmLoginButton.dataset.terminalConfirmLogin || "").trim();
+  const terminalAutoPublishButton = event.target.closest("[data-terminal-auto-publish]");
+  if (terminalAutoPublishButton) {
+    const windowId = String(terminalAutoPublishButton.dataset.terminalAutoPublish || "").trim();
     if (!windowId) return;
-    const restoreButton = setButtonLoading(terminalConfirmLoginButton, "确认中");
+    if (terminalAutoPublishWindowIds.has(windowId)) return;
+    terminalAutoPublishWindowIds.add(windowId);
+    terminalAutoPublishStageByWindowId.set(windowId, "confirm_login");
+    renderTerminalExecution();
     terminalErrorModalSignature = "";
     hideTerminalErrorModal();
+    let stage = "confirm_login";
     try {
       state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/confirm-login`, { method: "POST" });
+      terminalAutoPublishStageByWindowId.set(windowId, "prepare_publish");
+      renderTerminalExecution();
+      stage = "manual_publish";
+      terminalAutoPublishStageByWindowId.set(windowId, "publishing");
+      state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/manual-publish`, { method: "POST" });
+      terminalAutoPublishStageByWindowId.delete(windowId);
       renderTerminalExecution();
     } catch (error) {
+      terminalAutoPublishStageByWindowId.delete(windowId);
       showTerminalErrorModal({
-        stage: "login_manual_confirm",
-        title: "人工确认登录失败",
-        message: error.message || "人工确认登录失败",
+        stage: stage === "confirm_login" ? "login_manual_confirm" : "publish_start",
+        title: "一键自动发布失败",
+        message: error.message || "一键自动发布失败",
         context: `窗口 #${windowId}`,
-        signature: `login-request|manual-confirm|${windowId}|${error.message || "unknown"}`,
+        signature: `auto-publish|${stage}|${windowId}|${error.message || "unknown"}`,
       });
+      renderTerminalExecution();
     } finally {
-      restoreButton();
+      terminalAutoPublishWindowIds.delete(windowId);
+      terminalAutoPublishStageByWindowId.delete(windowId);
+      renderTerminalExecution();
     }
     return;
   }

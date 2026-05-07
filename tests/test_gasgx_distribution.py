@@ -380,6 +380,171 @@ def test_notification_route_api_can_send_probe_message(monkeypatch, tmp_path: Pa
     assert "action_required" in str(sent[-1]["json"]["text"])
 
 
+def test_notification_policy_dedupes_incidents_and_tracks_actions(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    sent: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    def fake_post(url: str, json: dict[str, object], headers: dict[str, str], timeout: float) -> FakeResponse:
+        sent.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("gasgx_distribution.service.requests.post", fake_post)
+    service.save_ai_robot_config(
+        "telegram",
+        {
+            "enabled": True,
+            "bot_name": "GasGx Bot",
+            "webhook_url": "https://example.test/bot",
+            "target_id": "chat-1",
+        },
+    )
+    service.save_notification_route("publish_result", "telegram", True)
+
+    first = service.route_operation_notification(
+        "publish_result",
+        {
+            "subtype": "failed",
+            "severity": "error",
+            "title": "发布失败",
+            "summary": "upload failed",
+            "dedupe_key": "publish:acct-1:asset-1",
+            "account_id": 7,
+            "platform": "wechat",
+        },
+    )
+    second = service.route_operation_notification(
+        "publish_result",
+        {
+            "subtype": "failed",
+            "severity": "error",
+            "title": "发布失败",
+            "summary": "upload failed again",
+            "dedupe_key": "publish:acct-1:asset-1",
+            "account_id": 7,
+            "platform": "wechat",
+        },
+    )
+
+    assert first["notification_platforms"] == ["telegram"]
+    assert second["notification_platforms"] == []
+    assert second["suppressed_reason"] == "cooldown"
+    assert len(sent) == 1
+    incident = service.list_notification_incidents()[0]
+    assert incident["occurrence_count"] == 2
+    assert incident["status"] == "open"
+
+    ack = service.act_on_notification_incident(int(incident["id"]), "ack", {"actor": "Allen"})
+    assert ack["incident"]["status"] == "acknowledged"
+    resolved = service.act_on_notification_incident(int(incident["id"]), "resolve", {"actor": "Allen"})
+    assert resolved["incident"]["status"] == "resolved"
+    sla = service.notification_sla_summary()
+    assert sla["closed_count"] == 1
+    with dist_db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM notification_actions").fetchone()["c"] == 2
+
+
+def test_notification_policy_api_and_sla_endpoint(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    policies = client.get("/api/notification-policies")
+    assert policies.status_code == 200
+    assert any(item["event_type"] == "material_issue" for item in policies.json())
+
+    saved = client.put(
+        "/api/notification-policies",
+        json={
+            "policies": [
+                {
+                    "event_type": "material_issue",
+                    "severity": "warning",
+                    "enabled": True,
+                    "target_platforms": ["telegram", "wecom"],
+                    "cooldown_seconds": 42,
+                    "escalation_enabled": False,
+                }
+            ]
+        },
+    )
+    assert saved.status_code == 200
+    material = next(item for item in saved.json() if item["event_type"] == "material_issue")
+    assert material["cooldown_seconds"] == 42
+    assert material["target_platforms"] == ["telegram", "wecom"]
+
+    incident = service.route_operation_notification("material_issue", {"dedupe_key": "mat-1", "summary": "素材不足"}, notify=False)["incident"]
+    action = client.post(f"/api/notification-incidents/{incident['id']}/assign", json={"actor": "Allen", "assigned_to": "Allen"})
+    assert action.status_code == 200
+    assert action.json()["incident"]["status"] == "assigned"
+    sla = client.get("/api/stats/notification-sla")
+    assert sla.status_code == 200
+    assert sla.json()["open_count"] == 1
+
+
+def test_ai_robot_worker_processes_due_notification_escalations(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    sent: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    def fake_post(url: str, json: dict[str, object], headers: dict[str, str], timeout: float) -> FakeResponse:
+        sent.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("gasgx_distribution.service.requests.post", fake_post)
+    service.save_ai_robot_config(
+        "telegram",
+        {
+            "enabled": True,
+            "bot_name": "GasGx Bot",
+            "webhook_url": "https://example.test/bot",
+            "target_id": "chat-1",
+        },
+    )
+    service.save_notification_policies(
+        {
+            "policies": [
+                {
+                    "event_type": "system_error",
+                    "severity": "critical",
+                    "enabled": True,
+                    "target_platforms": ["telegram"],
+                    "cooldown_seconds": 0,
+                    "escalation_enabled": True,
+                    "escalation_minutes": 10,
+                    "escalation_platforms": ["telegram"],
+                }
+            ]
+        }
+    )
+    incident = service.route_operation_notification(
+        "system_error",
+        {"dedupe_key": "system:down", "title": "依赖不可用", "summary": "storage down"},
+        notify=False,
+    )["incident"]
+    with dist_db.connect() as conn:
+        conn.execute("UPDATE notification_incidents SET next_escalate_at = ? WHERE id = ?", (service.now_ts() - 1, incident["id"]))
+
+    result = service.run_ai_robot_sender_worker(limit=5)
+
+    assert result["escalations"]["escalated"] == 1
+    assert result["sent"] == 1
+    assert "升级提醒" in sent[-1]["json"]["text"]
+    updated = service.get_notification_incident(int(incident["id"]))
+    assert updated and updated["escalation_count"] == 1
+
+
 def test_accounts_include_matrix_publish_success_count(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     first = service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
@@ -2156,6 +2321,180 @@ def test_terminal_execution_state_recovers_existing_qr_cache(monkeypatch, tmp_pa
     assert data["windows"][0]["qr_path"].endswith("window-01.png")
     assert data["windows"][0]["qr_expires_at"] == 1060
 
+
+def test_terminal_execution_state_normalizes_legacy_palette_colors(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 3,
+                        "enabled": True,
+                        "operator_wechat": "op-a",
+                        "color": "#A855F7",
+                        "color_name": "神秘紫",
+                        "current_index": 0,
+                        "accounts": [],
+                    },
+                    {
+                        "id": 4,
+                        "enabled": True,
+                        "operator_wechat": "op-b",
+                        "color": "#EC4899",
+                        "color_name": "醒目粉",
+                        "current_index": 0,
+                        "accounts": [],
+                    },
+                ],
+                "config": [
+                    {"id": 3, "enabled": True, "operator_wechat": "op-a", "color": "#A855F7"},
+                    {"id": 4, "enabled": True, "operator_wechat": "op-b", "color": "#EC4899"},
+                ],
+                "initialized": True,
+                "login_started": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    service._invalidate_terminal_execution_state_cache()
+    payload = service.terminal_execution_state()
+
+    assert payload["colors"][:5] == [
+        {"hex": "#EF4444", "name": "标准红"},
+        {"hex": "#EAB308", "name": "明亮黄"},
+        {"hex": "#22C55E", "name": "安全绿"},
+        {"hex": "#3B82F6", "name": "科技蓝"},
+        {"hex": "#F97316", "name": "活力橙"},
+    ]
+    assert payload["windows"][0]["color"] == "#22C55E"
+    assert payload["windows"][0]["color_name"] == "安全绿"
+    assert payload["windows"][1]["color"] == "#EF4444"
+    assert payload["windows"][1]["color_name"] == "标准红"
+    assert payload["config"][0]["color"] == "#22C55E"
+    assert payload["config"][1]["color"] == "#EF4444"
+
+    persisted = json.loads((runtime_dir / "terminal_execution_state.json").read_text(encoding="utf-8"))
+    assert persisted["windows"][0]["color"] == "#22C55E"
+    assert persisted["windows"][1]["color"] == "#EF4444"
+    assert persisted["config"][0]["color"] == "#22C55E"
+    assert persisted["config"][1]["color"] == "#EF4444"
+
+
+def test_terminal_execution_state_resets_windows_after_business_date_rollover(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    cache_dir = runtime_dir / "terminal_qr_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "window-01.png").write_bytes(b"old-qr")
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op-a",
+                        "color": "#3B82F6",
+                        "current_index": 2,
+                        "completed": True,
+                        "manual_available_at": 1234,
+                        "qr_path": str(cache_dir / "window-01.png"),
+                        "qr_url": "/api/terminal-execution/windows/1/qr-image",
+                        "qr_expires_at": 9999,
+                        "accounts": [
+                            {"id": 10, "display_name": "A", "status": "success", "status_text": "发布成功", "task_id": "done-1"},
+                            {"id": 11, "display_name": "B", "status": "success", "status_text": "发布成功", "task_id": "done-2"},
+                        ],
+                        "publish_run": {"status": "success", "account_id": 11},
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+                "business_date": "2026-05-06",
+                "next_probe_at": 9000,
+                "probe_cursor": 3,
+                "updated_at": 1714972800,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "_terminal_business_date", lambda: "2026-05-07")
+
+    service._invalidate_terminal_execution_state_cache()
+    payload = service.terminal_execution_state()
+
+    window = payload["windows"][0]
+    assert window["current_index"] == 0
+    assert "completed" not in window
+    assert window["publish_run"] == {}
+    assert window["manual_available_at"] == 0
+    assert window["qr_url"] == ""
+    assert window["accounts"][0]["status"] == "pending"
+    assert window["accounts"][0]["status_text"] == "等待打开登录浏览器"
+    assert window["accounts"][0]["task_id"] is None
+    assert window["accounts"][1]["status"] == "pending"
+    assert window["accounts"][1]["status_text"] == "未登录"
+    assert window["accounts"][1]["task_id"] is None
+
+    persisted = json.loads((runtime_dir / "terminal_execution_state.json").read_text(encoding="utf-8"))
+    assert persisted["business_date"] == "2026-05-07"
+    assert persisted["next_probe_at"] == 0
+    assert persisted["probe_cursor"] == 0
+
+
+def test_terminal_execution_state_keeps_completed_window_with_same_business_date(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op-a",
+                        "color": "#3B82F6",
+                        "current_index": 2,
+                        "completed": True,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "qr_expires_at": 0,
+                        "accounts": [
+                            {"id": 10, "display_name": "A", "status": "success", "status_text": "发布成功", "task_id": None},
+                            {"id": 11, "display_name": "B", "status": "success", "status_text": "发布成功", "task_id": None},
+                        ],
+                        "publish_run": {},
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+                "business_date": "2026-05-07",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "_terminal_business_date", lambda: "2026-05-07")
+
+    service._invalidate_terminal_execution_state_cache()
+    payload = service.terminal_execution_state()
+
+    window = payload["windows"][0]
+    assert window["current_index"] == 2
+    assert window["completed"] is True
 
 def test_terminal_config_update_preserves_active_qr_for_same_window(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)

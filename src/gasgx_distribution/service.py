@@ -13,7 +13,8 @@ from io import BytesIO
 import sqlite3
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from threading import Lock, Thread
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
@@ -119,6 +120,9 @@ NOTIFICATION_EVENT_DEFINITIONS = [
 NOTIFICATION_EVENT_TYPES = {item["event_type"] for item in NOTIFICATION_EVENT_DEFINITIONS}
 NOTIFICATION_EVENT_META = {item["event_type"]: item for item in NOTIFICATION_EVENT_DEFINITIONS}
 NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
+NOTIFICATION_OPEN_STATUSES = {"open", "acknowledged", "assigned"}
+NOTIFICATION_CLOSED_STATUSES = {"resolved", "ignored"}
+NOTIFICATION_POLICY_SEVERITY_ORDER = {"critical": 5, "blocking": 4, "error": 3, "warning": 2, "info": 1}
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 BRAND_INLINE_ASSET_MAX_CHARS = int(os.getenv("GASGX_BRAND_INLINE_ASSET_MAX_CHARS", "200000") or 200000)
 BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_account_prefix,created_at,updated_at"
@@ -376,6 +380,9 @@ SYNC_TABLE_CONFLICT_KEYS = {
     "browser_profiles": "account_id",
     "brand_settings": "id",
     "notification_routes": "event_type,platform",
+    "notification_policies": "event_type,severity,platform,account_scope",
+    "notification_incidents": "event_type,dedupe_key",
+    "notification_actions": "id",
     "automation_tasks": "id",
     "video_stats_snapshots": "id",
     "wechat_stats_account_snapshots": "account_id,platform,stat_date",
@@ -383,10 +390,11 @@ SYNC_TABLE_CONFLICT_KEYS = {
     "ai_robot_messages": "id",
     "app_settings": "setting_key",
 }
-SYNC_JSON_FIELDS = {"payload_json", "fingerprint_json", "raw_json"}
+SYNC_JSON_FIELDS = {"payload_json", "fingerprint_json", "raw_json", "target_platforms_json", "escalation_platforms_json"}
 SYNC_INTEGER_FIELDS_BY_TABLE = {
     "account_platforms": {"enabled"},
     "notification_routes": {"enabled"},
+    "notification_policies": {"enabled", "escalation_enabled"},
     "ai_robot_configs": {"enabled"},
 }
 
@@ -585,6 +593,7 @@ def push_sync_outbox_to_supabase(*, limit: int = 100) -> dict[str, Any]:
             )
             failed = int(cursor.rowcount or 0)
         return {"ok": False, "pushed": 0, "failed": failed, "skipped": 0, "errors": [error], "status": sync_status()}
+    resolved_ids: list[int] = []
     with connect() as conn:
         rows = [
             dict_from_row(row)
@@ -1619,6 +1628,7 @@ def list_ai_robot_messages() -> list[dict[str, Any]]:
 
 def run_ai_robot_sender_worker(*, limit: int = 10) -> dict[str, Any]:
     limit = max(1, int(limit or 10))
+    escalations = process_notification_escalations(limit=limit)
     messages = _claim_ai_robot_messages(limit)
     sent = 0
     failed = 0
@@ -1633,7 +1643,7 @@ def run_ai_robot_sender_worker(*, limit: int = 10) -> dict[str, Any]:
             sent += 1
             updated = _mark_ai_robot_message_sent(message)
         results.append(updated)
-    return {"ok": failed == 0, "claimed": len(messages), "sent": sent, "failed": failed, "messages": results}
+    return {"ok": failed == 0, "claimed": len(messages), "sent": sent, "failed": failed, "escalations": escalations, "messages": results}
 
 
 def send_ai_robot_message_now(message: dict[str, Any]) -> dict[str, Any]:
@@ -1719,6 +1729,295 @@ def _enabled_notification_platforms(event_type: str) -> list[str]:
     ]
 
 
+def _json_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    raw = _json_payload(value, [] if isinstance(value, str) else value)
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str):
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    return []
+
+
+def _normalize_notification_platforms(value: Any) -> list[str]:
+    result: list[str] = []
+    for item in _json_list(value):
+        try:
+            token = _normalize_ai_platform(item)
+        except ValueError:
+            continue
+        if token in NOTIFICATION_PLATFORMS and token not in result:
+            result.append(token)
+    return result
+
+
+def _default_notification_cooldown_seconds(event_type: str, severity: str) -> int:
+    if event_type == "ops_summary":
+        return 0
+    if event_type == "wechat_login_qr":
+        return LOGIN_QR_NOTIFY_COOLDOWN_SECONDS
+    if severity == "critical":
+        return 300
+    return 600
+
+
+def _default_notification_escalation_minutes(severity: str) -> int:
+    if severity == "critical":
+        return 10
+    if severity == "blocking":
+        return 20
+    return 0
+
+
+def _default_notification_policy(event_type: str) -> dict[str, Any]:
+    meta = NOTIFICATION_EVENT_META[event_type]
+    severity = str(meta.get("default_severity") or "info")
+    escalation_minutes = _default_notification_escalation_minutes(severity)
+    return {
+        "event_type": event_type,
+        "severity": severity,
+        "platform": "",
+        "account_scope": "",
+        "enabled": True,
+        "target_platforms": [],
+        "cooldown_seconds": _default_notification_cooldown_seconds(event_type, severity),
+        "quiet_start": "",
+        "quiet_end": "",
+        "escalation_enabled": escalation_minutes > 0,
+        "escalation_minutes": escalation_minutes,
+        "escalation_platforms": [],
+        "owner_hint": "",
+        "label": meta.get("label") or event_type,
+        "source": meta.get("source") or "",
+        "default_severity": severity,
+    }
+
+
+def _normalize_notification_policy(row: dict[str, Any]) -> dict[str, Any]:
+    event = str(row.get("event_type") or "").strip()
+    if event not in NOTIFICATION_EVENT_TYPES:
+        event = "action_required"
+    base = _default_notification_policy(event)
+    severity = str(row.get("severity") or base["severity"]).strip().lower()
+    if severity not in NOTIFICATION_POLICY_SEVERITY_ORDER:
+        severity = base["severity"]
+    return {
+        **base,
+        "id": row.get("id"),
+        "event_type": event,
+        "severity": severity,
+        "platform": str(row.get("platform") or "").strip(),
+        "account_scope": str(row.get("account_scope") or "").strip(),
+        "enabled": bool(row.get("enabled", base["enabled"])),
+        "target_platforms": _normalize_notification_platforms(row.get("target_platforms_json", row.get("target_platforms"))),
+        "cooldown_seconds": max(0, int(row.get("cooldown_seconds") if row.get("cooldown_seconds") is not None else base["cooldown_seconds"])),
+        "quiet_start": str(row.get("quiet_start") or "").strip(),
+        "quiet_end": str(row.get("quiet_end") or "").strip(),
+        "escalation_enabled": bool(row.get("escalation_enabled", base["escalation_enabled"])),
+        "escalation_minutes": max(0, int(row.get("escalation_minutes") if row.get("escalation_minutes") is not None else base["escalation_minutes"])),
+        "escalation_platforms": _normalize_notification_platforms(row.get("escalation_platforms_json", row.get("escalation_platforms"))),
+        "owner_hint": str(row.get("owner_hint") or "").strip(),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def list_notification_policies() -> list[dict[str, Any]]:
+    defaults = {
+        (event, _default_notification_policy(event)["severity"], "", ""): _default_notification_policy(event)
+        for event in sorted(NOTIFICATION_EVENT_TYPES)
+    }
+    rows: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    if brand_database_backend() == "supabase":
+        try:
+            raw_rows = _brand_supabase().select("notification_policies", order="event_type.asc,severity.asc,platform.asc,account_scope.asc")
+        except SupabaseError:
+            raw_rows = []
+        for row in raw_rows:
+            policy = _normalize_notification_policy(row)
+            rows[(policy["event_type"], policy["severity"], policy["platform"], policy["account_scope"])] = policy
+    else:
+        ensure_database()
+        with connect() as conn:
+            for row in conn.execute("SELECT * FROM notification_policies ORDER BY event_type, severity, platform, account_scope"):
+                policy = _normalize_notification_policy(dict_from_row(row))
+                rows[(policy["event_type"], policy["severity"], policy["platform"], policy["account_scope"])] = policy
+    merged = [{**item, **rows.get(key, {})} for key, item in defaults.items()]
+    extras = [item for key, item in rows.items() if key not in defaults]
+    return sorted(
+        [*merged, *extras],
+        key=lambda item: (
+            str(item.get("event_type") or ""),
+            -NOTIFICATION_POLICY_SEVERITY_ORDER.get(str(item.get("severity") or "info"), 0),
+            str(item.get("platform") or ""),
+            str(item.get("account_scope") or ""),
+        ),
+    )
+
+
+def _policy_storage_payload(raw: dict[str, Any], *, for_supabase: bool = False) -> dict[str, Any]:
+    event = str(raw.get("event_type") or "").strip()
+    if event not in NOTIFICATION_EVENT_TYPES:
+        raise ValueError("unsupported notification event_type")
+    base = _default_notification_policy(event)
+    severity = str(raw.get("severity") or base["severity"]).strip().lower()
+    if severity not in NOTIFICATION_POLICY_SEVERITY_ORDER:
+        severity = base["severity"]
+    platform = str(raw.get("platform") or "").strip()
+    if platform:
+        platform = _normalize_ai_platform(platform)
+        if platform not in NOTIFICATION_PLATFORMS:
+            raise ValueError("notification platform must be telegram, dingtalk, or wecom")
+    target_platforms = _normalize_notification_platforms(raw.get("target_platforms", raw.get("target_platforms_json")))
+    escalation_platforms = _normalize_notification_platforms(raw.get("escalation_platforms", raw.get("escalation_platforms_json")))
+    ts = now_ts()
+    payload = {
+        "event_type": event,
+        "severity": severity,
+        "platform": platform,
+        "account_scope": str(raw.get("account_scope") or "").strip(),
+        "enabled": 1 if bool(raw.get("enabled", True)) else 0,
+        "target_platforms_json": target_platforms if for_supabase else json.dumps(target_platforms, ensure_ascii=False),
+        "cooldown_seconds": max(0, int(raw.get("cooldown_seconds") if raw.get("cooldown_seconds") is not None else base["cooldown_seconds"])),
+        "quiet_start": str(raw.get("quiet_start") or "").strip(),
+        "quiet_end": str(raw.get("quiet_end") or "").strip(),
+        "escalation_enabled": 1 if bool(raw.get("escalation_enabled", base["escalation_enabled"])) else 0,
+        "escalation_minutes": max(0, int(raw.get("escalation_minutes") if raw.get("escalation_minutes") is not None else base["escalation_minutes"])),
+        "escalation_platforms_json": escalation_platforms if for_supabase else json.dumps(escalation_platforms, ensure_ascii=False),
+        "owner_hint": str(raw.get("owner_hint") or "").strip(),
+        "created_at": int(raw.get("created_at") or ts),
+        "updated_at": ts,
+    }
+    return payload
+
+
+def save_notification_policies(payload: Any) -> list[dict[str, Any]]:
+    policies = payload.get("policies") if isinstance(payload, dict) else payload
+    if not isinstance(policies, list):
+        raise ValueError("policies must be a list")
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        for raw in policies:
+            if not isinstance(raw, dict):
+                continue
+            data = _policy_storage_payload(raw, for_supabase=True)
+            client.upsert("notification_policies", data, on_conflict="event_type,severity,platform,account_scope")
+        _invalidate_supabase_read_cache("notification_policies")
+        return list_notification_policies()
+    ensure_database()
+    with connect() as conn:
+        for raw in policies:
+            if not isinstance(raw, dict):
+                continue
+            data = _policy_storage_payload(raw, for_supabase=False)
+            conn.execute(
+                """
+                INSERT INTO notification_policies(
+                    event_type, severity, platform, account_scope, enabled, target_platforms_json,
+                    cooldown_seconds, quiet_start, quiet_end, escalation_enabled, escalation_minutes,
+                    escalation_platforms_json, owner_hint, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_type, severity, platform, account_scope) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    target_platforms_json = excluded.target_platforms_json,
+                    cooldown_seconds = excluded.cooldown_seconds,
+                    quiet_start = excluded.quiet_start,
+                    quiet_end = excluded.quiet_end,
+                    escalation_enabled = excluded.escalation_enabled,
+                    escalation_minutes = excluded.escalation_minutes,
+                    escalation_platforms_json = excluded.escalation_platforms_json,
+                    owner_hint = excluded.owner_hint,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    data["event_type"],
+                    data["severity"],
+                    data["platform"],
+                    data["account_scope"],
+                    data["enabled"],
+                    data["target_platforms_json"],
+                    data["cooldown_seconds"],
+                    data["quiet_start"],
+                    data["quiet_end"],
+                    data["escalation_enabled"],
+                    data["escalation_minutes"],
+                    data["escalation_platforms_json"],
+                    data["owner_hint"],
+                    data["created_at"],
+                    data["updated_at"],
+                ),
+            )
+            _enqueue_sync_row(
+                conn,
+                "notification_policies",
+                "event_type = ? AND severity = ? AND platform = ? AND account_scope = ?",
+                (data["event_type"], data["severity"], data["platform"], data["account_scope"]),
+            )
+    return list_notification_policies()
+
+
+def _account_scope_matches(scope: str, payload: dict[str, Any]) -> bool:
+    token = str(scope or "").strip()
+    if not token:
+        return True
+    account_id = str(payload.get("account_id") or "").strip()
+    account_key = str(payload.get("account_key") or payload.get("account") or "").strip()
+    return token in {account_id, account_key, f"account:{account_id}", f"account:{account_key}"}
+
+
+def _matching_notification_policy(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    severity = str(payload.get("severity") or NOTIFICATION_EVENT_META[event_type].get("default_severity") or "info").strip().lower()
+    platform = str(payload.get("platform") or "").strip()
+    candidates = []
+    for policy in list_notification_policies():
+        if policy["event_type"] != event_type:
+            continue
+        if policy.get("severity") not in {"", severity}:
+            continue
+        if policy.get("platform") and policy.get("platform") != platform:
+            continue
+        if not _account_scope_matches(str(policy.get("account_scope") or ""), payload):
+            continue
+        score = 0
+        if policy.get("severity") == severity:
+            score += 4
+        if policy.get("platform"):
+            score += 2
+        if policy.get("account_scope"):
+            score += 1
+        candidates.append((score, policy))
+    if not candidates:
+        return _default_notification_policy(event_type)
+    return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
+
+
+def _notification_delivery_platforms(event_type: str, policy: dict[str, Any]) -> list[str]:
+    targets = _normalize_notification_platforms(policy.get("target_platforms"))
+    if not targets:
+        return _enabled_notification_platforms(event_type)
+    configs = {item["platform"]: item for item in list_ai_robot_configs()}
+    return [
+        platform
+        for platform in targets
+        if bool(configs.get(platform, {}).get("enabled")) and bool(configs.get(platform, {}).get("webhook_url"))
+    ]
+
+
+def _notification_in_quiet_window(policy: dict[str, Any], *, now: datetime | None = None) -> bool:
+    start = str(policy.get("quiet_start") or "").strip()
+    end = str(policy.get("quiet_end") or "").strip()
+    if not start or not end:
+        return False
+    if not re.match(r"^\d{2}:\d{2}$", start) or not re.match(r"^\d{2}:\d{2}$", end):
+        return False
+    current = (now or datetime.now().astimezone()).strftime("%H:%M")
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
+
+
 def list_notification_event_definitions() -> list[dict[str, Any]]:
     return [dict(item) for item in NOTIFICATION_EVENT_DEFINITIONS]
 
@@ -1736,11 +2035,225 @@ def _notification_text(event_type: str, payload: dict[str, Any]) -> str:
         lines.append(f"类型: {event_type}")
     if summary:
         lines.append(f"摘要: {summary}")
-    for key in ("account", "platform", "task_id", "run_id", "action"):
+    for key in ("account", "account_id", "platform", "task_id", "run_id", "action", "owner_hint"):
         value = str(payload.get(key) or "").strip()
         if value:
             lines.append(f"{key}: {value}")
+    for key, label in (("source_url", "来源"), ("action_url", "处理")):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            lines.append(f"{label}: {value}")
     return "\n".join(lines)
+
+
+def _notification_dedupe_key(event_type: str, payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("dedupe_key") or "").strip()
+    if explicit:
+        return explicit[:240]
+    parts = [
+        event_type,
+        str(payload.get("subtype") or ""),
+        str(payload.get("account_id") or payload.get("account") or ""),
+        str(payload.get("account_key") or ""),
+        str(payload.get("platform") or ""),
+        str(payload.get("task_id") or payload.get("run_id") or ""),
+        str(payload.get("title") or ""),
+    ]
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:24]
+    return f"{event_type}:{digest}"
+
+
+def _incident_next_escalate_at(policy: dict[str, Any], status: str, ts: int) -> int | None:
+    if status != "open":
+        return None
+    minutes = int(policy.get("escalation_minutes") or 0)
+    if not bool(policy.get("escalation_enabled")) or minutes <= 0:
+        return None
+    return ts + minutes * 60
+
+
+def _normalize_notification_incident(row: dict[str, Any]) -> dict[str, Any]:
+    payload = _json_payload(row.get("payload_json"), {})
+    return {
+        **row,
+        "payload": payload if isinstance(payload, dict) else {},
+        "account_id": int(row.get("account_id") or 0) if row.get("account_id") is not None else None,
+        "occurrence_count": int(row.get("occurrence_count") or 0),
+        "escalation_count": int(row.get("escalation_count") or 0),
+    }
+
+
+def _incident_payload_for_storage(event_type: str, message: dict[str, Any], policy: dict[str, Any], ts: int) -> dict[str, Any]:
+    meta = NOTIFICATION_EVENT_META[event_type]
+    severity = str(message.get("severity") or meta.get("default_severity") or "info").strip().lower()
+    account_id_value = message.get("account_id")
+    try:
+        account_id = int(account_id_value) if account_id_value not in {None, ""} else None
+    except Exception:
+        account_id = None
+    return {
+        "event_type": event_type,
+        "subtype": str(message.get("subtype") or "").strip(),
+        "dedupe_key": _notification_dedupe_key(event_type, message),
+        "severity": severity,
+        "status": "open",
+        "title": str(message.get("title") or meta.get("label") or event_type).strip(),
+        "summary": str(message.get("summary") or message.get("reason") or "").strip(),
+        "account_id": account_id,
+        "account_key": str(message.get("account_key") or message.get("account") or "").strip(),
+        "platform": str(message.get("platform") or "").strip(),
+        "owner_hint": str(message.get("owner_hint") or policy.get("owner_hint") or "").strip(),
+        "source_url": str(message.get("source_url") or "").strip(),
+        "action_url": str(message.get("action_url") or "").strip(),
+        "occurrence_count": 1,
+        "escalation_count": 0,
+        "first_seen_at": ts,
+        "last_seen_at": ts,
+        "acknowledged_at": None,
+        "resolved_at": None,
+        "assigned_to": "",
+        "last_escalated_at": None,
+        "next_escalate_at": _incident_next_escalate_at(policy, "open", ts),
+        "payload_json": message,
+        "created_at": ts,
+        "updated_at": ts,
+    }
+
+
+def _upsert_notification_incident(event_type: str, message: dict[str, Any], policy: dict[str, Any], *, notify: bool) -> dict[str, Any]:
+    ts = now_ts()
+    data = _incident_payload_for_storage(event_type, message, policy, ts)
+    cooldown = max(0, int(policy.get("cooldown_seconds") or 0))
+    quiet = _notification_in_quiet_window(policy)
+    policy_enabled = bool(policy.get("enabled", True))
+    reason = ""
+    send_allowed = bool(notify and policy_enabled and not quiet)
+    if not policy_enabled:
+        reason = "policy_disabled"
+    elif quiet:
+        reason = "quiet_window"
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        try:
+            existing = client.select_one("notification_incidents", filters={"event_type": event_type, "dedupe_key": data["dedupe_key"]})
+            if existing:
+                existing_status = str(existing.get("status") or "open")
+                closed = existing_status in NOTIFICATION_CLOSED_STATUSES
+                in_cooldown = cooldown > 0 and not closed and int(existing.get("last_seen_at") or 0) >= ts - cooldown
+                if in_cooldown:
+                    send_allowed = False
+                    reason = reason or "cooldown"
+                next_status = "open" if closed else existing_status
+                update_payload = {
+                    **{key: data[key] for key in ("subtype", "severity", "title", "summary", "account_id", "account_key", "platform", "owner_hint", "source_url", "action_url", "payload_json")},
+                    "status": next_status,
+                    "occurrence_count": int(existing.get("occurrence_count") or 1) + 1,
+                    "last_seen_at": ts,
+                    "updated_at": ts,
+                    "resolved_at": None if closed else existing.get("resolved_at"),
+                    "next_escalate_at": _incident_next_escalate_at(policy, next_status, ts) if closed else existing.get("next_escalate_at"),
+                }
+                row = client.update("notification_incidents", update_payload, filters={"id": existing["id"]})
+            else:
+                row = client.insert("notification_incidents", data)
+            _invalidate_supabase_read_cache("notification_incidents")
+            incident = _normalize_notification_incident(row or data)
+        except SupabaseError as exc:
+            incident = {**data, "id": 0, "storage_unavailable": True, "error": str(exc)}
+            send_allowed = bool(notify and policy_enabled and not quiet)
+    else:
+        ensure_database()
+        with connect() as conn:
+            existing_row = conn.execute(
+                "SELECT * FROM notification_incidents WHERE event_type = ? AND dedupe_key = ?",
+                (event_type, data["dedupe_key"]),
+            ).fetchone()
+            if existing_row is None:
+                conn.execute(
+                    """
+                    INSERT INTO notification_incidents(
+                        event_type, subtype, dedupe_key, severity, status, title, summary, account_id,
+                        account_key, platform, owner_hint, source_url, action_url, occurrence_count,
+                        escalation_count, first_seen_at, last_seen_at, acknowledged_at, resolved_at,
+                        assigned_to, last_escalated_at, next_escalate_at, payload_json, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        data["event_type"],
+                        data["subtype"],
+                        data["dedupe_key"],
+                        data["severity"],
+                        data["status"],
+                        data["title"],
+                        data["summary"],
+                        data["account_id"],
+                        data["account_key"],
+                        data["platform"],
+                        data["owner_hint"],
+                        data["source_url"],
+                        data["action_url"],
+                        data["occurrence_count"],
+                        data["escalation_count"],
+                        data["first_seen_at"],
+                        data["last_seen_at"],
+                        data["acknowledged_at"],
+                        data["resolved_at"],
+                        data["assigned_to"],
+                        data["last_escalated_at"],
+                        data["next_escalate_at"],
+                        json.dumps(data["payload_json"], ensure_ascii=False, default=str),
+                        data["created_at"],
+                        data["updated_at"],
+                    ),
+                )
+                row = conn.execute("SELECT * FROM notification_incidents WHERE event_type = ? AND dedupe_key = ?", (event_type, data["dedupe_key"])).fetchone()
+            else:
+                existing = dict_from_row(existing_row)
+                existing_status = str(existing.get("status") or "open")
+                closed = existing_status in NOTIFICATION_CLOSED_STATUSES
+                in_cooldown = cooldown > 0 and not closed and int(existing.get("last_seen_at") or 0) >= ts - cooldown
+                if in_cooldown:
+                    send_allowed = False
+                    reason = reason or "cooldown"
+                next_status = "open" if closed else existing_status
+                next_escalate_at = _incident_next_escalate_at(policy, next_status, ts) if closed else existing.get("next_escalate_at")
+                conn.execute(
+                    """
+                    UPDATE notification_incidents
+                    SET subtype = ?, severity = ?, status = ?, title = ?, summary = ?, account_id = ?,
+                        account_key = ?, platform = ?, owner_hint = ?, source_url = ?, action_url = ?,
+                        occurrence_count = occurrence_count + 1, last_seen_at = ?, resolved_at = ?,
+                        next_escalate_at = ?, payload_json = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        data["subtype"],
+                        data["severity"],
+                        next_status,
+                        data["title"],
+                        data["summary"],
+                        data["account_id"],
+                        data["account_key"],
+                        data["platform"],
+                        data["owner_hint"],
+                        data["source_url"],
+                        data["action_url"],
+                        ts,
+                        None if closed else existing.get("resolved_at"),
+                        next_escalate_at,
+                        json.dumps(data["payload_json"], ensure_ascii=False, default=str),
+                        ts,
+                        existing["id"],
+                    ),
+                )
+                row = conn.execute("SELECT * FROM notification_incidents WHERE id = ?", (existing["id"],)).fetchone()
+            if row is not None:
+                _enqueue_sync_row(conn, "notification_incidents", "id = ?", (int(row["id"]),))
+                incident = _normalize_notification_incident(dict_from_row(row))
+            else:
+                incident = data
+    return {"incident": incident, "send_allowed": send_allowed, "suppressed_reason": reason}
 
 
 def route_operation_notification(event_type: str, payload: dict[str, Any] | None = None, *, notify: bool = True) -> dict[str, Any]:
@@ -1753,7 +2266,11 @@ def route_operation_notification(event_type: str, payload: dict[str, Any] | None
     message.setdefault("severity", meta.get("default_severity") or "info")
     message.setdefault("notification_center", bool(meta.get("default_center")))
     message.setdefault("routeable", bool(meta.get("routeable")))
-    platforms = _enabled_notification_platforms(event) if notify and bool(meta.get("routeable")) else []
+    policy = _matching_notification_policy(event, message)
+    incident_result = _upsert_notification_incident(event, message, policy, notify=notify and bool(message["notification_center"]))
+    incident = incident_result.get("incident") or {}
+    message.setdefault("incident_id", incident.get("id"))
+    platforms = _notification_delivery_platforms(event, policy) if incident_result.get("send_allowed") and bool(meta.get("routeable")) else []
     text = str(message.get("text") or "").strip() or _notification_text(event, message)
     results: list[dict[str, Any]] = []
     for platform in platforms:
@@ -1770,7 +2287,371 @@ def route_operation_notification(event_type: str, payload: dict[str, Any] | None
         "routeable": bool(message["routeable"]),
         "notification_platforms": platforms,
         "notification_results": results,
+        "incident": incident,
+        "suppressed_reason": incident_result.get("suppressed_reason") or "",
     }
+
+
+def list_notification_incidents(*, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit or 100), 500))
+    status_token = str(status or "").strip().lower()
+    if brand_database_backend() == "supabase":
+        try:
+            filters = {"status": status_token} if status_token else None
+            rows = _brand_supabase().select("notification_incidents", filters=filters, order="updated_at.desc,id.desc")[:limit]
+        except SupabaseError:
+            return []
+        return [_normalize_notification_incident(row) for row in rows]
+    ensure_database()
+    with connect() as conn:
+        if status_token:
+            rows = conn.execute(
+                "SELECT * FROM notification_incidents WHERE status = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (status_token, limit),
+            )
+        else:
+            rows = conn.execute("SELECT * FROM notification_incidents ORDER BY updated_at DESC, id DESC LIMIT ?", (limit,))
+        return [_normalize_notification_incident(dict_from_row(row)) for row in rows]
+
+
+def get_notification_incident(incident_id: int) -> dict[str, Any] | None:
+    incident_id = int(incident_id or 0)
+    if incident_id <= 0:
+        return None
+    if brand_database_backend() == "supabase":
+        try:
+            row = _brand_supabase().select_one("notification_incidents", filters={"id": incident_id})
+        except SupabaseError:
+            return None
+        return _normalize_notification_incident(row) if row else None
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM notification_incidents WHERE id = ?", (incident_id,)).fetchone()
+        return _normalize_notification_incident(dict_from_row(row)) if row else None
+
+
+def _record_notification_action(incident_id: int, action: str, actor: str, note: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    ts = now_ts()
+    data = {
+        "incident_id": int(incident_id),
+        "action": str(action or "").strip(),
+        "actor": str(actor or "system").strip(),
+        "note": str(note or "").strip(),
+        "payload_json": payload or {},
+        "created_at": ts,
+    }
+    if brand_database_backend() == "supabase":
+        try:
+            return _brand_supabase().insert("notification_actions", data)
+        except SupabaseError:
+            return data
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO notification_actions(incident_id, action, actor, note, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (data["incident_id"], data["action"], data["actor"], data["note"], json.dumps(data["payload_json"], ensure_ascii=False), ts),
+        )
+        row = conn.execute("SELECT * FROM notification_actions WHERE rowid = last_insert_rowid()").fetchone()
+        if row is not None:
+            _enqueue_sync_row(conn, "notification_actions", "id = ?", (int(row["id"]),))
+            return dict_from_row(row)
+    return data
+
+
+def _update_notification_incident_fields(incident_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+    fields = {**fields, "updated_at": now_ts()}
+    if brand_database_backend() == "supabase":
+        row = _brand_supabase().update("notification_incidents", fields, filters={"id": incident_id})
+        _invalidate_supabase_read_cache("notification_incidents")
+        return _normalize_notification_incident(row)
+    with connect() as conn:
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        values = list(fields.values())
+        conn.execute(f"UPDATE notification_incidents SET {assignments} WHERE id = ?", (*values, incident_id))
+        _enqueue_sync_row(conn, "notification_incidents", "id = ?", (incident_id,))
+        row = conn.execute("SELECT * FROM notification_incidents WHERE id = ?", (incident_id,)).fetchone()
+        return _normalize_notification_incident(dict_from_row(row)) if row else {}
+
+
+def _incident_resend_payload(incident: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(incident.get("payload") or _json_payload(incident.get("payload_json"), {}) or {})
+    payload.update(
+        {
+            "message_type": incident.get("event_type"),
+            "subtype": incident.get("subtype") or payload.get("subtype") or "resend",
+            "severity": incident.get("severity") or payload.get("severity") or "info",
+            "title": incident.get("title") or payload.get("title") or "通知重发",
+            "summary": incident.get("summary") or payload.get("summary") or "",
+            "account_id": incident.get("account_id") or payload.get("account_id"),
+            "account_key": incident.get("account_key") or payload.get("account_key"),
+            "platform": incident.get("platform") or payload.get("platform"),
+            "owner_hint": incident.get("owner_hint") or payload.get("owner_hint"),
+            "source_url": incident.get("source_url") or payload.get("source_url"),
+            "action_url": incident.get("action_url") or payload.get("action_url"),
+            "incident_id": incident.get("id"),
+        }
+    )
+    payload["text"] = _notification_text(str(incident.get("event_type") or "action_required"), payload)
+    return payload
+
+
+def resend_notification_incident(incident_id: int) -> dict[str, Any]:
+    incident = get_notification_incident(incident_id)
+    if not incident:
+        raise KeyError("incident not found")
+    event = str(incident.get("event_type") or "action_required")
+    policy = _matching_notification_policy(event, incident.get("payload") or incident)
+    platforms = _notification_delivery_platforms(event, policy)
+    payload = _incident_resend_payload(incident)
+    results: list[dict[str, Any]] = []
+    for platform in platforms:
+        try:
+            queued = enqueue_ai_robot_message(platform, payload, test=False)
+            results.append(send_ai_robot_message_now(queued) if str(queued.get("status") or "") != "unsupported" else queued)
+        except Exception as exc:
+            results.append({"platform": platform, "ok": False, "error": str(exc)})
+    return {"incident": incident, "notification_platforms": platforms, "notification_results": results}
+
+
+def act_on_notification_incident(incident_id: int, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    incident = get_notification_incident(incident_id)
+    if not incident:
+        raise KeyError("incident not found")
+    action_token = str(action or "").strip().lower()
+    body = dict(payload or {})
+    actor = str(body.get("actor") or "Allen").strip()
+    note = str(body.get("note") or "").strip()
+    ts = now_ts()
+    if action_token == "ack":
+        fields = {"status": "acknowledged", "acknowledged_at": incident.get("acknowledged_at") or ts, "next_escalate_at": None}
+    elif action_token == "assign":
+        assigned_to = str(body.get("assigned_to") or body.get("assignee") or actor).strip()
+        fields = {"status": "assigned", "assigned_to": assigned_to, "acknowledged_at": incident.get("acknowledged_at") or ts, "next_escalate_at": None}
+    elif action_token == "resolve":
+        fields = {"status": "resolved", "resolved_at": ts, "next_escalate_at": None}
+    elif action_token == "ignore":
+        fields = {"status": "ignored", "resolved_at": ts, "next_escalate_at": None}
+    elif action_token == "resend":
+        _record_notification_action(int(incident["id"]), action_token, actor, note, body)
+        resend = resend_notification_incident(int(incident["id"]))
+        return {"incident": resend["incident"], "action": action_token, "resend": resend}
+    else:
+        raise ValueError("action must be ack, assign, resolve, ignore, or resend")
+    updated = _update_notification_incident_fields(int(incident["id"]), fields)
+    _record_notification_action(int(incident["id"]), action_token, actor, note, body)
+    return {"incident": updated, "action": action_token}
+
+
+def resolve_login_notification_incidents(account_id: int, platform: str = "wechat") -> int:
+    account_id = int(account_id or 0)
+    if account_id <= 0:
+        return 0
+    ts = now_ts()
+    resolved = 0
+    if brand_database_backend() == "supabase":
+        try:
+            rows = _brand_supabase().select("notification_incidents", filters={"account_id": account_id}, order="id.desc")
+            for row in rows:
+                if row.get("event_type") not in {"wechat_login_qr", "login_status"}:
+                    continue
+                if str(row.get("platform") or platform or "wechat") != platform:
+                    continue
+                if str(row.get("status") or "") not in NOTIFICATION_OPEN_STATUSES:
+                    continue
+                _brand_supabase().update("notification_incidents", {"status": "resolved", "resolved_at": ts, "next_escalate_at": None, "updated_at": ts}, filters={"id": row["id"]})
+                _record_notification_action(int(row["id"]), "resolve", "system", "login_ready")
+                resolved += 1
+        except SupabaseError:
+            return 0
+        return resolved
+    ensure_database()
+    with connect() as conn:
+        rows = [
+            dict_from_row(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM notification_incidents
+                WHERE account_id = ? AND event_type IN ('wechat_login_qr', 'login_status') AND status IN ('open', 'acknowledged', 'assigned')
+                """,
+                (account_id,),
+            )
+        ]
+        for row in rows:
+            if row.get("platform") and str(row.get("platform")) != platform:
+                continue
+            conn.execute(
+                "UPDATE notification_incidents SET status = 'resolved', resolved_at = ?, next_escalate_at = NULL, updated_at = ? WHERE id = ?",
+                (ts, ts, row["id"]),
+            )
+            _enqueue_sync_row(conn, "notification_incidents", "id = ?", (int(row["id"]),))
+            resolved_ids.append(int(row["id"]))
+            resolved += 1
+    for incident_id in resolved_ids:
+        _record_notification_action(incident_id, "resolve", "system", "login_ready")
+    return resolved
+
+
+def _due_notification_incidents(limit: int) -> list[dict[str, Any]]:
+    ts = now_ts()
+    if brand_database_backend() == "supabase":
+        try:
+            rows = _brand_supabase().select_where(
+                "notification_incidents",
+                params={"status": "eq.open", "next_escalate_at": f"lte.{ts}"},
+                order="next_escalate_at.asc,id.asc",
+            )[:limit]
+        except SupabaseError:
+            return []
+        return [_normalize_notification_incident(row) for row in rows if row.get("next_escalate_at")]
+    ensure_database()
+    with connect() as conn:
+        return [
+            _normalize_notification_incident(dict_from_row(row))
+            for row in conn.execute(
+                """
+                SELECT * FROM notification_incidents
+                WHERE status = 'open' AND next_escalate_at IS NOT NULL AND next_escalate_at <= ?
+                ORDER BY next_escalate_at ASC, id ASC
+                LIMIT ?
+                """,
+                (ts, max(1, int(limit or 20))),
+            )
+        ]
+
+
+def process_notification_escalations(*, limit: int = 20) -> dict[str, Any]:
+    due = _due_notification_incidents(max(1, int(limit or 20)))
+    ts = now_ts()
+    escalated = 0
+    queued = 0
+    results: list[dict[str, Any]] = []
+    for incident in due:
+        event = str(incident.get("event_type") or "action_required")
+        policy = _matching_notification_policy(event, incident.get("payload") or incident)
+        minutes = max(1, int(policy.get("escalation_minutes") or _default_notification_escalation_minutes(str(incident.get("severity") or "info")) or 10))
+        platforms = _normalize_notification_platforms(policy.get("escalation_platforms")) or _notification_delivery_platforms(event, policy)
+        payload = _incident_resend_payload(incident)
+        payload["subtype"] = payload.get("subtype") or "escalated"
+        payload["title"] = f"升级提醒：{incident.get('title') or event}"
+        payload["summary"] = f"未确认超时，已发生 {int(incident.get('occurrence_count') or 1)} 次"
+        payload["text"] = _notification_text(event, payload)
+        platform_results: list[dict[str, Any]] = []
+        for platform in platforms:
+            try:
+                message = enqueue_ai_robot_message(platform, payload, test=False)
+                platform_results.append(message)
+                if str(message.get("status") or "") != "unsupported":
+                    queued += 1
+            except Exception as exc:
+                platform_results.append({"platform": platform, "ok": False, "error": str(exc)})
+        next_at = ts + minutes * 60
+        if brand_database_backend() == "supabase":
+            try:
+                _brand_supabase().update(
+                    "notification_incidents",
+                    {
+                        "escalation_count": int(incident.get("escalation_count") or 0) + 1,
+                        "last_escalated_at": ts,
+                        "next_escalate_at": next_at,
+                        "updated_at": ts,
+                    },
+                    filters={"id": incident["id"]},
+                )
+            except SupabaseError:
+                pass
+        else:
+            with connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE notification_incidents
+                    SET escalation_count = escalation_count + 1, last_escalated_at = ?, next_escalate_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (ts, next_at, ts, incident["id"]),
+                )
+                _enqueue_sync_row(conn, "notification_incidents", "id = ?", (int(incident["id"]),))
+        _record_notification_action(int(incident["id"]), "escalate", "system", "unacknowledged_timeout", {"platforms": platforms})
+        escalated += 1
+        results.append({"incident_id": incident.get("id"), "platforms": platforms, "results": platform_results})
+    return {"ok": True, "due": len(due), "escalated": escalated, "queued": queued, "results": results}
+
+
+def notification_sla_summary() -> dict[str, Any]:
+    incidents = list_notification_incidents(limit=500)
+    now = now_ts()
+    open_items = [item for item in incidents if str(item.get("status") or "") in NOTIFICATION_OPEN_STATUSES]
+    closed_items = [item for item in incidents if str(item.get("status") or "") in NOTIFICATION_CLOSED_STATUSES]
+    ack_seconds = [
+        int(item.get("acknowledged_at") or 0) - int(item.get("first_seen_at") or 0)
+        for item in incidents
+        if item.get("acknowledged_at") and item.get("first_seen_at")
+    ]
+    resolve_seconds = [
+        int(item.get("resolved_at") or 0) - int(item.get("first_seen_at") or 0)
+        for item in closed_items
+        if item.get("resolved_at") and item.get("first_seen_at")
+    ]
+    top_events: dict[str, int] = {}
+    for item in incidents:
+        key = str(item.get("event_type") or "unknown")
+        top_events[key] = top_events.get(key, 0) + int(item.get("occurrence_count") or 1)
+    messages = list_ai_robot_messages()
+    failed_messages = [item for item in messages if str(item.get("status") or "") in {"failed", "retry", "unsupported"}]
+    sent_messages = [item for item in messages if str(item.get("status") or "") == "sent"]
+    total_delivery = len(failed_messages) + len(sent_messages)
+    return {
+        "open_count": len(open_items),
+        "unacknowledged_count": len([item for item in open_items if str(item.get("status") or "") == "open"]),
+        "closed_count": len(closed_items),
+        "avg_ack_seconds": round(sum(ack_seconds) / len(ack_seconds)) if ack_seconds else 0,
+        "avg_resolve_seconds": round(sum(resolve_seconds) / len(resolve_seconds)) if resolve_seconds else 0,
+        "timed_out_count": len([item for item in open_items if item.get("next_escalate_at") and int(item.get("next_escalate_at") or 0) <= now]),
+        "escalation_count": sum(int(item.get("escalation_count") or 0) for item in incidents),
+        "send_failed_count": len(failed_messages),
+        "delivery_failed_rate": round((len(failed_messages) / total_delivery * 100), 1) if total_delivery else 0,
+        "top_events": [
+            {"event_type": key, "label": NOTIFICATION_EVENT_META.get(key, {}).get("label") or key, "count": value}
+            for key, value in sorted(top_events.items(), key=lambda item: item[1], reverse=True)[:5]
+        ],
+    }
+
+
+def build_daily_ops_summary(target_date: str = "") -> dict[str, Any]:
+    day = str(target_date or datetime.now().astimezone().date().isoformat())
+    incidents = list_notification_incidents(limit=500)
+    sla = notification_sla_summary()
+    by_event: dict[str, int] = {}
+    for item in incidents:
+        key = str(item.get("event_type") or "unknown")
+        by_event[key] = by_event.get(key, 0) + int(item.get("occurrence_count") or 1)
+    top = ", ".join(f"{NOTIFICATION_EVENT_META.get(key, {}).get('label') or key} {value}" for key, value in sorted(by_event.items(), key=lambda item: item[1], reverse=True)[:3]) or "暂无"
+    text = "\n".join(
+        [
+            f"GasGx 运营通知日报 {day}",
+            f"未闭环: {sla['open_count']}，未确认: {sla['unacknowledged_count']}，已关闭: {sla['closed_count']}",
+            f"平均确认: {sla['avg_ack_seconds']} 秒，平均关闭: {sla['avg_resolve_seconds']} 秒",
+            f"升级次数: {sla['escalation_count']}，送达失败率: {sla['delivery_failed_rate']}%",
+            f"TOP 问题: {top}",
+        ]
+    )
+    return {"target_date": day, "sla": sla, "top_events": by_event, "text": text}
+
+
+def send_daily_ops_summary(target_date: str = "", *, notify: bool = True) -> dict[str, Any]:
+    summary = build_daily_ops_summary(target_date)
+    result = route_operation_notification(
+        "ops_summary",
+        {
+            "subtype": "daily_sent",
+            "severity": "info",
+            "title": f"运营通知日报 {summary['target_date']}",
+            "summary": f"未闭环 {summary['sla']['open_count']} / 未确认 {summary['sla']['unacknowledged_count']}",
+            "dedupe_key": f"ops_summary:{summary['target_date']}",
+            "text": summary["text"],
+            "payload": summary,
+        },
+        notify=notify,
+    )
+    return {"ok": True, "summary": summary, "notification": result}
 
 
 def send_notification_route_probe(event_type: str, platform: str) -> dict[str, Any]:
@@ -1962,16 +2843,32 @@ def record_wechat_login_qr_batch(login_required: list[dict[str, Any]], *, notify
                         ts,
                     ),
                 )
-    notification_results: list[dict[str, Any]] = []
-    platforms = _enabled_notification_platforms("wechat_login_qr") if notify else []
     text = _login_qr_text(batch_id, items)
-    if notify and platforms:
-        for platform in platforms:
-            try:
-                notification_results.append(_send_notification_text(platform, text))
-            except Exception as exc:
-                notification_results.append({"platform": platform, "ok": False, "error": str(exc)})
-    return {"batch_id": batch_id, "items": items, "notification_platforms": platforms, "notification_results": notification_results}
+    result = route_operation_notification(
+        "wechat_login_qr",
+        {
+            "subtype": "qr_generated",
+            "severity": "blocking",
+            "title": "视频号登录二维码待扫码",
+            "summary": f"{len(items)} 个账号需要扫码",
+            "dedupe_key": f"wechat_login_qr:{hashlib.sha256('|'.join(item['qr_fingerprint'] for item in items).encode('utf-8')).hexdigest()[:24]}",
+            "account_id": items[0].get("account_id") if len(items) == 1 else None,
+            "account_key": items[0].get("account_key") if len(items) == 1 else "",
+            "account": items[0].get("display_name") if len(items) == 1 else "",
+            "platform": "wechat",
+            "text": text,
+            "items": items,
+        },
+        notify=notify,
+    )
+    return {
+        "batch_id": batch_id,
+        "items": items,
+        "notification_platforms": result.get("notification_platforms", []),
+        "notification_results": result.get("notification_results", []),
+        "incident": result.get("incident", {}),
+        "suppressed_reason": result.get("suppressed_reason", ""),
+    }
 
 
 def list_login_qr_batches(limit: int = 20) -> list[dict[str, Any]]:
@@ -1989,16 +2886,66 @@ def list_login_qr_batches(limit: int = 20) -> list[dict[str, Any]]:
 
 
 TERMINAL_COLORS = [
+    {"hex": "#EF4444", "name": "标准红"},
+    {"hex": "#EAB308", "name": "明亮黄"},
+    {"hex": "#22C55E", "name": "安全绿"},
     {"hex": "#3B82F6", "name": "科技蓝"},
     {"hex": "#F97316", "name": "活力橙"},
-    {"hex": "#A855F7", "name": "神秘紫"},
-    {"hex": "#EC4899", "name": "醒目粉"},
-    {"hex": "#EAB308", "name": "明亮黄"},
 ]
+TERMINAL_LEGACY_COLOR_ALIASES = {
+    "#A855F7": "#22C55E",
+    "#EC4899": "#EF4444",
+}
+TERMINAL_COLOR_NAME_BY_HEX = {item["hex"].lower(): item["name"] for item in TERMINAL_COLORS}
 
 
 def _terminal_state_path() -> Path:
     return get_paths().runtime_root / "terminal_execution_state.json"
+
+
+def _terminal_business_date() -> str:
+    timezone_name = str(load_distribution_settings_db().get("common", {}).get("timezone") or "").strip()
+    if timezone_name:
+        try:
+            return datetime.now(ZoneInfo(timezone_name)).date().isoformat()
+        except ZoneInfoNotFoundError:
+            pass
+    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+    return datetime.now(local_tz).date().isoformat()
+
+
+def _terminal_state_day_from_timestamp(timestamp_value: Any) -> str:
+    try:
+        ts = int(timestamp_value or 0)
+    except Exception:
+        return ""
+    if ts <= 0:
+        return ""
+    timezone_name = str(load_distribution_settings_db().get("common", {}).get("timezone") or "").strip()
+    if timezone_name:
+        try:
+            return datetime.fromtimestamp(ts, ZoneInfo(timezone_name)).date().isoformat()
+        except ZoneInfoNotFoundError:
+            pass
+    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+    return datetime.fromtimestamp(ts, local_tz).date().isoformat()
+
+
+def _normalize_terminal_color_hex(color: Any, *, slot_index: int = 0) -> str:
+    fallback = TERMINAL_COLORS[max(0, int(slot_index)) % len(TERMINAL_COLORS)]["hex"]
+    token = str(color or "").strip().upper()
+    if token in TERMINAL_LEGACY_COLOR_ALIASES:
+        token = TERMINAL_LEGACY_COLOR_ALIASES[token]
+    if not re.fullmatch(r"#[0-9A-F]{6}", token):
+        return fallback
+    if token.lower() not in TERMINAL_COLOR_NAME_BY_HEX:
+        return fallback
+    return token
+
+
+def _terminal_color_name(color: Any) -> str:
+    token = str(color or "").strip().lower()
+    return TERMINAL_COLOR_NAME_BY_HEX.get(token, "")
 
 
 def _terminal_qr_cache_root() -> Path:
@@ -2134,11 +3081,91 @@ def _load_terminal_state() -> dict[str, Any]:
 
 
 def _save_terminal_state(payload: dict[str, Any]) -> None:
+    if not str(payload.get("business_date") or "").strip():
+        payload["business_date"] = _terminal_business_date()
     payload["updated_at"] = now_ts()
     path = _terminal_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _invalidate_terminal_execution_state_cache()
+
+
+def _reset_terminal_window_for_new_business_date(window: dict[str, Any]) -> bool:
+    if not isinstance(window, dict):
+        return False
+    changed = False
+    window_id = int(window.get("id") or 0)
+    if int(window.get("current_index") or 0) != 0:
+        window["current_index"] = 0
+        changed = True
+    if bool(window.get("completed")):
+        window.pop("completed", None)
+        changed = True
+    if window.get("publish_run"):
+        _clear_terminal_publish_run(window)
+        changed = True
+    if (
+        str(window.get("qr_path") or "").strip()
+        or str(window.get("qr_url") or "").strip()
+        or int(window.get("qr_expires_at") or 0) > 0
+    ):
+        _clear_terminal_qr_cache(window_id)
+        _set_terminal_window_qr(window, "")
+        changed = True
+    if int(window.get("manual_available_at") or 0) != 0:
+        window["manual_available_at"] = 0
+        changed = True
+    accounts = window.get("accounts") or []
+    if isinstance(accounts, list):
+        for index, account in enumerate(accounts):
+            if not isinstance(account, dict):
+                continue
+            _clear_terminal_account_error(account)
+            expected_status = "pending"
+            expected_text = "等待打开登录浏览器" if index == 0 else "未登录"
+            if str(account.get("status") or "") != expected_status:
+                account["status"] = expected_status
+                changed = True
+            if str(account.get("status_text") or "") != expected_text:
+                account["status_text"] = expected_text
+                changed = True
+            if account.get("task_id") is not None:
+                account["task_id"] = None
+                changed = True
+    return changed
+
+
+def _apply_terminal_daily_rollover(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    today = _terminal_business_date()
+    stored = str(state.get("business_date") or "").strip()
+    inferred = stored or _terminal_state_day_from_timestamp(state.get("updated_at"))
+    changed = False
+    if stored != today:
+        state["business_date"] = today
+        changed = True
+    if not inferred or inferred == today:
+        return changed
+    windows = state.get("windows") or []
+    if isinstance(windows, list):
+        for window in windows:
+            if isinstance(window, dict):
+                changed = _reset_terminal_window_for_new_business_date(window) or changed
+    if int(state.get("next_probe_at") or 0) != 0:
+        state["next_probe_at"] = 0
+        changed = True
+    if int(state.get("probe_cursor") or 0) != 0:
+        state["probe_cursor"] = 0
+        changed = True
+    return changed
+
+
+def _load_terminal_state_with_rollover() -> dict[str, Any]:
+    state = _load_terminal_state()
+    if _apply_terminal_daily_rollover(state):
+        _save_terminal_state(state)
+    return state
 
 
 def _clear_terminal_qr_cache(window_id: int) -> None:
@@ -2351,10 +3378,20 @@ def terminal_execution_state() -> dict[str, Any]:
     if cached["value"] is not None and now < float(cached["expires_at"] or 0.0):
         return cached["value"]
     groups = _terminal_operator_groups()
-    state = _load_terminal_state()
+    state = _load_terminal_state_with_rollover()
     login_started = bool(state.get("login_started"))
     windows = state.get("windows") or []
     normalized = False
+    config_rows = state.get("config") or []
+    if isinstance(config_rows, list):
+        for index, row in enumerate(config_rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            slot_id = int(row.get("id") or index)
+            color = _normalize_terminal_color_hex(row.get("color"), slot_index=max(0, slot_id - 1))
+            if str(row.get("color") or "").strip().upper() != color:
+                row["color"] = color
+                normalized = True
     for window in windows:
         if isinstance(window, dict):
             normalized = _normalize_terminal_window_runtime(window) or normalized
@@ -2708,11 +3745,13 @@ def _apply_account_browser_window_color(open_result: dict[str, Any], color: str)
 def _terminal_color_title_badge(color: str) -> str:
     token = str(color or "").strip().lower()
     mapping = {
+        "#ef4444": "🔴",
+        "#22c55e": "🟢",
         "#3b82f6": "🔵",
         "#f97316": "🟠",
-        "#a855f7": "🟣",
-        "#ec4899": "🩷",
         "#eab308": "🟡",
+        "#a855f7": "🟢",
+        "#ec4899": "🔴",
     }
     return mapping.get(token, "")
 
@@ -2788,7 +3827,7 @@ def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, A
 
 def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
     groups = {item["operator_wechat"]: item for item in _terminal_operator_groups()}
-    previous_state = _load_terminal_state()
+    previous_state = _load_terminal_state_with_rollover()
     previous_login_started = bool(previous_state.get("login_started"))
     previous_windows = {
         int(item.get("id") or 0): item
@@ -2805,7 +3844,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
         operator = str(raw.get("operator_wechat") or "").strip()
         group = groups.get(operator) or {"accounts": []}
         accounts = _terminal_account_cards(group.get("accounts") or [])
-        color = str(raw.get("color") or TERMINAL_COLORS[(index - 1) % len(TERMINAL_COLORS)]["hex"])
+        color = _normalize_terminal_color_hex(raw.get("color"), slot_index=index - 1)
         qr_path = ""
         window_id = int(raw.get("id") or index)
         window = {
@@ -2813,7 +3852,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
             "enabled": True,
             "operator_wechat": operator,
             "color": color,
-            "color_name": next((item["name"] for item in TERMINAL_COLORS if item["hex"].lower() == color.lower()), ""),
+            "color_name": _terminal_color_name(color),
             "current_index": 0,
             "qr_path": qr_path,
             "qr_url": "",
@@ -2863,7 +3902,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def start_terminal_login() -> dict[str, Any]:
-    state = _load_terminal_state()
+    state = _load_terminal_state_with_rollover()
     windows = state.get("windows") or []
     if not windows:
         raise ValueError("请先初始化执行矩阵")
@@ -3008,6 +4047,15 @@ def _set_terminal_account_waiting_publish_confirm(account: dict[str, Any]) -> No
 
 def _normalize_terminal_window_runtime(window: dict[str, Any]) -> bool:
     changed = False
+    window_id = int(window.get("id") or 0)
+    normalized_color = _normalize_terminal_color_hex(window.get("color"), slot_index=max(0, window_id - 1))
+    if str(window.get("color") or "").strip().upper() != normalized_color:
+        window["color"] = normalized_color
+        changed = True
+    expected_color_name = _terminal_color_name(normalized_color)
+    if str(window.get("color_name") or "") != expected_color_name:
+        window["color_name"] = expected_color_name
+        changed = True
     accounts = window.get("accounts") or []
     current_index = int(window.get("current_index") or 0)
     run = window.get("publish_run")
@@ -3527,7 +4575,7 @@ def _poll_terminal_publish_runs(windows: list[dict[str, Any]]) -> bool:
 
 
 def poll_terminal_execution(*, allow_browser_open: bool = True, allow_login_probe: bool = True) -> dict[str, Any]:
-    state = _load_terminal_state()
+    state = _load_terminal_state_with_rollover()
     if not bool(state.get("login_started")):
         return terminal_execution_state()
     windows = [window for window in (state.get("windows") or []) if isinstance(window, dict)]
@@ -3543,7 +4591,7 @@ def poll_terminal_execution(*, allow_browser_open: bool = True, allow_login_prob
 
 
 def manual_terminal_publish(window_id: int) -> dict[str, Any]:
-    state = _load_terminal_state()
+    state = _load_terminal_state_with_rollover()
     target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
     if target is None:
         raise KeyError("window not found")
@@ -3609,7 +4657,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
 
 
 def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
-    state = _load_terminal_state()
+    state = _load_terminal_state_with_rollover()
     target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
     if target is None:
         raise KeyError("window not found")
@@ -3664,7 +4712,7 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
 
 
 def confirm_terminal_login_ready(window_id: int) -> dict[str, Any]:
-    state = _load_terminal_state()
+    state = _load_terminal_state_with_rollover()
     target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
     if target is None:
         raise KeyError("window not found")
@@ -3696,7 +4744,7 @@ def confirm_terminal_login_ready(window_id: int) -> dict[str, Any]:
 
 
 def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
-    state = _load_terminal_state()
+    state = _load_terminal_state_with_rollover()
     target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
     if target is None:
         raise KeyError("window not found")
@@ -3910,6 +4958,12 @@ def _robot_http_request(
         return body, headers
     if platform == "telegram":
         body = {"text": text, "parse_mode": str(payload.get("parse_mode") or "")}
+        reply_markup = payload.get("reply_markup") if isinstance(payload.get("reply_markup"), dict) else {}
+        action_url = str(payload.get("action_url") or "").strip()
+        if reply_markup:
+            body["reply_markup"] = reply_markup
+        elif action_url.startswith(("http://", "https://")):
+            body["reply_markup"] = {"inline_keyboard": [[{"text": "打开处理", "url": action_url}]]}
         if target_id:
             body["chat_id"] = target_id
         return {key: value for key, value in body.items() if value}, headers
@@ -4846,9 +5900,10 @@ def _account_browser_marker_payload(
     operator_wechat = _account_operator_wechat(account)
     window_id = int(terminal_window_id or 0)
     window_label = f"终端执行窗口 {window_id:02d}" if window_id > 0 else ""
-    palette = ["#3B82F6", "#F97316", "#A855F7", "#22C55E", "#EAB308", "#06B6D4"]
+    palette = ["#EF4444", "#EAB308", "#22C55E", "#3B82F6", "#F97316"]
     seed = account_id or sum(ord(ch) for ch in account_key or display_name)
     accent = str(accent_override or "").strip()
+    accent = TERMINAL_LEGACY_COLOR_ALIASES.get(accent.upper(), accent)
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
         accent = palette[seed % len(palette)]
     return {
@@ -5067,6 +6122,8 @@ def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
             (status, now_ts(), now_ts(), account_id, token),
         )
         _enqueue_sync_row(conn, "account_platforms", "account_id = ? AND platform = ?", (account_id, token))
+    if status == "ready":
+        result["resolved_login_incidents"] = resolve_login_notification_incidents(account_id, token)
     return result
 
 
