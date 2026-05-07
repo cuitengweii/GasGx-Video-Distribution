@@ -115,6 +115,12 @@ class TelegramResolvePayload(BaseModel):
     token: str = ""
 
 
+class NotificationActionPayload(BaseModel):
+    actor: str = "Allen"
+    note: str = ""
+    assigned_to: str = ""
+
+
 class BrandInstancePayload(BaseModel):
     id: str = ""
     name: str
@@ -635,6 +641,38 @@ def create_app() -> FastAPI:
     @app.get("/api/notification-events")
     def notification_events() -> list[dict[str, Any]]:
         return service.list_notification_event_definitions()
+
+    @app.get("/api/notification-policies")
+    def notification_policies() -> list[dict[str, Any]]:
+        return service.list_notification_policies()
+
+    @app.put("/api/notification-policies")
+    def save_notification_policies(payload: Any = Body(default_factory=dict)) -> list[dict[str, Any]]:
+        try:
+            return service.save_notification_policies(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/notification-incidents")
+    def notification_incidents(status: str = "", limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
+        return service.list_notification_incidents(status=status, limit=limit)
+
+    @app.post("/api/notification-incidents/{incident_id}/{action}")
+    def notification_incident_action(incident_id: int, action: str, payload: NotificationActionPayload = Body(default_factory=NotificationActionPayload)) -> dict[str, Any]:
+        try:
+            return service.act_on_notification_incident(incident_id, action, _model_payload(payload))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/stats/notification-sla")
+    def notification_sla() -> dict[str, Any]:
+        return service.notification_sla_summary()
+
+    @app.post("/api/notification-ops/daily-summary")
+    def notification_daily_summary(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+        return service.send_daily_ops_summary(str(payload.get("target_date") or ""), notify=bool(payload.get("notify", True)))
 
     @app.post("/api/notification-routes/{event_type}/{platform}")
     def save_notification_route(event_type: str, platform: str, payload: dict[str, Any]) -> dict[str, Any]:

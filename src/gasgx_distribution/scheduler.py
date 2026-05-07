@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import service
 from .matrix_publish import check_wechat_matrix_login_status, run_matrix_publish
 from .paths import get_paths
 from .public_settings import load_distribution_settings
@@ -18,6 +19,7 @@ _THREAD: threading.Thread | None = None
 _STOP = threading.Event()
 _RUNNING = threading.Event()
 _STATS_RUNNING = threading.Event()
+_OPS_SUMMARY_RUNNING = threading.Event()
 
 
 def scheduler_state_path() -> Path:
@@ -47,6 +49,10 @@ def _job_settings() -> dict[str, Any]:
 
 def _stats_job_settings() -> dict[str, Any]:
     return dict(load_distribution_settings().get("jobs", {}).get("matrix_wechat_stats_capture", {}))
+
+
+def _ops_summary_job_settings() -> dict[str, Any]:
+    return dict(load_distribution_settings().get("jobs", {}).get("notification_ops_summary", {}))
 
 
 def _now() -> int:
@@ -92,6 +98,7 @@ def _login_check_interval_seconds(settings: dict[str, Any]) -> int:
 def _base_status() -> dict[str, Any]:
     settings = _job_settings()
     stats_settings = _stats_job_settings()
+    ops_settings = _ops_summary_job_settings()
     state = _read_state()
     return {
         "enabled": bool(settings.get("enabled")),
@@ -121,6 +128,18 @@ def _base_status() -> dict[str, Any]:
             "last_error": state.get("stats_last_error", ""),
             "last_result": state.get("stats_last_result", {}),
             "next_run_at": state.get("stats_next_run_at"),
+        },
+        "notification_ops_summary": {
+            "enabled": bool(ops_settings.get("enabled")),
+            "running": _OPS_SUMMARY_RUNNING.is_set(),
+            "schedule_mode": "daily",
+            "daily_time": str(ops_settings.get("daily_time") or "09:10"),
+            "last_started_at": state.get("ops_summary_last_started_at"),
+            "last_finished_at": state.get("ops_summary_last_finished_at"),
+            "last_ok": state.get("ops_summary_last_ok"),
+            "last_error": state.get("ops_summary_last_error", ""),
+            "last_result": state.get("ops_summary_last_result", {}),
+            "next_run_at": state.get("ops_summary_next_run_at"),
         },
     }
 
@@ -250,6 +269,49 @@ def _run_stats_capture_once(reason: str = "scheduled") -> dict[str, Any]:
         _STATS_RUNNING.clear()
 
 
+def _run_ops_summary_once(reason: str = "scheduled") -> dict[str, Any]:
+    if _OPS_SUMMARY_RUNNING.is_set():
+        return {"ok": False, "skipped": True, "reason": "ops_summary_running"}
+    _OPS_SUMMARY_RUNNING.set()
+    state = _read_state()
+    state.update(
+        {
+            "ops_summary_last_started_at": _now(),
+            "ops_summary_last_finished_at": None,
+            "ops_summary_last_ok": None,
+            "ops_summary_last_error": "",
+            "ops_summary_last_reason": reason,
+        }
+    )
+    _write_state(state)
+    try:
+        result = service.send_daily_ops_summary(notify=True)
+        state.update(
+            {
+                "ops_summary_last_finished_at": _now(),
+                "ops_summary_last_ok": bool(result.get("ok")),
+                "ops_summary_last_error": "",
+                "ops_summary_last_result": result,
+            }
+        )
+        return result
+    except Exception as exc:
+        result = {"ok": False, "error": f"{exc}\n{traceback.format_exc()}"}
+        state.update(
+            {
+                "ops_summary_last_finished_at": _now(),
+                "ops_summary_last_ok": False,
+                "ops_summary_last_error": result["error"],
+                "ops_summary_last_result": result,
+            }
+        )
+        return result
+    finally:
+        state["ops_summary_next_run_at"] = _next_daily_run(_ops_summary_job_settings())
+        _write_state(state)
+        _OPS_SUMMARY_RUNNING.clear()
+
+
 def trigger_matrix_wechat_job() -> dict[str, Any]:
     def _runner() -> None:
         _run_once(reason="manual")
@@ -266,11 +328,14 @@ def _scheduler_loop() -> None:
     while not _STOP.is_set():
         settings = _job_settings()
         stats_settings = _stats_job_settings()
+        ops_settings = _ops_summary_job_settings()
         enabled = bool(settings.get("enabled"))
         stats_enabled = bool(stats_settings.get("enabled"))
+        ops_enabled = bool(ops_settings.get("enabled"))
         state = _read_state()
         next_run_at = int(state.get("next_run_at") or 0)
         stats_next_run_at = int(state.get("stats_next_run_at") or 0)
+        ops_summary_next_run_at = int(state.get("ops_summary_next_run_at") or 0)
         last_login_check_at = int(state.get("last_login_check_at") or 0)
         now = _now()
         if not next_run_at:
@@ -285,6 +350,11 @@ def _scheduler_loop() -> None:
             _write_state(state)
         elif stats_enabled and now >= stats_next_run_at and not _STATS_RUNNING.is_set():
             _run_stats_capture_once(reason="scheduled")
+        if not ops_summary_next_run_at:
+            state["ops_summary_next_run_at"] = _next_daily_run(ops_settings, now=now)
+            _write_state(state)
+        elif ops_enabled and now >= ops_summary_next_run_at and not _OPS_SUMMARY_RUNNING.is_set():
+            _run_ops_summary_once(reason="scheduled")
         _STOP.wait(10)
 
 

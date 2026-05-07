@@ -1,5 +1,14 @@
 # GasGx Video Distribution State
 
+## 2026-05-07 AI Robot Notification Policy And Incident Update
+
+- AI robot operation notifications now create `notification_incidents` through `route_operation_notification(event_type, payload)`, with `dedupe_key`, severity, account/platform context, owner hint, occurrence count, and open/acknowledged/assigned/resolved/ignored lifecycle states.
+- New notification policy storage is available in SQLite and Supabase baseline SQL through `notification_policies`; policies support target robots, cooldown seconds, quiet windows, escalation minutes, escalation targets, and owner hints for Telegram, DingTalk, and WeCom.
+- New action audit storage is available through `notification_actions`; the Web API supports ack, assign, resolve, ignore, and resend actions.
+- The AI robot sender worker now processes due notification escalations before claiming pending robot messages, while keeping the existing command `python -m gasgx_distribution ai-robot-send-worker --limit 10`.
+- Notification Center now shows route switches, policy controls, incident handling, login QR batches, and outbound history. Data Statistics now includes notification SLA metrics and TOP notification problems.
+- A disabled-by-default daily notification operations summary job is registered under `jobs.notification_ops_summary`; when enabled, the scheduler sends an `ops_summary` daily report.
+
 ## 2026-04-30 WeChat Matrix Profile, Fingerprint, Login Check Update
 
 - Current repository path: `G:\GasGx Video Distribution`.

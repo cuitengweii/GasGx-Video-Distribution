@@ -59,6 +59,71 @@ CREATE TABLE IF NOT EXISTS notification_routes (
     UNIQUE(event_type, platform)
 );
 
+CREATE TABLE IF NOT EXISTS notification_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT '',
+    platform TEXT NOT NULL DEFAULT '',
+    account_scope TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    target_platforms_json TEXT NOT NULL DEFAULT '[]',
+    cooldown_seconds INTEGER NOT NULL DEFAULT 600,
+    quiet_start TEXT NOT NULL DEFAULT '',
+    quiet_end TEXT NOT NULL DEFAULT '',
+    escalation_enabled INTEGER NOT NULL DEFAULT 0,
+    escalation_minutes INTEGER NOT NULL DEFAULT 0,
+    escalation_platforms_json TEXT NOT NULL DEFAULT '[]',
+    owner_hint TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(event_type, severity, platform, account_scope)
+);
+
+CREATE TABLE IF NOT EXISTS notification_incidents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    subtype TEXT NOT NULL DEFAULT '',
+    dedupe_key TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    status TEXT NOT NULL DEFAULT 'open',
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    account_id INTEGER,
+    account_key TEXT NOT NULL DEFAULT '',
+    platform TEXT NOT NULL DEFAULT '',
+    owner_hint TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    action_url TEXT NOT NULL DEFAULT '',
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    escalation_count INTEGER NOT NULL DEFAULT 0,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    acknowledged_at INTEGER,
+    resolved_at INTEGER,
+    assigned_to TEXT NOT NULL DEFAULT '',
+    last_escalated_at INTEGER,
+    next_escalate_at INTEGER,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(event_type, dedupe_key)
+);
+
+CREATE TABLE IF NOT EXISTS notification_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(incident_id) REFERENCES notification_incidents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_incidents_status ON notification_incidents(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_notification_incidents_escalation ON notification_incidents(next_escalate_at, status);
+CREATE INDEX IF NOT EXISTS idx_notification_actions_incident ON notification_actions(incident_id, created_at);
+
 CREATE TABLE IF NOT EXISTS login_qr_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     batch_id TEXT NOT NULL UNIQUE,

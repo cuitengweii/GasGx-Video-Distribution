@@ -712,6 +712,16 @@
             </div>
           </section>
         </div>
+        <div class="dashboard-grid two-col">
+          <section class="panel dashboard-panel">
+            <div class="panel-head"><h2>通知与处理效率</h2><span class="system-status">SLA</span></div>
+            <div id="notification-sla-cards" class="mini-metric-grid"></div>
+          </section>
+          <section class="panel dashboard-panel">
+            <div class="panel-head"><h2>通知 TOP 问题</h2><span class="system-status">机器人</span></div>
+            <div id="notification-sla-top" class="risk-list"></div>
+          </section>
+        </div>
       </section>
     </section>
 
@@ -819,7 +829,9 @@
           <span>发布前审核等待确认</span>
         </div>
         <div id="operation-notice-routes" class="notification-list"></div>
+        <div id="notification-policy-list" class="notification-list"></div>
         <div id="notification-route-state" class="muted"></div>
+        <div id="notification-incident-list" class="notification-list"></div>
         <div id="login-qr-batches" class="notification-list"></div>
         <div id="notification-history" class="notification-list"></div>
       </div>

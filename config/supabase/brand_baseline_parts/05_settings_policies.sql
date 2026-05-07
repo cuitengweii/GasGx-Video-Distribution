@@ -1,4 +1,21 @@
 ﻿drop policy if exists "brand admins manage robot configs" on ai_robot_configs;
+drop policy if exists "brand viewers read notification routes" on notification_routes;
+create policy "brand viewers read notification routes" on notification_routes for select to authenticated using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+drop policy if exists "brand operators manage notification routes" on notification_routes;
+create policy "brand operators manage notification routes" on notification_routes for all to authenticated using (brand_has_role(array['owner', 'admin', 'operator'])) with check (brand_has_role(array['owner', 'admin', 'operator']));
+drop policy if exists "brand viewers read notification policies" on notification_policies;
+create policy "brand viewers read notification policies" on notification_policies for select to authenticated using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+drop policy if exists "brand admins manage notification policies" on notification_policies;
+create policy "brand admins manage notification policies" on notification_policies for all to authenticated using (brand_has_role(array['owner', 'admin'])) with check (brand_has_role(array['owner', 'admin']));
+drop policy if exists "brand viewers read notification incidents" on notification_incidents;
+create policy "brand viewers read notification incidents" on notification_incidents for select to authenticated using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+drop policy if exists "brand operators manage notification incidents" on notification_incidents;
+create policy "brand operators manage notification incidents" on notification_incidents for all to authenticated using (brand_has_role(array['owner', 'admin', 'operator'])) with check (brand_has_role(array['owner', 'admin', 'operator']));
+drop policy if exists "brand viewers read notification actions" on notification_actions;
+create policy "brand viewers read notification actions" on notification_actions for select to authenticated using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
+drop policy if exists "brand operators manage notification actions" on notification_actions;
+create policy "brand operators manage notification actions" on notification_actions for all to authenticated using (brand_has_role(array['owner', 'admin', 'operator'])) with check (brand_has_role(array['owner', 'admin', 'operator']));
+
 create policy "brand admins manage robot configs"
 on ai_robot_configs for all
 to authenticated

@@ -2533,6 +2533,10 @@ select option {
     grid-template-columns: 10px minmax(0, 1fr);
   }
 
+  .notification-policy-grid {
+    grid-template-columns: 1fr;
+  }
+
   .notification-card time {
     grid-column: 2;
   }
@@ -3674,6 +3678,50 @@ select option {
 .notification-card .inline-actions .btn:hover {
   border-color: rgba(93, 214, 44, 0.42);
   background: rgba(93, 214, 44, 0.1);
+}
+
+.notification-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.notification-policy-grid label,
+.notification-check {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.notification-policy-grid input,
+.notification-policy-grid select {
+  width: 100%;
+  min-width: 0;
+}
+
+.notification-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  color: var(--text-secondary);
+}
+
+.notification-check {
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  align-items: center;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.notification-check input {
+  margin: 0;
 }
 
 .notification-card time {
@@ -5321,6 +5369,17 @@ body.sidebar-collapsed .terminal-init-modal {
   color: var(--terminal-text-sub);
   border-color: var(--terminal-glass-border);
   cursor: not-allowed;
+}
+
+.terminal-col-btn.completed,
+.terminal-col-btn.completed:disabled {
+  background: var(--term-color);
+  border-color: var(--term-color);
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 2px var(--term-color-dim), 0 0 16px var(--term-color-dim);
+  cursor: default;
+  opacity: 1;
 }
 
 .terminal-col-btn.secondary.strong-loading:disabled,

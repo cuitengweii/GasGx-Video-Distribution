@@ -47,6 +47,12 @@ DEFAULT_MATRIX_WECHAT_STATS_CAPTURE_SETTINGS: dict[str, Any] = {
     "limit": 0,
 }
 
+DEFAULT_NOTIFICATION_OPS_SUMMARY_SETTINGS: dict[str, Any] = {
+    "enabled": False,
+    "schedule_mode": "daily",
+    "daily_time": "09:10",
+}
+
 DEFAULT_PLATFORM_SETTINGS: dict[str, Any] = {
     "enabled": True,
     "content_type": "short_video",
@@ -228,12 +234,30 @@ def _normalize_matrix_wechat_stats_capture_job(payload: dict[str, Any]) -> dict[
     return merged
 
 
+def _normalize_notification_ops_summary_job(payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(DEFAULT_NOTIFICATION_OPS_SUMMARY_SETTINGS)
+    merged.update({key: value for key, value in payload.items() if key in merged})
+    merged["enabled"] = _normalize_bool(merged.get("enabled"))
+    merged["schedule_mode"] = "daily"
+    raw_daily_time = str(merged.get("daily_time") or "09:10").strip()
+    try:
+        hour_text, minute_text = raw_daily_time.split(":", 1)
+        hour = min(23, max(0, int(hour_text)))
+        minute = min(59, max(0, int(minute_text)))
+    except Exception:
+        hour, minute = 9, 10
+    merged["daily_time"] = f"{hour:02d}:{minute:02d}"
+    return merged
+
+
 def _normalize_jobs(payload: dict[str, Any]) -> dict[str, Any]:
     raw_matrix = payload.get("matrix_wechat_publish")
     raw_stats = payload.get("matrix_wechat_stats_capture")
+    raw_ops = payload.get("notification_ops_summary")
     return {
         "matrix_wechat_publish": _normalize_matrix_wechat_job(raw_matrix if isinstance(raw_matrix, dict) else {}),
         "matrix_wechat_stats_capture": _normalize_matrix_wechat_stats_capture_job(raw_stats if isinstance(raw_stats, dict) else {}),
+        "notification_ops_summary": _normalize_notification_ops_summary_job(raw_ops if isinstance(raw_ops, dict) else {}),
     }
 
 
