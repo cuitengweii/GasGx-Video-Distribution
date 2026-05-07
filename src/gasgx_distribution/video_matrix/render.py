@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
@@ -548,17 +549,45 @@ def _drawtext_lines(
                 y_expr,
                 font_size=font_size,
                 line_index=index,
+                effect=effect,
             )
         )
         filters.append(
-            "drawtext="
-            f"{font_arg}fontcolor={_text_style_base_color(style, color)}:"
-            f"fontsize={font_size}:"
-            f"{text_source}"
-            f"{_text_effect_options(effect, x_expr, y_expr, line_index=index, font_size=font_size)}"
-            f"{_text_style_options(style)}"
+            _drawtext_filter(
+                font_arg,
+                _text_style_base_color(style, color),
+                text_source,
+                x_expr,
+                y_expr,
+                font_size=font_size,
+                effect=effect,
+                line_index=index,
+                options=_text_style_options(style),
+            )
         )
     return filters
+
+
+def _drawtext_filter(
+    font_arg: str,
+    fontcolor: str,
+    text_source: str,
+    x_expr: str,
+    y_expr: str,
+    *,
+    font_size: int,
+    effect: str,
+    line_index: int,
+    options: str = "",
+) -> str:
+    return (
+        "drawtext="
+        f"{font_arg}fontcolor={fontcolor}:"
+        f"fontsize={font_size}:"
+        f"{text_source}"
+        f"{_text_effect_options(effect, x_expr, y_expr, line_index=line_index, font_size=font_size)}"
+        f"{options}"
+    )
 
 
 def _text_style_extra_filters(
@@ -570,32 +599,71 @@ def _text_style_extra_filters(
     *,
     font_size: int,
     line_index: int,
+    effect: str = "none",
 ) -> list[str]:
     if style == "glow":
-        return _text_glow_layers(font_arg, text_source, x_expr, y_expr, font_size, color="0x5DD62C", alpha=0.42)
+        return _text_glow_layers(
+            font_arg,
+            text_source,
+            x_expr,
+            y_expr,
+            font_size,
+            color="0x5DD62C",
+            alpha=0.42,
+            effect=effect,
+            line_index=line_index,
+        )
     if style == "neon":
-        return _text_glow_layers(font_arg, text_source, x_expr, y_expr, font_size, color="0x5DD62C", alpha=0.52)
+        return _text_glow_layers(
+            font_arg,
+            text_source,
+            x_expr,
+            y_expr,
+            font_size,
+            color="0x5DD62C",
+            alpha=0.52,
+            effect=effect,
+            line_index=line_index,
+        )
     if style == "gradient":
+        low_offset = max(3, int(font_size * 0.18))
+        high_offset = max(6, int(font_size * 0.34))
         return [
-            "drawtext="
-            f"{font_arg}fontcolor=#5DD62C@0.90:"
-            f"fontsize={font_size}:"
-            f"{text_source}:"
-            f"x={x_expr}:y={y_expr}+{max(3, int(font_size * 0.18))}",
-            "drawtext="
-            f"{font_arg}fontcolor=#1F8F23@0.72:"
-            f"fontsize={font_size}:"
-            f"{text_source}:"
-            f"x={x_expr}:y={y_expr}+{max(6, int(font_size * 0.34))}",
+            _drawtext_filter(
+                font_arg,
+                "#5DD62C@0.90",
+                text_source,
+                x_expr,
+                f"{y_expr}+{low_offset}",
+                font_size=font_size,
+                effect=effect,
+                line_index=line_index,
+            ),
+            _drawtext_filter(
+                font_arg,
+                "#1F8F23@0.72",
+                text_source,
+                x_expr,
+                f"{y_expr}+{high_offset}",
+                font_size=font_size,
+                effect=effect,
+                line_index=line_index,
+            ),
         ]
     if style == "reflection":
+        reflected_y = f"{y_expr}+{max(18, int(font_size * 1.18))}"
+        reflection_alpha = 0.24 * math.exp(-0.18 * line_index)
         return [
-            "drawtext="
-            f"{font_arg}fontcolor=#FFFFFF@0.24:"
-            f"fontsize={font_size}:"
-            f"{text_source}:"
-            f"x={x_expr}:y={y_expr}+{max(18, int(font_size * 1.18))}:"
-            f"alpha='0.24*exp(-0.18*{line_index})'"
+            _drawtext_filter(
+                font_arg,
+                f"#FFFFFF@{reflection_alpha:.2f}",
+                text_source,
+                x_expr,
+                reflected_y,
+                font_size=font_size,
+                effect=effect,
+                line_index=line_index,
+            )
         ]
     return []
 
@@ -609,14 +677,21 @@ def _text_glow_layers(
     *,
     color: str,
     alpha: float,
+    effect: str = "none",
+    line_index: int = 0,
 ) -> list[str]:
     offsets = ((0, 0), (2, 0), (-2, 0), (0, 2), (0, -2))
     return [
-        "drawtext="
-        f"{font_arg}fontcolor={color}@{alpha:.2f}:"
-        f"fontsize={font_size}:"
-        f"{text_source}:"
-        f"x={x_expr}{_signed_offset(dx)}:y={y_expr}{_signed_offset(dy)}"
+        _drawtext_filter(
+            font_arg,
+            f"{color}@{alpha:.2f}",
+            text_source,
+            f"{x_expr}{_signed_offset(dx)}",
+            f"{y_expr}{_signed_offset(dy)}",
+            font_size=font_size,
+            effect=effect,
+            line_index=line_index,
+        )
         for dx, dy in offsets
     ]
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -266,6 +267,35 @@ def test_video_matrix_progress_sync_failure_does_not_abort_render(monkeypatch, t
     assert response["assets"][0]["video_path"] == "video.mp4"
     assert response["metrics_summary"]["status"] == "complete"
     assert Path(response["report_path"]).exists()
+
+
+def test_video_matrix_local_state_writes_runtime_config_overrides(monkeypatch, tmp_path) -> None:
+    default_settings = tmp_path / "config" / "defaults.json"
+    runtime_settings = tmp_path / "runtime" / "config" / "defaults.json"
+    default_ui_state = tmp_path / "config" / "ui_state.json"
+    runtime_ui_state = tmp_path / "runtime" / "config" / "ui_state.json"
+    default_settings.parent.mkdir(parents=True)
+    default_ui_state.parent.mkdir(parents=True, exist_ok=True)
+    default_settings.write_text(json.dumps({"project_name": "default"}), encoding="utf-8")
+    default_ui_state.write_text(json.dumps({"output_count": 9}), encoding="utf-8")
+
+    monkeypatch.setattr(video_matrix_api, "DEFAULT_CONFIG_PATH", default_settings)
+    monkeypatch.setattr(video_matrix_api, "CONFIG_PATH", default_settings)
+    monkeypatch.setattr(video_matrix_api, "LOCAL_CONFIG_PATH", runtime_settings)
+    monkeypatch.setattr(video_matrix_api, "DEFAULT_UI_STATE_PATH", runtime_ui_state)
+    monkeypatch.setattr(video_matrix_api, "UI_STATE_PATH", runtime_ui_state)
+    monkeypatch.setattr(video_matrix_api, "LEGACY_UI_STATE_PATH", default_ui_state)
+
+    assert video_matrix_api._load_local_settings_payload()["project_name"] == "default"
+    assert video_matrix_api._load_local_ui_state()["output_count"] == 9
+
+    video_matrix_api._save_local_settings_payload({"project_name": "runtime"})
+    video_matrix_api._save_local_ui_state({"output_count": 11})
+
+    assert json.loads(runtime_settings.read_text(encoding="utf-8"))["project_name"] == "runtime"
+    assert json.loads(runtime_ui_state.read_text(encoding="utf-8"))["output_count"] == 11
+    assert json.loads(default_settings.read_text(encoding="utf-8"))["project_name"] == "default"
+    assert json.loads(default_ui_state.read_text(encoding="utf-8"))["output_count"] == 9
 
 
 def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path) -> None:

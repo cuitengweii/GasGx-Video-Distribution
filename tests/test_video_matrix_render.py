@@ -388,7 +388,43 @@ def test_text_style_extra_filters_support_gradient_and_reflection_layers() -> No
     assert "fontcolor=#5DD62C@0.90" in gradient_filters[0]
     assert "fontcolor=#1F8F23@0.72" in gradient_filters[1]
     assert "fontcolor=#FFFFFF@0.24" in reflection_filters[0]
-    assert "alpha='0.24*exp" in reflection_filters[0]
+
+
+def test_text_style_extra_filters_inherit_text_effects() -> None:
+    glow_filters = render._text_style_extra_filters(
+        "glow",
+        "fontfile=/tmp/font.ttf:",
+        "text=GasGx",
+        "100",
+        "200",
+        font_size=48,
+        line_index=0,
+        effect="fade-in",
+    )
+    gradient_filters = render._text_style_extra_filters(
+        "gradient",
+        "fontfile=/tmp/font.ttf:",
+        "text=GasGx",
+        "100",
+        "200",
+        font_size=48,
+        line_index=0,
+        effect="slide-left",
+    )
+    reflection_filters = render._text_style_extra_filters(
+        "reflection",
+        "fontfile=/tmp/font.ttf:",
+        "text=GasGx",
+        "100",
+        "200",
+        font_size=48,
+        line_index=0,
+        effect="pulse",
+    )
+
+    assert all("alpha='1-exp" in item for item in glow_filters)
+    assert all("+64*exp" in item for item in gradient_filters)
+    assert "0.80+0.20*sin" in reflection_filters[0]
 
 
 def test_overlay_filters_apply_selected_text_style_to_render_layers(tmp_path: Path) -> None:
@@ -422,4 +458,3 @@ def test_overlay_filters_apply_selected_text_style_to_render_layers(tmp_path: Pa
     assert "fontcolor=#1F8F23@0.72" in filters
     assert "fontcolor=#FFFFFF:" in filters
     assert "fontcolor=#FFFFFF@0.24" in filters
-    assert "alpha='0.24*exp" in filters

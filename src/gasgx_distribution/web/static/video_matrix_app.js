@@ -18,6 +18,7 @@ let endingModeLoading = "";
 let displayedJobPercent = 0;
 let jobProgressTimer = null;
 let lastJobSnapshot = null;
+let visualDropdownCloseBound = false;
 
 const jobStepLabels = [
   ["queued", "任务提交", 0, ["queued"]],
@@ -119,6 +120,15 @@ function fontSamplePreviewHtml(label) {
     return `<span class="font-sample-en">${escapeHtml(fontPreviewEnglish)}</span>`;
   }
   return `<span class="font-sample-en">${escapeHtml(fontPreviewEnglish)}</span><span class="font-sample-cn">${escapeHtml(fontPreviewChinese)}</span>`;
+}
+function visualOptionLabel(options, value) {
+  const found = options.find(([optionValue]) => optionValue === value);
+  return found ? found[1] : (options[0]?.[1] || "");
+}
+function visualDropdownOptionsHtml(options, selectedValue, command) {
+  return options.map(([value, label]) => `
+          <button type="button" class="visual-dropdown-option ${value === selectedValue ? "active" : ""}" data-visual-command="${escapeHtml(command)}" data-value="${escapeHtml(value)}">${escapeHtml(label)}</button>
+  `).join("");
 }
 const textEffectOptions = [
   ["none", "无动效"],
@@ -1336,6 +1346,7 @@ async function refreshAllPreviews() {
 function renderVideoTemplateEditor() {
   const template = templates[selectedVideoTemplate];
   if (!template) return;
+  const visibilityChecks = [];
   const html = [
     `<h3>模板调整区</h3>`,
     `<label>模板名称<input data-key="name" type="text" value="${escapeHtml(template.name || "")}"></label>`,
@@ -1345,7 +1356,7 @@ function renderVideoTemplateEditor() {
     if (key === "name") continue;
     const value = template[key] ?? "";
     if (type === "checkbox") {
-      html.push(`<label class="check-row"><input data-key="${key}" type="checkbox" ${value ? "checked" : ""}><span>${label}</span></label>`);
+      visibilityChecks.push(`<label class="check-row"><input data-key="${key}" type="checkbox" ${value ? "checked" : ""}><span>${label}</span></label>`);
     } else if (type === "select") {
       html.push(`<label>${label}<select data-key="${key}"><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>`);
     } else if (type === "range") {
@@ -1355,6 +1366,9 @@ function renderVideoTemplateEditor() {
     } else {
       html.push(`<label>${label}<input data-key="${key}" type="${type}" value="${escapeHtml(value)}"></label>`);
     }
+  }
+  if (visibilityChecks.length) {
+    html.push(`<div class="template-visibility-row">${visibilityChecks.join("")}</div>`);
   }
   html.push(`
     <div class="template-actions">
@@ -1392,12 +1406,10 @@ function visualTemplateToolbarHtml(template) {
               ${fontSamplePreviewHtml(label)}
             </span>
           </button>`).join("");
-  const effectOptions = textEffectOptions.map(([value, label]) =>
-    `<option value="${escapeHtml(value)}" ${value === effectValue ? "selected" : ""}>${label}</option>`
-  ).join("");
-  const styleOptions = textStyleOptions.map(([value, label]) =>
-    `<option value="${escapeHtml(value)}" ${value === styleValue ? "selected" : ""}>${label}</option>`
-  ).join("");
+  const effectLabel = visualOptionLabel(textEffectOptions, effectValue);
+  const styleLabel = visualOptionLabel(textStyleOptions, styleValue);
+  const effectOptions = visualDropdownOptionsHtml(textEffectOptions, effectValue, "text-effect");
+  const styleOptions = visualDropdownOptionsHtml(textStyleOptions, styleValue, "text-style");
   return `
     <div class="visual-toolbar-panel" aria-label="文字可视化工具">
       <div class="visual-target-tabs" aria-label="叠层选择">
@@ -1423,8 +1435,18 @@ function visualTemplateToolbarHtml(template) {
         <div class="font-sample-picker" role="listbox" aria-label="字体样张选择">
           ${fontSamples}
         </div>
-        <label class="visual-effect-control">文字样式<select data-visual-command="text-style">${styleOptions}</select></label>
-        <label class="visual-effect-control">文字动效<select data-visual-command="text-effect">${effectOptions}</select></label>
+        <label class="visual-effect-control">文字样式
+          <div class="visual-dropdown">
+            <button type="button" class="visual-dropdown-trigger" data-visual-dropdown-trigger aria-expanded="false">${escapeHtml(styleLabel)}</button>
+            <div class="visual-dropdown-menu" role="listbox">${styleOptions}</div>
+          </div>
+        </label>
+        <label class="visual-effect-control">文字动效
+          <div class="visual-dropdown">
+            <button type="button" class="visual-dropdown-trigger" data-visual-dropdown-trigger aria-expanded="false">${escapeHtml(effectLabel)}</button>
+            <div class="visual-dropdown-menu" role="listbox">${effectOptions}</div>
+          </div>
+        </label>
       </div>
       <div class="visual-control-section visual-hud-controls" aria-label="字幕背板调整区">
         <div class="visual-section-title">字幕背板调整区</div>
@@ -1461,13 +1483,50 @@ function colorPickerIconSvg() {
 function bindVisualTemplateToolbar() {
   const toolbar = $("videoTemplateForm").querySelector(".visual-toolbar-panel");
   if (!toolbar) return;
+  if (!visualDropdownCloseBound) {
+    document.addEventListener("click", (event) => {
+      if (event.target.closest(".visual-dropdown")) return;
+      document.querySelectorAll(".visual-dropdown.open").forEach((node) => {
+        node.classList.remove("open");
+        const trigger = node.querySelector("[data-visual-dropdown-trigger]");
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+      });
+    });
+    visualDropdownCloseBound = true;
+  }
   toolbar.querySelectorAll("button[data-visual-command]").forEach((button) => {
     button.onclick = () => {
+      if (button.classList.contains("visual-dropdown-option")) {
+        const dropdown = button.closest(".visual-dropdown");
+        const trigger = dropdown?.querySelector("[data-visual-dropdown-trigger]");
+        dropdown?.querySelectorAll(".visual-dropdown-option.active").forEach((node) => node.classList.remove("active"));
+        button.classList.add("active");
+        if (trigger) {
+          trigger.textContent = button.textContent.trim();
+          trigger.setAttribute("aria-expanded", "false");
+        }
+        dropdown?.classList.remove("open");
+      }
       if (button.dataset.visualCommand === "font-family") {
         toolbar.querySelectorAll(".font-sample-option.active").forEach((node) => node.classList.remove("active"));
         button.classList.add("active");
       }
       postVisualTemplateCommand(button.dataset.visualCommand, button.dataset.value || "", visualCommandScope(button));
+    };
+  });
+  toolbar.querySelectorAll("[data-visual-dropdown-trigger]").forEach((button) => {
+    button.onclick = () => {
+      const dropdown = button.closest(".visual-dropdown");
+      const willOpen = !dropdown?.classList.contains("open");
+      toolbar.querySelectorAll(".visual-dropdown.open").forEach((node) => {
+        node.classList.remove("open");
+        const trigger = node.querySelector("[data-visual-dropdown-trigger]");
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+      });
+      if (dropdown && willOpen) {
+        dropdown.classList.add("open");
+        button.setAttribute("aria-expanded", "true");
+      }
     };
   });
   toolbar.querySelectorAll("select[data-visual-command], input[data-visual-command]").forEach((input) => {
@@ -1903,19 +1962,20 @@ async function cloneVideoTemplate() {
 }
 
 function showTemplateActionStatus(message, formId = "videoTemplateForm") {
-  const actions = $(formId)?.querySelector(".template-actions");
-  if (!actions) return;
-  let status = actions.querySelector(".template-action-status");
+  let status = $("templateActionToast");
   if (!status) {
     status = document.createElement("div");
-    status.className = "template-action-status";
-    actions.appendChild(status);
+    status.id = "templateActionToast";
+    status.className = "template-action-toast";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    document.body.appendChild(status);
   }
   status.textContent = message;
-  status.hidden = false;
+  status.classList.add("show");
   window.clearTimeout(showTemplateActionStatus.timer);
   showTemplateActionStatus.timer = window.setTimeout(() => {
-    status.hidden = true;
+    status.classList.remove("show");
   }, 2200);
 }
 
@@ -2606,12 +2666,8 @@ function confirmGeneration(statePayload) {
 function generationConfirmHtml(statePayload) {
   const categories = materialCategories({ settings });
   const categoryNames = Object.fromEntries(categories.map((category) => [category.id, category.label]));
-  const active = statePayload.active_category_ids || [];
-  const activeRows = active.length
-    ? active.map((id) => `<tr><td>${escapeHtml(categoryNames[id] || id)}</td><td>${escapeHtml(id)}</td><td>${statePayload.recent_limits?.[id] || 0}</td></tr>`).join("")
-    : `<tr><td colspan="3">未选择素材分类</td></tr>`;
   const compositionRows = (statePayload.composition_sequence || []).map((row, index) =>
-    `<tr><td>${index + 1}</td><td>${escapeHtml(categoryNames[row.category_id] || row.category_id)}</td><td>${escapeHtml(row.category_id)}</td><td>${Number(row.duration || 0).toFixed(1)} 秒</td></tr>`
+    `<tr><td>${index + 1}</td><td>${escapeHtml(categoryNames[row.category_id] || row.category_id)}</td><td>${escapeHtml(row.category_id)}</td><td>${Number(row.duration || 0).toFixed(1)} 秒（参考）</td></tr>`
   ).join("") || `<tr><td colspan="4">未配置生成结构</td></tr>`;
   return `
     <div class="confirm-summary">
@@ -2628,12 +2684,9 @@ function generationConfirmHtml(statePayload) {
       <code>${escapeHtml(statePayload.output_root)}</code>
     </section>
     <section>
-      <h4>启用素材分类</h4>
-      <table><thead><tr><th>分类</th><th>ID</th><th>最近素材</th></tr></thead><tbody>${activeRows}</tbody></table>
-    </section>
-    <section>
       <h4>生成结构</h4>
-      <table><thead><tr><th>#</th><th>分类</th><th>ID</th><th>片段秒数</th></tr></thead><tbody>${compositionRows}</tbody></table>
+      <table><thead><tr><th>#</th><th>分类</th><th>ID</th><th>基础计划时长</th></tr></thead><tbody>${compositionRows}</tbody></table>
+      <small>提示：最终片段时长由动态算法按节拍和素材有效区间实时调整，这里仅展示基础计划值。</small>
     </section>
     <section class="confirm-algorithm">
       <h4>本次算法框架</h4>

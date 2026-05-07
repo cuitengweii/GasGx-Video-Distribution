@@ -62,5 +62,5 @@ Last updated: 2026-04-30
 
 - `gasgx_distribution.video_matrix` is a separate素材生产 namespace for ingestion, templates, cover generation, BGM/beat handling, preview and render helpers.
 - `gasgx_distribution.video_matrix_api` exposes the Web/API boundary for the video-matrix UI.
-- `config/video_matrix/` stores defaults, templates, cover templates, BGM library and UI state.
+- `config/video_matrix/` stores Git-tracked video matrix defaults and seed templates. Local operator edits are runtime data: the app reads `runtime/video_matrix/config/*.json` first when present, falls back to `config/video_matrix/*.json`, and writes local UI/settings/template changes back to `runtime/video_matrix/config/` so production `git pull` does not overwrite business configuration.
 - This module is intentionally separate from `matrix_publish`; it prepares or manages assets, while `matrix_publish` distributes prepared videos to accounts.

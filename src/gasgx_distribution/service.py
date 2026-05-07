@@ -34,6 +34,7 @@ from .platforms import DEBUG_PORT_END, DEBUG_PORT_START, SUPPORTED_PLATFORMS, ge
 from .public_settings import load_distribution_settings, load_platform_publish_settings, resolve_material_dir
 from .public_settings import save_distribution_settings as save_local_distribution_settings
 from .supabase_backend import SupabaseError, SupabaseRestClient
+from .video_matrix.config_store import active_config_path, default_config_path, runtime_config_path
 from .video_matrix.cover_templates import load_cover_templates
 from .video_matrix.output_root import resolve_video_matrix_output_root
 from .video_matrix.settings import ProjectSettings
@@ -1204,9 +1205,8 @@ def initialize_system() -> dict[str, Any]:
         target[name] = target.get(name, 0) + 1
 
     mark("distribution_settings", _insert_seed_item("app_settings", "setting_key", "distribution_settings", {"payload_json": load_distribution_settings(), "updated_at": ts}))
-    config_dir = _config_root()
-    settings = ProjectSettings.from_file(config_dir / "defaults.json")
-    bgm_path = config_dir / "bgm_library.json"
+    settings = ProjectSettings.from_file(active_config_path("defaults.json"))
+    bgm_path = active_config_path("bgm_library.json")
     video_state = {
         "settings": {
             "project_name": settings.project_name,
@@ -1219,9 +1219,9 @@ def initialize_system() -> dict[str, Any]:
             "recent_limits": settings.recent_limits,
             "material_categories": settings.material_categories,
         },
-        "ui_state": load_ui_state(config_dir / "ui_state.json"),
-        "templates": load_templates(config_dir / "templates.json"),
-        "cover_templates": load_cover_templates(config_dir / "cover_templates.json"),
+        "ui_state": load_ui_state(runtime_config_path("ui_state.json"), fallback_path=default_config_path("ui_state.json")),
+        "templates": load_templates(active_config_path("templates.json")),
+        "cover_templates": load_cover_templates(active_config_path("cover_templates.json")),
         "bgm_library": _json_payload(bgm_path.read_text(encoding="utf-8"), {}) if bgm_path.exists() else {},
     }
     mark("video_matrix_state", _insert_seed_item("app_settings", "setting_key", "video_matrix_state", {"payload_json": video_state, "updated_at": ts}))

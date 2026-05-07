@@ -32,11 +32,14 @@ DEFAULT_UI_STATE: dict[str, Any] = {
 }
 
 
-def load_ui_state(path: Path) -> dict[str, Any]:
-    if not path.exists():
+def load_ui_state(path: Path, fallback_path: Path | None = None) -> dict[str, Any]:
+    source_path = path
+    if not source_path.exists() and fallback_path is not None and fallback_path.exists():
+        source_path = fallback_path
+    if not source_path.exists():
         return DEFAULT_UI_STATE.copy()
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return DEFAULT_UI_STATE.copy()
     state = DEFAULT_UI_STATE.copy()

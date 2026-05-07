@@ -28,6 +28,7 @@ except Exception:  # pragma: no cover - optional local dependency
 from . import service
 from .video_matrix.cover import render_cover_preview_image
 from .video_matrix.cover_templates import DEFAULT_COVER_TEMPLATE_ID, load_cover_templates, require_cover_template
+from .video_matrix.config_store import default_config_path, runtime_config_path
 from .video_matrix.ingestion import VIDEO_EXTENSIONS, ensure_category_dirs
 from .video_matrix.pipeline import run_pipeline
 from .video_matrix.settings import ProjectSettings
@@ -39,11 +40,21 @@ from .video_matrix.ui_state import load_ui_state, save_ui_state
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "config" / "video_matrix"
-CONFIG_PATH = CONFIG_DIR / "defaults.json"
-TEMPLATES_PATH = CONFIG_DIR / "templates.json"
-COVER_TEMPLATES_PATH = CONFIG_DIR / "cover_templates.json"
-UI_STATE_PATH = CONFIG_DIR / "ui_state.json"
-BGM_LIBRARY_PATH = CONFIG_DIR / "bgm_library.json"
+DEFAULT_CONFIG_PATH = default_config_path("defaults.json")
+DEFAULT_TEMPLATES_PATH = default_config_path("templates.json")
+DEFAULT_COVER_TEMPLATES_PATH = default_config_path("cover_templates.json")
+DEFAULT_UI_STATE_PATH = runtime_config_path("ui_state.json")
+LEGACY_UI_STATE_PATH = default_config_path("ui_state.json")
+DEFAULT_BGM_LIBRARY_PATH = default_config_path("bgm_library.json")
+CONFIG_PATH = DEFAULT_CONFIG_PATH
+TEMPLATES_PATH = DEFAULT_TEMPLATES_PATH
+COVER_TEMPLATES_PATH = DEFAULT_COVER_TEMPLATES_PATH
+UI_STATE_PATH = DEFAULT_UI_STATE_PATH
+BGM_LIBRARY_PATH = DEFAULT_BGM_LIBRARY_PATH
+LOCAL_CONFIG_PATH = runtime_config_path("defaults.json")
+LOCAL_TEMPLATES_PATH = runtime_config_path("templates.json")
+LOCAL_COVER_TEMPLATES_PATH = runtime_config_path("cover_templates.json")
+LOCAL_BGM_LIBRARY_PATH = runtime_config_path("bgm_library.json")
 TMP_DIR = ROOT / "runtime" / "video_matrix" / "web_uploads"
 BGM_DIR = ROOT / "runtime" / "video_matrix" / "bgm"
 MODEL_IMAGE_DIR = ROOT / "runtime" / "video_matrix" / "modelimg"
@@ -120,6 +131,87 @@ def _save_video_matrix_app_setting(payload: Any) -> bool:
     except Exception:
         return False
     return True
+
+
+def _readable_json_path(current_path: Path, default_path: Path, runtime_path: Path) -> Path:
+    current_path = Path(current_path)
+    if current_path != default_path:
+        return current_path
+    if runtime_path.exists():
+        return runtime_path
+    return default_path
+
+
+def _writable_json_path(current_path: Path, default_path: Path, runtime_path: Path) -> Path:
+    current_path = Path(current_path)
+    if current_path != default_path:
+        return current_path
+    return runtime_path
+
+
+def _settings_read_path() -> Path:
+    return _readable_json_path(CONFIG_PATH, DEFAULT_CONFIG_PATH, LOCAL_CONFIG_PATH)
+
+
+def _settings_write_path() -> Path:
+    return _writable_json_path(CONFIG_PATH, DEFAULT_CONFIG_PATH, LOCAL_CONFIG_PATH)
+
+
+def _templates_read_path() -> Path:
+    return _readable_json_path(TEMPLATES_PATH, DEFAULT_TEMPLATES_PATH, LOCAL_TEMPLATES_PATH)
+
+
+def _templates_write_path() -> Path:
+    return _writable_json_path(TEMPLATES_PATH, DEFAULT_TEMPLATES_PATH, LOCAL_TEMPLATES_PATH)
+
+
+def _cover_templates_read_path() -> Path:
+    return _readable_json_path(COVER_TEMPLATES_PATH, DEFAULT_COVER_TEMPLATES_PATH, LOCAL_COVER_TEMPLATES_PATH)
+
+
+def _cover_templates_write_path() -> Path:
+    return _writable_json_path(COVER_TEMPLATES_PATH, DEFAULT_COVER_TEMPLATES_PATH, LOCAL_COVER_TEMPLATES_PATH)
+
+
+def _bgm_library_read_path() -> Path:
+    return _readable_json_path(BGM_LIBRARY_PATH, DEFAULT_BGM_LIBRARY_PATH, LOCAL_BGM_LIBRARY_PATH)
+
+
+def _load_local_ui_state() -> dict[str, Any]:
+    fallback = LEGACY_UI_STATE_PATH if Path(UI_STATE_PATH) == DEFAULT_UI_STATE_PATH else None
+    return load_ui_state(Path(UI_STATE_PATH), fallback_path=fallback)
+
+
+def _save_local_ui_state(state: dict[str, Any]) -> None:
+    save_ui_state(Path(UI_STATE_PATH), state)
+
+
+def _load_local_settings_payload() -> dict[str, Any]:
+    return _load_json(_settings_read_path(), {})
+
+
+def _save_local_settings_payload(payload: dict[str, Any]) -> None:
+    target = _settings_write_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_local_templates() -> dict[str, Any]:
+    return load_templates(_templates_read_path())
+
+
+def _save_local_templates(templates: dict[str, Any]) -> None:
+    save_templates(_templates_write_path(), templates)
+
+
+def _load_local_cover_templates() -> dict[str, Any]:
+    return load_cover_templates(_cover_templates_read_path())
+
+
+def _save_local_cover_templates(templates: dict[str, Any]) -> None:
+    target = _cover_templates_write_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(templates, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _sync_video_matrix_job(job_id: str, payload: dict[str, Any]) -> None:
@@ -203,10 +295,10 @@ def _persist_video_matrix_state(payload: Any) -> None:
 def _local_video_matrix_state() -> dict[str, Any]:
     return {
         "settings": _settings_payload(_local_settings()),
-        "ui_state": load_ui_state(UI_STATE_PATH),
-        "templates": load_templates(TEMPLATES_PATH),
-        "cover_templates": load_cover_templates(COVER_TEMPLATES_PATH),
-        "bgm_library": _load_json(BGM_LIBRARY_PATH, {}),
+        "ui_state": _load_local_ui_state(),
+        "templates": _load_local_templates(),
+        "cover_templates": _load_local_cover_templates(),
+        "bgm_library": _load_json(_bgm_library_read_path(), {}),
         "signature_history": _load_json(SIGNATURE_HISTORY_PATH, []),
     }
 
@@ -413,18 +505,18 @@ def get_state() -> dict[str, Any]:
         }
     local_state = _local_video_matrix_state()
     if _normalize_material_category_ids(local_state):
-        CONFIG_PATH.write_text(json.dumps(local_state["settings"], indent=2, ensure_ascii=False), encoding="utf-8")
-        save_ui_state(UI_STATE_PATH, local_state.get("ui_state") or {})
+        _save_local_settings_payload(local_state["settings"])
+        _save_local_ui_state(local_state.get("ui_state") or {})
     settings = _settings_from_payload(local_state["settings"])
     ensure_category_dirs(settings.source_root, settings.material_categories)
     BGM_DIR.mkdir(parents=True, exist_ok=True)
     ENDING_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "settings": _settings_payload(settings),
-        "ui_state": load_ui_state(UI_STATE_PATH),
-        "templates": load_templates(TEMPLATES_PATH),
-        "cover_templates": load_cover_templates(COVER_TEMPLATES_PATH),
-        "bgm_library": _load_json(BGM_LIBRARY_PATH, {}),
+        "ui_state": _load_local_ui_state(),
+        "templates": _load_local_templates(),
+        "cover_templates": _load_local_cover_templates(),
+        "bgm_library": _load_json(_bgm_library_read_path(), {}),
         "local_bgm_dir": str(BGM_DIR),
         "local_bgm": [path.name for path in _list_local_bgm_files(BGM_DIR)],
         "ending_template_dir": str(ENDING_TEMPLATE_DIR),
@@ -447,11 +539,11 @@ def post_state(payload: dict[str, Any]) -> dict[str, Any]:
         current["ui_state"] = state
         if _save_video_matrix_app_setting(current):
             return {"ok": True, "ui_state": state}
-        save_ui_state(UI_STATE_PATH, state)
+        _save_local_ui_state(state)
         return {"ok": True, "ui_state": state}
-    state = load_ui_state(UI_STATE_PATH)
+    state = _load_local_ui_state()
     state.update(payload)
-    save_ui_state(UI_STATE_PATH, state)
+    _save_local_ui_state(state)
     return {"ok": True, "ui_state": state}
 
 
@@ -474,11 +566,11 @@ def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
         _save_video_matrix_app_setting(current)
         ensure_category_dirs(Path(settings_payload["source_root"]), categories)
         return {"ok": True, "category": category}
-    config = _load_json(CONFIG_PATH, {})
-    local_state = {"settings": config, "ui_state": load_ui_state(UI_STATE_PATH)}
+    config = _load_local_settings_payload()
+    local_state = {"settings": config, "ui_state": _load_local_ui_state()}
     if _normalize_material_category_ids(local_state):
         config = local_state["settings"]
-        save_ui_state(UI_STATE_PATH, local_state.get("ui_state") or {})
+        _save_local_ui_state(local_state.get("ui_state") or {})
     categories = list(config.get("material_categories") or [])
     category_id = _next_material_category_id(categories)
     categories.append({"id": category_id, "label": label})
@@ -486,8 +578,8 @@ def add_material_category(payload: MaterialCategoryPayload) -> dict[str, Any]:
     recent_limits = dict(config.get("recent_limits") or {})
     recent_limits[category_id] = 6
     config["recent_limits"] = recent_limits
-    CONFIG_PATH.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
-    settings = ProjectSettings.from_file(CONFIG_PATH)
+    _save_local_settings_payload(config)
+    settings = _local_settings()
     ensure_category_dirs(settings.source_root, settings.material_categories)
     return {"ok": True, "category": {"id": category_id, "label": label}}
 
@@ -504,9 +596,9 @@ def rename_material_category(category_id: str, payload: MaterialCategoryRenamePa
         current["settings"] = settings_payload
         _persist_video_matrix_state(current)
         return {"ok": True, "category": category, "storage": "database"}
-    config = _load_json(CONFIG_PATH, {})
+    config = _load_local_settings_payload()
     category = _rename_material_category_in_settings(config, category_id, label)
-    CONFIG_PATH.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    _save_local_settings_payload(config)
     return {"ok": True, "category": category, "storage": "file"}
 
 
@@ -519,9 +611,9 @@ def save_video_template(template_id: str, payload: dict[str, Any]) -> dict[str, 
         current["templates"] = templates
         _persist_video_matrix_state(current)
         return {"ok": True, "template_id": template_id, "template": payload, "storage": "database"}
-    templates = load_templates(TEMPLATES_PATH)
+    templates = _load_local_templates()
     templates[template_id] = payload
-    save_templates(TEMPLATES_PATH, templates)
+    _save_local_templates(templates)
     return {"ok": True, "template_id": template_id, "template": payload, "storage": "local"}
 
 
@@ -551,9 +643,9 @@ def save_cover_template(template_id: str, payload: dict[str, Any]) -> dict[str, 
         current["cover_templates"] = templates
         _persist_video_matrix_state(current)
         return {"ok": True, "template_id": template_id, "template": payload, "storage": "database"}
-    templates = load_cover_templates(COVER_TEMPLATES_PATH)
+    templates = _load_local_cover_templates()
     templates[template_id] = payload
-    COVER_TEMPLATES_PATH.write_text(json.dumps(templates, indent=2, ensure_ascii=False), encoding="utf-8")
+    _save_local_cover_templates(templates)
     return {"ok": True, "template_id": template_id, "template": payload, "storage": "local"}
 
 
@@ -572,8 +664,7 @@ def replace_cover_templates(payload: dict[str, Any]) -> dict[str, Any]:
         current.setdefault("ui_state", {})["cover_template_id"] = selected_cover
         _persist_video_matrix_state(current)
         return {"ok": True, "cover_templates": templates, "selected_cover": selected_cover, "storage": "database"}
-    COVER_TEMPLATES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    COVER_TEMPLATES_PATH.write_text(json.dumps(templates, indent=2, ensure_ascii=False), encoding="utf-8")
+    _save_local_cover_templates(templates)
     return {"ok": True, "cover_templates": templates, "selected_cover": selected_cover, "storage": "local"}
 
 
@@ -941,8 +1032,8 @@ def _run_generate_job(
             existing_signatures = _load_signature_history(settings) | set(generation_history["signatures"])
         with trace.span("state", "load_video_matrix_state"):
             video_state, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
-        templates = video_state.get("templates") or load_templates(TEMPLATES_PATH)
-        cover_templates = video_state.get("cover_templates") or load_cover_templates(COVER_TEMPLATES_PATH)
+        templates = video_state.get("templates") or _load_local_templates()
+        cover_templates = video_state.get("cover_templates") or _load_local_cover_templates()
         template_id = str(request.get("template_id") or DEFAULT_TEMPLATE_ID)
         cover_template_id = str(request.get("cover_template_id") or DEFAULT_COVER_TEMPLATE_ID)
         request_template_config = request.get("template_config") if isinstance(request.get("template_config"), dict) else None
@@ -1094,7 +1185,7 @@ def _settings() -> ProjectSettings:
 
 
 def _local_settings() -> ProjectSettings:
-    return ProjectSettings.from_file(CONFIG_PATH)
+    return ProjectSettings.from_file(_settings_read_path())
 
 
 def _settings_payload(settings: ProjectSettings) -> dict[str, Any]:
@@ -1311,7 +1402,7 @@ def _save_ui_state(state: dict[str, Any]) -> None:
         current["ui_state"] = state
         if _save_video_matrix_app_setting(current):
             return
-    save_ui_state(UI_STATE_PATH, state)
+    _save_local_ui_state(state)
 
 
 def _count_category_files(root: Path, categories: list[dict[str, str]]) -> dict[str, int]:

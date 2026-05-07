@@ -1088,6 +1088,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "composition-row" in css
 
 
+def test_video_matrix_partial_center_background_syncs_text_box() -> None:
+    preview = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
+
+    assert "function setBackgroundPartialCenter()" in preview
+    assert 'const textTarget = pairedTextTarget(backgroundTarget)' in preview
+    assert '[`${textTarget}_x`]: x' in preview
+    assert '[`${textTarget}_text_width`]: width' in preview
+    assert '[`${textTarget}_text_align`]: "center"' in preview
+
+
 def test_video_matrix_preview_keeps_video_audio_available() -> None:
     preview_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_preview.html").read_text(encoding="utf-8")
     video_tag = preview_html[preview_html.index("<video"):preview_html.index("</video>")]

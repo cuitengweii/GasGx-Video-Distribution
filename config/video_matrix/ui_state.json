@@ -1,156 +1,6 @@
 {
-  "output_count": 30,
-  "max_workers": 3,
-  "output_options": [
-    "mp4"
-  ],
-  "template_id": "clean_data",
-  "cover_template_id": "industrial_engine_hook",
-  "copy_language": "zh",
-  "source_mode": "Category folders",
-  "active_category_ids": [
-    "category_A",
-    "category_B",
-    "category_C",
-    "category_D",
-    "category_E",
-    "category_F",
-    "category_G",
-    "category_H",
-    "category_I",
-    "category_J"
-  ],
-  "video_duration_min": 8,
-  "video_duration_max": 12,
-  "headline": "Gas Engines That Turn Field Gas Into Power",
-  "subhead": "Generator sets for onsite Bitcoin and industrial load",
-  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
-  "follow_text": "全球领先的搁浅天然气算力变现引擎",
   "bgm_source": "Local library",
-  "bgm_library_id": "",
-  "composition_customized": false,
-  "composition_sequence": [
-    {
-      "category_id": "category_A",
-      "duration": 1.5
-    },
-    {
-      "category_id": "category_B",
-      "duration": 3.4
-    },
-    {
-      "category_id": "category_C",
-      "duration": 3
-    },
-    {
-      "category_id": "category_D",
-      "duration": 2
-    },
-    {
-      "category_id": "category_E",
-      "duration": 2
-    },
-    {
-      "category_id": "category_F",
-      "duration": 2
-    },
-    {
-      "category_id": "category_G",
-      "duration": 2
-    },
-    {
-      "category_id": "category_H",
-      "duration": 2
-    },
-    {
-      "category_id": "category_I",
-      "duration": 2
-    },
-    {
-      "category_id": "category_J",
-      "duration": 2
-    }
-  ],
-  "target_fps": 30,
-  "render_speed_mode": "fast_first",
-  "output_root": "G:\\GasGx Video Distribution\\runtime\\materials\\videos",
-  "template_config": {
-    "name": "Clean Data",
-    "show_hud": true,
-    "show_slogan": true,
-    "show_title": true,
-    "hud_bar_y": 1252,
-    "hud_bar_height": 180,
-    "hud_x": 147,
-    "hud_y": 1293,
-    "hud_font_size": 34,
-    "slogan_x": 157,
-    "slogan_y": 812,
-    "slogan_font_size": 52,
-    "title_x": 157,
-    "title_y": 421,
-    "title_font_size": 36,
-    "hud_bar_color": "#0E1A10",
-    "hud_bar_opacity": 0.34,
-    "primary_color": "#5DD62C",
-    "secondary_color": "#FFFFFF",
-    "title_bg_height": 128,
-    "hud_bar_x": 0,
-    "slogan_bg_height": 176,
-    "hud_color": "#eef5eb",
-    "hud_text_style": "glow",
-    "slogan_text_style": "glow",
-    "title_color": "#d7ddd4",
-    "title_text_style": "glow"
-  },
-  "cover_template_config": {
-    "name": "Gas Engine Hook",
-    "brand": "GasGx",
-    "eyebrow": "GAS ENGINE / GENERATOR SET",
-    "cta": "",
-    "tint_color": "#08120A",
-    "tint_opacity": 0.58,
-    "gradient_color": "#5DD62C",
-    "gradient_opacity": 0.24,
-    "accent_color": "#5DD62C",
-    "primary_color": "#F4FFF0",
-    "secondary_color": "#C8D4C4",
-    "panel_color": "#071108",
-    "panel_opacity": 0.76,
-    "brand_y": 118,
-    "headline_y": 300,
-    "subhead_y": 560,
-    "hud_y": 1568,
-    "cta_y": 1740,
-    "align": "left",
-    "cover_layout": "profile",
-    "single_cover_logo_text": "GasGx",
-    "single_cover_slogan_text": "终结废气 | 重塑能源 | 就地变现",
-    "single_cover_title_text": "全球领先的搁浅天然气算力变现引擎",
-    "single_cover_logo_font_size": 84,
-    "single_cover_slogan_font_size": 60,
-    "single_cover_title_font_size": 54,
-    "tile_brand_text": "GasGx",
-    "tile_tagline_text": "终结废气 | 重塑能源 | 就地变现",
-    "tile_titles_text": "全球领先的搁浅天然气算力变现引擎"
-  },
   "ending_template_mode": "dynamic",
-  "ending_template_id": "test_fa2c5c25.mp4",
-  "ending_template_ids": [
-    "test_fa2c5c25.mp4",
-    "00dd10627624de5a4bda59b7a7a83dbb.mp4",
-    "ceaf927e622c4610ba0de0f8b71dab6b.mp4",
-    "465b021720b52f6abeb83fab51d8883e.mp4",
-    "0accc930742e671bb9727129e5daea2b.mp4",
-    "4958d26b08164ef0a0887f81eabc5a01.mp4",
-    "e25b1f29719892c8ea33f9482ba1da70.mp4",
-    "3f7ad2e0de5ddeccd78591ed2bef6ce6.mp4",
-    "1e00cd934d7158cfa5ea5382093d0d18.mp4",
-    "689c0ba32fe5288618a041124205cb2b.mp4",
-    "74604e74561aa3ae5f75e0901f901426.mp4"
-  ],
-  "ending_template_dir": "G:\\GasGx Video Distribution\\runtime\\video_matrix\\ending_template",
-  "ending_cover_template_id": "ending_cover_template_02",
   "ending_cover_templates": {
     "ending_cover_template_01": {
       "name": "片尾封面模板 01",
@@ -234,6 +84,35 @@
       "singleTitle_text_align": "right"
     }
   },
+  "ending_template_dir": "G:\\GasGx Video Distribution\\runtime\\video_matrix\\ending_template",
+  "cover_template_id": "industrial_engine_hook",
+  "video_duration_min": 8,
+  "composition_customized": false,
+  "ending_cover_template_id": "ending_cover_template_02",
+  "target_fps": 30,
+  "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
+  "video_duration_max": 12,
+  "ending_template_id": "test_fa2c5c25.mp4",
+  "subhead": "Generator sets for onsite Bitcoin and industrial load",
+  "source_mode": "Category folders",
+  "headline": "Gas Engines That Turn Field Gas Into Power",
+  "copy_language": "zh",
+  "max_workers": 3,
+  "bgm_library_id": "",
+  "render_speed_mode": "fast_first",
+  "active_category_ids": [
+    "category_A",
+    "category_B",
+    "category_C",
+    "category_D",
+    "category_E",
+    "category_F",
+    "category_G",
+    "category_H",
+    "category_I",
+    "category_J"
+  ],
+  "output_root": "G:\\GasGx Video Distribution\\runtime\\materials\\videos",
   "ending_cover_template": {
     "name": "片尾封面模板 02",
     "brand": "GasGx",
@@ -275,6 +154,12 @@
     "singleLogo_color": "#6ad53d",
     "singleTitle_text_align": "right"
   },
+  "output_count": 3,
+  "template_id": "center_brand",
+  "output_options": [
+    "mp4"
+  ],
+  "follow_text": "全球领先的搁浅天然气算力变现引擎",
   "recent_limits": {
     "category_A": 10,
     "category_B": 8,
@@ -286,5 +171,60 @@
     "category_H": 6,
     "category_I": 6,
     "category_J": 5
-  }
+  },
+  "ending_template_ids": [
+    "test_fa2c5c25.mp4",
+    "00dd10627624de5a4bda59b7a7a83dbb.mp4",
+    "ceaf927e622c4610ba0de0f8b71dab6b.mp4",
+    "465b021720b52f6abeb83fab51d8883e.mp4",
+    "0accc930742e671bb9727129e5daea2b.mp4",
+    "4958d26b08164ef0a0887f81eabc5a01.mp4",
+    "e25b1f29719892c8ea33f9482ba1da70.mp4",
+    "3f7ad2e0de5ddeccd78591ed2bef6ce6.mp4",
+    "1e00cd934d7158cfa5ea5382093d0d18.mp4",
+    "689c0ba32fe5288618a041124205cb2b.mp4",
+    "74604e74561aa3ae5f75e0901f901426.mp4"
+  ],
+  "composition_sequence": [
+    {
+      "category_id": "category_A",
+      "duration": 1.5
+    },
+    {
+      "category_id": "category_B",
+      "duration": 3.4
+    },
+    {
+      "category_id": "category_C",
+      "duration": 3
+    },
+    {
+      "category_id": "category_D",
+      "duration": 2
+    },
+    {
+      "category_id": "category_E",
+      "duration": 2
+    },
+    {
+      "category_id": "category_F",
+      "duration": 2
+    },
+    {
+      "category_id": "category_G",
+      "duration": 2
+    },
+    {
+      "category_id": "category_H",
+      "duration": 2
+    },
+    {
+      "category_id": "category_I",
+      "duration": 2
+    },
+    {
+      "category_id": "category_J",
+      "duration": 2
+    }
+  ]
 }

@@ -47,12 +47,11 @@ class ProjectSettings:
     @classmethod
     def from_file(cls, config_path: Path) -> "ProjectSettings":
         payload = json.loads(config_path.read_text(encoding="utf-8"))
-        base_dir = config_path.parent.parent
         return cls(
             project_name=payload["project_name"],
-            source_root=(base_dir / payload["source_root"]).resolve(),
-            library_root=(base_dir / payload["library_root"]).resolve(),
-            output_root=(base_dir / payload["output_root"]).resolve(),
+            source_root=_resolve_config_path(config_path, payload["source_root"]),
+            library_root=_resolve_config_path(config_path, payload["library_root"]),
+            output_root=_resolve_config_path(config_path, payload["output_root"]),
             output_count=int(payload["output_count"]),
             target_width=int(payload["target_width"]),
             target_height=int(payload["target_height"]),
@@ -72,6 +71,24 @@ class ProjectSettings:
             enhancement_modules=dict(payload.get("enhancement_modules") or {"enabled": False, "modules": []}),
             copy_mode=str(payload.get("copy_mode") or "spark_then_template"),
         )
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_config_path(config_path: Path, raw: object) -> Path:
+    token = str(raw or "").strip()
+    path = Path(token)
+    if path.is_absolute():
+        return path.resolve()
+    normalized = token.replace("\\", "/")
+    repo = _repo_root()
+    if normalized.startswith("../runtime/"):
+        return (repo / normalized.removeprefix("../")).resolve()
+    if normalized.startswith("runtime/"):
+        return (repo / normalized).resolve()
+    return (config_path.parent.parent / path).resolve()
 
 
 def _material_categories(raw: object) -> list[dict[str, str]]:
