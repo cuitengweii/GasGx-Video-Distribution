@@ -14,7 +14,7 @@ import sqlite3
 import time
 import uuid
 from datetime import datetime
-from threading import Lock
+from threading import Lock, Thread
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
 from contextlib import contextmanager
@@ -124,6 +124,7 @@ BRAND_INLINE_ASSET_MAX_CHARS = int(os.getenv("GASGX_BRAND_INLINE_ASSET_MAX_CHARS
 BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_account_prefix,created_at,updated_at"
 TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", "5") or 5)
 TERMINAL_QR_EXPIRY_SECONDS = int(os.getenv("GASGX_TERMINAL_QR_EXPIRY_SECONDS", "60") or 60)
+TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS", "4") or 4)
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
 SUPER_ADMIN_PASSWORD = "cuitengwei2023"
 FEATURE_ENTRIES = [
@@ -3300,7 +3301,58 @@ def _queue_terminal_draft_task(account_id: int) -> dict[str, Any]:
         raise
 
 
-def _advance_terminal_window(window: dict[str, Any]) -> bool:
+def _check_terminal_login_status_with_timeout(account_id: int, platform: str) -> dict[str, Any]:
+    holder: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            holder["result"] = check_login_status(account_id, platform)
+        except Exception as exc:
+            holder["error"] = exc
+
+    timeout_seconds = max(1, int(TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS or 4))
+    thread = Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        raise TimeoutError(f"登录检测超时（{timeout_seconds}s）")
+    if "error" in holder:
+        raise holder["error"]
+    result = holder.get("result")
+    return result if isinstance(result, dict) else {"status": "unknown"}
+
+
+def _terminal_current_needs_browser_open(window: dict[str, Any]) -> bool:
+    current = _terminal_current_account(window)
+    if not isinstance(current, dict):
+        return False
+    if current.get("task_id"):
+        return False
+    current_status = str(current.get("status") or "").strip().lower()
+    if current_status == "pending" and not window.get("qr_url"):
+        return True
+    if current_status not in {"opening", "waiting_qr"}:
+        return False
+    runtime = _terminal_browser_runtime_for_account(int(current.get("id") or 0), "wechat")
+    return runtime.get("browser_open") is False
+
+
+def _terminal_current_needs_login_probe(window: dict[str, Any]) -> bool:
+    current = _terminal_current_account(window)
+    if not isinstance(current, dict) or current.get("task_id"):
+        return False
+    if _terminal_current_needs_browser_open(window):
+        return False
+    current_status = str(current.get("status") or "").strip().lower()
+    return current_status in {"opening", "waiting_qr"}
+
+
+def _advance_terminal_window(
+    window: dict[str, Any],
+    *,
+    allow_browser_open: bool = True,
+    allow_login_probe: bool = True,
+) -> bool:
     if _normalize_terminal_window_runtime(window):
         return True
     accounts = window.get("accounts") or []
@@ -3331,15 +3383,26 @@ def _advance_terminal_window(window: dict[str, Any]) -> bool:
         current["status_text"] = f"发布失败：{reason}" if reason else "发布失败"
         return True
     account_id = int(current.get("id") or 0)
-    if str(current.get("status") or "") == "pending" and not current.get("task_id") and not window.get("qr_url"):
+    current_status = str(current.get("status") or "").strip().lower()
+    if current_status == "pending" and not current.get("task_id") and not window.get("qr_url"):
+        if not allow_browser_open:
+            return False
         return _open_terminal_window_current_account(window)
+    if current_status in {"opening", "waiting_qr"} and not current.get("task_id"):
+        runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
+        if runtime.get("browser_open") is False:
+            if not allow_browser_open:
+                return False
+            return _open_terminal_window_current_account(window)
     if not current.get("task_id") and now_ts() < int(window.get("manual_available_at") or 0):
         if str(current.get("status") or "") != "success":
             current["status"] = "waiting_qr"
             current["status_text"] = "请在已打开浏览器扫码"
         return False
+    if not allow_login_probe:
+        return False
     try:
-        result = check_login_status(account_id, "wechat")
+        result = _check_terminal_login_status_with_timeout(account_id, "wechat")
     except Exception as exc:
         current["status"] = "error"
         current["status_text"] = str(exc)
@@ -3460,8 +3523,28 @@ def poll_terminal_execution() -> dict[str, Any]:
             _save_terminal_state(state)
         return terminal_execution_state()
     if windows:
+        opened_browser = False
+        probed_login = False
+        browser_open_needed = any(_terminal_current_needs_browser_open(window) for window in windows)
         for window in windows:
-            _advance_terminal_window(window)
+            needs_open = _terminal_current_needs_browser_open(window)
+            needs_probe = (not browser_open_needed) and (not needs_open) and _terminal_current_needs_login_probe(window)
+            allow_browser_open = (not needs_open) or (not opened_browser)
+            allow_login_probe = (not needs_probe) or (not probed_login)
+            try:
+                _advance_terminal_window(
+                    window,
+                    allow_browser_open=allow_browser_open,
+                    allow_login_probe=allow_login_probe,
+                )
+            except TypeError as exc:
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                _advance_terminal_window(window)
+            if needs_open and allow_browser_open:
+                opened_browser = True
+            if needs_probe and allow_login_probe:
+                probed_login = True
         state["probe_cursor"] = 0
         state["next_probe_at"] = now + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
     _save_terminal_state(state)
@@ -4790,14 +4873,29 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     const brand = document.createElement('div');
     const topLabel = marker.window_label || '当前账号';
     const operatorWechat = String(marker.operator_wechat || '').trim();
-    const contextLabel = operatorWechat ? `运营微信: ${{operatorWechat}}` : (marker.platform ? `GasGx · ${{marker.platform}}` : 'GasGx');
-    brand.textContent = `${{topLabel}} · ${{contextLabel}}`;
     brand.style.cssText = [
-      `color:${{marker.accent || '#5dd62c'}}`,
-      'font-size:13px',
-      'font-weight:900',
+      'display:flex',
+      'flex-direction:column',
+      'gap:3px',
       'margin-bottom:5px'
     ].join(';');
+    const windowLine = document.createElement('div');
+    windowLine.textContent = topLabel;
+    windowLine.style.cssText = [
+      `color:${{marker.accent || '#5dd62c'}}`,
+      'font-size:13px',
+      'font-weight:900'
+    ].join(';');
+    const operatorLine = document.createElement('div');
+    operatorLine.textContent = operatorWechat ? `运营微信: ${{operatorWechat}}` : (marker.platform ? `GasGx · ${{marker.platform}}` : 'GasGx');
+    operatorLine.style.cssText = [
+      'color:#38f8ff',
+      'font-size:13px',
+      'font-weight:900',
+      'text-shadow:0 0 8px rgba(56,248,255,.48)'
+    ].join(';');
+    brand.appendChild(windowLine);
+    brand.appendChild(operatorLine);
     const title = document.createElement('div');
     title.textContent = marker.title || '';
     title.style.cssText = 'font-size:22px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
@@ -4805,16 +4903,22 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     meta.textContent = marker.meta || '';
     meta.style.cssText = 'margin-top:5px;color:#e5e7eb;font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     const ribbon = document.createElement('div');
-    ribbon.textContent = '请确认这是当前要操作的账号';
+    ribbon.innerHTML = '<span aria-hidden="true">⚠</span><span>请确认这是当前要操作的账号</span>';
     ribbon.style.cssText = [
       'margin-top:10px',
       'padding:6px 8px',
-      `background:${{marker.accent || '#5dd62c'}}`,
-      'color:#07110a',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'gap:6px',
+      'border:1px solid #ff9b9b',
+      'background:#ff2f3f',
+      'color:#fff',
       'border-radius:9px',
       'font-size:13px',
       'font-weight:900',
-      'text-align:center'
+      'text-align:center',
+      'box-shadow:0 0 0 2px rgba(255,47,63,.24),0 0 16px rgba(255,47,63,.38)'
     ].join(';');
     el.appendChild(brand);
     el.appendChild(title);

@@ -53,6 +53,10 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert '一次登录长期有效；失效后重新检测或重新登录。' in app
     assert 'setInterval(async' not in app
     assert 'installGlobalButtonLoading' in app
+    assert 'TERMINAL_BROWSER_WARMUP_TIMEOUT_MS' in app
+    assert 'timeoutMs: TERMINAL_BROWSER_WARMUP_TIMEOUT_MS' in app
+    assert 'timeoutMs: TERMINAL_POLL_TIMEOUT_MS' in app
+    assert 'controller.abort()' in app
     assert '_raise_account_browser_window' in service
 
 

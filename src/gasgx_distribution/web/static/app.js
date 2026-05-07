@@ -150,6 +150,8 @@ let terminalPollRequestInFlight = false;
 let terminalErrorModalSignature = "";
 let terminalFullLoadingCount = 0;
 
+const TERMINAL_BROWSER_WARMUP_TIMEOUT_MS = 12000;
+const TERMINAL_POLL_TIMEOUT_MS = 10000;
 const SHELL_THEME_KEY = "gasgx-shell-theme";
 const SHELL_BRAND_KEY = "gasgx-shell-brand";
 const SHELL_AUTH_KEY = "gasgx-shell-auth";
@@ -1320,10 +1322,27 @@ function formatFriendlyMessage(message) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  const { timeoutMs = 0, ...fetchOptions } = options || {};
+  const timeout = Number(timeoutMs || 0);
+  const controller = timeout > 0 ? new AbortController() : null;
+  const timer = controller
+    ? window.setTimeout(() => controller.abort(), timeout)
+    : null;
+  let response;
+  try {
+    response = await fetch(path, {
+      ...fetchOptions,
+      headers: { "Content-Type": "application/json", ...(fetchOptions.headers || {}) },
+      signal: controller ? controller.signal : fetchOptions.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("请求超时，请稍后刷新状态");
+    }
+    throw error;
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
   const text = await response.arrayBuffer().then((buffer) => {
     const decoded = new TextDecoder("utf-8").decode(buffer);
     if (/[ÃÂåçæèäöü]/.test(decoded) && !/[\u4e00-\u9fff]/.test(decoded)) {
@@ -1413,9 +1432,25 @@ async function warmTerminalBrowsersBeforeRender(message = "") {
   if (!terminalNeedsBrowserWarmup()) return false;
   setTerminalFullLoading(true, message || terminalBrowserLoadingTitle(), terminalBrowserLoadingDetail());
   try {
-    const nextState = await api("/api/terminal-execution/poll", { method: "POST" });
+    const nextState = await api("/api/terminal-execution/poll", {
+      method: "POST",
+      timeoutMs: TERMINAL_BROWSER_WARMUP_TIMEOUT_MS,
+    });
     state.terminalExecution = { ...nextState, loading: false };
     return true;
+  } catch (error) {
+    state.terminalExecution = {
+      ...(state.terminalExecution || {}),
+      loading: false,
+      warmup_error: error?.message || "恢复登录浏览器超时",
+    };
+    try {
+      const currentState = await api("/api/terminal-execution/state", { timeoutMs: 5000 });
+      state.terminalExecution = { ...currentState, loading: false };
+    } catch (_stateError) {
+      // Keep the terminal page usable even when browser warmup is still blocked server-side.
+    }
+    return false;
   } finally {
     setTerminalFullLoading(false);
   }
@@ -1432,7 +1467,10 @@ async function startTerminalWechatLoginWithLoading(button = null) {
       });
       updateTerminalFullLoading(terminalBrowserLoadingTitle(), terminalBrowserLoadingDetail());
     }
-    state.terminalExecution = await api("/api/terminal-execution/start-login", { method: "POST" });
+    state.terminalExecution = await api("/api/terminal-execution/start-login", {
+      method: "POST",
+      timeoutMs: TERMINAL_BROWSER_WARMUP_TIMEOUT_MS,
+    });
     state.terminalQrVisible = true;
     state.terminalConfigOpen = false;
     renderTerminalExecution();
@@ -2653,6 +2691,22 @@ function sanitizeTerminalStatusText(statusText, status) {
   return raw;
 }
 
+function terminalStatusNeedsManualConfirm(account, statusText) {
+  const text = String(statusText || account?.status_text || "").trim();
+  return terminalAccountIsManualConfirmable(account) || text.includes("等待人工确认");
+}
+
+function terminalAccountStatusMarkup(account, statusText) {
+  const text = escapeHtml(statusText || "");
+  if (!terminalStatusNeedsManualConfirm(account, statusText)) return text;
+  return `
+    <span class="terminal-acc-warning-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3 2.5 20h19L12 3zm-1 6h2v6h-2zm0 7h2v2h-2z"/></svg>
+    </span>
+    <span>${text}</span>
+  `;
+}
+
 function terminalAccountStatusToken(account) {
   const status = String(account?.status || "").toLowerCase();
   if (status === "success") return "success";
@@ -2721,13 +2775,15 @@ function terminalWechatWindowMarkup(window, loginStarted) {
       <div class="terminal-account-list">
         ${accounts.map((account, index) => {
           const displayAccount = terminalDisplayAccount(window, account, index, currentIndex);
+          const statusText = terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted);
+          const needsManualConfirm = terminalStatusNeedsManualConfirm(displayAccount, statusText);
           return `
-          <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
+          <div class="terminal-account-item ${index === currentIndex ? "active" : ""} ${needsManualConfirm ? "manual-confirm" : ""}">
             <div class="terminal-account-info">
               ${terminalAccountStatusAvatar(displayAccount)}
               <div>
                 <div class="terminal-acc-name">${displayAccount.display_name || displayAccount.account_key || `账号 ${displayAccount.id}`}</div>
-                <div class="terminal-acc-status" ${index === currentIndex ? `data-terminal-current-status="${window.id}"` : ""}>${terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted)}</div>
+                <div class="terminal-acc-status ${needsManualConfirm ? "manual-confirm" : ""}" ${index === currentIndex ? `data-terminal-current-status="${window.id}"` : ""}>${terminalAccountStatusMarkup(displayAccount, statusText)}</div>
               </div>
             </div>
             ${terminalAccountTaskBadge(displayAccount)}
@@ -2924,13 +2980,15 @@ function renderTerminalExecution() {
         <div class="terminal-account-list">
           ${accounts.map((account, index) => {
             const displayAccount = terminalDisplayAccount(window, account, index, currentIndex);
+            const statusText = terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted);
+            const needsManualConfirm = terminalStatusNeedsManualConfirm(displayAccount, statusText);
             return `
-            <div class="terminal-account-item ${index === currentIndex ? "active" : ""}">
+            <div class="terminal-account-item ${index === currentIndex ? "active" : ""} ${needsManualConfirm ? "manual-confirm" : ""}">
               <div class="terminal-account-info">
                 ${terminalAccountStatusAvatar(displayAccount)}
                 <div>
                   <div class="terminal-acc-name">${displayAccount.display_name || displayAccount.account_key || `账号 ${displayAccount.id}`}</div>
-                  <div class="terminal-acc-status">${terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted)}</div>
+                  <div class="terminal-acc-status ${needsManualConfirm ? "manual-confirm" : ""}">${terminalAccountStatusMarkup(displayAccount, statusText)}</div>
                 </div>
               </div>
             ${terminalAccountTaskBadge(displayAccount)}
@@ -3168,7 +3226,11 @@ function updateTerminalQrCountdowns() {
     }
     const currentStatusNode = windowNode.querySelector(`[data-terminal-current-status="${window.id}"]`);
     if (currentStatusNode) {
-      currentStatusNode.textContent = terminalWechatAccountStatusText(window, current, currentIndex, currentIndex, loginStarted);
+      const statusText = terminalWechatAccountStatusText(window, current, currentIndex, currentIndex, loginStarted);
+      const needsManualConfirm = terminalStatusNeedsManualConfirm(current, statusText);
+      currentStatusNode.innerHTML = terminalAccountStatusMarkup(current, statusText);
+      currentStatusNode.classList.toggle("manual-confirm", needsManualConfirm);
+      currentStatusNode.closest(".terminal-account-item")?.classList.toggle("manual-confirm", needsManualConfirm);
     }
   }
   updateTerminalManualCountdowns();
@@ -3191,7 +3253,10 @@ function startTerminalPolling() {
       if (!state.terminalExecution?.login_started) return;
       terminalPollRequestInFlight = true;
       try {
-        const nextState = await api("/api/terminal-execution/poll", { method: "POST" });
+        const nextState = await api("/api/terminal-execution/poll", {
+          method: "POST",
+          timeoutMs: TERMINAL_POLL_TIMEOUT_MS,
+        });
         if (currentView !== "terminal-execution" || terminalCurrentRoute() !== "wechat") return;
         state.terminalExecution = nextState;
         renderTerminalExecution();

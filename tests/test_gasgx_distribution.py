@@ -5,6 +5,7 @@ import os
 import hmac
 import hashlib
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -2250,7 +2251,7 @@ def test_public_brand_settings_supabase_uses_lightweight_columns(monkeypatch, tm
     assert {call["columns"] for call in fake.select_where_calls} == {"logo_asset_path", "id"}
 
 
-def test_terminal_poll_probes_all_windows_per_interval(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_limits_login_probe_work_per_interval(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2277,10 +2278,74 @@ def test_terminal_poll_probes_all_windows_per_interval(monkeypatch, tmp_path: Pa
     service.poll_terminal_execution()
     service.poll_terminal_execution()
 
-    assert calls == [1, 2, 3]
+    assert calls == [1]
     state = json.loads((runtime_dir / "terminal_execution_state.json").read_text(encoding="utf-8"))
     assert state["probe_cursor"] == 0
     assert state["next_probe_at"] > 0
+
+
+def test_terminal_poll_reopens_waiting_qr_when_browser_is_closed(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    windows = [
+        {
+            "id": 1,
+            "enabled": True,
+            "operator_wechat": "op1",
+            "color": "#3B82F6",
+            "current_index": 0,
+            "manual_available_at": 0,
+            "accounts": [{"id": 9, "status": "waiting_qr", "status_text": "请在已打开浏览器扫码", "task_id": None}],
+        }
+    ]
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps({"windows": windows, "config": [], "initialized": True, "login_started": True}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    opened: list[int] = []
+    monkeypatch.setattr(service, "_terminal_browser_runtime_for_account", lambda *_args, **_kwargs: {"browser_open": False})
+    monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("closed browser should reopen before probing")))
+
+    service._invalidate_terminal_execution_state_cache()
+    result = service.poll_terminal_execution()
+
+    assert opened == [9]
+    assert result["windows"][0]["accounts"][0]["status"] == "waiting_qr"
+
+
+def test_terminal_poll_marks_login_probe_timeout_without_hanging(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    windows = [
+        {
+            "id": 1,
+            "enabled": True,
+            "operator_wechat": "op1",
+            "color": "#3B82F6",
+            "current_index": 0,
+            "manual_available_at": 0,
+            "accounts": [{"id": 9, "status": "waiting_qr", "status_text": "请在已打开浏览器扫码", "task_id": None}],
+        }
+    ]
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps({"windows": windows, "config": [], "initialized": True, "login_started": True}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "_terminal_browser_runtime_for_account", lambda *_args, **_kwargs: {"browser_open": True})
+    monkeypatch.setattr(service, "TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: time.sleep(5) or {"status": "waiting"})
+
+    service._invalidate_terminal_execution_state_cache()
+    started_at = time.monotonic()
+    result = service.poll_terminal_execution()
+
+    assert time.monotonic() - started_at < 2.5
+    current = result["windows"][0]["accounts"][0]
+    assert current["status"] == "error"
+    assert "登录检测超时" in current["status_text"]
 
 
 def test_terminal_start_login_opens_all_windows_for_current_batch(monkeypatch, tmp_path: Path) -> None:
