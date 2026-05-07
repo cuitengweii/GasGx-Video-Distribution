@@ -255,7 +255,9 @@ def test_center_aligned_video_template_wraps_drawtext_inside_canvas() -> None:
     assert "fontcolor=#FF3366" in filter_complex
     assert "fontcolor=#66CCFF" in filter_complex
     assert filter_complex.count("fontsize=64") >= 2
-    assert filter_complex.count("x=(w-text_w)/2") >= 3
+    assert "x=92+(760-text_w)/2" in filter_complex
+    assert "x=116+(760-text_w)/2" in filter_complex
+    assert "x=70+(760-text_w)/2" in filter_complex
 
 
 def test_video_template_text_background_and_color_defaults_match_preview() -> None:
@@ -334,7 +336,7 @@ def test_video_template_text_effect_is_rendered_in_drawtext_filter() -> None:
     filter_complex, _inputs = _build_filter_complex(variant, _settings(), template_config=template)
 
     assert ":y=820+44*exp(-4*(t-0.00))" in filter_complex
-    assert ":x=(w-text_w)/2+8*sin(38*(t-0.00)):y=627" in filter_complex
+    assert ":x=116+(760-text_w)/2+8*sin(38*(t-0.00)):y=627" in filter_complex
 
 
 def test_hud_text_defaults_to_primary_color_when_not_overridden() -> None:
@@ -394,7 +396,7 @@ def test_hud_text_alignment_uses_hud_specific_template_value() -> None:
 
     filter_complex, _inputs = _build_filter_complex(variant, _settings(), template_config=template)
 
-    assert ":x=w-text_w-0:y=1762" in filter_complex
+    assert ":x=0+760-text_w:y=1762" in filter_complex
     assert ":x=0:y=1762" not in filter_complex
 
 

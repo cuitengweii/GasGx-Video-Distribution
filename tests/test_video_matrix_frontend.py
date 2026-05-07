@@ -865,15 +865,20 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert 'if (target === "title") return "titleBar"' in preview
     assert 'if (target === "hud") return "hudBar"' in preview
     assert "textTargetForAlignment(activeTarget)" in preview
-    assert 'const useHudAlignBox = target === "hud" && template[alignKey]' in preview
-    assert "node.style.left = useHudAlignBox ? designX(template.hud_bar_x ?? x) : designX(x)" in preview
-    assert "node.style.width = useHudAlignBox ? designX(template.hud_bar_width || 1080) : \"\"" in preview
+    assert "const boxWidth = textBoxWidth(template, target, x)" in preview
+    assert "node.style.left = designX(x)" in preview
+    assert "node.style.width = designX(boxWidth)" in preview
+    assert "function textBoxWidth(template, target, anchorX = 0)" in preview
     assert "文字调整区" in app
     assert 'data-visual-command="bar-align" data-value="left" title="字幕背板左对齐">左齐' in app
     assert 'data-visual-command="bar-align" data-value="center" title="字幕背板居中对齐">居中' in app
     assert 'data-visual-command="bar-align" data-value="right" title="字幕背板右对齐">右齐' in app
     assert 'data-value="hudBar" title="选择 字幕背板 背景">字幕背板背景' not in app
     assert 'data-visual-command="opacity"' in app
+    assert 'data-visual-command="text-align" data-value="left" title="文字靠左">文左' in app
+    assert 'data-visual-command="text-width-down" title="缩小文字框">框W-' in app
+    assert 'data-visual-command="background-full" title="背景自动顶满宽度">满宽' in app
+    assert 'data-visual-command="background-partial-center" title="背景居中块">居中块' in app
     assert "const oldWidth = clamp(Number(template[widthKey] || 1080), 120, 1080)" in preview
     assert "const centerX = oldX + oldWidth / 2" in preview
     assert "const newX = clamp(Math.round(centerX - newWidth / 2), 0, 1080 - newWidth)" in preview
@@ -984,10 +989,14 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "上标题背景高度" not in app
     assert "中标题背景高度" not in app
     assert "下标题背景高度" not in app
-    assert 'data-visual-command="select-target" data-value="slogan"' not in app
-    assert 'data-visual-command="select-target" data-value="title"' not in app
-    assert 'data-visual-command="select-target" data-value="hud"' not in app
+    assert 'data-visual-command="select-target" data-value="slogan"' in app
+    assert 'data-visual-command="select-target" data-value="title"' in app
+    assert 'data-visual-command="select-target" data-value="hud"' in app
     assert 'command === "select-target"' in preview
+    assert 'if (command === "text-width-down") adjustTextWidth(-80)' in preview
+    assert 'if (command === "background-full") setBackgroundFullWidth()' in preview
+    assert "freezeBackgroundPositionForText(target)" in preview
+    assert "updates.title_bg_y = Number(template.title_y ?? 0)" in preview
     assert ".visual-target-tabs" in css
     assert 'data-visual-command="width-down"' in app
     assert 'data-visual-command="width-up"' in app
@@ -1148,7 +1157,7 @@ def test_video_matrix_preview_keeps_video_audio_available() -> None:
     assert "body.preview-browser-mode .phone-mockup" in preview_html
     assert "transform: scale(var(--device-fit-scale, 1))" in preview_html
     assert "function updateDeviceScale" in preview_html
-    assert "window.innerHeight - 96" in preview_html
+    assert "const heightPadding = compact ? 92 : 96" in preview_html
     assert "window.addEventListener(\"resize\", () => updateDeviceScale())" in preview_html
     assert "max-height: 188px" in preview_html
     assert "max-height: 256px" in preview_html

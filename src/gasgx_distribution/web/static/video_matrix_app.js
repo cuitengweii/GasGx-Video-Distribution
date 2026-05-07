@@ -163,6 +163,7 @@ const endingTemplateModeOptions = [
   ["random", "视频片尾"],
 ];
 const PREVIEW_FRAME_PLACEHOLDER = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bwidth%3A100%25%3Bheight%3A100%25%3Boverflow%3Ahidden%3Bbackground%3A%23050505%3Bcolor-scheme%3Adark%3B%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E";
+const VIDEO_TEMPLATE_DEFAULT_TEXT_WIDTH = 760;
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -1399,14 +1400,21 @@ function visualTemplateToolbarHtml(template) {
   ).join("");
   return `
     <div class="visual-toolbar-panel" aria-label="文字可视化工具">
+      <div class="visual-target-tabs" aria-label="叠层选择">
+        <button type="button" data-visual-command="select-target" data-value="slogan" title="选择上标题">上标题</button>
+        <button type="button" data-visual-command="select-target" data-value="title" title="选择中标题">中标题</button>
+        <button type="button" data-visual-command="select-target" data-value="hud" title="选择下标题">下标题</button>
+      </div>
       <div class="visual-control-section visual-text-controls" aria-label="文字调整区">
         <div class="visual-section-title">文字调整区</div>
+        <button type="button" data-visual-command="text-align" data-value="left" title="文字靠左">文左</button>
+        <button type="button" data-visual-command="text-align" data-value="center" title="文字居中">文中</button>
+        <button type="button" data-visual-command="text-align" data-value="right" title="文字靠右">文右</button>
+        <button type="button" data-visual-command="text-width-down" title="缩小文字框">框W-</button>
+        <button type="button" data-visual-command="text-width-up" title="放大文字框">框W+</button>
         <button type="button" data-visual-command="size-down" title="缩小字号">A-</button>
         <button type="button" data-visual-command="size-up" title="放大字号">A+</button>
         <button type="button" data-visual-command="edit" title="编辑文字">编辑</button>
-        <button type="button" data-visual-command="align" data-value="left" title="左对齐">左齐</button>
-        <button type="button" data-visual-command="align" data-value="center" title="居中对齐">居中</button>
-        <button type="button" data-visual-command="align" data-value="right" title="右对齐">右齐</button>
         <label class="color-swatch-button" title="文字颜色">
           ${colorPickerIconSvg()}
           <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
@@ -1420,6 +1428,8 @@ function visualTemplateToolbarHtml(template) {
       </div>
       <div class="visual-control-section visual-hud-controls" aria-label="字幕背板调整区">
         <div class="visual-section-title">字幕背板调整区</div>
+        <button type="button" data-visual-command="background-full" title="背景自动顶满宽度">满宽</button>
+        <button type="button" data-visual-command="background-partial-center" title="背景居中块">居中块</button>
         <button type="button" data-visual-command="width-down" title="缩小背景宽度">W-</button>
         <button type="button" data-visual-command="width-up" title="放大背景宽度">W+</button>
         <button type="button" data-visual-command="height-down" title="缩小背景高度">H-</button>
@@ -1523,6 +1533,7 @@ function applyVisualTemplateUpdates(updates) {
     const out = input.parentElement.querySelector("output");
     if (out) out.textContent = value;
   });
+  refreshVideoTemplateGallery({ showLoading: false });
   scheduleVideoTemplateSave();
 }
 
@@ -1533,6 +1544,7 @@ function applyVisualTextUpdates(text) {
     const field = $(fieldMap[key]);
     if (field) field.value = value;
   });
+  refreshVideoTemplateGallery({ showLoading: false });
   scheduleStateSave();
 }
 
@@ -1668,8 +1680,8 @@ async function refreshVideoTemplatePreview() {
   clearImageLoading("videoTemplatePreview");
 }
 
-async function refreshVideoTemplateGallery() {
-  setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
+async function refreshVideoTemplateGallery(options = {}) {
+  if (options.showLoading !== false) setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
   Object.entries(templates).forEach(([id, template], index) => {
     cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(template)}<button type="button" class="video-template-name-button" data-template-name="${escapeHtml(id)}">${escapeHtml(videoTemplateDisplayName(id, template, index))}</button></div>`);
@@ -1691,14 +1703,16 @@ function videoTemplateCardPreviewHtml(template) {
   if (!imageUrl) return `<div class="video-template-thumb empty"><span>暂无背景图</span></div>`;
   return `
     <div class="video-template-thumb">
-      <img src="${escapeHtml(imageUrl)}" alt="">
-      <div class="video-template-thumb-mask"></div>
-      ${videoTemplateCardBarHtml(template, "slogan")}
-      ${videoTemplateCardBarHtml(template, "title")}
-      ${videoTemplateCardBarHtml(template, "hud")}
-      ${videoTemplateCardTextHtml(template, "slogan", $("headline").value)}
-      ${videoTemplateCardTextHtml(template, "title", $("subhead").value)}
-      ${videoTemplateCardHudHtml(template)}
+      <div class="video-template-thumb-canvas">
+        <img src="${escapeHtml(imageUrl)}" alt="">
+        <div class="video-template-thumb-mask"></div>
+        ${videoTemplateCardBarHtml(template, "slogan")}
+        ${videoTemplateCardBarHtml(template, "title")}
+        ${videoTemplateCardBarHtml(template, "hud")}
+        ${videoTemplateCardTextHtml(template, "slogan", $("headline").value)}
+        ${videoTemplateCardTextHtml(template, "title", $("subhead").value)}
+        ${videoTemplateCardHudHtml(template)}
+      </div>
     </div>`;
 }
 
@@ -1736,8 +1750,9 @@ function videoTemplateCardTextHtml(template, target, value) {
   const x = Number(template[`${target}_x`] ?? 0);
   const y = Number(template[`${target}_y`] ?? 0);
   const size = Number(template[`${target}_font_size`] ?? 36);
-  const color = template[`${target}_color`] || (target === "slogan" ? template.primary_color : template.secondary_color) || "#ffffff";
-  return `<div class="video-template-thumb-text" style="${videoTemplateCardTextStyle(x, y, size, color)}">${escapeHtml(value || "")}</div>`;
+  const color = template[`${target}_color`] || (target === "slogan" ? template.secondary_color : template.primary_color) || "#ffffff";
+  const targetClass = target === "slogan" ? "video-template-thumb-slogan" : "video-template-thumb-title";
+  return `<div class="video-template-thumb-text ${targetClass}" style="${videoTemplateCardTextStyle(template, target, x, y, size, color)}">${escapeHtml(value || "")}</div>`;
 }
 
 function videoTemplateCardHudHtml(template) {
@@ -1746,14 +1761,27 @@ function videoTemplateCardHudHtml(template) {
   const y = Number(template.hud_y ?? 0);
   const size = Number(template.hud_font_size ?? 30);
   const color = template.hud_color || template.primary_color || "#ffffff";
-  return `<div class="video-template-thumb-hud" style="${videoTemplateCardTextStyle(x, y, size, color)}">${escapeHtml($("hudText").value || "")}</div>`;
+  return `<div class="video-template-thumb-hud" style="${videoTemplateCardTextStyle(template, "hud", x, y, size, color)}">${escapeHtml($("hudText").value || "")}</div>`;
 }
 
-function videoTemplateCardTextStyle(x, y, size, color) {
-  const left = Math.max(0, Math.min(100, x / 1080 * 100));
-  const top = Math.max(0, Math.min(100, y / 1920 * 100));
+function videoTemplateCardTextStyle(template, target, x, y, size, color) {
+  const alignKey = `${target}_text_align`;
+  const align = template?.[alignKey] || "left";
+  const leftDesign = Number(x || 0);
+  const widthDesign = videoTemplateTextBoxWidth(template, target, leftDesign);
+  const left = Math.max(0, Math.min(100, leftDesign / 1080 * 100));
+  const top = Math.max(0, Math.min(100, Number(y || 0) / 1920 * 100));
   const fontSize = Math.max(6, Math.min(14, size / 1920 * 154));
-  return `left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;font-size:${fontSize.toFixed(1)}px;color:${escapeHtml(color)};`;
+  const width = Math.max(8, Math.min(100, widthDesign / 1080 * 100));
+  return `left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${width.toFixed(2)}%;max-width:${width.toFixed(2)}%;font-size:${fontSize.toFixed(1)}px;color:${escapeHtml(color)};text-align:${escapeHtml(align)};`;
+}
+
+function videoTemplateTextBoxWidth(template, target, anchorX = 0) {
+  const raw = template?.[`${target}_text_width`];
+  const fallback = VIDEO_TEMPLATE_DEFAULT_TEXT_WIDTH;
+  const width = Number(raw ?? fallback);
+  const maxWidth = Math.max(120, 1080 - Number(anchorX || 0));
+  return clamp(Number.isFinite(width) ? width : fallback, 120, maxWidth);
 }
 
 function videoTemplateCardBarStyle(x, y, width, height, color, opacity, radius) {

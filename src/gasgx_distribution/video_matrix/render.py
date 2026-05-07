@@ -532,9 +532,9 @@ def _drawtext_lines(
     filters: list[str] = []
     for index, line in enumerate(lines):
         if align == "center":
-            x_expr = "(w-text_w)/2"
+            x_expr = f"{anchor_x}+({max_width}-text_w)/2"
         elif align == "right":
-            x_expr = f"w-text_w-{anchor_x}"
+            x_expr = f"{anchor_x}+{max_width}-text_w"
         else:
             x_expr = str(anchor_x)
         y_expr = str(anchor_y + index * line_gap)
@@ -711,17 +711,11 @@ def _text_box_width(template: dict[str, Any], text_key: str, anchor_x: int) -> i
     explicit_width = template.get(f"{text_key}_text_width")
     if explicit_width is not None:
         try:
-            return max(120, min(1080, int(float(explicit_width))))
+            return max(120, min(1080 - anchor_x, int(float(explicit_width))))
         except (TypeError, ValueError):
             pass
-    align = _target_text_align(template, text_key)
-    if text_key == "hud":
-        if template.get("hud_text_align"):
-            return 1080
-        return max(120, 1080 - anchor_x * 2 if align == "center" else 1080 - anchor_x - 42)
-    if align == "center":
-        return max(120, min(1000, 1080 - 84))
-    return max(120, 1080 - anchor_x - 42)
+    fallback = 760
+    return max(120, min(1080 - anchor_x, fallback))
 
 
 def _drawtext_text_source(line: str, text_key: str, line_index: int, text_dir: Path | None) -> str:

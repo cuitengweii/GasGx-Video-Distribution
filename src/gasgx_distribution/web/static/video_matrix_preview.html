@@ -42,21 +42,38 @@
             width: 479.25px;
             height: 852px;
             border-radius: 55px;
-            border: 2px solid rgba(60, 165, 255, .92);
-            outline: 1px solid rgba(196, 232, 255, .38);
-            outline-offset: -6px;
+            border: 2px solid rgba(77, 177, 255, .92);
+            outline: 1px solid rgba(196, 232, 255, .42);
+            outline-offset: -5px;
             box-shadow:
-                0 0 0 9px rgba(10, 16, 24, .92),
-                0 0 0 12px rgba(92, 128, 162, .52),
+                0 0 0 9px rgba(10, 16, 24, .95),
+                0 0 0 12px rgba(112, 148, 184, .58),
                 0 18px 40px rgba(0,0,0,0.74),
-                0 0 24px rgba(60, 165, 255, .18);
+                0 0 28px rgba(77, 177, 255, .22);
             position: relative;
             overflow: hidden;
             background-color: #050505;
         }
 
+        .phone-mockup::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: 85;
+            border-radius: inherit;
+            pointer-events: none;
+            box-shadow:
+                inset 0 0 0 3px rgba(7, 14, 20, .84),
+                inset 0 0 0 4px rgba(195, 232, 255, .34),
+                inset 0 -14px 22px rgba(0,0,0,.20);
+        }
+
         .device-side-button {
-            display: none;
+            display: block;
+            opacity: .88;
+            background: linear-gradient(180deg, rgba(71, 89, 109, .98), rgba(35, 47, 61, .98));
+            border-color: rgba(0, 0, 0, .78);
+            box-shadow: inset 0 0 0 1px rgba(180, 206, 232, .18), 0 2px 4px rgba(0,0,0,.35);
         }
 
         #previewVideo {
@@ -1504,6 +1521,8 @@
       const previewVideoLoading = document.getElementById("previewVideoLoading");
       const PREVIEW_WIDTH = 479.25;
       const PREVIEW_HEIGHT = 852;
+      const DEFAULT_TEXT_BOX_WIDTH = 760;
+      const PARTIAL_BACKGROUND_WIDTH = 760;
       const GRID_COUNTS = [3, 6, 9];
       const DEVICE_PRESETS = [
         { id: "iphone-15-pro-max", name: "iPhone 15 Pro Max", width: 430, height: 932 },
@@ -1834,6 +1853,14 @@
         return Math.round(Number(value || 0) * 1920 / PREVIEW_HEIGHT);
       }
 
+      function textBoxWidth(template, target, anchorX = 0) {
+        const raw = template?.[`${target}_text_width`];
+        const fallback = DEFAULT_TEXT_BOX_WIDTH;
+        const width = Number(raw ?? fallback);
+        const maxWidth = Math.max(120, 1080 - Number(anchorX || 0));
+        return clamp(Number.isFinite(width) ? width : fallback, 120, maxWidth);
+      }
+
       function setLayerText(id, visible, value, x, y, size, color) {
         const node = document.getElementById(id);
         node.hidden = !visible;
@@ -1841,13 +1868,13 @@
         const target = id === "templateTitle" ? "title" : id === "templateSlogan" ? "slogan" : "hud";
         const template = currentPayload?.template || {};
         const alignKey = `${target}_text_align`;
+        const boxWidth = textBoxWidth(template, target, x);
         node.textContent = value || "";
         node.dataset.reflectionText = value || "";
-        const useHudAlignBox = target === "hud" && template[alignKey];
-        node.style.left = useHudAlignBox ? designX(template.hud_bar_x ?? x) : designX(x);
+        node.style.left = designX(x);
         node.style.top = designY(y);
-        node.style.width = useHudAlignBox ? designX(template.hud_bar_width || 1080) : "";
-        node.style.maxWidth = useHudAlignBox ? designX(template.hud_bar_width || 1080) : "";
+        node.style.width = designX(boxWidth);
+        node.style.maxWidth = designX(boxWidth);
         node.style.fontSize = designSize(size);
         node.style.color = color || "#ffffff";
         node.style.fontFamily = template[`${target}_font_family`] || "'Noto Sans SC', sans-serif";
@@ -2205,13 +2232,17 @@
         if (command === "select-target") selectTarget(value || "title");
         if (command === "size-down") adjustSize(-2);
         if (command === "size-up") adjustSize(2);
+        if (command === "text-width-down") adjustTextWidth(-80);
+        if (command === "text-width-up") adjustTextWidth(80);
         if (command === "width-down") adjustWidth(-24);
         if (command === "width-up") adjustWidth(24);
         if (command === "height-down") adjustHeight(-12);
         if (command === "height-up") adjustHeight(12);
         if (command === "edit") enterTextEdit();
-        if (command === "align") setTextAlign(value || "left");
+        if (command === "align" || command === "text-align") setTextBoxAlign(value || "left");
         if (command === "bar-align") setBackgroundAlign(value || "left");
+        if (command === "background-full") setBackgroundFullWidth();
+        if (command === "background-partial-center") setBackgroundPartialCenter();
         if (command === "font-family") setFontFamily(value);
         if (command === "text-style") setTextStyle(value);
         if (command === "text-effect") setTextEffect(value);
@@ -2252,17 +2283,63 @@
 
       function pointerSelectionTarget(event, node) {
         const target = node.dataset.templateTarget;
-        if (!isBackgroundTarget(target)) return target;
-        const textNode = pairedTextNode(target);
-        if (!textNode || textNode.hidden) return target;
-        const rect = textNode.getBoundingClientRect();
-        const insideText = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
-        return insideText ? textNode.dataset.templateTarget : target;
+        if (isBackgroundTarget(target)) {
+          if (event.altKey) return target;
+          const textNode = pairedTextNode(target);
+          if (!textNode || textNode.hidden) return target;
+          return isPointOnTextContent(event, textNode) ? textNode.dataset.templateTarget : target;
+        }
+        if (event.altKey) return pairedHudTarget(target);
+        const backgroundNode = pairedBackgroundNode(target);
+        if (backgroundNode && !backgroundNode.hidden && !isPointOnTextContent(event, node)) {
+          return backgroundNode.dataset.templateTarget;
+        }
+        return target;
       }
 
       function pairedTextNode(target) {
         const textTarget = pairedTextTarget(target);
         return document.querySelector(`[data-template-target="${textTarget}"].vm-template-text`);
+      }
+
+      function pairedBackgroundNode(target) {
+        const backgroundTarget = pairedHudTarget(target);
+        return document.querySelector(`[data-template-target="${backgroundTarget}"].vm-template-editable`);
+      }
+
+      function isPointOnTextContent(event, node) {
+        const padding = 8;
+        const rects = textInkRects(node);
+        if (!rects.length) {
+          const rect = node.getBoundingClientRect();
+          return event.clientX >= rect.left - padding
+            && event.clientX <= rect.right + padding
+            && event.clientY >= rect.top - padding
+            && event.clientY <= rect.bottom + padding;
+        }
+        return rects.some((rect) => event.clientX >= rect.left - padding
+          && event.clientX <= rect.right + padding
+          && event.clientY >= rect.top - padding
+          && event.clientY <= rect.bottom + padding);
+      }
+
+      function textInkRects(node) {
+        const rects = [];
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        let textNode = walker.nextNode();
+        while (textNode) {
+          const value = textNode.nodeValue || "";
+          for (let index = 0; index < value.length; index += 1) {
+            if (!value[index].trim()) continue;
+            const range = document.createRange();
+            range.setStart(textNode, index);
+            range.setEnd(textNode, index + 1);
+            rects.push(...Array.from(range.getClientRects()));
+            range.detach();
+          }
+          textNode = walker.nextNode();
+        }
+        return rects;
       }
 
       function ensureTextTarget() {
@@ -2365,9 +2442,30 @@
       }
 
       function targetPositionUpdates(target, x, y) {
-        if (target === "title") return { title_x: toDesignX(x), title_y: toDesignY(y) };
-        if (target === "slogan") return { slogan_x: toDesignX(x), slogan_y: toDesignY(y) };
-        return { hud_x: toDesignX(x), hud_y: toDesignY(y) };
+        const frozenBackground = freezeBackgroundPositionForText(target);
+        if (target === "title") return { ...frozenBackground, title_x: toDesignX(x), title_y: toDesignY(y) };
+        if (target === "slogan") return { ...frozenBackground, slogan_x: toDesignX(x), slogan_y: toDesignY(y) };
+        return { ...frozenBackground, hud_x: toDesignX(x), hud_y: toDesignY(y) };
+      }
+
+      function freezeBackgroundPositionForText(target) {
+        const template = currentPayload?.template || {};
+        if (target === "title") {
+          const updates = {};
+          if (template.title_bg_x === undefined) updates.title_bg_x = Number(template.title_bg_x ?? 0);
+          if (template.title_bg_y === undefined) updates.title_bg_y = Number(template.title_y ?? 0);
+          return updates;
+        }
+        if (target === "slogan") {
+          const updates = {};
+          if (template.slogan_bg_x === undefined) updates.slogan_bg_x = Number(template.slogan_bg_x ?? 0);
+          if (template.slogan_bg_y === undefined) updates.slogan_bg_y = Number(template.slogan_y ?? 0);
+          return updates;
+        }
+        const updates = {};
+        if (template.hud_bar_x === undefined) updates.hud_bar_x = Number(template.hud_bar_x ?? 0);
+        if (template.hud_bar_y === undefined) updates.hud_bar_y = Number(template.hud_y ?? 0);
+        return updates;
       }
 
       function barPositionUpdates(target, x, y) {
@@ -2382,6 +2480,20 @@
         const template = currentPayload?.template || {};
         const key = `${target}_font_size`;
         postTemplateUpdates({ [key]: Math.max(8, Number(template[key] || 24) + delta) });
+      }
+
+      function adjustTextWidth(delta) {
+        const target = textTargetForControl(activeTarget || "title");
+        const template = currentPayload?.template || {};
+        const xKey = `${target}_x`;
+        const widthKey = `${target}_text_width`;
+        const oldX = clamp(Number(template[xKey] || 0), 0, 1080);
+        const oldWidth = textBoxWidth(template, target, oldX);
+        const newWidth = clamp(oldWidth + delta, 120, 1080);
+        const centerX = oldX + oldWidth / 2;
+        const newX = clamp(Math.round(centerX - newWidth / 2), 0, 1080 - newWidth);
+        selectTarget(target);
+        postTemplateUpdates({ [widthKey]: newWidth, [xKey]: newX });
       }
 
       function adjustWidth(delta) {
@@ -2444,6 +2556,19 @@
         updateAlignButtons(align);
       }
 
+      function setTextBoxAlign(value) {
+        const target = textTargetForControl(activeTarget || "title");
+        const align = value || "left";
+        const template = currentPayload?.template || {};
+        const width = textBoxWidth(template, target, Number(template[`${target}_x`] || 0));
+        selectTarget(target);
+        postTemplateUpdates({
+          [`${target}_text_align`]: align,
+          [`${target}_x`]: textBoxScreenAlignX(align, width),
+        });
+        updateAlignButtons(align);
+      }
+
       function updateAlignButtons(value) {
         document.querySelectorAll(".vm-align-btn").forEach((button) => {
           button.disabled = !textTargetForAlignment(activeTarget);
@@ -2453,6 +2578,11 @@
 
       function textTargetForAlignment(target) {
         return target && !isBackgroundTarget(target) ? target : "";
+      }
+
+      function textTargetForControl(target) {
+        if (!target) return "title";
+        return isBackgroundTarget(target) ? pairedTextTarget(target) : target;
       }
 
       function backgroundTargetForControl(target) {
@@ -2525,6 +2655,23 @@
         postTemplateUpdates({ [backgroundTargetXKey(backgroundTarget)]: backgroundScreenAlignX(value, width) });
       }
 
+      function setBackgroundFullWidth() {
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
+        const widthKey = backgroundTargetWidthKey(backgroundTarget);
+        const xKey = backgroundTargetXKey(backgroundTarget);
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [widthKey]: 1080, [xKey]: 0 });
+      }
+
+      function setBackgroundPartialCenter() {
+        const backgroundTarget = backgroundTargetForControl(activeTarget || "title");
+        const widthKey = backgroundTargetWidthKey(backgroundTarget);
+        const xKey = backgroundTargetXKey(backgroundTarget);
+        const width = Math.min(PARTIAL_BACKGROUND_WIDTH, 1080);
+        selectTarget(backgroundTarget);
+        postTemplateUpdates({ [widthKey]: width, [xKey]: backgroundScreenAlignX("center", width) });
+      }
+
       function backgroundTargetXKey(target) {
         if (target === "sloganBar") return "slogan_bg_x";
         if (target === "titleBar") return "title_bg_x";
@@ -2536,6 +2683,14 @@
         if (value === "right") return 1080 - safeWidth;
         if (value === "center") return Math.round((1080 - safeWidth) / 2);
         return 0;
+      }
+
+      function textBoxScreenAlignX(value, width) {
+        const safeWidth = clamp(Number(width || DEFAULT_TEXT_BOX_WIDTH), 120, 1080);
+        const margin = safeWidth >= 1080 - 84 ? 0 : 42;
+        if (value === "right") return clamp(1080 - safeWidth - margin, 0, 1080 - safeWidth);
+        if (value === "center") return Math.round((1080 - safeWidth) / 2);
+        return margin;
       }
 
       function hudScreenAlignX(value) {
