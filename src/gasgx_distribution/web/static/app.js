@@ -5082,6 +5082,7 @@ function activateView(view, updateHash = true) {
   setViewHeader(view);
   applyPermissionLimitedState();
   if (view === "video-matrix") {
+    setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在加载视频生成工作台。");
     mountVideoMatrixWorkbench();
   } else {
     const forceReload = view === "settings";
@@ -6197,13 +6198,19 @@ function vmDebounce(fn, delay) { let timer; return (...args) => { clearTimeout(t
 */
 function mountVideoMatrixWorkbench() {
   const section = document.querySelector("#video-matrix");
-  if (!section || section.dataset.mounted === "true") return;
+  if (!section) return;
+  if (section.dataset.mounted === "true") {
+    window.setTimeout(() => setWorkspaceLoading(false), 180);
+    return;
+  }
   section.dataset.mounted = "true";
   section.innerHTML = `<iframe class="video-matrix-frame" src="/static/video_matrix.html?embed=1" title="GasGx 视频生成工作台"></iframe>`;
   section.querySelector(".video-matrix-frame")?.addEventListener("load", () => {
     const theme = SHELL_THEMES.find((item) => item.id === localStorage.getItem(SHELL_THEME_KEY)) || SHELL_THEMES[0];
     broadcastShellTheme(theme);
+    setWorkspaceLoading(false);
   });
+  window.setTimeout(() => setWorkspaceLoading(false), 3000);
 }
 
 function unmountVideoMatrixWorkbench() {
