@@ -498,8 +498,8 @@ nav {
 }
 
 .workspace-loading {
-  position: absolute;
-  inset: 0;
+  position: fixed;
+  inset: 0 0 0 260px;
   z-index: 80;
   display: grid;
   place-items: center;
@@ -507,6 +507,10 @@ nav {
   background: rgba(8, 12, 10, 0.58);
   backdrop-filter: blur(12px);
   pointer-events: auto;
+}
+
+body.sidebar-collapsed .workspace-loading {
+  left: 0;
 }
 
 .workspace-loading.hidden {
@@ -2255,6 +2259,7 @@ select option {
   }
 
   .workspace-loading {
+    inset: 0;
     padding: 14px;
   }
 
