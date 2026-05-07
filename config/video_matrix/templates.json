@@ -25,7 +25,10 @@
     "slogan_bg_y": 733,
     "hud_bar_x": 0,
     "slogan_bg_height": 176,
-    "title_text_align": "center"
+    "title_text_align": "center",
+    "slogan_color": "#e5eee2",
+    "hud_color": "#eef3ed",
+    "title_color": "#e6ece4"
   },
   "center_brand": {
     "name": "Center Brand",
@@ -60,22 +63,30 @@
   "clean_data": {
     "name": "Clean Data",
     "show_hud": true,
-    "show_slogan": false,
+    "show_slogan": true,
     "show_title": true,
-    "hud_bar_y": 1540,
+    "hud_bar_y": 1252,
     "hud_bar_height": 180,
-    "hud_x": 48,
-    "hud_y": 1606,
+    "hud_x": 147,
+    "hud_y": 1293,
     "hud_font_size": 34,
-    "slogan_x": 42,
-    "slogan_y": 48,
+    "slogan_x": 157,
+    "slogan_y": 812,
     "slogan_font_size": 52,
-    "title_x": 48,
-    "title_y": 76,
+    "title_x": 157,
+    "title_y": 421,
     "title_font_size": 36,
     "hud_bar_color": "#0E1A10",
     "hud_bar_opacity": 0.34,
     "primary_color": "#5DD62C",
-    "secondary_color": "#FFFFFF"
+    "secondary_color": "#FFFFFF",
+    "title_bg_height": 128,
+    "hud_bar_x": 0,
+    "slogan_bg_height": 176,
+    "hud_color": "#eef5eb",
+    "hud_text_style": "glow",
+    "slogan_text_style": "glow",
+    "title_color": "#d7ddd4",
+    "title_text_style": "glow"
   }
 }

@@ -1578,12 +1578,35 @@ function renderHelpMarkdown(markdown) {
   return html.join("");
 }
 
-async function openHelpDocument(path) {
+function helpDocNameFromPath(path) {
+  return String(path || "").split("/").pop() || "";
+}
+
+function helpCenterDocPathFromLocation(pathname = window.location.pathname) {
+  const match = String(pathname || "").match(/^\/help-center\/([^/]+\.md)$/i);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return "";
+  }
+}
+
+function helpCenterDocUrl(docName) {
+  return `/help-center/${encodeURIComponent(String(docName || "").trim())}`;
+}
+
+function setHelpCenterStandaloneMode(active) {
+  document.body.classList.toggle("help-doc-standalone", Boolean(active));
+}
+
+async function openHelpDocument(path, { syncUrl = true } = {}) {
   const docName = String(path || "").split("/").pop();
   if (!docName) return;
   const reader = document.querySelector("#help-doc-reader");
   const body = document.querySelector("#help-reader-body");
   if (!reader || !body) return;
+  if (syncUrl) window.history.replaceState(null, "", helpCenterDocUrl(docName));
   reader.classList.remove("hidden");
   setWorkspaceLoading(true, "加载帮助文档...", "正在读取知识库内容。");
   body.innerHTML = loadingInline("加载帮助文档...");
@@ -1592,7 +1615,11 @@ async function openHelpDocument(path) {
     const firstTitle = String(doc.content || "").split(/\r?\n/).find((line) => line.startsWith("# "));
     document.querySelector("#help-reader-title").textContent = firstTitle ? firstTitle.replace(/^#\s*/, "") : doc.name;
     body.innerHTML = renderHelpMarkdown(doc.content);
-    reader.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!window.location.pathname.startsWith("/help-center/")) {
+      reader.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      window.scrollTo({ top: 0, left: 0 });
+    }
   } catch (error) {
     body.innerHTML = `<div class="muted">加载失败：${escapeHtml(error?.message || "unknown error")}</div>`;
   } finally {
@@ -1603,22 +1630,31 @@ async function openHelpDocument(path) {
 function initHelpCenter() {
   document.querySelectorAll(".help-doc-card").forEach((card) => {
     const docPath = (card.querySelector("code")?.textContent || "").trim();
-    const docName = docPath.split("/").pop();
+    const docName = helpDocNameFromPath(docPath);
     card.setAttribute("tabindex", "0");
     card.setAttribute("role", "button");
     card.addEventListener("click", () => {
       if (!docName) return;
-      openHelpDocument(docPath);
+      setHelpCenterStandaloneMode(true);
+      openHelpDocument(docPath, { syncUrl: true });
     });
     card.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         if (!docName) return;
-        openHelpDocument(docPath);
+        setHelpCenterStandaloneMode(true);
+        openHelpDocument(docPath, { syncUrl: true });
       }
     });
   });
   document.querySelector("#help-reader-close")?.addEventListener("click", () => {
+    if (window.location.pathname.startsWith("/help-center/")) {
+      setHelpCenterStandaloneMode(false);
+      window.history.replaceState(null, "", "/#help-center");
+      document.querySelector("#help-doc-reader")?.classList.add("hidden");
+      window.scrollTo({ top: 0, left: 0 });
+      return;
+    }
     document.querySelector("#help-doc-reader")?.classList.add("hidden");
   });
 }
@@ -5102,6 +5138,9 @@ function activateView(view, updateHash = true) {
   document.body.classList.remove("mobile-nav-open");
   document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", "false");
   setViewHeader(view);
+  if (view !== "help-center" || !window.location.pathname.startsWith("/help-center/")) {
+    setHelpCenterStandaloneMode(false);
+  }
   applyPermissionLimitedState();
   if (view === "video-matrix") {
     setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在加载视频生成工作台。");
@@ -5118,7 +5157,8 @@ function activateView(view, updateHash = true) {
   }
   if (updateHash && window.location.hash !== `#${view}`) {
     const hash = view === "terminal-execution" ? "#terminal-execution" : `#${view}`;
-    window.history.replaceState(null, "", hash);
+    const pathPrefix = window.location.pathname.startsWith("/help-center/") && view !== "help-center" ? "/" : window.location.pathname;
+    window.history.replaceState(null, "", `${pathPrefix}${hash}`);
   }
   window.scrollTo({ top: 0, left: 0 });
 }
@@ -6407,6 +6447,16 @@ document.addEventListener("click", async (event) => {
 }, true);
 
 window.addEventListener("load", () => {
+  const helpDocFromPath = helpCenterDocPathFromLocation();
+  if (helpDocFromPath) {
+    setHelpCenterStandaloneMode(true);
+    activateView("help-center", false);
+    openHelpDocument(helpDocFromPath, { syncUrl: false });
+    setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 50);
+    setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 300);
+    return;
+  }
+  setHelpCenterStandaloneMode(false);
   const requested = terminalRouteFromHash();
   if (requested.view) {
     if (requested.view === "terminal-execution") state.terminalRoute = requested.route;

@@ -16,6 +16,47 @@
     -> [输出文件 + 进度状态]
 ```
 
+## 多素材碎片拼接与去重架构图
+
+文档更新时间：2026-05-07
+
+```text
+[ingestion 素材池]
+    -> [按 category 分桶 buckets]
+    -> [recent_limits / active_category_ids 过滤]
+    -> [ClipMetadata(clip_id, category, duration, normalized_path)]
+
+[composition_sequence + beat_grid + video_duration_max]
+    -> [_pick_segments 逐段拼片]
+    -> [按类别挑 clip: _pick_clip(优先 fresh clip_id, 回退全量)]
+    -> [随机 start_time]
+    -> [按节拍对齐 duration: _align_duration]
+    -> [segment_key = clip_id:start_time:duration]
+
+[候选 variant 组装]
+    -> [注入标题/口号/HUD/lut/zoom/mirror/offset]
+    -> [signature = sha1(segments + 文案 + 视觉参数 + HUD)]
+
+[去重判定]
+    -> [批内去重: signature ∉ seen_signatures ?]
+    -> [历史去重: signature ∉ historical_signatures ?]
+    -> [片段去重: segment_key 不触碰 recent_segment_keys ?]
+    -> [不满足则重抽, attempts <= max_variant_attempts]
+    -> [超限且有 history_collision: 降级接受]
+    -> [超限且无可用候选: 抛错终止]
+
+[通过去重的 variants]
+    -> [render_variant 并发渲染]
+    -> [视频/封面/文案/manifest 输出]
+```
+
+## 关键去重键
+
+- `clip_id`：素材级唯一标识（来源路径哈希）。
+- `segment_key`：片段级唯一键，格式为 `clip_id:start_time:duration`。
+- `signature`：变体级唯一签名，包含片段组合 + 文案 + 视觉扰动参数 + HUD 文本。
+- `max_variant_attempts`：单条变体最大重试次数；超过后按实现走降级接受或抛错。
+
 ## 核心模块
 
 - `src/gasgx_distribution/video_matrix/pipeline.py`：组织生成任务流程。

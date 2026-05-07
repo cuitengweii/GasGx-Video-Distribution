@@ -192,7 +192,11 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def disable_console_cache(request: Request, call_next):
         response = await call_next(request)
-        if request.url.path == "/" or request.url.path.startswith("/static/"):
+        if (
+            request.url.path == "/"
+            or request.url.path.startswith("/static/")
+            or request.url.path.startswith("/help-center/")
+        ):
             response.headers["Cache-Control"] = "no-store, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
@@ -215,6 +219,16 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     def index() -> FileResponse:
+        return FileResponse(static_dir / "index.html")
+
+    @app.get("/help-center/{doc_name}")
+    def help_center_index(doc_name: str) -> FileResponse:
+        safe_name = Path(doc_name).name
+        if safe_name != doc_name or not safe_name.endswith(".md"):
+            raise HTTPException(status_code=404, detail="help doc not found")
+        path = Path(__file__).resolve().parents[2] / "docs" / "help" / safe_name
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="help doc not found")
         return FileResponse(static_dir / "index.html")
 
     @app.get("/api/summary")

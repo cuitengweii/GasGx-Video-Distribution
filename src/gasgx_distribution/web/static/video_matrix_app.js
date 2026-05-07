@@ -774,7 +774,11 @@ function renderEndingTemplatePanel(data) {
     <div class="ending-template-upload-row">
       <label class="ending-template-upload">
         <span>上传片尾 MP4</span>
-        <input id="endingTemplateUpload" type="file" accept=".mp4,video/mp4">
+        <div class="ending-template-upload-trigger">
+          <span class="ending-template-upload-btn">选择文件</span>
+          <span id="endingTemplateUploadName" class="ending-template-upload-name">未选择任何文件</span>
+          <input id="endingTemplateUpload" type="file" accept=".mp4,video/mp4">
+        </div>
         <small>仅支持 MP4，建议文件名保持原始素材名，上传后会进入片尾目录。</small>
       </label>
     </div>
@@ -801,10 +805,16 @@ function renderEndingTemplatePanel(data) {
   $("openEndingTemplateDirInline").onclick = () => openFolder(endingTemplateState.directory);
   $("endingTemplateUpload").onchange = async () => {
     const file = $("endingTemplateUpload").files?.[0];
-    if (!file) return;
+    const fileName = $("endingTemplateUploadName");
+    if (!file) {
+      if (fileName) fileName.textContent = "未选择任何文件";
+      return;
+    }
+    if (fileName) fileName.textContent = file.name;
     if (!/\.mp4$/i.test(file.name)) {
       showEndingTemplateUploadStatus("仅支持 MP4 文件，请重新选择。", "warn");
       $("endingTemplateUpload").value = "";
+      if (fileName) fileName.textContent = "未选择任何文件";
       return;
     }
     const form = new FormData();
@@ -813,6 +823,7 @@ function renderEndingTemplatePanel(data) {
       showEndingTemplateUploadStatus("正在上传片尾 MP4...", "loading");
       await api("/api/video-matrix/ending-templates/upload", { method: "POST", body: form });
       $("endingTemplateUpload").value = "";
+      if (fileName) fileName.textContent = "未选择任何文件";
       const data = await api("/api/video-matrix/state");
       renderEndingTemplatePanel(data);
       await refreshEndingTemplatePreview();

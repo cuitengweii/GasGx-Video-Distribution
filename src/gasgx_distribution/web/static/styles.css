@@ -1120,7 +1120,7 @@ select option {
 }
 
 .client-overview {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   margin-bottom: 0;
 }
 
@@ -4126,6 +4126,19 @@ select option {
   border: 1px solid var(--border-line);
   border-radius: 8px;
   background: #0b0b0b;
+}
+
+body.help-doc-standalone #help-center .help-hero-panel,
+body.help-doc-standalone #help-center .help-category-section {
+  display: none;
+}
+
+body.help-doc-standalone #help-center .help-layout {
+  gap: 0;
+}
+
+body.help-doc-standalone #help-center .help-reader-panel {
+  min-height: calc(100vh - 180px);
 }
 
 .help-grid {
