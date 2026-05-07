@@ -157,7 +157,6 @@ const terminalAutoPublishWindowIds = new Set();
 const terminalAutoPublishStageByWindowId = new Map();
 let terminalErrorModalSignature = "";
 let terminalFullLoadingCount = 0;
-let workspaceLoadingCount = 0;
 
 const TERMINAL_BROWSER_WARMUP_TIMEOUT_MS = 12000;
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -1408,7 +1407,6 @@ function setWorkspaceLoading(active, message = "页面加载中，请稍候...",
   const mask = document.querySelector("#workspace-loading");
   if (!mask) return;
   if (active) {
-    workspaceLoadingCount += 1;
     const textNode = mask.querySelector("[data-workspace-loading-text]");
     const detailNode = mask.querySelector("[data-workspace-loading-detail]");
     if (textNode) textNode.textContent = message;
@@ -1417,8 +1415,6 @@ function setWorkspaceLoading(active, message = "页面加载中，请稍候...",
     mask.setAttribute("aria-hidden", "false");
     return;
   }
-  workspaceLoadingCount = Math.max(0, workspaceLoadingCount - 1);
-  if (workspaceLoadingCount > 0) return;
   mask.classList.add("hidden");
   mask.setAttribute("aria-hidden", "true");
 }
@@ -5086,7 +5082,7 @@ function activateView(view, updateHash = true) {
     setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在加载视频生成工作台。");
     mountVideoMatrixWorkbench();
   } else {
-    if (view === "terminal-execution" && terminalCurrentRoute() === "hub") {
+    if (view === "terminal-execution" && terminalCurrentRoute() === "hub" && !loadedViews.has(view)) {
       setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在同步右侧面板数据。");
     }
     const forceReload = view === "settings";
