@@ -2569,6 +2569,7 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const runStatus = String(run?.status || "").toLowerCase();
   const runActiveForCurrent = Number(run?.account_id || 0) === Number(current?.id || 0);
   const publishRunning = runActiveForCurrent && runStatus === "running";
+  const publishStopping = runActiveForCurrent && runStatus === "stopping";
   const publishSucceeded = runActiveForCurrent && runStatus === "success";
   const publishManualConfirmableFailure = runActiveForCurrent && terminalRunIsManualConfirmableFailure(run);
   const qrState = terminalQrLifecycle(window);
@@ -2577,12 +2578,15 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const browserClosed = qrState.placeholderState === "browser_closed";
   const primaryIssue = terminalPrecheckPrimaryIssue(window);
   const hasP0Issue = Boolean(primaryIssue && primaryIssue.level === "p0");
-  const canPublish = loginStarted && hasCurrent && isReady && !browserClosed && !publishRunning && !publishSucceeded && !isSuccess && !hasP0Issue && !confirmingNext;
+  const canPublish = loginStarted && hasCurrent && isReady && !browserClosed && !publishRunning && !publishStopping && !publishSucceeded && !isSuccess && !hasP0Issue && !confirmingNext;
   const canConfirm = loginStarted && hasCurrent && (publishSucceeded || publishManualConfirmableFailure) && !isSuccess && !confirmingNext;
   const hasNext = currentIndex + 1 < accounts.length;
-  const publishButtonLoading = publishRunning;
+  const publishButtonLoading = publishRunning || publishStopping;
+  const publishLoadingLabel = publishStopping ? "停止中" : "发布中";
   const publishLabel = !hasCurrent
     ? "全部完成"
+    : publishStopping
+      ? "停止中"
     : publishRunning
       ? "发布中"
       : publishSucceeded
@@ -2603,7 +2607,7 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const confirmLabel = canConfirm ? confirmReadyLabel : confirmIdleLabel;
   const publishButtonClass = `terminal-col-btn ${publishButtonLoading ? "loading strong-loading terminal-publish-loading" : ""}`;
   const publishButtonBusy = publishButtonLoading ? "true" : "false";
-  const publishButtonContent = publishButtonLoading ? terminalPublishLoadingInline("发布中") : publishLabel;
+  const publishButtonContent = publishButtonLoading ? terminalPublishLoadingInline(publishLoadingLabel) : publishLabel;
   return `
     <div class="terminal-window-actions">
       <button class="${publishButtonClass}" type="button" data-terminal-manual="${window.id}" ${canPublish ? "" : "disabled"} aria-busy="${publishButtonBusy}">${publishButtonContent}</button>
