@@ -3212,6 +3212,54 @@ def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path
     assert window["accounts"][1]["status_text"] == "\u8bf7\u5728\u5df2\u6253\u5f00\u6d4f\u89c8\u5668\u626b\u7801"
     assert window["qr_url"] == ""
 
+
+def test_terminal_open_account_qr_marks_current_account_ready_when_login_is_already_valid(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": str(runtime_dir / "terminal_qr_cache" / "window-01.png"),
+                        "qr_url": "/api/terminal-execution/windows/1/qr-image",
+                        "accounts": [
+                            {"id": 1, "status": "waiting_qr", "status_text": "请在已打开浏览器扫码", "task_id": None, "publish_success_count": 0}
+                        ],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "_terminal_browser_runtime_for_account", lambda *_args, **_kwargs: {"browser_open": True})
+    monkeypatch.setattr(service, "_check_terminal_login_status_with_timeout", lambda *_args, **_kwargs: {"status": "ready"})
+    monkeypatch.setattr(service, "_inject_terminal_account_browser_marker", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "_raise_account_browser_window", lambda *_args, **_kwargs: True)
+
+    result = service.open_terminal_account_qr(1, 1)
+
+    window = result["windows"][0]
+    account = window["accounts"][0]
+    assert account["status"] == "ready"
+    assert account["status_text"] == "已登录，等待手动发布"
+    assert window["qr_url"] == ""
+
+
 def test_terminal_qr_cache_uses_current_page_source_first(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"

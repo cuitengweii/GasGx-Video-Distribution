@@ -4684,6 +4684,14 @@ body.sidebar-collapsed .terminal-init-modal {
   min-height: 0;
 }
 
+.terminal-task-column.confirming-next {
+  box-shadow: inset 0 0 0 2px var(--term-color), 0 0 26px var(--term-color-dim);
+}
+
+.terminal-task-column.confirming-next .terminal-color-anchor {
+  animation: terminal-confirm-sweep 0.85s ease-in-out infinite alternate;
+}
+
 .terminal-color-anchor {
   height: 4px;
   width: 100%;
@@ -5059,12 +5067,22 @@ body.sidebar-collapsed .terminal-init-modal {
 .terminal-acc-status {
   font-size: 12px;
   color: var(--terminal-text-sub);
+  display: block;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: normal;
-  word-break: break-all;
-  line-height: 1.25;
-  max-height: calc(1.25em * 2);
+  white-space: nowrap;
+  word-break: normal;
+  line-height: 1.2;
+  max-height: none;
+}
+
+.terminal-acc-status.compact-sm {
+  font-size: 11px;
+}
+
+.terminal-acc-status.compact {
+  font-size: 10px;
 }
 
 .terminal-acc-status.manual-confirm {
@@ -5074,7 +5092,13 @@ body.sidebar-collapsed .terminal-init-modal {
   color: #ffb4b4;
   font-weight: 900;
   max-height: none;
-  white-space: normal;
+  white-space: nowrap;
+}
+
+.terminal-acc-status.manual-confirm .terminal-acc-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .terminal-acc-warning-icon {
@@ -5168,9 +5192,96 @@ body.sidebar-collapsed .terminal-init-modal {
   font-weight: 700;
 }
 
+.terminal-col-btn.strong-loading {
+  background: var(--term-color);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--term-color-dim), 0 0 18px var(--term-color-dim);
+}
+
+.terminal-col-btn.strong-loading .loading-inline {
+  justify-content: center;
+  padding: 0;
+  color: #fff;
+  font-weight: 900;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.terminal-col-btn.strong-loading .btn-spinner {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
+
+.terminal-col-btn.terminal-publish-loading {
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal-col-btn.terminal-publish-loading::after {
+  content: "";
+  position: absolute;
+  inset: -2px auto -2px -36%;
+  width: 32%;
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0));
+  animation: terminal-publish-sheen 1.45s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.terminal-publish-loading-inline {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.terminal-publish-dots {
+  display: inline-block;
+  width: 16px;
+  text-align: left;
+  letter-spacing: 1px;
+  animation: terminal-publish-dots 0.95s steps(4, end) infinite;
+}
+
+@keyframes terminal-publish-sheen {
+  0% {
+    left: -36%;
+    opacity: 0.25;
+  }
+  46% {
+    opacity: 0.75;
+  }
+  100% {
+    left: 108%;
+    opacity: 0.05;
+  }
+}
+
+@keyframes terminal-publish-dots {
+  0% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.15;
+  }
+}
+
 .terminal-col-btn.secondary {
   border-color: rgba(255, 255, 255, 0.18);
   color: var(--terminal-text-main);
+}
+
+.terminal-col-btn.secondary.strong-loading,
+.terminal-col-btn.strong-loading:disabled {
+  background: var(--term-color);
+  border-color: var(--term-color);
+  color: #fff;
+  cursor: wait;
+  opacity: 1;
 }
 
 .terminal-col-btn:disabled {
@@ -5178,6 +5289,15 @@ body.sidebar-collapsed .terminal-init-modal {
   color: var(--terminal-text-sub);
   border-color: var(--terminal-glass-border);
   cursor: not-allowed;
+}
+
+.terminal-col-btn.secondary.strong-loading:disabled,
+.terminal-col-btn.strong-loading:disabled {
+  background: var(--term-color);
+  border-color: var(--term-color);
+  color: #fff;
+  cursor: wait;
+  opacity: 1;
 }
 
 .terminal-precheck-note {
@@ -5200,6 +5320,17 @@ body.sidebar-collapsed .terminal-init-modal {
   border-color: rgba(245, 158, 11, 0.4);
   color: #f6c679;
   background: rgba(245, 158, 11, 0.1);
+}
+
+@keyframes terminal-confirm-sweep {
+  from {
+    opacity: 0.45;
+    box-shadow: 0 0 8px var(--term-color);
+  }
+  to {
+    opacity: 1;
+    box-shadow: 0 0 22px var(--term-color);
+  }
 }
 
 @media (max-width: 1180px) {

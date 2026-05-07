@@ -8,6 +8,30 @@ import pytest
 from cybercar import engine
 
 
+def test_resolve_platform_publish_config_keeps_wechat_title_and_location() -> None:
+    config = {
+        "publish": {
+            "platforms": {
+                "wechat": {
+                    "collection_name": "GasGx",
+                    "short_title": "GasGx",
+                    "location": "上海",
+                    "publish_now": True,
+                    "save_draft": False,
+                }
+            }
+        }
+    }
+
+    resolved = engine.resolve_platform_publish_config(config, "wechat")
+
+    assert resolved["collection_name"] == "GasGx"
+    assert resolved["short_title"] == "GasGx"
+    assert resolved["location"] == "上海"
+    assert resolved["publish_now"] is True
+    assert resolved["save_draft"] is False
+
+
 def test_is_collection_match_strips_counter_suffix() -> None:
     assert engine._is_collection_match("赛博皮卡-天津港现车 共11个内容", "赛博皮卡-天津港现车")
     assert engine._is_collection_match(" 添加到合集 赛博皮卡测评 ", "赛博皮卡测评")

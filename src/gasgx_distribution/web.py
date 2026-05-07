@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -66,6 +66,11 @@ class TerminalWindowPayload(BaseModel):
 
 class TerminalStartPayload(BaseModel):
     windows: list[TerminalWindowPayload] = Field(default_factory=list)
+
+
+class TerminalPollPayload(BaseModel):
+    allow_browser_open: bool = False
+    allow_login_probe: bool = False
 
 
 class WechatPublishSettingsPayload(BaseModel):
@@ -574,8 +579,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/terminal-execution/poll")
-    def terminal_execution_poll() -> dict[str, Any]:
-        return service.poll_terminal_execution()
+    def terminal_execution_poll(payload: TerminalPollPayload | None = Body(default=None)) -> dict[str, Any]:
+        data = _model_payload(payload) if payload is not None else {}
+        return service.poll_terminal_execution(
+            allow_browser_open=bool(data.get("allow_browser_open")),
+            allow_login_probe=bool(data.get("allow_login_probe")),
+        )
 
     @app.get("/api/terminal-execution/windows/{window_id}/qr-image")
     def terminal_execution_qr_image(window_id: int) -> FileResponse:

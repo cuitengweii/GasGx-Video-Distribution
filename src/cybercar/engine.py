@@ -349,6 +349,8 @@ BILIBILI_RANDOM_SCHEDULE_MAX_MINUTES_DEFAULT = 240
 DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
     "wechat": {
         "collection_name": DEFAULT_COLLECTION_NAME,
+        "short_title": "",
+        "location": "",
         "save_draft": True,
         "publish_now": False,
         "declare_original": False,
@@ -4830,6 +4832,10 @@ def _merge_publish_platform_config(raw: Any) -> dict[str, Any]:
         collection_name = str(value.get("collection_name", "") or "").strip()
         if collection_name:
             merged["collection_name"] = collection_name
+        if "short_title" in value:
+            merged["short_title"] = str(value.get("short_title") or "").strip()
+        if "location" in value:
+            merged["location"] = str(value.get("location") or "").strip()
         if "save_draft" in value:
             merged["save_draft"] = _to_bool(value.get("save_draft"), default=bool(merged.get("save_draft", False)))
         if "publish_now" in value:
@@ -14730,6 +14736,41 @@ def _debug_chrome_has_remote_allow_origins(debug_port: int, chrome_user_data_dir
     return False
 
 
+def _find_debug_chrome_profile_by_port(debug_port: int) -> Optional[str]:
+    for command_line in _iter_chrome_command_lines():
+        if "--type=" in command_line:
+            continue
+        if "--remote-debugging-port=" not in command_line:
+            continue
+        running_port_raw = _extract_cli_flag_value(command_line, "remote-debugging-port")
+        if not running_port_raw:
+            continue
+        try:
+            running_port = int(running_port_raw)
+        except Exception:
+            continue
+        if running_port != debug_port:
+            continue
+        running_dir_raw = _extract_cli_flag_value(command_line, "user-data-dir")
+        if not running_dir_raw:
+            return ""
+        return _normalize_user_data_dir(running_dir_raw)
+    return None
+
+
+def _build_debug_port_profile_conflict_message(
+    debug_port: int,
+    expected_user_data_dir: str,
+    actual_user_data_dir: Optional[str],
+) -> str:
+    actual = actual_user_data_dir if actual_user_data_dir else "unknown profile"
+    return (
+        f"Chrome debug port {debug_port} is already used by another browser profile "
+        f"({actual}); expected profile: {expected_user_data_dir}. "
+        "Close the mismatched Chrome window or free this port, then retry."
+    )
+
+
 def _find_debug_chrome_process_pid(debug_port: int, chrome_user_data_dir: str) -> Optional[int]:
     if os.name != "nt":
         return None
@@ -14844,6 +14885,15 @@ def _ensure_chrome_debug_port(
     startup_url: str = CREATE_POST_URL,
 ) -> None:
     if _is_chrome_debug_port_ready(debug_port):
+        if not _has_debug_chrome_process(debug_port, chrome_user_data_dir):
+            running_dir = _find_debug_chrome_profile_by_port(debug_port)
+            raise RuntimeError(
+                _build_debug_port_profile_conflict_message(
+                    debug_port,
+                    chrome_user_data_dir,
+                    running_dir,
+                )
+            )
         if _debug_chrome_has_remote_allow_origins(debug_port, chrome_user_data_dir):
             return
         _log(
@@ -18091,7 +18141,7 @@ def _clear_location_if_selected(ctx: Any) -> None:
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && norm(el.textContent) === '浣嶇疆');
+      .find(el => isVisible(el) && ['位置', '浣嶇疆'].includes(norm(el.textContent)));
     if (!label) return {state: 'missing_field'};
     const item = label.closest('.form-item') || label.parentElement;
     const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
@@ -18129,6 +18179,136 @@ def _clear_location_if_selected(ctx: Any) -> None:
             continue
 
     _log("[Uploader] Could not find '涓嶆樉绀轰綅缃? option, keep current location.")
+
+
+def _select_location(ctx: Any, location: str) -> None:
+    target = str(location or "").strip()
+    if not target:
+        _clear_location_if_selected(ctx)
+        return
+
+    before = _get_location_state(ctx)
+    if not before.get("hasLocationField"):
+        _log(f"[Uploader] Location field not found, skip location selection: {target}")
+        return
+    current = str(before.get("current", "") or "").strip()
+    if current and (current == target or target in current or current in target):
+        _log(f"[Uploader] Location already selected: {current}")
+        return
+
+    js_select = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    function setInputValue(el, value) {
+      if (!el) return false;
+      try { el.focus(); } catch (e) {}
+      try {
+        if ('value' in el) {
+          const proto = Object.getPrototypeOf(el);
+          const desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+          if (desc && desc.set) desc.set.call(el, value);
+          else el.value = value;
+        } else if (el.isContentEditable) {
+          el.textContent = value;
+        }
+      } catch (e) {
+        try { el.value = value; } catch (inner) {}
+      }
+      ['input', 'change', 'keyup'].forEach(type => {
+        try {
+          const event = type === 'keyup'
+            ? new KeyboardEvent(type, {bubbles: true, cancelable: true, key: 'Enter', code: 'Enter'})
+            : new Event(type, {bubbles: true, cancelable: true});
+          el.dispatchEvent(event);
+        } catch (e) {}
+      });
+      return true;
+    }
+    const target = norm(arguments[0] || '');
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
+      .find(el => isVisible(el) && ['位置', '浣嶇疆'].includes(norm(el.textContent)));
+    if (!label) return {state: 'missing_field'};
+    const item = label.closest('.form-item') || label.parentElement;
+    const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
+    const trigger = wrap && (
+      wrap.querySelector('.position-display-wrap, .position-display, .location-name, .place') ||
+      wrap.querySelector('.weui-desktop-form__dropdown, .selector, .select, .dropdown') ||
+      wrap
+    );
+    if (!trigger) return {state: 'missing_trigger'};
+    try {
+      trigger.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+      trigger.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+    } catch (e) {}
+    trigger.click();
+
+    const searchFields = Array.from(document.querySelectorAll('input, textarea, [contenteditable=\"true\"], [role=\"textbox\"]'))
+      .filter(isVisible)
+      .filter(el => {
+        const attrs = norm([
+          el.getAttribute && el.getAttribute('placeholder'),
+          el.getAttribute && el.getAttribute('aria-label'),
+          el.getAttribute && el.getAttribute('data-placeholder'),
+          el.className
+        ].join(' '));
+        return /位置|地点|搜索|location|place|浣嶇疆|鍦扮偣|鎼滅储/i.test(attrs);
+      });
+    if (searchFields.length) setInputValue(searchFields[0], target);
+
+    const pools = Array.from(document.querySelectorAll(
+      '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown, .selector-panel, [role=\"listbox\"]'
+    )).filter(isVisible);
+    pools.push(document);
+    let best = null;
+    const visibleOptions = [];
+    for (const root of pools) {
+      const nodes = Array.from(root.querySelectorAll('.option-item, .location-item, [role=\"option\"], li, button, div, span, a'))
+        .filter(isVisible);
+      for (const node of nodes) {
+        const txt = norm(node.innerText || node.textContent);
+        if (!txt || txt.length > 80) continue;
+        if (/不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?/.test(txt)) continue;
+        if (!visibleOptions.includes(txt)) visibleOptions.push(txt);
+        if (txt === target || txt.includes(target) || target.includes(txt)) {
+          best = node;
+          break;
+        }
+      }
+      if (best) break;
+    }
+    if (!best) return {state: 'option_not_found', visible_options: visibleOptions.slice(0, 8)};
+    const clickNode = best.closest('.option-item, .location-item, [role=\"option\"], li, button, a') || best;
+    clickNode.click();
+    return {state: 'clicked', option: norm(clickNode.innerText || clickNode.textContent), visible_options: visibleOptions.slice(0, 8)};
+    """
+    action: Any = None
+    for attempt in range(1, 5):
+        _humanized_publish_pause("wechat location picker interaction")
+        try:
+            action = ctx.run_js(js_select, target)
+        except Exception:
+            action = None
+        _humanized_publish_retry_pause("wechat location picker settle")
+        after = _get_location_state(ctx)
+        current = str(after.get("current", "") or "").strip()
+        if current and (current == target or target in current or current in target):
+            _log(f"[Uploader] Location selected: {current}")
+            return
+        action_state = str((action or {}).get("state", "")) if isinstance(action, dict) else ""
+        visible = list((action or {}).get("visible_options") or []) if isinstance(action, dict) else []
+        _log(
+            f"[Uploader] Location select retry {attempt}/4: "
+            f"action={action_state or 'none'}, current={current or '-'}, visible={';'.join(visible[:4]) or '-'}"
+        )
+        if action_state in {"missing_field", "missing_trigger"}:
+            return
+    _log(f"[Uploader] Could not confirm location selection: {target}; keep current location.")
 
 
 def _get_collection_state(ctx: Any) -> dict[str, Any]:
@@ -18594,6 +18774,7 @@ def _fill_draft_once(
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
     wechat_publish_click_confirmed: bool = False,
     short_title: str = "",
+    location: str = "",
 ) -> Any:
     wechat_open_url = _wechat_primary_create_url()
     if _current_page_matches_publish_entry(page, "wechat", wechat_open_url):
@@ -18689,8 +18870,8 @@ def _fill_draft_once(
     # Resolve context again after upload to avoid stale frame references.
     editor_ctx = _resolve_post_editor_context(page)
 
-    _log("[Uploader] Location strategy: keep current browser network/proxy context.")
-    _clear_location_if_selected(editor_ctx)
+    _log("[Uploader] Location strategy: apply configured publish location.")
+    _select_location(editor_ctx, location)
     _fill_caption(editor_ctx, final_caption)
     configured_short_title = str(short_title or "").strip()
     wechat_short_title = _fill_wechat_short_title(
@@ -18788,6 +18969,7 @@ def fill_draft_wechat(
     target_video: Optional[Path] = None,
     collection_name: str = DEFAULT_COLLECTION_NAME,
     short_title: str = "",
+    location: str = "",
     debug_port: int = DEFAULT_PORT,
     save_draft: bool = True,
     publish_now: bool = False,
@@ -18849,6 +19031,7 @@ def fill_draft_wechat(
                     notify_env_prefix=notify_env_prefix,
                     wechat_publish_click_confirmed=wechat_publish_click_confirmed,
                     short_title=short_title,
+                    location=location,
                 )
                 return target
             except Exception as exc:
@@ -29057,6 +29240,7 @@ def main() -> int:
                             target_video=target,
                             collection_name=platform_collection_name,
                             short_title=str(platform_publish_cfg.get("short_title") or "").strip(),
+                            location=str(platform_publish_cfg.get("location") or "").strip(),
                             debug_port=args.debug_port,
                             save_draft=platform_save_draft,
                             publish_now=platform_publish_now,

@@ -3674,8 +3674,20 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
             _inject_terminal_account_browser_marker(int(account_id), "wechat", str(target.get("color") or ""), int(target.get("id") or 0))
             _raise_account_browser_window(int(account_id), "wechat")
             _clear_terminal_account_error(current)
-            current["status"] = "waiting_qr"
-            current["status_text"] = "请在已打开浏览器扫码"
+            login_ready = False
+            try:
+                probe = _check_terminal_login_status_with_timeout(int(account_id), "wechat")
+                login_ready = str((probe or {}).get("status") or "").strip().lower() == "ready"
+            except Exception:
+                login_ready = False
+            if login_ready:
+                _clear_terminal_qr_cache(int(target.get("id") or 0))
+                _set_terminal_window_qr(target, "")
+                current["status"] = "ready"
+                current["status_text"] = "已登录，等待手动发布"
+            else:
+                current["status"] = "waiting_qr"
+                current["status_text"] = "请在已打开浏览器扫码"
             current["task_id"] = None
             target["manual_available_at"] = 0
             state["next_probe_at"] = 0

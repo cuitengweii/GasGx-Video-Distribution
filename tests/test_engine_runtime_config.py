@@ -155,3 +155,25 @@ def test_extract_cli_flag_value_supports_wrapped_flag_token() -> None:
 
     assert user_dir == r"G:\GasGx Video Distribution\profiles\matrix\gasgx-demo"
     assert debug_port == "21288"
+
+
+def test_ensure_chrome_debug_port_rejects_ready_port_for_wrong_profile(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_is_chrome_debug_port_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_has_debug_chrome_process", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_find_debug_chrome_profile_by_port", lambda _debug_port: r"g:\profiles\other")
+    monkeypatch.setattr(
+        engine,
+        "_launch_chrome_debug",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not launch over occupied port")),
+    )
+
+    try:
+        engine._ensure_chrome_debug_port(21288, chrome_user_data_dir=r"G:\Profiles\Expected")
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        assert False, "expected profile mismatch error"
+
+    assert "Chrome debug port 21288" in message
+    assert "g:\\profiles\\other" in message
+    assert r"G:\Profiles\Expected" in message

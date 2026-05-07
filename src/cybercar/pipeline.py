@@ -3588,6 +3588,7 @@ def _publish_once(
                 target_video=target,
                 collection_name=platform_collection_name,
                 short_title=str(platform_publish_cfg.get("short_title") or "").strip(),
+                location=str(platform_publish_cfg.get("location") or "").strip(),
                 debug_port=runtime_debug_port,
                 save_draft=publish_mode.save_draft,
                 publish_now=publish_mode.publish_now,
