@@ -2342,6 +2342,11 @@ select option {
   margin-top: -4px;
 }
 
+.settings-save-state {
+  grid-column: 1 / -1;
+  min-height: 20px;
+}
+
 .job-layout {
   display: grid;
   gap: 14px;
@@ -3395,6 +3400,17 @@ select option {
   white-space: nowrap;
 }
 
+#system-settings .storage-actions #sync-pull-supabase,
+#system-settings .storage-actions #sync-push-supabase {
+  font-size: clamp(11px, 0.9vw, 14px);
+  line-height: 1.2;
+}
+
+#system-settings .storage-actions #sync-pull-supabase.loading,
+#system-settings .storage-actions #sync-push-supabase.loading {
+  font-size: clamp(10px, 0.82vw, 13px);
+}
+
 #system-settings .system-action-state {
   margin: 10px 0 0;
   line-height: 1.5;
@@ -4246,8 +4262,10 @@ body.video-matrix-active #video-matrix {
 .terminal-wechat-page,
 .terminal-long-session-page {
   display: grid;
-  gap: 12px;
-  padding: 12px 16px 16px;
+  gap: 18px;
+  width: min(1160px, 100%);
+  margin: 0 auto;
+  padding: 18px 18px 26px;
 }
 
 .terminal-entry-grid,
@@ -4258,16 +4276,107 @@ body.video-matrix-active #video-matrix {
 }
 
 .terminal-entry-grid {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.terminal-group-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.terminal-group-panel > .panel-head {
+  margin: 0;
+  padding: 0 2px;
+  align-items: end;
+}
+
+.terminal-group-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.terminal-group-panel h2 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.terminal-group-panel .muted {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.58);
+  line-height: 1.5;
+}
+
+.terminal-group-eyebrow,
+.terminal-group-count,
+.terminal-policy-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 26px;
+  border: 1px solid rgba(93, 214, 44, 0.18);
+  border-radius: 999px;
+  background: rgba(93, 214, 44, 0.075);
+  color: rgba(165, 244, 131, 0.86);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.terminal-group-eyebrow {
+  min-height: 24px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.terminal-group-count,
+.terminal-policy-chip {
+  padding: 6px 10px;
+}
+
+.terminal-group-count {
+  color: rgba(255, 255, 255, 0.66);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.terminal-group-short .terminal-entry-grid {
+  grid-template-columns: 1fr;
 }
 
 .terminal-entry-card {
   display: grid;
+  grid-template-rows: auto minmax(40px, auto) auto auto;
   gap: 12px;
+  min-height: 156px;
   padding: 18px;
-  border: 1px solid rgba(93, 214, 44, 0.16);
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(18, 18, 18, 0.96), rgba(11, 18, 13, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(28, 30, 31, 0.94), rgba(16, 21, 23, 0.94));
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.18);
+}
+
+.terminal-entry-card.wechat {
+  min-height: 148px;
+  border-color: rgba(93, 214, 44, 0.24);
+  background:
+    linear-gradient(90deg, rgba(93, 214, 44, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(28, 32, 28, 0.96), rgba(15, 22, 18, 0.94));
+}
+
+.terminal-entry-card.long-session {
+  border-color: rgba(111, 202, 255, 0.13);
+}
+
+.terminal-entry-card.long-session .terminal-policy-chip {
+  color: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+  font-weight: 700;
 }
 
 .terminal-entry-head,
@@ -4286,10 +4395,37 @@ body.video-matrix-active #video-matrix {
 
 .terminal-entry-actions {
   flex-wrap: wrap;
+  align-self: end;
 }
 
 .terminal-entry-card .platform-name strong {
   font-size: 16px;
+  line-height: 1.2;
+}
+
+.terminal-entry-desc {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.terminal-entry-card .system-status {
+  min-height: 26px;
+  padding: 5px 9px;
+}
+
+.terminal-entry-card .btn {
+  min-height: 38px;
+}
+
+.terminal-entry-card .btn.primary {
+  min-width: 58px;
+}
+
+.terminal-entry-card .btn.secondary {
+  border-color: rgba(111, 202, 255, 0.2);
+  background: rgba(111, 202, 255, 0.07);
 }
 
 .terminal-wechat-summary {
@@ -5430,12 +5566,35 @@ body.sidebar-collapsed .terminal-init-modal {
     grid-template-columns: 1fr;
   }
 
+  .terminal-entry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .terminal-workspace.terminal-workspace-wechat {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 720px) {
+  .terminal-hub-layout {
+    padding: 12px 10px 18px;
+  }
+
+  .terminal-entry-grid,
+  .terminal-group-short .terminal-entry-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terminal-entry-head,
+  .terminal-entry-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .terminal-entry-actions .btn {
+    flex: 1 1 100%;
+  }
+
   .terminal-workspace.terminal-workspace-wechat {
     grid-template-columns: minmax(0, 1fr);
   }

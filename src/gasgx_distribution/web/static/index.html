@@ -252,7 +252,7 @@
             </label>
           </div>
           <fieldset class="wechat-defaults-fieldset">
-            <p class="muted">平台默认项放在这里，终端执行里的平台独立配置可覆盖；短标题默认 GasGx燃气发电挖矿，位置留空表示不显示位置，视频描述不会覆盖短标题。</p>
+            <p class="muted">公共默认项放在这里；短标题默认 GasGx燃气发电挖矿，位置留空表示不显示位置，视频描述不会覆盖短标题。</p>
             <div class="wechat-defaults-grid">
               <label>内容类型
                 <select name="common.wechat_content_type">
@@ -298,6 +298,7 @@
               </label>
             </div>
           </fieldset>
+          <div id="settings-save-state" class="muted settings-save-state"></div>
         </section>
 
         <section class="panel form-panel settings-job">
@@ -408,18 +409,6 @@
           </div>
         </section>
 
-        <section class="panel">
-          <div class="panel-head">
-            <div>
-              <h2>平台独立配置</h2>
-              <p class="muted">每个平台可以单独配置文案、权限和发布策略；视频号有额外合集和原创声明。</p>
-              <p class="muted">配置优先级：平台独立配置 &gt; 继承全局时使用全局公共配置 &gt; 代码默认值。视频号短标题优先使用平台独立配置（默认 GasGx燃气发电挖矿）；位置留空表示不显示位置；视频描述不会覆盖短标题。</p>
-            </div>
-            <button class="btn primary" type="submit">保存全部设置</button>
-          </div>
-          <div id="platform-settings-list" class="platform-settings-list"></div>
-          <div id="settings-save-state" class="muted"></div>
-        </section>
         </div>
 
       </form>
@@ -590,7 +579,7 @@
                   </button>
                   <button class="operation-route-card settings-card-button" type="button" data-terminal-init-card="platform">
                     <strong>平台发布配置</strong>
-                    <span>公共设置中的平台发布策略卡片。</span>
+                    <span>当前平台的发布策略卡片。</span>
                   </button>
                 </div>
               </div>

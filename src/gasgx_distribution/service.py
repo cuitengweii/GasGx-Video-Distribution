@@ -1045,14 +1045,23 @@ def save_distribution_settings_db(payload: dict[str, Any]) -> dict[str, Any]:
 def list_operator_wechats() -> list[str]:
     settings = load_distribution_settings_db()
     operators = settings.get("common", {}).get("operator_wechats")
+    defaults = ["aamecc", "aalbcc"]
     if not isinstance(operators, list):
-        return ["aamecc", "aalbcc"]
+        operators = list(defaults)
     values = []
     for item in operators:
         value = str(item or "").strip()
         if value and value not in values:
             values.append(value)
-    return values or ["aamecc", "aalbcc"]
+    # Keep the configured order first, then append operator IDs inferred from existing local accounts.
+    if brand_database_backend() != "supabase":
+        for account in list_accounts():
+            if str(account.get("status") or "").strip().lower() != "active":
+                continue
+            inferred = _account_operator_wechat(account).strip()
+            if inferred and inferred != "未绑定运营微信" and inferred not in values:
+                values.append(inferred)
+    return values or defaults
 
 
 def add_operator_wechat(value: str) -> dict[str, Any]:

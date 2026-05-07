@@ -1585,7 +1585,6 @@ function setPageLoading(label = "加载中...") {
     ["#tasks-list", "加载任务..."],
     ["#stats-overview", "加载统计..."],
     ["#operation-progress", "加载进度..."],
-    ["#platform-settings-list", "加载设置..."],
     ["#matrix-job-status", "加载作业..."],
     ["#operation-notice-routes", "加载通知..."],
     ["#login-qr-batches", "加载登录批次..."],
@@ -1607,10 +1606,7 @@ function setViewLoading(view) {
       ["#platforms", "加载平台..."],
     ],
     accounts: [["#accounts-list", "加载账号..."]],
-    settings: [
-      ["#platform-settings-list", "加载设置..."],
-      ["#matrix-job-status", "加载作业..."],
-    ],
+    settings: [["#matrix-job-status", "加载作业..."]],
     tasks: [["#tasks-list", "加载任务..."]],
     stats: [
       ["#stats-overview", "加载统计..."],
@@ -3423,8 +3419,20 @@ function renderTerminalExecution() {
       renderTerminalConfig();
     }
     const groups = [
-      { title: "短会话平台", items: ["wechat"] },
-      { title: "长会话平台", items: ["douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"] },
+      {
+        title: "短会话平台",
+        tone: "short",
+        eyebrow: "Daily QR",
+        summary: "视频号独立扫码，流程与其它平台分开。",
+        items: ["wechat"],
+      },
+      {
+        title: "长会话平台",
+        tone: "long",
+        eyebrow: "Persistent Session",
+        summary: "复用统一模板，检测登录后进入创作者后台。",
+        items: ["douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"],
+      },
     ];
     const hubHasCards = groups.some((group) => group.items.some((platform) => platformMap.has(platform)));
     workspace.innerHTML = `
@@ -3435,14 +3443,18 @@ function renderTerminalExecution() {
             const item = platformMap.get(platform);
             const capability = state.terminalExecution.platform_capabilities?.[platform] || {};
             const health = terminalHealthSummary(platform);
+            const policy = terminalSessionPolicyLabel(capability.sessionPolicy || (platform === "wechat" ? "daily_qr" : "persistent"));
+            const cardDesc = platform === "wechat"
+              ? "每日扫码确认后进入视频号执行窗口。"
+              : "账号与浏览器配置复用同一套长会话入口。";
             return `
               <article class="terminal-entry-card ${platform === "wechat" ? "wechat" : "long-session"}">
                 <div class="terminal-entry-head">
                   <div class="platform-name">${platformLogo(platform)}<strong>${item?.label || terminalPlatformName(platform)}</strong></div>
-                  <span class="chip">${terminalSessionPolicyLabel(capability.sessionPolicy || (platform === "wechat" ? "daily_qr" : "persistent"))}</span>
+                  <span class="terminal-policy-chip">${policy}</span>
                 </div>
-                ${platform === "wechat" ? "" : ""}
-                <div class="terminal-entry-meta">
+                <p class="terminal-entry-desc">${cardDesc}</p>
+                <div class="terminal-entry-meta" aria-label="${terminalPlatformName(platform)} 状态">
                   ${terminalStatusChip(platform, health)}
                 </div>
                 <div class="terminal-entry-actions">
@@ -3452,13 +3464,18 @@ function renderTerminalExecution() {
               </article>
             `;
           }).join("");
+          const availableCount = group.items.filter((platform) => platformMap.has(platform)).length;
           return `
-            <section class="terminal-group-panel">
+            <section class="terminal-group-panel terminal-group-${group.tone}">
               <div class="panel-head">
                 <div>
-                  <h2>${group.title}</h2>
-                  <p class="muted">${group.title === "短会话平台" ? "强调独立流程，不与其它平台混排。" : "统一长会话模板，平台间样式一致。"}</p>
+                  <div class="terminal-group-title-row">
+                    <h2>${group.title}</h2>
+                    <span class="terminal-group-eyebrow">${group.eyebrow}</span>
+                  </div>
+                  <p class="muted">${group.summary}</p>
                 </div>
+                <span class="terminal-group-count">${availableCount} 个入口</span>
               </div>
               <div class="terminal-entry-grid">${cards}</div>
             </section>
@@ -3472,6 +3489,8 @@ function renderTerminalExecution() {
 
   if (route === "wechat") {
     renderTerminalConfig();
+    const hasWechatWindows = Array.isArray(state.terminalExecution.windows) && state.terminalExecution.windows.length > 0;
+    const showWechatLoadingState = !loadError && !hasWechatWindows && !Boolean(state.terminalExecution.initialized);
     workspace.innerHTML = `
       <div class="terminal-wechat-page">
         ${loadError ? `<div class="terminal-load-error">${loadError}</div>` : ""}
@@ -3483,10 +3502,11 @@ function renderTerminalExecution() {
             </div>
           </div>
           <div class="terminal-wechat-summary">
-            <div class="metric"><span>已完成账号数</span><strong>${summary.success || 0}</strong></div>
-            <div class="metric"><span>总账号数</span><strong>${summary.total || 0}</strong></div>
-            <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
+            <div class="metric"><span>已完成账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.success || 0)}</strong></div>
+            <div class="metric"><span>总账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.total || 0)}</strong></div>
+            <div class="metric"><span>活跃窗数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.active_windows || 0)}</strong></div>
           </div>
+          ${showWechatLoadingState ? `<p class="system-action-state muted">正在拉取终端执行状态，请稍候…</p>` : ""}
           <div class="terminal-workspace terminal-workspace-wechat"></div>
         </section>
       </div>
@@ -4875,16 +4895,7 @@ function renderDistributionSettings() {
   form.elements["jobs.matrix_wechat_publish.rotate_start_group"].value = String(matrixJob.rotate_start_group !== false);
   form.elements["jobs.matrix_wechat_publish.shuffle_within_batch"].value = String(matrixJob.shuffle_within_batch !== false);
   form.elements["jobs.matrix_wechat_publish.retry_failed_last"].value = String(matrixJob.retry_failed_last !== false);
-  document.querySelector("#platform-settings-list").innerHTML = ["cn", "global"].map((region) => {
-    const items = state.platforms
-      .filter((item) => (item.region === "cn") === (region === "cn"))
-      .sort((a, b) => PLATFORM_ORDER.indexOf(a.key) - PLATFORM_ORDER.indexOf(b.key));
-    return `<section class="platform-settings-region">
-      <div class="region-title">${REGION_LABELS[region]}</div>
-      <div class="platform-settings-grid">${items.map(renderPlatformSettingsCard).join("")}</div>
-    </section>`;
-  }).join("");
-  syncWechatInheritModeInputs(document.querySelector("#distribution-settings-form") || document);
+  syncWechatInheritModeInputs(form);
 }
 
 function renderPlatformSettingsCard(platform) {
@@ -5037,28 +5048,10 @@ function collectDistributionSettings(form) {
       retry_failed_last: data.get("jobs.matrix_wechat_publish.retry_failed_last") === "true",
     },
   };
-  const platforms = {};
-  PLATFORM_ORDER.forEach((platform) => {
-    platforms[platform] = {
-      enabled: data.get(`platforms.${platform}.enabled`) === "true",
-      content_type: data.get(`platforms.${platform}.content_type`) || "short_video",
-      publish_mode: data.get(`platforms.${platform}.publish_mode`) || "inherit",
-      visibility: data.get(`platforms.${platform}.visibility`) || "public",
-      comment_permission: data.get(`platforms.${platform}.comment_permission`) || "public",
-      caption: data.get(`platforms.${platform}.caption`) || "",
-      upload_timeout: common.upload_timeout,
-    };
-    if (platform === "wechat") {
-      const shortTitleMode = data.get("platforms.wechat.short_title_mode") || "custom";
-      const locationMode = data.get("platforms.wechat.location_mode") || "custom";
-      const captionMode = data.get("platforms.wechat.caption_mode") || "custom";
-      platforms[platform].collection_name = data.get("platforms.wechat.collection_name") || "";
-      platforms[platform].declare_original = data.get("platforms.wechat.declare_original") || "inherit";
-      platforms[platform].short_title = shortTitleMode === "inherit" ? "inherit" : (data.get("platforms.wechat.short_title") || "GasGx燃气发电挖矿");
-      platforms[platform].location = locationMode === "inherit" ? "inherit" : (data.get("platforms.wechat.location") || "");
-      platforms[platform].caption = captionMode === "inherit" ? "inherit" : (data.get("platforms.wechat.caption") || "");
-    }
-  });
+  const existingPlatforms = state.distributionSettings?.platforms || {};
+  const platforms = Object.fromEntries(
+    Object.entries(existingPlatforms).map(([platform, value]) => [platform, { ...(value || {}) }])
+  );
   return { common, jobs, platforms };
 }
 
@@ -5346,13 +5339,13 @@ async function saveDistributionSettingsForm(form, submitter = null) {
   distributionSettingsSaving = true;
   const restoreButton = setButtonLoading(submitter || form.querySelector('button[type="submit"]'), "保存中");
   const stateNode = document.querySelector("#settings-save-state");
-  stateNode.textContent = "保存中...";
+  if (stateNode) stateNode.textContent = "保存中...";
   try {
     await api("/api/settings/distribution", {
       method: "PATCH",
       body: JSON.stringify(collectDistributionSettings(form)),
     });
-    stateNode.textContent = "已保存，下一次矩阵分发会按全局配置和平台独立配置执行。";
+    if (stateNode) stateNode.textContent = "已保存，下一次矩阵分发会按公共配置执行。";
     await refresh();
   } finally {
     distributionSettingsSaving = false;

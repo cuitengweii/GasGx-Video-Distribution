@@ -17,6 +17,8 @@ from gasgx_distribution.web import create_app
 
 
 def _isolated_paths(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("BRAND_DATABASE_BACKEND", "sqlite")
+
     class FakePaths:
         repo_root = tmp_path
         runtime_root = tmp_path / "runtime"
@@ -303,14 +305,30 @@ def test_operator_wechats_api_persists_to_distribution_settings(monkeypatch, tmp
     added = client.post("/api/operator-wechats", json={"operator_wechat": "aamebb"})
 
     assert added.status_code == 200
-    assert added.json()["items"] == ["aamecc", "aalbcc", "aamebb"]
-    assert client.get("/api/operator-wechats").json() == ["aamecc", "aalbcc", "aamebb"]
-    assert load_distribution_settings()["common"]["operator_wechats"] == ["aamecc", "aalbcc", "aamebb"]
+    added_items = added.json()["items"]
+    assert added_items[:2] == ["aamecc", "aalbcc"]
+    assert "aamebb" in added_items
+    assert client.get("/api/operator-wechats").json() == added_items
+    assert load_distribution_settings()["common"]["operator_wechats"] == added_items
 
     duplicate = client.post("/api/operator-wechats", json={"operator_wechat": "aamebb"})
 
     assert duplicate.status_code == 200
-    assert duplicate.json()["items"] == ["aamecc", "aalbcc", "aamebb"]
+    assert duplicate.json()["items"] == added_items
+
+
+def test_operator_wechats_api_includes_values_inferred_from_existing_accounts(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+
+    result = client.get("/api/operator-wechats")
+
+    assert result.status_code == 200
+    items = result.json()
+    assert items[:2] == ["aamecc", "aalbcc"]
+    assert "bbbbbb" in items
+    assert "aaaaaa" in items
+    assert "cccccc" in items
 
 
 def test_open_material_dir_api(monkeypatch, tmp_path: Path) -> None:
