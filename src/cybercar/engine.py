@@ -1787,12 +1787,9 @@ def _prepare_platform_login_qr_notice(
             open_url=open_target_url,
             close_stale_login_tabs=True,
         )
-    if refresh_page:
+    if refresh_page and allow_navigation:
         try:
-            if allow_navigation:
-                active_page.get(open_target_url)
-            else:
-                active_page.refresh()
+            active_page.get(open_target_url)
         except Exception:
             try:
                 active_page.refresh()
@@ -2578,6 +2575,8 @@ def _build_login_qr_rect_script(platform_name: str) -> str:
             ".qrcode-area canvas",
             ".login-qrcode-wrap img",
             ".login-qrcode-wrap canvas",
+            "[class*='scan'] img",
+            "[class*='scan'] canvas",
             "img.qrcode",
         ]
     else:
@@ -18102,15 +18101,20 @@ def _get_location_state(ctx: Any) -> dict[str, Any]:
       return r.width > 6 && r.height > 6;
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
-    const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && ['位置', '浣嶇疆'].includes(norm(el.textContent)));
-    if (!label) return {hasLocationField: false, current: '', isNone: true};
-    const item = label.closest('.form-item') || label.parentElement;
-    const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
+    const locationLabelRe = /^(?:\\u4f4d\\u7f6e|\\u5730\\u70b9|location)$/i;
+    const noLocationRe = /(?:\\u4e0d\\u663e\\u793a\\u4f4d\\u7f6e|\\u4e0d\\u663e\\u793a|\\u4e0d\\u6dfb\\u52a0\\u4f4d\\u7f6e|none location|no location)/i;
+    const directWrap = Array.from(document.querySelectorAll(
+      '.post-position-wrap, .position-display-wrap, .position-display, [class*="position"][class*="wrap"], [class*="location"][class*="wrap"]'
+    )).find(isVisible);
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, label, div, span'))
+      .find(el => isVisible(el) && locationLabelRe.test(norm(el.textContent)));
+    if (!label && !directWrap) return {hasLocationField: false, current: '', isNone: true};
+    const item = label ? (label.closest('.form-item') || label.parentElement) : null;
+    const wrap = directWrap || (item && item.querySelector('.post-position-wrap')) || item || (label ? label.parentElement : null);
     const nameEl = wrap && (wrap.querySelector('.location-name') || wrap.querySelector('.place') || wrap.querySelector('.position-display-wrap'));
     const currentRaw = norm(nameEl ? nameEl.innerText : '');
-    const current = currentRaw.replace(/^浣嶇疆/, '').trim();
-    return {hasLocationField: true, current, isNone: (!current || /不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀?.test(current))};
+    const current = currentRaw.replace(/^(?:\\u4f4d\\u7f6e|\\u5730\\u70b9|location)/i, '').trim();
+    return {hasLocationField: true, current, isNone: (!current || noLocationRe.test(current))};
     """
     try:
         state = ctx.run_js(js)
@@ -18127,7 +18131,8 @@ def _clear_location_if_selected(ctx: Any) -> None:
         _log("[Uploader] Location field not found, skip clear.")
         return
 
-    if before.get("isNone"):
+    current_before = str(before.get("current", "") or "").strip()
+    if before.get("isNone") and re.search(r"不显示位置|不显示|不添加位置|none", current_before, re.IGNORECASE):
         _log("[Uploader] Location already set to '涓嶆樉绀轰綅缃?.")
         return
 
@@ -18140,28 +18145,77 @@ def _clear_location_if_selected(ctx: Any) -> None:
       return r.width > 6 && r.height > 6;
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    const locationLabelRe = /^(?:\\u4f4d\\u7f6e|\\u5730\\u70b9|location)$/i;
+    const noLocationRe = /(?:\\u4e0d\\u663e\\u793a\\u4f4d\\u7f6e|\\u4e0d\\u663e\\u793a|\\u4e0d\\u6dfb\\u52a0\\u4f4d\\u7f6e|none location|no location)/i;
+    const noLocationText = '\\u4e0d\\u663e\\u793a\\u4f4d\\u7f6e';
+    function clickLike(el) {
+      if (!el) return false;
+      try {
+        el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+        el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+      } catch (e) {}
+      try { el.click(); return true; } catch (e) {}
+      const r = el.getBoundingClientRect();
+      if (r && r.width > 1 && r.height > 1) {
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const top = document.elementFromPoint(cx, cy);
+        if (top && top !== el) {
+          try { top.click(); return true; } catch (e) {}
+        }
+      }
+      return false;
+    }
+    function findNoLocationNode(root) {
+      if (!root) return null;
+      const candidates = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      while (walker.nextNode()) {
+        const el = walker.currentNode;
+        if (!isVisible(el)) continue;
+        const txt = norm(el.innerText || el.textContent);
+        if (!txt || txt.length > 40) continue;
+        if (!noLocationRe.test(txt)) continue;
+        candidates.push(el);
+      }
+      if (!candidates.length) return null;
+      const exact = candidates.find(el => norm(el.innerText || el.textContent) === noLocationText);
+      return exact || candidates[0];
+    }
+    function findPopupRoots() {
+      const roots = Array.from(document.querySelectorAll(
+        '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown, .selector-panel, .location-panel, [role=\"listbox\"], [role=\"dialog\"]'
+      )).filter(isVisible);
+      return roots.length ? roots : [document];
+    }
+    const directWrap = Array.from(document.querySelectorAll('.post-position-wrap')).find(isVisible);
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && ['位置', '浣嶇疆'].includes(norm(el.textContent)));
-    if (!label) return {state: 'missing_field'};
-    const item = label.closest('.form-item') || label.parentElement;
-    const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
-    const display = wrap && (wrap.querySelector('.position-display-wrap') || wrap.querySelector('.position-display') || wrap);
+      .find(el => isVisible(el) && locationLabelRe.test(norm(el.textContent)));
+    const item = label ? (label.closest('.form-item') || label.parentElement) : null;
+    const wrap = directWrap || (item && item.querySelector('.post-position-wrap')) || item || (label ? label.parentElement : null);
+    if (!wrap) return {state: 'missing_field'};
+    const display = wrap.querySelector('.position-display-wrap')
+      || wrap.querySelector('.position-display')
+      || wrap.querySelector('.location-name')
+      || wrap.querySelector('.place')
+      || wrap.querySelector('[class*=\"position\"]')
+      || wrap;
     if (!display) return {state: 'missing_trigger'};
-    display.click();
+    clickLike(display);
 
-    const pool = Array.from((wrap || document).querySelectorAll('.option-item, .location-item, .name, div, span'))
-      .filter(el => isVisible(el));
-    let target = pool.find(el => /^不显示位置$/.test(norm(el.innerText)));
-    if (!target) target = pool.find(el => /不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
+    let target = null;
+    const roots = findPopupRoots();
+    for (const root of roots) {
+      target = findNoLocationNode(root);
+      if (target) break;
+    }
     if (!target) {
-      const globalPool = Array.from(document.querySelectorAll('.option-item, .location-item, .name, div, span'))
-        .filter(el => isVisible(el));
-      target = globalPool.find(el => /^不显示位置$/.test(norm(el.innerText)))
-        || globalPool.find(el => /不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?.test(norm(el.innerText)));
+      target = findNoLocationNode(wrap) || findNoLocationNode(document);
     }
     if (!target) return {state: 'option_not_found'};
-    target.click();
-    return {state: 'clicked', option: norm(target.innerText)};
+    const clickNode = target.closest('.option-item, .location-item, [role="option"], li, button, a') || target;
+    clickLike(clickNode);
+    return {state: 'clicked', option: norm(clickNode.innerText || clickNode.textContent)};
     """
 
     for _ in range(4):
@@ -18172,9 +18226,15 @@ def _clear_location_if_selected(ctx: Any) -> None:
             action = None
         _humanized_publish_retry_pause("wechat location picker settle")
         after = _get_location_state(ctx)
+        action_state = str((action or {}).get("state", "")) if isinstance(action, dict) else ""
+        current = str(after.get("current", "") or "").strip()
         if after.get("isNone"):
             _log("[Uploader] Location cleared to '涓嶆樉绀轰綅缃?.")
             return
+        _log(
+            f"[Uploader] Clear location retry: "
+            f"action={action_state or 'none'}, current={current or '-'}"
+        )
         if isinstance(action, dict) and action.get("state") in {"missing_field", "missing_trigger", "option_not_found"}:
             continue
 
@@ -18183,6 +18243,9 @@ def _clear_location_if_selected(ctx: Any) -> None:
 
 def _select_location(ctx: Any, location: str) -> None:
     target = str(location or "").strip()
+    if re.search(r"不显示位置|不显示|不添加位置|none", target, re.IGNORECASE):
+        _clear_location_if_selected(ctx)
+        return
     if not target:
         _clear_location_if_selected(ctx)
         return
@@ -18205,6 +18268,9 @@ def _select_location(ctx: Any, location: str) -> None:
       return r.width > 6 && r.height > 6;
     }
     function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim(); }
+    const locationLabelRe = /^(?:\\u4f4d\\u7f6e|\\u5730\\u70b9|location)$/i;
+    const searchFieldRe = /(?:\\u4f4d\\u7f6e|\\u5730\\u70b9|\\u641c\\u7d22|location|place)/i;
+    const noLocationRe = /(?:\\u4e0d\\u663e\\u793a\\u4f4d\\u7f6e|\\u4e0d\\u663e\\u793a|\\u4e0d\\u6dfb\\u52a0\\u4f4d\\u7f6e|none location|no location)/i;
     function setInputValue(el, value) {
       if (!el) return false;
       try { el.focus(); } catch (e) {}
@@ -18232,7 +18298,7 @@ def _select_location(ctx: Any, location: str) -> None:
     }
     const target = norm(arguments[0] || '');
     const label = Array.from(document.querySelectorAll('.form-item .label, .label, div, span'))
-      .find(el => isVisible(el) && ['位置', '浣嶇疆'].includes(norm(el.textContent)));
+      .find(el => isVisible(el) && locationLabelRe.test(norm(el.textContent)));
     if (!label) return {state: 'missing_field'};
     const item = label.closest('.form-item') || label.parentElement;
     const wrap = (item && item.querySelector('.post-position-wrap')) || item || label.parentElement;
@@ -18257,7 +18323,7 @@ def _select_location(ctx: Any, location: str) -> None:
           el.getAttribute && el.getAttribute('data-placeholder'),
           el.className
         ].join(' '));
-        return /位置|地点|搜索|location|place|浣嶇疆|鍦扮偣|鎼滅储/i.test(attrs);
+        return searchFieldRe.test(attrs);
       });
     if (searchFields.length) setInputValue(searchFields[0], target);
 
@@ -18273,7 +18339,7 @@ def _select_location(ctx: Any, location: str) -> None:
       for (const node of nodes) {
         const txt = norm(node.innerText || node.textContent);
         if (!txt || txt.length > 80) continue;
-        if (/不显示位置|不显示|不添加位置|涓嶆樉绀轰綅缃畖涓嶆樉绀簗涓嶆坊鍔犱綅缃?/.test(txt)) continue;
+        if (noLocationRe.test(txt)) continue;
         if (!visibleOptions.includes(txt)) visibleOptions.push(txt);
         if (txt === target || txt.includes(target) || target.includes(txt)) {
           best = node;
@@ -18309,6 +18375,161 @@ def _select_location(ctx: Any, location: str) -> None:
         if action_state in {"missing_field", "missing_trigger"}:
             return
     _log(f"[Uploader] Could not confirm location selection: {target}; keep current location.")
+
+
+def _apply_wechat_publish_location(editor_ctx: Any, page: Any, location: str) -> None:
+    target = str(location or "").strip()
+    contexts = _collect_upload_contexts(editor_ctx, page)
+    attempted = 0
+    for ctx in contexts:
+        state = _get_location_state(ctx)
+        if not state.get("hasLocationField"):
+            continue
+        attempted += 1
+        _select_location(ctx, target)
+        after = _get_location_state(ctx)
+        current = str(after.get("current", "") or "").strip()
+        if not target:
+            if re.search(r"不显示位置|不显示|不添加位置|none", current, re.IGNORECASE):
+                return
+            if bool(after.get("isNone")) and current:
+                return
+        elif current and (current == target or target in current or current in target):
+            return
+    if not attempted:
+        _log("[Uploader] Location field not found in editor/page contexts, skip location selection.")
+
+
+def _read_wechat_publish_optional_controls(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 4 && r.height > 4;
+    }
+    function norm(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
+    function cls(el) {
+      try {
+        return typeof el.className === 'string'
+          ? el.className
+          : String((el.getAttribute && el.getAttribute('class')) || '');
+      } catch (e) {
+        return '';
+      }
+    }
+    function rect(el) {
+      const r = el.getBoundingClientRect();
+      return {x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height)};
+    }
+    function fieldByLabel(labelRe, selectors) {
+      const labels = Array.from(document.querySelectorAll('.form-item .label, .label, label, div, span'))
+        .filter(isVisible);
+      let label = labels.find(el => labelRe.test(norm(el.innerText || el.textContent)));
+      let item = label ? (label.closest('.form-item') || label.parentElement) : null;
+      let trigger = null;
+      if (item) {
+        for (const selector of selectors) {
+          trigger = item.querySelector(selector);
+          if (trigger && isVisible(trigger)) break;
+          trigger = null;
+        }
+      }
+      if (!trigger) {
+        for (const selector of selectors) {
+          trigger = Array.from(document.querySelectorAll(selector)).find(isVisible);
+          if (trigger) break;
+        }
+      }
+      if (!item && trigger) item = trigger.closest('.form-item') || trigger.parentElement;
+      if (!label && item) {
+        label = Array.from(item.querySelectorAll('.label, label, div, span'))
+          .find(el => isVisible(el) && labelRe.test(norm(el.innerText || el.textContent))) || null;
+      }
+      if (!item && !trigger) return {found: false, label: '', current: '', selector: '', rect: null};
+      const body = item && (item.querySelector('.form-item-body') || item);
+      const currentSource = trigger || body || item;
+      return {
+        found: true,
+        label: norm(label ? (label.innerText || label.textContent) : ''),
+        current: norm(currentSource ? (currentSource.innerText || currentSource.textContent) : ''),
+        selector: trigger ? cls(trigger) : '',
+        rect: trigger ? rect(trigger) : (item ? rect(item) : null)
+      };
+    }
+    function scheduleField() {
+      const row = fieldByLabel(
+        /^(?:\u5b9a\u65f6\u53d1\u8868|\u5b9a\u65f6\u53d1\u5e03|\u5b9a\u65f6)$/,
+        ['.weui-desktop-radio-group', '.radio-line', '[role="radiogroup"]', 'input[type="radio"]']
+      );
+      if (!row.found) return row;
+      const item = Array.from(document.querySelectorAll('.form-item'))
+        .find(el => isVisible(el) && /(?:\u5b9a\u65f6\u53d1\u8868|\u5b9a\u65f6\u53d1\u5e03)/.test(norm(el.innerText || el.textContent)));
+      if (!item) return row;
+      const options = Array.from(item.querySelectorAll('label, .weui-desktop-radio, [role="radio"]'))
+        .filter(isVisible)
+        .map(el => {
+          const input = el.matches && el.matches('input[type="radio"]') ? el : el.querySelector && el.querySelector('input[type="radio"]');
+          return {
+            text: norm(el.innerText || el.textContent || (input && input.value) || ''),
+            checked: !!(input && input.checked) || /\b(active|checked|selected)\b/i.test(cls(el))
+          };
+        })
+        .filter(item => item.text);
+      row.options = options;
+      const selected = options.find(item => item.checked);
+      if (selected) row.current = selected.text;
+      return row;
+    }
+    return {
+      collection: fieldByLabel(
+        /^(?:\u6dfb\u52a0\u5230\u5408\u96c6|\u5408\u96c6)$/,
+        ['.post-album-wrap', '.post-album-display-wrap', '.post-album-display']
+      ),
+      link: fieldByLabel(
+        /^(?:\u94fe\u63a5|link)$/i,
+        ['.post-link-wrap', '.link-display-wrap', '.link-display']
+      ),
+      activity: fieldByLabel(
+        /^(?:\u6d3b\u52a8|activity)$/i,
+        ['.post-activity-wrap', '.activity-display-wrap', '.activity-display']
+      ),
+      schedule: scheduleField()
+    };
+    """
+    merged: dict[str, Any] = {}
+    for ctx in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        try:
+            payload = ctx.run_js(js)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if key not in merged and isinstance(value, dict) and value.get("found"):
+                merged[key] = value
+    for key in ("collection", "link", "activity", "schedule"):
+        merged.setdefault(key, {"found": False, "label": "", "current": "", "selector": "", "rect": None})
+    return merged
+
+
+def _log_wechat_publish_optional_controls(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    controls = _read_wechat_publish_optional_controls(primary_ctx, fallback_ctx)
+    labels = {
+        "collection": "collection",
+        "link": "link",
+        "activity": "activity",
+        "schedule": "schedule",
+    }
+    parts = []
+    for key in ("collection", "link", "activity", "schedule"):
+        item = controls.get(key) if isinstance(controls, dict) else {}
+        found = bool(isinstance(item, dict) and item.get("found"))
+        current = str((item or {}).get("current") or "").strip() if isinstance(item, dict) else ""
+        parts.append(f"{labels[key]}={'found' if found else 'missing'}:{current or '-'}")
+    _log(f"[Uploader:wechat] Optional controls: {'; '.join(parts)}")
+    return controls
 
 
 def _get_collection_state(ctx: Any) -> dict[str, Any]:
@@ -18871,7 +19092,8 @@ def _fill_draft_once(
     editor_ctx = _resolve_post_editor_context(page)
 
     _log("[Uploader] Location strategy: apply configured publish location.")
-    _select_location(editor_ctx, location)
+    _apply_wechat_publish_location(editor_ctx, page, location)
+    _log_wechat_publish_optional_controls(editor_ctx, page)
     _fill_caption(editor_ctx, final_caption)
     configured_short_title = str(short_title or "").strip()
     wechat_short_title = _fill_wechat_short_title(

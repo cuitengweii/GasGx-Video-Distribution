@@ -4873,14 +4873,30 @@ body.sidebar-collapsed .terminal-init-modal {
 }
 
 .terminal-account-item.manual-confirm {
+  border-color: rgba(148, 163, 184, 0.48);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.terminal-account-item.manual-confirm-warning {
   border-color: rgba(255, 82, 82, 0.95);
   background: rgba(255, 82, 82, 0.16);
   box-shadow: inset 0 0 0 1px rgba(255, 82, 82, 0.28), 0 0 18px rgba(255, 82, 82, 0.18);
 }
 
-.terminal-account-item.active.manual-confirm {
+.terminal-account-item.active.manual-confirm-warning {
   border-color: #ff5252;
   background: rgba(255, 82, 82, 0.22);
+}
+
+.terminal-account-item.manual-confirm-success {
+  border-color: rgba(93, 214, 44, 0.9);
+  background: rgba(93, 214, 44, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(93, 214, 44, 0.24), 0 0 18px rgba(93, 214, 44, 0.16);
+}
+
+.terminal-account-item.active.manual-confirm-success {
+  border-color: rgba(93, 214, 44, 1);
+  background: rgba(93, 214, 44, 0.2);
 }
 
 .terminal-account-info {
@@ -5089,10 +5105,18 @@ body.sidebar-collapsed .terminal-init-modal {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #ffb4b4;
+  color: var(--terminal-text-sub);
   font-weight: 900;
   max-height: none;
   white-space: nowrap;
+}
+
+.terminal-acc-status.manual-confirm-warning {
+  color: #ffb4b4;
+}
+
+.terminal-acc-status.manual-confirm-success {
+  color: #b8f595;
 }
 
 .terminal-acc-status.manual-confirm .terminal-acc-status-text {
@@ -5101,15 +5125,23 @@ body.sidebar-collapsed .terminal-init-modal {
   white-space: nowrap;
 }
 
-.terminal-acc-warning-icon {
+.terminal-acc-confirm-icon {
   width: 15px;
   height: 15px;
   flex: 0 0 auto;
+}
+
+.terminal-acc-confirm-icon.warning {
   color: #ff5252;
   filter: drop-shadow(0 0 5px rgba(255, 82, 82, 0.55));
 }
 
-.terminal-acc-warning-icon svg {
+.terminal-acc-confirm-icon.success {
+  color: #5dd62c;
+  filter: drop-shadow(0 0 5px rgba(93, 214, 44, 0.5));
+}
+
+.terminal-acc-confirm-icon svg {
   width: 100%;
   height: 100%;
   display: block;

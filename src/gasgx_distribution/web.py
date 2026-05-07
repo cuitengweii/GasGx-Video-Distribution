@@ -607,6 +607,13 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.post("/api/terminal-execution/windows/{window_id}/confirm-login")
+    def terminal_execution_confirm_login(window_id: int) -> dict[str, Any]:
+        try:
+            return service.confirm_terminal_login_ready(window_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/terminal-execution/windows/{window_id}/manual-publish")
     def terminal_execution_manual_publish(window_id: int) -> dict[str, Any]:
         try:

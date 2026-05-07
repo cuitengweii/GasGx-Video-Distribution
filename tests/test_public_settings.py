@@ -239,6 +239,49 @@ def test_wechat_platform_inherit_values_resolve_to_common(monkeypatch, tmp_path:
     assert resolved["caption"] == "common caption"
 
 
+def test_wechat_platform_blank_location_does_not_fallback_to_common(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    save_distribution_settings(
+        {
+            "common": {
+                "wechat_location": "涓婃捣",
+            },
+            "platforms": {
+                "wechat": {
+                    "location": "",
+                },
+            },
+        }
+    )
+
+    resolved = load_platform_publish_settings("wechat")
+    assert resolved["location"] == ""
+
+
+def test_wechat_publish_settings_api_blank_location_keeps_no_location(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    save_distribution_settings({"common": {"wechat_location": "涓婃捣"}})
+    client = TestClient(create_app())
+
+    result = client.patch(
+        "/api/settings/wechat-publish",
+        json={
+            "material_dir": "runtime/materials/videos",
+            "publish_mode": "publish",
+            "collection_name": "test collection",
+            "caption": "shared caption",
+            "declare_original": False,
+            "short_title": "GasGx API",
+            "location": "",
+            "upload_timeout": 120,
+        },
+    )
+
+    assert result.status_code == 200
+    assert result.json()["location"] == ""
+    assert client.get("/api/settings/wechat-publish").json()["location"] == ""
+
+
 def test_distribution_settings_default_wechat_platform_uses_inherit(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     saved = save_distribution_settings({})

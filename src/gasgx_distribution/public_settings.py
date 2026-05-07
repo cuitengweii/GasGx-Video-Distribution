@@ -360,7 +360,11 @@ def load_platform_publish_settings(platform: str) -> dict[str, Any]:
             "collection_name": _resolve_wechat_common_value(platform_settings.get("collection_name"), common.get("wechat_collection_name", "GasGx"), blank_is_fallback=False),
             "declare_original": _resolve_wechat_common_value(platform_settings.get("declare_original"), common.get("wechat_declare_original", False)),
             "short_title": _resolve_wechat_common_value(platform_settings.get("short_title"), common.get("wechat_short_title", DEFAULT_COMMON_SETTINGS["wechat_short_title"])),
-            "location": _resolve_wechat_common_value(platform_settings.get("location"), common.get("wechat_location", "")),
+            "location": _resolve_wechat_common_value(
+                platform_settings.get("location"),
+                common.get("wechat_location", ""),
+                blank_is_fallback=False,
+            ),
             "caption": _resolve_wechat_common_value(platform_settings.get("caption"), common.get("wechat_caption", "")),
         }
     return {

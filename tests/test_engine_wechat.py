@@ -32,6 +32,132 @@ def test_resolve_platform_publish_config_keeps_wechat_title_and_location() -> No
     assert resolved["save_draft"] is False
 
 
+def test_select_location_treats_none_keyword_as_clear(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(engine, "_clear_location_if_selected", lambda _ctx: calls.append("clear"))
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._select_location(object(), "不显示位置")
+
+    assert calls == ["clear"]
+
+
+def test_clear_location_clicks_option_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    states = [
+        {"hasLocationField": True, "isNone": False, "current": "廊坊市"},
+        {"hasLocationField": True, "isNone": True, "current": "不显示位置"},
+    ]
+
+    def fake_state(_ctx: Any) -> dict[str, Any]:
+        if len(states) > 1:
+            return states.pop(0)
+        return states[0]
+
+    class FakeCtx:
+        def __init__(self) -> None:
+            self.scripts: list[str] = []
+
+        def run_js(self, script: str, *args: Any) -> Any:
+            del args
+            self.scripts.append(script)
+            return {"state": "clicked", "option": "不显示位置"}
+
+    monkeypatch.setattr(engine, "_get_location_state", fake_state)
+    monkeypatch.setattr(engine, "_humanized_publish_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    ctx = FakeCtx()
+    engine._clear_location_if_selected(ctx)
+
+    assert ctx.scripts
+    assert "closest('.option-item, .location-item, [role=\"option\"], li, button, a')" in ctx.scripts[0]
+
+
+def test_clear_location_does_not_early_return_when_current_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    states = [
+        {"hasLocationField": True, "isNone": True, "current": ""},
+        {"hasLocationField": True, "isNone": True, "current": "不显示位置"},
+    ]
+
+    def fake_state(_ctx: Any) -> dict[str, Any]:
+        if len(states) > 1:
+            return states.pop(0)
+        return states[0]
+
+    class FakeCtx:
+        def __init__(self) -> None:
+            self.scripts: list[str] = []
+
+        def run_js(self, script: str, *args: Any) -> Any:
+            del args
+            self.scripts.append(script)
+            return {"state": "clicked", "option": "不显示位置"}
+
+    monkeypatch.setattr(engine, "_get_location_state", fake_state)
+    monkeypatch.setattr(engine, "_humanized_publish_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    ctx = FakeCtx()
+    engine._clear_location_if_selected(ctx)
+
+    assert ctx.scripts
+
+
+def test_apply_wechat_publish_location_falls_back_to_page_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    editor = object()
+    page = object()
+    calls: list[Any] = []
+
+    def fake_state(ctx: Any) -> dict[str, Any]:
+        if ctx is editor:
+            return {"hasLocationField": False, "isNone": True, "current": ""}
+        if calls:
+            return {"hasLocationField": True, "isNone": True, "current": "不显示位置"}
+        return {"hasLocationField": True, "isNone": False, "current": "廊坊市"}
+
+    monkeypatch.setattr(engine, "_collect_upload_contexts", lambda *_args: [editor, page])
+    monkeypatch.setattr(engine, "_get_location_state", fake_state)
+    monkeypatch.setattr(engine, "_select_location", lambda ctx, location: calls.append((ctx, location)))
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._apply_wechat_publish_location(editor, page, "")
+
+    assert calls == [(page, "")]
+
+
+def test_read_wechat_publish_optional_controls_merges_detected_contexts(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeCtx:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        def run_js(self, _script: str) -> dict[str, Any]:
+            return self.payload
+
+    editor = FakeCtx(
+        {
+            "collection": {"found": True, "current": "选择合集", "selector": "post-album-wrap"},
+            "link": {"found": True, "current": "小游戏", "selector": "post-link-wrap"},
+        }
+    )
+    page = FakeCtx(
+        {
+            "activity": {"found": True, "current": "不参与活动", "selector": "post-activity-wrap"},
+            "schedule": {"found": True, "current": "不定时", "selector": "radio-line"},
+        }
+    )
+
+    monkeypatch.setattr(engine, "_collect_upload_contexts", lambda *_args: [editor, page])
+
+    controls = engine._read_wechat_publish_optional_controls(editor, page)
+
+    assert controls["collection"]["current"] == "选择合集"
+    assert controls["link"]["current"] == "小游戏"
+    assert controls["activity"]["current"] == "不参与活动"
+    assert controls["schedule"]["current"] == "不定时"
+
+
 def test_is_collection_match_strips_counter_suffix() -> None:
     assert engine._is_collection_match("赛博皮卡-天津港现车 共11个内容", "赛博皮卡-天津港现车")
     assert engine._is_collection_match(" 添加到合集 赛博皮卡测评 ", "赛博皮卡测评")

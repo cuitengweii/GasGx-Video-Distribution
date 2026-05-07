@@ -2356,7 +2356,7 @@ def test_public_brand_settings_supabase_uses_lightweight_columns(monkeypatch, tm
     assert {call["columns"] for call in fake.select_where_calls} == {"logo_asset_path", "id"}
 
 
-def test_terminal_poll_limits_login_probe_work_per_interval(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_does_not_probe_login_status(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2383,10 +2383,10 @@ def test_terminal_poll_limits_login_probe_work_per_interval(monkeypatch, tmp_pat
     service.poll_terminal_execution()
     service.poll_terminal_execution()
 
-    assert calls == [1]
+    assert calls == []
     state = json.loads((runtime_dir / "terminal_execution_state.json").read_text(encoding="utf-8"))
-    assert state["probe_cursor"] == 0
-    assert state["next_probe_at"] > 0
+    assert int(state.get("probe_cursor") or 0) == 0
+    assert int(state.get("next_probe_at") or 0) == 0
 
 
 def test_terminal_poll_passive_mode_does_not_open_or_probe(monkeypatch, tmp_path: Path) -> None:
@@ -2445,7 +2445,7 @@ def test_terminal_poll_passive_mode_does_not_open_or_probe(monkeypatch, tmp_path
     assert int(state.get("next_probe_at") or 0) == 0
 
 
-def test_terminal_poll_reopens_waiting_qr_when_browser_is_closed(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_does_not_reopen_waiting_qr_when_browser_is_closed(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2457,7 +2457,7 @@ def test_terminal_poll_reopens_waiting_qr_when_browser_is_closed(monkeypatch, tm
             "color": "#3B82F6",
             "current_index": 0,
             "manual_available_at": 0,
-            "accounts": [{"id": 9, "status": "waiting_qr", "status_text": "请在已打开浏览器扫码", "task_id": None}],
+            "accounts": [{"id": 9, "status": "waiting_qr", "status_text": service.TERMINAL_LOGIN_CONFIRM_TEXT, "task_id": None}],
         }
     ]
     (runtime_dir / "terminal_execution_state.json").write_text(
@@ -2467,16 +2467,16 @@ def test_terminal_poll_reopens_waiting_qr_when_browser_is_closed(monkeypatch, tm
     opened: list[int] = []
     monkeypatch.setattr(service, "_terminal_browser_runtime_for_account", lambda *_args, **_kwargs: {"browser_open": False})
     monkeypatch.setattr(service, "open_account_browser", lambda account_id, platform: opened.append(account_id) or {"ok": True})
-    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("closed browser should reopen before probing")))
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not probe login")))
 
     service._invalidate_terminal_execution_state_cache()
     result = service.poll_terminal_execution()
 
-    assert opened == [9]
+    assert opened == []
     assert result["windows"][0]["accounts"][0]["status"] == "waiting_qr"
 
 
-def test_terminal_poll_marks_login_probe_timeout_without_hanging(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_does_not_wait_for_login_probe(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2488,7 +2488,7 @@ def test_terminal_poll_marks_login_probe_timeout_without_hanging(monkeypatch, tm
             "color": "#3B82F6",
             "current_index": 0,
             "manual_available_at": 0,
-            "accounts": [{"id": 9, "status": "waiting_qr", "status_text": "请在已打开浏览器扫码", "task_id": None}],
+            "accounts": [{"id": 9, "status": "waiting_qr", "status_text": service.TERMINAL_LOGIN_CONFIRM_TEXT, "task_id": None}],
         }
     ]
     (runtime_dir / "terminal_execution_state.json").write_text(
@@ -2497,16 +2497,16 @@ def test_terminal_poll_marks_login_probe_timeout_without_hanging(monkeypatch, tm
     )
     monkeypatch.setattr(service, "_terminal_browser_runtime_for_account", lambda *_args, **_kwargs: {"browser_open": True})
     monkeypatch.setattr(service, "TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS", 1)
-    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: time.sleep(5) or {"status": "waiting"})
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not check login")))
 
     service._invalidate_terminal_execution_state_cache()
     started_at = time.monotonic()
     result = service.poll_terminal_execution()
 
-    assert time.monotonic() - started_at < 2.5
+    assert time.monotonic() - started_at < 0.5
     current = result["windows"][0]["accounts"][0]
-    assert current["status"] == "error"
-    assert "登录检测超时" in current["status_text"]
+    assert current["status"] == "waiting_qr"
+    assert current["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
 
 
 def test_terminal_start_login_opens_all_windows_for_current_batch(monkeypatch, tmp_path: Path) -> None:
@@ -2540,10 +2540,49 @@ def test_terminal_start_login_opens_all_windows_for_current_batch(monkeypatch, t
 
     assert opened == [1, 2, 3]
     assert [item["accounts"][0]["status"] for item in first_state["windows"]] == ["waiting_qr", "waiting_qr", "waiting_qr"]
-    assert [item["accounts"][0]["status_text"] for item in first_state["windows"]] == ["\u8bf7\u5728\u5df2\u6253\u5f00\u6d4f\u89c8\u5668\u626b\u7801"] * 3
+    assert [item["accounts"][0]["status_text"] for item in first_state["windows"]] == [service.TERMINAL_LOGIN_CONFIRM_TEXT] * 3
     assert [item["qr_url"] for item in first_state["windows"]] == ["", "", ""]
     assert first_state["login_started"] is True
     assert [item["manual_available_at"] for item in first_state["windows"]] == [0, 0, 0]
+
+
+def test_terminal_confirm_login_ready_marks_account_without_probe(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": str(runtime_dir / "terminal_qr_cache" / "window-01.png"),
+                        "qr_url": "/api/terminal-execution/windows/1/qr-image",
+                        "accounts": [{"id": 9, "status": "waiting_qr", "status_text": "等待扫码中...", "task_id": None}],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("manual login confirm should not probe login")))
+
+    service._invalidate_terminal_execution_state_cache()
+    result = service.confirm_terminal_login_ready(1)
+
+    account = result["windows"][0]["accounts"][0]
+    assert account["status"] == "ready"
+    assert account["status_text"] == service.TERMINAL_LOGIN_READY_TEXT
+    assert result["windows"][0]["qr_url"] == ""
 
 
 def test_terminal_start_login_rejects_when_no_executable_accounts(monkeypatch, tmp_path: Path) -> None:
@@ -2615,7 +2654,7 @@ def test_terminal_start_login_applies_window_color_to_browser(monkeypatch, tmp_p
     assert applied == [(open_result, "#F97316")]
 
 
-def test_terminal_state_marks_ready_account_browser_closed(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_state_keeps_ready_account_manual_when_browser_closed(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     account = service.create_account({"account_key": "gasgx-ready-closed", "display_name": "Ready Closed", "platforms": ["wechat"]})
     runtime_dir = tmp_path / "runtime"
@@ -2664,7 +2703,7 @@ def test_terminal_state_marks_ready_account_browser_closed(monkeypatch, tmp_path
     current = window["accounts"][0]
     assert current["browser_open"] is False
     assert window["browser_open"] is False
-    assert any(item["code"] == "browser_closed" for item in window["publish_precheck"]["issues"]["p0"])
+    assert not any(item["code"] == "browser_closed" for item in window["publish_precheck"]["issues"]["p0"])
 
 
 def test_terminal_execution_state_does_not_duplicate_runtime_probe_before_login(monkeypatch, tmp_path: Path) -> None:
@@ -2811,7 +2850,7 @@ def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatc
                         "manual_available_at": 0,
                         "qr_path": "",
                         "qr_url": "",
-                        "accounts": [{"id": 1, "status": "waiting_qr", "status_text": "等待扫码中...", "task_id": None}],
+                        "accounts": [{"id": 1, "status": "ready", "status_text": service.TERMINAL_LOGIN_READY_TEXT, "task_id": None}],
                     }
                 ],
                 "config": [],
@@ -2853,7 +2892,7 @@ def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatc
             ],
         },
     )
-    monkeypatch.setattr(service, "check_login_status", lambda account_id, platform: {"status": "ready", "ok": True})
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("manual publish should not probe login")))
     import gasgx_distribution.matrix_publish as mp
     sample = runtime_dir / "materials" / "videos" / "one.mp4"
     sample.parent.mkdir(parents=True, exist_ok=True)
@@ -2865,11 +2904,84 @@ def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatc
 
     window = result["windows"][0]
     assert window["accounts"][0]["status"] == "running"
-    assert window["accounts"][0]["status_text"] == "已启动发布，执行中..."
+    assert window["accounts"][0]["status_text"] == service.TERMINAL_PUBLISH_PREPARE_TEXT
     assert window["qr_url"] == ""
 
 
-def test_terminal_poll_resolves_publish_run_success(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_wechat_publish_command_follows_publish_mode(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    sample = runtime_dir / "materials" / "videos" / "one.mp4"
+    sample.parent.mkdir(parents=True, exist_ok=True)
+    sample.write_bytes(b"video")
+    profile_dir = tmp_path / "profiles" / "wechat"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        service,
+        "get_account",
+        lambda account_id: {
+            "id": account_id,
+            "account_key": "acc-1",
+            "display_name": "acc-1",
+            "platforms": [
+                {
+                    "platform": "wechat",
+                    "profile_dir": str(profile_dir),
+                    "debug_port": 9333,
+                    "fingerprint": {},
+                }
+            ],
+        },
+    )
+    settings_payload = {
+        "publish_mode": "publish",
+        "upload_timeout": 120,
+        "caption": "caption",
+        "topics": "",
+        "collection_name": "",
+        "declare_original": False,
+    }
+    monkeypatch.setattr(service, "load_platform_publish_settings", lambda platform: dict(settings_payload))
+    import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [sample])
+    monkeypatch.setattr(mp, "_consumed_index", lambda today=None: set())
+    monkeypatch.setattr(mp, "prepare_workspace", lambda item: item.workspace.mkdir(parents=True, exist_ok=True))
+    popen_calls: list[dict[str, Any]] = []
+
+    class FakeProcess:
+        pid = 4321
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append({"cmd": list(cmd), "env": dict(kwargs.get("env") or {})})
+        return FakeProcess()
+
+    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
+
+    run = service._start_terminal_wechat_publish({"id": 1, "color": "#3B82F6"}, {"id": 1})
+
+    assert run["manual_publish"] is True
+    assert popen_calls
+    cmd = popen_calls[0]["cmd"]
+    assert "--wechat-publish-now" in cmd
+    assert "--wechat-save-draft-only" not in cmd
+    assert "--wechat-upload-only" not in cmd
+    assert "--no-save-draft" not in cmd
+    assert "CYBERCAR_KEEP_WORK_TABS" not in popen_calls[0]["env"]
+
+    settings_payload["publish_mode"] = "draft"
+    run = service._start_terminal_wechat_publish({"id": 1, "color": "#3B82F6"}, {"id": 1})
+
+    assert run["manual_publish"] is True
+    cmd = popen_calls[1]["cmd"]
+    assert "--wechat-save-draft-only" in cmd
+    assert "--wechat-publish-now" not in cmd
+    assert "--wechat-upload-only" not in cmd
+    assert "--no-save-draft" not in cmd
+
+
+def test_terminal_poll_moves_finished_publish_run_to_manual_confirm(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2901,17 +3013,17 @@ def test_terminal_poll_resolves_publish_run_success(monkeypatch, tmp_path: Path)
     )
     monkeypatch.setattr(service, "now_ts", lambda: 100)
     monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
-    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not advance terminal windows")))
     import gasgx_distribution.matrix_publish as mp
-    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: True)
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not inspect publish evidence")))
     saved_publish_states: list[dict[str, Any]] = []
     monkeypatch.setattr(mp, "_save_state", lambda payload: saved_publish_states.append(payload))
     result = service.poll_terminal_execution()
     window = result["windows"][0]
     assert window["current_index"] == 0
-    assert window["publish_run"]["status"] == "success"
+    assert window["publish_run"]["status"] == "manual_confirm"
     assert window["accounts"][0]["status"] == "running"
-    assert "等待人工确认" in window["accounts"][0]["status_text"]
+    assert window["accounts"][0]["status_text"] == service.TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT
     assert saved_publish_states == []
 
 
@@ -2972,7 +3084,7 @@ def test_terminal_manual_publish_sets_error_stage_on_missing_material(monkeypatc
                         "manual_available_at": 0,
                         "qr_path": "",
                         "qr_url": "",
-                        "accounts": [{"id": 1, "status": "waiting_qr", "status_text": "等待扫码中...", "task_id": None, "publish_success_count": 0}],
+                        "accounts": [{"id": 1, "status": "ready", "status_text": service.TERMINAL_LOGIN_READY_TEXT, "task_id": None, "publish_success_count": 0}],
                     }
                 ],
                 "config": [],
@@ -3001,7 +3113,7 @@ def test_terminal_manual_publish_sets_error_stage_on_missing_material(monkeypatc
         },
     )
     import gasgx_distribution.matrix_publish as mp
-    monkeypatch.setattr(service, "check_login_status", lambda account_id, platform: {"status": "ready", "ok": True})
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("manual publish should not probe login")))
     monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [])
 
     result = service.manual_terminal_publish(1)
@@ -3014,7 +3126,7 @@ def test_terminal_manual_publish_sets_error_stage_on_missing_material(monkeypatc
     assert "当前账号当天没有可用视频素材" in account["status_text"]
 
 
-def test_terminal_poll_marks_publish_run_failure_with_error_stage(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_finished_publish_run_does_not_mark_failure(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -3046,21 +3158,22 @@ def test_terminal_poll_marks_publish_run_failure_with_error_stage(monkeypatch, t
     )
     monkeypatch.setattr(service, "now_ts", lambda: 100)
     monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
-    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not advance terminal windows")))
     import gasgx_distribution.matrix_publish as mp
-    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: False)
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not inspect publish evidence")))
 
     result = service.poll_terminal_execution()
 
     window = result["windows"][0]
     account = window["accounts"][0]
-    assert window["publish_run"]["status"] == "failed"
+    assert window["publish_run"]["status"] == "manual_confirm"
     assert account["status"] == "running"
-    assert "等待人工确认" in account["status_text"]
+    assert account["status_text"] == service.TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT
     assert "error_stage" not in account
+    assert window["publish_run"].get("error") == ""
 
 
-def test_terminal_poll_marks_publish_run_unconfirmed_from_log(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_ignores_log_failure_and_waits_for_manual_confirm(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -3100,20 +3213,21 @@ def test_terminal_poll_marks_publish_run_unconfirmed_from_log(monkeypatch, tmp_p
     )
     monkeypatch.setattr(service, "now_ts", lambda: 100)
     monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
-    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not advance terminal windows")))
     import gasgx_distribution.matrix_publish as mp
-    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: False)
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not inspect publish evidence")))
 
     result = service.poll_terminal_execution()
 
     account = result["windows"][0]["accounts"][0]
     run = result["windows"][0]["publish_run"]
+    assert run["status"] == "manual_confirm"
     assert account["status"] == "running"
-    assert "等待人工确认" in account["status_text"]
-    assert "发布未确认" in str(run.get("error") or "")
+    assert account["status_text"] == service.TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT
+    assert str(run.get("error") or "") == ""
 
 
-def test_terminal_poll_marks_publish_run_success_from_log_marker_without_evidence(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_poll_ignores_log_success_and_waits_for_manual_confirm(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -3153,19 +3267,19 @@ def test_terminal_poll_marks_publish_run_success_from_log_marker_without_evidenc
     )
     monkeypatch.setattr(service, "now_ts", lambda: 100)
     monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
-    monkeypatch.setattr(service, "_advance_terminal_window", lambda window: False)
+    monkeypatch.setattr(service, "_advance_terminal_window", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not advance terminal windows")))
     import gasgx_distribution.matrix_publish as mp
-    monkeypatch.setattr(mp, "_has_publish_evidence", lambda workspace, platform: False)
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not inspect publish evidence")))
 
     result = service.poll_terminal_execution()
 
     account = result["windows"][0]["accounts"][0]
     run = result["windows"][0]["publish_run"]
-    assert run["status"] == "success"
-    assert run["evidence_ok"] is False
-    assert run["success_inferred_from_log"] is True
+    assert run["status"] == "manual_confirm"
+    assert "evidence_ok" not in run
+    assert "success_inferred_from_log" not in run
     assert account["status"] == "running"
-    assert "\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4" in account["status_text"]
+    assert account["status_text"] == service.TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT
 
 
 def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path: Path) -> None:
@@ -3209,11 +3323,11 @@ def test_terminal_open_account_qr_switches_current_account(monkeypatch, tmp_path
     assert opened == [2]
     assert window["current_index"] == 1
     assert window["accounts"][1]["status"] == "waiting_qr"
-    assert window["accounts"][1]["status_text"] == "\u8bf7\u5728\u5df2\u6253\u5f00\u6d4f\u89c8\u5668\u626b\u7801"
+    assert window["accounts"][1]["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
     assert window["qr_url"] == ""
 
 
-def test_terminal_open_account_qr_marks_current_account_ready_when_login_is_already_valid(
+def test_terminal_open_account_qr_keeps_current_account_waiting_for_manual_login_confirmation(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -3234,7 +3348,7 @@ def test_terminal_open_account_qr_marks_current_account_ready_when_login_is_alre
                         "qr_path": str(runtime_dir / "terminal_qr_cache" / "window-01.png"),
                         "qr_url": "/api/terminal-execution/windows/1/qr-image",
                         "accounts": [
-                            {"id": 1, "status": "waiting_qr", "status_text": "请在已打开浏览器扫码", "task_id": None, "publish_success_count": 0}
+                            {"id": 1, "status": "waiting_qr", "status_text": service.TERMINAL_LOGIN_CONFIRM_TEXT, "task_id": None, "publish_success_count": 0}
                         ],
                     }
                 ],
@@ -3247,7 +3361,7 @@ def test_terminal_open_account_qr_marks_current_account_ready_when_login_is_alre
         encoding="utf-8",
     )
     monkeypatch.setattr(service, "_terminal_browser_runtime_for_account", lambda *_args, **_kwargs: {"browser_open": True})
-    monkeypatch.setattr(service, "_check_terminal_login_status_with_timeout", lambda *_args, **_kwargs: {"status": "ready"})
+    monkeypatch.setattr(service, "_check_terminal_login_status_with_timeout", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("open account should not probe login")))
     monkeypatch.setattr(service, "_inject_terminal_account_browser_marker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(service, "_raise_account_browser_window", lambda *_args, **_kwargs: True)
 
@@ -3255,8 +3369,8 @@ def test_terminal_open_account_qr_marks_current_account_ready_when_login_is_alre
 
     window = result["windows"][0]
     account = window["accounts"][0]
-    assert account["status"] == "ready"
-    assert account["status_text"] == "已登录，等待手动发布"
+    assert account["status"] == "waiting_qr"
+    assert account["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
     assert window["qr_url"] == ""
 
 
@@ -3341,7 +3455,7 @@ def test_terminal_open_account_qr_opens_browser_without_extracting_qr(monkeypatc
     assert opened == [2]
     assert window["current_index"] == 1
     assert window["accounts"][1]["status"] == "waiting_qr"
-    assert window["accounts"][1]["status_text"] == "\u8bf7\u5728\u5df2\u6253\u5f00\u6d4f\u89c8\u5668\u626b\u7801"
+    assert window["accounts"][1]["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
     assert window["qr_url"] == ""
 
 def test_terminal_confirm_success_opens_next_account_browser(monkeypatch, tmp_path: Path) -> None:
@@ -3394,7 +3508,7 @@ def test_terminal_confirm_success_opens_next_account_browser(monkeypatch, tmp_pa
     assert window["accounts"][0]["status"] == "success"
     assert window["accounts"][0]["publish_success_count"] == 1
     assert window["accounts"][1]["status"] == "waiting_qr"
-    assert window["accounts"][1]["status_text"] == "\u8bf7\u5728\u5df2\u6253\u5f00\u6d4f\u89c8\u5668\u626b\u7801"
+    assert window["accounts"][1]["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
     assert window["qr_url"] == ""
 
 
@@ -3437,7 +3551,7 @@ def test_terminal_poll_ignores_stale_publish_run_for_current_account(monkeypatch
         encoding="utf-8",
     )
     monkeypatch.setattr(service, "now_ts", lambda: 100)
-    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: {"status": "login_required"})
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("poll should not check login")))
 
     result = service.poll_terminal_execution()
 
@@ -3445,7 +3559,7 @@ def test_terminal_poll_ignores_stale_publish_run_for_current_account(monkeypatch
     assert window["current_index"] == 1
     assert window["publish_run"] == {}
     assert window["accounts"][1]["status"] == "waiting_qr"
-    assert window["accounts"][1]["status_text"] == "请在已打开浏览器扫码"
+    assert window["accounts"][1]["status_text"] == "waiting qr"
 
 
 def test_terminal_confirm_ignores_stale_publish_run(monkeypatch, tmp_path: Path) -> None:
@@ -3548,7 +3662,7 @@ def test_terminal_confirm_manual_confirmable_failure_advances(monkeypatch, tmp_p
     assert window["accounts"][0]["publish_success_count"] == 1
     assert opened == [2]
     assert window["accounts"][1]["status"] == "waiting_qr"
-    assert window["accounts"][1]["status_text"] == "\u8bf7\u5728\u5df2\u6253\u5f00\u6d4f\u89c8\u5668\u626b\u7801"
+    assert window["accounts"][1]["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
     import gasgx_distribution.matrix_publish as mp
     consumed = mp._load_state().get("consumed") or []
     assert consumed[-1]["asset_key"] == "videos/one.mp4"

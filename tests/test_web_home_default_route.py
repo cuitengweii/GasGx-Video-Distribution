@@ -35,10 +35,10 @@ def test_terminal_confirm_next_shows_persistent_loading_state() -> None:
 
     assert "confirming_next" in app_js
     assert "const terminalConfirmingWindowIds = new Set();" in app_js
-    assert "if (terminalConfirmingWindowIds.size) return;" in app_js
+    assert "if (terminalConfirmingWindowIds.has(String(windowId))) return;" in app_js
     assert "terminalConfirmingWindowIds.add(String(windowId));" in app_js
     assert "terminalConfirmingWindowIds.delete(String(windowId));" in app_js
-    assert "发布后进入下一账号" in app_js
+    assert "发布成功后点这里" in app_js
     assert "正在进入下一个账号" in app_js
     assert "正在进入下一个..." in app_js
     assert "replaceTerminalWindowNode(refreshRoot, windowId, pendingWindow" in app_js
@@ -60,11 +60,12 @@ def test_terminal_wechat_entry_does_not_start_hot_polling() -> None:
     app_js = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     web_py = (ROOT / "src" / "gasgx_distribution" / "web.py").read_text(encoding="utf-8")
 
-    assert "let terminalLivePollingEnabled = false;" in app_js
-    assert "Boolean(state.terminalExecution?.login_started) && terminalLivePollingEnabled" in app_js
-    assert "window.setInterval(pollOnce, 3000)" in app_js
+    assert "let terminalLivePollingEnabled = false;" not in app_js
+    assert "Boolean(state.terminalExecution?.login_started) && terminalLivePollingEnabled" not in app_js
+    assert "window.setInterval(pollOnce, 3000)" not in app_js
     assert "window.setInterval(updateTerminalQrCountdowns, 1000)" in app_js
-    assert "body: JSON.stringify({ allow_browser_open: true, allow_login_probe: true })" in app_js
+    assert "/api/terminal-execution/poll" not in app_js
+    assert "body: JSON.stringify({ allow_browser_open: true, allow_login_probe: true })" not in app_js
     assert 'await warmTerminalBrowsersBeforeRender("正在恢复登录浏览器，请稍候...");' not in app_js
     assert "class TerminalPollPayload" in web_py
     assert "allow_browser_open: bool = False" in web_py
