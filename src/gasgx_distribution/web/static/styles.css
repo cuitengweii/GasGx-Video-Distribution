@@ -631,6 +631,16 @@ h2 {
   margin-bottom: 18px;
 }
 
+#summary.metric-grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+@media (max-width: 1200px) {
+  #summary.metric-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
+
 .platform-groups {
   display: grid;
   gap: 18px;
@@ -2491,15 +2501,27 @@ select option {
   gap: 18px;
 }
 
+.terminal-modal-content .platform-settings-list {
+  gap: 10px;
+}
+
 .platform-settings-region {
   display: grid;
   gap: 10px;
+}
+
+.terminal-modal-content .platform-settings-region {
+  gap: 8px;
 }
 
 .platform-settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 12px;
+}
+
+.terminal-modal-content .platform-settings-grid {
+  gap: 8px;
 }
 
 .platform-settings-card {
@@ -2510,6 +2532,27 @@ select option {
   border-radius: 8px;
   background: rgba(15, 15, 15, 0.62);
   padding: 14px;
+}
+
+.terminal-modal-content .platform-settings-card {
+  gap: 8px;
+  padding: 10px;
+}
+
+.terminal-modal-content .platform-settings-card label {
+  gap: 4px;
+  font-size: 12px;
+}
+
+.terminal-modal-content .platform-settings-card input,
+.terminal-modal-content .platform-settings-card select,
+.terminal-modal-content .platform-settings-card textarea {
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.terminal-modal-content .platform-settings-card textarea {
+  min-height: 72px;
 }
 
 .platform-settings-card .row-head,
@@ -3143,6 +3186,19 @@ select option {
   min-height: 132px;
 }
 
+#system-settings .system-subsection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+#system-settings .system-subsection-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
 .system-status {
   display: inline-flex;
   align-items: center;
@@ -3508,12 +3564,23 @@ select option {
 
 .role-admin-card {
   grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1.35fr);
-  align-items: center;
+  grid-template-columns: minmax(220px, 0.85fr) minmax(320px, 1.15fr);
+  grid-template-areas:
+    "head create"
+    "tabs tabs";
+  align-items: start;
+  gap: 12px 14px;
 }
 
 .role-admin-card .panel-head {
   min-width: 0;
+  grid-area: head;
+  margin-bottom: 0;
+}
+
+.role-admin-card .role-create-form {
+  grid-area: create;
+  align-items: center;
 }
 
 .role-admin-card .role-create-form,
@@ -3583,9 +3650,16 @@ select option {
   }
 
   .account-assign-form,
-  .role-admin-card,
   .operator-account-row {
     grid-template-columns: 1fr;
+  }
+
+  .role-admin-card {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "head"
+      "create"
+      "tabs";
   }
 }
 
@@ -3594,7 +3668,8 @@ select option {
 }
 
 .role-admin-card .role-tabs {
-  grid-template-columns: repeat(4, minmax(118px, 1fr));
+  grid-area: tabs;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
 }
 
 .role-tab {
@@ -3653,13 +3728,26 @@ select option {
   }
 
   .account-assign-form,
-  .role-admin-card,
   .operator-account-row {
     grid-template-columns: 1fr;
   }
 
+  .role-admin-card {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "head"
+      "create"
+      "tabs";
+  }
+
   .role-admin-card .role-tabs {
     grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  }
+}
+
+@media (max-width: 920px) {
+  .role-admin-card .role-create-form {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -4674,8 +4762,8 @@ body.video-matrix-active #video-matrix {
   backdrop-filter: blur(5px);
   display: flex;
   justify-content: center;
-  align-items: flex-start;
-  padding: 28px;
+  align-items: center;
+  padding: 14px;
   overflow-y: auto;
   pointer-events: none;
 }
@@ -4689,10 +4777,10 @@ body.sidebar-collapsed .terminal-init-modal {
 }
 
 .terminal-modal-content {
-  padding: 32px;
-  width: min(580px, calc(100vw - 48px));
-  max-height: none;
-  overflow: visible;
+  padding: 20px;
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100vh - 28px);
+  overflow: auto;
   border-radius: 12px;
   pointer-events: auto;
 }
@@ -4700,9 +4788,9 @@ body.sidebar-collapsed .terminal-init-modal {
 .terminal-modal-header {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 14px;
 }
 
 .terminal-modal-header-copy {
@@ -4719,32 +4807,47 @@ body.sidebar-collapsed .terminal-init-modal {
 
 .terminal-close-btn {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border: 1px solid rgba(93, 214, 44, 0.22);
   border-radius: 6px;
   background: #101010;
   color: var(--accent-aurora);
-  font-size: 22px;
+  font-size: 19px;
   line-height: 1;
   cursor: pointer;
 }
 
 .terminal-modal-header h2 {
-  margin-bottom: 8px;
-  font-size: 26px;
+  margin-bottom: 4px;
+  font-size: 22px;
 }
 
 .terminal-modal-header p {
   color: var(--terminal-text-sub);
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .terminal-init-card-switcher {
-  margin-top: 10px;
+  margin-top: 8px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
+}
+
+.terminal-modal-content .settings-card-button {
+  min-height: 80px;
+  padding: 10px 12px;
+}
+
+.terminal-modal-content .settings-card-button strong {
+  font-size: 16px;
+}
+
+.terminal-modal-content .settings-card-button span {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .terminal-config-list {
@@ -4769,7 +4872,12 @@ body.sidebar-collapsed .terminal-init-modal {
 .terminal-modal-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 4px;
+  margin-top: 0;
+}
+
+.terminal-modal-content .terminal-config-list {
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .terminal-config-row {
@@ -4781,6 +4889,11 @@ body.sidebar-collapsed .terminal-init-modal {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--terminal-glass-border);
   border-radius: 8px;
+}
+
+.terminal-modal-content .terminal-config-row {
+  gap: 10px;
+  padding: 9px 12px;
 }
 
 .terminal-config-row.disabled {
@@ -4809,11 +4922,19 @@ body.sidebar-collapsed .terminal-init-modal {
   outline: none;
 }
 
+.terminal-modal-content .terminal-wx-select {
+  padding: 7px 9px;
+}
+
 .terminal-swatch-group {
   display: flex;
   gap: 10px;
   align-items: center;
   justify-content: flex-end;
+}
+
+.terminal-modal-content .terminal-swatch-group {
+  gap: 8px;
 }
 
 .terminal-swatch {
@@ -4822,6 +4943,11 @@ body.sidebar-collapsed .terminal-init-modal {
   border-radius: 50%;
   border: 2px solid transparent;
   cursor: pointer;
+}
+
+.terminal-modal-content .terminal-swatch {
+  width: 22px;
+  height: 22px;
 }
 
 .terminal-swatch.active {
