@@ -380,7 +380,11 @@ SYNC_TABLE_CONFLICT_KEYS = {
     "app_settings": "setting_key",
 }
 SYNC_JSON_FIELDS = {"payload_json", "fingerprint_json", "raw_json"}
-SYNC_BOOLEAN_FIELDS = {"enabled"}
+SYNC_INTEGER_FIELDS_BY_TABLE = {
+    "account_platforms": {"enabled"},
+    "notification_routes": {"enabled"},
+    "ai_robot_configs": {"enabled"},
+}
 
 
 def _sync_outbox_enabled() -> bool:
@@ -501,9 +505,9 @@ def _sync_payload_for_supabase(table_name: str, payload: dict[str, Any]) -> dict
         if field in data:
             default = [] if str(data.get(field) or "").strip().startswith("[") else {}
             data[field] = _json_payload(data.get(field), default)
-    for field in SYNC_BOOLEAN_FIELDS:
+    for field in SYNC_INTEGER_FIELDS_BY_TABLE.get(table_name, set()):
         if field in data:
-            data[field] = bool(data.get(field))
+            data[field] = 1 if bool(data.get(field)) else 0
     return data
 
 
@@ -649,6 +653,7 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
     skipped_accounts = 0
     imported_platforms = 0
     imported_profiles = 0
+    account_id_map: dict[int, int] = {}
     with connect() as conn:
         for account in accounts:
             account_id = int(account.get("id") or 0)
@@ -657,10 +662,37 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
                 skipped_accounts += 1
                 continue
             remote_updated = int(account.get("updated_at") or account.get("created_at") or ts)
-            existing = conn.execute("SELECT * FROM matrix_accounts WHERE id = ? OR account_key = ?", (account_id, account_key)).fetchone()
-            if existing is not None and int(existing["updated_at"] or 0) > remote_updated:
-                skipped_accounts += 1
+            existing_by_id = conn.execute("SELECT * FROM matrix_accounts WHERE id = ?", (account_id,)).fetchone()
+            existing_by_key = conn.execute("SELECT * FROM matrix_accounts WHERE account_key = ?", (account_key,)).fetchone()
+            if existing_by_key is not None and int(existing_by_key["id"]) != account_id:
+                local_account_id = int(existing_by_key["id"])
+                account_id_map[account_id] = local_account_id
+                if int(existing_by_key["updated_at"] or 0) > remote_updated:
+                    skipped_accounts += 1
+                    continue
+                conn.execute(
+                    """
+                    UPDATE matrix_accounts
+                    SET display_name = ?, niche = ?, status = ?, notes = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(account.get("display_name") or account_key).strip(),
+                        str(account.get("niche") or "").strip(),
+                        str(account.get("status") or "active").strip() or "active",
+                        str(account.get("notes") or "").strip(),
+                        remote_updated or ts,
+                        local_account_id,
+                    ),
+                )
+                imported_accounts += 1
                 continue
+            existing = existing_by_id or existing_by_key
+            if existing is not None:
+                account_id_map[account_id] = int(existing["id"])
+                if int(existing["updated_at"] or 0) > remote_updated:
+                    skipped_accounts += 1
+                    continue
             conn.execute(
                 """
                 INSERT INTO matrix_accounts(id, account_key, display_name, niche, status, notes, created_at, updated_at)
@@ -684,10 +716,11 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
                     remote_updated or ts,
                 ),
             )
+            account_id_map[account_id] = account_id
             imported_accounts += 1
         local_account_ids = {int(row["id"]) for row in conn.execute("SELECT id FROM matrix_accounts")}
         for platform in platforms:
-            account_id = int(platform.get("account_id") or 0)
+            account_id = account_id_map.get(int(platform.get("account_id") or 0), int(platform.get("account_id") or 0))
             if account_id not in local_account_ids:
                 continue
             token = normalize_platform(str(platform.get("platform") or ""))
@@ -724,6 +757,7 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
             if account_id <= 0 and profile.get("account_platform_id"):
                 platform_row = conn.execute("SELECT account_id FROM account_platforms WHERE id = ?", (int(profile.get("account_platform_id") or 0),)).fetchone()
                 account_id = int(platform_row["account_id"]) if platform_row else 0
+            account_id = account_id_map.get(account_id, account_id)
             if account_id not in local_account_ids:
                 continue
             account = conn.execute("SELECT account_key FROM matrix_accounts WHERE id = ?", (account_id,)).fetchone()
@@ -754,14 +788,6 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
             )
             Path(profile_dir).mkdir(parents=True, exist_ok=True)
             imported_profiles += 1
-        for account in accounts:
-            account_id = int(account.get("id") or 0)
-            if account_id > 0:
-                _enqueue_sync_payload(conn, "matrix_accounts", "upsert", {**account, "id": account_id}, entity_id=str(account_id))
-        conn.execute(
-            "UPDATE sync_outbox SET status = 'synced', synced_at = ?, updated_at = ?, error = '' WHERE status = 'pending' AND table_name IN ('matrix_accounts', 'account_platforms', 'browser_profiles')",
-            (ts, ts),
-        )
     clear_supabase_read_cache()
     return {
         "ok": True,
@@ -2450,10 +2476,15 @@ def _terminal_browser_runtime_for_account(account_id: int, platform_name: str = 
         return {}
     browser_open: bool | None = None
     try:
-        # Hot path: probe CDP port first to avoid expensive per-window WMI process scans.
+        # Probe CDP first; only verify the owning profile when a browser appears to be open.
         browser_open = bool(engine._is_chrome_debug_port_ready(debug_port, timeout=0.2))  # type: ignore[attr-defined]
     except Exception:
         browser_open = None
+    if browser_open is True and os.name == "nt":
+        try:
+            browser_open = bool(_find_windows_chrome_pid_by_debug_port(debug_port, profile_dir))
+        except Exception:
+            browser_open = None
     return {
         "browser_open": browser_open,
         "debug_port": debug_port,
@@ -2546,14 +2577,9 @@ def _find_windows_chrome_pid_by_debug_port(
         for row in browser_rows:
             if str(row.get("normalized_user_data_dir") or "") == target_dir:
                 return int(row.get("process_id") or 0)
+        return 0
     for row in browser_rows:
         return int(row.get("process_id") or 0)
-    if target_dir:
-        for row in rows:
-            if int(row.get("debug_port") or 0) != int(debug_port):
-                continue
-            if str(row.get("normalized_user_data_dir") or "") == target_dir:
-                return int(row.get("process_id") or 0)
     return 0
 
 
@@ -3504,7 +3530,7 @@ def _poll_terminal_publish_runs(windows: list[dict[str, Any]]) -> bool:
     return changed
 
 
-def poll_terminal_execution() -> dict[str, Any]:
+def poll_terminal_execution(*, allow_browser_open: bool = True, allow_login_probe: bool = True) -> dict[str, Any]:
     state = _load_terminal_state()
     if not bool(state.get("login_started")):
         return terminal_execution_state()
@@ -3525,28 +3551,34 @@ def poll_terminal_execution() -> dict[str, Any]:
     if windows:
         opened_browser = False
         probed_login = False
-        browser_open_needed = any(_terminal_current_needs_browser_open(window) for window in windows)
+        browser_open_needed = bool(allow_browser_open) and any(_terminal_current_needs_browser_open(window) for window in windows)
         for window in windows:
-            needs_open = _terminal_current_needs_browser_open(window)
-            needs_probe = (not browser_open_needed) and (not needs_open) and _terminal_current_needs_login_probe(window)
-            allow_browser_open = (not needs_open) or (not opened_browser)
-            allow_login_probe = (not needs_probe) or (not probed_login)
+            needs_open = bool(allow_browser_open) and _terminal_current_needs_browser_open(window)
+            needs_probe = (
+                bool(allow_login_probe)
+                and (not browser_open_needed)
+                and (not needs_open)
+                and _terminal_current_needs_login_probe(window)
+            )
+            window_allow_browser_open = bool(allow_browser_open) and ((not needs_open) or (not opened_browser))
+            window_allow_login_probe = bool(allow_login_probe) and ((not needs_probe) or (not probed_login))
             try:
                 _advance_terminal_window(
                     window,
-                    allow_browser_open=allow_browser_open,
-                    allow_login_probe=allow_login_probe,
+                    allow_browser_open=window_allow_browser_open,
+                    allow_login_probe=window_allow_login_probe,
                 )
             except TypeError as exc:
                 if "unexpected keyword argument" not in str(exc):
                     raise
                 _advance_terminal_window(window)
-            if needs_open and allow_browser_open:
+            if needs_open and window_allow_browser_open:
                 opened_browser = True
-            if needs_probe and allow_login_probe:
+            if needs_probe and window_allow_login_probe:
                 probed_login = True
         state["probe_cursor"] = 0
-        state["next_probe_at"] = now + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
+        if allow_browser_open or allow_login_probe:
+            state["next_probe_at"] = now + TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -4839,92 +4871,13 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
 (() => {{
   const marker = {marker};
   const install = () => {{
-    const parent = document.body || document.documentElement;
-    if (!parent) return false;
-    const markerKey = `v3:${{marker.account_id || ''}}:${{marker.title || ''}}:${{marker.window_label || ''}}:${{marker.operator_wechat || ''}}`;
-    let el = document.getElementById('gasgx-account-marker');
-    if (!el) {{
-      el = document.createElement('div');
-      el.id = 'gasgx-account-marker';
-    }}
-    if (el.parentNode === parent && el.getAttribute('data-marker-key') === markerKey) return true;
-    el.setAttribute('data-account-id', String(marker.account_id || ''));
-    el.setAttribute('data-marker-key', markerKey);
-    el.setAttribute('aria-label', `GasGx account marker ${{marker.title || ''}}`);
-    el.style.cssText = [
-      'position:fixed',
-      'right:18px',
-      'top:18px',
-      'z-index:2147483647',
-      'pointer-events:none',
-      'min-width:260px',
-      'max-width:420px',
-      'padding:14px 16px',
-      'border-radius:16px',
-      `border:3px solid ${{marker.accent || '#5dd62c'}}`,
-      'background:linear-gradient(135deg,rgba(5,10,8,.96),rgba(18,24,22,.94))',
-      `box-shadow:0 0 0 4px rgba(255,255,255,.82),0 0 0 8px ${{marker.accent || '#5dd62c'}}55,0 16px 46px rgba(0,0,0,.42)`,
-      'color:#fff',
-      'font:800 15px/1.35 "Microsoft YaHei",Arial,sans-serif',
-      'letter-spacing:.01em',
-      'text-align:left'
-    ].join(';');
-    el.innerHTML = '';
-    const brand = document.createElement('div');
-    const topLabel = marker.window_label || '当前账号';
-    const operatorWechat = String(marker.operator_wechat || '').trim();
-    brand.style.cssText = [
-      'display:flex',
-      'flex-direction:column',
-      'gap:3px',
-      'margin-bottom:5px'
-    ].join(';');
-    const windowLine = document.createElement('div');
-    windowLine.textContent = topLabel;
-    windowLine.style.cssText = [
-      `color:${{marker.accent || '#5dd62c'}}`,
-      'font-size:13px',
-      'font-weight:900'
-    ].join(';');
-    const operatorLine = document.createElement('div');
-    operatorLine.textContent = operatorWechat ? `运营微信: ${{operatorWechat}}` : (marker.platform ? `GasGx · ${{marker.platform}}` : 'GasGx');
-    operatorLine.style.cssText = [
-      'color:#38f8ff',
-      'font-size:13px',
-      'font-weight:900',
-      'text-shadow:0 0 8px rgba(56,248,255,.48)'
-    ].join(';');
-    brand.appendChild(windowLine);
-    brand.appendChild(operatorLine);
-    const title = document.createElement('div');
-    title.textContent = marker.title || '';
-    title.style.cssText = 'font-size:22px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    const meta = document.createElement('div');
-    meta.textContent = marker.meta || '';
-    meta.style.cssText = 'margin-top:5px;color:#e5e7eb;font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    const ribbon = document.createElement('div');
-    ribbon.innerHTML = '<span aria-hidden="true">⚠</span><span>请确认这是当前要操作的账号</span>';
-    ribbon.style.cssText = [
-      'margin-top:10px',
-      'padding:6px 8px',
-      'display:flex',
-      'align-items:center',
-      'justify-content:center',
-      'gap:6px',
-      'border:1px solid #ff9b9b',
-      'background:#ff2f3f',
-      'color:#fff',
-      'border-radius:9px',
-      'font-size:13px',
-      'font-weight:900',
-      'text-align:center',
-      'box-shadow:0 0 0 2px rgba(255,47,63,.24),0 0 16px rgba(255,47,63,.38)'
-    ].join(';');
-    el.appendChild(brand);
-    el.appendChild(title);
-    if (marker.meta) el.appendChild(meta);
-    el.appendChild(ribbon);
-    if (el.parentNode !== parent) parent.appendChild(el);
+    if (!document.documentElement) return false;
+    try {{
+      const observer = window.__gasgxAccountMarkerObserver;
+      if (observer && typeof observer.disconnect === 'function') observer.disconnect();
+    }} catch (_error) {{}}
+    window.__gasgxAccountMarkerObserver = null;
+    document.querySelectorAll('#gasgx-account-marker').forEach((el) => el.remove());
     const badge = String(marker.title_badge || '').trim();
     const base = marker.title ? `GasGx-${{marker.title}}` : 'GasGx';
     const prefix = badge ? `[${{badge}} ${{base}}] ` : `[${{base}}] `;
@@ -4934,18 +4887,6 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     return true;
   }};
   if (!install()) document.addEventListener('DOMContentLoaded', install, {{ once: true }});
-  if (!window.__gasgxAccountMarkerObserver) {{
-    let markerTimer = 0;
-    const scheduleInstall = () => {{
-      if (markerTimer) return;
-      markerTimer = window.setTimeout(() => {{
-        markerTimer = 0;
-        install();
-      }}, 250);
-    }};
-    window.__gasgxAccountMarkerObserver = new MutationObserver(scheduleInstall);
-    window.__gasgxAccountMarkerObserver.observe(document.documentElement || document, {{ childList: true, subtree: true }});
-  }}
 }})();
 """.strip()
 

@@ -546,6 +546,19 @@ def test_sync_push_marks_outbox_items_synced(monkeypatch, tmp_path: Path) -> Non
     assert {item[0] for item in fake.upserts} >= {"matrix_accounts", "automation_tasks"}
 
 
+def test_sync_payload_enabled_fields_stay_integer_for_supabase() -> None:
+    ap = service._sync_payload_for_supabase("account_platforms", {"enabled": True})
+    route = service._sync_payload_for_supabase("notification_routes", {"enabled": 0})
+    robot = service._sync_payload_for_supabase("ai_robot_configs", {"enabled": "1"})
+
+    assert ap["enabled"] == 1
+    assert isinstance(ap["enabled"], int)
+    assert route["enabled"] == 0
+    assert isinstance(route["enabled"], int)
+    assert robot["enabled"] == 1
+    assert isinstance(robot["enabled"], int)
+
+
 def test_sync_push_failure_keeps_local_api_available(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account({"account_key": "gasgx-sync-fail", "display_name": "GasGx Sync Fail", "platforms": ["wechat"]})
@@ -635,6 +648,94 @@ def test_sync_pull_imports_remote_accounts_to_sqlite(monkeypatch, tmp_path: Path
     assert account["display_name"] == "GasGx Remote 31"
     assert account["platforms"][0]["platform"] == "wechat"
     assert account["platforms"][0]["debug_port"] == 12331
+
+
+def test_sync_pull_does_not_mark_existing_local_outbox_rows_synced(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "gasgx-local-pending", "display_name": "GasGx Local Pending", "platforms": ["wechat"]})
+
+    class EmptyPullClient:
+        def select(self, table: str, *, order: str = "", filters: dict[str, Any] | None = None, columns: str = "*") -> list[dict[str, Any]]:
+            del table, order, filters, columns
+            return []
+
+    monkeypatch.setattr(service, "_brand_supabase", lambda: EmptyPullClient())
+    client = TestClient(create_app())
+    response = client.post("/api/sync/supabase/pull")
+    assert response.status_code == 200
+
+    with connect() as conn:
+        rows = [
+            (str(row["table_name"]), str(row["status"]))
+            for row in conn.execute(
+                "SELECT table_name, status FROM sync_outbox WHERE table_name IN ('matrix_accounts', 'account_platforms', 'browser_profiles')"
+            ).fetchall()
+        ]
+    assert rows
+    assert all(status == "pending" for _, status in rows)
+
+
+def test_sync_pull_handles_remote_account_key_conflict(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    local = service.create_account({"account_key": "gasgx-dup-01", "display_name": "Local Name", "platforms": ["wechat"]})
+
+    class ConflictPullClient:
+        def select(self, table: str, *, order: str = "", filters: dict[str, Any] | None = None, columns: str = "*") -> list[dict[str, Any]]:
+            del order, filters, columns
+            if table == "matrix_accounts":
+                return [
+                    {
+                        "id": int(local["id"]) + 1000,
+                        "account_key": "gasgx-dup-01",
+                        "display_name": "Remote Name",
+                        "niche": "remote-niche",
+                        "status": "paused",
+                        "notes": "from-remote",
+                        "created_at": 100,
+                        "updated_at": 9999999999,
+                    }
+                ]
+            if table == "account_platforms":
+                return [
+                    {
+                        "id": 7001,
+                        "account_id": int(local["id"]) + 1000,
+                        "platform": "wechat",
+                        "handle": "remote-handle",
+                        "enabled": True,
+                        "capability_status": "registered",
+                        "login_status": "ready",
+                        "created_at": 100,
+                        "updated_at": 9999999999,
+                    }
+                ]
+            if table == "browser_profiles":
+                return [
+                    {
+                        "id": 7002,
+                        "account_id": int(local["id"]) + 1000,
+                        "profile_dir": str(tmp_path / "profiles" / "matrix" / "gasgx-dup-01"),
+                        "debug_port": 12999,
+                        "fingerprint_json": {"provider": "remote"},
+                        "created_at": 100,
+                        "updated_at": 9999999999,
+                    }
+                ]
+            raise AssertionError(f"unexpected table {table}")
+
+    monkeypatch.setattr(service, "_brand_supabase", lambda: ConflictPullClient())
+    client = TestClient(create_app())
+    response = client.post("/api/sync/supabase/pull")
+    assert response.status_code == 200
+    assert response.json()["accounts"] == 1
+
+    refreshed = service.get_account(int(local["id"]))
+    assert refreshed is not None
+    assert refreshed["display_name"] == "Remote Name"
+    assert refreshed["status"] == "paused"
+    wechat = next(item for item in refreshed["platforms"] if item["platform"] == "wechat")
+    assert wechat["handle"] == "remote-handle"
+    assert int(wechat["debug_port"]) == 12999
 
 
 def test_wechat_stats_account_snapshots_are_idempotent_and_drive_summary(monkeypatch, tmp_path: Path) -> None:
@@ -1658,10 +1759,12 @@ def test_account_browser_marker_uses_cdp_current_and_future_documents(monkeypatc
     assert "Runtime.evaluate" in methods
     source = next(item["params"]["source"] for item in sent if item["method"] == "Page.addScriptToEvaluateOnNewDocument")
     assert "GasGx test" in source
-    assert "终端执行窗口 03" in source
     assert '"operator_wechat": "aamecc"' in source
-    assert "运营微信:" in source
-    assert "当前账号" in source
+    assert "document.title" in source
+    assert "disconnect" in source
+    assert "#gasgx-account-marker" in source
+    assert "createElement('div')" not in source
+    assert "请确认这是当前要操作的账号" not in source
     assert "GasGx-" in source
 
 
@@ -1745,6 +1848,8 @@ def test_find_windows_chrome_pid_by_debug_port_prefers_browser_process(monkeypat
     pid = service._find_windows_chrome_pid_by_debug_port(21288)
 
     assert pid == 654
+    assert service._find_windows_chrome_pid_by_debug_port(21288, r"G:\Profiles\A") == 654
+    assert service._find_windows_chrome_pid_by_debug_port(21288, r"G:\Profiles\B") == 0
 
 
 def test_supabase_system_initialize_is_idempotent(monkeypatch, tmp_path: Path) -> None:
@@ -2284,6 +2389,62 @@ def test_terminal_poll_limits_login_probe_work_per_interval(monkeypatch, tmp_pat
     assert state["next_probe_at"] > 0
 
 
+def test_terminal_poll_passive_mode_does_not_open_or_probe(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "accounts": [{"id": 9, "status": "pending", "status_text": "waiting", "task_id": None}],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        service,
+        "_terminal_current_needs_browser_open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("passive poll should not probe browser-open state")),
+    )
+    monkeypatch.setattr(
+        service,
+        "_terminal_current_needs_login_probe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("passive poll should not probe login state")),
+    )
+    monkeypatch.setattr(
+        service,
+        "open_account_browser",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("passive poll should not open browsers")),
+    )
+    monkeypatch.setattr(
+        service,
+        "check_login_status",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("passive poll should not check login")),
+    )
+    monkeypatch.setattr(service, "_terminal_browser_runtime_for_account", lambda *_args, **_kwargs: {})
+
+    service._invalidate_terminal_execution_state_cache()
+    result = service.poll_terminal_execution(allow_browser_open=False, allow_login_probe=False)
+
+    assert result["windows"][0]["accounts"][0]["status"] == "pending"
+    state = json.loads((runtime_dir / "terminal_execution_state.json").read_text(encoding="utf-8"))
+    assert int(state.get("next_probe_at") or 0) == 0
+
+
 def test_terminal_poll_reopens_waiting_qr_when_browser_is_closed(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
@@ -2600,11 +2761,37 @@ def test_terminal_execution_state_runtime_probe_prefers_debug_port_health(monkey
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pid scan should not run in terminal state probe")),
     )
     monkeypatch.setattr(service.engine, "_is_chrome_debug_port_ready", lambda *_args, **_kwargs: True)
+    profile_checks: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        service,
+        "_find_windows_chrome_pid_by_debug_port",
+        lambda debug_port, profile_dir: profile_checks.append((int(debug_port), str(profile_dir))) or 1234,
+    )
 
     service._invalidate_terminal_execution_state_cache()
     result = service.terminal_execution_state()
 
     assert result["windows"][0]["accounts"][0]["browser_open"] is True
+    assert profile_checks
+
+
+def test_terminal_browser_runtime_treats_wrong_profile_port_as_closed(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-wrong-profile", "display_name": "Wrong Profile", "platforms": ["wechat"]})
+    checked: list[tuple[int, str]] = []
+    monkeypatch.setattr(service.os, "name", "nt", raising=False)
+    monkeypatch.setattr(service.engine, "_is_chrome_debug_port_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        service,
+        "_find_windows_chrome_pid_by_debug_port",
+        lambda debug_port, profile_dir: checked.append((int(debug_port), str(profile_dir))) or 0,
+    )
+
+    runtime = service._terminal_browser_runtime_for_account(int(account["id"]), "wechat")
+
+    assert runtime["browser_open"] is False
+    assert checked
+    assert "gasgx-wrong-profile" in checked[0][1].replace("\\", "/")
 
 
 def test_terminal_manual_publish_waits_for_human_success_confirmation(monkeypatch, tmp_path: Path) -> None:
