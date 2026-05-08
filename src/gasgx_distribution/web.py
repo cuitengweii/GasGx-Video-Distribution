@@ -456,7 +456,7 @@ def create_app() -> FastAPI:
         return service.sync_status()
 
     @app.post("/api/sync/supabase/push")
-    def push_sync_supabase_route(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+    def push_sync_supabase_route(limit: int = Query(default=2000, ge=1, le=2000)) -> dict[str, Any]:
         return service.push_sync_outbox_to_supabase(limit=limit)
 
     @app.post("/api/sync/supabase/pull")

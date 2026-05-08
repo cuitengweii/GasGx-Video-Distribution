@@ -33,7 +33,7 @@ create table if not exists browser_profiles (
     updated_at bigint not null
 );
 
-alter table browser_profiles add column if not exists account_id bigint references matrix_accounts(id) on delete cascade;
+alter table browser_profiles add column if not exists account_id bigint;
 alter table browser_profiles add column if not exists fingerprint_json jsonb not null default '{}'::jsonb;
 
 create table if not exists automation_tasks (

@@ -711,6 +711,91 @@ def test_sync_push_marks_outbox_items_synced(monkeypatch, tmp_path: Path) -> Non
     assert {item[0] for item in fake.upserts} >= {"matrix_accounts", "automation_tasks"}
 
 
+def test_sync_push_rebuilds_current_backup_snapshot(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-sync-clean", "display_name": "GasGx Sync Clean", "platforms": ["wechat"]})
+    stale_dir = tmp_path / "pytest-stale" / "profiles" / "matrix" / "stale"
+    with connect() as conn:
+        conn.execute("UPDATE browser_profiles SET profile_dir = ? WHERE account_id = ?", (str(stale_dir), account["id"]))
+        service._enqueue_sync_payload(
+            conn,
+            "browser_profiles",
+            "upsert",
+            {
+                "id": 9999,
+                "account_id": 9999,
+                "profile_dir": str(stale_dir),
+                "debug_port": 19999,
+                "fingerprint_json": "{}",
+                "created_at": 1,
+                "updated_at": 1,
+            },
+        )
+
+    class FakeSyncClient:
+        def __init__(self) -> None:
+            self.upserts: list[tuple[str, dict[str, Any], str]] = []
+
+        def select_one(self, table: str, *, filters: dict[str, Any]) -> dict[str, Any] | None:
+            return None
+
+        def upsert(self, table: str, payload: dict[str, Any], *, on_conflict: str) -> dict[str, Any]:
+            self.upserts.append((table, payload, on_conflict))
+            return payload
+
+        def delete(self, table: str, *, filters: dict[str, Any]) -> bool:
+            return True
+
+    fake = FakeSyncClient()
+    monkeypatch.setattr(service, "_brand_supabase", lambda: fake)
+
+    result = service.push_sync_outbox_to_supabase()
+
+    assert result["ok"] is True
+    profile_payloads = [payload for table, payload, _ in fake.upserts if table == "browser_profiles"]
+    assert profile_payloads
+    assert all("pytest-stale" not in str(item.get("profile_dir") or "") for item in profile_payloads)
+    assert str(profile_payloads[0]["profile_dir"]).endswith(str(Path("profiles") / "matrix" / "gasgx-sync-clean"))
+
+
+def test_sync_push_browser_profile_falls_back_to_legacy_schema(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "gasgx-sync-legacy", "display_name": "GasGx Sync Legacy", "platforms": ["wechat"]})
+
+    class LegacyBrowserProfileClient:
+        def __init__(self) -> None:
+            self.browser_upserts: list[tuple[dict[str, Any], str]] = []
+
+        def select_one(self, table: str, *, filters: dict[str, Any]) -> dict[str, Any] | None:
+            return None
+
+        def upsert(self, table: str, payload: dict[str, Any], *, on_conflict: str) -> dict[str, Any]:
+            if table == "browser_profiles" and "account_id" in payload:
+                raise SupabaseError(
+                    'supabase request failed: 400 {"code":"PGRST204","message":"Could not find the '
+                    "'account_id' column of 'browser_profiles' in the schema cache\"}"
+                )
+            if table == "browser_profiles":
+                self.browser_upserts.append((payload, on_conflict))
+            return payload
+
+        def delete(self, table: str, *, filters: dict[str, Any]) -> bool:
+            return True
+
+    fake = LegacyBrowserProfileClient()
+    monkeypatch.setattr(service, "_brand_supabase", lambda: fake)
+
+    result = service.push_sync_outbox_to_supabase()
+
+    assert result["ok"] is True
+    assert fake.browser_upserts
+    legacy_payload, conflict = fake.browser_upserts[0]
+    assert conflict == "account_platform_id"
+    assert "account_id" not in legacy_payload
+    assert "id" not in legacy_payload
+    assert legacy_payload["account_platform_id"] > 0
+
+
 def test_sync_payload_enabled_fields_stay_integer_for_supabase() -> None:
     ap = service._sync_payload_for_supabase("account_platforms", {"enabled": True})
     route = service._sync_payload_for_supabase("notification_routes", {"enabled": 0})

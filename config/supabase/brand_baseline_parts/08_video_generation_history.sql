@@ -57,3 +57,5 @@ drop policy if exists "brand viewers read video matrix generation segments" on v
 create policy "brand viewers read video matrix generation segments" on video_matrix_generation_segments for select to authenticated using (brand_has_role(array['owner', 'admin', 'operator', 'viewer']));
 drop policy if exists "brand operators manage video matrix generation segments" on video_matrix_generation_segments;
 create policy "brand operators manage video matrix generation segments" on video_matrix_generation_segments for all to authenticated using (brand_has_role(array['owner', 'admin', 'operator'])) with check (brand_has_role(array['owner', 'admin', 'operator']));
+
+notify pgrst, 'reload schema';

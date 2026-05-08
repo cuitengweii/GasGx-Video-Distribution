@@ -398,6 +398,22 @@ SYNC_INTEGER_FIELDS_BY_TABLE = {
     "notification_policies": {"enabled", "escalation_enabled"},
     "ai_robot_configs": {"enabled"},
 }
+SYNC_BACKUP_TABLES = (
+    "matrix_accounts",
+    "account_platforms",
+    "browser_profiles",
+    "brand_settings",
+    "notification_routes",
+    "notification_policies",
+    "notification_incidents",
+    "notification_actions",
+    "automation_tasks",
+    "video_stats_snapshots",
+    "wechat_stats_account_snapshots",
+    "ai_robot_configs",
+    "ai_robot_messages",
+    "app_settings",
+)
 
 
 def _sync_outbox_enabled() -> bool:
@@ -455,6 +471,67 @@ def _enqueue_account_sync_rows(conn, account_id: int) -> None:
     for row in conn.execute("SELECT * FROM account_platforms WHERE account_id = ?", (account_id,)):
         _enqueue_sync_payload(conn, "account_platforms", "upsert", dict_from_row(row))
     _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
+
+
+def _sqlite_table_exists(conn, table_name: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table_name,)).fetchone()
+    return row is not None
+
+
+def _normalize_browser_profiles_for_backup(conn) -> int:
+    ts = now_ts()
+    normalized = 0
+    for account in conn.execute("SELECT * FROM matrix_accounts ORDER BY id ASC"):
+        account_id = int(account["id"])
+        account_key = str(account["account_key"] or account_id)
+        expected_dir = str(profile_dir_for(account_key))
+        fingerprint = json.dumps(build_browser_fingerprint(account_key, "account"), ensure_ascii=False)
+        profile = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
+        if profile is None:
+            conn.execute(
+                """
+                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (account_id, expected_dir, _profile_debug_port_from_seed(conn, account_key), fingerprint, ts, ts),
+            )
+            Path(expected_dir).mkdir(parents=True, exist_ok=True)
+            normalized += 1
+            continue
+        updates: dict[str, Any] = {}
+        if str(profile["profile_dir"] or "").strip() != expected_dir:
+            updates["profile_dir"] = expected_dir
+        if not _json_payload(profile["fingerprint_json"], {}):
+            updates["fingerprint_json"] = fingerprint
+        if updates:
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            conn.execute(
+                f"UPDATE browser_profiles SET {assignments}, updated_at = ? WHERE account_id = ?",
+                (*updates.values(), ts, account_id),
+            )
+            normalized += 1
+        Path(expected_dir).mkdir(parents=True, exist_ok=True)
+    return normalized
+
+
+def rebuild_sync_backup_snapshot() -> dict[str, Any]:
+    ensure_database()
+    queued = 0
+    ts = now_ts()
+    with connect() as conn:
+        normalized_profiles = _normalize_browser_profiles_for_backup(conn)
+        conn.execute("DELETE FROM sync_outbox WHERE status IN ('pending', 'failed')")
+        for table_name in SYNC_BACKUP_TABLES:
+            if not _sqlite_table_exists(conn, table_name):
+                continue
+            for row in conn.execute(f"SELECT * FROM {table_name} ORDER BY id ASC" if table_name != "app_settings" else f"SELECT * FROM {table_name}"):
+                _enqueue_sync_payload(conn, table_name, "upsert", dict_from_row(row))
+                queued += 1
+        conn.execute(
+            "UPDATE sync_outbox SET retry_count = 0, last_attempt_at = NULL, error = '', updated_at = ? WHERE status = 'pending'",
+            (ts,),
+        )
+    return {"ok": True, "queued": queued, "normalized_profiles": normalized_profiles, "status": sync_status()}
 
 
 def sync_status() -> dict[str, Any]:
@@ -529,6 +606,123 @@ def _sync_filters_for_payload(table_name: str, payload: dict[str, Any]) -> dict[
     return {key: payload[key] for key in keys if key in payload and payload[key] is not None}
 
 
+def _supabase_missing_column_error(exc: Exception, table_name: str, column_name: str) -> bool:
+    text = str(exc)
+    return "PGRST204" in text and table_name in text and column_name in text
+
+
+def _legacy_browser_profile_conflict_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "browser_profiles" in text and "debug_port" in text and ("23505" in text or "23502" in text)
+
+
+def _legacy_browser_profile_payload(
+    platform_ids_by_account: dict[int, int],
+    profile_debug_ports_by_platform: dict[int, int],
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], str] | None:
+    account_id = int(payload.get("account_id") or 0)
+    if account_id <= 0:
+        return None
+    platform_id = platform_ids_by_account.get(account_id, 0)
+    if platform_id <= 0:
+        return None
+    data = copy.deepcopy(payload)
+    data.pop("id", None)
+    data.pop("account_id", None)
+    data["account_platform_id"] = platform_id
+    if platform_id in profile_debug_ports_by_platform:
+        data["debug_port"] = profile_debug_ports_by_platform[platform_id]
+    elif int(data.get("debug_port") or 0) in set(profile_debug_ports_by_platform.values()):
+        data.pop("debug_port", None)
+    return data, "account_platform_id"
+
+
+def _remote_account_id_map(client: SupabaseRestClient, rows: list[dict[str, Any]]) -> dict[int, int]:
+    local_accounts: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("table_name") or "") != "matrix_accounts":
+            continue
+        payload = _json_payload(row.get("payload_json"), {})
+        if isinstance(payload, dict):
+            local_accounts.append(payload)
+    remote_by_key: dict[str, int] = {}
+    used_ids: set[int] = set()
+    try:
+        for account in client.select("matrix_accounts", columns="id,account_key"):
+            account_id = int(account.get("id") or 0)
+            account_key = str(account.get("account_key") or "").strip()
+            if account_id > 0:
+                used_ids.add(account_id)
+            if account_id > 0 and account_key:
+                remote_by_key[account_key] = account_id
+    except Exception:
+        return {}
+    next_id = max(used_ids or {0}) + 1
+    result: dict[int, int] = {}
+    for account in local_accounts:
+        local_id = int(account.get("id") or 0)
+        account_key = str(account.get("account_key") or "").strip()
+        if local_id <= 0:
+            continue
+        if account_key and account_key in remote_by_key:
+            result[local_id] = remote_by_key[account_key]
+            continue
+        if local_id not in used_ids:
+            result[local_id] = local_id
+            used_ids.add(local_id)
+            continue
+        while next_id in used_ids:
+            next_id += 1
+        result[local_id] = next_id
+        used_ids.add(next_id)
+    return result
+
+
+def _remote_account_platform_ids(client: SupabaseRestClient) -> dict[int, int]:
+    result: dict[int, int] = {}
+    try:
+        rows = client.select("account_platforms", columns="id,account_id,platform")
+    except Exception:
+        return result
+    for row in sorted(rows, key=lambda item: (int(item.get("account_id") or 0), str(item.get("platform") or ""), int(item.get("id") or 0))):
+        account_id = int(row.get("account_id") or 0)
+        platform_id = int(row.get("id") or 0)
+        if account_id > 0 and platform_id > 0:
+            result.setdefault(account_id, platform_id)
+    return result
+
+
+def _remote_browser_profile_debug_ports_by_platform(client: SupabaseRestClient) -> dict[int, int]:
+    result: dict[int, int] = {}
+    try:
+        rows = client.select("browser_profiles", columns="account_platform_id,debug_port")
+    except Exception:
+        return result
+    for row in rows:
+        platform_id = int(row.get("account_platform_id") or 0)
+        debug_port = int(row.get("debug_port") or 0)
+        if platform_id > 0 and debug_port > 0:
+            result[platform_id] = debug_port
+    return result
+
+
+def _map_sync_payload_ids(table_name: str, payload: dict[str, Any], account_id_map: dict[int, int]) -> dict[str, Any]:
+    data = copy.deepcopy(payload)
+    if table_name == "matrix_accounts":
+        local_id = int(data.get("id") or 0)
+        if local_id in account_id_map:
+            data["id"] = account_id_map[local_id]
+        return data
+    if "account_id" in data and data.get("account_id") is not None:
+        local_id = int(data.get("account_id") or 0)
+        if local_id in account_id_map:
+            data["account_id"] = account_id_map[local_id]
+    if table_name != "brand_settings" and SYNC_TABLE_CONFLICT_KEYS.get(table_name) != "id":
+        data.pop("id", None)
+    return data
+
+
 def _record_sync_conflict(conn, table_name: str, entity_id: str, local_payload: dict[str, Any], remote_payload: dict[str, Any]) -> None:
     ts = now_ts()
     conn.execute(
@@ -566,13 +760,14 @@ def _detect_sync_conflict(conn, client: SupabaseRestClient, table_name: str, ent
         _record_sync_conflict(conn, table_name, entity_id, payload, remote)
 
 
-def push_sync_outbox_to_supabase(*, limit: int = 100) -> dict[str, Any]:
+def push_sync_outbox_to_supabase(*, limit: int = 2000) -> dict[str, Any]:
     ensure_database()
-    limit = max(1, min(int(limit or 100), 500))
+    limit = max(1, min(int(limit or 500), 2000))
     pushed = 0
     failed = 0
     skipped = 0
     errors: list[str] = []
+    snapshot = rebuild_sync_backup_snapshot()
     try:
         client = _brand_supabase()
     except Exception as exc:
@@ -594,7 +789,6 @@ def push_sync_outbox_to_supabase(*, limit: int = 100) -> dict[str, Any]:
             )
             failed = int(cursor.rowcount or 0)
         return {"ok": False, "pushed": 0, "failed": failed, "skipped": 0, "errors": [error], "status": sync_status()}
-    resolved_ids: list[int] = []
     with connect() as conn:
         rows = [
             dict_from_row(row)
@@ -608,48 +802,102 @@ def push_sync_outbox_to_supabase(*, limit: int = 100) -> dict[str, Any]:
                 (limit,),
             )
         ]
-        for row in rows:
-            ts = now_ts()
-            table_name = str(row.get("table_name") or "")
-            operation = str(row.get("operation") or "")
-            try:
-                payload = _json_payload(row.get("payload_json"), {})
-                if table_name not in SYNC_TABLE_CONFLICT_KEYS or not isinstance(payload, dict):
-                    skipped += 1
+        platform_ids_by_account: dict[int, int] = {}
+        for platform in conn.execute("SELECT id, account_id FROM account_platforms ORDER BY account_id ASC, platform ASC, id ASC"):
+            account_id = int(platform["account_id"] or 0)
+            platform_ids_by_account.setdefault(account_id, int(platform["id"] or 0))
+    account_id_map = _remote_account_id_map(client, rows)
+    platform_ids_by_account = _remote_account_platform_ids(client) or {
+        account_id_map.get(local_account_id, local_account_id): platform_id
+        for local_account_id, platform_id in platform_ids_by_account.items()
+    }
+    profile_debug_ports_by_platform = _remote_browser_profile_debug_ports_by_platform(client)
+    browser_profiles_legacy_schema = False
+    for row in rows:
+        ts = now_ts()
+        table_name = str(row.get("table_name") or "")
+        operation = str(row.get("operation") or "")
+        row_id = int(row["id"])
+        try:
+            payload = _json_payload(row.get("payload_json"), {})
+            if table_name not in SYNC_TABLE_CONFLICT_KEYS or not isinstance(payload, dict):
+                skipped += 1
+                with connect() as conn:
                     conn.execute(
                         "UPDATE sync_outbox SET status = 'synced', synced_at = ?, updated_at = ?, error = ? WHERE id = ?",
-                        (ts, ts, "skipped unsupported sync item", row["id"]),
+                        (ts, ts, "skipped unsupported sync item", row_id),
                     )
-                    continue
-                if operation == "delete":
-                    filters = payload.get("filters")
-                    if not isinstance(filters, dict) or not filters:
-                        raise ValueError("delete sync item missing filters")
-                    client.delete(table_name, filters=filters)
-                elif operation == "upsert":
-                    supabase_payload = _sync_payload_for_supabase(table_name, payload)
-                    _detect_sync_conflict(conn, client, table_name, str(row.get("entity_id") or ""), supabase_payload)
-                    client.upsert(table_name, supabase_payload, on_conflict=SYNC_TABLE_CONFLICT_KEYS[table_name])
+                continue
+            if operation == "delete":
+                filters = payload.get("filters")
+                if not isinstance(filters, dict) or not filters:
+                    raise ValueError("delete sync item missing filters")
+                client.delete(table_name, filters=filters)
+            elif operation == "upsert":
+                supabase_payload = _sync_payload_for_supabase(table_name, _map_sync_payload_ids(table_name, payload, account_id_map))
+                if table_name == "browser_profiles" and browser_profiles_legacy_schema:
+                    legacy = _legacy_browser_profile_payload(platform_ids_by_account, profile_debug_ports_by_platform, supabase_payload)
+                    if legacy is None:
+                        raise ValueError("browser profile legacy sync missing account platform")
+                    legacy_payload, legacy_conflict = legacy
+                    client.upsert(table_name, legacy_payload, on_conflict=legacy_conflict)
                 else:
-                    raise ValueError(f"unsupported sync operation: {operation}")
-                pushed += 1
+                    try:
+                        remote_row = client.upsert(table_name, supabase_payload, on_conflict=SYNC_TABLE_CONFLICT_KEYS[table_name])
+                    except SupabaseError as exc:
+                        legacy = (
+                            _legacy_browser_profile_payload(platform_ids_by_account, profile_debug_ports_by_platform, supabase_payload)
+                            if table_name == "browser_profiles" and _supabase_missing_column_error(exc, "browser_profiles", "account_id")
+                            else None
+                        )
+                        if legacy is None:
+                            raise
+                        browser_profiles_legacy_schema = True
+                        legacy_payload, legacy_conflict = legacy
+                        remote_row = client.upsert(table_name, legacy_payload, on_conflict=legacy_conflict)
+                    if table_name == "account_platforms" and isinstance(remote_row, dict):
+                        account_id = int(remote_row.get("account_id") or supabase_payload.get("account_id") or 0)
+                        platform_id = int(remote_row.get("id") or 0)
+                        if account_id > 0 and platform_id > 0:
+                            platform_ids_by_account.setdefault(account_id, platform_id)
+            else:
+                raise ValueError(f"unsupported sync operation: {operation}")
+            pushed += 1
+            with connect() as conn:
                 conn.execute(
                     "UPDATE sync_outbox SET status = 'synced', synced_at = ?, updated_at = ?, error = '' WHERE id = ?",
-                    (ts, ts, row["id"]),
+                    (ts, ts, row_id),
                 )
-            except Exception as exc:
-                failed += 1
-                error = str(exc)[:1000]
-                errors.append(error)
+        except Exception as exc:
+            if table_name == "browser_profiles" and _legacy_browser_profile_conflict_error(exc):
+                skipped += 1
+                with connect() as conn:
+                    conn.execute(
+                        "UPDATE sync_outbox SET status = 'synced', synced_at = ?, updated_at = ?, error = ? WHERE id = ?",
+                        (ts, ts, "skipped legacy browser profile row; import regenerates local profiles", row_id),
+                    )
+                continue
+            failed += 1
+            error = str(exc)[:1000]
+            errors.append(error)
+            with connect() as conn:
                 conn.execute(
                     """
                     UPDATE sync_outbox
                     SET status = 'failed', retry_count = retry_count + 1, last_attempt_at = ?, updated_at = ?, error = ?
                     WHERE id = ?
                     """,
-                    (ts, ts, error, row["id"]),
+                    (ts, ts, error, row_id),
                 )
-    return {"ok": failed == 0, "pushed": pushed, "failed": failed, "skipped": skipped, "errors": errors[:5], "status": sync_status()}
+    return {
+        "ok": failed == 0,
+        "pushed": pushed,
+        "failed": failed,
+        "skipped": skipped,
+        "snapshot": snapshot,
+        "errors": errors[:5],
+        "status": sync_status(),
+    }
 
 
 def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
@@ -799,6 +1047,25 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
                     int(profile.get("created_at") or remote_updated or ts),
                     remote_updated or ts,
                 ),
+            )
+            Path(profile_dir).mkdir(parents=True, exist_ok=True)
+            imported_profiles += 1
+        for account in conn.execute("SELECT id, account_key FROM matrix_accounts ORDER BY id ASC"):
+            account_id = int(account["id"] or 0)
+            if account_id not in local_account_ids:
+                continue
+            profile = conn.execute("SELECT 1 FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
+            if profile is not None:
+                continue
+            account_key = str(account["account_key"] or account_id)
+            profile_dir = str(profile_dir_for(account_key))
+            fingerprint = json.dumps(build_browser_fingerprint(account_key, "account"), ensure_ascii=False)
+            conn.execute(
+                """
+                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (account_id, profile_dir, _profile_debug_port_from_seed(conn, account_key), fingerprint, ts, ts),
             )
             Path(profile_dir).mkdir(parents=True, exist_ok=True)
             imported_profiles += 1

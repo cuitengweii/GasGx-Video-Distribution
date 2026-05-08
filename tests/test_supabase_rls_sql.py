@@ -13,6 +13,7 @@ def test_brand_baseline_supabase_sql_parts_stay_under_editor_limit() -> None:
     parts = sorted(parts_dir.glob("*.sql"))
     assert [part.name for part in parts] == [
         "01_core_tables.sql",
+        "01a_browser_profiles_migration.sql",
         "02_app_tables.sql",
         "02a_stats_capture.sql",
         "03_functions_and_rls.sql",
@@ -90,6 +91,15 @@ def test_brand_baseline_supabase_sql_defines_database_initialization_tables() ->
     assert "payload_json jsonb" in sql
     assert "assets_json jsonb" in sql
     assert "unique(section, item_key)" in sql
+
+
+def test_brand_baseline_supabase_sql_migrates_browser_profiles_to_account_id() -> None:
+    sql = _sql("brand_baseline.sql")
+    assert "column_name = 'account_platform_id'" in sql
+    assert "set account_id = ap.account_id" in sql
+    assert "browser_profiles_account_id_fkey" in sql
+    assert "browser_profiles_account_id_key" in sql
+    assert "notify pgrst, 'reload schema'" in sql
 
 
 def test_brand_baseline_supabase_sql_defines_dashboard_summary_rpc() -> None:
