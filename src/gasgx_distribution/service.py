@@ -910,11 +910,17 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
         profiles = client.select("browser_profiles")
     except Exception:
         profiles = []
+    try:
+        ai_robot_configs = client.select("ai_robot_configs", order="platform.asc")
+    except Exception:
+        ai_robot_configs = []
     ts = now_ts()
     imported_accounts = 0
     skipped_accounts = 0
     imported_platforms = 0
     imported_profiles = 0
+    imported_ai_robot_configs = 0
+    skipped_ai_robot_configs = 0
     account_id_map: dict[int, int] = {}
     with connect() as conn:
         for account in accounts:
@@ -1069,6 +1075,43 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
             )
             Path(profile_dir).mkdir(parents=True, exist_ok=True)
             imported_profiles += 1
+        for config in ai_robot_configs:
+            try:
+                token = _normalize_ai_platform(str(config.get("platform") or ""))
+            except ValueError:
+                skipped_ai_robot_configs += 1
+                continue
+            remote_updated = int(config.get("updated_at") or config.get("created_at") or ts)
+            existing = conn.execute("SELECT updated_at FROM ai_robot_configs WHERE platform = ?", (token,)).fetchone()
+            if existing is not None and int(existing["updated_at"] or 0) > remote_updated:
+                skipped_ai_robot_configs += 1
+                continue
+            conn.execute(
+                """
+                INSERT INTO ai_robot_configs(platform, enabled, bot_name, webhook_url, webhook_secret, signing_secret, target_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    bot_name = excluded.bot_name,
+                    webhook_url = excluded.webhook_url,
+                    webhook_secret = excluded.webhook_secret,
+                    signing_secret = excluded.signing_secret,
+                    target_id = excluded.target_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    token,
+                    1 if bool(config.get("enabled")) else 0,
+                    str(config.get("bot_name") or "").strip(),
+                    str(config.get("webhook_url") or "").strip(),
+                    str(config.get("webhook_secret") or "").strip(),
+                    str(config.get("signing_secret") or "").strip(),
+                    str(config.get("target_id") or "").strip(),
+                    int(config.get("created_at") or remote_updated or ts),
+                    remote_updated or ts,
+                ),
+            )
+            imported_ai_robot_configs += 1
     clear_supabase_read_cache()
     return {
         "ok": True,
@@ -1076,6 +1119,8 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
         "skipped_accounts": skipped_accounts,
         "platforms": imported_platforms,
         "profiles": imported_profiles,
+        "ai_robot_configs": imported_ai_robot_configs,
+        "skipped_ai_robot_configs": skipped_ai_robot_configs,
         "status": sync_status(),
     }
 

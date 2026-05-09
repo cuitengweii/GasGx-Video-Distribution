@@ -4498,7 +4498,7 @@ function initSyncActions() {
         await loadViewData("accounts", { force: true });
       }
       if (stateNode) {
-        stateNode.textContent = `已导入账号 ${result.accounts || 0} 个，平台 ${result.platforms || 0} 条，浏览器配置 ${result.profiles || 0} 条。`;
+        stateNode.textContent = `已导入账号 ${result.accounts || 0} 个，平台 ${result.platforms || 0} 条，浏览器配置 ${result.profiles || 0} 条，AI机器人接入 ${result.ai_robot_configs || 0} 条。`;
         stateNode.classList.remove("danger");
       }
     } catch (error) {
