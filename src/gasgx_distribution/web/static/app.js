@@ -4490,7 +4490,7 @@ function initSyncActions() {
   pullButton?.addEventListener("click", async () => {
     const restoreButton = setButtonLoading(pullButton, "导入中...");
     try {
-      const result = await api("/api/sync/supabase/pull", { method: "POST" });
+      const result = await api("/api/sync/supabase/pull", { method: "POST", timeoutMs: 45000 });
       state.syncStatus = result.status || await api("/api/sync/status");
       renderSyncStatus();
       loadedViews.delete("accounts");
@@ -4498,7 +4498,7 @@ function initSyncActions() {
         await loadViewData("accounts", { force: true });
       }
       if (stateNode) {
-        stateNode.textContent = `已导入账号 ${result.accounts || 0} 个，平台 ${result.platforms || 0} 条，浏览器配置 ${result.profiles || 0} 条，AI机器人接入 ${result.ai_robot_configs || 0} 条。`;
+        stateNode.textContent = `已导入账号 ${result.accounts || 0} 个，平台 ${result.platforms || 0} 条，浏览器配置 ${result.profiles || 0} 条。`;
         stateNode.classList.remove("danger");
       }
     } catch (error) {
@@ -4514,7 +4514,7 @@ function initSyncActions() {
   pushButton?.addEventListener("click", async () => {
     const restoreButton = setButtonLoading(pushButton, "推送中...");
     try {
-      const result = await api("/api/sync/supabase/push", { method: "POST" });
+      const result = await api("/api/sync/supabase/push", { method: "POST", timeoutMs: 60000 });
       state.syncStatus = result.status || await api("/api/sync/status");
       renderSyncStatus();
       if (stateNode) stateNode.textContent = `推送完成：成功 ${result.pushed || 0}，失败 ${result.failed || 0}。`;
@@ -4531,7 +4531,7 @@ function initSyncActions() {
   retryButton?.addEventListener("click", async () => {
     const restoreButton = setButtonLoading(retryButton, "重试中...");
     try {
-      const result = await api("/api/sync/retry", { method: "POST" });
+      const result = await api("/api/sync/retry", { method: "POST", timeoutMs: 30000 });
       state.syncStatus = result.status || await api("/api/sync/status");
       renderSyncStatus();
       if (stateNode) stateNode.textContent = `已重新排队 ${result.retried || 0} 条失败同步。`;

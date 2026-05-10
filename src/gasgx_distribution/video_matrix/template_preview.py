@@ -18,6 +18,7 @@ def render_video_template_preview_image(
     background: Image.Image | None = None,
 ) -> Image.Image:
     template = coerce_template(template_config)
+    explicit_template_keys = set((template_config or {}).keys())
     width = int(settings.target_width)
     height = int(settings.target_height)
     base = _fit_background(background, width, height).convert("RGBA") if background else _placeholder_background(width, height).convert("RGBA")
@@ -42,9 +43,9 @@ def render_video_template_preview_image(
             hud,
             (int(template["hud_x"]), int(template["hud_y"])),
             _load_font(int(template["hud_font_size"])),
-            str(template.get("hud_color") or template["primary_color"]),
+            _template_text_color(template, "hud", "hud_color", explicit_template_keys),
             max_width=width - int(template["hud_x"]) - 42,
-            max_lines=2,
+            max_lines=_template_max_lines(template, "hud", 2),
         )
 
     if template.get("show_slogan", True):
@@ -54,9 +55,9 @@ def render_video_template_preview_image(
             slogan_text,
             (int(template["slogan_x"]), int(template["slogan_y"])),
             _load_font(int(template["slogan_font_size"]), bold=True),
-            str(template["primary_color"]),
+            _template_text_color(template, "slogan", "slogan_color", explicit_template_keys),
             max_width=width - int(template["slogan_x"]) - 42,
-            max_lines=3,
+            max_lines=_template_max_lines(template, "slogan", 3),
         )
 
     if template.get("show_title", True):
@@ -66,9 +67,9 @@ def render_video_template_preview_image(
             title_text,
             (int(template["title_x"]), int(template["title_y"])),
             _load_font(int(template["title_font_size"])),
-            str(template["secondary_color"]),
+            _template_text_color(template, "title", "title_color", explicit_template_keys),
             max_width=width - int(template["title_x"]) - 42,
-            max_lines=2,
+            max_lines=_template_max_lines(template, "title", 12),
         )
 
     return Image.alpha_composite(base, overlay).convert("RGB")
@@ -155,6 +156,14 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def _template_text_color(template: dict, text_key: str, color_key: str, explicit_template_keys: set[str]) -> str:
+    if color_key in explicit_template_keys and template.get(color_key):
+        return str(template[color_key])
+    if text_key in {"slogan", "hud"}:
+        return str(template.get("primary_color") or "#ffffff")
+    return str(template.get("secondary_color") or "#ffffff")
+
+
 def _hex_to_rgba(value: str, opacity: float) -> tuple[int, int, int, int]:
     value = value.strip().lstrip("#")
     if len(value) == 3:
@@ -163,3 +172,12 @@ def _hex_to_rgba(value: str, opacity: float) -> tuple[int, int, int, int]:
     green = int(value[2:4], 16)
     blue = int(value[4:6], 16)
     return red, green, blue, max(0, min(255, int(255 * opacity)))
+
+
+def _template_max_lines(template: dict, text_key: str, fallback: int) -> int:
+    raw_value = template.get(f"{text_key}_max_lines")
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(1, min(parsed, 12))

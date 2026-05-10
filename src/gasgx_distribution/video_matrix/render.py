@@ -398,7 +398,7 @@ def _overlay_filters(
                 hud_text,
                 text_key="hud",
                 color_key="hud_color",
-                max_lines=2,
+                max_lines=_template_max_lines(template, "hud", 2),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
             )
@@ -414,7 +414,7 @@ def _overlay_filters(
                 slogan,
                 text_key="slogan",
                 color_key="slogan_color",
-                max_lines=3,
+                max_lines=_template_max_lines(template, "slogan", 3),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
             )
@@ -430,7 +430,7 @@ def _overlay_filters(
                 title,
                 text_key="title",
                 color_key="title_color",
-                max_lines=2,
+                max_lines=_template_max_lines(template, "title", 12),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
             )
@@ -526,6 +526,14 @@ def _drawtext_lines(
     lines = _wrap_text_for_drawtext(text, font_size, max_width, font_family=font_family)[:max_lines]
     align = _target_text_align(template, text_key)
     line_gap = max(1, int(font_size * 1.18))
+    anchor_y = _centered_text_anchor_y(
+        template,
+        text_key,
+        anchor_y,
+        line_count=max(1, len(lines)),
+        line_gap=line_gap,
+        font_size=font_size,
+    )
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
     style = str(template.get(f"{text_key}_text_style") or "none").strip().lower()
     color = _template_text_color(template, text_key, color_key, explicit_template_keys or set())
@@ -566,6 +574,29 @@ def _drawtext_lines(
             )
         )
     return filters
+
+
+def _centered_text_anchor_y(
+    template: dict[str, Any],
+    text_key: str,
+    default_anchor_y: int,
+    *,
+    line_count: int,
+    line_gap: int,
+    font_size: int,
+) -> int:
+    if not bool(template.get(f"{text_key}_auto_center", True)):
+        return default_anchor_y
+
+    target = "hud" if text_key == "hud" else text_key
+    spec = _background_box_spec(template, target)
+    if spec is None:
+        return default_anchor_y
+
+    _x, y, _w, height, _color, _opacity, _radius = spec
+    text_block_height = font_size + max(0, line_count - 1) * line_gap
+    centered = y + max(0, int((height - text_block_height) / 2))
+    return centered
 
 
 def _drawtext_filter(
@@ -880,7 +911,12 @@ def _overlay_complexity(template_config: dict | None, variant: VideoVariant) -> 
     drawtext_count = 0
     for key, value in enabled.items():
         if value:
-            max_lines = 3 if key == "slogan" else 2
+            if key == "slogan":
+                max_lines = _template_max_lines(template, "slogan", 3)
+            elif key == "title":
+                max_lines = _template_max_lines(template, "title", 12)
+            else:
+                max_lines = _template_max_lines(template, "hud", 2)
             wrapped_lines = _wrap_text_for_drawtext(
                 text_inputs[key],
                 int(template[f"{key}_font_size"]),
@@ -899,6 +935,15 @@ def _overlay_complexity(template_config: dict | None, variant: VideoVariant) -> 
         "title_effect": str(template.get("title_text_effect") or "none"),
         "hud_effect": str(template.get("hud_text_effect") or "none"),
     }
+
+
+def _template_max_lines(template: dict[str, Any], text_key: str, fallback: int) -> int:
+    raw_value = template.get(f"{text_key}_max_lines")
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(1, min(parsed, 12))
 
 
 def _file_size(path: Path) -> int:

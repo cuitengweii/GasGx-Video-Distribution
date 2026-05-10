@@ -2804,6 +2804,19 @@ button .loading-spinner,
   padding: 0;
   background: #080808;
 }
+.video-template-thumb-frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 479.25px;
+  height: 852px;
+  border: 0;
+  border-radius: 0;
+  background: #080808;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.2963);
+  transform-origin: center center;
+}
 .video-template-thumb-mask {
   position: absolute;
   inset: 0;

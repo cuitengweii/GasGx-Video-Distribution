@@ -19,6 +19,7 @@ let displayedJobPercent = 0;
 let jobProgressTimer = null;
 let lastJobSnapshot = null;
 let visualDropdownCloseBound = false;
+let videoTemplateThumbScaleBound = false;
 
 const jobStepLabels = [
   ["queued", "任务提交", 0, ["queued"]],
@@ -259,12 +260,16 @@ function encodePreviewPayload(payload) {
   return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
 }
 
+function previewFrameUrlForPayload(payload = null) {
+  return payload
+    ? `/static/video_matrix_preview.html?template=${encodeURIComponent(encodePreviewPayload(payload))}`
+    : "/static/video_matrix_preview.html";
+}
+
 function refreshPhonePreviewFrame(id, payload = null) {
   const frame = $(id);
   if (!frame) return;
-  const url = payload
-    ? `/static/video_matrix_preview.html?template=${encodeURIComponent(encodePreviewPayload(payload))}`
-    : "/static/video_matrix_preview.html";
+  const url = previewFrameUrlForPayload(payload);
   if (frame.getAttribute("src") === url) return;
   frame.src = PREVIEW_FRAME_PLACEHOLDER;
   window.requestAnimationFrame(() => {
@@ -1578,6 +1583,7 @@ function updateVideoTemplateField(input) {
   if (out) out.textContent = input.value;
   setImageLoading("videoTemplatePreview", "应用模板参数...");
   refreshVideoTemplatePreview();
+  refreshVideoTemplateGallery({ showLoading: false });
   scheduleVideoTemplateSave();
 }
 
@@ -1743,10 +1749,11 @@ async function refreshVideoTemplateGallery(options = {}) {
   if (options.showLoading !== false) setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
   const cards = [];
   Object.entries(templates).forEach(([id, template], index) => {
-    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(template)}<button type="button" class="video-template-name-button" data-template-name="${escapeHtml(id)}">${escapeHtml(videoTemplateDisplayName(id, template, index))}</button></div>`);
+    cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(id, template)}<button type="button" class="video-template-name-button" data-template-name="${escapeHtml(id)}">${escapeHtml(videoTemplateDisplayName(id, template, index))}</button></div>`);
   });
-  $("videoTemplateGallery").innerHTML = cards.join("");
-  $("videoTemplateGallery").querySelectorAll(".cover-card").forEach((card) => {
+  const gallery = $("videoTemplateGallery");
+  gallery.innerHTML = cards.join("");
+  gallery.querySelectorAll(".cover-card").forEach((card) => {
     card.onclick = async (event) => {
       if (event.target?.tagName === "VIDEO") {
         toggleTemplateCardVideo(event.target);
@@ -1755,111 +1762,50 @@ async function refreshVideoTemplateGallery(options = {}) {
       await selectVideoTemplate(card.dataset.id);
     };
   });
+  window.requestAnimationFrame(() => fitVideoTemplateThumbFrames(gallery));
+  bindVideoTemplateThumbFrameScale();
 }
 
-function videoTemplateCardPreviewHtml(template) {
-  const imageUrl = selectedModelImageUrl || modelImages[0]?.url || "";
-  if (!imageUrl) return `<div class="video-template-thumb empty"><span>暂无背景图</span></div>`;
+function videoTemplateCardPreviewHtml(templateId, template) {
+  const hasBg = Boolean(selectedModelImageUrl || modelImages[0]?.url);
+  if (!hasBg) return `<div class="video-template-thumb empty"><span>暂无背景图</span></div>`;
+  const payload = videoTemplatePreviewPayload(template);
   return `
     <div class="video-template-thumb">
-      <div class="video-template-thumb-canvas">
-        <img src="${escapeHtml(imageUrl)}" alt="">
-        <div class="video-template-thumb-mask"></div>
-        ${videoTemplateCardBarHtml(template, "slogan")}
-        ${videoTemplateCardBarHtml(template, "title")}
-        ${videoTemplateCardBarHtml(template, "hud")}
-        ${videoTemplateCardTextHtml(template, "slogan", $("headline").value)}
-        ${videoTemplateCardTextHtml(template, "title", $("subhead").value)}
-        ${videoTemplateCardHudHtml(template)}
-      </div>
-    </div>`;
+      <iframe
+        class="video-template-thumb-frame"
+        src="${escapeHtml(previewFrameUrlForPayload(payload))}"
+        title="${escapeHtml(template?.name || templateId)}"
+        loading="lazy"
+        scrolling="no"
+        tabindex="-1"
+      ></iframe>
+    </div>
+  `;
 }
 
-function videoTemplateCardBarHtml(template, target) {
-  if (target === "slogan" && !template?.show_slogan) return "";
-  if (target === "title" && !template?.show_title) return "";
-  if (target === "hud" && !template?.show_hud) return "";
-  const x = target === "slogan" ? Number(template.slogan_bg_x ?? 0)
-    : target === "title" ? Number(template.title_bg_x ?? 0)
-    : Number(template.hud_bar_x ?? 0);
-  const y = target === "slogan" ? Number(template.slogan_bg_y ?? template.slogan_y ?? 0)
-    : target === "title" ? Number(template.title_bg_y ?? template.title_y ?? 0)
-    : Number(template.hud_bar_y ?? 0);
-  const width = target === "slogan" ? Number(template.slogan_bg_width ?? 1080)
-    : target === "title" ? Number(template.title_bg_width ?? 1080)
-    : Number(template.hud_bar_width ?? 1080);
-  const height = target === "slogan" ? Number(template.slogan_bg_height ?? 80)
-    : target === "title" ? Number(template.title_bg_height ?? template.slogan_bg_height ?? 92)
-    : Number(template.hud_bar_height ?? 120);
-  const color = target === "slogan" ? (template.slogan_bg_color || template.hud_bar_color || "#0E1A10")
-    : target === "title" ? (template.title_bg_color || template.hud_bar_color || "#0E1A10")
-    : (template.hud_bar_color || "#0E1A10");
-  const opacity = target === "slogan" ? Number(template.slogan_bg_opacity ?? 0.62)
-    : target === "title" ? Number(template.title_bg_opacity ?? template.slogan_bg_opacity ?? 0.62)
-    : Number(template.hud_bar_opacity ?? 0.68);
-  const radius = target === "slogan" ? Number(template.slogan_bg_radius ?? template.hud_bar_radius ?? 10)
-    : target === "title" ? Number(template.title_bg_radius ?? template.hud_bar_radius ?? 10)
-    : Number(template.hud_bar_radius ?? 10);
-  return `<div class="video-template-thumb-bar" style="${videoTemplateCardBarStyle(x, y, width, height, color, opacity, radius)}"></div>`;
+function fitVideoTemplateThumbFrames(root = document) {
+  const designWidth = 479.25;
+  const designHeight = 852;
+  root.querySelectorAll(".video-template-thumb-frame").forEach((frame) => {
+    const thumb = frame.closest(".video-template-thumb");
+    if (!thumb) return;
+    const innerWidth = Math.max(1, thumb.clientWidth - 12);
+    const innerHeight = Math.max(1, thumb.clientHeight - 12);
+    const scale = Math.max(0.12, Math.min(innerWidth / designWidth, innerHeight / designHeight));
+    frame.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(4)})`;
+  });
 }
 
-function videoTemplateCardTextHtml(template, target, value) {
-  const visibleKey = target === "slogan" ? "show_slogan" : "show_title";
-  if (!template?.[visibleKey]) return "";
-  const x = Number(template[`${target}_x`] ?? 0);
-  const y = Number(template[`${target}_y`] ?? 0);
-  const size = Number(template[`${target}_font_size`] ?? 36);
-  const color = template[`${target}_color`] || (target === "slogan" ? template.secondary_color : template.primary_color) || "#ffffff";
-  const targetClass = target === "slogan" ? "video-template-thumb-slogan" : "video-template-thumb-title";
-  return `<div class="video-template-thumb-text ${targetClass}" style="${videoTemplateCardTextStyle(template, target, x, y, size, color)}">${escapeHtml(value || "")}</div>`;
-}
-
-function videoTemplateCardHudHtml(template) {
-  if (!template?.show_hud) return "";
-  const x = Number(template.hud_x ?? 0);
-  const y = Number(template.hud_y ?? 0);
-  const size = Number(template.hud_font_size ?? 30);
-  const color = template.hud_color || template.primary_color || "#ffffff";
-  return `<div class="video-template-thumb-hud" style="${videoTemplateCardTextStyle(template, "hud", x, y, size, color)}">${escapeHtml($("hudText").value || "")}</div>`;
-}
-
-function videoTemplateCardTextStyle(template, target, x, y, size, color) {
-  const alignKey = `${target}_text_align`;
-  const align = template?.[alignKey] || "left";
-  const leftDesign = Number(x || 0);
-  const widthDesign = videoTemplateTextBoxWidth(template, target, leftDesign);
-  const left = Math.max(0, Math.min(100, leftDesign / 1080 * 100));
-  const top = Math.max(0, Math.min(100, Number(y || 0) / 1920 * 100));
-  const fontSize = Math.max(6, Math.min(14, size / 1920 * 154));
-  const width = Math.max(8, Math.min(100, widthDesign / 1080 * 100));
-  return `left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${width.toFixed(2)}%;max-width:${width.toFixed(2)}%;font-size:${fontSize.toFixed(1)}px;color:${escapeHtml(color)};text-align:${escapeHtml(align)};`;
-}
-
-function videoTemplateTextBoxWidth(template, target, anchorX = 0) {
-  const raw = template?.[`${target}_text_width`];
-  const fallback = VIDEO_TEMPLATE_DEFAULT_TEXT_WIDTH;
-  const width = Number(raw ?? fallback);
-  const maxWidth = Math.max(120, 1080 - Number(anchorX || 0));
-  return clamp(Number.isFinite(width) ? width : fallback, 120, maxWidth);
-}
-
-function videoTemplateCardBarStyle(x, y, width, height, color, opacity, radius) {
-  const left = Math.max(0, Math.min(100, x / 1080 * 100));
-  const top = Math.max(0, Math.min(100, y / 1920 * 100));
-  const barWidth = Math.max(8, Math.min(100, width / 1080 * 100));
-  const barHeight = Math.max(3, Math.min(100, height / 1920 * 100));
-  const alpha = Math.max(0, Math.min(1, opacity));
-  const corner = Math.max(0, Math.min(10, radius / 1920 * 154));
-  return `left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${barWidth.toFixed(2)}%;height:${barHeight.toFixed(2)}%;background:${hexToRgba(color, alpha)};border-radius:${corner.toFixed(1)}px;`;
-}
-
-function hexToRgba(value, opacity) {
-  const hex = String(value || "#0E1A10").trim().replace("#", "");
-  const normalized = hex.length === 3 ? hex.split("").map((char) => char + char).join("") : hex.padEnd(6, "0").slice(0, 6);
-  const red = parseInt(normalized.slice(0, 2), 16) || 0;
-  const green = parseInt(normalized.slice(2, 4), 16) || 0;
-  const blue = parseInt(normalized.slice(4, 6), 16) || 0;
-  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, Number(opacity)))})`;
+function bindVideoTemplateThumbFrameScale() {
+  if (videoTemplateThumbScaleBound) return;
+  const rerender = () => {
+    const gallery = $("videoTemplateGallery");
+    if (!gallery) return;
+    fitVideoTemplateThumbFrames(gallery);
+  };
+  window.addEventListener("resize", rerender);
+  videoTemplateThumbScaleBound = true;
 }
 
 function videoTemplatePreviewVideos() {

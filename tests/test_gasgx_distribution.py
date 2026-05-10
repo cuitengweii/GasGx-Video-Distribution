@@ -881,20 +881,6 @@ def test_sync_pull_imports_remote_accounts_to_sqlite(monkeypatch, tmp_path: Path
                         "updated_at": 200,
                     }
                 ]
-            if table == "ai_robot_configs":
-                return [
-                    {
-                        "platform": "wecom",
-                        "enabled": 1,
-                        "bot_name": "Ops Bot",
-                        "webhook_url": "https://example.test/wecom",
-                        "webhook_secret": "secret",
-                        "signing_secret": "sig",
-                        "target_id": "group-1",
-                        "created_at": 100,
-                        "updated_at": 200,
-                    }
-                ]
             raise AssertionError(f"unexpected table {table}")
 
     monkeypatch.setattr(service, "_brand_supabase", lambda: FakePullClient())
@@ -907,16 +893,11 @@ def test_sync_pull_imports_remote_accounts_to_sqlite(monkeypatch, tmp_path: Path
     assert payload["accounts"] == 1
     assert payload["platforms"] == 1
     assert payload["profiles"] == 1
-    assert payload["ai_robot_configs"] == 1
     account = service.get_account(31)
     assert account is not None
     assert account["display_name"] == "GasGx Remote 31"
     assert account["platforms"][0]["platform"] == "wechat"
     assert account["platforms"][0]["debug_port"] == 12331
-    wecom = next(item for item in service.list_ai_robot_configs() if item["platform"] == "wecom")
-    assert wecom["enabled"] is True
-    assert wecom["bot_name"] == "Ops Bot"
-    assert wecom["webhook_url"] == "https://example.test/wecom"
 
 
 def test_sync_pull_does_not_mark_existing_local_outbox_rows_synced(monkeypatch, tmp_path: Path) -> None:
