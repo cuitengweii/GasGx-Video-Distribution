@@ -48,6 +48,7 @@ def render_variant(
     telemetry: Any | None = None,
     speed_mode: str = "quality",
     ffmpeg_threads: int | None = None,
+    bgm_start_offset: float = 0.0,
 ) -> RenderedAsset:
     batch_dir.mkdir(parents=True, exist_ok=True)
     output_types = output_types or {"mp4"}
@@ -63,6 +64,9 @@ def render_variant(
     cover_path = batch_dir / f"{base_name}_cover.png" if "png" in output_types else None
     copy_path = batch_dir / f"{base_name}_copy.txt" if "txt" in output_types else None
     manifest_path = batch_dir / f"{base_name}_manifest.json" if "json" in output_types else None
+    if bgm_start_offset:
+        variant.bgm_start_offset = max(0.0, float(bgm_start_offset or 0.0))
+        variant.bgm_offset_bucket = variant.bgm_offset_bucket or f"b{int(variant.bgm_start_offset // 8)}"
 
     try:
         if telemetry is not None:
@@ -81,8 +85,9 @@ def render_variant(
         intro_cover_path = None
         if cover_template_config is not None and cover_intro_seconds > 0:
             first_segment = variant.segments[0]
-            with _span(telemetry, "render", "intro_extract_frame", {"source": first_segment.clip.normalized_path, "timestamp": first_segment.start_time}):
-                _extract_frame_or_fallback(first_segment.clip.normalized_path, intro_frame, timestamp=first_segment.start_time)
+            intro_timestamp = _segment_cover_timestamp(first_segment, variant.cover_frame_offset)
+            with _span(telemetry, "render", "intro_extract_frame", {"source": first_segment.clip.normalized_path, "timestamp": intro_timestamp}):
+                _extract_frame_or_fallback(first_segment.clip.normalized_path, intro_frame, timestamp=intro_timestamp)
             with _span(telemetry, "render", "intro_cover_render", {"cover_template": cover_template_config.get("name", "") if isinstance(cover_template_config, dict) else ""}):
                 render_intro_cover(intro_frame, intro_cover, variant, settings, cover_template_config)
             intro_cover_path = intro_cover
@@ -133,14 +138,14 @@ def render_variant(
             },
         ):
             body_output_path = main_video_path if video_ending_path is not None else video_path
-            concat_video(
-                filter_complex,
-                inputs,
-                body_output_path,
-                bgm_path=bgm_path,
-                speed_mode=speed_mode,
-                threads=ffmpeg_threads,
-            )
+            concat_kwargs = {
+                "bgm_path": bgm_path,
+                "speed_mode": speed_mode,
+                "threads": ffmpeg_threads,
+            }
+            if bgm_start_offset:
+                concat_kwargs["bgm_start_offset"] = max(0.0, float(bgm_start_offset or 0.0))
+            concat_video(filter_complex, inputs, body_output_path, **concat_kwargs)
         if video_ending_path is not None:
             with _span(
                 telemetry,
@@ -189,6 +194,11 @@ def render_variant(
                             "title": variant.title,
                             "slogan": variant.slogan,
                             "signature": variant.signature,
+                            "narrative_template_id": variant.narrative_template_id,
+                            "account_pool_id": variant.account_pool_id,
+                            "cover_frame_offset": variant.cover_frame_offset,
+                            "bgm_start_offset": variant.bgm_start_offset,
+                            "bgm_offset_bucket": variant.bgm_offset_bucket,
                             "video_path": str(video_path),
                             "cover_path": str(cover_path) if cover_path else None,
                             "cover_template_id": cover_template_id,
@@ -241,6 +251,11 @@ def _extract_frame_or_fallback(video_path: Path, output_path: Path, timestamp: f
     extract_frame(video_path, output_path, timestamp=0.0)
     if not output_path.exists():
         raise FileNotFoundError(f"Unable to extract frame from {video_path}")
+
+
+def _segment_cover_timestamp(segment: Any, offset: float) -> float:
+    safe_offset = max(0.0, min(float(offset or 0.0), max(0.0, float(segment.duration) - 0.05)))
+    return round(float(segment.start_time) + safe_offset, 3)
 
 
 def _build_filter_complex(

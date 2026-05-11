@@ -4,9 +4,10 @@
   "library_root": "../runtime/video_matrix/library",
   "output_root": "../runtime/materials/videos",
   "output_count": 30,
+  "daily_output_goal": 50,
   "target_width": 1080,
   "target_height": 1920,
-  "target_fps": 60,
+  "target_fps": 30,
   "recent_limits": {
     "category_A": 15,
     "category_B": 8,
@@ -61,8 +62,8 @@
       "label": "电控"
     }
   ],
-  "video_duration_min": 8.0,
-  "video_duration_max": 12.0,
+  "video_duration_min": 9.0,
+  "video_duration_max": 15.0,
   "composition_sequence": [
     {
       "category_id": "category_A",
@@ -81,6 +82,80 @@
       "duration": 3.0
     }
   ],
+  "narrative_templates": [
+    {
+      "id": "quick_showcase",
+      "name": "快切展示",
+      "account_pool_id": "result_showcase",
+      "composition_sequence": [
+        {"category_id": "category_A", "duration": 1.2},
+        {"category_id": "category_B", "duration": 2.0},
+        {"category_id": "category_C", "duration": 2.0},
+        {"category_id": "category_H", "duration": 2.2}
+      ]
+    },
+    {
+      "id": "faq_explainer",
+      "name": "FAQ 教程",
+      "account_pool_id": "tutorial_faq",
+      "composition_sequence": [
+        {"category_id": "category_G", "duration": 1.8},
+        {"category_id": "category_D", "duration": 2.4},
+        {"category_id": "category_J", "duration": 2.2},
+        {"category_id": "category_I", "duration": 2.8}
+      ]
+    },
+    {
+      "id": "contrast_compare",
+      "name": "反差对比",
+      "account_pool_id": "contrast",
+      "composition_sequence": [
+        {"category_id": "category_H", "duration": 1.5},
+        {"category_id": "category_F", "duration": 2.2},
+        {"category_id": "category_A", "duration": 2.0},
+        {"category_id": "category_C", "duration": 2.3}
+      ]
+    },
+    {
+      "id": "step_list",
+      "name": "清单步骤",
+      "account_pool_id": "howto_steps",
+      "composition_sequence": [
+        {"category_id": "category_F", "duration": 1.6},
+        {"category_id": "category_G", "duration": 1.8},
+        {"category_id": "category_D", "duration": 2.0},
+        {"category_id": "category_E", "duration": 1.7},
+        {"category_id": "category_J", "duration": 2.0}
+      ]
+    },
+    {
+      "id": "voiceover_broll",
+      "name": "口播挂画面",
+      "account_pool_id": "onsite_voice",
+      "composition_sequence": [
+        {"category_id": "category_I", "duration": 2.2},
+        {"category_id": "category_H", "duration": 1.7},
+        {"category_id": "category_B", "duration": 2.0},
+        {"category_id": "category_C", "duration": 2.4}
+      ]
+    }
+  ],
+  "dedupe_policy": {
+    "same_account_strictness": 0.04,
+    "max_mutation_retries": 1,
+    "borderline_total": 0.8,
+    "reject_total": 0.88,
+    "single_dimension_retry": true,
+    "visual_retry": 0.9,
+    "text_retry": 0.96,
+    "structure_retry": 0.86,
+    "preflight_avoidance_enabled": true,
+    "text_preflight_threshold": 0.86,
+    "structure_preflight_threshold": 0.72,
+    "hook_cooldown_enabled": true,
+    "bgm_random_offset_enabled": true,
+    "bgm_offset_bucket_seconds": 8
+  },
   "beat_detection": {
     "mode": "auto",
     "target_bpm_min": 120,

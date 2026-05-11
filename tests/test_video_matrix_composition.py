@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from gasgx_distribution.video_matrix.composition import plan_variants
+from gasgx_distribution.video_matrix.dedupe import plan_feature_record
 from gasgx_distribution.video_matrix.hud import HudPayload
 from gasgx_distribution.video_matrix.models import ClipMetadata
 from gasgx_distribution.video_matrix.pipeline import _beat_cache_entry_path, _beat_cache_path, _beat_duration_hint, _fit_composition_sequence_to_max_duration
@@ -13,6 +14,7 @@ from gasgx_distribution.video_matrix import cover as cover_renderer
 from gasgx_distribution.video_matrix import render as video_renderer
 from gasgx_distribution.video_matrix.render import _build_filter_complex
 from gasgx_distribution.video_matrix.settings import ProjectSettings
+from gasgx_distribution.video_matrix.spark_text import build_text_variants
 
 
 def _settings(**overrides) -> ProjectSettings:
@@ -92,6 +94,52 @@ def test_plan_variants_accepts_configured_non_default_categories() -> None:
     assert [segment.duration for segment in variants[0].segments] == [0.5, 1.0, 1.5]
 
 
+def test_plan_variants_cycles_configured_narrative_templates() -> None:
+    clips = [_clip("category_D", "d1"), _clip("category_E", "e1"), _clip("category_F", "f1")]
+    sequence = [
+        {"category_id": "category_D", "duration": 0.5},
+        {"category_id": "category_E", "duration": 1.0},
+        {"category_id": "category_F", "duration": 1.5},
+    ]
+    narrative_templates = [
+        {
+            "id": "quick_showcase",
+            "account_pool_id": "result_showcase",
+            "composition_sequence": [
+                {"category_id": "category_D", "duration": 0.5},
+                {"category_id": "category_E", "duration": 1.0},
+                {"category_id": "category_F", "duration": 1.5},
+            ],
+        },
+        {
+            "id": "faq_explainer",
+            "account_pool_id": "tutorial_faq",
+            "composition_sequence": [
+                {"category_id": "category_F", "duration": 0.5},
+                {"category_id": "category_E", "duration": 1.0},
+                {"category_id": "category_D", "duration": 1.5},
+            ],
+        },
+    ]
+
+    variants = plan_variants(
+        clips,
+        _settings(
+            composition_sequence=sequence,
+            narrative_templates=narrative_templates,
+            dedupe_policy={"single_dimension_retry": False, "borderline_total": 0.99, "reject_total": 1.0},
+        ),
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1, 1.5, 2, 2.5, 3],
+        output_count=2,
+    )
+
+    assert [variant.narrative_template_id for variant in variants] == ["quick_showcase", "faq_explainer"]
+    assert variants[0].account_pool_id == "result_showcase"
+    assert [segment.category for segment in variants[0].segments] == ["category_D", "category_E", "category_F"]
+    assert [segment.category for segment in variants[1].segments] == ["category_F", "category_E", "category_D"]
+
+
 def test_plan_variants_reports_missing_configured_category() -> None:
     with pytest.raises(ValueError, match="category_F"):
         plan_variants(
@@ -141,6 +189,88 @@ def test_plan_variants_reuses_recent_clip_when_pool_is_exhausted() -> None:
     )[0]
 
     assert variant.segments[0].clip.clip_id == "a1"
+
+
+def test_plan_variants_preflight_cools_down_hook_clips_within_batch() -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_A", "a2"), _clip("category_A", "a3")]
+    settings = _settings(composition_sequence=[{"category_id": "category_A", "duration": 0.5}], output_count=3)
+
+    variants = plan_variants(clips, settings, HudPayload(["HUD"], False), [0, 0.5, 1, 1.5], output_count=3)
+
+    hook_ids = [variant.segments[0].clip.clip_id for variant in variants]
+    assert len(set(hook_ids)) == 3
+    assert all(variant.visual_plan_key for variant in variants)
+
+
+def test_plan_variants_preflight_skips_reused_text_signature() -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_A", "a2")]
+    settings = _settings(composition_sequence=[{"category_id": "category_A", "duration": 0.5}])
+    history = plan_feature_record(
+        plan_variants(clips, settings, HudPayload(["HUD"], False), [0, 0.5, 1.0, 1.5], output_count=1)[0]
+    )
+
+    variant = plan_variants(
+        clips,
+        settings,
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1.0, 1.5],
+        output_count=1,
+        history_features=[history],
+    )[0]
+
+    assert variant.text_variant_id != "template_01"
+    assert "text_preflight_avoided" not in variant.dedupe_result.report.reasons
+
+
+def test_plan_variants_preflight_rotates_structure_variant() -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_B", "b1"), _clip("category_C", "c1")]
+    settings = _settings(
+        composition_sequence=[
+            {"category_id": "category_A", "duration": 0.5},
+            {"category_id": "category_B", "duration": 0.5},
+            {"category_id": "category_C", "duration": 0.5},
+        ],
+    )
+    first = plan_variants(clips, settings, HudPayload(["HUD"], False), [0, 0.5, 1.0, 1.5, 2.0], output_count=1)[0]
+    history = plan_feature_record(first)
+
+    variant = plan_variants(
+        clips,
+        settings,
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1.0, 1.5, 2.0],
+        output_count=1,
+        history_features=[history],
+    )[0]
+
+    assert variant.structure_variant_id != first.structure_variant_id
+    assert "structure_preflight_avoided" not in variant.dedupe_result.report.reasons
+
+
+def test_plan_variants_assigns_bgm_random_offsets_for_long_tracks() -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_A", "a2")]
+    settings = _settings(composition_sequence=[{"category_id": "category_A", "duration": 0.5}], output_count=2)
+
+    variants = plan_variants(
+        clips,
+        settings,
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1.0, 1.5],
+        output_count=2,
+        bgm_name="long.mp3",
+        bgm_duration=120.0,
+    )
+
+    assert all(variant.bgm_start_offset > 0 for variant in variants)
+    assert len({variant.bgm_offset_bucket for variant in variants}) >= 1
+
+
+def test_build_text_variants_template_fallback_is_distinct() -> None:
+    variants = build_text_variants(_settings(), ["HUD"], 4)
+
+    openings = [str(item["opening_text"]) for item in variants]
+    assert len(variants) == 4
+    assert len(set(openings)) == 4
 
 
 def test_beat_duration_hint_expands_to_composition_total() -> None:

@@ -29,8 +29,9 @@ from . import service
 from .video_matrix.cover import render_cover_preview_image
 from .video_matrix.cover_templates import DEFAULT_COVER_TEMPLATE_ID, load_cover_templates, require_cover_template
 from .video_matrix.config_store import default_config_path, runtime_config_path
+from .video_matrix.dedupe import dedupe_payload_for_variant, plan_feature_record
 from .video_matrix.ingestion import VIDEO_EXTENSIONS, ensure_category_dirs
-from .video_matrix.pipeline import run_pipeline
+from .video_matrix.pipeline import rendered_asset_payload, run_pipeline
 from .video_matrix.settings import ProjectSettings
 from .video_matrix.template_preview import render_video_template_preview_image
 from .video_matrix.telemetry import GenerationTrace
@@ -60,6 +61,7 @@ BGM_DIR = ROOT / "runtime" / "video_matrix" / "bgm"
 MODEL_IMAGE_DIR = ROOT / "runtime" / "video_matrix" / "modelimg"
 ENDING_TEMPLATE_DIR = ROOT / "runtime" / "video_matrix" / "ending_template"
 SIGNATURE_HISTORY_PATH = ROOT / "runtime" / "video_matrix" / "signature_history.json"
+GENERATION_HISTORY_PATH = ROOT / "runtime" / "video_matrix" / "generation_history.json"
 TELEMETRY_LOG_ROOT = ROOT / "runtime" / "video_matrix" / "logs"
 JOB_STATE_DIR = ROOT / "runtime" / "video_matrix" / "jobs"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -1117,12 +1119,7 @@ def _run_generate_job(
             _persist_job_state(job_id)
 
         def on_asset_ready(asset: Any, completed: int, total: int) -> None:
-            payload = {
-                "video_path": str(asset.video_path),
-                "cover_path": str(asset.cover_path) if asset.cover_path else "",
-                "copy_path": str(asset.copy_path) if asset.copy_path else "",
-                "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
-            }
+            payload = rendered_asset_payload(asset)
             job_assets = _jobs[job_id].setdefault("assets", [])
             job_assets.append(payload)
             _jobs[job_id]["first_asset_ready"] = True
@@ -1151,6 +1148,7 @@ def _run_generate_job(
                 existing_signatures=existing_signatures if settings.variant_history_enabled else None,
                 recent_clip_ids=set(generation_history["clip_ids"]),
                 recent_segment_keys=set(generation_history["segment_keys"]),
+                history_features=list(generation_history.get("features") or []),
                 ending_template_path=ending_template_path,
                 telemetry=trace,
                 speed_mode=speed_mode,
@@ -1179,12 +1177,7 @@ def _run_generate_job(
             "message": f"Completed {len(assets)} exports",
             "first_asset_ready": bool(assets),
             "assets": [
-                {
-                    "video_path": str(asset.video_path),
-                    "cover_path": str(asset.cover_path) if asset.cover_path else "",
-                    "copy_path": str(asset.copy_path) if asset.copy_path else "",
-                    "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
-                }
+                rendered_asset_payload(asset)
                 for asset in assets
             ],
             "metrics_summary": metrics_summary,
@@ -1270,6 +1263,9 @@ def _settings_payload(settings: ProjectSettings) -> dict[str, Any]:
         "variant_history_limit": settings.variant_history_limit,
         "enhancement_modules": settings.enhancement_modules,
         "copy_mode": settings.copy_mode,
+        "daily_output_goal": settings.daily_output_goal,
+        "narrative_templates": settings.narrative_templates,
+        "dedupe_policy": settings.dedupe_policy,
     }
 
 
@@ -1307,6 +1303,9 @@ def _settings_from_payload(payload: dict[str, Any]) -> ProjectSettings:
     settings.variant_history_limit = int(payload.get("variant_history_limit") or settings.variant_history_limit)
     settings.enhancement_modules = dict(payload.get("enhancement_modules") or settings.enhancement_modules)
     settings.copy_mode = str(payload.get("copy_mode") or settings.copy_mode)
+    settings.daily_output_goal = int(payload.get("daily_output_goal") or settings.daily_output_goal)
+    settings.narrative_templates = [dict(item) for item in payload.get("narrative_templates") or settings.narrative_templates if isinstance(item, dict)]
+    settings.dedupe_policy = dict(payload.get("dedupe_policy") or settings.dedupe_policy)
     return settings
 
 
@@ -1325,7 +1324,7 @@ def _load_signature_history(settings: ProjectSettings) -> set[str]:
 
 def _recent_bgm_names(limit: int = 5000) -> set[str]:
     if service.brand_database_backend() != "supabase":
-        return set()
+        return set(_load_generation_history(limit).get("bgm_names") or set())
     try:
         rows = service._brand_supabase().select_where(
             "video_matrix_generation_runs",
@@ -1337,10 +1336,10 @@ def _recent_bgm_names(limit: int = 5000) -> set[str]:
     return {str(row.get("bgm_filename") or "").strip() for row in rows if str(row.get("bgm_filename") or "").strip()}
 
 
-def _load_generation_history(limit: int) -> dict[str, set[str]]:
-    history: dict[str, set[str]] = {"signatures": set(), "clip_ids": set(), "segment_keys": set(), "bgm_names": set()}
+def _load_generation_history(limit: int) -> dict[str, Any]:
+    history: dict[str, Any] = {"signatures": set(), "clip_ids": set(), "segment_keys": set(), "bgm_names": set(), "features": []}
     if service.brand_database_backend() != "supabase":
-        return history
+        return _load_local_generation_history(history, limit)
     capped = str(max(1, int(limit or 5000)))
     try:
         assets = service._brand_supabase().select_where(
@@ -1368,7 +1367,87 @@ def _load_generation_history(limit: int) -> dict[str, set[str]]:
         if str(row.get("clip_id") or "").strip()
     }
     history["bgm_names"] = {str(row.get("bgm_filename") or "").strip() for row in runs if str(row.get("bgm_filename") or "").strip()}
+    history["features"] = [_history_feature_from_asset_row(row) for row in assets]
+    history["features"] = [item for item in history["features"] if item]
     return history
+
+
+def _load_local_generation_history(history: dict[str, Any], limit: int) -> dict[str, Any]:
+    raw = _load_json(GENERATION_HISTORY_PATH, [])
+    records = raw.get("runs") if isinstance(raw, dict) else raw
+    if not isinstance(records, list):
+        return history
+    cap = max(1, int(limit or 5000))
+    asset_count = 0
+    for record in reversed(records):
+        if not isinstance(record, dict):
+            continue
+        run = record.get("run") if isinstance(record.get("run"), dict) else record
+        bgm_filename = str(run.get("bgm_filename") or record.get("bgm_filename") or "").strip()
+        if bgm_filename:
+            history["bgm_names"].add(bgm_filename)
+        assets = record.get("assets") if isinstance(record.get("assets"), list) else []
+        for asset in reversed(assets):
+            if not isinstance(asset, dict) or asset_count >= cap:
+                continue
+            signature = str(asset.get("signature") or "").strip()
+            if signature:
+                history["signatures"].add(signature)
+            feature = _history_feature_from_local_asset(asset, bgm_filename)
+            if feature:
+                history["features"].append(feature)
+            for segment in asset.get("segments") or []:
+                if not isinstance(segment, dict):
+                    continue
+                clip_id = str(segment.get("clip_id") or "").strip()
+                if not clip_id:
+                    continue
+                history["clip_ids"].add(clip_id)
+                try:
+                    history["segment_keys"].add(f"{clip_id}:{float(segment.get('start_time') or 0)}:{float(segment.get('duration') or 0)}")
+                except (TypeError, ValueError):
+                    continue
+            asset_count += 1
+        if asset_count >= cap:
+            break
+    return history
+
+
+def _history_feature_from_local_asset(asset: dict[str, Any], bgm_filename: str = "") -> dict[str, Any]:
+    feature = asset.get("dedupe_features") if isinstance(asset.get("dedupe_features"), dict) else {}
+    if bgm_filename and feature and not feature.get("bgm_name"):
+        feature = {**feature, "bgm_name": bgm_filename}
+    metadata = {
+        "dedupe": asset.get("dedupe") if isinstance(asset.get("dedupe"), dict) else {},
+        "dedupe_features": feature,
+    }
+    row = {"signature": asset.get("signature"), "metadata_json": metadata}
+    return _history_feature_from_asset_row(row)
+
+
+def _history_feature_from_asset_row(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+    dedupe = metadata.get("dedupe") if isinstance(metadata.get("dedupe"), dict) else {}
+    feature = metadata.get("dedupe_features") if isinstance(metadata.get("dedupe_features"), dict) else {}
+    return {
+        "signature": str(row.get("signature") or "").strip(),
+        "text_signature": str(feature.get("text_signature") or dedupe.get("text_signature") or "").strip(),
+        "structure_signature": str(feature.get("structure_signature") or dedupe.get("structure_signature") or "").strip(),
+        "structure_tokens": feature.get("structure_tokens") if isinstance(feature.get("structure_tokens"), list) else [],
+        "narrative_template_id": str(feature.get("narrative_template_id") or dedupe.get("narrative_template_id") or "").strip(),
+        "account_pool_id": str(feature.get("account_pool_id") or dedupe.get("account_pool_id") or "").strip(),
+        "text_variant_id": str(feature.get("text_variant_id") or dedupe.get("text_variant_id") or "").strip(),
+        "visual_plan_key": str(feature.get("visual_plan_key") or dedupe.get("visual_plan_key") or "").strip(),
+        "structure_variant_id": str(feature.get("structure_variant_id") or dedupe.get("structure_variant_id") or "").strip(),
+        "bgm_start_offset": feature.get("bgm_start_offset") if feature.get("bgm_start_offset") is not None else dedupe.get("bgm_start_offset"),
+        "bgm_offset_bucket": str(feature.get("bgm_offset_bucket") or dedupe.get("bgm_offset_bucket") or "").strip(),
+        "first_clip_id": str(feature.get("first_clip_id") or "").strip(),
+        "first_frame_hash": str(feature.get("first_frame_hash") or dedupe.get("first_frame_hash") or "").strip(),
+        "cover_frame_hash": str(feature.get("cover_frame_hash") or dedupe.get("cover_frame_hash") or "").strip(),
+        "content_fingerprint": str(feature.get("content_fingerprint") or dedupe.get("content_fingerprint") or "").strip(),
+        "bgm_name": str(feature.get("bgm_name") or "").strip(),
+        "bgm_fingerprint": str(feature.get("bgm_fingerprint") or dedupe.get("bgm_fingerprint") or "").strip(),
+    }
 
 
 def _save_generation_history(
@@ -1380,7 +1459,10 @@ def _save_generation_history(
     template_id: str,
     cover_template_id: str,
 ) -> None:
-    if service.brand_database_backend() != "supabase" or not assets:
+    if not assets:
+        return
+    if service.brand_database_backend() != "supabase":
+        _save_local_generation_history(job_id, request, bgm_path, assets, settings, template_id, cover_template_id)
         return
     ts = service.now_ts()
     try:
@@ -1413,7 +1495,18 @@ def _save_generation_history(
                     "template_id": template_id,
                     "cover_template_id": cover_template_id,
                     "copy_language": str(request.get("copy_language") or "zh"),
-                    "metadata_json": {"hud_lines": asset.variant.hud_lines},
+                    "metadata_json": {
+                        "hud_lines": asset.variant.hud_lines,
+                        "dedupe": dedupe_payload_for_variant(asset.variant),
+                        "dedupe_features": plan_feature_record(
+                            asset.variant,
+                            bgm_name=bgm_path.name,
+                            content_fingerprint=asset.variant.content_fingerprint,
+                            first_frame_hash=asset.variant.first_frame_hash,
+                            cover_frame_hash=asset.variant.cover_frame_hash,
+                            bgm_fingerprint=asset.variant.bgm_fingerprint,
+                        ),
+                    },
                     "created_at": ts,
                 },
             )
@@ -1438,6 +1531,89 @@ def _save_generation_history(
                 )
     except service.SupabaseError:
         return
+
+
+def _save_local_generation_history(
+    job_id: str,
+    request: dict[str, Any],
+    bgm_path: Path,
+    assets: list,
+    settings: ProjectSettings,
+    template_id: str,
+    cover_template_id: str,
+) -> None:
+    raw = _load_json(GENERATION_HISTORY_PATH, [])
+    records = raw.get("runs") if isinstance(raw, dict) else raw
+    if not isinstance(records, list):
+        records = []
+    ts = service.now_ts()
+    entry = {
+        "run": {
+            "job_key": job_id,
+            "bgm_filename": bgm_path.name,
+            "bgm_path": str(bgm_path),
+            "request_json": request,
+            "composition_json": _request_composition_sequence(request, settings),
+            "template_id": template_id,
+            "cover_template_id": cover_template_id,
+            "created_at": ts,
+        },
+        "assets": [
+            _local_generation_asset_payload(asset, bgm_path, request, template_id, cover_template_id, ts)
+            for asset in assets
+        ],
+    }
+    records.append(entry)
+    max_runs = max(20, min(500, int(settings.variant_history_limit or 5000)))
+    records = records[-max_runs:]
+    GENERATION_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    GENERATION_HISTORY_PATH.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _local_generation_asset_payload(
+    asset: Any,
+    bgm_path: Path,
+    request: dict[str, Any],
+    template_id: str,
+    cover_template_id: str,
+    created_at: str,
+) -> dict[str, Any]:
+    return {
+        "sequence_number": asset.variant.sequence_number,
+        "signature": asset.variant.signature,
+        "title": asset.variant.title,
+        "slogan": asset.variant.slogan,
+        "video_path": str(asset.video_path),
+        "cover_path": str(asset.cover_path) if asset.cover_path else "",
+        "copy_path": str(asset.copy_path) if asset.copy_path else "",
+        "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
+        "template_id": template_id,
+        "cover_template_id": cover_template_id,
+        "copy_language": str(request.get("copy_language") or "zh"),
+        "hud_lines": asset.variant.hud_lines,
+        "dedupe": dedupe_payload_for_variant(asset.variant),
+        "dedupe_features": plan_feature_record(
+            asset.variant,
+            bgm_name=bgm_path.name,
+            content_fingerprint=asset.variant.content_fingerprint,
+            first_frame_hash=asset.variant.first_frame_hash,
+            cover_frame_hash=asset.variant.cover_frame_hash,
+            bgm_fingerprint=asset.variant.bgm_fingerprint,
+        ),
+        "segments": [
+            {
+                "segment_index": segment.index,
+                "clip_id": segment.clip.clip_id,
+                "category": segment.category,
+                "source_path": str(segment.clip.source_path),
+                "normalized_path": str(segment.clip.normalized_path),
+                "start_time": segment.start_time,
+                "duration": segment.duration,
+            }
+            for segment in asset.variant.segments
+        ],
+        "created_at": created_at,
+    }
 
 
 def _save_signature_history(settings: ProjectSettings, signatures: set[str]) -> None:

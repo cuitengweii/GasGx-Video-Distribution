@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .beat import detect_beat_grid
-from .ffmpeg_tools import resolve_ffmpeg_threads
+from .dedupe import dedupe_payload_for_variant, enrich_rendered_asset_dedupe
+from .ffmpeg_tools import probe_media, resolve_ffmpeg_threads
 from .composition import plan_variants
 from .cover_templates import DEFAULT_COVER_TEMPLATE_ID, default_cover_templates, require_cover_template
 from .hud import build_hud_payload
@@ -50,6 +51,7 @@ def run_pipeline(
     existing_signatures: set[str] | None = None,
     recent_clip_ids: set[str] | None = None,
     recent_segment_keys: set[str] | None = None,
+    history_features: list[dict[str, Any]] | None = None,
     ending_template_path: Path | None = None,
     telemetry: Any | None = None,
     speed_mode: str = "quality",
@@ -128,7 +130,9 @@ def run_pipeline(
         "existing_signatures": len(existing_signatures or set()),
         "recent_clip_ids": len(recent_clip_ids or set()),
         "recent_segment_keys": len(recent_segment_keys or set()),
+        "history_features": len(history_features or []),
     }
+    bgm_duration = _audio_duration_seconds(bgm_path)
     if telemetry is not None:
         with telemetry.span("planning", "plan_variants", planning_payload):
             variants = plan_variants(
@@ -142,6 +146,9 @@ def run_pipeline(
                 existing_signatures=existing_signatures,
                 recent_clip_ids=recent_clip_ids,
                 recent_segment_keys=recent_segment_keys,
+                history_features=history_features,
+                bgm_name=bgm_path.name,
+                bgm_duration=bgm_duration,
             )
         telemetry.event("planning", "variants_ready", {"variant_count": len(variants), **planning_payload})
     else:
@@ -156,6 +163,9 @@ def run_pipeline(
             existing_signatures=existing_signatures,
             recent_clip_ids=recent_clip_ids,
             recent_segment_keys=recent_segment_keys,
+            history_features=history_features,
+            bgm_name=bgm_path.name,
+            bgm_duration=bgm_duration,
         )
     _apply_text_overrides(variants, text_overrides)
     template_copy = _copy_template_path().read_text(encoding="utf-8")
@@ -212,6 +222,7 @@ def run_pipeline(
                     telemetry.variant(variant.sequence_number) if telemetry is not None else None,
                     speed_mode,
                     ffmpeg_threads,
+                    bgm_start_offset=variant.bgm_start_offset,
                 ): variant.sequence_number
                 for variant in variants
             }
@@ -221,6 +232,7 @@ def run_pipeline(
                 sequence_number = futures[future]
                 try:
                     asset = future.result()
+                    enrich_rendered_asset_dedupe(asset, bgm_path)
                 except Exception as exc:  # noqa: BLE001
                     failed += 1
                     if telemetry is not None:
@@ -347,6 +359,33 @@ def _apply_text_overrides(variants: list, text_overrides: dict[str, str] | None)
 
 def _copy_template_path() -> Path:
     return Path(__file__).resolve().parents[3] / "config" / "video_matrix" / "copy_template.txt"
+
+
+def rendered_asset_payload(asset: RenderedAsset) -> dict[str, Any]:
+    return {
+        "video_path": str(asset.video_path),
+        "cover_path": str(asset.cover_path) if asset.cover_path else "",
+        "copy_path": str(asset.copy_path) if asset.copy_path else "",
+        "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
+        "narrative_template_id": asset.variant.narrative_template_id,
+        "account_pool_id": asset.variant.account_pool_id,
+        "bgm_start_offset": asset.variant.bgm_start_offset,
+        "bgm_offset_bucket": asset.variant.bgm_offset_bucket,
+        "dedupe": dedupe_payload_for_variant(asset.variant),
+    }
+
+
+def _audio_duration_seconds(path: Path) -> float:
+    if not path.exists():
+        return 0.0
+    try:
+        payload = probe_media(path)
+    except Exception:
+        return 0.0
+    try:
+        return max(0.0, float((payload.get("format") or {}).get("duration") or 0.0))
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
 
 
 @contextmanager

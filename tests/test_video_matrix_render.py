@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PIL import Image
@@ -176,6 +177,35 @@ def test_render_variant_copy_uses_ending_follow_text_without_cta(monkeypatch, tm
     assert "界面录入的片尾文案" in copy_text
     assert "https://example.test" not in copy_text
     assert "CTA" not in copy_text
+
+
+def test_render_variant_passes_bgm_offset_and_writes_manifest(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    bgm = tmp_path / "bgm.mp3"
+    source.write_bytes(b"video")
+    bgm.write_bytes(b"audio")
+    captured = {}
+
+    def fake_concat(_filter_complex, _inputs, output, **kwargs) -> None:
+        captured.update(kwargs)
+        output.write_bytes(b"mp4")
+
+    monkeypatch.setattr(render, "concat_video", fake_concat)
+
+    asset = render.render_variant(
+        _variant(source),
+        _settings(tmp_path),
+        template_copy="",
+        batch_dir=tmp_path,
+        bgm_path=bgm,
+        output_types={"mp4", "json"},
+        bgm_start_offset=12.0,
+    )
+
+    manifest = json.loads(asset.manifest_path.read_text(encoding="utf-8"))
+    assert captured["bgm_start_offset"] == 12.0
+    assert manifest["bgm_start_offset"] == 12.0
+    assert manifest["bgm_offset_bucket"] == "b1"
 
 
 def test_render_variant_uses_independent_ending_cover_template(monkeypatch, tmp_path: Path) -> None:

@@ -72,6 +72,31 @@ def test_concat_video_uses_filter_complex_script(monkeypatch, tmp_path: Path) ->
     assert not Path(captured["script_path"]).exists()
 
 
+def test_concat_video_seeks_bgm_offset_before_audio_input(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_command(args):
+        captured["args"] = list(args)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ffmpeg_tools, "resolve_binary", lambda name: name)
+    monkeypatch.setattr(ffmpeg_tools, "run_command", fake_run_command)
+
+    ffmpeg_tools.concat_video(
+        "[0:v]null[vout]",
+        [tmp_path / "clip.mp4"],
+        tmp_path / "rendered.mp4",
+        bgm_path=tmp_path / "long.mp3",
+        bgm_start_offset=12.345,
+    )
+
+    args = captured["args"]
+    ss_index = args.index("-ss")
+    assert args[ss_index + 1] == "12.345"
+    assert args[ss_index - 2:ss_index] == ["-stream_loop", "-1"]
+    assert args[ss_index + 2:ss_index + 4] == ["-i", str(tmp_path / "long.mp3")]
+
+
 def test_ffmpeg_runtime_health_reports_binary_paths(monkeypatch) -> None:
     monkeypatch.setattr(ffmpeg_tools, "resolve_binary", lambda name: f"/bin/{name}")
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 import subprocess
 from pathlib import Path
@@ -31,7 +30,10 @@ def structure_signature_for_variant(variant: VideoVariant) -> str:
 
 
 def structure_tokens_for_variant(variant: VideoVariant) -> list[str]:
-    tokens = [f"narrative:{variant.narrative_template_id or 'default'}"]
+    tokens = [
+        f"narrative:{variant.narrative_template_id or 'default'}",
+        f"structure_variant:{variant.structure_variant_id or 'v1'}",
+    ]
     for segment in variant.segments:
         duration_bucket = max(1, int(round(float(segment.duration) * 2)))
         tokens.append(f"{segment.index}:{segment.category}:{segment.clip.clip_id}:{duration_bucket}")
@@ -61,6 +63,11 @@ def plan_feature_record(
         "structure_tokens": structure_tokens_for_variant(variant),
         "narrative_template_id": variant.narrative_template_id,
         "account_pool_id": variant.account_pool_id,
+        "text_variant_id": variant.text_variant_id,
+        "visual_plan_key": variant.visual_plan_key,
+        "structure_variant_id": variant.structure_variant_id,
+        "bgm_start_offset": round(float(variant.bgm_start_offset or 0.0), 3),
+        "bgm_offset_bucket": variant.bgm_offset_bucket,
         "first_clip_id": first_segment.clip.clip_id if first_segment else "",
         "first_category": first_segment.category if first_segment else "",
         "segment_keys": [segment_key(segment) for segment in variant.segments],
@@ -83,11 +90,15 @@ def evaluate_variant_plan(
     existing_signatures: set[str] | None = None,
     recent_segment_keys: set[str] | None = None,
     same_account: bool = False,
+    policy: dict[str, Any] | None = None,
+    bgm_name: str = "",
 ) -> DedupeResult:
     prepare_variant_dedupe_fields(variant)
     existing_signatures = set(existing_signatures or set())
     recent_segment_keys = set(recent_segment_keys or set())
-    candidate_features = plan_feature_record(variant)
+    reject_total = _policy_float(policy, "reject_total", PLAN_TOTAL_REJECT)
+    retry_total = _policy_float(policy, "borderline_total", PLAN_TOTAL_RETRY)
+    candidate_features = plan_feature_record(variant, bgm_name=bgm_name)
     best_report = SimilarityReport()
     reasons: list[str] = []
 
@@ -125,16 +136,55 @@ def evaluate_variant_plan(
     if reasons:
         best_report.reasons = _unique([*best_report.reasons, *reasons])
 
-    if best_report.total_score >= PLAN_TOTAL_REJECT or "signature_exact" in best_report.reasons or "segment_exact" in best_report.reasons:
+    single_dimension_reasons = _single_dimension_retry_reasons(best_report, policy)
+    if single_dimension_reasons:
+        best_report.reasons = _unique([*best_report.reasons, *single_dimension_reasons])
+    if (
+        single_dimension_reasons
+        or best_report.total_score >= reject_total
+        or "signature_exact" in best_report.reasons
+        or "segment_exact" in best_report.reasons
+    ):
         action = "retry"
         status = "retry"
-    elif best_report.total_score >= PLAN_TOTAL_RETRY:
+    elif best_report.total_score >= retry_total:
         action = "retry"
         status = "borderline"
     else:
         action = "pass"
         status = "pass"
     return DedupeResult(status=status, action=action, report=best_report)
+
+
+def _policy_float(policy: dict[str, Any] | None, key: str, fallback: float) -> float:
+    if not isinstance(policy, dict):
+        return fallback
+    try:
+        value = float(policy.get(key, fallback))
+    except (TypeError, ValueError):
+        return fallback
+    return value if 0 <= value <= 1 else fallback
+
+
+def _policy_bool(policy: dict[str, Any] | None, key: str, fallback: bool) -> bool:
+    if not isinstance(policy, dict):
+        return fallback
+    return bool(policy.get(key, fallback))
+
+
+def _single_dimension_retry_reasons(report: SimilarityReport, policy: dict[str, Any] | None) -> list[str]:
+    if not _policy_bool(policy, "single_dimension_retry", True):
+        return []
+    reasons: list[str] = []
+    if "same_hook_clip" in report.reasons:
+        reasons.append("same_hook_clip")
+    if report.visual_score >= _policy_float(policy, "visual_retry", 0.90):
+        reasons.append("visual_near")
+    if report.text_score >= _policy_float(policy, "text_retry", 0.96):
+        reasons.append("text_near")
+    if report.structure_score >= _policy_float(policy, "structure_retry", 0.86):
+        reasons.append("structure_near")
+    return _unique(reasons)
 
 
 def mark_recut_passed(result: DedupeResult, retry_count: int, mutation_history: list[str]) -> DedupeResult:
@@ -184,6 +234,11 @@ def dedupe_payload_for_variant(variant: VideoVariant) -> dict[str, Any]:
         "cover_frame_hash": variant.cover_frame_hash,
         "content_fingerprint": _fingerprint_digest(variant.content_fingerprint),
         "bgm_fingerprint": _fingerprint_digest(variant.bgm_fingerprint),
+        "visual_plan_key": variant.visual_plan_key,
+        "text_variant_id": variant.text_variant_id,
+        "structure_variant_id": variant.structure_variant_id,
+        "bgm_start_offset": round(float(variant.bgm_start_offset or 0.0), 3),
+        "bgm_offset_bucket": variant.bgm_offset_bucket,
     }
 
 
@@ -298,20 +353,41 @@ def _compare_plan_features(candidate: dict[str, Any], history: dict[str, Any], *
         reasons.append("signature_exact")
         text_score = max(text_score, 1.0)
         structure_score = max(structure_score, 1.0)
+    candidate_visual_key = str(candidate.get("visual_plan_key") or "").strip()
+    history_visual_key = str(history.get("visual_plan_key") or "").strip()
+    same_visual_key = bool(candidate_visual_key and history_visual_key and candidate_visual_key == history_visual_key)
+    if same_visual_key:
+        reasons.append("visual_plan_key_reuse")
+        visual_score = max(visual_score, 0.90)
     if candidate.get("first_clip_id") and candidate.get("first_clip_id") == history.get("first_clip_id"):
-        reasons.append("same_hook_clip")
-        visual_score = max(visual_score, 0.92)
+        if same_visual_key or not (candidate_visual_key and history_visual_key):
+            reasons.append("same_hook_clip")
+            visual_score = max(visual_score, 0.92)
+        else:
+            reasons.append("hook_offset_shifted")
+            visual_score = max(visual_score, 0.64)
     if candidate.get("first_frame_hash") and history.get("first_frame_hash"):
         visual_score = max(visual_score, hamming_similarity(str(candidate["first_frame_hash"]), str(history["first_frame_hash"])))
     if candidate.get("cover_frame_hash") and history.get("cover_frame_hash"):
         visual_score = max(visual_score, hamming_similarity(str(candidate["cover_frame_hash"]), str(history["cover_frame_hash"])))
     if candidate.get("content_fingerprint") and history.get("content_fingerprint"):
         visual_score = max(visual_score, hamming_similarity(str(candidate["content_fingerprint"]), str(history["content_fingerprint"])))
-    if candidate.get("bgm_name") and candidate.get("bgm_name") == history.get("bgm_name"):
-        audio_score = max(audio_score, 0.55)
-        reasons.append("same_bgm")
-    if candidate.get("bgm_fingerprint") and history.get("bgm_fingerprint"):
+    if candidate.get("structure_variant_id") and candidate.get("structure_variant_id") == history.get("structure_variant_id"):
+        reasons.append("same_structure_variant")
+        structure_score = max(structure_score, 0.80)
+    same_bgm_name = bool(candidate.get("bgm_name") and candidate.get("bgm_name") == history.get("bgm_name"))
+    same_bgm_offset_bucket = bool(candidate.get("bgm_offset_bucket") and candidate.get("bgm_offset_bucket") == history.get("bgm_offset_bucket"))
+    if same_bgm_name:
+        if same_bgm_offset_bucket:
+            audio_score = max(audio_score, 0.78)
+            reasons.append("same_bgm")
+        else:
+            audio_score = max(audio_score, 0.25)
+            reasons.append("same_bgm_offset_shifted")
+    if candidate.get("bgm_fingerprint") and history.get("bgm_fingerprint") and not (same_bgm_name and not same_bgm_offset_bucket):
         audio_score = max(audio_score, hamming_similarity(str(candidate["bgm_fingerprint"]), str(history["bgm_fingerprint"])))
+    if visual_score >= 0.90:
+        reasons.append("visual_near")
     if text_score >= 0.96:
         reasons.append("text_near")
     if structure_score >= 0.86:
@@ -364,6 +440,8 @@ def _write_manifest_dedupe_fields(asset: RenderedAsset, bgm_path: Path | None) -
     payload["account_pool_id"] = asset.variant.account_pool_id
     payload["cover_frame_offset"] = asset.variant.cover_frame_offset
     payload["bgm_name"] = bgm_path.name if bgm_path is not None else ""
+    payload["bgm_start_offset"] = round(float(asset.variant.bgm_start_offset or 0.0), 3)
+    payload["bgm_offset_bucket"] = asset.variant.bgm_offset_bucket
     payload["dedupe"] = dedupe_payload_for_variant(asset.variant)
     try:
         asset.manifest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -387,6 +465,8 @@ def _fingerprint_bits(fingerprint: str) -> str:
 
 def _fingerprint_digest(fingerprint: str) -> str:
     parts = str(fingerprint or "").split(":")
+    if len(parts) >= 3:
+        return parts[1] if set(parts[-1]) <= {"0", "1"} else parts[-1]
     if len(parts) >= 2:
         return parts[1]
     return str(fingerprint or "")

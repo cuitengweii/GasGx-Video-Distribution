@@ -21,13 +21,29 @@ let lastJobSnapshot = null;
 let visualDropdownCloseBound = false;
 let videoTemplateThumbScaleBound = false;
 
+const narrativeTemplateNameMap = {
+  quick_showcase: "快切展示",
+  faq_explainer: "FAQ 教程",
+  contrast_compare: "反差对比",
+  step_list: "清单步骤",
+  voiceover_broll: "口播挂画面",
+};
+
+const narrativeAccountPoolNameMap = {
+  result_showcase: "成果展示",
+  tutorial_faq: "教程答疑",
+  contrast: "反差对比",
+  howto_steps: "步骤清单",
+  onsite_voice: "现场口播",
+};
+
 const jobStepLabels = [
   ["queued", "任务提交", 0, ["queued"]],
   ["ingest_scan", "扫描素材", 5, ["ingestion"]],
   ["ingestion", "整理素材", 12, ["ingestion"]],
   ["hud", "准备数据字幕", 20, ["hud"]],
   ["beat", "分析音乐节奏", 30, ["beat"]],
-  ["planning", "规划混剪方案", 42, ["planning"]],
+  ["planning", "规划去重方案", 42, ["planning"]],
   ["render_start", "启动渲染", 45, ["render"]],
   ["render", "生成视频", 56, ["render"]],
   ["render_wait", "等待导出", 82, ["render"]],
@@ -40,7 +56,7 @@ const jobMessages = {
   ingestion: "正在读取并整理素材视频，请确认素材目录里有视频文件。",
   hud: "正在准备视频里的字幕背板数据和文字信息。",
   beat: "正在分析背景音乐节奏，用于卡点混剪。",
-  planning: "正在规划每条视频的素材组合，避免重复。",
+  planning: "正在规划每条视频的叙事骨架、素材组合和低成本去重。",
   render: "正在调用 FFmpeg 生成视频，这一步耗时最长。",
   finalizing: "正在整理导出的 MP4、封面和文案文件。",
   complete: "生成完成，可以到输出目录查看文件。",
@@ -52,7 +68,7 @@ const backendJobMessageMap = {
   "Collecting and normalizing source clips": "正在扫描并整理素材视频，按分类目录读取可用片段。",
   "Preparing GasGx data HUD": "正在准备视频里的字幕背板数据、标题和字幕字段。",
   "Analyzing BGM beat grid": "正在分析背景音乐节拍网格，用于后续卡点混剪。",
-  "Planning de-duplicated video variants": "正在规划每条视频的素材组合，避免重复使用同一片段。",
+  "Planning de-duplicated video variants": "正在规划每条视频的叙事骨架和去重策略，命中重复会自动重剪。",
   "Finalizing preview assets and manifests": "正在整理导出的 MP4、预览文件和清单。",
 };
 
@@ -309,6 +325,7 @@ async function init() {
   renderSidebar(data);
   renderSource(data);
   renderComposition(data);
+  renderNarrativeTemplates(data);
   renderTextSettings();
   renderVideoTemplateEditor();
   renderCoverSelector();
@@ -326,8 +343,8 @@ function renderSidebar(data) {
   $("outputCount").value = state.output_count || 3;
   $("maxWorkers").value = state.max_workers || 3;
   $("maxWorkersValue").textContent = `${$("maxWorkers").value}`;
-  $("videoDurationMin").value = state.video_duration_min || settings.video_duration_min || 8;
-  $("videoDurationMax").value = state.video_duration_max || settings.video_duration_max || 12;
+  $("videoDurationMin").value = state.video_duration_min || settings.video_duration_min || 9;
+  $("videoDurationMax").value = state.video_duration_max || settings.video_duration_max || 15;
   syncNumber("outputCount");
   syncNumber("videoDurationMin");
   syncNumber("videoDurationMax");
@@ -340,7 +357,7 @@ function renderSidebar(data) {
   $("outputOptions").value = (state.output_options || ["mp4"])[0] || "mp4";
   $("outputOptions").onchange = scheduleStateSave;
   $("openOutput").onclick = () => openFolder(outputRootPath());
-  renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 60), scheduleStateSave);
+  renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 30), scheduleStateSave);
   renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "快速首出"], ["quality", "标准质量"]], String(state.render_speed_mode || "quality"), scheduleStateSave);
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
@@ -437,6 +454,40 @@ function renderSource(data) {
   });
   updateRecentLimitVisibility(categories);
   updateSourceMode();
+  renderNarrativeTemplates(data);
+}
+
+function renderNarrativeTemplates(data = { settings }) {
+  const containers = [...document.querySelectorAll("[data-narrative-templates]")];
+  if (!containers.length) return;
+  const templates = narrativeTemplates();
+  const categories = materialCategories(data);
+  const categoryNames = Object.fromEntries(categories.map((category) => [category.id, category.label || category.id]));
+  let html = "";
+  if (!templates.length) {
+    html = `<div class="narrative-empty">当前未配置叙事骨架，将沿用生成结构顺序。</div>`;
+    containers.forEach((container) => { container.innerHTML = html; });
+    return;
+  }
+  html = templates.map((template, index) => {
+    const sequence = narrativeTemplateSequence(template);
+    const steps = sequence.length
+      ? sequence.map((row) => {
+          const categoryId = String(row.category_id || "").trim();
+          const name = categoryNames[categoryId] || categoryId;
+          return `<span title="${escapeHtml(categoryId)}">${escapeHtml(name)}<b>${Number(row.duration || 0).toFixed(1)}s</b></span>`;
+        }).join("")
+      : `<span>沿用生成结构</span>`;
+    return `<article class="narrative-template-card" data-narrative-template="${escapeHtml(template.id)}">
+      <div class="narrative-template-head">
+        <strong>${index + 1}. ${escapeHtml(narrativeTemplateDisplayName(template))}</strong>
+        <code title="${escapeHtml(template.id)}">模板 ${index + 1}</code>
+      </div>
+      <div class="narrative-template-path">${steps}</div>
+      <small>账号池：${escapeHtml(narrativeAccountPoolDisplayName(template.account_pool_id || template.id))}</small>
+    </article>`;
+  }).join("");
+  containers.forEach((container) => { container.innerHTML = html; });
 }
 
 function compositionRowsByCategory(data, categories) {
@@ -2201,7 +2252,9 @@ async function pollJob(jobId) {
   if (job.status === "complete") {
     stopJobProgressTicker();
     lastPreviewPath = job.assets?.[0]?.video_path || "";
-    updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。点击下方按钮可预览第一条视频在视频号里的展示效果。`});
+    const dedupeSummary = summarizeDedupeStatuses(job.assets || []);
+    const dedupeText = dedupeSummary ? ` 去重：${dedupeSummary}。` : " ";
+    updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。${dedupeText}点击下方按钮可预览第一条视频在视频号里的展示效果。`});
     showGenerationWaitOverlay(false);
     const button = $("generateBtn");
     if (lastPreviewPath) {
@@ -2642,7 +2695,7 @@ function generationConfirmHtml(statePayload) {
       <ol>
         <li>按启用分类读取素材目录，每类最多取“最近素材”数量对应的新文件。</li>
         <li>将候选素材归一化为 1080:1920、${statePayload.target_fps}fps 的短视频片段库。</li>
-        <li>按“生成结构”的分类顺序和片段秒数，为每条视频抽取不同素材片段。</li>
+        <li>按叙事骨架、分类顺序和片段秒数，为每条视频抽取不同素材片段。</li>
         <li>分析本地背景音乐节拍，把片段切换点尽量对齐节奏窗口。</li>
         <li>按当前模板、字幕背板文本和片尾文案并行渲染，导出到最终视频目录。</li>
       </ol>
@@ -2657,9 +2710,9 @@ function collectState() {
   const endingCoverTemplate = activeEndingCoverTemplateSnapshot(endingCopyText);
   return {
     output_count: Number($("outputCount").value), max_workers: Number($("maxWorkers").value),
-    video_duration_min: Number($("videoDurationMin").value || settings.video_duration_min || 8),
-    video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 12),
-    target_fps: Number(radioValue("target_fps") || settings.target_fps || 60),
+    video_duration_min: Number($("videoDurationMin").value || settings.video_duration_min || 9),
+    video_duration_max: Number($("videoDurationMax").value || settings.video_duration_max || 15),
+    target_fps: Number(radioValue("target_fps") || settings.target_fps || 30),
     render_speed_mode: String(radioValue("render_speed_mode") || state.render_speed_mode || "quality"),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: state.copy_language || settings.copy_language || "zh",
@@ -2747,6 +2800,44 @@ function materialCategories(data = { settings }) {
     { id: "category_B", label: "B 类" },
     { id: "category_C", label: "C 类" },
   ];
+}
+
+function narrativeTemplates() {
+  return (Array.isArray(settings.narrative_templates) ? settings.narrative_templates : [])
+    .filter((template) => template && typeof template === "object" && String(template.id || "").trim())
+    .map((template) => ({
+      id: String(template.id || "").trim(),
+      name: String(template.name || template.id || "").trim(),
+      account_pool_id: String(template.account_pool_id || template.id || "").trim(),
+      composition_sequence: narrativeTemplateSequence(template),
+    }));
+}
+
+function narrativeTemplateSequence(template) {
+  return (Array.isArray(template?.composition_sequence) ? template.composition_sequence : [])
+    .map((row) => ({
+      category_id: String(row.category_id || "").trim(),
+      duration: Number(row.duration || 0),
+    }))
+    .filter((row) => row.category_id && row.duration > 0);
+}
+
+function narrativeTemplateDisplayName(template) {
+  const id = typeof template === "object" ? String(template.id || "").trim() : String(template || "").trim();
+  const rawName = typeof template === "object" ? String(template.name || "").trim() : "";
+  return narrativeTemplateNameMap[id] || rawName || id || "默认结构";
+}
+
+function narrativeAccountPoolDisplayName(poolId) {
+  const id = String(poolId || "").trim();
+  return narrativeAccountPoolNameMap[id] || narrativeTemplateNameMap[id] || id || "默认账号池";
+}
+
+function narrativeTemplateLabel(templateId) {
+  const id = String(templateId || "").trim();
+  if (!id) return "默认结构";
+  const template = narrativeTemplates().find((item) => item.id === id);
+  return template ? narrativeTemplateDisplayName(template) : narrativeTemplateDisplayName(id);
 }
 
 function shortPath(value) {
@@ -2917,8 +3008,177 @@ function updateJobStatus(job) {
     const active = stageKeys.includes(stage) && percent >= stepPercent && !done || key === stage || (stage === "render" && stageKeys.includes("render") && percent >= stepPercent && percent < 97);
     return `<li class="${done ? "done" : ""} ${active ? "active" : ""}"><span></span>${label}</li>`;
   }).join("");
+  renderDedupeReport(job);
   updateGenerationWaitOverlay(job, percent);
 }
+
+function renderDedupeReport(job) {
+  const box = $("dedupeReport");
+  if (!box) return;
+  const assets = Array.isArray(job.assets) ? job.assets : [];
+  if (!assets.length) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  const rows = assets.map((asset, index) => {
+    const dedupe = assetDedupe(asset);
+    const report = dedupe.report && typeof dedupe.report === "object" ? dedupe.report : {};
+    const reasons = (Array.isArray(report.reasons) && report.reasons.length) ? report.reasons : ["low_cost_dedupe_passed"];
+    const status = String(dedupe.status || "pass");
+    const retryCount = Number(dedupe.retry_count || 0);
+    const displayStatus = dedupeDisplayStatus(status, reasons, report);
+    const narrativeId = String(dedupe.narrative_template_id || asset.narrative_template_id || "").trim();
+    const narrativeName = narrativeTemplateLabel(narrativeId);
+    const avoidanceSummary = dedupeAvoidanceSummary(reasons, dedupe);
+    const scores = [
+      ["视觉", report.visual_score],
+      ["音频", report.audio_score],
+      ["文本", report.text_score],
+      ["结构", report.structure_score],
+    ].map(([label, value]) => `<span class="dedupe-score ${scoreRiskClass(value)}">${label} ${scorePercent(value)}</span>`).join("");
+    const reasonChips = reasons.map((reason) =>
+      `<span class="dedupe-reason ${reasonRiskClass(reason)}">${escapeHtml(dedupeReasonLabel(reason))}</span>`
+    ).join("");
+    return `<article class="dedupe-report-row">
+      <div class="dedupe-report-main">
+        <span class="dedupe-status ${escapeHtml(displayStatus)}">${escapeHtml(dedupeStatusLabel(displayStatus, retryCount))}</span>
+        <strong>${escapeHtml(String(asset.name || asset.video_path || `视频 ${index + 1}`).split(/[\\/]/).pop())}</strong>
+      </div>
+      <p class="dedupe-conclusion">${escapeHtml(dedupeConclusion(displayStatus, reasons, retryCount))}</p>
+      <div class="dedupe-narrative"><span>骨架</span><b title="${escapeHtml(narrativeId)}">${escapeHtml(narrativeName)}</b></div>
+      <div class="dedupe-avoidance"><span>避重来源</span><b>${escapeHtml(avoidanceSummary)}</b></div>
+      <div class="dedupe-scores">${scores}</div>
+      <div class="dedupe-reasons">${reasonChips}</div>
+      <div class="dedupe-suggestion">${escapeHtml(dedupeSuggestion(reasons, report))}</div>
+    </article>`;
+  }).join("");
+  box.innerHTML = `<div class="dedupe-report-head">
+    <strong>去重报告</strong>
+    <span>${escapeHtml(summarizeDedupeStatuses(assets) || "等待更多结果")}</span>
+  </div>${rows}`;
+  box.classList.remove("hidden");
+}
+
+function assetDedupe(asset) {
+  return asset?.dedupe && typeof asset.dedupe === "object" ? asset.dedupe : {};
+}
+
+function summarizeDedupeStatuses(assets) {
+  const counts = {};
+  (Array.isArray(assets) ? assets : []).forEach((asset) => {
+    const dedupe = assetDedupe(asset);
+    const report = dedupe.report && typeof dedupe.report === "object" ? dedupe.report : {};
+    const reasons = (Array.isArray(report.reasons) && report.reasons.length) ? report.reasons : ["low_cost_dedupe_passed"];
+    const status = dedupeDisplayStatus(String(dedupe.status || "pass"), reasons, report);
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  return Object.entries(counts)
+    .map(([status, count]) => `${dedupeStatusLabel(status)} ${count}`)
+    .join("，");
+}
+
+function dedupeStatusLabel(status, retryCount = 0) {
+  if (status === "recut_passed" && retryCount > 0) return `重剪 ${retryCount} 次通过`;
+  return ({
+    pass: "通过",
+    suggest_recut: "建议重剪",
+    recut_passed: "重剪后通过",
+    manual_review: "人工复核",
+    retry: "待重剪",
+    borderline: "边界重复",
+  })[status] || status || "通过";
+}
+
+function dedupeConclusion(status, reasons, retryCount = 0) {
+  if (status === "manual_review") return "需复核：重复风险较高，请人工确认。";
+  if (reasons.includes("preflight_limited_pool")) return "前置避重已降级：可用素材或文本候选不足，系统选择了当前最低风险版本。";
+  if (status === "suggest_recut") return "建议重剪：单项相似度偏高，直接发布容易撞首屏或文案。";
+  if (status === "recut_passed") return retryCount > 0 ? `通过：系统已自动重剪 ${retryCount} 次。` : "通过：系统已自动重剪。";
+  if (reasons.includes("same_hook_clip")) return "注意：Hook 镜头相同，建议关注首屏差异。";
+  if (reasons.includes("text_near") || reasons.includes("structure_near")) return "注意：文本或结构接近，当前仍在阈值内。";
+  return "通过：未发现明显重复。";
+}
+
+function dedupeDisplayStatus(status, reasons, report = {}) {
+  if (status !== "pass") return status;
+  const visual = Number(report.visual_score || 0);
+  const text = Number(report.text_score || 0);
+  const structure = Number(report.structure_score || 0);
+  const riskyReason = reasons.some((reason) => ["same_hook_clip", "visual_near", "text_near", "structure_near"].includes(reason));
+  return riskyReason || visual >= 0.9 || text >= 0.96 || structure >= 0.86 ? "suggest_recut" : "pass";
+}
+
+function dedupeReasonLabel(reason) {
+  return ({
+    low_cost_dedupe_passed: "低成本检测通过",
+    signature_exact: "组合签名重复",
+    segment_exact: "片段重复",
+    same_hook_clip: "Hook 镜头相同",
+    hook_offset_shifted: "Hook 已错开起点",
+    visual_plan_key_reuse: "首屏组合重复",
+    visual_near: "画面高度相似",
+    same_bgm: "BGM 相同",
+    same_bgm_offset_shifted: "BGM 已错开起点",
+    text_near: "标题/字幕近似",
+    structure_near: "叙事结构近似",
+    same_structure_variant: "结构变体相同",
+    visual_preflight_ok: "视觉前置避重",
+    visual_preflight_avoided: "视觉候选已避让",
+    ai_text_variant: "AI 文本变体",
+    template_text_variant: "模板文本变体",
+    text_preflight_avoided: "文本候选已避让",
+    structure_preflight_ok: "结构前置避重",
+    structure_preflight_avoided: "结构候选已避让",
+    bgm_offset_used: "BGM 随机切片",
+    preflight_limited_pool: "候选池不足",
+  })[reason] || String(reason || "");
+}
+
+function dedupeAvoidanceSummary(reasons, dedupe = {}) {
+  const items = [];
+  if (reasons.includes("visual_preflight_ok") || reasons.includes("visual_preflight_avoided") || dedupe.visual_plan_key) items.push("首屏调度");
+  if (reasons.includes("ai_text_variant")) items.push("AI 文本");
+  if (reasons.includes("template_text_variant")) items.push("模板文本");
+  if (reasons.includes("structure_preflight_ok") || reasons.includes("structure_preflight_avoided") || dedupe.structure_variant_id) items.push("结构轮换");
+  if (reasons.includes("bgm_offset_used") || dedupe.bgm_start_offset > 0) items.push("BGM 切片");
+  return items.length ? Array.from(new Set(items)).join(" / ") : "常规去重";
+}
+
+function dedupeSuggestion(reasons, report = {}) {
+  const visual = Number(report.visual_score || 0);
+  const text = Number(report.text_score || 0);
+  const structure = Number(report.structure_score || 0);
+  if (reasons.includes("signature_exact") || reasons.includes("segment_exact")) return "解决方案：丢弃该候选，重新抽取镜头组合。";
+  if (reasons.includes("preflight_limited_pool")) return "解决方案：补充更多 Hook 素材、AI 文本候选或 BGM 长音频，降低候选池不足带来的重复风险。";
+  if (reasons.includes("visual_preflight_avoided")) return "解决方案：Hook 候选不足，建议补充同类首屏素材或增加可用起点标注。";
+  if (reasons.includes("text_preflight_avoided")) return "解决方案：AI 文本候选不足，建议增加素材标签或扩大 Spark 文案生成数量。";
+  if (reasons.includes("structure_preflight_avoided")) return "解决方案：叙事结构候选不足，建议增加分类素材或扩展骨架变体。";
+  if (reasons.includes("same_hook_clip") || reasons.includes("visual_near") || visual >= 0.9) return "解决方案：换 Hook 镜头，或把首 1 秒切到不同分类/不同起点，再换封面帧。";
+  if (reasons.includes("text_near") || text >= 0.96) return "解决方案：重写字幕第一句和标题，避免同一句开头连续出现。";
+  if (reasons.includes("structure_near") || structure >= 0.86) return "解决方案：换叙事骨架或打乱镜头顺序。";
+  if (reasons.includes("same_bgm")) return "解决方案：换 BGM，或至少错开音乐起点。";
+  return "解决方案：无需处理，可进入发布池。";
+}
+
+function scoreRiskClass(value) {
+  const number = Number(value || 0);
+  if (number >= 0.8) return "risk-high";
+  if (number >= 0.5) return "risk-mid";
+  return "risk-low";
+}
+
+function reasonRiskClass(reason) {
+  if (["signature_exact", "segment_exact"].includes(reason)) return "risk-high";
+  if (["same_hook_clip", "visual_near", "text_near", "structure_near", "same_bgm", "visual_preflight_avoided", "text_preflight_avoided", "structure_preflight_avoided", "preflight_limited_pool"].includes(reason)) return "risk-mid";
+  return "risk-low";
+}
+
+function scorePercent(value) {
+  const number = Number(value || 0);
+  return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`;
+}
+
 function showGenerationWaitOverlay(visible, job = {}) {
   const overlay = $("generationWaitOverlay");
   if (!overlay) return;

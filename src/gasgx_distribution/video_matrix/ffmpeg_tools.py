@@ -149,6 +149,7 @@ def concat_video(
     bgm_path: Path | None = None,
     speed_mode: str = "quality",
     threads: int | None = None,
+    bgm_start_offset: float = 0.0,
 ) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -160,7 +161,11 @@ def concat_video(
     for clip in inputs:
         command.extend(["-i", str(clip)])
     if bgm_path is not None:
-        command.extend(["-stream_loop", "-1", "-i", str(bgm_path)])
+        command.extend(["-stream_loop", "-1"])
+        offset = max(0.0, float(bgm_start_offset or 0.0))
+        if offset:
+            command.extend(["-ss", f"{offset:.3f}"])
+        command.extend(["-i", str(bgm_path)])
     command.extend(
         [
             "-filter_complex_script",

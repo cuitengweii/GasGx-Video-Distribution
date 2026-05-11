@@ -1071,7 +1071,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "targetFpsGroup" in html
     assert "video_duration_max" in app
     assert 'renderRadio("targetFpsGroup", "target_fps"' in app
-    assert 'target_fps: Number(radioValue("target_fps") || settings.target_fps || 60)' in app
+    assert 'target_fps: Number(radioValue("target_fps") || settings.target_fps || 30)' in app
     assert "template_config: activeVideoTemplateSnapshot()" in app
     assert "cover_template_config: activeCoverTemplateSnapshot()" in app
     assert "ending_cover_template: endingCoverTemplate" in app
@@ -1086,6 +1086,9 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "background: var(--green)" in css
     assert "composition-rows" in css
     assert "composition-row" in css
+    assert 'id="dedupeReport"' in html
+    assert "function renderDedupeReport" in app
+    assert ".dedupe-report" in css
 
 
 def test_video_matrix_partial_center_background_syncs_text_box() -> None:
@@ -1312,3 +1315,45 @@ def test_video_matrix_preview_matches_wechat_phone_reference_shell() -> None:
     assert "event.stopPropagation()" in preview_html
     assert "rgba(0,0,0,0.4) 0%" in preview_html
     assert "self-contained" in preview_css
+
+
+def test_video_matrix_frontend_has_dedupe_report_panel() -> None:
+    html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix.html").read_text(encoding="utf-8")
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_app.js").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_styles.css").read_text(encoding="utf-8")
+
+    assert 'id="narrativeTemplates"' in html
+    assert "data-narrative-templates" in html
+    assert "preflight-dedupe-20260511" in html
+    assert "叙事骨架轮换" in html
+    assert "function renderNarrativeTemplates" in app
+    assert 'document.querySelectorAll("[data-narrative-templates]")' in app
+    assert "function narrativeTemplateLabel" in app
+    assert "quick_showcase: \"快切展示\"" in app
+    assert "result_showcase: \"成果展示\"" in app
+    assert 'id="dedupeReport"' in html
+    assert "function renderDedupeReport" in app
+    assert "summarizeDedupeStatuses" in app
+    assert "dedupe.narrative_template_id" in app
+    assert "function scoreRiskClass" in app
+    assert "function reasonRiskClass" in app
+    assert "function dedupeConclusion" in app
+    assert "function dedupeSuggestion" in app
+    assert "function dedupeDisplayStatus" in app
+    assert "function dedupeAvoidanceSummary" in app
+    assert "建议重剪" in app
+    assert "换 Hook 镜头" in app
+    assert "避重来源" in app
+    assert "AI 文本变体" in app
+    assert "BGM 随机切片" in app
+    assert "重剪后通过" in app
+    assert "通过：未发现明显重复" in app
+    assert ".narrative-template-card" in css
+    assert ".narrative-template-panel" in css
+    assert "grid-template-columns: minmax(0, 1fr)" in css
+    assert ".dedupe-score.risk-mid" in css
+    assert ".dedupe-reason.risk-high" in css
+    assert ".dedupe-conclusion" in css
+    assert ".dedupe-suggestion" in css
+    assert ".dedupe-avoidance" in css
+    assert ".dedupe-report" in css

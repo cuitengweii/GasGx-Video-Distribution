@@ -34,7 +34,7 @@
         applyEmbeddedShellTheme(event.data.theme);
       });
     </script>
-    <link rel="stylesheet" href="/static/video_matrix_styles.css" />
+    <link rel="stylesheet" href="/static/video_matrix_styles.css?v=preflight-dedupe-20260511" />
   </head>
   <body>
     <aside class="sidebar">
@@ -111,6 +111,12 @@
           <ol id="jobSteps" class="job-steps"></ol>
           <p id="jobWarning" class="job-warning">警示：视频生成期间不可以关闭页面，否则会影响视频生成。</p>
           <p id="jobMessage">点击生成后，这里会显示每一步进度。</p>
+          <div id="dedupeReport" class="dedupe-report hidden"></div>
+        </div>
+        <div class="narrative-template-panel">
+          <div class="subsection-title"><span>NARRATIVE</span><b>叙事骨架轮换</b></div>
+          <div class="narrative-template-note">本批视频会按以下 5 类结构轮换生成。</div>
+          <div data-narrative-templates class="narrative-template-list compact"></div>
         </div>
         <button id="generateBtn" class="primary" type="button">立即生成</button>
       </section>
@@ -150,6 +156,10 @@
               <p class="muted">按顺序选择素材分类和片段秒数，算法会继续按背景音乐节拍对齐。</p>
               <div id="compositionRows" class="composition-rows"></div>
               <button id="addCompositionRow" class="secondary" type="button">添加片段</button>
+            </div>
+            <div class="source-config-column narrative-template-group">
+              <div class="subsection-title"><span>NARRATIVE</span><b>叙事骨架轮换</b></div>
+              <div id="narrativeTemplates" data-narrative-templates class="narrative-template-list"></div>
             </div>
           </div>
         </div>
@@ -254,6 +264,6 @@
         <b id="generationWaitPercent">0%</b>
       </div>
     </div>
-    <script src="/static/video_matrix_app.js"></script>
+    <script src="/static/video_matrix_app.js?v=preflight-dedupe-20260511"></script>
   </body>
 </html>

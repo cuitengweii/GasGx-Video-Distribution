@@ -113,7 +113,14 @@ def test_video_matrix_api_state_and_preview() -> None:
     assert "category_H" in payload["category_counts"]
     assert payload["settings"]["composition_sequence"][0]["category_id"] == "category_A"
     assert payload["settings"]["composition_sequence"][1]["duration"] == 3.4
-    assert payload["settings"]["video_duration_max"] == 12.0
+    assert payload["settings"]["video_duration_min"] == 9.0
+    assert payload["settings"]["video_duration_max"] == 15.0
+    assert payload["settings"]["target_fps"] == 30
+    assert payload["settings"]["daily_output_goal"] == 50
+    assert payload["settings"]["narrative_templates"]
+    assert payload["settings"]["dedupe_policy"]["max_mutation_retries"] == 1
+    assert payload["settings"]["dedupe_policy"]["preflight_avoidance_enabled"] is True
+    assert payload["settings"]["dedupe_policy"]["bgm_random_offset_enabled"] is True
     assert payload["settings"]["beat_detection"]["fallback_spacing"] == 0.48
     assert payload["settings"]["max_variant_attempts"] == 20
     assert payload["settings"]["variant_history_enabled"] is True
@@ -481,6 +488,37 @@ def test_video_matrix_generation_history_is_saved_after_success(monkeypatch, tmp
     assert fake.tables["video_matrix_generation_assets"][0]["signature"] == "sig-1"
     assert fake.tables["video_matrix_generation_segments"][0]["clip_id"] == "clip-1"
     assert captured["recent_clip_ids"] == set()
+
+
+def test_video_matrix_generation_history_is_saved_and_loaded_locally(monkeypatch, tmp_path) -> None:
+    history_path = tmp_path / "generation_history.json"
+    monkeypatch.setattr(video_matrix_api.service, "brand_database_backend", lambda: "local")
+    monkeypatch.setattr(video_matrix_api, "GENERATION_HISTORY_PATH", history_path)
+
+    video_matrix_api._save_generation_history(
+        "local-history-job",
+        {
+            "output_count": 1,
+            "output_options": ["mp4"],
+            "copy_language": "zh",
+            "source_mode": "Category folders",
+            "composition_sequence": [{"category_id": "category_A", "duration": 1.0}],
+        },
+        tmp_path / "fresh.mp3",
+        [_fake_rendered_asset()],
+        video_matrix_api._settings(),
+        "template-a",
+        "cover-a",
+    )
+
+    history = video_matrix_api._load_generation_history(5000)
+
+    assert history["signatures"] == {"sig-1"}
+    assert history["clip_ids"] == {"clip-1"}
+    assert history["segment_keys"] == {"clip-1:0.5:1.0"}
+    assert history["bgm_names"] == {"fresh.mp3"}
+    assert history["features"][0]["bgm_name"] == "fresh.mp3"
+    assert json.loads(history_path.read_text(encoding="utf-8"))[0]["assets"][0]["dedupe"]["status"] == "pass"
 
 
 def test_video_matrix_generation_failure_does_not_write_history(monkeypatch, tmp_path) -> None:
