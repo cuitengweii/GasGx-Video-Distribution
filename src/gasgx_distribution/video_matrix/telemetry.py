@@ -296,6 +296,7 @@ def _asset_summary(asset: Any) -> dict[str, Any]:
     return {
         "sequence_number": getattr(variant, "sequence_number", None),
         "signature": getattr(variant, "signature", ""),
+        "dedupe_status": getattr(getattr(variant, "dedupe_result", None), "status", ""),
         "video_path": str(video_path) if video_path else "",
         "video_bytes": size,
         "cover_path": str(getattr(asset, "cover_path", "") or ""),

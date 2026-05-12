@@ -26,7 +26,8 @@ runtime = [
   "browser-cookie3"
 ]
 dev = [
-  "pytest"
+  "pytest",
+  "httpx"
 ]
 
 [project.scripts]

@@ -34,7 +34,7 @@
         applyEmbeddedShellTheme(event.data.theme);
       });
     </script>
-    <link rel="stylesheet" href="/static/video_matrix_styles.css?v=preflight-dedupe-20260511" />
+    <link rel="stylesheet" href="/static/video_matrix_styles.css?v=dedupe-scroll-20260512" />
   </head>
   <body>
     <aside class="sidebar">
@@ -102,6 +102,7 @@
         <input id="subhead" type="hidden" />
         <input id="followText" type="hidden" />
         <input id="hudText" type="hidden" />
+        <button id="generateBtn" class="primary" type="button">立即生成</button>
         <div id="jobLog" class="job-status-card">
           <div class="job-status-head">
             <strong id="jobStatusTitle">等待生成</strong>
@@ -118,7 +119,6 @@
           <div class="narrative-template-note">本批视频会按以下 5 类结构轮换生成。</div>
           <div data-narrative-templates class="narrative-template-list compact"></div>
         </div>
-        <button id="generateBtn" class="primary" type="button">立即生成</button>
       </section>
 
       <section class="source-panel">
@@ -223,38 +223,6 @@
         </section>
       </section>
     </main>
-    <div id="generationConfirmModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="generationConfirmTitle">
-      <div class="confirm-panel">
-        <div class="confirm-head">
-          <div>
-            <span>FINAL CHECK</span>
-            <strong id="generationConfirmTitle">确认生成配置</strong>
-          </div>
-          <button id="confirmClose" class="icon-btn" type="button" aria-label="关闭">×</button>
-        </div>
-        <div id="generationConfirmBody" class="confirm-body"></div>
-        <div class="confirm-actions">
-          <button id="confirmCancel" class="secondary" type="button">取消</button>
-          <button id="confirmSubmit" class="primary" type="button">确认生成</button>
-        </div>
-      </div>
-    </div>
-    <div id="generationPreflightModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="generationPreflightTitle">
-      <div class="confirm-panel preflight-panel">
-        <div class="confirm-head">
-          <div>
-            <span>PREFLIGHT CHECK</span>
-            <strong id="generationPreflightTitle">生成前预检</strong>
-          </div>
-          <button id="preflightClose" class="icon-btn" type="button" aria-label="关闭">×</button>
-        </div>
-        <div id="generationPreflightBody" class="confirm-body preflight-body"></div>
-        <div class="confirm-actions preflight-actions">
-          <button id="preflightCancel" class="secondary" type="button">返回修改</button>
-          <button id="preflightContinue" class="primary" type="button">继续</button>
-        </div>
-      </div>
-    </div>
     <div id="generationWaitOverlay" class="generation-wait-overlay hidden" role="status" aria-live="polite" aria-label="视频生成中，请等待">
       <div class="generation-wait-panel">
         <span class="loading-spinner" aria-hidden="true"></span>
@@ -264,6 +232,6 @@
         <b id="generationWaitPercent">0%</b>
       </div>
     </div>
-    <script src="/static/video_matrix_app.js?v=preflight-dedupe-20260511"></script>
+    <script src="/static/video_matrix_app.js?v=direct-generate-20260512"></script>
   </body>
 </html>

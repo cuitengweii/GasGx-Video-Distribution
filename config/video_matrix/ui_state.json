@@ -86,12 +86,12 @@
   },
   "ending_template_dir": "G:\\GasGx Video Distribution\\runtime\\video_matrix\\ending_template",
   "cover_template_id": "industrial_engine_hook",
-  "video_duration_min": 8,
+  "video_duration_min": 9,
   "composition_customized": false,
   "ending_cover_template_id": "ending_cover_template_02",
   "target_fps": 30,
   "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
-  "video_duration_max": 12,
+  "video_duration_max": 15,
   "ending_template_id": "test_fa2c5c25.mp4",
   "subhead": "Generator sets for onsite Bitcoin and industrial load",
   "source_mode": "Category folders",
@@ -154,7 +154,7 @@
     "singleLogo_color": "#6ad53d",
     "singleTitle_text_align": "right"
   },
-  "output_count": 3,
+  "output_count": 30,
   "template_id": "center_brand",
   "output_options": [
     "mp4"

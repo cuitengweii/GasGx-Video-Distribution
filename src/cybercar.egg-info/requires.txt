@@ -1,0 +1,17 @@
+requests
+python-dotenv
+websocket-client
+pillow
+fastapi
+uvicorn
+pydantic
+python-multipart
+numpy
+librosa
+
+[dev]
+pytest
+
+[runtime]
+DrissionPage
+browser-cookie3

@@ -3090,6 +3090,24 @@ button .loading-spinner,
 .dedupe-report-head {
   justify-content: space-between;
 }
+.dedupe-report-list {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+.dedupe-report-list::-webkit-scrollbar {
+  width: 8px;
+}
+.dedupe-report-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(93, 214, 44, .32);
+}
+.dedupe-report-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, .03);
+}
 .dedupe-report-main {
   justify-content: flex-start;
   min-width: 0;
@@ -3212,6 +3230,10 @@ button .loading-spinner,
   line-height: 1.45;
 }
 @media (max-width: 1280px) {
+  .dedupe-report-list {
+    max-height: 360px;
+  }
+
   .editor-grid,
   .cover-editor,
   .ending-editor {

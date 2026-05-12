@@ -1,0 +1,3 @@
+[console_scripts]
+cybercar = cybercar.cli:main
+gasgx-distribution = gasgx_distribution.cli:main

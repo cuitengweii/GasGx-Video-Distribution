@@ -2215,8 +2215,6 @@ async function generate() {
   button.dataset.mode = "generate";
   try {
     const statePayload = collectState();
-    if (!(await runPreflightChecks(statePayload))) return;
-    if (!(await confirmGeneration(statePayload))) return;
     displayedJobPercent = 0;
     showGenerationWaitOverlay(true, { progress: 0, message: "正在提交生成任务..." });
     button.disabled = true;
@@ -2254,7 +2252,7 @@ async function pollJob(jobId) {
     lastPreviewPath = job.assets?.[0]?.video_path || "";
     const dedupeSummary = summarizeDedupeStatuses(job.assets || []);
     const dedupeText = dedupeSummary ? ` 去重：${dedupeSummary}。` : " ";
-    updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。${dedupeText}点击下方按钮可预览第一条视频在视频号里的展示效果。`});
+    updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。${dedupeText}点击按钮可预览第一条视频在视频号里的展示效果。`});
     showGenerationWaitOverlay(false);
     const button = $("generateBtn");
     if (lastPreviewPath) {
@@ -3021,25 +3019,44 @@ function renderDedupeReport(job) {
     box.innerHTML = "";
     return;
   }
-  const rows = assets.map((asset, index) => {
-    const dedupe = assetDedupe(asset);
-    const report = dedupe.report && typeof dedupe.report === "object" ? dedupe.report : {};
-    const reasons = (Array.isArray(report.reasons) && report.reasons.length) ? report.reasons : ["low_cost_dedupe_passed"];
-    const status = String(dedupe.status || "pass");
-    const retryCount = Number(dedupe.retry_count || 0);
-    const displayStatus = dedupeDisplayStatus(status, reasons, report);
-    const narrativeId = String(dedupe.narrative_template_id || asset.narrative_template_id || "").trim();
-    const narrativeName = narrativeTemplateLabel(narrativeId);
-    const avoidanceSummary = dedupeAvoidanceSummary(reasons, dedupe);
-    const scores = [
-      ["视觉", report.visual_score],
-      ["音频", report.audio_score],
-      ["文本", report.text_score],
-      ["结构", report.structure_score],
-    ].map(([label, value]) => `<span class="dedupe-score ${scoreRiskClass(value)}">${label} ${scorePercent(value)}</span>`).join("");
-    const reasonChips = reasons.map((reason) =>
-      `<span class="dedupe-reason ${reasonRiskClass(reason)}">${escapeHtml(dedupeReasonLabel(reason))}</span>`
-    ).join("");
+  const rows = assets
+    .map((asset, index) => {
+      const dedupe = assetDedupe(asset);
+      const report = dedupe.report && typeof dedupe.report === "object" ? dedupe.report : {};
+      const reasons = (Array.isArray(report.reasons) && report.reasons.length) ? report.reasons : ["low_cost_dedupe_passed"];
+      const status = String(dedupe.status || "pass");
+      const retryCount = Number(dedupe.retry_count || 0);
+      const displayStatus = dedupeDisplayStatus(status, reasons, report);
+      const maxRiskScore = Math.max(
+        Number(report.visual_score || 0),
+        Number(report.audio_score || 0),
+        Number(report.text_score || 0),
+        Number(report.structure_score || 0)
+      );
+      return { asset, index, dedupe, report, reasons, retryCount, displayStatus, maxRiskScore };
+    })
+    .sort((a, b) => {
+      const priorityDiff = dedupePriorityWeight(b.displayStatus) - dedupePriorityWeight(a.displayStatus);
+      if (priorityDiff) return priorityDiff;
+      const retryDiff = b.retryCount - a.retryCount;
+      if (retryDiff) return retryDiff;
+      const riskDiff = b.maxRiskScore - a.maxRiskScore;
+      if (riskDiff) return riskDiff;
+      return a.index - b.index;
+    })
+    .map(({ asset, index, dedupe, report, reasons, retryCount, displayStatus }) => {
+      const narrativeId = String(dedupe.narrative_template_id || asset.narrative_template_id || "").trim();
+      const narrativeName = narrativeTemplateLabel(narrativeId);
+      const avoidanceSummary = dedupeAvoidanceSummary(reasons, dedupe);
+      const scores = [
+        ["视觉", report.visual_score],
+        ["音频", report.audio_score],
+        ["文本", report.text_score],
+        ["结构", report.structure_score],
+      ].map(([label, value]) => `<span class="dedupe-score ${scoreRiskClass(value)}">${label} ${scorePercent(value)}</span>`).join("");
+      const reasonChips = reasons.map((reason) =>
+        `<span class="dedupe-reason ${reasonRiskClass(reason)}">${escapeHtml(dedupeReasonLabel(reason))}</span>`
+      ).join("");
     return `<article class="dedupe-report-row">
       <div class="dedupe-report-main">
         <span class="dedupe-status ${escapeHtml(displayStatus)}">${escapeHtml(dedupeStatusLabel(displayStatus, retryCount))}</span>
@@ -3056,7 +3073,7 @@ function renderDedupeReport(job) {
   box.innerHTML = `<div class="dedupe-report-head">
     <strong>去重报告</strong>
     <span>${escapeHtml(summarizeDedupeStatuses(assets) || "等待更多结果")}</span>
-  </div>${rows}`;
+  </div><div class="dedupe-report-list">${rows}</div>`;
   box.classList.remove("hidden");
 }
 
@@ -3088,6 +3105,17 @@ function dedupeStatusLabel(status, retryCount = 0) {
     retry: "待重剪",
     borderline: "边界重复",
   })[status] || status || "通过";
+}
+
+function dedupePriorityWeight(status) {
+  return ({
+    manual_review: 5,
+    retry: 4,
+    suggest_recut: 3,
+    borderline: 2,
+    recut_passed: 1,
+    pass: 0,
+  })[status] ?? 0;
 }
 
 function dedupeConclusion(status, reasons, retryCount = 0) {

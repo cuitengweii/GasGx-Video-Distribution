@@ -130,6 +130,7 @@ BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_ac
 TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", "5") or 5)
 TERMINAL_QR_EXPIRY_SECONDS = int(os.getenv("GASGX_TERMINAL_QR_EXPIRY_SECONDS", "60") or 60)
 TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS", "4") or 4)
+TERMINAL_FAST_LOGIN_PROBE_TIMEOUT_SECONDS = int(os.getenv("GASGX_TERMINAL_FAST_LOGIN_PROBE_TIMEOUT_SECONDS", "2") or 2)
 TERMINAL_LOGIN_CONFIRM_TEXT = "请扫码，完成后点“我已登录”"
 TERMINAL_LOGIN_READY_TEXT = "已人工确认登录，等待准备发布"
 TERMINAL_PUBLISH_PREPARE_TEXT = "正在准备发布页面，请看浏览器"
@@ -4658,7 +4659,7 @@ def _queue_terminal_draft_task(account_id: int) -> dict[str, Any]:
         raise
 
 
-def _check_terminal_login_status_with_timeout(account_id: int, platform: str) -> dict[str, Any]:
+def _check_terminal_login_status_with_timeout(account_id: int, platform: str, *, timeout_seconds: int | None = None) -> dict[str, Any]:
     holder: dict[str, Any] = {}
 
     def _runner() -> None:
@@ -4667,12 +4668,15 @@ def _check_terminal_login_status_with_timeout(account_id: int, platform: str) ->
         except Exception as exc:
             holder["error"] = exc
 
-    timeout_seconds = max(1, int(TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS or 4))
+    effective_timeout = timeout_seconds
+    if effective_timeout is None:
+        effective_timeout = int(TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS or 4)
+    effective_timeout = max(1, int(effective_timeout))
     thread = Thread(target=_runner, daemon=True)
     thread.start()
-    thread.join(timeout_seconds)
+    thread.join(effective_timeout)
     if thread.is_alive():
-        raise TimeoutError(f"登录检测超时（{timeout_seconds}s）")
+        raise TimeoutError(f"登录检测超时（{effective_timeout}s）")
     if "error" in holder:
         raise holder["error"]
     result = holder.get("result")
@@ -5011,6 +5015,33 @@ def confirm_terminal_login_ready(window_id: int) -> dict[str, Any]:
     if _terminal_run_matches_current(run if isinstance(run, dict) else None, current) and (
         run_status in {"running", "manual_confirm", "success"} or _terminal_run_is_manual_confirmable(run)
     ):
+        return terminal_execution_state()
+    account_id = int(current.get("id") or 0)
+    try:
+        result = _check_terminal_login_status_with_timeout(
+            account_id,
+            "wechat",
+            timeout_seconds=int(TERMINAL_FAST_LOGIN_PROBE_TIMEOUT_SECONDS or 2),
+        )
+    except Exception as exc:
+        _set_terminal_account_error(
+            current,
+            stage="login_probe",
+            title="登录检测失败",
+            message=f"登录检测失败：{str(exc) or '请稍后重试'}",
+        )
+        target["manual_available_at"] = 0
+        state["next_probe_at"] = 0
+        _save_terminal_state(state)
+        return terminal_execution_state()
+    if str(result.get("status") or "").strip().lower() != "ready":
+        _clear_terminal_account_error(current)
+        current["status"] = "waiting_qr"
+        current["status_text"] = TERMINAL_LOGIN_CONFIRM_TEXT
+        current["task_id"] = None
+        target["manual_available_at"] = 0
+        state["next_probe_at"] = 0
+        _save_terminal_state(state)
         return terminal_execution_state()
     _clear_terminal_account_error(current)
     _clear_terminal_qr_cache(int(target.get("id") or 0))

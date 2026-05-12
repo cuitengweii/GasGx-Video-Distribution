@@ -2970,7 +2970,7 @@ def test_terminal_start_login_opens_all_windows_for_current_batch(monkeypatch, t
     assert [item["manual_available_at"] for item in first_state["windows"]] == [0, 0, 0]
 
 
-def test_terminal_confirm_login_ready_marks_account_without_probe(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_confirm_login_ready_marks_account_after_fast_probe(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2998,7 +2998,13 @@ def test_terminal_confirm_login_ready_marks_account_without_probe(monkeypatch, t
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("manual login confirm should not probe login")))
+    probed: list[tuple[int, str]] = []
+
+    def _probe(account_id: int, platform: str) -> dict[str, object]:
+        probed.append((account_id, platform))
+        return {"ok": True, "status": "ready"}
+
+    monkeypatch.setattr(service, "check_login_status", _probe)
 
     service._invalidate_terminal_execution_state_cache()
     result = service.confirm_terminal_login_ready(1)
@@ -3007,6 +3013,80 @@ def test_terminal_confirm_login_ready_marks_account_without_probe(monkeypatch, t
     assert account["status"] == "ready"
     assert account["status_text"] == service.TERMINAL_LOGIN_READY_TEXT
     assert result["windows"][0]["qr_url"] == ""
+    assert probed == [(9, "wechat")]
+
+
+def test_terminal_confirm_login_ready_rejects_when_probe_not_ready(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "accounts": [{"id": 9, "status": "waiting_qr", "status_text": "请扫码", "task_id": None}],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: {"ok": False, "status": "login_required"})
+
+    service._invalidate_terminal_execution_state_cache()
+    result = service.confirm_terminal_login_ready(1)
+
+    account = result["windows"][0]["accounts"][0]
+    assert account["status"] == "waiting_qr"
+    assert account["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
+
+
+def test_terminal_confirm_login_ready_sets_error_on_probe_timeout(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "accounts": [{"id": 9, "status": "waiting_qr", "status_text": "请扫码", "task_id": None}],
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("登录检测超时（2s）")))
+
+    service._invalidate_terminal_execution_state_cache()
+    result = service.confirm_terminal_login_ready(1)
+
+    account = result["windows"][0]["accounts"][0]
+    assert account["status"] == "error"
+    assert account["error_stage"] == "login_probe"
+    assert "登录检测失败" in str(account["status_text"])
 
 
 def test_terminal_start_login_rejects_when_no_executable_accounts(monkeypatch, tmp_path: Path) -> None:

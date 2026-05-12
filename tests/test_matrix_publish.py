@@ -70,6 +70,66 @@ def test_publish_plan_assigns_newest_unused_video_by_account_order(monkeypatch, 
     assert [item.source_video.name for item in plan] == ["newest.mp4", "middle.mp4"]
 
 
+def test_publish_plan_skips_same_account_recent_dedupe_traits(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat"]})
+    base = tmp_path / "runtime" / "materials" / "videos"
+    now = int(time.time())
+    newest = base / "same_bgm.mp4"
+    fresh = base / "fresh_story.mp4"
+    _write_video(newest, now)
+    _write_video(fresh, now - 10)
+    newest.with_name("same_bgm_manifest.json").write_text(
+        json.dumps(
+            {
+                "narrative_template_id": "quick_showcase",
+                "bgm_name": "used.mp3",
+                "dedupe": {"first_frame_hash": "frame-a", "text_signature": "text-a"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    fresh.with_name("fresh_story_manifest.json").write_text(
+        json.dumps(
+            {
+                "narrative_template_id": "faq_explainer",
+                "bgm_name": "fresh.mp3",
+                "dedupe": {"first_frame_hash": "frame-b", "text_signature": "text-b"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "runtime" / "matrix_publish_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "consumed": [
+                    {
+                        "asset_key": "old.mp4",
+                        "account_id": 1,
+                        "platform": "wechat",
+                        "publish_date": time.strftime("%Y-%m-%d", time.localtime(now - 86400)),
+                        "success": True,
+                        "finished_at": now - 86400,
+                        "asset_metadata": {
+                            "first_frame_hash": "frame-a",
+                            "bgm_name": "used.mp3",
+                            "narrative_template_id": "quick_showcase",
+                            "text_signature": "text-a",
+                        },
+                    }
+                ],
+                "runs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = build_publish_plan()
+
+    assert [item.source_video.name for item in plan] == ["fresh_story.mp4"]
+
+
 def test_dry_run_does_not_mark_videos_used(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat"]})

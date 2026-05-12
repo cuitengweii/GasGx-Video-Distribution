@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: cybercar
+Version: 0.1.0
+Summary: Standalone CyberCar automation workspace
+Requires-Python: >=3.11
+Requires-Dist: requests
+Requires-Dist: python-dotenv
+Requires-Dist: websocket-client
+Requires-Dist: pillow
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: pydantic
+Requires-Dist: python-multipart
+Requires-Dist: numpy
+Requires-Dist: librosa
+Provides-Extra: runtime
+Requires-Dist: DrissionPage; extra == "runtime"
+Requires-Dist: browser-cookie3; extra == "runtime"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"

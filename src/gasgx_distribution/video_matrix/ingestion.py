@@ -125,6 +125,7 @@ def ingest_sources(
             raw_metadata = probe_media(normalized_path)
         duration, width, height, fps = _parse_video_info(raw_metadata)
         brightness, contrast = _compute_visual_scores(raw_metadata)
+        business_tags = _business_tags_for_source(source_path, category, duration)
         if telemetry is not None:
             telemetry.event(
                 "ingestion",
@@ -153,6 +154,7 @@ def ingest_sources(
                 brightness_score=brightness,
                 contrast_score=contrast,
                 tags=[category],
+                **business_tags,
             )
         )
     if telemetry is not None:
@@ -299,3 +301,75 @@ def _write_normalize_cache(source_path: Path, normalized_path: Path, settings: P
 
 def _normalize_cache_path(normalized_path: Path) -> Path:
     return normalized_path.with_suffix(".norm.json")
+
+
+def _business_tags_for_source(source_path: Path, category: str, duration: float) -> dict[str, Any]:
+    payload = _load_source_sidecar(source_path)
+    name = source_path.stem.lower()
+    default_action = "展示"
+    if any(token in name for token in ("inspect", "巡检", "test", "测试")):
+        default_action = "巡检测试"
+    elif any(token in name for token in ("screen", "monitor", "display", "仪表", "屏")):
+        default_action = "数据观察"
+    elif any(token in name for token in ("build", "install", "施工", "操作")):
+        default_action = "施工操作"
+    usable_range = payload.get("usable_range") if isinstance(payload.get("usable_range"), list) else None
+    parsed_range = None
+    if usable_range and len(usable_range) >= 2:
+        try:
+            start = max(0.0, float(usable_range[0]))
+            end = min(float(duration or 0.0), float(usable_range[1]))
+            parsed_range = (start, max(start, end))
+        except (TypeError, ValueError):
+            parsed_range = None
+    return {
+        "scene_tag": str(payload.get("scene_tag") or category).strip(),
+        "subject_tag": _string_list(payload.get("subject_tag") or payload.get("subject_tags") or [category]),
+        "action_tag": _string_list(payload.get("action_tag") or payload.get("action_tags") or [default_action]),
+        "shot_size": str(payload.get("shot_size") or "unknown").strip(),
+        "camera_angle": str(payload.get("camera_angle") or "unknown").strip(),
+        "camera_move": str(payload.get("camera_move") or "unknown").strip(),
+        "audio_state": str(payload.get("audio_state") or "unknown").strip(),
+        "language_tag": str(payload.get("language_tag") or "zh-CN").strip(),
+        "usable_range": parsed_range,
+        "account_fit_tags": _string_list(payload.get("account_fit_tags") or [category]),
+        "rights_status": str(payload.get("rights_status") or "owned").strip(),
+        "hero_frame_candidates": _float_list(payload.get("hero_frame_candidates")),
+    }
+
+
+def _load_source_sidecar(source_path: Path) -> dict[str, Any]:
+    candidates = [
+        source_path.with_suffix(".json"),
+        source_path.with_name(f"{source_path.stem}.metadata.json"),
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _string_list(raw: object) -> list[str]:
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _float_list(raw: object) -> list[float]:
+    if not isinstance(raw, list):
+        return []
+    values: list[float] = []
+    for item in raw:
+        try:
+            values.append(float(item))
+        except (TypeError, ValueError):
+            continue
+    return values

@@ -1,0 +1,2 @@
+# Add one authorized direct MP3 URL per line.
+# Blank lines and full-line comments are ignored.

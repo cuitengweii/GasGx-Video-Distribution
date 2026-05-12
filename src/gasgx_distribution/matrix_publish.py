@@ -184,6 +184,60 @@ def asset_day(path: Path, tz: ZoneInfo | None = None) -> date:
     return datetime.fromtimestamp(path.stat().st_mtime, active_tz).date()
 
 
+def _asset_manifest_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}_manifest.json")
+
+
+def _asset_manifest_metadata(path: Path) -> dict[str, Any]:
+    manifest_path = _asset_manifest_path(path)
+    if not manifest_path.exists():
+        return {}
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    dedupe = payload.get("dedupe") if isinstance(payload.get("dedupe"), dict) else {}
+    return {
+        "narrative_template_id": str(payload.get("narrative_template_id") or dedupe.get("narrative_template_id") or "").strip(),
+        "account_pool_id": str(payload.get("account_pool_id") or dedupe.get("account_pool_id") or "").strip(),
+        "text_signature": str(dedupe.get("text_signature") or "").strip(),
+        "first_frame_hash": str(dedupe.get("first_frame_hash") or "").strip(),
+        "cover_frame_hash": str(dedupe.get("cover_frame_hash") or "").strip(),
+        "content_fingerprint": str(dedupe.get("content_fingerprint") or "").strip(),
+        "bgm_fingerprint": str(dedupe.get("bgm_fingerprint") or "").strip(),
+        "bgm_name": str(payload.get("bgm_name") or "").strip(),
+    }
+
+
+def _last_account_asset_metadata(account_id: int) -> dict[str, Any]:
+    for item in reversed(_consumed_records()):
+        try:
+            if int(item.get("account_id") or 0) != int(account_id):
+                continue
+        except Exception:
+            continue
+        metadata = item.get("asset_metadata") if isinstance(item.get("asset_metadata"), dict) else {}
+        if metadata:
+            return metadata
+    return {}
+
+
+def _asset_allowed_for_account(path: Path, account_id: int) -> bool:
+    previous = _last_account_asset_metadata(account_id)
+    if not previous:
+        return True
+    current = _asset_manifest_metadata(path)
+    if not current:
+        return True
+    guarded_keys = ("first_frame_hash", "bgm_name", "narrative_template_id", "text_signature")
+    for key in guarded_keys:
+        if current.get(key) and current.get(key) == previous.get(key):
+            return False
+    return True
+
+
 def _relative_asset_key(path: Path) -> str:
     root = materials_video_dir()
     try:
@@ -413,6 +467,8 @@ def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
         for path in videos:
             asset_key = _relative_asset_key(path)
             if asset_key in assigned_asset_keys:
+                continue
+            if not _asset_allowed_for_account(path, account_id):
                 continue
             selected = path
             assigned_asset_keys.add(asset_key)
@@ -832,6 +888,7 @@ def run_matrix_publish(
                         "publish_date": record["publish_date"],
                         "success": True,
                         "finished_at": int(time.time()),
+                        "asset_metadata": _asset_manifest_metadata(item.source_video),
                     }
                 )
             state["consumed"] = consumed[-500:]

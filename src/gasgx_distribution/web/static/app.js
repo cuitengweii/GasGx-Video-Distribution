@@ -2602,6 +2602,41 @@ function terminalPrecheckPrimaryIssue(window) {
   return null;
 }
 
+function terminalStatusLooksLoggedIn(statusText) {
+  const text = String(statusText || "").trim();
+  if (!text) return false;
+  return text.includes("已登录")
+    || text.includes("无需扫码")
+    || text.includes("发布中")
+    || text.includes("发布成功")
+    || text.includes("待人工发布");
+}
+
+function terminalStatusLooksLoggedOut(statusText) {
+  const text = String(statusText || "").trim();
+  if (!text) return true;
+  if (terminalStatusLooksLoggedIn(text)) return false;
+  return text.includes("未登录")
+    || text.includes("扫码")
+    || text.includes("登录浏览器")
+    || text.includes("等待登录")
+    || text.includes("请登录");
+}
+
+function terminalAccountRequiresLoginConfirmation(account) {
+  const status = String(account?.status || "").toLowerCase();
+  if (status === "ready" || status === "running" || status === "success") return false;
+  const statusText = sanitizeTerminalStatusText(account?.status_text, account?.status);
+  if (terminalStatusLooksLoggedIn(statusText)) return false;
+  if (status === "waiting_qr" || status === "pending" || status === "idle") return true;
+  return terminalStatusLooksLoggedOut(statusText);
+}
+
+function terminalAccountCanStartPublish(account) {
+  const status = String(account?.status || "").toLowerCase();
+  return status === "ready" || status === "running" || status === "success";
+}
+
 function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
   const windowIdText = String(window?.id || "").trim();
@@ -2630,6 +2665,7 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const isReady = currentStatus === "ready" || isPreparingByText;
   const primaryIssue = terminalPrecheckPrimaryIssue(window);
   const hasP0Issue = Boolean(primaryIssue && primaryIssue.level === "p0");
+  const requiresLoginConfirm = terminalAccountRequiresLoginConfirmation(current);
   const localAutoPublishStage = terminalAutoPublishStageByWindowId.get(windowIdText) || "";
   const runningAutoPublishStage = publishRunning ? (terminalAutoPublishStageFromStatusText(currentStatusText) || "publishing") : "";
   const autoPublishStage = publishStopping
@@ -2653,8 +2689,8 @@ function terminalWindowActionButtons(window, current, loginStarted) {
         ? "待人工发布"
         : publishManualConfirmableFailure
           ? "重新准备"
-        : hasP0Issue
-          ? "我已登录，点击发布"
+        : hasP0Issue || requiresLoginConfirm
+          ? "确认已登录后发布"
           : "我已登录，点击发布";
   const confirmReadyLabel = hasNext
     ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
@@ -5817,6 +5853,14 @@ document.addEventListener("click", async (event) => {
     const windowId = String(terminalAutoPublishButton.dataset.terminalAutoPublish || "").trim();
     if (!windowId) return;
     if (terminalAutoPublishWindowIds.has(windowId)) return;
+    const currentWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowId);
+    const currentIndex = Number(currentWindow?.current_index || 0);
+    const currentAccount = currentWindow?.accounts?.[currentIndex] || {};
+    if (terminalAccountRequiresLoginConfirmation(currentAccount)) {
+      const statusText = sanitizeTerminalStatusText(currentAccount?.status_text, currentAccount?.status);
+      const continuePublish = window.confirm(`当前状态是“${statusText}”，看起来还没完成登录。\n继续会直接进入发布流程，确认继续吗？`);
+      if (!continuePublish) return;
+    }
     terminalAutoPublishWindowIds.add(windowId);
     terminalAutoPublishStageByWindowId.set(windowId, "confirm_login");
     renderTerminalExecution();
@@ -5825,6 +5869,13 @@ document.addEventListener("click", async (event) => {
     let stage = "confirm_login";
     try {
       state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/confirm-login`, { method: "POST" });
+      const refreshedWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowId);
+      const refreshedIndex = Number(refreshedWindow?.current_index || 0);
+      const refreshedAccount = refreshedWindow?.accounts?.[refreshedIndex] || {};
+      if (!terminalAccountCanStartPublish(refreshedAccount)) {
+        const statusText = sanitizeTerminalStatusText(refreshedAccount?.status_text, refreshedAccount?.status);
+        throw new Error(`登录态校验未通过：${statusText}`);
+      }
       terminalAutoPublishStageByWindowId.set(windowId, "prepare_publish");
       renderTerminalExecution();
       stage = "manual_publish";
