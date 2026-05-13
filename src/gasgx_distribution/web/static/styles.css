@@ -4653,7 +4653,7 @@ body.video-matrix-active #video-matrix {
 }
 
 .terminal-wechat-summary {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 #terminal-execution[data-terminal-route="wechat"] .terminal-global-header {

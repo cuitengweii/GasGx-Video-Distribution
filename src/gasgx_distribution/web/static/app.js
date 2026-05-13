@@ -657,6 +657,28 @@ function saveAuthSession(nextSession) {
   localStorage.setItem(SHELL_AUTH_KEY, JSON.stringify(nextSession));
 }
 
+function terminalFriendlyMessage(message) {
+  const raw = String(message || "").trim();
+  if (!raw) return "操作失败，请稍后重试。";
+  const lowered = raw.toLowerCase();
+  if (lowered.includes("account not found") || raw.includes("未找到账号") || raw.includes("账号不存在")) {
+    return "账号不存在。请先到“账号矩阵”检查账号是否被删除或禁用，然后回到当前窗口重新打开浏览器。";
+  }
+  if (
+    lowered.includes("httpsconnectionpool(") ||
+    lowered.includes("max retries exceeded") ||
+    lowered.includes("traceback") ||
+    lowered.includes("connection aborted") ||
+    lowered.includes("name or service not known")
+  ) {
+    return "网络连接异常。请稍后重试；若连续失败，请检查网络后再试。";
+  }
+  if (/[A-Za-z]{3,}/.test(raw)) {
+    return "执行失败。请先点击“打开浏览器扫码”完成登录，再重试当前操作。";
+  }
+  return raw;
+}
+
 function currentAuthUser(statePayload = authState) {
   if (!statePayload.currentUserId) return null;
   return statePayload.users.find((user) => user.id === statePayload.currentUserId) || statePayload.users[0];
@@ -761,6 +783,7 @@ function showAccountRepairToast(result) {
 function terminalErrorStageTitle(stage) {
   const map = {
     load: "终端执行加载失败",
+    account_missing: "账号配置异常",
     login_browser: "打开登录浏览器失败",
     qr: "打开登录浏览器失败",
     login_probe: "登录检测失败",
@@ -786,9 +809,9 @@ function terminalErrorStageFromMessage(message) {
   ) return "publish_run";
   if (
     lowered.includes("no available material for today") ||
-    lowered.includes("wechat platform config missing") ||
-    lowered.includes("account not found")
+    lowered.includes("wechat platform config missing")
   ) return "publish_start";
+  if (lowered.includes("account not found") || /账号不存在|未找到账号/.test(text)) return "account_missing";
   if (/二维码|浏览器/.test(text)) return "login_browser";
   if (/登录|会话|network|connection|timeout|超时|接口/.test(text)) return "login_probe";
   return "";
@@ -882,10 +905,14 @@ function showTerminalErrorModal(payload) {
   const contextNode = modal.querySelector("#terminalErrorContext");
   const messageNode = modal.querySelector("#terminalErrorMessage");
   const flowNode = modal.querySelector("#terminalErrorFlow");
-  if (titleNode) titleNode.textContent = payload.title || "终端流程错误";
-  if (stageNode) stageNode.textContent = payload.stage ? `错误节点：${terminalErrorStageTitle(payload.stage)}` : "错误节点";
+  if (titleNode) titleNode.textContent = payload.title || "操作未完成";
+  if (stageNode) {
+    const stageText = payload.stage ? terminalErrorStageTitle(payload.stage) : "";
+    stageNode.textContent = stageText;
+    stageNode.classList.toggle("hidden", !stageText);
+  }
   if (contextNode) contextNode.textContent = payload.context || "";
-  if (messageNode) messageNode.textContent = payload.message || "终端流程发生错误";
+  if (messageNode) messageNode.textContent = terminalFriendlyMessage(payload.message || "操作失败");
   if (flowNode) flowNode.innerHTML = terminalErrorFlowMarkup(payload.stage, { showAll: Boolean(payload.showAllGuides) });
   modal.classList.remove("hidden");
 }
@@ -1320,13 +1347,17 @@ function showTaskState(message, kind = "muted") {
 }
 
 function formatFriendlyMessage(message) {
-  const text = String(message || "");
+  const text = String(message || "").trim();
   const duplicateTaskMatch = text.match(/^duplicate active task already queued: #(\d+)$/i);
   if (duplicateTaskMatch) return `已有相同任务在队列中：#${duplicateTaskMatch[1]}`;
   if (text === "queued for manual worker execution") return "已加入队列，等待人工执行";
   if (text === "pending") return "待处理";
   if (text === "paused") return "已暂停";
   if (text === "unsupported") return "暂不支持";
+  if (/account not found/i.test(text)) return "账号不存在，请到账号矩阵检查后重试";
+  if (/unknown error/i.test(text)) return "未知异常，请稍后重试";
+  if (/window not found/i.test(text)) return "窗口不存在，请刷新后重试";
+  if (/[A-Za-z]{3,}/.test(text)) return "执行异常，请稍后重试";
   return text || "操作失败，请稍后重试";
 }
 
@@ -1621,7 +1652,7 @@ async function openHelpDocument(path, { syncUrl = true } = {}) {
       window.scrollTo({ top: 0, left: 0 });
     }
   } catch (error) {
-    body.innerHTML = `<div class="muted">加载失败：${escapeHtml(error?.message || "unknown error")}</div>`;
+    body.innerHTML = `<div class="muted">加载失败：${escapeHtml(formatFriendlyMessage(error?.message || "未知异常"))}</div>`;
   } finally {
     setWorkspaceLoading(false);
   }
@@ -2798,6 +2829,9 @@ function sanitizeTerminalStatusText(statusText, status) {
     return TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT;
   }
   const lowered = raw.toLowerCase();
+  if (lowered.includes("account not found") || /未找到账号|账号不存在/.test(raw)) {
+    return "账号不存在。请到账号矩阵检查后重试。";
+  }
   if (
     lowered.includes("httpsconnectionpool(") ||
     lowered.includes("max retries exceeded") ||
@@ -2806,6 +2840,9 @@ function sanitizeTerminalStatusText(statusText, status) {
     lowered.includes("name or service not known")
   ) {
     return "网络连接异常，请稍后重试";
+  }
+  if (/[A-Za-z]{3,}/.test(raw)) {
+    return "执行异常，请重试；若仍失败，请检查账号配置";
   }
   if ((String(status || "").toLowerCase() === "error" || String(status || "").toLowerCase() === "failed") && raw.length > 64) {
     return "执行异常，请查看日志";
@@ -2957,6 +2994,7 @@ function syncTerminalWechatSummary(summary, windows) {
       <div class="metric"><span>已完成账号数</span><strong>${summary.success || 0}</strong></div>
       <div class="metric"><span>总账号数</span><strong>${summary.total || 0}</strong></div>
       <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
+      <div class="metric"><span>当日素材数量</span><strong>${summary.today_materials || 0}</strong></div>
     `;
   }
   const progress = document.querySelector("#terminal-global-progress");
@@ -3577,6 +3615,7 @@ function renderTerminalExecution() {
             <div class="metric"><span>已完成账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.success || 0)}</strong></div>
             <div class="metric"><span>总账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.total || 0)}</strong></div>
             <div class="metric"><span>活跃窗数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.active_windows || 0)}</strong></div>
+            <div class="metric"><span>当日素材数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.today_materials || 0)}</strong></div>
           </div>
           ${showWechatLoadingState ? `<p class="system-action-state muted">正在拉取终端执行状态，请稍候…</p>` : ""}
           <div class="terminal-workspace terminal-workspace-wechat"></div>
@@ -5188,7 +5227,7 @@ function activateView(view, updateHash = true) {
     const forceReload = view === "settings";
     loadViewData(view, { force: forceReload }).catch((error) => {
       const target = section.querySelector(".loading-inline") || section;
-      target.innerHTML = `<div class="muted">加载失败：${error.message}</div>`;
+      target.innerHTML = `<div class="muted">加载失败：${escapeHtml(formatFriendlyMessage(error.message))}</div>`;
     });
   }
   if (updateHash && window.location.hash !== `#${view}`) {
@@ -5393,7 +5432,7 @@ document.querySelector("#terminal-save-platform-config")?.addEventListener("clic
     state.distributionSettings = await api("/api/settings/distribution");
     await renderTerminalPlatformPublishPanel();
   } catch (error) {
-    window.alert(`更新平台配置失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
+    window.alert(`更新平台配置失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
   } finally {
     restoreButton();
   }
@@ -5403,7 +5442,7 @@ document.querySelector("#terminal-start-login-legacy")?.addEventListener("click"
   try {
     await startTerminalWechatLoginWithLoading(event.currentTarget);
   } catch (error) {
-    window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
+    window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
   }
 });
 
@@ -6386,7 +6425,7 @@ document.addEventListener("click", async (event) => {
         renderTerminalExecution();
       }
     } catch (error) {
-      window.alert(`更新配置失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
+      window.alert(`更新配置失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
     } finally {
       restoreButton();
     }
@@ -6402,7 +6441,7 @@ document.addEventListener("click", async (event) => {
       try {
         await startTerminalWechatLoginWithLoading(embeddedStart);
       } catch (error) {
-        window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
+        window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
       }
       return;
     }
@@ -6469,7 +6508,7 @@ document.addEventListener("click", async (event) => {
       try {
         await startTerminalWechatLoginWithLoading(terminalStart);
       } catch (error) {
-        window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "unknown error")}`);
+        window.alert(`启动登录浏览器失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
       }
       return;
     }

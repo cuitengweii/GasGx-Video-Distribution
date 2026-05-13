@@ -1067,20 +1067,16 @@
     <div class="confirm-panel terminal-error-panel">
       <div class="confirm-head">
         <div>
-          <span>TERMINAL ERROR</span>
-          <strong id="terminalErrorTitle">终端流程错误</strong>
+          <span>终端提示</span>
+          <strong id="terminalErrorTitle">操作未完成</strong>
         </div>
         <button id="terminalErrorClose" class="icon-btn" type="button" aria-label="关闭">×</button>
       </div>
       <div class="confirm-body terminal-error-body">
         <div class="confirm-message terminal-error-summary">
-          <strong id="terminalErrorStage">错误节点</strong>
+          <strong id="terminalErrorStage"></strong>
           <p id="terminalErrorMessage"></p>
           <p class="terminal-error-context" id="terminalErrorContext"></p>
-        </div>
-        <div class="terminal-error-flow">
-          <strong class="terminal-error-flow-title">流程错误节点</strong>
-          <div id="terminalErrorFlow" class="terminal-error-flow-grid"></div>
         </div>
       </div>
       <div class="confirm-actions">
@@ -1096,6 +1092,6 @@
       if (host) node.textContent = host;
     })();
   </script>
-  <script src="/static/app.js?v=20260507-helpcenter-no-white-flash"></script>
+  <script src="/static/app.js?v=20260512-terminal-login-verify"></script>
 </body>
 </html>
