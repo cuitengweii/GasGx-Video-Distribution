@@ -4158,6 +4158,59 @@ def _open_chrome_debug_url(debug_port: int, url: str) -> bool:
         return False
 
 
+def _close_chrome_debug_target(debug_port: int, target_id: str) -> bool:
+    token = str(target_id or "").strip()
+    if int(debug_port or 0) <= 0 or not token:
+        return False
+    endpoint = f"http://127.0.0.1:{int(debug_port)}/json/close/{token}"
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.put(endpoint, timeout=1.8)
+            if response.status_code < 400:
+                return True
+    except Exception:
+        pass
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(endpoint, timeout=1.8)
+            return response.status_code < 400
+    except Exception:
+        return False
+
+
+def _dedupe_terminal_browser_tabs(debug_port: int, terminal_window_id: int, phase_tag: str) -> None:
+    if int(debug_port or 0) <= 0:
+        return
+    targets = _chrome_cdp_page_targets(int(debug_port))
+    if not targets:
+        return
+    marker_token = f"标识 窗{int(terminal_window_id or 0):02d} {str(phase_tag or '').strip() or '登录'}"
+    marker_pages = [item for item in targets if marker_token in str(item.get("title") or "")]
+    if len(marker_pages) > 1:
+        for item in marker_pages[1:]:
+            _close_chrome_debug_target(int(debug_port), str(item.get("id") or ""))
+    wechat_pages = [item for item in targets if "channels.weixin.qq.com" in str(item.get("url") or "")]
+    if len(wechat_pages) <= 1:
+        return
+    prefer_keys = ("platform/post/create", "login.html") if str(phase_tag or "").strip() == "发布" else ("login.html", "platform/post/create")
+
+    def _score(page: dict[str, Any]) -> tuple[int, str]:
+        url = str(page.get("url") or "")
+        for index, token in enumerate(prefer_keys):
+            if token in url:
+                return (index, url)
+        return (99, url)
+
+    ordered = sorted(wechat_pages, key=_score)
+    keep_id = str(ordered[0].get("id") or "")
+    for page in ordered[1:]:
+        target_id = str(page.get("id") or "")
+        if target_id and target_id != keep_id:
+            _close_chrome_debug_target(int(debug_port), target_id)
+
+
 def _open_terminal_browser_marker_tab(
     account_id: int,
     platform: str,
@@ -4174,6 +4227,11 @@ def _open_terminal_browser_marker_tab(
         debug_port = 0
     if debug_port <= 0:
         return False
+    marker_token = f"标识 窗{int(terminal_window_id or 0):02d} {str(phase_tag or '').strip() or '登录'}"
+    for target in _chrome_cdp_page_targets(debug_port):
+        title = str(target.get("title") or "")
+        if marker_token in title:
+            return True
     return _open_chrome_debug_url(
         debug_port,
         _terminal_marker_page_url(account_id, platform, color, terminal_window_id, phase_tag=phase_tag),
@@ -4428,7 +4486,6 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
             int(window.get("id") or 0),
             phase_tag="登录",
         )
-        _open_chrome_debug_url(int(open_result.get("debug_port") or 0), str(open_result.get("open_url") or ""))
         _inject_terminal_account_browser_marker(
             account_id,
             "wechat",
@@ -4436,6 +4493,7 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
             int(window.get("id") or 0),
             phase_tag="登录",
         )
+        _dedupe_terminal_browser_tabs(int(open_result.get("debug_port") or 0), int(window.get("id") or 0), "登录")
         _schedule_terminal_window_marker_refresh(window, delays=(1.3, 3.6))
         _raise_windows_chrome_window(int(open_result.get("debug_port") or 0), str(open_result.get("profile_dir") or ""))
         current["status"] = "waiting_qr"
@@ -5219,6 +5277,8 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         _clear_terminal_account_error(current)
         if current.get("task_id"):
             current["task_id"] = None
+        publish_runtime = _terminal_browser_runtime_for_account(int(current.get("id") or 0), "wechat")
+        publish_debug_port = int(publish_runtime.get("debug_port") or 0)
         if _is_terminal_publish_running(target):
             current["status"] = "running"
             current["status_text"] = TERMINAL_PUBLISH_PREPARE_TEXT
@@ -5229,6 +5289,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
                 int(target.get("id") or 0),
                 phase_tag="发布",
             )
+            _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
             _refresh_terminal_window_marker(target, force=True)
             _schedule_terminal_window_marker_refresh(target, delays=(1.8, 4.8))
             _save_terminal_state(state)
@@ -5241,6 +5302,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
                 int(target.get("id") or 0),
                 phase_tag="发布",
             )
+            _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
             run = _start_terminal_wechat_publish(target, current)
             target["publish_run"] = run
             current["task_id"] = None
@@ -5303,6 +5365,7 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
                 int(target.get("id") or 0),
                 phase_tag="登录",
             )
+            _dedupe_terminal_browser_tabs(int(runtime.get("debug_port") or 0), int(target.get("id") or 0), "登录")
             _schedule_terminal_window_marker_refresh(target, delays=(1.3, 3.6))
             _raise_account_browser_window(int(account_id), "wechat")
             _clear_terminal_account_error(current)
@@ -6663,7 +6726,10 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     const colorShort = colorText || String(marker.accent || '').toUpperCase();
     const titleShort = titleText.length > 8 ? titleText.slice(0, 8) : titleText;
     const operatorShort = operatorText.length > 8 ? operatorText.slice(0, 8) : operatorText;
-    const prefix = `【${{windowShort}} ${{phaseText}} ${{colorShort}} ${{titleShort || '-'}} ${{operatorShort || '-'}}】 `;
+    const href = String(window.location?.href || '');
+    const rawTitle = String(document.title || '');
+    const tabRole = (href.startsWith('data:text/html') || rawTitle.includes('标识')) ? '标识' : '业务';
+    const prefix = `【${{windowShort}} ${{tabRole}} ${{phaseText}} ${{colorShort}} ${{titleShort || '-'}} ${{operatorShort || '-'}}】 `;
     if (!document.title || !document.title.startsWith(prefix)) {{
       document.title = `${{prefix}}${{String(document.title || '视频号助手').replace(/^(\\[[^\\]]+\\]|【[^】]+】)\\s*/, '')}}`;
     }}
@@ -6770,7 +6836,6 @@ def _inject_account_browser_marker(
     except Exception:
         expected_window_id = 0
     expected_window = f"窗{expected_window_id:02d}" if expected_window_id > 0 else str(payload.get("window_label") or "终端执行窗口")
-    expected_prefix = f"【{expected_window} {str(payload.get('phase_tag') or '登录')} "
     deadline = time.monotonic() + 0.9
     idle_rounds = 0
     while time.monotonic() < deadline:
@@ -6787,7 +6852,10 @@ def _inject_account_browser_marker(
             if not ws_url or ws_url in seen_targets:
                 continue
             title = str(target.get("title") or "").strip()
-            if title.startswith(expected_prefix):
+            if (
+                title.startswith(f"【{expected_window} 业务 ")
+                or title.startswith(f"【{expected_window} 标识 ")
+            ):
                 applied = True
                 injected_this_round = True
                 seen_targets.add(ws_url)
