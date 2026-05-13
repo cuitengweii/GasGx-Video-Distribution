@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from threading import Lock, Thread
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
 from contextlib import contextmanager
 from pathlib import Path
@@ -4074,6 +4074,112 @@ def _inject_terminal_account_browser_marker(
     )
 
 
+def _terminal_marker_short_label(window_id: int, phase_tag: str, color_label: str, account_name: str, operator: str) -> str:
+    account_short = str(account_name or "-").replace("GasGx ", "").strip()[:8] or "-"
+    operator_short = str(operator or "-").strip()[:8] or "-"
+    return f"窗{window_id:02d} {phase_tag} {color_label or '色标'} {account_short} {operator_short}"
+
+
+def _terminal_marker_page_url(
+    account_id: int,
+    platform: str,
+    color: str,
+    terminal_window_id: int,
+    *,
+    phase_tag: str = "登录",
+) -> str:
+    account = get_account(account_id) or {}
+    token = normalize_platform(platform)
+    capability = get_platform(token)
+    platform_label = str(getattr(capability, "label", "") or "视频号") if capability is not None else "视频号"
+    color_label = _terminal_color_name(color)
+    display_name = str(account.get("display_name") or account.get("account_key") or f"账号 {account_id}").strip()
+    operator_wechat = _account_operator_wechat(account)
+    accent = _normalize_terminal_color_hex(color, slot_index=max(0, terminal_window_id - 1))
+    short_label = _terminal_marker_short_label(terminal_window_id, phase_tag, color_label, display_name, operator_wechat)
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>标识 {short_label}</title>
+  <style>
+    html, body {{ margin: 0; width: 100%; height: 100%; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #080b0d; color: #fff; }}
+    body {{ display: grid; place-items: stretch; }}
+    .wrap {{ min-height: 100vh; display: grid; grid-template-columns: 24px 1fr; background: linear-gradient(120deg, {accent} 0 24px, #080b0d 24px 100%); }}
+    .panel {{ padding: 42px 46px; display: flex; flex-direction: column; gap: 26px; }}
+    .headline {{ display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 34px; font-weight: 900; }}
+    .pill {{ background: {accent}; color: #08100b; border-radius: 8px; padding: 8px 14px; font-size: 24px; font-weight: 900; }}
+    .grid {{ display: grid; gap: 14px; font-size: 26px; }}
+    .item {{ padding: 16px 18px; border: 2px solid rgba(255,255,255,.14); border-left: 8px solid {accent}; border-radius: 8px; background: rgba(255,255,255,.06); }}
+    .item span {{ color: rgba(255,255,255,.64); margin-right: 12px; }}
+    .item strong {{ color: #fff; font-size: 30px; }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div></div>
+    <section class="panel">
+      <div class="headline"><span class="pill">{phase_tag}</span><span>终端执行窗口 {terminal_window_id:02d}</span></div>
+      <div class="grid">
+        <div class="item"><span>窗口颜色</span><strong>{color_label}</strong></div>
+        <div class="item"><span>{platform_label}账号</span><strong>{display_name}</strong></div>
+        <div class="item"><span>运营微信</span><strong>{operator_wechat}</strong></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>"""
+    return "data:text/html;charset=utf-8," + quote(html)
+
+
+def _open_chrome_debug_url(debug_port: int, url: str) -> bool:
+    if int(debug_port or 0) <= 0 or not str(url or "").strip():
+        return False
+    try:
+        if not bool(engine._is_chrome_debug_port_ready(int(debug_port), timeout=0.5)):  # type: ignore[attr-defined]
+            return False
+    except Exception:
+        return False
+    endpoint = f"http://127.0.0.1:{int(debug_port)}/json/new?{url}"
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.put(endpoint, timeout=2.0)
+            if response.status_code < 400:
+                return True
+    except Exception:
+        pass
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(endpoint, timeout=2.0)
+            return response.status_code < 400
+    except Exception:
+        return False
+
+
+def _open_terminal_browser_marker_tab(
+    account_id: int,
+    platform: str,
+    color: str,
+    terminal_window_id: int,
+    *,
+    phase_tag: str = "登录",
+) -> bool:
+    account = get_account(account_id) or {}
+    profile = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == normalize_platform(platform)), None)
+    try:
+        debug_port = int((profile or {}).get("debug_port") or 0)
+    except Exception:
+        debug_port = 0
+    if debug_port <= 0:
+        return False
+    return _open_chrome_debug_url(
+        debug_port,
+        _terminal_marker_page_url(account_id, platform, color, terminal_window_id, phase_tag=phase_tag),
+    )
+
+
 def _terminal_window_phase_tag(window: dict[str, Any]) -> str:
     current = _terminal_current_account(window)
     run = window.get("publish_run")
@@ -4315,6 +4421,14 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
     try:
         open_result = open_account_browser(account_id, "wechat", apply_marker=False)
         _apply_account_browser_window_color(open_result, str(window.get("color") or ""))
+        _open_terminal_browser_marker_tab(
+            account_id,
+            "wechat",
+            str(window.get("color") or ""),
+            int(window.get("id") or 0),
+            phase_tag="登录",
+        )
+        _open_chrome_debug_url(int(open_result.get("debug_port") or 0), str(open_result.get("open_url") or ""))
         _inject_terminal_account_browser_marker(
             account_id,
             "wechat",
@@ -5108,11 +5222,25 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         if _is_terminal_publish_running(target):
             current["status"] = "running"
             current["status_text"] = TERMINAL_PUBLISH_PREPARE_TEXT
+            _open_terminal_browser_marker_tab(
+                int(current.get("id") or 0),
+                "wechat",
+                str(target.get("color") or ""),
+                int(target.get("id") or 0),
+                phase_tag="发布",
+            )
             _refresh_terminal_window_marker(target, force=True)
             _schedule_terminal_window_marker_refresh(target, delays=(1.8, 4.8))
             _save_terminal_state(state)
             return terminal_execution_state()
         try:
+            _open_terminal_browser_marker_tab(
+                int(current.get("id") or 0),
+                "wechat",
+                str(target.get("color") or ""),
+                int(target.get("id") or 0),
+                phase_tag="发布",
+            )
             run = _start_terminal_wechat_publish(target, current)
             target["publish_run"] = run
             current["task_id"] = None
@@ -5161,6 +5289,13 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
     if current is not None and int(current.get("id") or 0) == int(account_id):
         runtime = _terminal_browser_runtime_for_account(int(account_id), "wechat")
         if runtime.get("browser_open") is True:
+            _open_terminal_browser_marker_tab(
+                int(account_id),
+                "wechat",
+                str(target.get("color") or ""),
+                int(target.get("id") or 0),
+                phase_tag="登录",
+            )
             _inject_terminal_account_browser_marker(
                 int(account_id),
                 "wechat",
@@ -6474,53 +6609,56 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const markerId = '__gasgx-account-marker';
   const markerStyleId = '__gasgx-account-marker-style';
   const installStyle = () => {{
-    if (document.getElementById(markerStyleId)) return;
-    const style = document.createElement('style');
+    let style = document.getElementById(markerStyleId);
+    if (!style) {{
+      style = document.createElement('style');
+      style.id = markerStyleId;
+      (document.head || document.documentElement).appendChild(style);
+    }}
     style.id = markerStyleId;
     style.textContent = `
       #${{markerId}} {{
         position: fixed;
-        top: 10px;
-        right: 10px;
+        top: 0;
+        left: 0;
+        right: 0;
         z-index: 2147483647;
-        min-width: 300px;
-        max-width: min(52vw, 540px);
+        min-height: 78px;
         font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
         color: #fff;
-        background: rgba(8, 12, 14, 0.88);
-        border: 3px solid ${{marker.accent || '#22C55E'}};
-        border-radius: 12px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.06);
+        background: linear-gradient(90deg, ${{marker.accent || '#22C55E'}} 0 14px, rgba(7, 10, 12, 0.96) 14px, rgba(7, 10, 12, 0.9) 100%);
+        border-bottom: 5px solid ${{marker.accent || '#22C55E'}};
+        box-shadow: 0 10px 28px rgba(0,0,0,0.42);
         overflow: hidden;
         pointer-events: none;
       }}
       #${{markerId}} .bar {{
-        height: 7px;
+        display: none;
         background: ${{marker.accent || '#22C55E'}};
       }}
       #${{markerId}} .body {{
-        padding: 10px 12px 11px;
+        padding: 10px 18px 12px 30px;
         display: grid;
-        gap: 6px;
+        gap: 7px;
       }}
       #${{markerId}} .title {{
         display: flex;
         flex-wrap: wrap;
-        gap: 6px;
+        gap: 8px;
         align-items: center;
-        font-size: 14px;
+        font-size: 17px;
         font-weight: 900;
-        letter-spacing: .2px;
+        letter-spacing: 0;
       }}
       #${{markerId}} .badge {{
         display: inline-flex;
         align-items: center;
-        height: 22px;
-        padding: 0 8px;
-        border-radius: 999px;
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 6px;
         border: 1px solid rgba(255,255,255,0.22);
         background: rgba(255,255,255,0.1);
-        font-size: 12px;
+        font-size: 14px;
         font-weight: 800;
       }}
       #${{markerId}} .badge.phase {{
@@ -6529,14 +6667,18 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
         color: #07110a;
       }}
       #${{markerId}} .desc {{
-        display: grid;
-        gap: 2px;
-        font-size: 12px;
-        color: rgba(255,255,255,0.86);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 18px;
+        font-size: 16px;
+        color: rgba(255,255,255,0.92);
         line-height: 1.35;
       }}
+      #${{markerId}} strong {{
+        color: #fff;
+        font-size: 18px;
+      }}
     `;
-    document.documentElement.appendChild(style);
   }};
   const install = () => {{
     if (!document.documentElement) return false;
@@ -6558,7 +6700,7 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
           <div class="desc"></div>
         </div>
       `;
-      document.documentElement.appendChild(markerNode);
+      (document.body || document.documentElement).appendChild(markerNode);
     }}
     const phaseText = String(marker.phase_tag || '登录');
     const windowText = String(marker.window_label || '终端执行窗口');
@@ -6566,15 +6708,18 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     const platformText = String(marker.platform || '视频号');
     const titleText = String(marker.title || '');
     const operatorText = String(marker.operator_wechat || '');
-    markerNode.querySelector('.badge.phase').textContent = `阶段:${{phaseText}}`;
+    markerNode.style.setProperty('display', 'block', 'important');
+    markerNode.style.setProperty('visibility', 'visible', 'important');
+    markerNode.style.setProperty('opacity', '1', 'important');
+    markerNode.querySelector('.badge.phase').textContent = `当前:${{phaseText}}`;
     markerNode.querySelector('.badge.window').textContent = windowText;
-    markerNode.querySelector('.badge.color').textContent = colorText ? `色标:${{colorText}}` : `色标:${{String(marker.accent || '').toUpperCase()}}`;
+    markerNode.querySelector('.badge.color').textContent = colorText ? `窗口颜色:${{colorText}}` : `窗口颜色:${{String(marker.accent || '').toUpperCase()}}`;
     markerNode.querySelector('.badge.platform').textContent = platformText;
     const desc = markerNode.querySelector('.desc');
     if (desc) {{
       desc.innerHTML = `
-        <div>视频号账号: <strong>${{titleText || '-'}}</strong></div>
-        <div>运营微信: <strong>${{operatorText || '-'}}</strong></div>
+        <div>视频号：<strong>${{titleText || '-'}}</strong></div>
+        <div>运营微信：<strong>${{operatorText || '-'}}</strong></div>
       `;
     }}
     try {{
@@ -6606,14 +6751,13 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
         icon.setAttribute('href', iconHref);
       }}
     }} catch (_error) {{}}
-    const badge = String(marker.title_badge || '').trim();
-    const badgeSeg = badge ? (`|${{badge}}`) : '';
-    const titleSeg = titleText ? `视频号:${{titleText}}` : '视频号:-';
-    const operatorSeg = operatorText ? `运营微信:${{operatorText}}` : '运营微信:-';
-    const colorSeg = colorText ? `色标:${{colorText}}` : `色标:${{String(marker.accent || '').toUpperCase()}}`;
-    const prefix = `【${{windowText}}|${{phaseText}}|${{colorSeg}}${{badgeSeg}}|${{titleSeg}}|${{operatorSeg}}】 `;
-    if (document.title && !document.title.startsWith(prefix)) {{
-      document.title = `${{prefix}}${{document.title.replace(/^(\\[[^\\]]+\\]|【[^】]+】)\\s*/, '')}}`;
+    const windowShort = windowText.replace('终端执行窗口 ', '窗');
+    const colorShort = colorText || String(marker.accent || '').toUpperCase();
+    const titleShort = titleText.length > 8 ? titleText.slice(0, 8) : titleText;
+    const operatorShort = operatorText.length > 8 ? operatorText.slice(0, 8) : operatorText;
+    const prefix = `【${{windowShort}} ${{phaseText}} ${{colorShort}} ${{titleShort || '-'}} ${{operatorShort || '-'}}】 `;
+    if (!document.title || !document.title.startsWith(prefix)) {{
+      document.title = `${{prefix}}${{String(document.title || '视频号助手').replace(/^(\\[[^\\]]+\\]|【[^】]+】)\\s*/, '')}}`;
     }}
     return true;
   }};
