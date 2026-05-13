@@ -4186,12 +4186,27 @@ def _dedupe_terminal_browser_tabs(debug_port: int, terminal_window_id: int, phas
     targets = _chrome_cdp_page_targets(int(debug_port))
     if not targets:
         return
+    legacy_marker_pages = [
+        item
+        for item in targets
+        if str(item.get("url") or "").startswith("data:text/html")
+        or str(item.get("title") or "").startswith("标识 ")
+        or str(item.get("title") or "").startswith(f"【窗{int(terminal_window_id or 0):02d} 标识 ")
+    ]
+    legacy_marker_ids = {str(item.get("id") or "") for item in legacy_marker_pages}
+    for item in legacy_marker_pages:
+        _close_chrome_debug_target(int(debug_port), str(item.get("id") or ""))
     marker_token = f"标识 窗{int(terminal_window_id or 0):02d} {str(phase_tag or '').strip() or '登录'}"
     marker_pages = [item for item in targets if marker_token in str(item.get("title") or "")]
     if len(marker_pages) > 1:
         for item in marker_pages[1:]:
             _close_chrome_debug_target(int(debug_port), str(item.get("id") or ""))
-    wechat_pages = [item for item in targets if "channels.weixin.qq.com" in str(item.get("url") or "")]
+    wechat_pages = [
+        item
+        for item in targets
+        if "channels.weixin.qq.com" in str(item.get("url") or "")
+        and str(item.get("id") or "") not in legacy_marker_ids
+    ]
     if len(wechat_pages) <= 1:
         return
     prefer_keys = ("platform/post/create", "login.html") if str(phase_tag or "").strip() == "发布" else ("login.html", "platform/post/create")
@@ -4219,22 +4234,12 @@ def _open_terminal_browser_marker_tab(
     *,
     phase_tag: str = "登录",
 ) -> bool:
-    account = get_account(account_id) or {}
-    profile = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == normalize_platform(platform)), None)
-    try:
-        debug_port = int((profile or {}).get("debug_port") or 0)
-    except Exception:
-        debug_port = 0
-    if debug_port <= 0:
-        return False
-    marker_token = f"标识 窗{int(terminal_window_id or 0):02d} {str(phase_tag or '').strip() or '登录'}"
-    for target in _chrome_cdp_page_targets(debug_port):
-        title = str(target.get("title") or "")
-        if marker_token in title:
-            return True
-    return _open_chrome_debug_url(
-        debug_port,
-        _terminal_marker_page_url(account_id, platform, color, terminal_window_id, phase_tag=phase_tag),
+    return _inject_terminal_account_browser_marker(
+        account_id,
+        platform,
+        color,
+        terminal_window_id=terminal_window_id,
+        phase_tag=phase_tag,
     )
 
 
@@ -4479,13 +4484,6 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
     try:
         open_result = open_account_browser(account_id, "wechat", apply_marker=False)
         _apply_account_browser_window_color(open_result, str(window.get("color") or ""))
-        _open_terminal_browser_marker_tab(
-            account_id,
-            "wechat",
-            str(window.get("color") or ""),
-            int(window.get("id") or 0),
-            phase_tag="登录",
-        )
         _inject_terminal_account_browser_marker(
             account_id,
             "wechat",
@@ -5282,26 +5280,12 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         if _is_terminal_publish_running(target):
             current["status"] = "running"
             current["status_text"] = TERMINAL_PUBLISH_PREPARE_TEXT
-            _open_terminal_browser_marker_tab(
-                int(current.get("id") or 0),
-                "wechat",
-                str(target.get("color") or ""),
-                int(target.get("id") or 0),
-                phase_tag="发布",
-            )
             _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
             _refresh_terminal_window_marker(target, force=True)
             _schedule_terminal_window_marker_refresh(target, delays=(1.8, 4.8))
             _save_terminal_state(state)
             return terminal_execution_state()
         try:
-            _open_terminal_browser_marker_tab(
-                int(current.get("id") or 0),
-                "wechat",
-                str(target.get("color") or ""),
-                int(target.get("id") or 0),
-                phase_tag="发布",
-            )
             _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
             run = _start_terminal_wechat_publish(target, current)
             target["publish_run"] = run
@@ -5351,13 +5335,6 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
     if current is not None and int(current.get("id") or 0) == int(account_id):
         runtime = _terminal_browser_runtime_for_account(int(account_id), "wechat")
         if runtime.get("browser_open") is True:
-            _open_terminal_browser_marker_tab(
-                int(account_id),
-                "wechat",
-                str(target.get("color") or ""),
-                int(target.get("id") or 0),
-                phase_tag="登录",
-            )
             _inject_terminal_account_browser_marker(
                 int(account_id),
                 "wechat",
@@ -6688,9 +6665,7 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const install = () => {{
     if (!document.documentElement) return false;
     cleanupOldOverlay();
-    const phaseText = String(marker.phase_tag || '登录');
     const windowText = String(marker.window_label || '终端执行窗口');
-    const colorText = String(marker.color_label || '').trim();
     const titleText = String(marker.title || '');
     const operatorText = String(marker.operator_wechat || '');
     try {{
@@ -6704,12 +6679,15 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
         ctx.beginPath();
         ctx.arc(32, 32, 30, 0, Math.PI * 2);
         ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
         ctx.fillStyle = '#0b1014';
-        ctx.font = 'bold 30px Microsoft YaHei';
+        ctx.font = 'bold 24px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const phaseChar = String(phaseText || '登').slice(0, 1);
-        ctx.fillText(phaseChar, 32, 33);
+        const windowDigits = String(windowText).replace(/\\D/g, '').slice(-2) || '0';
+        ctx.fillText(windowDigits, 32, 33);
         const iconHref = canvas.toDataURL('image/png');
         let icon = document.querySelector('link[rel=\"icon\"][data-gasgx-marker=\"1\"]');
         if (!icon) {{
@@ -6722,16 +6700,12 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
         icon.setAttribute('href', iconHref);
       }}
     }} catch (_error) {{}}
-    const windowShort = windowText.replace('终端执行窗口 ', '窗');
-    const colorShort = colorText || String(marker.accent || '').toUpperCase();
     const titleShort = titleText.length > 8 ? titleText.slice(0, 8) : titleText;
     const operatorShort = operatorText.length > 8 ? operatorText.slice(0, 8) : operatorText;
-    const href = String(window.location?.href || '');
-    const rawTitle = String(document.title || '');
-    const tabRole = (href.startsWith('data:text/html') || rawTitle.includes('标识')) ? '标识' : '业务';
-    const prefix = `【${{windowShort}} ${{tabRole}} ${{phaseText}} ${{colorShort}} ${{titleShort || '-'}} ${{operatorShort || '-'}}】 `;
+    const windowShort = windowText.replace('终端执行窗口 ', '窗');
+    const prefix = `【${{windowShort}}】 ${{titleShort || '-'}} ${{operatorShort || '-'}}`;
     if (!document.title || !document.title.startsWith(prefix)) {{
-      document.title = `${{prefix}}${{String(document.title || '视频号助手').replace(/^(\\[[^\\]]+\\]|【[^】]+】)\\s*/, '')}}`;
+      document.title = prefix;
     }}
     return true;
   }};
@@ -6852,10 +6826,7 @@ def _inject_account_browser_marker(
             if not ws_url or ws_url in seen_targets:
                 continue
             title = str(target.get("title") or "").strip()
-            if (
-                title.startswith(f"【{expected_window} 业务 ")
-                or title.startswith(f"【{expected_window} 标识 ")
-            ):
+            if title.startswith(f"【{expected_window} "):
                 applied = True
                 injected_this_round = True
                 seen_targets.add(ws_url)
