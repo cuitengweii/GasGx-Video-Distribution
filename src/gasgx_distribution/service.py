@@ -6826,7 +6826,7 @@ def _inject_account_browser_marker(
             if not ws_url or ws_url in seen_targets:
                 continue
             title = str(target.get("title") or "").strip()
-            if title.startswith(f"【{expected_window} "):
+            if title.startswith(f"【{expected_window}】 "):
                 applied = True
                 injected_this_round = True
                 seen_targets.add(ws_url)
