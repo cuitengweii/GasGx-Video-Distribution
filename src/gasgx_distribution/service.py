@@ -6608,120 +6608,28 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const marker = {marker};
   const markerId = '__gasgx-account-marker';
   const markerStyleId = '__gasgx-account-marker-style';
-  const installStyle = () => {{
-    let style = document.getElementById(markerStyleId);
-    if (!style) {{
-      style = document.createElement('style');
-      style.id = markerStyleId;
-      (document.head || document.documentElement).appendChild(style);
-    }}
-    style.id = markerStyleId;
-    style.textContent = `
-      #${{markerId}} {{
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 2147483647;
-        min-height: 78px;
-        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-        color: #fff;
-        background: linear-gradient(90deg, ${{marker.accent || '#22C55E'}} 0 14px, rgba(7, 10, 12, 0.96) 14px, rgba(7, 10, 12, 0.9) 100%);
-        border-bottom: 5px solid ${{marker.accent || '#22C55E'}};
-        box-shadow: 0 10px 28px rgba(0,0,0,0.42);
-        overflow: hidden;
-        pointer-events: none;
-      }}
-      #${{markerId}} .bar {{
-        display: none;
-        background: ${{marker.accent || '#22C55E'}};
-      }}
-      #${{markerId}} .body {{
-        padding: 10px 18px 12px 30px;
-        display: grid;
-        gap: 7px;
-      }}
-      #${{markerId}} .title {{
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        align-items: center;
-        font-size: 17px;
-        font-weight: 900;
-        letter-spacing: 0;
-      }}
-      #${{markerId}} .badge {{
-        display: inline-flex;
-        align-items: center;
-        height: 28px;
-        padding: 0 10px;
-        border-radius: 6px;
-        border: 1px solid rgba(255,255,255,0.22);
-        background: rgba(255,255,255,0.1);
-        font-size: 14px;
-        font-weight: 800;
-      }}
-      #${{markerId}} .badge.phase {{
-        border-color: rgba(0,0,0,0.18);
-        background: ${{marker.accent || '#22C55E'}};
-        color: #07110a;
-      }}
-      #${{markerId}} .desc {{
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px 18px;
-        font-size: 16px;
-        color: rgba(255,255,255,0.92);
-        line-height: 1.35;
-      }}
-      #${{markerId}} strong {{
-        color: #fff;
-        font-size: 18px;
-      }}
-    `;
+  const cleanupOldOverlay = () => {{
+    try {{
+      const oldTimer = window.__gasgxAccountMarkerTimer;
+      if (oldTimer) window.clearInterval(oldTimer);
+      window.__gasgxAccountMarkerTimer = null;
+    }} catch (_error) {{}}
+    try {{
+      const observer = window.__gasgxAccountMarkerObserver;
+      if (observer && typeof observer.disconnect === 'function') observer.disconnect();
+      window.__gasgxAccountMarkerObserver = null;
+    }} catch (_error) {{}}
+    try {{ document.getElementById(markerId)?.remove(); }} catch (_error) {{}}
+    try {{ document.getElementById(markerStyleId)?.remove(); }} catch (_error) {{}}
   }};
   const install = () => {{
     if (!document.documentElement) return false;
-    installStyle();
-    let markerNode = document.getElementById(markerId);
-    if (!markerNode) {{
-      markerNode = document.createElement('section');
-      markerNode.id = markerId;
-      markerNode.setAttribute('data-gasgx-marker', '1');
-      markerNode.innerHTML = `
-        <div class="bar"></div>
-        <div class="body">
-          <div class="title">
-            <span class="badge phase"></span>
-            <span class="badge window"></span>
-            <span class="badge color"></span>
-            <span class="badge platform"></span>
-          </div>
-          <div class="desc"></div>
-        </div>
-      `;
-      (document.body || document.documentElement).appendChild(markerNode);
-    }}
+    cleanupOldOverlay();
     const phaseText = String(marker.phase_tag || '登录');
     const windowText = String(marker.window_label || '终端执行窗口');
     const colorText = String(marker.color_label || '').trim();
-    const platformText = String(marker.platform || '视频号');
     const titleText = String(marker.title || '');
     const operatorText = String(marker.operator_wechat || '');
-    markerNode.style.setProperty('display', 'block', 'important');
-    markerNode.style.setProperty('visibility', 'visible', 'important');
-    markerNode.style.setProperty('opacity', '1', 'important');
-    markerNode.querySelector('.badge.phase').textContent = `当前:${{phaseText}}`;
-    markerNode.querySelector('.badge.window').textContent = windowText;
-    markerNode.querySelector('.badge.color').textContent = colorText ? `窗口颜色:${{colorText}}` : `窗口颜色:${{String(marker.accent || '').toUpperCase()}}`;
-    markerNode.querySelector('.badge.platform').textContent = platformText;
-    const desc = markerNode.querySelector('.desc');
-    if (desc) {{
-      desc.innerHTML = `
-        <div>视频号：<strong>${{titleText || '-'}}</strong></div>
-        <div>运营微信：<strong>${{operatorText || '-'}}</strong></div>
-      `;
-    }}
     try {{
       const canvas = document.createElement('canvas');
       canvas.width = 64;
@@ -6763,17 +6671,6 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   }};
   const boot = () => {{
     install();
-    const timer = window.__gasgxAccountMarkerTimer;
-    if (!timer) {{
-      window.__gasgxAccountMarkerTimer = window.setInterval(() => install(), 1200);
-    }}
-    try {{
-      const observer = window.__gasgxAccountMarkerObserver;
-      if (observer && typeof observer.disconnect === 'function') observer.disconnect();
-      const next = new MutationObserver(() => install());
-      next.observe(document.documentElement || document, {{ childList: true, subtree: true }});
-      window.__gasgxAccountMarkerObserver = next;
-    }} catch (_error) {{}}
   }};
   if (!install()) document.addEventListener('DOMContentLoaded', boot, {{ once: true }});
   else boot();
@@ -6868,7 +6765,12 @@ def _inject_account_browser_marker(
     script = _account_browser_marker_script(payload)
     applied = False
     seen_targets: set[str] = set()
-    expected_prefix = f"【{str(payload.get('window_label') or '终端执行窗口')}|{str(payload.get('phase_tag') or '登录')}|"
+    try:
+        expected_window_id = int(terminal_window_id or 0)
+    except Exception:
+        expected_window_id = 0
+    expected_window = f"窗{expected_window_id:02d}" if expected_window_id > 0 else str(payload.get("window_label") or "终端执行窗口")
+    expected_prefix = f"【{expected_window} {str(payload.get('phase_tag') or '登录')} "
     deadline = time.monotonic() + 0.9
     idle_rounds = 0
     while time.monotonic() < deadline:
