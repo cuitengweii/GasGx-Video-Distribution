@@ -488,3 +488,32 @@ def test_overlay_filters_apply_selected_text_style_to_render_layers(tmp_path: Pa
     assert "fontcolor=#1F8F23@0.72" in filters
     assert "fontcolor=#FFFFFF:" in filters
     assert "fontcolor=#FFFFFF@0.24" in filters
+
+
+def test_overlay_filters_do_not_truncate_multiline_slogan_by_default(tmp_path: Path) -> None:
+    template = render.coerce_template(
+        {
+            "show_hud": False,
+            "show_slogan": True,
+            "show_title": False,
+            "slogan_font_size": 42,
+            "slogan_x": 120,
+            "slogan_y": 540,
+            "slogan_text_width": 800,
+            "slogan_text_align": "left",
+        }
+    )
+
+    render._overlay_filters(
+        template,
+        hud_text="",
+        slogan="L1\nL2\nL3\nL4",
+        title="",
+        explicit_template_keys=set(template),
+        text_dir=tmp_path,
+    )
+
+    assert (tmp_path / "slogan_0.txt").read_text(encoding="utf-8") == "L1"
+    assert (tmp_path / "slogan_1.txt").read_text(encoding="utf-8") == "L2"
+    assert (tmp_path / "slogan_2.txt").read_text(encoding="utf-8") == "L3"
+    assert (tmp_path / "slogan_3.txt").read_text(encoding="utf-8") == "L4"

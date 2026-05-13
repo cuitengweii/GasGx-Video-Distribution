@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,6 +20,8 @@ from .spark_text import build_marketing_copy
 from .templates import coerce_template
 ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+CJK_FONT_FAMILY = "'Microsoft YaHei Bold', 'Microsoft YaHei', SimHei, SimSun, 'Noto Sans SC', 'Source Han Sans SC Heavy', 'HarmonyOS Sans SC Bold', sans-serif"
+CJK_CHAR_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
 
 
 class VideoMatrixRenderError(RuntimeError):
@@ -372,14 +375,14 @@ def _decorate_cover(source_path: Path, target_path: Path, title: str) -> None:
         draw.line([(0, step), (width, step)], fill=color)
     base = Image.alpha_composite(image, overlay)
     text_draw = ImageDraw.Draw(base)
-    font = _load_drawtext_font(40)
+    font = _load_drawtext_font(40, sample_text=title)
     text_draw.rounded_rectangle((120, height // 2 - 56, width - 120, height // 2 + 56), radius=24, fill=(6, 14, 8, 190))
     text_draw.text((160, height // 2 - 8), title, fill=(255, 255, 255, 255), font=font)
     base.convert("RGB").save(target_path)
 
 
-def _resolve_drawtext_font_arg(font_family: str | None = None) -> str:
-    for candidate in _font_candidates_for_family(font_family):
+def _resolve_drawtext_font_arg(font_family: str | None = None, *, sample_text: str = "") -> str:
+    for candidate in _font_candidates_for_text(font_family, sample_text):
         if candidate.exists():
             escaped = str(candidate).replace("\\", "/").replace(":", "\\:")
             return f"fontfile='{escaped}':"
@@ -388,6 +391,32 @@ def _resolve_drawtext_font_arg(font_family: str | None = None) -> str:
 
 def _font_candidates_for_family(font_family: str | None = None) -> tuple[Path, ...]:
     return build_font_candidates_for_family(font_family)
+
+
+def _font_candidates_for_text(font_family: str | None, text: str) -> tuple[Path, ...]:
+    base = _font_candidates_for_family(font_family)
+    if not _contains_cjk_text(text):
+        return base
+    # Chinese/Japanese/Korean text should prefer CJK-capable fonts first to avoid tofu glyphs.
+    cjk_first = _font_candidates_for_family(CJK_FONT_FAMILY)
+    return _merge_font_candidates(cjk_first, base)
+
+
+def _merge_font_candidates(*groups: tuple[Path, ...]) -> tuple[Path, ...]:
+    merged: list[Path] = []
+    seen: set[str] = set()
+    for group in groups:
+        for candidate in group:
+            key = str(candidate).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(candidate)
+    return tuple(merged)
+
+
+def _contains_cjk_text(text: str) -> bool:
+    return bool(CJK_CHAR_PATTERN.search(str(text or "")))
 
 
 def _overlay_filters(
@@ -413,7 +442,7 @@ def _overlay_filters(
                 hud_text,
                 text_key="hud",
                 color_key="hud_color",
-                max_lines=_template_max_lines(template, "hud", 2),
+                max_lines=_template_max_lines(template, "hud", 6),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
             )
@@ -429,7 +458,7 @@ def _overlay_filters(
                 slogan,
                 text_key="slogan",
                 color_key="slogan_color",
-                max_lines=_template_max_lines(template, "slogan", 3),
+                max_lines=_template_max_lines(template, "slogan", 12),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
             )
@@ -552,7 +581,7 @@ def _drawtext_lines(
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
     style = str(template.get(f"{text_key}_text_style") or "none").strip().lower()
     color = _template_text_color(template, text_key, color_key, explicit_template_keys or set())
-    font_arg = _resolve_drawtext_font_arg(font_family)
+    font_arg = _resolve_drawtext_font_arg(font_family, sample_text=text)
     filters: list[str] = []
     for index, line in enumerate(lines):
         if align == "center":
@@ -852,10 +881,15 @@ def _wrap_text_for_drawtext(text: str, font_size: int, max_width: int, *, font_f
     paragraphs = [line.strip() for line in str(text).replace("\\n", "\n").splitlines()]
     if not paragraphs:
         return [""]
-    font = _load_drawtext_font(font_size, font_family=font_family)
+    font = _load_drawtext_font(font_size, font_family=font_family, sample_text=text)
     draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     lines: list[str] = []
     for paragraph in paragraphs:
+        if not paragraph:
+            continue
+        if _contains_cjk_text(paragraph) and not any(char.isspace() for char in paragraph):
+            lines.extend(_wrap_unspaced_text(draw, paragraph, font, max_width))
+            continue
         words = paragraph.split()
         if not words:
             continue
@@ -871,8 +905,23 @@ def _wrap_text_for_drawtext(text: str, font_size: int, max_width: int, *, font_f
     return lines or [""]
 
 
-def _load_drawtext_font(size: int, font_family: str | None = None) -> ImageFont.ImageFont:
-    for candidate in _font_candidates_for_family(font_family):
+def _wrap_unspaced_text(draw: ImageDraw.ImageDraw, paragraph: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    wrapped: list[str] = []
+    current = ""
+    for char in paragraph:
+        candidate = f"{current}{char}"
+        if current and _measure_text_width(draw, candidate, font) > max_width:
+            wrapped.append(current)
+            current = char
+        else:
+            current = candidate
+    if current:
+        wrapped.append(current)
+    return wrapped
+
+
+def _load_drawtext_font(size: int, font_family: str | None = None, *, sample_text: str = "") -> ImageFont.ImageFont:
+    for candidate in _font_candidates_for_text(font_family, sample_text):
         if candidate.exists():
             return ImageFont.truetype(str(candidate), size)
     return ImageFont.load_default()
@@ -927,11 +976,11 @@ def _overlay_complexity(template_config: dict | None, variant: VideoVariant) -> 
     for key, value in enabled.items():
         if value:
             if key == "slogan":
-                max_lines = _template_max_lines(template, "slogan", 3)
+                max_lines = _template_max_lines(template, "slogan", 12)
             elif key == "title":
                 max_lines = _template_max_lines(template, "title", 12)
             else:
-                max_lines = _template_max_lines(template, "hud", 2)
+                max_lines = _template_max_lines(template, "hud", 6)
             wrapped_lines = _wrap_text_for_drawtext(
                 text_inputs[key],
                 int(template[f"{key}_font_size"]),
