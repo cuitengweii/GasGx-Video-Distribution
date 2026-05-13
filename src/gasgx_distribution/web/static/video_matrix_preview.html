@@ -712,9 +712,9 @@
             line-height: 1.14;
             letter-spacing: 0;
             text-shadow: 0 3px 16px rgba(0,0,0,.72);
-            white-space: pre;
-            overflow-wrap: normal;
-            word-break: keep-all;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .single-cover-title {
@@ -726,12 +726,12 @@
             color: #fff;
             font-size: 22px;
             font-weight: 700;
-            line-height: 1.16;
+            line-height: 1.14;
             letter-spacing: 0;
             text-shadow: 0 3px 16px rgba(0,0,0,.76);
-            white-space: pre;
-            overflow-wrap: normal;
-            word-break: keep-all;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .cover-status-bar {
@@ -950,6 +950,9 @@
             font-size: 7px;
             font-weight: 700;
             line-height: 1.15;
+            white-space: pre-line;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .cover-tile-like {
@@ -2003,7 +2006,7 @@
         document.querySelector(".single-cover-gradient").style.background = singleCoverMaskStyle(template);
         setSingleCoverText("singleCoverLogo", template.single_cover_logo_text || "GasGx", template.single_cover_logo_font_size || 84, "singleLogo");
         setSingleCoverText("singleCoverSlogan", template.single_cover_slogan_text || "终结废气 | 重塑能源 | 就地变现", template.single_cover_slogan_font_size || 60, "singleSlogan");
-        setSingleCoverText("singleCoverTitle", template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎", template.single_cover_title_font_size || 54, "singleTitle");
+        setSingleCoverText("singleCoverTitle", payload.headline || payload.slogan || template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎", template.single_cover_title_font_size || 54, "singleTitle");
       }
 
       function setSingleCoverText(id, text, size, target) {
@@ -2111,7 +2114,7 @@
         ].filter(Boolean).filter((src, index, list) => list.indexOf(src) === index);
         const tileBrand = template.single_cover_logo_text || "GasGx";
         const tileTagline = template.single_cover_slogan_text || "终结废气 | 重塑能源 | 就地变现";
-        const title = template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎";
+        const title = payload.headline || payload.slogan || template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎";
         const likes = [128, 1097, 45, 888, 260, 410, 188, 332, 76];
         const maskStyle = `background:${singleCoverMaskStyle(template)}`;
         const logoStyle = `font-size:${tileCoverFontSize(template.single_cover_logo_font_size, 84)};color:${template.singleLogo_color || template.singleLogoColor || template.primary_color || "#ffffff"}`;

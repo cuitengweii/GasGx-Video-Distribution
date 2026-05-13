@@ -183,6 +183,9 @@ def run_pipeline(
     total = max(len(variants), 1)
     worker_count = _resolve_worker_count(max_workers, total)
     ffmpeg_threads = resolve_ffmpeg_threads(worker_count=worker_count, concurrent_jobs=2)
+    # FFmpeg 8 + x264 can crash with access violations on some Windows hosts under multi-thread encode.
+    # Prefer stability over throughput for matrix batch rendering.
+    ffmpeg_threads = 1
     if telemetry is not None:
         telemetry.event(
             "render",

@@ -169,7 +169,7 @@ def build_single_video_cover_image(
 
     logo_text = str(template.get("single_cover_logo_text") or "GasGx")
     slogan = str(template.get("single_cover_slogan_text") or "终结废气 | 重塑能源 | 就地变现")
-    title = str(template.get("single_cover_title_text") or headline or subhead or "全球领先的搁浅天然气算力变现引擎")
+    title = str(headline or template.get("single_cover_title_text") or subhead or "全球领先的搁浅天然气算力变现引擎")
     title = title.replace("\\n", "\n")
 
     logo_font = _load_font(max(24, int(float(template.get("single_cover_logo_font_size", 84)))), bold=True)
@@ -447,8 +447,27 @@ def _wrap_multiline_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.I
         line = raw_line.strip()
         if not line:
             continue
-        lines.extend(_wrap_text(draw, line, font, max_width))
+        lines.extend(_wrap_cover_line(draw, line, font, max_width))
     return lines or [""]
+
+
+def _wrap_cover_line(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    if _text_size(draw, text, font)[0] <= max_width:
+        return [text]
+    if " " in text:
+        return _wrap_text(draw, text, font, max_width)
+    lines: list[str] = []
+    chunk = ""
+    for char in text:
+        candidate = f"{chunk}{char}"
+        if chunk and _text_size(draw, candidate, font)[0] > max_width:
+            lines.append(chunk)
+            chunk = char
+        else:
+            chunk = candidate
+    if chunk:
+        lines.append(chunk)
+    return lines or [text]
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:

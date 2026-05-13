@@ -117,6 +117,7 @@ def render_variant(
                 outro_seconds=outro_seconds,
                 ending_template_path=inline_ending_path,
                 text_dir=scratch_dir / "text_layers",
+                speed_mode=speed_mode,
             )
         if telemetry is not None:
             telemetry.event(
@@ -271,6 +272,7 @@ def _build_filter_complex(
     outro_seconds: float = 1.0,
     ending_template_path: Path | None = None,
     text_dir: Path | None = None,
+    speed_mode: str = "quality",
 ) -> tuple[str, list[Path]]:
     inputs = [segment.clip.normalized_path for segment in variant.segments]
     chains: list[str] = []
@@ -317,6 +319,7 @@ def _build_filter_complex(
             explicit_template_keys,
             text_dir=text_dir,
             include_boxes=background_overlay_index is None,
+            speed_mode=speed_mode,
         )
         if background_overlay_index is not None:
             chain = (
@@ -428,6 +431,7 @@ def _overlay_filters(
     *,
     text_dir: Path | None = None,
     include_boxes: bool = True,
+    speed_mode: str = "quality",
 ) -> str:
     filters: list[str] = []
     explicit_template_keys = explicit_template_keys or set()
@@ -445,6 +449,7 @@ def _overlay_filters(
                 max_lines=_template_max_lines(template, "hud", 6),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
+                speed_mode=speed_mode,
             )
         )
     if template.get("show_slogan", True):
@@ -461,6 +466,7 @@ def _overlay_filters(
                 max_lines=_template_max_lines(template, "slogan", 12),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
+                speed_mode=speed_mode,
             )
         )
     if template.get("show_title", True):
@@ -477,6 +483,7 @@ def _overlay_filters(
                 max_lines=_template_max_lines(template, "title", 12),
                 explicit_template_keys=explicit_template_keys,
                 text_dir=text_dir,
+                speed_mode=speed_mode,
             )
         )
     return "," + ",".join(filters) if filters else ""
@@ -561,6 +568,7 @@ def _drawtext_lines(
     max_lines: int,
     explicit_template_keys: set[str] | None = None,
     text_dir: Path | None = None,
+    speed_mode: str = "quality",
 ) -> list[str]:
     font_size = int(template[f"{text_key}_font_size"])
     anchor_x = int(template[f"{text_key}_x"])
@@ -580,6 +588,9 @@ def _drawtext_lines(
     )
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
     style = str(template.get(f"{text_key}_text_style") or "none").strip().lower()
+    if str(speed_mode).strip().lower() == "fast_first":
+        effect = "none"
+        style = "none"
     color = _template_text_color(template, text_key, color_key, explicit_template_keys or set())
     font_arg = _resolve_drawtext_font_arg(font_family, sample_text=text)
     filters: list[str] = []
