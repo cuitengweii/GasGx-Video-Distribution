@@ -20,6 +20,7 @@ from .ingestion import ingest_sources
 from .models import RenderedAsset
 from .render import render_variant
 from .settings import ProjectSettings
+from .spark_text import build_headline_variants
 from ..paths import get_paths
 
 
@@ -45,7 +46,7 @@ def run_pipeline(
     cover_template_config: dict | None = None,
     ending_cover_template_config: dict | None = None,
     cover_intro_seconds: float = 1.0,
-    text_overrides: dict[str, str] | None = None,
+    text_overrides: dict[str, Any] | None = None,
     outro_seconds: float = 1.0,
     composition_sequence: list[dict[str, Any]] | None = None,
     existing_signatures: set[str] | None = None,
@@ -167,7 +168,7 @@ def run_pipeline(
             bgm_name=bgm_path.name,
             bgm_duration=bgm_duration,
         )
-    _apply_text_overrides(variants, text_overrides)
+    _apply_text_overrides(variants, text_overrides, settings, language=copy_language)
     template_copy = _copy_template_path().read_text(encoding="utf-8")
     active_cover_template = _resolve_cover_template_config(cover_template_id, cover_template_config)
     active_ending_cover_template = ending_cover_template_config or active_cover_template
@@ -341,15 +342,35 @@ def _resolve_cover_template_config(template_id: str, template_config: dict | Non
         raise ValueError(str(exc)) from exc
 
 
-def _apply_text_overrides(variants: list, text_overrides: dict[str, str] | None) -> None:
+def _apply_text_overrides(
+    variants: list,
+    text_overrides: dict[str, Any] | None,
+    settings: ProjectSettings,
+    *,
+    language: str = "zh",
+) -> None:
     if not text_overrides:
         return
-    headline = text_overrides.get("headline", "").strip()
-    subhead = text_overrides.get("subhead", "").strip()
-    hud_text = text_overrides.get("hud_text", "").strip()
+    headline = str(text_overrides.get("headline") or "").strip()
+    subhead = str(text_overrides.get("subhead") or "").strip()
+    hud_text = str(text_overrides.get("hud_text") or "").strip()
+    headline_ai_enabled = bool(text_overrides.get("headline_ai_enabled"))
     hud_lines = [line.strip() for line in hud_text.splitlines() if line.strip()]
+
+    headline_variants: list[str] = []
+    if headline_ai_enabled and variants:
+        seed_headline = headline or str(variants[0].slogan or "").strip()
+        headline_variants = build_headline_variants(
+            seed_headline,
+            len(variants),
+            language=language,
+            settings=settings,
+        )
+
     for variant in variants:
-        if headline:
+        if headline_ai_enabled and headline_variants:
+            variant.slogan = headline_variants.pop(0)
+        elif headline:
             variant.slogan = headline
         if subhead:
             variant.title = subhead

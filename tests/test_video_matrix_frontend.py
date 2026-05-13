@@ -119,6 +119,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "HUD调整区" not in app
     assert "文案参考资料" not in html
     assert '<input id="headline" type="hidden" />' in html
+    assert 'id="headlineAiEnabled" type="checkbox"' in html
+    assert "headline_ai_enabled: Boolean($(\"headlineAiEnabled\")?.checked)" in app
     assert html.index('class="cover-workbench"') < html.index('class="video-template-workbench"') < html.index('class="side-editor"')
     assert html.index('class="video-template-workbench"') < html.index('class="ending-workbench cover-workbench"') < html.index('class="side-editor"')
     assert "transcriptFile" not in html

@@ -1,4 +1,4 @@
-﻿const $ = (id) => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 let state = {};
 let templates = {};
 let coverTemplates = {};
@@ -359,6 +359,14 @@ function renderSidebar(data) {
   $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 30), scheduleStateSave);
   renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "快速首出"], ["quality", "标准质量"]], String(state.render_speed_mode || "quality"), scheduleStateSave);
+  const headlineAiToggle = $("headlineAiEnabled");
+  if (headlineAiToggle) {
+    headlineAiToggle.checked = Boolean(state.headline_ai_enabled);
+    headlineAiToggle.onchange = () => {
+      state.headline_ai_enabled = headlineAiToggle.checked;
+      scheduleStateSave();
+    };
+  }
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
   $("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory);
@@ -2532,7 +2540,7 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "生成文案",
       pendingText: "检查字幕背板和片尾文案。",
       readyText: "文案字段可用。",
-      configText: `字幕背板 ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"}`,
+      configText: `字幕背板 ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"} / 上标题 ${statePayload.headline_ai_enabled ? "AI 批量生成" : "固定文案"}`,
       run: async (index) => {
         await animatePreflightProgress(index, 55, "检查字幕背板和片尾文案...");
         const emptyFields = [
@@ -2541,7 +2549,7 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
         ].filter(([, value]) => !String(value || "").trim()).map(([label]) => label);
         await animatePreflightProgress(index, 100, "文案字段检查完成。");
         if (emptyFields.length) return { status: "warn", detail: `${emptyFields.join("、")}为空，仍可生成但画面文案会变少。` };
-        return { status: "pass", detail: "字幕背板、片尾文案和语言设置可用。" };
+        return { status: "pass", detail: statePayload.headline_ai_enabled ? "字幕背板、片尾文案可用；上标题将按生成数量由 AI 批量生成。" : "字幕背板、片尾文案可用；上标题使用固定文案。" };
       },
     },
     {
@@ -2717,6 +2725,7 @@ function collectState() {
     template_config: activeVideoTemplateSnapshot(),
     cover_template_config: activeCoverTemplateSnapshot(),
     source_mode: "Category folders",
+    headline_ai_enabled: Boolean($("headlineAiEnabled")?.checked),
     headline: $("headline").value, subhead: $("subhead").value,
     follow_text: endingCopyText, hud_text: $("hudText").value,
     ending_template_mode: endingTemplateMode(),
@@ -3302,3 +3311,4 @@ window.addEventListener("message", (event) => {
 });
 
 init().catch((err) => log(err.message));
+

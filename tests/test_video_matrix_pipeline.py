@@ -159,3 +159,47 @@ def test_run_pipeline_uses_conservative_default_worker_count(monkeypatch, tmp_pa
 
     assert [asset.variant.sequence_number for asset in assets] == [1, 2, 3, 4]
     assert captured["ffmpeg_threads"] == 2
+
+
+def test_apply_text_overrides_keeps_fixed_headline_when_ai_disabled(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    variants = [_variant(tmp_path / "source.mp4", 1), _variant(tmp_path / "source.mp4", 2)]
+
+    pipeline._apply_text_overrides(
+        variants,
+        {
+            "headline": "Fixed headline",
+            "headline_ai_enabled": False,
+            "subhead": "Fixed subhead",
+            "hud_text": "Line A\nLine B",
+        },
+        settings,
+        language="zh",
+    )
+
+    assert [item.slogan for item in variants] == ["Fixed headline", "Fixed headline"]
+    assert [item.title for item in variants] == ["Fixed subhead", "Fixed subhead"]
+    assert [item.hud_lines for item in variants] == [["Line A", "Line B"], ["Line A", "Line B"]]
+
+
+def test_apply_text_overrides_assigns_distinct_headline_variants_when_ai_enabled(monkeypatch, tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    variants = [_variant(tmp_path / "source.mp4", 1), _variant(tmp_path / "source.mp4", 2)]
+
+    monkeypatch.setattr(
+        pipeline,
+        "build_headline_variants",
+        lambda *_args, **_kwargs: ["EN line 1\n中文 1", "EN line 2\n中文 2"],
+    )
+
+    pipeline._apply_text_overrides(
+        variants,
+        {
+            "headline": "Seed headline",
+            "headline_ai_enabled": True,
+        },
+        settings,
+        language="zh",
+    )
+
+    assert [item.slogan for item in variants] == ["EN line 1\n中文 1", "EN line 2\n中文 2"]

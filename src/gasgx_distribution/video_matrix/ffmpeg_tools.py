@@ -61,10 +61,11 @@ def resolve_binary(name: str) -> str:
 
 
 def run_command(args: Iterable[str]) -> subprocess.CompletedProcess[str]:
+    command = list(args)
     acquire_encode_slot()
     try:
         process = subprocess.run(
-            list(args),
+            command,
             check=False,
             text=True,
             encoding="utf-8",
@@ -74,7 +75,8 @@ def run_command(args: Iterable[str]) -> subprocess.CompletedProcess[str]:
         if process.returncode != 0:
             stderr = process.stderr or ""
             stdout = process.stdout or ""
-            raise FFmpegError(stderr.strip() or stdout.strip() or "FFmpeg command failed")
+            message = stderr.strip() or stdout.strip() or "FFmpeg command failed"
+            raise FFmpegError(f"[exit={process.returncode}] {message}")
         return process
     finally:
         release_encode_slot()
@@ -157,6 +159,48 @@ def concat_video(
     filter_script_path.write_text(filter_complex, encoding="utf-8")
     profile = _video_encode_profile(speed_mode)
     threads = max(1, threads or resolve_ffmpeg_threads())
+    try:
+        failures: list[str] = []
+        for filter_mode in ("new", "legacy"):
+            for include_bgm in ((True, False) if bgm_path is not None else (False,)):
+                command = _build_concat_command(
+                    ffmpeg=ffmpeg,
+                    inputs=inputs,
+                    output=output,
+                    bgm_path=bgm_path if include_bgm else None,
+                    filter_script_path=filter_script_path,
+                    filter_mode=filter_mode,
+                    profile=profile,
+                    threads=threads,
+                    speed_mode=speed_mode,
+                    bgm_start_offset=bgm_start_offset,
+                )
+                try:
+                    run_command(command)
+                    return
+                except FFmpegError as exc:
+                    failures.append(f"{filter_mode}/bgm={include_bgm}: {exc}")
+                    # Older ffmpeg builds don't understand the new script syntax.
+                    if filter_mode == "new" and "Unrecognized option '-/filter_complex'" in str(exc):
+                        break
+        raise FFmpegError("\n".join(failures))
+    finally:
+        filter_script_path.unlink(missing_ok=True)
+
+
+def _build_concat_command(
+    *,
+    ffmpeg: str,
+    inputs: list[Path],
+    output: Path,
+    bgm_path: Path | None,
+    filter_script_path: Path,
+    filter_mode: str,
+    profile: dict[str, str],
+    threads: int,
+    speed_mode: str,
+    bgm_start_offset: float,
+) -> list[str]:
     command = [ffmpeg, "-y"]
     for clip in inputs:
         command.extend(["-i", str(clip)])
@@ -166,10 +210,12 @@ def concat_video(
         if offset:
             command.extend(["-ss", f"{offset:.3f}"])
         command.extend(["-i", str(bgm_path)])
+    if filter_mode == "new":
+        command.extend(["-/filter_complex", str(filter_script_path)])
+    else:
+        command.extend(["-filter_complex_script", str(filter_script_path)])
     command.extend(
         [
-            "-filter_complex_script",
-            str(filter_script_path),
             "-map",
             "[vout]",
             "-c:v",
@@ -199,10 +245,7 @@ def concat_video(
     else:
         command.append("-an")
     command.append(str(output))
-    try:
-        run_command(command)
-    finally:
-        filter_script_path.unlink(missing_ok=True)
+    return command
 
 
 def append_video_tail(

@@ -14,7 +14,7 @@ from gasgx_distribution.video_matrix import cover as cover_renderer
 from gasgx_distribution.video_matrix import render as video_renderer
 from gasgx_distribution.video_matrix.render import _build_filter_complex
 from gasgx_distribution.video_matrix.settings import ProjectSettings
-from gasgx_distribution.video_matrix.spark_text import build_text_variants
+from gasgx_distribution.video_matrix.spark_text import build_headline_variants, build_text_variants
 
 
 def _settings(**overrides) -> ProjectSettings:
@@ -271,6 +271,14 @@ def test_build_text_variants_template_fallback_is_distinct() -> None:
     openings = [str(item["opening_text"]) for item in variants]
     assert len(variants) == 4
     assert len(set(openings)) == 4
+
+
+def test_build_headline_variants_fallback_returns_bilingual_rows() -> None:
+    variants = build_headline_variants("Gas to Compute", 3, settings=_settings(copy_mode="template"))
+
+    assert len(variants) == 3
+    assert len(set(variants)) == 3
+    assert all(len([line for line in item.splitlines() if line.strip()]) == 2 for item in variants)
 
 
 def test_beat_duration_hint_expands_to_composition_total() -> None:

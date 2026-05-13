@@ -94,6 +94,7 @@ def test_video_matrix_api_state_and_preview() -> None:
     state = client.get("/api/video-matrix/state")
     assert state.status_code == 200
     payload = state.json()
+    assert "headline_ai_enabled" in payload["ui_state"]
     assert payload["cover_templates"]
     assert "industrial_engine_hook" in payload["cover_templates"]
     assert payload["local_bgm_dir"].endswith("runtime\\video_matrix\\bgm") or payload["local_bgm_dir"].endswith("runtime/video_matrix/bgm")
@@ -326,11 +327,13 @@ def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path
         "video_duration_max": 24,
         "target_fps": 30,
         "composition_sequence": [{"category_id": "category_D", "duration": 2.2}],
+        "headline_ai_enabled": True,
     }
 
     video_matrix_api._run_generate_job("test-job", request, tmp_path / "bgm.mp3", None)
 
     assert captured["composition_sequence"] == [{"category_id": "category_D", "duration": 2.2}]
+    assert captured["text_overrides"]["headline_ai_enabled"] is True
     assert captured["settings"].video_duration_min == 8
     assert captured["settings"].video_duration_max == 24
     assert captured["settings"].target_fps == 30
@@ -391,6 +394,7 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
         "output_root": str(tmp_path / "exports"),
         "copy_language": "zh",
         "source_mode": "Category folders",
+        "headline_ai_enabled": True,
         "recent_limits": {"category_A": 12},
         "active_category_ids": ["category_A"],
         "video_duration_min": 7,
@@ -407,6 +411,7 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
     assert state["video_duration_min"] == 7
     assert state["video_duration_max"] == 18
     assert state["target_fps"] == 30
+    assert state["headline_ai_enabled"] is True
     assert state["bgm_library_id"] == "selected.mp3"
     assert "transcript_text" not in state
 

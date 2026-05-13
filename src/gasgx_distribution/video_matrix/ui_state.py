@@ -17,6 +17,7 @@ DEFAULT_UI_STATE: dict[str, Any] = {
     "video_duration_min": 8.0,
     "video_duration_max": 12.0,
     "headline": "Gas Engines That Turn Field Gas Into Power",
+    "headline_ai_enabled": False,
     "subhead": "Generator sets for onsite Bitcoin and industrial load",
     "hud_text": "Gas Engine -> Generator Set -> Power Output\nField Gas -> Stable Load -> Hashrate",
     "follow_text": "Follow GasGx for more field power cases",

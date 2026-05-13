@@ -36,7 +36,7 @@ from .video_matrix.settings import ProjectSettings
 from .video_matrix.template_preview import render_video_template_preview_image
 from .video_matrix.telemetry import GenerationTrace
 from .video_matrix.templates import DEFAULT_TEMPLATE_ID, load_templates, save_templates
-from .video_matrix.ui_state import load_ui_state, save_ui_state
+from .video_matrix.ui_state import DEFAULT_UI_STATE, load_ui_state, save_ui_state
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -472,6 +472,11 @@ def _complete_video_matrix_state(stored: dict[str, Any] | None) -> tuple[dict[st
         if not current.get(key):
             current[key] = value
             changed = True
+    merged_ui_state = dict(DEFAULT_UI_STATE)
+    merged_ui_state.update(dict(current.get("ui_state") or {}))
+    if dict(current.get("ui_state") or {}) != merged_ui_state:
+        current["ui_state"] = merged_ui_state
+        changed = True
     current["settings"] = _merge_settings_payload(dict(current.get("settings") or {}))
     changed = _remove_website_url_state(current) or changed
     changed = _remove_retired_video_matrix_state(current) or changed
@@ -1158,6 +1163,7 @@ def _run_generate_job(
                     "subhead": str(request.get("subhead") or ""),
                     "hud_text": str(request.get("hud_text") or ""),
                     "follow_text": str(request.get("follow_text") or ""),
+                    "headline_ai_enabled": bool(request.get("headline_ai_enabled")),
                 },
             )
         try:
@@ -1767,6 +1773,7 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "target_fps",
         "render_speed_mode",
         "headline",
+        "headline_ai_enabled",
         "subhead",
         "follow_text",
         "hud_text",
