@@ -91,6 +91,15 @@ def test_account_list_has_keyword_search_filter() -> None:
     assert ".account-search-field" in css
 
 
+def test_terminal_login_failure_copy_mentions_login_confirmation() -> None:
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'login_manual_confirm: "登录确认失败"' not in app
+    assert 'function terminalFriendlyMessage(message, stage = "")' in app
+    assert "登录态校验未通过" not in app
+    assert "执行失败，请稍后重试。" in app
+
+
 def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> None:
     app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_app.js").read_text(encoding="utf-8")
     css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_styles.css").read_text(encoding="utf-8")

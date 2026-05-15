@@ -3655,6 +3655,20 @@ def probe_platform_session_via_debug_port(
 
     login_state = inspect_platform_login_gate(page, platform)
     current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
+    if platform == "wechat" and "channels.weixin.qq.com/login" in current_url.lower() and "channels.weixin.qq.com/login" not in resolved_open_url.lower():
+        try:
+            page.get(resolved_open_url)
+            time.sleep(0.8)
+            page = _stabilize_platform_session_page(
+                page,
+                platform_name=platform,
+                open_url=resolved_open_url,
+                close_stale_login_tabs=True,
+            )
+            login_state = inspect_platform_login_gate(page, platform)
+            current_url = str(login_state.get("url") or _page_current_url(page) or "").strip()
+        except Exception:
+            pass
     if platform == "wechat" and "channels.weixin.qq.com/login" in current_url.lower():
         login_state = {
             **dict(login_state or {}),

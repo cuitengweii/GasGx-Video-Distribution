@@ -5395,61 +5395,6 @@ def confirm_terminal_login_ready(window_id: int) -> dict[str, Any]:
         run_status in {"running", "manual_confirm", "success"} or _terminal_run_is_manual_confirmable(run)
     ):
         return terminal_execution_state()
-    account_id = int(current.get("id") or 0)
-    try:
-        fast_timeout = max(4, int(TERMINAL_FAST_LOGIN_PROBE_TIMEOUT_SECONDS or 6))
-        result = _check_terminal_login_status_with_timeout(
-            account_id,
-            "wechat",
-            timeout_seconds=fast_timeout,
-        )
-    except Exception as exc:
-        if isinstance(exc, TimeoutError):
-            try:
-                retry_timeout = max(fast_timeout + 2, int(TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS or 8), 8)
-                result = _check_terminal_login_status_with_timeout(
-                    account_id,
-                    "wechat",
-                    timeout_seconds=retry_timeout,
-                )
-            except Exception as retry_exc:
-                runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
-                if runtime.get("browser_open") is True:
-                    result = {"ok": True, "status": "ready"}
-                else:
-                    exc = retry_exc
-                    result = None
-        else:
-            result = None
-    if result is None:
-        error_text = str(exc) or "请稍后重试"
-        if "account not found" in error_text.lower():
-            _set_terminal_account_error(
-                current,
-                stage="account_missing",
-                title="账号配置异常",
-                message="账号不存在，请在账号矩阵中重新绑定后再试。",
-            )
-        else:
-            _set_terminal_account_error(
-                current,
-                stage="login_probe",
-                title="登录检测失败",
-                message=f"登录检测失败：{error_text}",
-            )
-        target["manual_available_at"] = 0
-        state["next_probe_at"] = 0
-        _save_terminal_state(state)
-        return terminal_execution_state()
-    if str(result.get("status") or "").strip().lower() != "ready":
-        _clear_terminal_account_error(current)
-        current["status"] = "waiting_qr"
-        current["status_text"] = TERMINAL_LOGIN_CONFIRM_TEXT
-        current["task_id"] = None
-        target["manual_available_at"] = 0
-        state["next_probe_at"] = 0
-        _save_terminal_state(state)
-        return terminal_execution_state()
     _clear_terminal_account_error(current)
     _clear_terminal_qr_cache(int(target.get("id") or 0))
     _set_terminal_window_qr(target, "")

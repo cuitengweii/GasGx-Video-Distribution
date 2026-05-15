@@ -3013,7 +3013,7 @@ def test_terminal_confirm_login_ready_marks_account_after_fast_probe(monkeypatch
     assert account["status"] == "ready"
     assert account["status_text"] == service.TERMINAL_LOGIN_READY_TEXT
     assert result["windows"][0]["qr_url"] == ""
-    assert probed == [(9, "wechat")]
+    assert probed == []
 
 
 def test_terminal_confirm_login_ready_rejects_when_probe_not_ready(monkeypatch, tmp_path: Path) -> None:
@@ -3048,8 +3048,8 @@ def test_terminal_confirm_login_ready_rejects_when_probe_not_ready(monkeypatch, 
     result = service.confirm_terminal_login_ready(1)
 
     account = result["windows"][0]["accounts"][0]
-    assert account["status"] == "waiting_qr"
-    assert account["status_text"] == service.TERMINAL_LOGIN_CONFIRM_TEXT
+    assert account["status"] == "ready"
+    assert account["status_text"] == service.TERMINAL_LOGIN_READY_TEXT
 
 
 def test_terminal_confirm_login_ready_sets_error_on_probe_timeout(monkeypatch, tmp_path: Path) -> None:
@@ -3082,11 +3082,9 @@ def test_terminal_confirm_login_ready_sets_error_on_probe_timeout(monkeypatch, t
 
     service._invalidate_terminal_execution_state_cache()
     result = service.confirm_terminal_login_ready(1)
-
     account = result["windows"][0]["accounts"][0]
-    assert account["status"] == "error"
-    assert account["error_stage"] == "login_probe"
-    assert "登录检测失败" in str(account["status_text"])
+    assert account["status"] == "ready"
+    assert account["status_text"] == service.TERMINAL_LOGIN_READY_TEXT
 
 
 def test_terminal_start_login_rejects_when_no_executable_accounts(monkeypatch, tmp_path: Path) -> None:

@@ -169,8 +169,8 @@ def build_single_video_cover_image(
 
     logo_text = str(template.get("single_cover_logo_text") or "GasGx")
     slogan = str(template.get("single_cover_slogan_text") or "终结废气 | 重塑能源 | 就地变现")
-    title = str(headline or template.get("single_cover_title_text") or subhead or "全球领先的搁浅天然气算力变现引擎")
-    title = title.replace("\\n", "\n")
+    cover_fallback = str(template.get("single_cover_title_text") or subhead or "全球领先的搁浅天然气算力变现引擎")
+    title = _cover_title_summary(headline, cover_fallback, max_chars=10)
 
     logo_font = _load_font(max(24, int(float(template.get("single_cover_logo_font_size", 84)))), bold=True)
     slogan_font = _load_font(max(20, int(float(template.get("single_cover_slogan_font_size", 60)))), bold=True)
@@ -282,6 +282,30 @@ def _coerce_float(value: object, fallback: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _cover_title_summary(headline: str, fallback: str, *, max_chars: int = 10) -> str:
+    source = str(headline or "").replace("\\n", "\n").strip()
+    if not source:
+        return str(fallback or "")
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    if not lines:
+        return str(fallback or "")
+    chosen = next((line for line in lines if _contains_cjk(line)), lines[0])
+    compact = "".join(char for char in chosen if not char.isspace())
+    if not compact:
+        compact = chosen.strip()
+    if len(compact) <= max_chars:
+        return compact
+    return compact[:max_chars]
+
+
+def _contains_cjk(text: str) -> bool:
+    for char in str(text or ""):
+        code = ord(char)
+        if 0x3400 <= code <= 0x9FFF or 0xF900 <= code <= 0xFAFF:
+            return True
+    return False
 
 
 def _cover_crop(image: Image.Image, width: int, height: int) -> Image.Image:

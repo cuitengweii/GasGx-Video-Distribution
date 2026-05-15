@@ -657,10 +657,17 @@ function saveAuthSession(nextSession) {
   localStorage.setItem(SHELL_AUTH_KEY, JSON.stringify(nextSession));
 }
 
-function terminalFriendlyMessage(message) {
+function terminalFriendlyMessage(message, stage = "") {
   const raw = String(message || "").trim();
   if (!raw) return "操作失败，请稍后重试。";
   const lowered = raw.toLowerCase();
+  const stageToken = String(stage || "").trim().toLowerCase();
+  if (stageToken === "login_browser" || stageToken === "qr") {
+    return "请先点击“打开浏览器扫码”完成登录，再重试当前操作。";
+  }
+  if (stageToken === "login_probe" || lowered.includes("login_probe")) {
+    return "登录检测未通过，请先在浏览器完成登录后再重试。";
+  }
   if (lowered.includes("account not found") || raw.includes("未找到账号") || raw.includes("账号不存在")) {
     return "账号不存在。请先到“账号矩阵”检查账号是否被删除或禁用，然后回到当前窗口重新打开浏览器。";
   }
@@ -674,7 +681,7 @@ function terminalFriendlyMessage(message) {
     return "网络连接异常。请稍后重试；若连续失败，请检查网络后再试。";
   }
   if (/[A-Za-z]{3,}/.test(raw)) {
-    return "执行失败。请先点击“打开浏览器扫码”完成登录，再重试当前操作。";
+    return "执行失败，请稍后重试。";
   }
   return raw;
 }
@@ -812,6 +819,7 @@ function terminalErrorStageFromMessage(message) {
     lowered.includes("wechat platform config missing")
   ) return "publish_start";
   if (lowered.includes("account not found") || /账号不存在|未找到账号/.test(text)) return "account_missing";
+  if (lowered.includes("login_probe")) return "login_probe";
   if (/二维码|浏览器/.test(text)) return "login_browser";
   if (/登录|会话|network|connection|timeout|超时|接口/.test(text)) return "login_probe";
   return "";
@@ -912,7 +920,7 @@ function showTerminalErrorModal(payload) {
     stageNode.classList.toggle("hidden", !stageText);
   }
   if (contextNode) contextNode.textContent = payload.context || "";
-  if (messageNode) messageNode.textContent = terminalFriendlyMessage(payload.message || "操作失败");
+  if (messageNode) messageNode.textContent = terminalFriendlyMessage(payload.message || "操作失败", payload.stage);
   if (flowNode) flowNode.innerHTML = terminalErrorFlowMarkup(payload.stage, { showAll: Boolean(payload.showAllGuides) });
   modal.classList.remove("hidden");
 }
@@ -2633,36 +2641,6 @@ function terminalPrecheckPrimaryIssue(window) {
   return null;
 }
 
-function terminalStatusLooksLoggedIn(statusText) {
-  const text = String(statusText || "").trim();
-  if (!text) return false;
-  return text.includes("已登录")
-    || text.includes("无需扫码")
-    || text.includes("发布中")
-    || text.includes("发布成功")
-    || text.includes("待人工发布");
-}
-
-function terminalStatusLooksLoggedOut(statusText) {
-  const text = String(statusText || "").trim();
-  if (!text) return true;
-  if (terminalStatusLooksLoggedIn(text)) return false;
-  return text.includes("未登录")
-    || text.includes("扫码")
-    || text.includes("登录浏览器")
-    || text.includes("等待登录")
-    || text.includes("请登录");
-}
-
-function terminalAccountRequiresLoginConfirmation(account) {
-  const status = String(account?.status || "").toLowerCase();
-  if (status === "ready" || status === "running" || status === "success") return false;
-  const statusText = sanitizeTerminalStatusText(account?.status_text, account?.status);
-  if (terminalStatusLooksLoggedIn(statusText)) return false;
-  if (status === "waiting_qr" || status === "pending" || status === "idle") return true;
-  return terminalStatusLooksLoggedOut(statusText);
-}
-
 function terminalAccountCanStartPublish(account) {
   const status = String(account?.status || "").toLowerCase();
   return status === "ready" || status === "running" || status === "success";
@@ -2694,9 +2672,6 @@ function terminalWindowActionButtons(window, current, loginStarted) {
   const currentStatusText = String(current?.status_text || "");
   const isPreparingByText = currentStatusText.includes("正在准备发布页面");
   const isReady = currentStatus === "ready" || isPreparingByText;
-  const primaryIssue = terminalPrecheckPrimaryIssue(window);
-  const hasP0Issue = Boolean(primaryIssue && primaryIssue.level === "p0");
-  const requiresLoginConfirm = terminalAccountRequiresLoginConfirmation(current);
   const localAutoPublishStage = terminalAutoPublishStageByWindowId.get(windowIdText) || "";
   const runningAutoPublishStage = publishRunning ? (terminalAutoPublishStageFromStatusText(currentStatusText) || "publishing") : "";
   const autoPublishStage = publishStopping
@@ -2720,9 +2695,7 @@ function terminalWindowActionButtons(window, current, loginStarted) {
         ? "待人工发布"
         : publishManualConfirmableFailure
           ? "重新准备"
-        : hasP0Issue || requiresLoginConfirm
-          ? "确认已登录后发布"
-          : "我已登录，点击发布";
+        : "我已登录，点击发布";
   const confirmReadyLabel = hasNext
     ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
     : (publishManualConfirmableFailure ? "已人工确认成功，完成" : "发布成功，完成");
@@ -5892,14 +5865,6 @@ document.addEventListener("click", async (event) => {
     const windowId = String(terminalAutoPublishButton.dataset.terminalAutoPublish || "").trim();
     if (!windowId) return;
     if (terminalAutoPublishWindowIds.has(windowId)) return;
-    const currentWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowId);
-    const currentIndex = Number(currentWindow?.current_index || 0);
-    const currentAccount = currentWindow?.accounts?.[currentIndex] || {};
-    if (terminalAccountRequiresLoginConfirmation(currentAccount)) {
-      const statusText = sanitizeTerminalStatusText(currentAccount?.status_text, currentAccount?.status);
-      const continuePublish = window.confirm(`当前状态是“${statusText}”，看起来还没完成登录。\n继续会直接进入发布流程，确认继续吗？`);
-      if (!continuePublish) return;
-    }
     terminalAutoPublishWindowIds.add(windowId);
     terminalAutoPublishStageByWindowId.set(windowId, "confirm_login");
     renderTerminalExecution();
@@ -5908,13 +5873,6 @@ document.addEventListener("click", async (event) => {
     let stage = "confirm_login";
     try {
       state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/confirm-login`, { method: "POST" });
-      const refreshedWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowId);
-      const refreshedIndex = Number(refreshedWindow?.current_index || 0);
-      const refreshedAccount = refreshedWindow?.accounts?.[refreshedIndex] || {};
-      if (!terminalAccountCanStartPublish(refreshedAccount)) {
-        const statusText = sanitizeTerminalStatusText(refreshedAccount?.status_text, refreshedAccount?.status);
-        throw new Error(`登录态校验未通过：${statusText}`);
-      }
       terminalAutoPublishStageByWindowId.set(windowId, "prepare_publish");
       renderTerminalExecution();
       stage = "manual_publish";
@@ -5924,13 +5882,7 @@ document.addEventListener("click", async (event) => {
       renderTerminalExecution();
     } catch (error) {
       terminalAutoPublishStageByWindowId.delete(windowId);
-      showTerminalErrorModal({
-        stage: stage === "confirm_login" ? "login_manual_confirm" : "publish_start",
-        title: "一键自动发布失败",
-        message: error.message || "一键自动发布失败",
-        context: `窗口 #${windowId}`,
-        signature: `auto-publish|${stage}|${windowId}|${error.message || "unknown"}`,
-      });
+      console.warn("[terminal:auto-publish] failed", { windowId, stage, error: error?.message || error });
       renderTerminalExecution();
     } finally {
       terminalAutoPublishWindowIds.delete(windowId);

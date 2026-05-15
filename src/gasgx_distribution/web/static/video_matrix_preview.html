@@ -2006,7 +2006,7 @@
         document.querySelector(".single-cover-gradient").style.background = singleCoverMaskStyle(template);
         setSingleCoverText("singleCoverLogo", template.single_cover_logo_text || "GasGx", template.single_cover_logo_font_size || 84, "singleLogo");
         setSingleCoverText("singleCoverSlogan", template.single_cover_slogan_text || "终结废气 | 重塑能源 | 就地变现", template.single_cover_slogan_font_size || 60, "singleSlogan");
-        setSingleCoverText("singleCoverTitle", payload.headline || payload.slogan || template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎", template.single_cover_title_font_size || 54, "singleTitle");
+        setSingleCoverText("singleCoverTitle", coverHeadlineSummary(payload.headline || payload.slogan || template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎", 10), template.single_cover_title_font_size || 54, "singleTitle");
       }
 
       function setSingleCoverText(id, text, size, target) {
@@ -2087,6 +2087,16 @@
         return existingLines.concat(Array(lineCount - existingLines.length).fill("")).join("\n");
       }
 
+      function coverHeadlineSummary(value, maxChars = 10) {
+        const raw = String(value || "").replace(/\\n/g, "\n").trim();
+        if (!raw) return "";
+        const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        const chosen = lines.find((line) => /[\u3400-\u9fff\uf900-\ufaff]/.test(line)) || lines[0] || raw;
+        const compact = chosen.replace(/\s+/g, "");
+        if (!compact) return chosen;
+        return compact.length <= maxChars ? compact : compact.slice(0, maxChars);
+      }
+
       function escapeHtmlText(value) {
         return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
       }
@@ -2114,7 +2124,7 @@
         ].filter(Boolean).filter((src, index, list) => list.indexOf(src) === index);
         const tileBrand = template.single_cover_logo_text || "GasGx";
         const tileTagline = template.single_cover_slogan_text || "终结废气 | 重塑能源 | 就地变现";
-        const title = payload.headline || payload.slogan || template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎";
+        const title = coverHeadlineSummary(payload.headline || payload.slogan || template.single_cover_title_text || "全球领先的搁浅天然气算力变现引擎", 10);
         const likes = [128, 1097, 45, 888, 260, 410, 188, 332, 76];
         const maskStyle = `background:${singleCoverMaskStyle(template)}`;
         const logoStyle = `font-size:${tileCoverFontSize(template.single_cover_logo_font_size, 84)};color:${template.singleLogo_color || template.singleLogoColor || template.primary_color || "#ffffff"}`;

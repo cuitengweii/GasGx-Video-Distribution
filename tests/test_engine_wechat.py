@@ -1799,6 +1799,50 @@ def test_probe_platform_session_rechecks_wechat_when_active_tab_is_irrelevant(
     assert page.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
 
 
+def test_probe_platform_session_rechecks_wechat_when_current_tab_is_login_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://channels.weixin.qq.com/login.html"
+            self.get_calls: list[str] = []
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(str(url))
+            self.url = str(url)
+
+    page = FakePage()
+    inspect_calls: list[str] = []
+
+    monkeypatch.setattr(engine, "_connect_chrome", lambda **_kwargs: page)
+    monkeypatch.setattr(engine, "_stabilize_platform_session_page", lambda current_page, **_kwargs: current_page)
+
+    def fake_inspect(current_page, _platform):
+        inspect_calls.append(str(getattr(current_page, "url", "")))
+        if "login.html" in str(getattr(current_page, "url", "")):
+            return {"needs_login": True, "reason": "login_url", "url": str(getattr(current_page, "url", ""))}
+        return {"needs_login": False, "reason": "", "url": str(getattr(current_page, "url", ""))}
+
+    monkeypatch.setattr(engine, "inspect_platform_login_gate", fake_inspect)
+    monkeypatch.setattr(engine, "_page_current_url", lambda current: str(getattr(current, "url", "") or ""))
+    monkeypatch.setattr(engine, "_disconnect_chrome_page_quietly", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_has_recent_platform_session_ready", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_mark_platform_session_ready", lambda *_args, **_kwargs: None)
+
+    result = engine.probe_platform_session_via_debug_port(
+        platform_name="wechat",
+        open_url="https://channels.weixin.qq.com/platform/post/create",
+        debug_port=9334,
+        chrome_user_data_dir="D:/profiles/wechat",
+        enable_wechat_keepalive=False,
+    )
+
+    assert result["status"] == "ready"
+    assert page.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
+    assert inspect_calls[0] == "https://channels.weixin.qq.com/login.html"
+    assert inspect_calls[-1] == "https://channels.weixin.qq.com/platform/post/create"
+
+
 def test_wechat_keepalive_does_not_reload_when_current_page_is_relevant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

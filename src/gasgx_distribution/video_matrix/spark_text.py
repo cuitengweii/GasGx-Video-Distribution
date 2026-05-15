@@ -19,7 +19,7 @@ LANGUAGE_LABELS = {
 
 TEXT_VARIANT_TOPICS = [
     ("现场负载", "燃气机组稳定带载", "现场气源转成稳定电力"),
-    ("余气利用", "把放空气变成可用能源", "减少放散同时提升用能效率"),
+    ("余气利用", "把废气变成可用能源", "减少放散同时提升用能效率"),
     ("机组巡检", "关键参数一眼看懂", "从气源到发电保持连续输出"),
     ("矿场供能", "低成本电力支撑算力", "让边远场站也能稳定运行"),
     ("项目交付", "模块化部署更快落地", "机组、控制和负载协同启动"),
@@ -361,7 +361,7 @@ def _fallback_headline_variants(seed: str, count: int, *, min_len: int, max_len:
     seed = seed.strip() or DEFAULT_HEADLINE_SEED
     topics = [
         ("Field Gas to Stable Power", "现场燃气转稳定电力"),
-        ("Turn Waste Gas Into Hashrate", "把放空气变成算力收益"),
+        ("Turn Waste Gas Into Hashrate", "把废气变成算力收益"),
         ("Deploy Power Where Gas Lives", "气源在哪里 电力就部署到哪里"),
         ("Industrial Load, Onsite Energy", "工业负载配套就地能源"),
         ("Generator Sets for Remote Sites", "偏远站点也能稳定供电"),
@@ -400,24 +400,22 @@ def _fit_headline_length(candidate: str, seed: str, *, min_len: int, max_len: in
     if not normalized:
         return candidate
     en, zh = normalized.split("\n", 1)
-    target_hint = _headline_seed_hint(seed)
+    seed_en, _seed_zh = _headline_seed_lines(seed)
     length = _content_length(normalized)
     if length > max_len:
         en_words = en.split()
         while en_words and _content_length(" ".join(en_words) + "\n" + zh) > max_len:
             en_words.pop()
         en = " ".join(en_words) or "GasGx Onsite Power"
-    elif length < min_len:
-        pad = target_hint or "GasGx"
-        if LATIN_RE.search(pad):
-            en = f"{en} {pad}".strip()
-        if CJK_RE.search(pad):
-            zh = f"{zh} {pad}".strip()
+    elif length < min_len and seed_en:
+        en = f"{en} {seed_en}".strip()
     return f"{en}\n{zh}"
 
 
-def _headline_seed_hint(seed: str) -> str:
+def _headline_seed_lines(seed: str) -> tuple[str, str]:
     parts = [line.strip() for line in seed.replace("\r\n", "\n").split("\n") if line.strip()]
-    if len(parts) == 2:
-        return parts[0] if LATIN_RE.search(parts[0]) else parts[1]
-    return parts[0] if parts else ""
+    if not parts:
+        return "", ""
+    seed_en = next((line for line in parts if LATIN_RE.search(line)), "")
+    seed_zh = next((line for line in parts if CJK_RE.search(line)), "")
+    return seed_en, seed_zh
