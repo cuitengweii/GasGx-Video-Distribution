@@ -1052,6 +1052,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "已保存正文模板：${displayTemplateName" in app
     assert "警示：视频生成期间不可以关闭页面，否则会影响视频生成" in html
     assert ".job-warning" in css
+    assert "#generationWaitFill" in css
     assert "repeat(auto-fit, minmax(96px, 1fr))" in css
     assert ".job-status-card.error" in css
     assert "#jobMessage.error-message" in css

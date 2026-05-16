@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, Callable
 
 from .beat import detect_beat_grid
@@ -27,6 +28,8 @@ from ..paths import get_paths
 ProgressCallback = Callable[[str, float, str], None]
 AssetCallback = Callable[[RenderedAsset, int, int], None]
 VIDEO_ENDING_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+DAILY_SEQUENCE_STATE_FILE = "daily_publish_sequence.json"
+_DAILY_SEQUENCE_LOCK = Lock()
 
 
 def run_pipeline(
@@ -176,6 +179,8 @@ def run_pipeline(
     run_dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     batch_dir = active_output_root / run_dir_name
     batch_dir.mkdir(parents=True, exist_ok=True)
+    publish_day_code = datetime.now().strftime("%m%d")
+    publish_sequence_start = _reserve_daily_publish_sequence(publish_day_code, len(variants))
     filename_prefix = ""
     assets: list[RenderedAsset] = []
     render_start = 0.45
@@ -227,6 +232,8 @@ def run_pipeline(
                     speed_mode,
                     ffmpeg_threads,
                     bgm_start_offset=variant.bgm_start_offset,
+                    publish_day_code=publish_day_code,
+                    publish_sequence_number=publish_sequence_start + variant.sequence_number - 1,
                 ): variant.sequence_number
                 for variant in variants
             }
@@ -421,6 +428,49 @@ def _beat_cache_path(settings: ProjectSettings) -> Path:
     path = get_paths().runtime_root / "video_matrix" / "beat_cache"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _daily_publish_sequence_state_path() -> Path:
+    path = get_paths().runtime_root / "video_matrix" / DAILY_SEQUENCE_STATE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _reserve_daily_publish_sequence(day_code: str, count: int) -> int:
+    reserve_count = max(0, int(count or 0))
+    if reserve_count == 0:
+        return 1
+    normalized_day_code = str(day_code or "").strip()
+    if len(normalized_day_code) != 4 or not normalized_day_code.isdigit():
+        normalized_day_code = datetime.now().strftime("%m%d")
+    with _DAILY_SEQUENCE_LOCK:
+        path = _daily_publish_sequence_state_path()
+        state = _load_daily_publish_sequence_state(path)
+        if str(state.get("day_code") or "") != normalized_day_code:
+            last_sequence = 0
+        else:
+            try:
+                last_sequence = max(0, int(state.get("last_sequence") or 0))
+            except (TypeError, ValueError):
+                last_sequence = 0
+        start = last_sequence + 1
+        updated = {
+            "day_code": normalized_day_code,
+            "last_sequence": last_sequence + reserve_count,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        _atomic_write_text(path, json.dumps(updated, ensure_ascii=False))
+        return start
+
+
+def _load_daily_publish_sequence_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def _beat_cache_key(settings_bgm_path: Path, duration_hint: float, settings: ProjectSettings, mode: str) -> str:

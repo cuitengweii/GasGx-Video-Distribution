@@ -203,3 +203,69 @@ def test_apply_text_overrides_assigns_distinct_headline_variants_when_ai_enabled
     )
 
     assert [item.slogan for item in variants] == ["EN line 1\n中文 1", "EN line 2\n中文 2"]
+
+
+def test_reserve_daily_publish_sequence_accumulates_and_resets_by_day(monkeypatch, tmp_path: Path) -> None:
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(pipeline, "get_paths", lambda: FakePaths())
+
+    start_a = pipeline._reserve_daily_publish_sequence("0516", 2)
+    start_b = pipeline._reserve_daily_publish_sequence("0516", 3)
+    start_c = pipeline._reserve_daily_publish_sequence("0517", 2)
+
+    state_path = tmp_path / "runtime" / "video_matrix" / "daily_publish_sequence.json"
+    state = pipeline._load_daily_publish_sequence_state(state_path)
+
+    assert start_a == 1
+    assert start_b == 3
+    assert start_c == 1
+    assert state["day_code"] == "0517"
+    assert state["last_sequence"] == 2
+
+
+def test_run_pipeline_passes_daily_publish_sequence_number_to_renderer(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    settings = _settings(tmp_path)
+    (tmp_path / "config" / "video_matrix").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "video_matrix" / "copy_template.txt").write_text("{title}", encoding="utf-8")
+    variants = [_variant(source, 1), _variant(source, 2)]
+    captured_numbers: list[int] = []
+
+    def fake_ingest_sources(*_args, **_kwargs):
+        return [variants[0].segments[0].clip]
+
+    def fake_build_hud_payload(_settings):
+        return {"hud": True}
+
+    def fake_detect_beat_grid(*_args, **_kwargs):
+        return [0.1, 0.2]
+
+    def fake_plan_variants(*_args, **_kwargs):
+        return variants
+
+    def fake_render_variant(variant, *_args, **_kwargs):
+        captured_numbers.append(int(_kwargs.get("publish_sequence_number")))
+        return RenderedAsset(variant, tmp_path / f"v{variant.sequence_number}.mp4", None, None, None)
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(pipeline, "get_paths", lambda: FakePaths())
+    monkeypatch.setattr(pipeline, "ingest_sources", fake_ingest_sources)
+    monkeypatch.setattr(pipeline, "build_hud_payload", fake_build_hud_payload)
+    monkeypatch.setattr(pipeline, "detect_beat_grid", fake_detect_beat_grid)
+    monkeypatch.setattr(pipeline, "plan_variants", fake_plan_variants)
+    monkeypatch.setattr(pipeline, "render_variant", fake_render_variant)
+    monkeypatch.setattr(pipeline, "_reserve_daily_publish_sequence", lambda _day, _count: 11)
+
+    pipeline.run_pipeline(
+        settings,
+        bgm_path=tmp_path / "bgm.mp3",
+        output_root=tmp_path,
+        max_workers=1,
+    )
+
+    assert sorted(captured_numbers) == [11, 12]

@@ -89,5 +89,5 @@ def test_render_variant_records_telemetry_events(monkeypatch, tmp_path: Path) ->
     text = (tmp_path / "logs" / "generation_events.jsonl").read_text(encoding="utf-8")
     assert '"name": "filter_build"' in text
     assert '"name": "ffmpeg_concat"' in text
-    assert '"drawtext_count": 2' in text
+    assert '"drawtext_count": 3' in text
     assert '"show_slogan": false' in text

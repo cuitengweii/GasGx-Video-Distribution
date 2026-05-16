@@ -6,6 +6,7 @@ import math
 import re
 import shutil
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,8 @@ def render_variant(
     speed_mode: str = "quality",
     ffmpeg_threads: int | None = None,
     bgm_start_offset: float = 0.0,
+    publish_day_code: str | None = None,
+    publish_sequence_number: int | None = None,
 ) -> RenderedAsset:
     batch_dir.mkdir(parents=True, exist_ok=True)
     output_types = output_types or {"mp4"}
@@ -70,6 +73,10 @@ def render_variant(
     if bgm_start_offset:
         variant.bgm_start_offset = max(0.0, float(bgm_start_offset or 0.0))
         variant.bgm_offset_bucket = variant.bgm_offset_bucket or f"b{int(variant.bgm_start_offset // 8)}"
+
+    day_code = _resolve_publish_day_code(publish_day_code)
+    display_sequence_number = _resolve_publish_sequence_number(publish_sequence_number, variant.sequence_number)
+    sequence_tag = f"{day_code}-{display_sequence_number}"
 
     try:
         if telemetry is not None:
@@ -118,6 +125,7 @@ def render_variant(
                 ending_template_path=inline_ending_path,
                 text_dir=scratch_dir / "text_layers",
                 speed_mode=speed_mode,
+                sequence_tag=sequence_tag,
             )
         if telemetry is not None:
             telemetry.event(
@@ -211,6 +219,7 @@ def render_variant(
                             "outro_seconds": outro_seconds if outro_cover_path is not None else 0,
                             "copy_path": str(copy_path) if copy_path else None,
                             "copy_language": copy_language,
+                            "publish_sequence_tag": sequence_tag,
                             "hud_lines": variant.hud_lines,
                             "segments": [
                                 {
@@ -273,6 +282,7 @@ def _build_filter_complex(
     ending_template_path: Path | None = None,
     text_dir: Path | None = None,
     speed_mode: str = "quality",
+    sequence_tag: str = "",
 ) -> tuple[str, list[Path]]:
     inputs = [segment.clip.normalized_path for segment in variant.segments]
     chains: list[str] = []
@@ -320,6 +330,7 @@ def _build_filter_complex(
             text_dir=text_dir,
             include_boxes=background_overlay_index is None,
             speed_mode=speed_mode,
+            sequence_tag=sequence_tag,
         )
         if background_overlay_index is not None:
             chain = (
@@ -432,6 +443,7 @@ def _overlay_filters(
     text_dir: Path | None = None,
     include_boxes: bool = True,
     speed_mode: str = "quality",
+    sequence_tag: str = "",
 ) -> str:
     filters: list[str] = []
     explicit_template_keys = explicit_template_keys or set()
@@ -486,7 +498,33 @@ def _overlay_filters(
                 speed_mode=speed_mode,
             )
         )
+    if template.get("show_sequence_tag", True) and sequence_tag.strip():
+        filters.append(_sequence_tag_filter(template, sequence_tag.strip()))
     return "," + ",".join(filters) if filters else ""
+
+
+def _sequence_tag_filter(template: dict[str, Any], sequence_tag: str) -> str:
+    font_family = str(template.get("sequence_tag_font_family") or template.get("hud_font_family") or "")
+    font_arg = _resolve_drawtext_font_arg(font_family, sample_text=sequence_tag)
+    font_size = _coerce_int(template.get("sequence_tag_font_size"), 28, minimum=12, maximum=120)
+    margin_right = _coerce_int(template.get("sequence_tag_margin_right"), 24, minimum=0, maximum=200)
+    margin_bottom = _coerce_int(template.get("sequence_tag_margin_bottom"), 30, minimum=0, maximum=240)
+    font_color = str(template.get("sequence_tag_color") or "#FFFFFF")
+    text_style = str(template.get("sequence_tag_text_style") or "soft-shadow").strip().lower()
+    x_expr = f"w-text_w-{margin_right}"
+    y_expr = f"h-text_h-{margin_bottom}"
+    text_source = f"text={_escape_drawtext_text(sequence_tag)}"
+    return _drawtext_filter(
+        font_arg,
+        font_color,
+        text_source,
+        x_expr,
+        y_expr,
+        font_size=font_size,
+        effect="none",
+        line_index=0,
+        options=_text_style_options(text_style),
+    )
 
 
 def _drawbox_filter(template: dict[str, Any], target: str) -> str | None:
@@ -938,6 +976,32 @@ def _load_drawtext_font(size: int, font_family: str | None = None, *, sample_tex
     return ImageFont.load_default()
 
 
+def _resolve_publish_day_code(raw: str | None) -> str:
+    token = re.sub(r"\D+", "", str(raw or ""))
+    if len(token) >= 4:
+        # Prefer MMDD from YYYYMMDD-like tokens.
+        token = token[-4:]
+    if len(token) != 4:
+        token = datetime.now().strftime("%m%d")
+    return token
+
+
+def _resolve_publish_sequence_number(raw: int | None, fallback: int) -> int:
+    try:
+        value = int(raw) if raw is not None else int(fallback)
+    except (TypeError, ValueError):
+        value = int(fallback)
+    return max(1, value)
+
+
+def _coerce_int(raw: Any, fallback: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = fallback
+    return max(minimum, min(maximum, value))
+
+
 def _measure_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
     box = draw.textbbox((0, 0), text, font=font)
     return box[2] - box[0]
@@ -999,6 +1063,8 @@ def _overlay_complexity(template_config: dict | None, variant: VideoVariant) -> 
                 font_family=str(template.get(f"{key}_font_family") or ""),
             )
             drawtext_count += min(max_lines, len(wrapped_lines) or 1)
+    if bool(template.get("show_sequence_tag", True)):
+        drawtext_count += 1
     return {
         "show_hud": enabled["hud"],
         "show_slogan": enabled["slogan"],

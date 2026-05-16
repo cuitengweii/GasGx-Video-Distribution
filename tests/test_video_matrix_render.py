@@ -517,3 +517,49 @@ def test_overlay_filters_do_not_truncate_multiline_slogan_by_default(tmp_path: P
     assert (tmp_path / "slogan_1.txt").read_text(encoding="utf-8") == "L2"
     assert (tmp_path / "slogan_2.txt").read_text(encoding="utf-8") == "L3"
     assert (tmp_path / "slogan_3.txt").read_text(encoding="utf-8") == "L4"
+
+
+def test_overlay_filters_include_publish_sequence_tag_in_bottom_right() -> None:
+    template = render.coerce_template(
+        {
+            "show_hud": False,
+            "show_slogan": False,
+            "show_title": False,
+        }
+    )
+
+    filters = render._overlay_filters(
+        template,
+        hud_text="",
+        slogan="",
+        title="",
+        explicit_template_keys=set(template),
+        sequence_tag="0516-2",
+    )
+
+    assert "text=0516-2" in filters
+    assert ":x=w-text_w-24:y=h-text_h-30" in filters
+
+
+def test_render_variant_uses_publish_sequence_number_for_sequence_tag(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    captured = {}
+
+    def fake_concat(filter_complex, _inputs, output, **_kwargs) -> None:
+        captured["filter_complex"] = filter_complex
+        output.write_bytes(b"mp4")
+
+    monkeypatch.setattr(render, "concat_video", fake_concat)
+
+    render.render_variant(
+        _variant(source),
+        _settings(tmp_path),
+        template_copy="",
+        batch_dir=tmp_path,
+        cover_template_config=None,
+        publish_day_code="0516",
+        publish_sequence_number=23,
+    )
+
+    assert "text=0516-23" in captured["filter_complex"]
