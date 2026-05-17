@@ -131,10 +131,21 @@ TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROB
 TERMINAL_QR_EXPIRY_SECONDS = int(os.getenv("GASGX_TERMINAL_QR_EXPIRY_SECONDS", "60") or 60)
 TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_TIMEOUT_SECONDS", "4") or 4)
 TERMINAL_FAST_LOGIN_PROBE_TIMEOUT_SECONDS = int(os.getenv("GASGX_TERMINAL_FAST_LOGIN_PROBE_TIMEOUT_SECONDS", "6") or 6)
-TERMINAL_LOGIN_CONFIRM_TEXT = "请扫码，完成后点“我已登录”"
-TERMINAL_LOGIN_READY_TEXT = "已人工确认登录，等待准备发布"
-TERMINAL_PUBLISH_PREPARE_TEXT = "正在准备发布页面，请看浏览器"
-TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT = "请在视频号页面手动发布，完成后点成功"
+TERMINAL_LOGIN_CONFIRM_TEXT = "扫码后点登录"
+TERMINAL_LOGIN_READY_TEXT = "已登录，待发布"
+TERMINAL_PUBLISH_PREPARE_TEXT = "发布页准备中"
+TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT = "已发布后点下一个"
+TERMINAL_ACCOUNT_MANUAL_KEYS = (
+    "login_clicked",
+    "publish_clicked",
+    "next_clicked",
+)
+TERMINAL_ACCOUNT_MATERIAL_KEYS = (
+    "material_asset_key",
+    "material_video",
+    "material_publish_date",
+    "material_assigned_at",
+)
 SEED_VERSION = "2026-04-29-supabase-db-init-v1"
 SUPER_ADMIN_PASSWORD = "cuitengwei2023"
 FEATURE_ENTRIES = [
@@ -3400,7 +3411,7 @@ def _reset_terminal_window_for_new_business_date(window: dict[str, Any]) -> bool
                 continue
             _clear_terminal_account_error(account)
             expected_status = "pending"
-            expected_text = "等待打开登录浏览器" if index == 0 else "未登录"
+            expected_text = "待点登录" if index == 0 else "未登录"
             if str(account.get("status") or "") != expected_status:
                 account["status"] = expected_status
                 changed = True
@@ -3410,6 +3421,19 @@ def _reset_terminal_window_for_new_business_date(window: dict[str, Any]) -> bool
             if account.get("task_id") is not None:
                 account["task_id"] = None
                 changed = True
+            for manual_key in TERMINAL_ACCOUNT_MANUAL_KEYS:
+                if bool(account.get(manual_key)):
+                    account[manual_key] = False
+                    changed = True
+            for material_key, empty_value in (
+                ("material_asset_key", ""),
+                ("material_video", ""),
+                ("material_publish_date", ""),
+                ("material_assigned_at", 0),
+            ):
+                if account.get(material_key) != empty_value:
+                    account[material_key] = empty_value
+                    changed = True
     return changed
 
 
@@ -3686,7 +3710,7 @@ def terminal_execution_state() -> dict[str, Any]:
                 visible_account = dict(account)
                 if index == int(visible_window.get("current_index") or 0) and str(visible_account.get("status") or "") != "success":
                     visible_account["status"] = "pending"
-                    visible_account["status_text"] = "等待开始登录"
+                    visible_account["status_text"] = "待登录"
                     visible_account["task_id"] = None
                 visible_accounts.append(visible_account)
             visible_window["accounts"] = visible_accounts
@@ -3784,6 +3808,22 @@ def _close_wechat_browser_for_account(account_id: int) -> None:
     try:
         process_rows = _list_windows_chrome_processes() if os.name == "nt" else []
         pid = _find_windows_chrome_pid_by_debug_port(debug_port, profile_dir, processes=process_rows)
+        # Fallback: profile_dir mismatch can happen after profile migration or stale DB data.
+        # In that case, still close by unique debug port to avoid leaving old login window open.
+        if pid <= 0:
+            pid = _find_windows_chrome_pid_by_debug_port(debug_port, "", processes=process_rows)
+        if pid:
+            engine._terminate_windows_process_tree(int(pid))  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+
+def _close_chrome_browser_by_debug_port(debug_port: int) -> None:
+    if os.name != "nt" or int(debug_port or 0) <= 0:
+        return
+    try:
+        process_rows = _list_windows_chrome_processes()
+        pid = _find_windows_chrome_pid_by_debug_port(int(debug_port), "", processes=process_rows)
         if pid:
             engine._terminate_windows_process_tree(int(pid))  # type: ignore[attr-defined]
     except Exception:
@@ -4323,9 +4363,61 @@ def _terminal_account_cards(accounts: list[dict[str, Any]]) -> list[dict[str, An
             "status_text": "未登录",
             "task_id": None,
             "publish_success_count": int(item.get("publish_success_count") or 0),
+            "login_clicked": False,
+            "publish_clicked": False,
+            "next_clicked": False,
+            "material_asset_key": "",
+            "material_video": "",
+            "material_publish_date": "",
+            "material_assigned_at": 0,
         }
         for item in accounts
     ]
+
+
+def _terminal_set_manual_flags(
+    account: dict[str, Any],
+    *,
+    login_clicked: bool | None = None,
+    publish_clicked: bool | None = None,
+    next_clicked: bool | None = None,
+) -> None:
+    if login_clicked is not None:
+        account["login_clicked"] = bool(login_clicked)
+    if publish_clicked is not None:
+        account["publish_clicked"] = bool(publish_clicked)
+    if next_clicked is not None:
+        account["next_clicked"] = bool(next_clicked)
+
+
+def _terminal_clear_material_assignment(account: dict[str, Any]) -> None:
+    account["material_asset_key"] = ""
+    account["material_video"] = ""
+    account["material_publish_date"] = ""
+    account["material_assigned_at"] = 0
+
+
+def _terminal_mark_material_assignment(account: dict[str, Any], *, asset_key: str, video: str, publish_date: str) -> None:
+    account["material_asset_key"] = str(asset_key or "").strip()
+    account["material_video"] = str(video or "").strip()
+    account["material_publish_date"] = str(publish_date or "").strip()
+    account["material_assigned_at"] = now_ts()
+
+
+def _terminal_assigned_asset_keys(state: dict[str, Any], publish_date: str) -> set[str]:
+    assigned: set[str] = set()
+    for window in state.get("windows") or []:
+        if not isinstance(window, dict):
+            continue
+        for account in window.get("accounts") or []:
+            if not isinstance(account, dict):
+                continue
+            if str(account.get("material_publish_date") or "") != str(publish_date):
+                continue
+            asset_key = str(account.get("material_asset_key") or "").strip()
+            if asset_key:
+                assigned.add(asset_key)
+    return assigned
 
 
 def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, Any]) -> bool:
@@ -4346,7 +4438,7 @@ def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, A
         previous_account = previous_by_id.get(int(account.get("id") or 0))
         if not previous_account:
             continue
-        for key in ("status", "status_text", "task_id", "error_stage", "error_title", "error_detail"):
+        for key in ("status", "status_text", "task_id", "error_stage", "error_title", "error_detail", *TERMINAL_ACCOUNT_MANUAL_KEYS, *TERMINAL_ACCOUNT_MATERIAL_KEYS):
             account[key] = previous_account.get(key)
     next_current = accounts[next_current_index]
     if int(next_current.get("id") or 0) != previous_current_id:
@@ -4400,7 +4492,7 @@ def start_terminal_execution(payload: dict[str, Any]) -> dict[str, Any]:
         if accounts:
             current = accounts[0]
             current["status"] = "pending"
-            current["status_text"] = "等待开始登录"
+            current["status_text"] = "待登录"
         previous_window = previous_windows.get(window_id)
         if previous_login_started and previous_window and str(previous_window.get("operator_wechat") or "") == operator:
             retained_window_ids.add(window_id)
@@ -4456,7 +4548,7 @@ def start_terminal_login() -> dict[str, Any]:
             elif str(current.get("status") or "") not in {"success", "running"}:
                 _clear_terminal_account_error(current)
                 current["status"] = "pending"
-                current["status_text"] = "等待打开登录浏览器"
+                current["status_text"] = "待点登录"
                 current["task_id"] = None
                 window["qr_path"] = ""
                 window["qr_url"] = ""
@@ -4478,7 +4570,7 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
     account_id = int(current.get("id") or 0)
     _clear_terminal_account_error(current)
     current["status"] = "opening"
-    current["status_text"] = "正在打开登录浏览器"
+    current["status_text"] = "正在打开浏览器"
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     _set_terminal_window_qr(window, "")
     try:
@@ -4494,8 +4586,11 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
         _dedupe_terminal_browser_tabs(int(open_result.get("debug_port") or 0), int(window.get("id") or 0), "登录")
         _schedule_terminal_window_marker_refresh(window, delays=(1.3, 3.6))
         _raise_windows_chrome_window(int(open_result.get("debug_port") or 0), str(open_result.get("profile_dir") or ""))
+        # Keep UI stage consistent even when browser is auto-opened by poll:
+        # once browser is opened for current account, treat login step as entered.
+        _terminal_set_manual_flags(current, login_clicked=True, publish_clicked=False, next_clicked=False)
         current["status"] = "waiting_qr"
-        current["status_text"] = TERMINAL_LOGIN_CONFIRM_TEXT
+        current["status_text"] = "待发布"
     except Exception as exc:
         _set_terminal_account_error(
             current,
@@ -4651,7 +4746,7 @@ def _normalize_terminal_window_runtime(window: dict[str, Any]) -> bool:
         if index < current_index:
             _clear_terminal_account_error(account)
             account["status"] = "success"
-            account["status_text"] = "发布成功"
+            account["status_text"] = "已完成"
             account["publish_success_count"] = max(1, int(account.get("publish_success_count") or 0))
             changed = True
         elif index == current_index and not (isinstance(run, dict) and run):
@@ -4665,7 +4760,10 @@ def _is_terminal_publish_running(window: dict[str, Any]) -> bool:
     if not isinstance(run, dict):
         return False
     current = _terminal_current_account(window)
-    return _terminal_run_matches_current(run, current) and str(run.get("status") or "").strip().lower() == "running"
+    if not (_terminal_run_matches_current(run, current) and str(run.get("status") or "").strip().lower() == "running"):
+        return False
+    pid = int(run.get("pid") or 0)
+    return pid > 0 and _pid_is_running(pid)
 
 
 def _clear_terminal_account_error(account: dict[str, Any]) -> None:
@@ -4702,7 +4800,7 @@ def _refresh_terminal_window_accounts_from_operator(window: dict[str, Any]) -> b
         previous_account = previous_by_id.get(int(account.get("id") or 0))
         if not previous_account:
             continue
-        for key in ("status", "status_text", "task_id", "error_stage", "error_title", "error_detail"):
+        for key in ("status", "status_text", "task_id", "error_stage", "error_title", "error_detail", *TERMINAL_ACCOUNT_MANUAL_KEYS, *TERMINAL_ACCOUNT_MATERIAL_KEYS):
             if key in previous_account:
                 account[key] = previous_account.get(key)
     next_current_index = 0
@@ -4793,11 +4891,11 @@ def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, r
         issues["p0"].append(_terminal_precheck_issue("account_invalid", "账号信息缺失", "当前账号 ID 无效，无法启动发布。"))
         return {"ok": False, "issues": issues, "selected_video": ""}
     if not login_started:
-        issues["p0"].append(_terminal_precheck_issue("login_not_started", "尚未启动登录流程", "请先打开登录浏览器并完成扫码登录。"))
+        issues["p2"].append(_terminal_precheck_issue("login_not_started", "尚未启动登录流程", "未检测到登录流程已启动（仅提示，不阻塞发布）。"))
     if not require_login_probe:
         if current_status not in {"ready", "running", "success"}:
-            issues["p0"].append(_terminal_precheck_issue("login_not_ready", "登录未确认", "请先在浏览器完成扫码，然后点击“我已登录”。"))
-        return {"ok": not issues["p0"], "issues": issues, "selected_video": ""}
+            issues["p2"].append(_terminal_precheck_issue("login_not_ready", "登录未确认", "未检测到登录确认（仅提示，不阻塞发布）。"))
+        return {"ok": True, "issues": issues, "selected_video": ""}
     account = get_account(account_id) or {}
     if not account:
         issues["p0"].append(_terminal_precheck_issue("account_not_found", "账号不存在", "账号记录不存在或已被删除。"))
@@ -4853,6 +4951,18 @@ def _friendly_terminal_run_error(message: str) -> str:
     if "publish_unconfirmed" in normalized or "发布未确认" in normalized:
         return "发布未确认，请先在视频号后台核实发布结果"
     return text
+
+
+def _is_debug_port_profile_conflict(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    return (
+        "debug port" in text
+        and "already used by another browser profile" in text
+    ) or (
+        "expected profile" in text and "debug port" in text
+    )
 
 
 def _friendly_terminal_status_error(message: str) -> str:
@@ -4931,7 +5041,7 @@ def _build_terminal_publish_plan_item(account: dict[str, Any], platform_row: dic
     )
 
 
-def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, Any], state: dict[str, Any] | None = None) -> dict[str, Any]:
     from . import matrix_publish as mp
 
     account_id = int(current.get("id") or 0)
@@ -4944,10 +5054,14 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
     candidates = mp.list_candidate_videos()
     publish_date = datetime.now().astimezone().date().isoformat()
     used = mp._consumed_index(today=publish_date)
+    state_payload = state if isinstance(state, dict) else _load_terminal_state_with_rollover()
+    assigned = _terminal_assigned_asset_keys(state_payload, publish_date)
     source_video: Path | None = None
     for path in candidates:
         asset_key = mp._relative_asset_key(path)
         if (asset_key, account_id, "wechat", publish_date) in used:
+            continue
+        if asset_key in assigned:
             continue
         source_video = path
         break
@@ -5186,6 +5300,19 @@ def _poll_terminal_publish_runs(windows: list[dict[str, Any]]) -> bool:
             changed = True
             continue
 
+        # Draft/publish success marker can appear in log before subprocess exits.
+        # Promote to manual_confirm immediately to keep UI responsive.
+        if _terminal_publish_log_has_success_marker(run):
+            _terminate_terminal_publish_run_process(run)
+            run["finished_at"] = now_ts()
+            run["status"] = "manual_confirm"
+            run["error_stage"] = ""
+            run["error_title"] = ""
+            run["error"] = ""
+            _set_terminal_account_waiting_publish_confirm(current)
+            changed = True
+            continue
+
         if pid <= 0:
             run["status"] = "failed"
             run["finished_at"] = now_ts()
@@ -5208,11 +5335,24 @@ def _poll_terminal_publish_runs(windows: list[dict[str, Any]]) -> bool:
             continue
 
         run["finished_at"] = now_ts()
-        run["status"] = "manual_confirm"
-        run["error_stage"] = ""
-        run["error_title"] = ""
-        run["error"] = ""
-        _set_terminal_account_waiting_publish_confirm(current)
+        reason = _terminal_publish_failure_reason(run)
+        if _terminal_message_is_manual_confirmable_failure(reason):
+            run["status"] = "manual_confirm"
+            run["error_stage"] = ""
+            run["error_title"] = ""
+            run["error"] = ""
+            _set_terminal_account_waiting_publish_confirm(current)
+        else:
+            run["status"] = "failed"
+            run["error_stage"] = "publish_run"
+            run["error_title"] = "发布执行失败"
+            run["error"] = reason
+            _set_terminal_account_error(
+                current,
+                stage="publish_run",
+                title="发布执行失败",
+                message=f"发布失败：{reason}",
+            )
         changed = True
     return changed
 
@@ -5250,6 +5390,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
     current_index = int(target.get("current_index") or 0)
     if current_index < len(accounts):
         current = accounts[current_index]
+        _terminal_set_manual_flags(current, publish_clicked=True, next_clicked=False)
         precheck = _terminal_publish_precheck(
             target,
             login_started=bool(state.get("login_started")),
@@ -5278,6 +5419,25 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         publish_runtime = _terminal_browser_runtime_for_account(int(current.get("id") or 0), "wechat")
         publish_debug_port = int(publish_runtime.get("debug_port") or 0)
         if _is_terminal_publish_running(target):
+            # Existing publish run is still marked running; keep the action responsive.
+            # If browser was closed, reopen and raise it so operator sees immediate effect.
+            try:
+                if publish_runtime.get("browser_open") is False:
+                    open_result = open_account_browser(int(current.get("id") or 0), "wechat", apply_marker=False)
+                    _apply_account_browser_window_color(open_result, str(target.get("color") or ""))
+                    _inject_terminal_account_browser_marker(
+                        int(current.get("id") or 0),
+                        "wechat",
+                        str(target.get("color") or ""),
+                        int(target.get("id") or 0),
+                        phase_tag="发布",
+                    )
+            except Exception:
+                pass
+            try:
+                _raise_account_browser_window(int(current.get("id") or 0), "wechat")
+            except Exception:
+                pass
             current["status"] = "running"
             current["status_text"] = TERMINAL_PUBLISH_PREPARE_TEXT
             _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
@@ -5287,11 +5447,28 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
             return terminal_execution_state()
         try:
             _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
-            run = _start_terminal_wechat_publish(target, current)
+            try:
+                run = _start_terminal_wechat_publish(target, current, state)
+            except Exception as first_exc:
+                # Self-heal once for common Windows profile/port drift:
+                # close the conflicting browser bound to this account's debug port,
+                # then retry publish bootstrap.
+                if not _is_debug_port_profile_conflict(str(first_exc)):
+                    raise
+                _close_wechat_browser_for_account(int(current.get("id") or 0))
+                time.sleep(0.35)
+                _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
+                run = _start_terminal_wechat_publish(target, current, state)
             target["publish_run"] = run
             current["task_id"] = None
             current["status"] = "running"
             current["status_text"] = TERMINAL_PUBLISH_PREPARE_TEXT
+            _terminal_mark_material_assignment(
+                current,
+                asset_key=str(run.get("asset_key") or ""),
+                video=str(run.get("video") or ""),
+                publish_date=str(run.get("publish_date") or datetime.now().astimezone().date().isoformat()),
+            )
             _refresh_terminal_window_marker(target, force=True)
             _schedule_terminal_window_marker_refresh(target, delays=(1.8, 4.8))
         except Exception as exc:
@@ -5324,10 +5501,14 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
     current = _terminal_current_account(target)
     run = target.get("publish_run")
     run_status = str((run or {}).get("status") or "").strip().lower() if isinstance(run, dict) else ""
-    if _terminal_run_matches_current(run if isinstance(run, dict) else None, current) and (
+    run_matches_current = _terminal_run_matches_current(run if isinstance(run, dict) else None, current)
+    # Keep login action responsive: if operator clicks "登录", allow browser reopen even when
+    # the backend still marks a publish run as running/manual_confirm/success for this account.
+    if run_matches_current and (
         run_status in {"running", "manual_confirm", "success"} or _terminal_run_is_manual_confirmable(run)
     ):
-        return terminal_execution_state()
+        _clear_terminal_publish_run(target)
+        target["manual_available_at"] = 0
     accounts = target.get("accounts") or []
     next_index = next((index for index, item in enumerate(accounts) if int(item.get("id") or 0) == int(account_id)), -1)
     if next_index < 0:
@@ -5352,6 +5533,8 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
                 current["status"] = "waiting_qr"
                 current["status_text"] = TERMINAL_LOGIN_CONFIRM_TEXT
             current["task_id"] = None
+            _terminal_set_manual_flags(current, login_clicked=True, publish_clicked=False, next_clicked=False)
+            _terminal_clear_material_assignment(current)
             target["manual_available_at"] = 0
             state["next_probe_at"] = 0
             _save_terminal_state(state)
@@ -5366,8 +5549,10 @@ def open_terminal_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
         if int(account.get("id") or 0) == int(account_id):
             _clear_terminal_account_error(account)
             account["status"] = "pending"
-            account["status_text"] = "等待打开登录浏览器"
+            account["status_text"] = "待点登录"
             account["task_id"] = None
+            _terminal_set_manual_flags(account, login_clicked=True, publish_clicked=False, next_clicked=False)
+            _terminal_clear_material_assignment(account)
             break
     _open_terminal_window_current_account(target)
     state["next_probe_at"] = 0
@@ -5401,6 +5586,41 @@ def confirm_terminal_login_ready(window_id: int) -> dict[str, Any]:
     current["status"] = "ready"
     current["status_text"] = TERMINAL_LOGIN_READY_TEXT
     current["task_id"] = None
+    _terminal_set_manual_flags(current, login_clicked=True, publish_clicked=False, next_clicked=False)
+    target["manual_available_at"] = 0
+    state["next_probe_at"] = 0
+    _save_terminal_state(state)
+    return terminal_execution_state()
+
+
+def reset_terminal_manual_flow(window_id: int, account_id: int) -> dict[str, Any]:
+    state = _load_terminal_state_with_rollover()
+    target = next((item for item in state.get("windows") or [] if int(item.get("id") or 0) == int(window_id)), None)
+    if target is None:
+        raise KeyError("window not found")
+    accounts = target.get("accounts") or []
+    target_account = next((item for item in accounts if int(item.get("id") or 0) == int(account_id)), None)
+    if not isinstance(target_account, dict):
+        raise KeyError("account not found")
+    current_account = _terminal_current_account(target)
+    accounts_to_reset: list[dict[str, Any]] = [target_account]
+    if isinstance(current_account, dict) and current_account is not target_account:
+        accounts_to_reset.append(current_account)
+    run = target.get("publish_run")
+    if isinstance(run, dict):
+        _terminate_terminal_publish_run_process(run)
+    _clear_terminal_publish_run(target)
+    for account in accounts_to_reset:
+        _clear_terminal_account_error(account)
+        _terminal_set_manual_flags(account, login_clicked=False, publish_clicked=False, next_clicked=False)
+        _terminal_clear_material_assignment(account)
+        account["status"] = "pending"
+        account["status_text"] = "待点登录"
+        account["task_id"] = None
+        _close_wechat_browser_for_account(int(account.get("id") or 0))
+    _clear_terminal_qr_cache(int(target.get("id") or 0))
+    _set_terminal_window_qr(target, "")
+    target.pop("publish_precheck", None)
     target["manual_available_at"] = 0
     state["next_probe_at"] = 0
     _save_terminal_state(state)
@@ -5425,31 +5645,25 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
         return terminal_execution_state()
     current = accounts[current_index]
     run = target.get("publish_run")
-    run_status = str((run or {}).get("status") or "").strip().lower() if isinstance(run, dict) else ""
-    run_matches_current = _terminal_run_matches_current(run if isinstance(run, dict) else None, current)
-    can_confirm = run_matches_current and (
-        run_status in {"running", "manual_confirm", "success"} or _terminal_run_is_manual_confirmable(run)
-    )
-    if not can_confirm:
-        if normalized:
-            _save_terminal_state(state)
-        return terminal_execution_state()
     if str(current.get("status") or "") != "success":
         _clear_terminal_account_error(current)
         current["status"] = "success"
-        current["status_text"] = "发布成功"
+        current["status_text"] = "已完成"
         current["publish_success_count"] = int(current.get("publish_success_count") or 0) + 1
+    _terminal_set_manual_flags(current, next_clicked=True)
     if isinstance(run, dict):
         try:
             from . import matrix_publish as mp
             state_payload = mp._load_state()
             consumed = list(state_payload.get("consumed", [])) if isinstance(state_payload.get("consumed"), list) else []
+            fallback_asset_key = str(current.get("material_asset_key") or "")
+            fallback_publish_date = str(current.get("material_publish_date") or datetime.now().astimezone().date().isoformat())
             consumed.append(
                 {
-                    "asset_key": str(run.get("asset_key") or ""),
-                    "account_id": int(run.get("account_id") or 0),
+                    "asset_key": str(run.get("asset_key") or fallback_asset_key),
+                    "account_id": int(run.get("account_id") or current.get("id") or 0),
                     "platform": "wechat",
-                    "publish_date": str(run.get("publish_date") or datetime.now().astimezone().date().isoformat()),
+                    "publish_date": str(run.get("publish_date") or fallback_publish_date),
                     "success": True,
                     "finished_at": int(time.time()),
                 }
@@ -5458,6 +5672,27 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
             mp._save_state(state_payload)
         except Exception:
             pass
+    else:
+        asset_key = str(current.get("material_asset_key") or "").strip()
+        if asset_key:
+            try:
+                from . import matrix_publish as mp
+                state_payload = mp._load_state()
+                consumed = list(state_payload.get("consumed", [])) if isinstance(state_payload.get("consumed"), list) else []
+                consumed.append(
+                    {
+                        "asset_key": asset_key,
+                        "account_id": int(current.get("id") or 0),
+                        "platform": "wechat",
+                        "publish_date": str(current.get("material_publish_date") or datetime.now().astimezone().date().isoformat()),
+                        "success": True,
+                        "finished_at": int(time.time()),
+                    }
+                )
+                state_payload["consumed"] = consumed[-500:]
+                mp._save_state(state_payload)
+            except Exception:
+                pass
     _terminate_terminal_publish_run_process(run if isinstance(run, dict) else None)
     _clear_terminal_publish_run(target)
     _close_wechat_browser_for_account(int(current.get("id") or 0))
@@ -5473,8 +5708,12 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
         target.pop("completed", None)
         _clear_terminal_account_error(next_account)
         next_account["status"] = "pending"
-        next_account["status_text"] = "等待打开登录浏览器"
+        next_account["status_text"] = "待发布"
         next_account["task_id"] = None
+        # After clicking "下一个", the next account browser opens directly.
+        # Keep login as an already-passed step so UI lands on "发布".
+        _terminal_set_manual_flags(next_account, login_clicked=True, publish_clicked=False, next_clicked=False)
+        _terminal_clear_material_assignment(next_account)
         _open_terminal_window_current_account(target)
         state["next_probe_at"] = 0
     else:
@@ -6819,18 +7058,33 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
         raise RuntimeError("account platform missing")
     profile_dir = Path(str(ap["profile_dir"]))
     profile_dir.mkdir(parents=True, exist_ok=True)
+    debug_port = int(ap["debug_port"])
     with _chrome_fingerprint_env(ap.get("fingerprint")):
-        engine._ensure_chrome_debug_port(
-            debug_port=int(ap["debug_port"]),
-            auto_open_chrome=True,
-            chrome_user_data_dir=str(profile_dir),
-            startup_url=capability.open_url,
-        )
+        try:
+            engine._ensure_chrome_debug_port(
+                debug_port=debug_port,
+                auto_open_chrome=True,
+                chrome_user_data_dir=str(profile_dir),
+                startup_url=capability.open_url,
+            )
+        except Exception as exc:
+            # Windows profile-path encoding can cause false mismatch detection on debug port ownership.
+            # Recover by forcing the port owner to exit, then retry once.
+            if not _is_debug_port_profile_conflict(str(exc)):
+                raise
+            _close_chrome_browser_by_debug_port(debug_port)
+            time.sleep(0.35)
+            engine._ensure_chrome_debug_port(
+                debug_port=debug_port,
+                auto_open_chrome=True,
+                chrome_user_data_dir=str(profile_dir),
+                startup_url=capability.open_url,
+            )
     marker_applied = _inject_account_browser_marker(refreshed, ap, capability) if apply_marker else False
     return {
         "ok": True,
         "platform": token,
-        "debug_port": int(ap["debug_port"]),
+        "debug_port": debug_port,
         "profile_dir": str(profile_dir),
         "open_url": capability.open_url,
         "fingerprint": ap.get("fingerprint") or {},

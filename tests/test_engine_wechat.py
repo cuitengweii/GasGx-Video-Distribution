@@ -1182,6 +1182,31 @@ def test_wait_wechat_publish_feedback_accepts_publish_click_confirmation(monkeyp
     assert any("Publish button click accepted" in item for item in log_messages)
 
 
+def test_fill_wechat_short_title_allows_whitespace_variants(monkeypatch: pytest.MonkeyPatch) -> None:
+    editor = object()
+    monkeypatch.setattr(engine, "_find_wechat_short_title_input", lambda *_args, **_kwargs: editor)
+    monkeypatch.setattr(engine, "_input_text_field_with_keyboard", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_read_element_text", lambda *_args, **_kwargs: "GasGx 燃气 天然气 发电机")
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._fill_wechat_short_title(object(), "GasGx 燃气 天然气 发电机", configured=True)
+
+    assert result == "GasGx 燃气 天然气 发电机"
+
+
+def test_fill_wechat_short_title_still_fails_on_real_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    editor = object()
+    monkeypatch.setattr(engine, "_find_wechat_short_title_input", lambda *_args, **_kwargs: editor)
+    monkeypatch.setattr(engine, "_input_text_field_with_keyboard", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_read_element_text", lambda *_args, **_kwargs: "GasGx 发电系统")
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="WeChat short title fill verification failed"):
+        engine._fill_wechat_short_title(object(), "GasGx 燃气 天然气 发电机", configured=True)
+
+
 def test_wait_upload_ready_accepts_hidden_form_media_heuristic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         engine,

@@ -16502,7 +16502,9 @@ def _fill_wechat_short_title(ctx: Any, short_title: str, *, configured: bool = F
         raise RuntimeError("WeChat short title keyboard input failed.")
     _humanized_publish_reaction_pause("wechat short title verification")
     current = _read_element_text(editor)
-    if re.sub(r"\s+", "", current) == final_title:
+    expected_compact = re.sub(r"\s+", "", str(final_title or ""))
+    current_compact = re.sub(r"\s+", "", str(current or ""))
+    if expected_compact and current_compact == expected_compact:
         _log(f"[Uploader] WeChat short title filled: {final_title}")
         return final_title
     raise RuntimeError(f"WeChat short title fill verification failed: expected={final_title}, current={current or '-'}")

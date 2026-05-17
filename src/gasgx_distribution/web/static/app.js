@@ -56,8 +56,8 @@ const PLATFORM_ORDER = [
   "instagram",
 ];
 
-const TERMINAL_LOGIN_CONFIRM_TEXT = "请扫码，完成后点“我已登录”";
-const TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT = "请在视频号页面手动发布，完成后点成功";
+const TERMINAL_LOGIN_CONFIRM_TEXT = "扫码后点登录";
+const TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT = "已发布后点下一个";
 const TERMINAL_LEGACY_MANUAL_CONFIRM_TEXT = "发布已执行，等待人工确认";
 
 const state = {
@@ -152,9 +152,14 @@ const TASK_TYPE_OPTIONS = [
 const loadedViews = new Set();
 let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "overview";
 let terminalCountdownTimer = null;
-const terminalConfirmingWindowIds = new Set();
 const terminalAutoPublishWindowIds = new Set();
 const terminalAutoPublishStageByWindowId = new Map();
+const terminalResetWindowIds = new Set();
+const terminalWindowActionEpochById = new Map();
+const terminalManualActionStateByWindow = new Map();
+const terminalManualCycleAccountByWindow = new Map();
+const terminalButtonCooldownByKey = new Map();
+let terminalButtonCooldownTimer = null;
 let terminalErrorModalSignature = "";
 let terminalFullLoadingCount = 0;
 
@@ -1302,9 +1307,11 @@ function initUserMenu() {
     sidebarToggle.textContent = collapsed ? "›" : "‹";
     sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
     sidebarToggle.setAttribute("aria-label", collapsed ? "显示左侧栏" : "隐藏左侧栏");
+    requestAnimationFrame(() => syncTerminalWechatGridHeight());
   });
   window.addEventListener("resize", () => {
     if (!isMobileNavViewport()) closeMobileNavigation();
+    requestAnimationFrame(() => syncTerminalWechatGridHeight());
   });
   closeMobileNavigation();
 }
@@ -2646,6 +2653,237 @@ function terminalAccountCanStartPublish(account) {
   return status === "ready" || status === "running" || status === "success";
 }
 
+function terminalManualActionState(windowId, accountId) {
+  const windowKey = String(windowId || "").trim();
+  const accountKey = String(accountId || "").trim();
+  const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowKey);
+  const targetAccount = (targetWindow?.accounts || []).find((item) => String(item?.id ?? item?.account_id ?? "") === accountKey);
+  if (targetAccount && typeof targetAccount === "object") {
+    const hasLoginFlag = Object.prototype.hasOwnProperty.call(targetAccount, "login_clicked");
+    const inferredLoginClicked = hasLoginFlag
+      ? Boolean(targetAccount.login_clicked)
+      : Number(targetWindow?.current_index || 0) > 0;
+    return {
+      loginClicked: inferredLoginClicked,
+      publishClicked: Boolean(targetAccount.publish_clicked),
+      nextClicked: Boolean(targetAccount.next_clicked),
+    };
+  }
+  if (!windowKey || !accountKey) return { loginClicked: false, publishClicked: false, nextClicked: false };
+  if (!terminalManualActionStateByWindow.has(windowKey)) terminalManualActionStateByWindow.set(windowKey, new Map());
+  const accountMap = terminalManualActionStateByWindow.get(windowKey);
+  if (!accountMap.has(accountKey)) accountMap.set(accountKey, { loginClicked: false, publishClicked: false, nextClicked: false });
+  return accountMap.get(accountKey);
+}
+
+function markTerminalManualAction(windowId, accountId, action) {
+  const manualState = terminalManualActionState(windowId, accountId);
+  if (action === "login") manualState.loginClicked = true;
+  if (action === "publish") manualState.publishClicked = true;
+  if (action === "next") manualState.nextClicked = true;
+  const windowKey = String(windowId || "").trim();
+  const accountKey = String(accountId || "").trim();
+  const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowKey);
+  const targetAccount = (targetWindow?.accounts || []).find((item) => String(item?.id ?? item?.account_id ?? "") === accountKey);
+  if (targetAccount && typeof targetAccount === "object") {
+    if (action === "login") targetAccount.login_clicked = true;
+    if (action === "publish") targetAccount.publish_clicked = true;
+    if (action === "next") targetAccount.next_clicked = true;
+  }
+}
+
+function terminalForcePostLoginStage(windowId, accountId) {
+  const windowKey = String(windowId || "").trim();
+  const accountKey = String(accountId || "").trim();
+  if (!windowKey || !accountKey) return;
+  const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowKey);
+  const targetAccount = (targetWindow?.accounts || []).find((item) => String(item?.id ?? item?.account_id ?? "") === accountKey);
+  if (!targetAccount || typeof targetAccount !== "object") return;
+  targetAccount.login_clicked = true;
+  if (targetAccount.publish_clicked == null) targetAccount.publish_clicked = false;
+  if (targetAccount.next_clicked == null) targetAccount.next_clicked = false;
+  const status = String(targetAccount.status || "").toLowerCase();
+  const statusText = String(targetAccount.status_text || "").trim();
+  if (
+    status === "pending" || status === "opening" || status === "waiting_qr"
+    || !statusText
+    || /待点登录|待登录|扫码后点登录/.test(statusText)
+  ) {
+    targetAccount.status = "waiting_qr";
+    targetAccount.status_text = "待发布";
+  }
+}
+
+function parseWindowAccountToken(rawToken) {
+  const raw = String(rawToken || "").trim();
+  if (!raw) return { windowId: "", accountId: "" };
+  const idx = raw.indexOf(":");
+  if (idx < 0) return { windowId: raw, accountId: "" };
+  return {
+    windowId: raw.slice(0, idx).trim(),
+    accountId: raw.slice(idx + 1).trim(),
+  };
+}
+
+function terminalResolveAccountId(account) {
+  if (!account || typeof account !== "object") return "";
+  const candidate = account.id ?? account.account_id ?? account.accountId ?? "";
+  return String(candidate || "").trim();
+}
+
+function terminalResolveWindowAccountId(window, index) {
+  const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
+  if (!accounts.length) return "";
+  const targetIndex = Number.isFinite(Number(index)) ? Number(index) : Number(window?.current_index || 0);
+  const primary = terminalResolveAccountId(accounts[targetIndex]);
+  if (primary) return primary;
+  const fallback = terminalResolveAccountId(accounts[0]);
+  return fallback || "";
+}
+
+function terminalCooldownKey(windowId, accountId, action) {
+  return `${String(windowId || "").trim()}:${String(accountId || "").trim()}:${String(action || "").trim()}`;
+}
+
+function terminalWindowActionEpoch(windowId) {
+  return Number(terminalWindowActionEpochById.get(String(windowId || "").trim()) || 0);
+}
+
+function terminalBumpWindowActionEpoch(windowId) {
+  const key = String(windowId || "").trim();
+  if (!key) return 0;
+  const nextValue = terminalWindowActionEpoch(key) + 1;
+  terminalWindowActionEpochById.set(key, nextValue);
+  return nextValue;
+}
+
+function terminalButtonCooldownRemaining(windowId, accountId, action) {
+  const key = terminalCooldownKey(windowId, accountId, action);
+  const expiresAt = Number(terminalButtonCooldownByKey.get(key) || 0);
+  if (!expiresAt) return 0;
+  const remainMs = expiresAt - Date.now();
+  if (remainMs <= 0) {
+    terminalButtonCooldownByKey.delete(key);
+    return 0;
+  }
+  return Math.ceil(remainMs / 1000);
+}
+
+function startTerminalCooldownTicker() {
+  if (terminalButtonCooldownTimer) return;
+  terminalButtonCooldownTimer = window.setInterval(() => {
+    if (!terminalButtonCooldownByKey.size) {
+      window.clearInterval(terminalButtonCooldownTimer);
+      terminalButtonCooldownTimer = null;
+      return;
+    }
+    const now = Date.now();
+    for (const [key, expiresAt] of terminalButtonCooldownByKey.entries()) {
+      if (Number(expiresAt || 0) <= now) terminalButtonCooldownByKey.delete(key);
+    }
+    if (currentView === "terminal-execution" && terminalCurrentRoute() === "wechat") {
+      updateTerminalManualCountdowns();
+    }
+  }, 1000);
+}
+
+function setTerminalButtonCooldown(windowId, accountId, action, seconds = 15) {
+  const w = String(windowId || "").trim();
+  const a = String(accountId || "").trim();
+  const act = String(action || "").trim();
+  if (!w || !a || !act) return;
+  terminalButtonCooldownByKey.set(terminalCooldownKey(w, a, act), Date.now() + Math.max(1, Number(seconds) || 15) * 1000);
+  startTerminalCooldownTicker();
+}
+
+function clearTerminalButtonCooldown(windowId, accountId, action) {
+  const w = String(windowId || "").trim();
+  const a = String(accountId || "").trim();
+  const act = String(action || "").trim();
+  if (!w || !a || !act) return;
+  terminalButtonCooldownByKey.delete(terminalCooldownKey(w, a, act));
+}
+
+function terminalCurrentWindowAccountId(windowId) {
+  const w = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowId));
+  if (!w) return "";
+  return terminalResolveWindowAccountId(w, Number(w.current_index || 0));
+}
+
+function terminalReapplyInFlightWindowActions() {
+  if (!terminalAutoPublishWindowIds.size) return;
+  for (const windowId of terminalAutoPublishWindowIds) {
+    const accountId = terminalCurrentWindowAccountId(windowId);
+    if (!accountId) continue;
+    // Keep optimistic publish stage stable for windows that are still waiting for API response.
+    terminalForcePostLoginStage(windowId, accountId);
+    markTerminalManualAction(windowId, accountId, "publish");
+  }
+}
+
+function terminalMarkPublishPending(windowId, accountId) {
+  const windowKey = String(windowId || "").trim();
+  const accountKey = String(accountId || "").trim();
+  if (!windowKey || !accountKey) return;
+  const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowKey);
+  const targetAccount = (targetWindow?.accounts || []).find((item) => String(item?.id ?? item?.account_id ?? "") === accountKey);
+  if (!targetAccount || typeof targetAccount !== "object") return;
+  delete targetAccount.error_stage;
+  delete targetAccount.error_title;
+  delete targetAccount.error_detail;
+  targetAccount.status = "running";
+  targetAccount.status_text = "发布页准备中";
+  targetAccount.task_id = null;
+}
+
+function resetTerminalManualAction(windowId, accountId) {
+  const manualState = terminalManualActionState(windowId, accountId);
+  manualState.loginClicked = false;
+  manualState.publishClicked = false;
+  manualState.nextClicked = false;
+  const windowKey = String(windowId || "").trim();
+  const accountKey = String(accountId || "").trim();
+  const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowKey);
+  const targetAccount = (targetWindow?.accounts || []).find((item) => String(item?.id ?? item?.account_id ?? "") === accountKey);
+  if (targetAccount && typeof targetAccount === "object") {
+    targetAccount.login_clicked = false;
+    targetAccount.publish_clicked = false;
+    targetAccount.next_clicked = false;
+  }
+}
+
+function terminalAdvanceWindowLocally(windowId) {
+  const target = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowId));
+  if (!target) return false;
+  const accounts = Array.isArray(target.accounts) ? target.accounts : [];
+  if (!accounts.length) return false;
+  const currentIndex = Number(target.current_index || 0);
+  if (currentIndex >= accounts.length) return false;
+  const current = accounts[currentIndex] || {};
+  if (String(current.status || "").toLowerCase() !== "success") {
+    current.status = "success";
+    current.status_text = "已完成";
+  }
+  current.next_clicked = true;
+  const nextIndex = currentIndex + 1;
+  target.current_index = nextIndex;
+  target.confirming_next = false;
+  target.qr_refreshing = false;
+  if (nextIndex < accounts.length) {
+    const nextAccount = accounts[nextIndex] || {};
+    nextAccount.login_clicked = true;
+    nextAccount.publish_clicked = false;
+    nextAccount.next_clicked = false;
+    if (String(nextAccount.status || "").toLowerCase() === "pending" || !String(nextAccount.status_text || "").trim()) {
+      nextAccount.status_text = "待发布";
+    }
+  }
+  if (nextIndex >= accounts.length) {
+    target.completed = true;
+  }
+  return true;
+}
+
 function terminalWindowActionButtons(window, current, loginStarted) {
   const accounts = window.accounts || [];
   const windowIdText = String(window?.id || "").trim();
@@ -2659,55 +2897,63 @@ function terminalWindowActionButtons(window, current, loginStarted) {
       </div>
     `;
   }
-  const hasCurrent = Boolean(current && current.id && currentIndex < accounts.length);
-  const run = window?.publish_run || {};
-  const runStatus = String(run?.status || "").toLowerCase();
-  const runActiveForCurrent = Number(run?.account_id || 0) === Number(current?.id || 0);
-  const publishRunning = runActiveForCurrent && runStatus === "running";
-  const publishStopping = runActiveForCurrent && runStatus === "stopping";
-  const publishSucceeded = runActiveForCurrent && (runStatus === "success" || runStatus === "manual_confirm");
-  const publishManualConfirmableFailure = runActiveForCurrent && terminalRunIsManualConfirmableFailure(run);
-  const isSuccess = String(current?.status || "") === "success";
-  const currentStatus = String(current?.status || "").toLowerCase();
-  const currentStatusText = String(current?.status_text || "");
-  const isPreparingByText = currentStatusText.includes("正在准备发布页面");
-  const isReady = currentStatus === "ready" || isPreparingByText;
-  const localAutoPublishStage = terminalAutoPublishStageByWindowId.get(windowIdText) || "";
-  const runningAutoPublishStage = publishRunning ? (terminalAutoPublishStageFromStatusText(currentStatusText) || "publishing") : "";
-  const autoPublishStage = publishStopping
-    ? "stopping"
-    : (runningAutoPublishStage || localAutoPublishStage);
+  const hasCurrent = currentIndex >= 0 && currentIndex < accounts.length;
   const inFlightAutoPublish = terminalAutoPublishWindowIds.has(windowIdText);
-  const canAutoPublish = loginStarted && hasCurrent && !publishRunning && !publishStopping && !publishSucceeded && !isSuccess && !confirmingNext && !inFlightAutoPublish;
-  const canConfirm = loginStarted && hasCurrent && (publishRunning || publishSucceeded || publishManualConfirmableFailure) && !isSuccess && !confirmingNext;
+  const resettingWindow = terminalResetWindowIds.has(windowIdText);
+  const currentAccountId = terminalResolveAccountId(current) || terminalResolveWindowAccountId(window, currentIndex);
+  const cycleAccountMarker = terminalManualCycleAccountByWindow.get(windowIdText) || "";
+  const currentAccountMarker = currentAccountId;
+  if (currentAccountMarker && cycleAccountMarker !== currentAccountMarker) {
+    const localWindowMap = terminalManualActionStateByWindow.get(windowIdText);
+    if (localWindowMap instanceof Map) {
+      localWindowMap.delete(currentAccountMarker);
+    }
+    terminalManualCycleAccountByWindow.set(windowIdText, currentAccountMarker);
+  }
+  const manualState = hasCurrent && currentAccountId
+    ? terminalManualActionState(window.id, currentAccountId)
+    : { loginClicked: false, publishClicked: false, nextClicked: false };
+  const cycleStage = !manualState.loginClicked
+    ? "login"
+    : (!manualState.publishClicked ? "publish" : "next");
   const hasNext = currentIndex + 1 < accounts.length;
-  const stageLoadingLabel = terminalAutoPublishStageLabel(autoPublishStage);
-  const publishTextLoadingLabel = terminalPublishLoadingLabelFromText(currentStatusText);
-  const publishButtonLoading = Boolean(stageLoadingLabel || publishTextLoadingLabel);
-  const publishLoadingLabel = stageLoadingLabel || publishTextLoadingLabel;
-  const publishLabel = !hasCurrent
-    ? "全部完成"
-    : isSuccess
-      ? "已完成"
-    : publishButtonLoading
-      ? publishLoadingLabel
-      : publishSucceeded
-        ? "待人工发布"
-        : publishManualConfirmableFailure
-          ? "重新准备"
-        : "我已登录，点击发布";
-  const confirmReadyLabel = hasNext
-    ? (publishManualConfirmableFailure ? "已人工确认成功，下一账号" : "发布成功，下一账号")
-    : (publishManualConfirmableFailure ? "已人工确认成功，完成" : "发布成功，完成");
-  const confirmIdleLabel = hasNext ? "发布成功后点这里" : "发布成功后完成";
-  const confirmLabel = canConfirm ? confirmReadyLabel : confirmIdleLabel;
-  const publishButtonClass = `terminal-col-btn ${publishButtonLoading ? "loading strong-loading terminal-publish-loading" : ""}`;
-  const publishButtonBusy = publishButtonLoading ? "true" : "false";
-  const publishButtonContent = publishButtonLoading ? terminalPublishLoadingInline(publishLoadingLabel) : publishLabel;
+  const canLoginBase = hasCurrent && cycleStage === "login" && !confirmingNext && !resettingWindow;
+  const canAutoPublish = hasCurrent && cycleStage === "publish" && !confirmingNext && !inFlightAutoPublish && !resettingWindow;
+  const canConfirm = hasCurrent && cycleStage === "next" && !confirmingNext && !resettingWindow;
+  const publishCooldown = hasCurrent && currentAccountId ? terminalButtonCooldownRemaining(windowIdText, currentAccountId, "publish") : 0;
+  const publishLoginCooldown = hasCurrent && currentAccountId ? terminalButtonCooldownRemaining(windowIdText, currentAccountId, "publish_login_wait") : 0;
+  const nextCooldown = hasCurrent && currentAccountId ? terminalButtonCooldownRemaining(windowIdText, currentAccountId, "next") : 0;
+  const publishBlockedByLoginWait = publishLoginCooldown > 0;
+  const effectivePublishCooldown = Math.max(publishCooldown, publishLoginCooldown);
+  const publishButtonLoading = false;
+  const publishLabel = publishBlockedByLoginWait
+    ? `请扫码登录(${publishLoginCooldown}s)`
+    : (effectivePublishCooldown > 0 ? `发布(${effectivePublishCooldown}s)` : "发布");
+  const confirmReadyLabel = hasNext ? "下一个" : "完成";
+  const confirmIdleLabel = hasNext ? "下一个" : "完成";
+  const confirmLabel = nextCooldown > 0
+    ? `${hasNext ? "下一个" : "完成"}(${nextCooldown}s)`
+    : (canConfirm ? confirmReadyLabel : confirmIdleLabel);
+  const showLoginButton = cycleStage === "login";
+  const publishButtonClass = `terminal-col-btn ${cycleStage === "publish" ? "cycle-active" : ""}`;
+  const publishButtonBusy = "false";
+  const publishButtonContent = publishLabel;
+  const qrState = terminalQrLifecycle(window);
+  const loginAccountId = currentAccountId;
+  const loginOpening = qrState.placeholderState === "opening";
+  const canLogin = canLoginBase && !loginOpening;
+  const loginButtonClass = `terminal-col-btn secondary ${cycleStage === "login" ? "cycle-active" : ""} ${loginOpening ? "loading strong-loading" : ""}`;
+  const loginButtonContent = loginOpening ? `${loadingInline("登录中...")}` : "登录";
+  const nextButtonClass = `terminal-col-btn secondary ${cycleStage === "next" ? "cycle-active" : ""} ${confirmingNext ? "loading strong-loading" : ""}`;
+  const canAutoPublishWithCooldown = canAutoPublish && effectivePublishCooldown <= 0;
+  const canConfirmWithCooldown = canConfirm && nextCooldown <= 0;
   return `
     <div class="terminal-window-actions">
-      <button class="${publishButtonClass}" type="button" data-terminal-auto-publish="${window.id}" ${canAutoPublish ? "" : "disabled"} aria-busy="${publishButtonBusy}">${publishButtonContent}</button>
-      <button class="terminal-col-btn secondary ${confirmingNext ? "loading strong-loading" : ""}" type="button" data-terminal-confirm-success="${window.id}" ${canConfirm ? "" : "disabled"} aria-busy="${confirmingNext ? "true" : "false"}">${confirmingNext ? `${loadingInline("正在进入下一个...")}` : confirmLabel}</button>
+      <div class="terminal-window-actions-top ${showLoginButton ? "" : "single-action"}">
+        ${showLoginButton ? `<button class="${loginButtonClass}" type="button" data-terminal-login-open="${window.id}:${loginAccountId}" ${canLogin ? "" : "disabled"} aria-busy="${loginOpening ? "true" : "false"}">${loginButtonContent}</button>` : ""}
+        <button class="${publishButtonClass}" type="button" data-terminal-auto-publish="${window.id}" ${canAutoPublishWithCooldown ? "" : "disabled"} aria-busy="${publishButtonBusy}">${publishButtonContent}</button>
+      </div>
+      <button class="${nextButtonClass}" type="button" data-terminal-confirm-success="${window.id}" ${canConfirmWithCooldown ? "" : "disabled"} aria-busy="${confirmingNext ? "true" : "false"}">${confirmingNext ? `${loadingInline("正在进入下一个...")}` : confirmLabel}</button>
     </div>
   `;
 }
@@ -2716,9 +2962,8 @@ function terminalQrImageMarkup(window, currentAccountId) {
   const qrState = terminalQrLifecycle(window);
   const accounts = Array.isArray(window?.accounts) ? window.accounts : [];
   const currentIndex = Number(window?.current_index || 0);
-  const fallbackCurrentId = Number(accounts?.[currentIndex]?.id || 0);
-  const firstAccountId = Number(accounts?.[0]?.id || 0);
-  const refreshAccountId = Number(currentAccountId || 0) || fallbackCurrentId || firstAccountId;
+  const fallbackCurrentId = terminalResolveWindowAccountId(window, currentIndex);
+  const refreshAccountId = String(currentAccountId || "").trim() || fallbackCurrentId;
   if (qrState.placeholderState === "completed") {
     return `
       <button class="terminal-qr-image-button" type="button" disabled aria-label="全部完成">
@@ -2798,6 +3043,13 @@ function terminalWechatAccountStatusText(window, account, index, currentIndex, l
 function sanitizeTerminalStatusText(statusText, status) {
   const raw = String(statusText || "").trim();
   if (!raw) return "未登录";
+  if (/请扫码.*我已登录/.test(raw) || /扫码.*点登录/.test(raw)) return "扫码后点登录";
+  if (/等待开始登录/.test(raw) || /等待打开登录浏览器/.test(raw) || /待点登录/.test(raw)) return "待点登录";
+  if (/正在打开登录浏览器/.test(raw)) return "正在打开浏览器";
+  if (/正在准备发布页面/.test(raw)) return "发布页准备中";
+  if (/登录.*点击发布.*(点成功|成功)/.test(raw)) return "待发布";
+  if (/手动发布.*点成功/.test(raw) || /已发布后点下一个/.test(raw)) return "已发布后点下一个";
+  if (/发布成功/.test(raw) || /已完成/.test(raw)) return "已完成";
   if (terminalTextIsManualConfirmableFailure(raw)) {
     return TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT;
   }
@@ -2909,6 +3161,27 @@ function terminalProgressMarkup(accounts, successCount) {
   `;
 }
 
+function terminalWechatAccountItemMarkup(window, account, index, currentIndex, loginStarted, options = {}) {
+  const displayAccount = terminalDisplayAccount(window, account, index, currentIndex);
+  const statusText = terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted);
+  const needsManualConfirm = terminalStatusNeedsManualConfirm(displayAccount, statusText);
+  const manualConfirmClass = terminalManualConfirmClass(displayAccount, statusText);
+  const statusSizeClass = terminalStatusSizeClass(statusText);
+  const isCurrent = Boolean(options?.isCurrent);
+  return `
+    <div class="terminal-account-item ${isCurrent ? "active" : ""} ${needsManualConfirm ? `manual-confirm${manualConfirmClass}` : ""}">
+      <div class="terminal-account-info">
+        ${terminalAccountStatusAvatar(displayAccount)}
+        <div>
+          <div class="terminal-acc-name">${displayAccount.display_name || displayAccount.account_key || `账号 ${displayAccount.id}`}</div>
+          <div class="terminal-acc-status ${needsManualConfirm ? `manual-confirm${manualConfirmClass}` : ""}${statusSizeClass}" ${isCurrent ? `data-terminal-current-status="${window.id}"` : ""}>${terminalAccountStatusMarkup(displayAccount, statusText)}</div>
+        </div>
+      </div>
+      ${terminalAccountTaskBadge(displayAccount)}
+    </div>
+  `;
+}
+
 function terminalWechatWindowMarkup(window, loginStarted) {
   const accounts = window.accounts || [];
   const currentIndex = Number(window.current_index || 0);
@@ -2916,45 +3189,45 @@ function terminalWechatWindowMarkup(window, loginStarted) {
   const colorDim = `${color}33`;
   const successCount = accounts.filter((account) => String(account?.status || "").toLowerCase() === "success").length;
   const current = accounts[currentIndex] || {};
-  const qrState = terminalQrLifecycle(window);
+  const hasCurrent = currentIndex >= 0 && currentIndex < accounts.length;
+  const resetAccountId = String(current?.id ?? accounts?.[currentIndex]?.id ?? accounts?.[0]?.id ?? "").trim();
+  const actionsMarkup = terminalWindowActionButtons(window, current, loginStarted);
+  const progressMarkup = terminalProgressMarkup(accounts, successCount);
+  const currentAccountMarkup = hasCurrent
+    ? terminalWechatAccountItemMarkup(window, current, currentIndex, currentIndex, loginStarted, { isCurrent: true })
+    : `<div class="terminal-account-current-empty muted">当前窗口已无进行中账号</div>`;
+  const queueAccountsMarkup = accounts
+    .map((account, index) => ({ account, index }))
+    .filter((item) => item.index !== currentIndex)
+    .map((item) => terminalWechatAccountItemMarkup(window, item.account, item.index, currentIndex, loginStarted))
+    .join("");
+  const currentPositionText = hasCurrent ? `#${currentIndex + 1}/${accounts.length}` : "已完成";
   return `
     <div class="terminal-task-column terminal-glass ${window?.confirming_next ? "confirming-next" : ""}" data-terminal-window-id="${window.id}" style="--term-color:${color};--term-color-dim:${colorDim}">
       <div class="terminal-color-anchor"></div>
       <div class="terminal-col-header">
-        <div class="terminal-col-header-top">
-          <span style="font-weight:700;font-size:16px;">${terminalWindowLabel(window.id)}</span>
-          <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
-        </div>
+          <div class="terminal-col-header-top">
+            <span class="terminal-col-title">${terminalWindowLabel(window.id)}</span>
+            <div class="terminal-col-header-controls">
+              <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
+              <button class="terminal-header-reset-btn" type="button" data-terminal-cycle-reset="${window.id}:${resetAccountId}" ${resetAccountId ? "" : "disabled"} title="重置当前账号按钮流程">重置</button>
+            </div>
+          </div>
         <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
+        <div class="terminal-col-header-progress">${progressMarkup}</div>
       </div>
-      <div class="terminal-qr-section" data-terminal-qr-section="${window.id}" data-terminal-qr-state="${qrState.placeholderState}">
-        <div class="terminal-qr-placeholder" data-terminal-qr-placeholder="${window.id}" data-terminal-qr-placeholder-state="${qrState.placeholderState}">${terminalQrImageMarkup(window, current.id)}</div>
-        <div class="terminal-qr-status-row"><span class="terminal-qr-sequence terminal-qr-countdown ${qrState.expired ? "expired" : qrState.active ? "active" : "idle"}" data-terminal-qr-countdown="${window.id}">${qrState.countdownText}</span></div>
+      <div class="terminal-col-actions">
+        ${actionsMarkup}
+      </div>
+      <div class="terminal-account-current">
+        <div class="terminal-account-current-head">
+          <span>当前操作账号</span>
+          <strong>${currentPositionText}</strong>
+        </div>
+        ${currentAccountMarkup}
       </div>
       <div class="terminal-account-list">
-        ${accounts.map((account, index) => {
-          const displayAccount = terminalDisplayAccount(window, account, index, currentIndex);
-          const statusText = terminalWechatAccountStatusText(window, displayAccount, index, currentIndex, loginStarted);
-          const needsManualConfirm = terminalStatusNeedsManualConfirm(displayAccount, statusText);
-          const manualConfirmClass = terminalManualConfirmClass(displayAccount, statusText);
-          const statusSizeClass = terminalStatusSizeClass(statusText);
-          return `
-          <div class="terminal-account-item ${index === currentIndex ? "active" : ""} ${needsManualConfirm ? `manual-confirm${manualConfirmClass}` : ""}">
-            <div class="terminal-account-info">
-              ${terminalAccountStatusAvatar(displayAccount)}
-              <div>
-                <div class="terminal-acc-name">${displayAccount.display_name || displayAccount.account_key || `账号 ${displayAccount.id}`}</div>
-                <div class="terminal-acc-status ${needsManualConfirm ? `manual-confirm${manualConfirmClass}` : ""}${statusSizeClass}" ${index === currentIndex ? `data-terminal-current-status="${window.id}"` : ""}>${terminalAccountStatusMarkup(displayAccount, statusText)}</div>
-              </div>
-            </div>
-            ${terminalAccountTaskBadge(displayAccount)}
-          </div>
-        `;
-        }).join("") || `<div class="muted">暂无账号</div>`}
-      </div>
-      <div class="terminal-col-footer">
-        ${terminalProgressMarkup(accounts, successCount)}
-        ${terminalWindowActionButtons(window, current, loginStarted)}
+        ${queueAccountsMarkup || `<div class="terminal-account-queue-empty muted">暂无待处理或历史账号</div>`}
       </div>
     </div>
   `;
@@ -3011,6 +3284,8 @@ function replaceTerminalWindowNode(refreshRoot, windowId, windowData, loginStart
 }
 
 async function refreshTerminalAccountQr(windowId, accountId, button) {
+  const requestWindowId = String(windowId || "").trim();
+  const requestEpoch = terminalWindowActionEpoch(requestWindowId);
   const restoreButton = setButtonLoading(button, "打开中");
   terminalErrorModalSignature = "";
   hideTerminalErrorModal();
@@ -3044,7 +3319,11 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
     }
 
     const nextState = await api(`/api/terminal-execution/windows/${windowId}/accounts/${accountId}/qr`, { method: "POST" });
+    if (terminalWindowActionEpoch(requestWindowId) !== requestEpoch) return;
     state.terminalExecution = nextState;
+    terminalReapplyInFlightWindowActions();
+    terminalForcePostLoginStage(windowId, accountId);
+    terminalManualCycleAccountByWindow.set(String(windowId || "").trim(), String(accountId || "").trim());
     const now = Date.now() / 1000;
     (state.terminalExecution.windows || []).forEach((item) => {
       if (String(item.id) === String(windowId)) {
@@ -3069,6 +3348,7 @@ async function refreshTerminalAccountQr(windowId, accountId, button) {
       window.scrollTo(pageScrollX, pageScrollY);
     }
   } catch (error) {
+    if (terminalWindowActionEpoch(requestWindowId) !== requestEpoch) return;
     const currentStateWindows = state.terminalExecution.windows || [];
     const pendingWindow = currentStateWindows.find((item) => String(item.id) === String(windowId));
     if (pendingWindow) {
@@ -3093,7 +3373,7 @@ function installGlobalButtonLoading() {
     if (!button || button.disabled || button.classList.contains("loading")) return;
     if (String(button.getAttribute("type") || "").toLowerCase() === "submit") return;
     if (button.dataset.noGlobalLoading === "1") return;
-    if (button.matches("[data-terminal-auto-publish], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], [data-save-notification-policy], [data-incident-action], #user-menu-toggle, #top-user-toggle")) return;
+    if (button.matches("[data-terminal-auto-publish], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-login-open], [data-terminal-cycle-reset], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], [data-save-notification-policy], [data-incident-action], #user-menu-toggle, #top-user-toggle")) return;
     pulseButtonLoading(button, "处理中");
   }, true);
 }
@@ -3130,7 +3410,7 @@ function renderTerminalExecution() {
         <div class="terminal-color-anchor"></div>
         <div class="terminal-col-header">
           <div class="terminal-col-header-top">
-            <span style="font-weight:700;font-size:16px;">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
+            <span class="terminal-col-title">终端执行窗 ${String(window.id).padStart(2, "0")}</span>
             <span class="terminal-status-badge theme">色标: ${window.color_name || ""}</span>
           </div>
           <div class="terminal-wx-operator">运营微信: ${window.operator_wechat || "-"}</div>
@@ -3263,6 +3543,53 @@ function renderTerminalDailyQrView(root) {
   if (!workspace) return;
   workspace.innerHTML = windows.map((window) => terminalWechatWindowMarkup(window, loginStarted)).join("");
   syncTerminalWechatSummary(summary, windows);
+  requestAnimationFrame(() => syncTerminalWechatGridHeight());
+}
+
+function syncTerminalWechatGridHeight() {
+  if (terminalCurrentRoute() !== "wechat") return;
+  const panel = document.querySelector("#terminal-matrix-workspace .terminal-group-panel");
+  const grid = panel?.querySelector(".terminal-workspace.terminal-workspace-wechat");
+  if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) return;
+  const panelStyle = window.getComputedStyle(panel);
+  const gap = Number.parseFloat(panelStyle.rowGap || panelStyle.gap || "0") || 0;
+  const siblings = Array.from(panel.children).filter((child) => child !== grid && !(child instanceof HTMLElement && child.hidden));
+  const usedHeight = siblings.reduce((total, child) => {
+    if (!(child instanceof HTMLElement)) return total;
+    return total + child.getBoundingClientRect().height;
+  }, 0);
+  const totalGap = Math.max(0, (siblings.length + 1) - 1) * gap;
+  const available = Math.floor(panel.clientHeight - usedHeight - totalGap);
+  if (available <= 0) return;
+  const clamped = Math.max(220, available);
+  const nextValue = `${clamped}px`;
+  if (grid.style.height !== nextValue) {
+    grid.style.height = nextValue;
+    grid.style.minHeight = nextValue;
+    grid.style.maxHeight = nextValue;
+  }
+}
+
+function scheduleTerminalPublishFollowup(windowId, attempts = 6, delayMs = 1800) {
+  // Lightweight one-shot sync to surface quick publish failures/success markers.
+  // This does not auto-open browsers or probe login.
+  const targetWindowId = String(windowId || "").trim();
+  if (!targetWindowId) return;
+  const waitMs = Math.max(400, Number(delayMs) || 1800);
+  window.setTimeout(async () => {
+    try {
+      const nextState = await api("/api/terminal-execution/poll", {
+        method: "POST",
+        body: JSON.stringify({ allow_browser_open: false, allow_login_probe: false }),
+      });
+      state.terminalExecution = nextState;
+      terminalReapplyInFlightWindowActions();
+      renderTerminalExecution();
+    } catch (error) {
+      void error;
+    }
+  }, waitMs);
+  void attempts;
 }
 
 function renderTerminalSessionBoardView() {
@@ -3341,13 +3668,14 @@ function updateTerminalManualCountdowns() {
   document.querySelectorAll("[data-terminal-auto-publish]").forEach((button) => {
     const window = windowById.get(String(button.dataset.terminalAutoPublish || ""));
     if (!window || updatedWindows.has(String(window.id))) return;
-    const footerNode = button.closest(".terminal-task-column")?.querySelector(".terminal-col-footer");
-    if (!footerNode) return;
-    if (footerNode.querySelector("button.loading")) return;
+    const windowNode = button.closest(".terminal-task-column");
+    const actionsContainer = windowNode?.querySelector(".terminal-col-actions") || windowNode?.querySelector(".terminal-col-footer");
+    if (!actionsContainer) return;
+    if (actionsContainer.querySelector("button.loading")) return;
     const currentIndex = Number(window.current_index || 0);
     const current = window.accounts?.[currentIndex] || {};
     const nextActionsMarkup = terminalWindowActionButtons(window, current, loginStarted).trim();
-    const actionsNode = footerNode.querySelector(".terminal-window-actions");
+    const actionsNode = actionsContainer.querySelector(".terminal-window-actions");
     if (actionsNode) {
       if (actionsNode.outerHTML.trim() !== nextActionsMarkup) {
         const wrapper = document.createElement("div");
@@ -3358,7 +3686,7 @@ function updateTerminalManualCountdowns() {
         }
       }
     } else {
-      footerNode.insertAdjacentHTML("beforeend", nextActionsMarkup);
+      actionsContainer.insertAdjacentHTML("beforeend", nextActionsMarkup);
     }
     updatedWindows.add(String(window.id));
   });
@@ -5864,25 +6192,38 @@ document.addEventListener("click", async (event) => {
   if (terminalAutoPublishButton) {
     const windowId = String(terminalAutoPublishButton.dataset.terminalAutoPublish || "").trim();
     if (!windowId) return;
+    const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowId);
+    const targetIndex = Number(targetWindow?.current_index || 0);
+    const targetAccountId = terminalResolveWindowAccountId(targetWindow, targetIndex);
+    if (targetAccountId) markTerminalManualAction(windowId, targetAccountId, "publish");
+    if (targetAccountId) terminalMarkPublishPending(windowId, targetAccountId);
+    if (targetAccountId) clearTerminalButtonCooldown(windowId, targetAccountId, "publish_login_wait");
+    if (targetAccountId) setTerminalButtonCooldown(windowId, targetAccountId, "publish", 15);
+    if (targetAccountId) setTerminalButtonCooldown(windowId, targetAccountId, "next", 60);
+    // Button flow is local-first: click publish immediately unlocks "下一步" for this account.
+    renderTerminalExecution();
     if (terminalAutoPublishWindowIds.has(windowId)) return;
     terminalAutoPublishWindowIds.add(windowId);
-    terminalAutoPublishStageByWindowId.set(windowId, "confirm_login");
-    renderTerminalExecution();
+    terminalAutoPublishStageByWindowId.set(windowId, "publishing");
     terminalErrorModalSignature = "";
     hideTerminalErrorModal();
-    let stage = "confirm_login";
+    let stage = "manual_publish";
     try {
-      state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/confirm-login`, { method: "POST" });
-      terminalAutoPublishStageByWindowId.set(windowId, "prepare_publish");
-      renderTerminalExecution();
-      stage = "manual_publish";
-      terminalAutoPublishStageByWindowId.set(windowId, "publishing");
       state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/manual-publish`, { method: "POST" });
+      terminalReapplyInFlightWindowActions();
       terminalAutoPublishStageByWindowId.delete(windowId);
       renderTerminalExecution();
+      scheduleTerminalPublishFollowup(windowId, 8, 1500);
     } catch (error) {
       terminalAutoPublishStageByWindowId.delete(windowId);
       console.warn("[terminal:auto-publish] failed", { windowId, stage, error: error?.message || error });
+      showTerminalErrorModal({
+        stage: "publish_start",
+        title: "发布执行失败",
+        message: error?.message || "发布执行失败",
+        context: `窗口 #${windowId}`,
+        signature: `publish-request|${stage}|${windowId}|${error?.message || "unknown"}`,
+      });
       renderTerminalExecution();
     } finally {
       terminalAutoPublishWindowIds.delete(windowId);
@@ -5892,73 +6233,141 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const terminalLoginOpenButton = event.target.closest("[data-terminal-login-open]");
+  if (terminalLoginOpenButton) {
+    const token = parseWindowAccountToken(terminalLoginOpenButton.dataset.terminalLoginOpen || "");
+    const windowIdValue = token.windowId;
+    const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowIdValue));
+    const accountIdValue = token.accountId || terminalResolveWindowAccountId(targetWindow, Number(targetWindow?.current_index || 0));
+    if (!windowIdValue || !accountIdValue) {
+      showTerminalErrorModal({
+        stage: "login_browser",
+        title: "登录浏览器打开失败",
+        message: "当前窗口没有可用账号，无法打开登录浏览器。请先检查账号配置后重试。",
+        context: `窗口 #${windowIdValue || "-"}`,
+        signature: `login-browser|empty-account|${windowIdValue || "-"}`,
+      });
+      return;
+    }
+    // Button flow is local-first: click login immediately unlocks "发布" for this account.
+    markTerminalManualAction(windowIdValue, accountIdValue, "login");
+    terminalForcePostLoginStage(windowIdValue, accountIdValue);
+    setTerminalButtonCooldown(windowIdValue, accountIdValue, "publish", 15);
+    terminalManualCycleAccountByWindow.set(windowIdValue, accountIdValue);
+    renderTerminalExecution();
+    void refreshTerminalAccountQr(windowIdValue, accountIdValue, terminalLoginOpenButton);
+    return;
+  }
+
+  const terminalCycleResetButton = event.target.closest("[data-terminal-cycle-reset]");
+  if (terminalCycleResetButton) {
+    const token = parseWindowAccountToken(terminalCycleResetButton.dataset.terminalCycleReset || "");
+    const windowIdValue = token.windowId;
+    const stateWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowIdValue));
+    const accountIdValue = token.accountId || terminalResolveWindowAccountId(stateWindow, Number(stateWindow?.current_index || 0));
+    if (!windowIdValue || !accountIdValue) return;
+    if (terminalResetWindowIds.has(windowIdValue)) return;
+    terminalBumpWindowActionEpoch(windowIdValue);
+    terminalResetWindowIds.add(windowIdValue);
+    const restoreButton = setButtonLoading(terminalCycleResetButton, "重置中");
+    try {
+      state.terminalExecution = await api(`/api/terminal-execution/windows/${windowIdValue}/accounts/${accountIdValue}/reset-manual-flow`, { method: "POST" });
+      terminalReapplyInFlightWindowActions();
+      terminalErrorModalSignature = "";
+      hideTerminalErrorModal();
+      const syncedWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowIdValue));
+      const syncedCurrentId = terminalResolveWindowAccountId(syncedWindow, Number(syncedWindow?.current_index || 0));
+      const resetAccountIds = Array.from(new Set([String(accountIdValue || "").trim(), String(syncedCurrentId || "").trim()])).filter(Boolean);
+      resetAccountIds.forEach((resetAccountId) => {
+        resetTerminalManualAction(windowIdValue, resetAccountId);
+        clearTerminalButtonCooldown(windowIdValue, resetAccountId, "publish");
+        clearTerminalButtonCooldown(windowIdValue, resetAccountId, "publish_login_wait");
+        clearTerminalButtonCooldown(windowIdValue, resetAccountId, "next");
+        const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowIdValue));
+        const targetAccount = (targetWindow?.accounts || []).find((item) => String(item?.id ?? item?.account_id ?? "") === String(resetAccountId));
+        if (targetAccount && typeof targetAccount === "object") {
+          targetAccount.status = "pending";
+          targetAccount.status_text = "待点登录";
+          targetAccount.task_id = null;
+          delete targetAccount.error_stage;
+          delete targetAccount.error_title;
+          delete targetAccount.error_detail;
+        }
+      });
+      terminalManualCycleAccountByWindow.set(windowIdValue, accountIdValue);
+      terminalAutoPublishWindowIds.delete(windowIdValue);
+      terminalAutoPublishStageByWindowId.delete(windowIdValue);
+      renderTerminalExecution();
+    } finally {
+      terminalResetWindowIds.delete(windowIdValue);
+      restoreButton();
+      renderTerminalExecution();
+    }
+    return;
+  }
+
   const terminalQrRefreshButton = event.target.closest("[data-terminal-qr-refresh]");
   if (terminalQrRefreshButton) {
-    const [windowId, accountId] = String(terminalQrRefreshButton.dataset.terminalQrRefresh || "").split(":");
-    const windowIdNumber = Number(windowId);
-    if (!windowIdNumber) return;
-    let accountIdNumber = Number(accountId);
-    const targetWindow = (state.terminalExecution.windows || []).find((item) => Number(item.id) === windowIdNumber);
-    if (!accountIdNumber) {
-      const currentIndex = Number(targetWindow?.current_index || 0);
-      accountIdNumber = Number(targetWindow?.accounts?.[currentIndex]?.id || 0) || Number(targetWindow?.accounts?.[0]?.id || 0);
-    }
-    if (!accountIdNumber) {
+    const token = parseWindowAccountToken(terminalQrRefreshButton.dataset.terminalQrRefresh || "");
+    const windowIdValue = token.windowId;
+    if (!windowIdValue) return;
+    const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowIdValue));
+    const accountIdValue = token.accountId || terminalResolveWindowAccountId(targetWindow, Number(targetWindow?.current_index || 0));
+    if (!accountIdValue) {
       showTerminalErrorModal({
         stage: "login_browser",
         title: "登录浏览器打开失败",
         message: "当前窗口没有可用账号，无法打开登录浏览器。请先在配置中添加账号后重试。",
-        context: `窗口 #${windowIdNumber}`,
-        signature: `login-browser|empty-account|${windowIdNumber}`,
+        context: `窗口 #${windowIdValue}`,
+        signature: `login-browser|empty-account|${windowIdValue}`,
       });
       return;
     }
-    await refreshTerminalAccountQr(windowIdNumber, accountIdNumber, terminalQrRefreshButton);
+    await refreshTerminalAccountQr(windowIdValue, accountIdValue, terminalQrRefreshButton);
     return;
   }
 
   const terminalConfirmButton = event.target.closest("[data-terminal-confirm-success]");
   if (terminalConfirmButton) {
-    const restoreButton = setButtonLoading(terminalConfirmButton, "进入中");
     const windowId = terminalConfirmButton.dataset.terminalConfirmSuccess;
-    if (terminalConfirmingWindowIds.has(String(windowId))) return;
-    terminalConfirmingWindowIds.add(String(windowId));
-    const refreshRoot = document.querySelector(".terminal-workspace-wechat") || document.querySelector("#terminal-matrix-workspace");
-    const pageScrollX = window.scrollX;
-    const pageScrollY = window.scrollY;
-    const rootScrollLeft = refreshRoot?.scrollLeft ?? 0;
-    const rootScrollTop = refreshRoot?.scrollTop ?? 0;
-    terminalErrorModalSignature = "";
-    hideTerminalErrorModal();
+    if (!windowId) return;
+    const currentAccountId = terminalCurrentWindowAccountId(windowId);
+    if (currentAccountId) setTerminalButtonCooldown(windowId, currentAccountId, "next", 15);
+    if (currentAccountId) markTerminalManualAction(windowId, currentAccountId, "next");
+    const restoreButton = setButtonLoading(terminalConfirmButton, "打开浏览器中");
     try {
-      const pendingWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowId));
-      if (pendingWindow) {
-        pendingWindow.confirming_next = true;
-        if (refreshRoot && replaceTerminalWindowNode(refreshRoot, windowId, pendingWindow, Boolean(state.terminalExecution.login_started))) {
-          refreshRoot.scrollLeft = rootScrollLeft;
-          refreshRoot.scrollTop = rootScrollTop;
-          window.scrollTo(pageScrollX, pageScrollY);
-        } else {
-          renderTerminalExecution();
-          window.scrollTo(pageScrollX, pageScrollY);
-        }
-      }
       state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/confirm-publish-success`, { method: "POST" });
+      terminalReapplyInFlightWindowActions();
+      terminalErrorModalSignature = "";
+      hideTerminalErrorModal();
+      const nextAccountId = terminalCurrentWindowAccountId(windowId);
+      if (nextAccountId) {
+        // Force the next account into publish stage locally: login is treated as already confirmed by operator.
+        markTerminalManualAction(windowId, nextAccountId, "login");
+        setTerminalButtonCooldown(windowId, nextAccountId, "publish_login_wait", 10);
+        clearTerminalButtonCooldown(windowId, nextAccountId, "publish");
+      }
       renderTerminalExecution();
-      window.scrollTo(pageScrollX, pageScrollY);
     } catch (error) {
-      const pendingWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === String(windowId));
-      if (pendingWindow) pendingWindow.confirming_next = false;
-      renderTerminalExecution();
+      const ok = terminalAdvanceWindowLocally(windowId);
+      if (ok) {
+        const nextAccountId = terminalCurrentWindowAccountId(windowId);
+        if (nextAccountId) {
+          // Keep local behavior consistent with success path even when backend confirm fails.
+          markTerminalManualAction(windowId, nextAccountId, "login");
+          setTerminalButtonCooldown(windowId, nextAccountId, "publish_login_wait", 10);
+          clearTerminalButtonCooldown(windowId, nextAccountId, "publish");
+        }
+        renderTerminalExecution();
+      }
       showTerminalErrorModal({
         stage: "confirm",
-        title: "确认请求失败",
-        message: error.message || "确认请求失败",
+        title: "下一个已本地推进",
+        message: `后端记录失败：${error?.message || "unknown"}`,
         context: `窗口 #${windowId}`,
-        signature: `publish-request|confirm|${windowId}|${error.message || "unknown"}`,
+        signature: `confirm-local-fallback|${windowId}|${error?.message || "unknown"}`,
       });
     } finally {
-      terminalConfirmingWindowIds.delete(String(windowId));
       restoreButton();
     }
     return;

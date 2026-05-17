@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,8 @@ from .tenant import bind_tenant_database
 from .video_matrix.ffmpeg_tools import ffmpeg_runtime_health
 from .video_matrix_api import router as video_matrix_router
 from .wechat_stats_capture import capture_status
+
+_TERMINAL_EXECUTION_API_LOCK = threading.RLock()
 
 
 def _model_payload(model: BaseModel, *, exclude_unset: bool = False) -> dict[str, Any]:
@@ -704,29 +707,33 @@ def create_app() -> FastAPI:
 
     @app.get("/api/terminal-execution/state")
     def terminal_execution_state() -> dict[str, Any]:
-        return service.terminal_execution_state()
+        with _TERMINAL_EXECUTION_API_LOCK:
+            return service.terminal_execution_state()
 
     @app.post("/api/terminal-execution/start")
     def terminal_execution_start(payload: TerminalStartPayload) -> dict[str, Any]:
         try:
-            return service.start_terminal_execution(_model_payload(payload))
+            with _TERMINAL_EXECUTION_API_LOCK:
+                return service.start_terminal_execution(_model_payload(payload))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/terminal-execution/start-login")
     def terminal_execution_start_login() -> dict[str, Any]:
         try:
-            return service.start_terminal_login()
+            with _TERMINAL_EXECUTION_API_LOCK:
+                return service.start_terminal_login()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/terminal-execution/poll")
     def terminal_execution_poll(payload: TerminalPollPayload | None = Body(default=None)) -> dict[str, Any]:
         data = _model_payload(payload) if payload is not None else {}
-        return service.poll_terminal_execution(
-            allow_browser_open=bool(data.get("allow_browser_open")),
-            allow_login_probe=bool(data.get("allow_login_probe")),
-        )
+        with _TERMINAL_EXECUTION_API_LOCK:
+            return service.poll_terminal_execution(
+                allow_browser_open=bool(data.get("allow_browser_open")),
+                allow_login_probe=bool(data.get("allow_login_probe")),
+            )
 
     @app.get("/api/terminal-execution/windows/{window_id}/qr-image")
     def terminal_execution_qr_image(window_id: int) -> FileResponse:
@@ -745,28 +752,40 @@ def create_app() -> FastAPI:
     @app.post("/api/terminal-execution/windows/{window_id}/accounts/{account_id}/qr")
     def terminal_execution_account_qr(window_id: int, account_id: int) -> dict[str, Any]:
         try:
-            return service.open_terminal_account_qr(window_id, account_id)
+            with _TERMINAL_EXECUTION_API_LOCK:
+                return service.open_terminal_account_qr(window_id, account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/terminal-execution/windows/{window_id}/confirm-login")
     def terminal_execution_confirm_login(window_id: int) -> dict[str, Any]:
         try:
-            return service.confirm_terminal_login_ready(window_id)
+            with _TERMINAL_EXECUTION_API_LOCK:
+                return service.confirm_terminal_login_ready(window_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/terminal-execution/windows/{window_id}/manual-publish")
     def terminal_execution_manual_publish(window_id: int) -> dict[str, Any]:
         try:
-            return service.manual_terminal_publish(window_id)
+            with _TERMINAL_EXECUTION_API_LOCK:
+                return service.manual_terminal_publish(window_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/terminal-execution/windows/{window_id}/accounts/{account_id}/reset-manual-flow")
+    def terminal_execution_reset_manual_flow(window_id: int, account_id: int) -> dict[str, Any]:
+        try:
+            with _TERMINAL_EXECUTION_API_LOCK:
+                return service.reset_terminal_manual_flow(window_id, account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/terminal-execution/windows/{window_id}/confirm-publish-success")
     def terminal_execution_confirm_publish_success(window_id: int) -> dict[str, Any]:
         try:
-            return service.confirm_terminal_publish_success(window_id)
+            with _TERMINAL_EXECUTION_API_LOCK:
+                return service.confirm_terminal_publish_success(window_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
