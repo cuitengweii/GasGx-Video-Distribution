@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 import html
 import json
+import locale
 import math
 import os
 import random
@@ -14613,6 +14614,31 @@ def _extract_cli_flag_value(command_line: str, flag_name: str) -> Optional[str]:
     return value.strip()
 
 
+def _decode_windows_process_output(raw: bytes | str | None) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    preferred = locale.getpreferredencoding(False)
+    candidates = ["utf-8", preferred, "mbcs", "cp936", "gbk", "utf-16le"]
+    tried: set[str] = set()
+    fallback = ""
+    for encoding_name in candidates:
+        name = str(encoding_name or "").strip().lower()
+        if not name or name in tried:
+            continue
+        tried.add(name)
+        try:
+            decoded = raw.decode(name)
+        except Exception:
+            continue
+        if "\ufffd" not in decoded:
+            return decoded
+        if not fallback:
+            fallback = decoded
+    return fallback or raw.decode("utf-8", errors="ignore")
+
+
 def _iter_chrome_command_lines() -> list[str]:
     if os.name == "nt":
         cmd_lines: list[str] = []
@@ -14620,12 +14646,11 @@ def _iter_chrome_command_lines() -> list[str]:
             result = subprocess.run(
                 ["wmic", "process", "where", "name='chrome.exe'", "get", "CommandLine", "/format:list"],
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
+                text=False,
                 check=False,
             )
-            for raw in (result.stdout or "").splitlines():
+            stdout_text = _decode_windows_process_output(result.stdout)
+            for raw in stdout_text.splitlines():
                 line = raw.strip()
                 if not line.lower().startswith("commandline="):
                     continue
@@ -14647,12 +14672,11 @@ def _iter_chrome_command_lines() -> list[str]:
                     "ForEach-Object { $_.CommandLine }",
                 ],
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
+                text=False,
                 check=False,
             )
-            for raw in (result.stdout or "").splitlines():
+            stdout_text = _decode_windows_process_output(result.stdout)
+            for raw in stdout_text.splitlines():
                 command = raw.strip()
                 if command:
                     cmd_lines.append(command)
@@ -14798,12 +14822,11 @@ def _find_debug_chrome_process_pid(debug_port: int, chrome_user_data_dir: str) -
                 "Select-Object ProcessId,CommandLine | ConvertTo-Json -Depth 3",
             ],
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
+            text=False,
             check=False,
         )
-        payload = json.loads(result.stdout or "[]")
+        stdout_text = _decode_windows_process_output(result.stdout)
+        payload = json.loads(stdout_text or "[]")
         if isinstance(payload, dict):
             payload = [payload]
         for item in payload:

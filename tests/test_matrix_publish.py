@@ -10,6 +10,7 @@ from gasgx_distribution import db as dist_db
 from gasgx_distribution import service
 from gasgx_distribution.matrix_publish import (
     _caption_with_topics,
+    caption_for_publish,
     asset_day,
     _runtime_config_for_wechat,
     build_publish_plan,
@@ -334,6 +335,28 @@ def test_publish_plan_skips_same_account_same_platform_same_day(monkeypatch, tmp
 def test_caption_with_topics_appends_global_topics() -> None:
     assert _caption_with_topics({"caption": "hello", "topics": "#gas #power"}) == "hello\n#gas #power"
     assert _caption_with_topics({"caption": "", "topics": "#gas #power"}) == "#gas #power"
+
+
+def test_caption_for_publish_uses_generated_copy_when_caption_empty(tmp_path: Path) -> None:
+    video_path = tmp_path / "demo.mp4"
+    video_path.write_bytes(b"video")
+    copy_path = tmp_path / "demo_copy.txt"
+    copy_path.write_text("AI generated description", encoding="utf-8")
+
+    caption = caption_for_publish({"caption": "", "topics": "#gas"}, video_path)
+
+    assert caption == "AI generated description\n#gas"
+
+
+def test_caption_for_publish_prefers_configured_caption_over_generated_copy(tmp_path: Path) -> None:
+    video_path = tmp_path / "demo.mp4"
+    video_path.write_bytes(b"video")
+    copy_path = tmp_path / "demo_copy.txt"
+    copy_path.write_text("AI generated description", encoding="utf-8")
+
+    caption = caption_for_publish({"caption": "manual caption", "topics": "#gas"}, video_path)
+
+    assert caption == "manual caption\n#gas"
 
 
 def test_wechat_runtime_config_includes_independent_video_account_fields(tmp_path: Path) -> None:

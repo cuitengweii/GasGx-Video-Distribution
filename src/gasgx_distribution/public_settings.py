@@ -22,6 +22,7 @@ DEFAULT_COMMON_SETTINGS: dict[str, Any] = {
     "wechat_declare_original": False,
     "wechat_short_title": "GasGx燃气发电挖矿",
     "wechat_location": "",
+    "use_ai_video_caption": True,
     "wechat_caption": "",
 }
 
@@ -138,6 +139,7 @@ def _normalize_common(payload: dict[str, Any]) -> dict[str, Any]:
     if _looks_like_mojibake(merged["wechat_short_title"]):
         merged["wechat_short_title"] = DEFAULT_COMMON_SETTINGS["wechat_short_title"]
     merged["wechat_location"] = str(merged.get("wechat_location") or DEFAULT_COMMON_SETTINGS["wechat_location"]).strip()
+    merged["use_ai_video_caption"] = _normalize_bool(merged.get("use_ai_video_caption", DEFAULT_COMMON_SETTINGS["use_ai_video_caption"]))
     merged["wechat_caption"] = str(merged.get("wechat_caption") or DEFAULT_COMMON_SETTINGS["wechat_caption"]).strip()
     if not isinstance(raw_operators, list):
         raw_operators = DEFAULT_COMMON_SETTINGS["operator_wechats"]
@@ -395,6 +397,7 @@ def load_platform_publish_settings(platform: str) -> dict[str, Any]:
         **platform_settings,
         "material_dir": common["material_dir"],
         "material_dir_follows_video_matrix": common["material_dir_follows_video_matrix"],
+        "use_ai_video_caption": common["use_ai_video_caption"],
         "publish_mode": common["publish_mode"] if publish_mode == "inherit" else publish_mode,
         "topics": common["topics"],
         "upload_timeout": upload_timeout,

@@ -20,6 +20,9 @@ let jobProgressTimer = null;
 let lastJobSnapshot = null;
 let visualDropdownCloseBound = false;
 let videoTemplateThumbScaleBound = false;
+const AI_PROMPT_HINT_MAX_CHARS = 240;
+const AI_PROMPT_HINT_MAX_LINES = 4;
+const AI_PROMPT_HINT_URL_RE = /(https?:\/\/\S+|www\.\S+)/gi;
 
 const narrativeTemplateNameMap = {
   quick_showcase: "快切展示",
@@ -198,6 +201,38 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function sanitizeAiPromptHint(value) {
+  const text = String(value || "").replace(/\r\n/g, "\n").replace(AI_PROMPT_HINT_URL_RE, "").trim();
+  if (!text) return "";
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, AI_PROMPT_HINT_MAX_LINES);
+  const merged = lines.join("\n").slice(0, AI_PROMPT_HINT_MAX_CHARS);
+  return merged.trim();
+}
+
+function aiPromptHintLineCount(value) {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  return text.split("\n").length;
+}
+
+function replaceSelection(value, start, end, insertText) {
+  const safeValue = String(value || "");
+  const from = Math.max(0, Number(start || 0));
+  const to = Math.max(from, Number(end || from));
+  return `${safeValue.slice(0, from)}${insertText}${safeValue.slice(to)}`;
+}
+
+function syncAiPromptHintMeta(value) {
+  const meta = $("aiPromptHintMeta");
+  if (!meta) return;
+  const lineCount = aiPromptHintLineCount(value);
+  meta.textContent = `限制：最多 ${AI_PROMPT_HINT_MAX_LINES} 行、最多 ${AI_PROMPT_HINT_MAX_CHARS} 字符，链接会被自动移除。已用 ${value.length}/${AI_PROMPT_HINT_MAX_CHARS} 字符，${lineCount}/${AI_PROMPT_HINT_MAX_LINES} 行。`;
+}
+
 function bindMobileSidebarToggle() {
   const toggle = $("mobileSidebarToggle");
   if (!toggle) return;
@@ -364,6 +399,43 @@ function renderSidebar(data) {
     headlineAiToggle.checked = Boolean(state.headline_ai_enabled);
     headlineAiToggle.onchange = () => {
       state.headline_ai_enabled = headlineAiToggle.checked;
+      scheduleStateSave();
+    };
+  }
+  const aiPromptHint = $("aiPromptHint");
+  if (aiPromptHint) {
+    const normalizedHint = sanitizeAiPromptHint(state.ai_prompt_hint || "");
+    state.ai_prompt_hint = normalizedHint;
+    aiPromptHint.value = normalizedHint;
+    syncAiPromptHintMeta(normalizedHint);
+    aiPromptHint.onkeydown = (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      const start = aiPromptHint.selectionStart ?? aiPromptHint.value.length;
+      const end = aiPromptHint.selectionEnd ?? start;
+      const nextRaw = replaceSelection(aiPromptHint.value, start, end, "\n");
+      const nextValue = sanitizeAiPromptHint(nextRaw);
+      if (aiPromptHintLineCount(nextValue) > AI_PROMPT_HINT_MAX_LINES || nextValue === aiPromptHint.value) {
+        event.preventDefault();
+      }
+    };
+    aiPromptHint.onpaste = (event) => {
+      const pasted = String(event.clipboardData?.getData("text") || "");
+      if (!pasted) return;
+      const start = aiPromptHint.selectionStart ?? aiPromptHint.value.length;
+      const end = aiPromptHint.selectionEnd ?? start;
+      const nextRaw = replaceSelection(aiPromptHint.value, start, end, pasted.replace(/\r\n/g, "\n"));
+      const nextValue = sanitizeAiPromptHint(nextRaw);
+      event.preventDefault();
+      aiPromptHint.value = nextValue;
+      state.ai_prompt_hint = nextValue;
+      syncAiPromptHintMeta(nextValue);
+      scheduleStateSave();
+    };
+    aiPromptHint.oninput = () => {
+      const nextValue = sanitizeAiPromptHint(aiPromptHint.value);
+      if (nextValue !== aiPromptHint.value) aiPromptHint.value = nextValue;
+      state.ai_prompt_hint = nextValue;
+      syncAiPromptHintMeta(nextValue);
       scheduleStateSave();
     };
   }
@@ -2714,6 +2786,8 @@ function collectState() {
   updateCompositionState();
   const endingCopyText = endingCopyTextValue();
   const endingCoverTemplate = activeEndingCoverTemplateSnapshot(endingCopyText);
+  const aiPromptHint = sanitizeAiPromptHint($("aiPromptHint")?.value || state.ai_prompt_hint || "");
+  state.ai_prompt_hint = aiPromptHint;
   return {
     output_count: Number($("outputCount").value), max_workers: Number($("maxWorkers").value),
     video_duration_min: Number($("videoDurationMin").value || settings.video_duration_min || 9),
@@ -2726,6 +2800,7 @@ function collectState() {
     cover_template_config: activeCoverTemplateSnapshot(),
     source_mode: "Category folders",
     headline_ai_enabled: Boolean($("headlineAiEnabled")?.checked),
+    ai_prompt_hint: aiPromptHint,
     headline: $("headline").value, subhead: $("subhead").value,
     follow_text: endingCopyText, hud_text: $("hudText").value,
     ending_template_mode: endingTemplateMode(),

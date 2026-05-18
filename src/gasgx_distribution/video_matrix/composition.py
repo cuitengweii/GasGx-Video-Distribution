@@ -34,6 +34,8 @@ def plan_variants(
     history_features: list[dict[str, Any]] | None = None,
     bgm_name: str = "",
     bgm_duration: float = 0.0,
+    ai_prompt_hint: str = "",
+    avoid_texts: list[str] | set[str] | None = None,
 ) -> list[VideoVariant]:
     count = output_count or settings.output_count
     sequence = _resolve_sequence(composition_sequence or settings.composition_sequence)
@@ -65,6 +67,8 @@ def plan_variants(
         list(getattr(hud_payload, "lines", []) or []),
         count * max(2, attempts_limit),
         narrative_templates=narrative_templates,
+        extra_prompt=ai_prompt_hint,
+        avoid_texts=avoid_texts,
     )
 
     for sequence_number in range(1, count + 1):

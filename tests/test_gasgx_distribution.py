@@ -1063,6 +1063,12 @@ def test_wechat_stats_parser_extracts_account_and_work_metrics() -> None:
     assert parsed["video_snapshots"][0]["feed_id"] == "feed-1"
 
 
+def test_wechat_account_match_token_uses_suffix_after_gasgx_prefix() -> None:
+    assert wechat_stats_capture._normalize_account_match_token("GasGx | 阿根廷-01") == wechat_stats_capture._normalize_account_match_token("阿根廷 01")
+    assert wechat_stats_capture._normalize_account_match_token("GASGX|燃气A组") == wechat_stats_capture._normalize_account_match_token("燃气A组")
+    assert wechat_stats_capture._normalize_account_match_token("普通账号B") == wechat_stats_capture._normalize_account_match_token("普通账号 B")
+
+
 def test_wechat_stats_capture_dry_run_uses_authorized_wechat_profiles(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account({"account_key": "gasgx-01", "display_name": "GasGx 01", "platforms": ["wechat"]})
@@ -1074,6 +1080,263 @@ def test_wechat_stats_capture_dry_run_uses_authorized_wechat_profiles(monkeypatc
     assert result["target_date"] == "2026-05-04"
     assert result["planned_accounts"][0]["debug_port"] >= 12000
     assert service.latest_wechat_stats_capture_run()["status"] == "completed"
+
+
+def test_wechat_stats_capture_dry_run_can_target_single_account(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    first = service.create_account({"account_key": "gasgx-one", "display_name": "GasGx One", "platforms": ["wechat"]})
+    second = service.create_account({"account_key": "gasgx-two", "display_name": "GasGx Two", "platforms": ["wechat"]})
+
+    result = wechat_stats_capture.run_wechat_stats_capture(target_date="2026-05-04", dry_run=True, account_id=int(second["id"]))
+
+    assert result["ok"] is True
+    assert result["account_id"] == int(second["id"])
+    assert result["account_total"] == 1
+    assert len(result["planned_accounts"]) == 1
+    assert int(result["planned_accounts"][0]["account_id"]) == int(second["id"])
+    assert int(result["planned_accounts"][0]["account_id"]) != int(first["id"])
+
+
+def test_wechat_stats_capture_no_data_rows_marked_skipped(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-nodata", "display_name": "GasGx NoData", "platforms": ["wechat"]})
+
+    def fake_capture(*_args, **_kwargs):
+        return {
+            "account_snapshots": [],
+            "video_snapshots": [],
+            "source_results": {"follower": {"rows": 0}, "post": {"rows": 0}},
+            "missing_sources": [],
+            "covered_dates": [],
+            "no_data": True,
+        }
+
+    monkeypatch.setattr(wechat_stats_capture, "_capture_account", fake_capture)
+    result = wechat_stats_capture.run_wechat_stats_capture(target_date="2026-05-17", dry_run=False, account_id=int(account["id"]))
+
+    assert result["ok"] is True
+    assert result["captured_accounts"] == 0
+    assert result["skipped_accounts"] == 1
+    assert result["failed_accounts"] == 0
+    assert result["results"][0]["status"] == "skipped"
+    assert result["results"][0]["reason"] == "no_data"
+
+
+def test_stats_capture_run_now_api_accepts_account_id(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_trigger(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "status": "started"}
+
+    monkeypatch.setattr("gasgx_distribution.web.trigger_matrix_wechat_stats_capture", fake_trigger)
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/jobs/matrix-wechat/stats-capture/run-now",
+        json={
+            "target_date": "2026-05-04",
+            "dry_run": False,
+            "account_id": 77,
+            "keep_browser_open_on_login_required": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    assert captured["target_date"] == "2026-05-04"
+    assert captured["dry_run"] is False
+    assert int(captured["account_id"]) == 77
+    assert captured["keep_browser_open_on_login_required"] is True
+
+
+def test_wechat_stats_csv_parsers_extract_rolling_7d_rows(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    follower_csv = tmp_path / "follower.csv"
+    follower_csv.write_text(
+        "时间,净增关注,新增关注,取消关注,关注者总数\n"
+        "2026/05/11,1,2,1,100\n"
+        "2026/05/12,2,4,2,102\n"
+        "2026/05/13,3,6,3,105\n"
+        "2026/05/14,4,8,4,109\n"
+        "2026/05/15,5,10,5,114\n"
+        "2026/05/16,6,12,6,120\n"
+        "2026/05/17,7,14,7,127\n",
+        encoding="utf-8",
+    )
+    post_csv = tmp_path / "post.csv"
+    post_csv.write_text(
+        "时间,播放,赞A,赞B,评论,分享,关注\n"
+        "2026/05/11,100,10,5,3,2,1\n"
+        "2026/05/12,120,11,6,4,2,1\n"
+        "2026/05/13,140,12,7,5,3,1\n"
+        "2026/05/14,160,13,8,6,3,2\n"
+        "2026/05/15,180,14,9,7,4,2\n"
+        "2026/05/16,200,15,10,8,4,3\n"
+        "2026/05/17,220,16,11,9,5,3\n",
+        encoding="utf-8",
+    )
+    follower_rows = wechat_stats_capture.parse_follower_stats_csv(follower_csv, account_id=9, meta={"source_file": "follower.csv"})
+    post_rows = wechat_stats_capture.parse_post_stats_csv(post_csv, account_id=9, meta={"source_file": "post.csv"})
+
+    assert len(follower_rows) == 7
+    assert follower_rows[0]["stat_date"] == "2026-05-11"
+    assert follower_rows[-1]["followers"] == 127
+    assert follower_rows[-1]["raw_json"]["sources"]["follower"]["new_followers"] == 14
+    assert follower_rows[-1]["raw_json"]["sources"]["follower"]["unfollows"] == 7
+    assert len(post_rows) == 7
+    assert post_rows[0]["views"] == 100
+    assert post_rows[-1]["likes"] == 27
+    assert post_rows[-1]["comments"] == 9
+    assert post_rows[-1]["shares"] == 5
+    assert post_rows[-1]["raw_json"]["sources"]["post"]["post_follows"] == 3
+
+
+def test_wechat_account_snapshot_merge_keeps_dual_sources_same_day(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "merge-01", "display_name": "Merge 01", "platforms": ["wechat"]})
+
+    service.import_stats(
+        {
+            "account_snapshots": [
+                {
+                    "account_id": account["id"],
+                    "platform": "wechat",
+                    "stat_date": "2026-05-17",
+                    "followers": 1200,
+                    "follower_delta": 15,
+                    "source": "wechat_official_csv",
+                    "raw_json": {"capture_window": "rolling_7d", "sources": {"follower": {"new_followers": 20, "unfollows": 5}}},
+                }
+            ]
+        }
+    )
+    service.import_stats(
+        {
+            "account_snapshots": [
+                {
+                    "account_id": account["id"],
+                    "platform": "wechat",
+                    "stat_date": "2026-05-17",
+                    "views": 2200,
+                    "likes": 120,
+                    "comments": 18,
+                    "shares": 11,
+                    "source": "wechat_official_csv",
+                    "raw_json": {"capture_window": "rolling_7d", "sources": {"post": {"post_follows": 9}}},
+                }
+            ]
+        }
+    )
+
+    rows = service.list_wechat_account_stats(account_id=account["id"], stat_date="2026-05-17")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["followers"] == 1200
+    assert row["follower_delta"] == 15
+    assert row["views"] == 2200
+    assert row["likes"] == 120
+    payload = json.loads(str(row["raw_json"]))
+    assert payload["sources"]["follower"]["new_followers"] == 20
+    assert payload["sources"]["post"]["post_follows"] == 9
+
+
+def test_stats_weekly_summary_and_csv_export(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    account_a = service.create_account({"account_key": "wx-a", "display_name": "WX A", "platforms": ["wechat"]})
+    account_b = service.create_account({"account_key": "wx-b", "display_name": "WX B", "platforms": ["wechat"]})
+
+    for day in range(11, 18):
+        stat_date = f"2026-05-{day:02d}"
+        service.import_stats(
+            {
+                "account_snapshots": [
+                    {
+                        "account_id": account_a["id"],
+                        "platform": "wechat",
+                        "stat_date": stat_date,
+                        "views": 100 + day,
+                        "likes": 10 + day,
+                        "comments": 2,
+                        "shares": 1,
+                        "followers": 1000 + day,
+                        "follower_delta": 3,
+                        "source": "wechat_official_csv",
+                        "raw_json": {
+                            "capture_window": "rolling_7d",
+                            "sources": {
+                                "follower": {"new_followers": 4, "unfollows": 1},
+                                "post": {"post_follows": 1},
+                            },
+                        },
+                    }
+                ]
+            }
+        )
+    for day in range(13, 18):
+        stat_date = f"2026-05-{day:02d}"
+        service.import_stats(
+            {
+                "account_snapshots": [
+                    {
+                        "account_id": account_b["id"],
+                        "platform": "wechat",
+                        "stat_date": stat_date,
+                        "views": 50 + day,
+                        "likes": 5 + day,
+                        "comments": 1,
+                        "shares": 1,
+                        "followers": 800 + day,
+                        "follower_delta": 1,
+                        "source": "wechat_official_csv",
+                        "raw_json": {"capture_window": "rolling_7d", "sources": {"post": {"post_follows": 1}}},
+                    }
+                ]
+            }
+        )
+
+    service.upsert_wechat_stats_capture_run(
+        {
+            "run_id": "run-login-required",
+            "target_date": "2026-05-17",
+            "status": "completed",
+            "account_total": 2,
+            "captured_accounts": 1,
+            "skipped_accounts": 1,
+            "failed_accounts": 0,
+            "payload_json": {
+                "results": [
+                    {"account_id": account_a["id"], "status": "captured"},
+                    {"account_id": account_b["id"], "status": "skipped", "reason": "login_required"},
+                ]
+            },
+        }
+    )
+
+    weekly = client.get("/api/stats/weekly-summary?platform=wechat")
+    assert weekly.status_code == 200
+    payload = weekly.json()
+    assert payload["window"]["start_date"] == "2026-05-11"
+    assert payload["window"]["end_date"] == "2026-05-17"
+    assert payload["account_total"] == 2
+    rows = {int(item["account_id"]): item for item in payload["rows"]}
+    assert rows[account_a["id"]]["capture_status"] == "完整"
+    assert rows[account_a["id"]]["coverage_days"] == 7
+    assert rows[account_b["id"]]["capture_status"] == "未登录"
+    assert rows[account_b["id"]]["coverage_days"] == 5
+    assert "follower" in rows[account_b["id"]]["missing_sources"]
+    assert payload["status_counts"]["完整"] == 1
+    assert payload["status_counts"]["未登录"] == 1
+    assert payload["totals"]["views_7d"] > 0
+
+    weekly_csv = client.get("/api/stats/weekly-summary.csv?platform=wechat")
+    assert weekly_csv.status_code == 200
+    assert weekly_csv.headers.get("content-type", "").startswith("text/csv")
+    csv_text = weekly_csv.text
+    assert "账号ID,账号标识,账号名称,平台,近7天播放" in csv_text
+    assert "wx-a" in csv_text
+    assert "WX A" in csv_text
 
 
 def test_delete_account_removes_related_platform_profile_tasks_and_stats(monkeypatch, tmp_path: Path) -> None:

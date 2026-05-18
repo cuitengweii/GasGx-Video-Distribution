@@ -66,6 +66,8 @@ const state = {
   tasks: [],
   stats: [],
   statsCaptureStatus: {},
+  weeklySummary: {},
+  statsMode: "dashboard",
   summary: {},
   distributionSettings: { common: {}, platforms: {} },
   matrixJobStatus: {},
@@ -2757,6 +2759,40 @@ function terminalBumpWindowActionEpoch(windowId) {
   return nextValue;
 }
 
+function mergeTerminalWindowState(nextState, windowId) {
+  if (!nextState || typeof nextState !== "object") return false;
+  const targetWindowId = String(windowId || "").trim();
+  if (!targetWindowId) {
+    state.terminalExecution = nextState;
+    return true;
+  }
+  const nextWindows = Array.isArray(nextState.windows) ? nextState.windows : [];
+  const nextWindow = nextWindows.find((item) => String(item?.id || "") === targetWindowId);
+  if (!nextWindow) {
+    state.terminalExecution = nextState;
+    return true;
+  }
+  const currentState = (state.terminalExecution && typeof state.terminalExecution === "object")
+    ? state.terminalExecution
+    : {};
+  const currentWindows = Array.isArray(currentState.windows) ? currentState.windows : [];
+  let replaced = false;
+  const mergedWindows = currentWindows.map((item) => {
+    if (String(item?.id || "") === targetWindowId) {
+      replaced = true;
+      return nextWindow;
+    }
+    return item;
+  });
+  if (!replaced) mergedWindows.push(nextWindow);
+  state.terminalExecution = {
+    ...currentState,
+    ...nextState,
+    windows: mergedWindows,
+  };
+  return true;
+}
+
 function terminalButtonCooldownRemaining(windowId, accountId, action) {
   const key = terminalCooldownKey(windowId, accountId, action);
   const expiresAt = Number(terminalButtonCooldownByKey.get(key) || 0);
@@ -3570,28 +3606,6 @@ function syncTerminalWechatGridHeight() {
   }
 }
 
-function scheduleTerminalPublishFollowup(windowId, attempts = 6, delayMs = 1800) {
-  // Lightweight one-shot sync to surface quick publish failures/success markers.
-  // This does not auto-open browsers or probe login.
-  const targetWindowId = String(windowId || "").trim();
-  if (!targetWindowId) return;
-  const waitMs = Math.max(400, Number(delayMs) || 1800);
-  window.setTimeout(async () => {
-    try {
-      const nextState = await api("/api/terminal-execution/poll", {
-        method: "POST",
-        body: JSON.stringify({ allow_browser_open: false, allow_login_probe: false }),
-      });
-      state.terminalExecution = nextState;
-      terminalReapplyInFlightWindowActions();
-      renderTerminalExecution();
-    } catch (error) {
-      void error;
-    }
-  }, waitMs);
-  void attempts;
-}
-
 function renderTerminalSessionBoardView() {
   const workspace = document.querySelector("#terminal-matrix-workspace");
   if (!workspace) return;
@@ -3971,7 +3985,73 @@ function renderTerminalExecution() {
   startTerminalPolling();
 }
 
+function statsWechatActiveAccounts() {
+  return (state.accounts || [])
+    .filter((account) => String(account.status || "").toLowerCase() === "active")
+    .filter((account) => {
+      const platforms = Array.isArray(account.platforms) ? account.platforms : [];
+      const wechat = platforms.find((item) => String(item.platform || "") === "wechat");
+      if (!wechat) return false;
+      if (wechat.enabled === undefined || wechat.enabled === null) return true;
+      return Boolean(wechat.enabled);
+    })
+    .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+}
+
+function setStatsMode(mode) {
+  state.statsMode = mode === "capture" ? "capture" : "dashboard";
+  const dashboardNode = document.querySelector("#stats-tab-dashboard");
+  const captureNode = document.querySelector("#stats-tab-capture");
+  const dashboardButton = document.querySelector("#stats-mode-dashboard");
+  const captureButton = document.querySelector("#stats-mode-capture");
+  if (dashboardNode) dashboardNode.classList.toggle("hidden", state.statsMode !== "dashboard");
+  if (captureNode) captureNode.classList.toggle("hidden", state.statsMode !== "capture");
+  if (dashboardButton) dashboardButton.classList.toggle("active", state.statsMode === "dashboard");
+  if (captureButton) captureButton.classList.toggle("active", state.statsMode === "capture");
+}
+
+function renderStatsCapturePanel() {
+  const statsCaptureStatus = state.statsCaptureStatus || {};
+  const latest = statsCaptureStatus.latest_run || {};
+  const lock = statsCaptureStatus.lock || {};
+  const captureStatusNode = document.querySelector("#matrix-stats-capture-status");
+  if (captureStatusNode) {
+    const parts = [];
+    if (latest.status) parts.push(latest.status);
+    if (latest.target_date) parts.push(latest.target_date);
+    if (!parts.length && lock.pid) parts.push(`PID ${lock.pid}`);
+    captureStatusNode.textContent = parts.length ? parts.join(" · ") : "未加载";
+  }
+  const lockStatusNode = document.querySelector("#stats-capture-lock-status");
+  if (lockStatusNode) {
+    lockStatusNode.textContent = lock.pid ? `锁状态：运行中（PID ${lock.pid}）` : "锁状态：空闲";
+    lockStatusNode.classList.toggle("danger", Boolean(lock.pid));
+  }
+  const lastRunNode = document.querySelector("#stats-capture-last-run");
+  if (lastRunNode) {
+    const runId = latest.run_id || "-";
+    const status = latest.status || "-";
+    const counts = `captured ${latest.captured_accounts || 0} / skipped ${latest.skipped_accounts || 0} / failed ${latest.failed_accounts || 0}`;
+    lastRunNode.textContent = `最近运行：${runId} · ${status} · ${counts}`;
+  }
+  const captureAccountFilter = document.querySelector("#stats-capture-account-filter");
+  if (captureAccountFilter) {
+    const accounts = statsWechatActiveAccounts();
+    const currentValue = captureAccountFilter.value;
+    const options = accounts.map((account) => {
+      const label = account.display_name || account.account_key || `账号 ${account.id}`;
+      return `<option value="${account.id}">#${account.id} ${escapeHtml(label)}</option>`;
+    }).join("");
+    captureAccountFilter.innerHTML = `<option value="">请选择账号</option>${options}`;
+    if (currentValue && [...captureAccountFilter.options].some((option) => option.value === currentValue)) {
+      captureAccountFilter.value = currentValue;
+    }
+  }
+}
+
 function renderStats() {
+  setStatsMode(state.statsMode || "dashboard");
+  renderStatsCapturePanel();
   const summary = state.summary || {};
   const overview = [
     ["矩阵账号总数", summary.accounts || 4, "+8.4%", "up"],
@@ -3987,23 +4067,17 @@ function renderStats() {
     <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
   `).join("");
 
-  const statsCaptureStatus = state.statsCaptureStatus || {};
-  const statsCaptureNode = document.querySelector("#matrix-stats-capture-status");
-  if (statsCaptureNode) {
-    const latest = statsCaptureStatus.latest_run || {};
-    const lock = statsCaptureStatus.lock || {};
-    const parts = [];
-    if (latest.status) parts.push(latest.status);
-    if (latest.target_date) parts.push(latest.target_date);
-    if (!parts.length && lock.pid) parts.push(`PID ${lock.pid}`);
-    statsCaptureNode.textContent = parts.length ? parts.join(" · ") : "未加载";
+  const statsWindowNode = document.querySelector("#stats-weekly-window");
+  if (statsWindowNode) {
+    const windowInfo = state.weeklySummary?.window || {};
+    const start = windowInfo.start_date || "";
+    const end = windowInfo.end_date || "";
+    statsWindowNode.textContent = start && end ? `近7天窗口 ${start} ~ ${end}` : "近7天汇总未加载";
   }
 
   const statsAccountFilter = document.querySelector("#stats-account-filter");
   if (statsAccountFilter) {
-    const activeAccounts = (state.accounts || [])
-      .filter((account) => String(account.status || "").toLowerCase() === "active")
-      .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+    const activeAccounts = statsWechatActiveAccounts();
     const currentValue = statsAccountFilter.value;
     const activeOptions = activeAccounts.map((account) => {
       const label = account.display_name || account.account_key || `账号 ${account.id}`;
@@ -4045,7 +4119,25 @@ function renderStats() {
       });
     });
   };
-  document.querySelector("#account-stats-search")?.addEventListener("input", renderAccountTable);
+  const statsSearchInput = document.querySelector("#account-stats-search");
+  if (statsSearchInput) {
+    statsSearchInput.oninput = () => {
+      if (Array.isArray(state.weeklySummary?.rows) && state.weeklySummary.rows.length) {
+        renderStatsWeeklySummary();
+      } else {
+        renderAccountTable();
+      }
+    };
+  }
+  if (statsAccountFilter) {
+    statsAccountFilter.onchange = () => {
+      if (Array.isArray(state.weeklySummary?.rows) && state.weeklySummary.rows.length) {
+        renderStatsWeeklySummary();
+      } else {
+        renderAccountTable();
+      }
+    };
+  }
   renderAccountTable();
 
   const works = [
@@ -4070,7 +4162,92 @@ function renderStats() {
   const risks = ["违规作品 1 条，待整改", "1 个账号播放断崖下跌", "1 个账号长期断更休眠", "高掉粉账号预警 1 个"];
   document.querySelector("#risk-list").innerHTML = risks.map((risk) => `<article>${risk}</article>`).join("");
   renderAnalyticsFromDatabase();
+  renderStatsWeeklySummary();
   renderNotificationSlaStats();
+}
+
+function renderStatsWeeklySummary() {
+  const summary = state.weeklySummary || {};
+  const rows = Array.isArray(summary.rows) ? summary.rows : [];
+  if (!rows.length) return;
+  const formatNumber = (value) => Number(value || 0).toLocaleString("zh-Hans-CN");
+  const formatSigned = (value) => {
+    const number = Number(value || 0);
+    const prefix = number >= 0 ? "+" : "";
+    return `${prefix}${formatNumber(number)}`;
+  };
+  const pct = (a, b) => {
+    const total = Number(b || 0);
+    if (!total) return "0.0%";
+    return `${((Number(a || 0) / total) * 100).toFixed(1)}%`;
+  };
+  const totals = summary.totals || {};
+  const statusCounts = summary.status_counts || {};
+  const missingCount = Number(summary.account_total || 0) - Number(statusCounts["完整"] || 0);
+  const overview = [
+    ["启用视频号账号", Number(summary.account_total || 0), "", "up"],
+    ["近7天总播放", formatNumber(totals.views_7d || 0), "", "up"],
+    ["近7天总互动", formatNumber(totals.interactions_7d || 0), "", "up"],
+    ["近7天净增关注", formatSigned(totals.follower_delta_7d || 0), "", Number(totals.follower_delta_7d || 0) >= 0 ? "up" : "down"],
+    ["完整覆盖账号", Number(statusCounts["完整"] || 0), "", "up"],
+    ["待处理账号", missingCount > 0 ? missingCount : 0, "", missingCount > 0 ? "down" : "up"],
+  ];
+  document.querySelector("#stats-overview").innerHTML = overview.map(([label, value, change, trend]) => `
+    <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
+  `).join("");
+
+  const statsWindowNode = document.querySelector("#stats-weekly-window");
+  if (statsWindowNode) {
+    const windowInfo = summary.window || {};
+    const start = windowInfo.start_date || "";
+    const end = windowInfo.end_date || "";
+    const statusText = Object.entries(statusCounts).map(([key, value]) => `${key}:${value}`).join(" · ");
+    statsWindowNode.textContent = start && end
+      ? `近7天窗口 ${start} ~ ${end}${statusText ? ` · ${statusText}` : ""}`
+      : "近7天汇总未加载";
+  }
+
+  const accountFilter = document.querySelector("#stats-account-filter")?.value || "";
+  const keyword = document.querySelector("#account-stats-search")?.value.trim().toLowerCase() || "";
+  const tableRows = rows
+    .filter((row) => !accountFilter || String(row.account_id || "") === String(accountFilter))
+    .filter((row) => {
+      const token = [row.display_name, row.account_key, row.capture_status, ...(row.missing_sources || [])].join(" ").toLowerCase();
+      return token.includes(keyword);
+    })
+    .sort((a, b) => Number(b.views_7d || 0) - Number(a.views_7d || 0));
+  const headers = ["账号名称", "平台", "状态", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "分层", "异常"];
+  document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${tableRows.map((row) => {
+    const interactions = Number(row.interactions_7d || 0);
+    const views = Number(row.views_7d || 0);
+    const coverage = Number(row.coverage_days || 0);
+    const missingText = (row.missing_sources || []).join(",") || (row.capture_status === "完整" ? "" : row.capture_status);
+    const tier = row.capture_status === "完整" ? "完整覆盖" : (row.capture_status === "未登录" ? "登录失效" : "待补采");
+    const cells = [
+      `${row.display_name || row.account_key || `账号 ${row.account_id}`}`,
+      "视频号",
+      row.capture_status || "-",
+      formatNumber(views),
+      formatNumber(views),
+      formatNumber(row.followers_current || 0),
+      formatSigned(row.follower_delta_7d || 0),
+      "-",
+      pct(interactions, views),
+      `${coverage}/7`,
+      tier,
+      missingText,
+    ];
+    return `<tr>${cells.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`;
+  }).join("")}</tbody></table><div class="table-pager">第 1 / 1 页 · ${tableRows.length} 条账号</div>`;
+
+  const alerts = Array.isArray(summary.alerts) ? summary.alerts : [];
+  if (alerts.length) {
+    document.querySelector("#risk-list").innerHTML = alerts.slice(0, 8).map((item) => {
+      const name = item.display_name || item.account_key || `账号 ${item.account_id}`;
+      const missing = Array.isArray(item.missing_sources) && item.missing_sources.length ? `，缺源 ${item.missing_sources.join("/")}` : "";
+      return `<article>${name}：${item.capture_status}（覆盖 ${item.coverage_days || 0}/7${missing}）</article>`;
+    }).join("");
+  }
 }
 
 function renderAnalyticsFromDatabase() {
@@ -5227,6 +5404,7 @@ async function loadViewData(view, { force = false } = {}) {
       state.summary = await api("/api/summary");
       state.stats = await api("/api/stats");
       state.analytics = await api("/api/stats/analytics");
+      state.weeklySummary = await api("/api/stats/weekly-summary?platform=wechat");
       state.notificationSla = await api("/api/stats/notification-sla");
       state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
       renderStats();
@@ -6025,24 +6203,132 @@ setInterval(() => {
 
 setInterval(() => {
   if (!loadedViews.has("stats")) return;
-  api("/api/jobs/matrix-wechat/stats-capture/status")
-    .then((statsCaptureStatus) => {
-      state.statsCaptureStatus = statsCaptureStatus;
-      if (currentView === "stats") renderStats();
+  api("/api/stats/weekly-summary?platform=wechat")
+    .then((weeklySummary) => {
+      state.weeklySummary = weeklySummary;
+      if (currentView === "stats" && state.statsMode === "dashboard") renderStats();
     })
     .catch(() => {});
 }, 15000);
 
-document.querySelector("#matrix-stats-capture-run-now")?.addEventListener("click", async (event) => {
+document.querySelector("#stats-mode-dashboard")?.addEventListener("click", () => {
+  setStatsMode("dashboard");
+  renderStats();
+});
+
+document.querySelector("#stats-mode-capture")?.addEventListener("click", () => {
+  setStatsMode("capture");
+  renderStats();
+});
+
+async function refreshStatsCaptureStatus({ refreshWeekly = true } = {}) {
+  state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
+  if (refreshWeekly) {
+    try {
+      state.weeklySummary = await api("/api/stats/weekly-summary?platform=wechat");
+    } catch (error) {
+      void error;
+    }
+  }
+  renderStatsCapturePanel();
+  return state.statsCaptureStatus;
+}
+
+function latestStatsCaptureResultForAccount(accountId) {
+  const currentId = Number(accountId || 0);
+  if (!currentId) return null;
+  const statusPayload = state.statsCaptureStatus?.status || {};
+  const results = Array.isArray(statusPayload.results) ? statusPayload.results : [];
+  return results.find((item) => Number(item?.account_id || 0) === currentId) || null;
+}
+
+function resolveStatsCaptureTip(accountId) {
+  const currentId = Number(accountId || 0);
+  const statusPayload = state.statsCaptureStatus?.status || {};
+  const lock = state.statsCaptureStatus?.lock || {};
+  const runningStatus = String(statusPayload.status || "").toLowerCase();
+  if (lock.pid || runningStatus === "running" || runningStatus === "planned") {
+    return currentId
+      ? `账号 #${currentId} 采集中，请稍后点击“刷新状态”查看结果。`
+      : "采集中，请稍后点击“刷新状态”查看结果。";
+  }
+  const latest = latestStatsCaptureResultForAccount(currentId);
+  if (!latest) return "状态已刷新。";
+  const reason = String(latest.reason || "").toLowerCase();
+  if (latest.status === "captured") return `账号 #${currentId} 采集完成并已入库。`;
+  if (reason === "no_data") return `账号 #${currentId} 下载成功，但当前近7天导出无数据行。`;
+  if (reason === "login_required") return `账号 #${currentId} 未登录，请先点击“登录该账号”完成登录。`;
+  if (reason === "account_mismatch") return `账号 #${currentId} 账号不匹配，请确认当前登录账号后重试。`;
+  if (latest.status === "failed") return `账号 #${currentId} 采集失败：${formatFriendlyMessage(latest.error || "未知异常")}`;
+  return "状态已刷新。";
+}
+
+document.querySelector("#stats-temp-capture-open-login")?.addEventListener("click", async (event) => {
+  const accountId = Number(document.querySelector("#stats-capture-account-filter")?.value || 0);
+  if (!accountId) {
+    window.alert("请先选择要登录的账号");
+    return;
+  }
+  const button = event.currentTarget;
+  const restoreButton = setButtonLoading(button, "打开中");
+  const tipNode = document.querySelector("#stats-capture-tip");
+  try {
+    await api(`/api/accounts/${accountId}/platforms/wechat/open-browser`, { method: "POST" });
+    if (tipNode) tipNode.textContent = `账号 #${accountId} 浏览器已打开，请在弹出窗口完成微信视频号助手登录。`;
+  } catch (error) {
+    if (tipNode) tipNode.textContent = `打开登录窗口失败：${formatFriendlyMessage(error?.message || "未知异常")}`;
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("#stats-temp-capture-run-now")?.addEventListener("click", async (event) => {
+  const accountId = Number(document.querySelector("#stats-capture-account-filter")?.value || 0);
+  if (!accountId) {
+    window.alert("请先选择要采集的账号");
+    return;
+  }
   const button = event.currentTarget;
   const restoreButton = setButtonLoading(button, "采集中");
+  const tipNode = document.querySelector("#stats-capture-tip");
   try {
-    await api("/api/jobs/matrix-wechat/stats-capture/run-now", {
+    if (tipNode) tipNode.textContent = `账号 #${accountId} 采集任务已提交，正在后台执行。`;
+    const started = await api("/api/jobs/matrix-wechat/stats-capture/run-now", {
       method: "POST",
-      body: JSON.stringify({ target_date: "", limit: 0, dry_run: false }),
+      body: JSON.stringify({
+        target_date: "",
+        dry_run: false,
+        account_id: accountId,
+        keep_browser_open_on_login_required: true,
+        auto_open_browser: false,
+      }),
     });
-    state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
+    if (String(started?.status || "") === "already_running" || started?.ok === false) {
+      if (tipNode) tipNode.textContent = "已有采集在运行，请稍后再试。";
+      await refreshStatsCaptureStatus();
+      return;
+    }
+    if (tipNode) tipNode.textContent = `账号 #${accountId} 采集已触发。请等待片刻后点击“刷新状态”查看结果。`;
+    await refreshStatsCaptureStatus();
+    if (tipNode) tipNode.textContent = resolveStatsCaptureTip(accountId);
+  } catch (error) {
+    if (tipNode) tipNode.textContent = `采集失败：${formatFriendlyMessage(error?.message || "未知异常")}`;
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("#stats-temp-capture-refresh-status")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const restoreButton = setButtonLoading(button, "刷新中");
+  const tipNode = document.querySelector("#stats-capture-tip");
+  try {
+    await refreshStatsCaptureStatus();
+    const accountId = Number(document.querySelector("#stats-capture-account-filter")?.value || 0);
+    if (tipNode) tipNode.textContent = resolveStatsCaptureTip(accountId);
     renderStats();
+  } catch (error) {
+    if (tipNode) tipNode.textContent = `刷新状态失败：${formatFriendlyMessage(error?.message || "未知异常")}`;
   } finally {
     restoreButton();
   }
@@ -6209,11 +6495,11 @@ document.addEventListener("click", async (event) => {
     hideTerminalErrorModal();
     let stage = "manual_publish";
     try {
-      state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/manual-publish`, { method: "POST" });
+      const nextState = await api(`/api/terminal-execution/windows/${windowId}/manual-publish`, { method: "POST" });
+      mergeTerminalWindowState(nextState, windowId);
       terminalReapplyInFlightWindowActions();
       terminalAutoPublishStageByWindowId.delete(windowId);
       renderTerminalExecution();
-      scheduleTerminalPublishFollowup(windowId, 8, 1500);
     } catch (error) {
       terminalAutoPublishStageByWindowId.delete(windowId);
       console.warn("[terminal:auto-publish] failed", { windowId, stage, error: error?.message || error });

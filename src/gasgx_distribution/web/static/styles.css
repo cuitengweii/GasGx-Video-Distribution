@@ -1112,11 +1112,43 @@ select option {
   gap: 18px;
 }
 
+.stats-mode-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  width: fit-content;
+}
+
+.stats-mode-tabs .btn.active {
+  border-color: rgba(93, 214, 44, 0.62);
+  color: var(--accent-aurora);
+  box-shadow: inset 0 0 0 1px rgba(93, 214, 44, 0.4);
+}
+
 .dashboard-filters {
   display: grid;
   grid-template-columns: repeat(3, minmax(180px, 1fr));
   gap: 14px;
   align-items: end;
+}
+
+.stats-capture-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.stats-capture-controls {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.stats-capture-summary {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .client-overview {
@@ -2633,6 +2665,7 @@ select option {
   .settings-common,
   .platform-settings-card,
   .dashboard-filters,
+  .stats-capture-controls,
   .dashboard-grid.two-col,
   .ai-feature-grid,
   .bot-channel-grid,

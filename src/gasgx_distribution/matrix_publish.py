@@ -605,6 +605,42 @@ def _caption_with_topics(settings: dict[str, Any]) -> str:
     return caption or topics
 
 
+def _asset_generated_caption(source_video: Path) -> str:
+    candidates: list[Path] = [source_video.with_name(f"{source_video.stem}_copy.txt")]
+    manifest_path = _asset_manifest_path(source_video)
+    if manifest_path.exists():
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            raw_copy_path = str(payload.get("copy_path") or "").strip()
+            if raw_copy_path:
+                copy_path = Path(raw_copy_path)
+                if not copy_path.is_absolute():
+                    copy_path = manifest_path.parent / copy_path
+                candidates.append(copy_path)
+    for path in candidates:
+        try:
+            if path.exists() and path.is_file():
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    return text
+        except Exception:
+            continue
+    return ""
+
+
+def caption_for_publish(settings: dict[str, Any], source_video: Path) -> str:
+    configured_caption = str(settings.get("caption") or "").strip()
+    generated_caption = _asset_generated_caption(source_video)
+    topics = str(settings.get("topics") or "").strip()
+    base = configured_caption or generated_caption
+    if base and topics:
+        return f"{base}\n{topics}"
+    return base or topics
+
+
 def _publish_evidence_path(workspace: Path, platform: str) -> Path:
     token = str(platform or "wechat").strip().lower() or "wechat"
     return workspace / f"uploaded_records_{token}.jsonl"
@@ -824,7 +860,7 @@ def run_matrix_publish(
                         str(settings.get("collection_name") or ""),
                     ]
                 )
-            caption = _caption_with_topics(settings)
+            caption = caption_for_publish(settings, item.source_video)
             if caption:
                 cmd.extend(["--caption", caption])
             if token == "wechat":

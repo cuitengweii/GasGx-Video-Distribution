@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from gasgx_distribution import db as dist_db
 from gasgx_distribution import scheduler
@@ -49,3 +50,36 @@ def test_scheduler_daily_time_rolls_to_next_day(monkeypatch, tmp_path: Path) -> 
 
     assert first > now
     assert second - first == 24 * 60 * 60
+
+
+def test_trigger_stats_capture_passes_keep_browser_flag(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_run_wechat_stats_capture(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    class InlineThread:
+        def __init__(self, *, target=None, name=None, daemon=None):
+            self._target = target
+
+        def start(self) -> None:
+            if self._target:
+                self._target()
+
+    monkeypatch.setattr(scheduler, "run_wechat_stats_capture", fake_run_wechat_stats_capture)
+    monkeypatch.setattr(scheduler.threading, "Thread", InlineThread)
+
+    result = scheduler.trigger_matrix_wechat_stats_capture(
+        target_date="2026-05-17",
+        dry_run=False,
+        account_id=58,
+        keep_browser_open_on_login_required=True,
+    )
+
+    assert result["status"] == "started"
+    assert captured["target_date"] == "2026-05-17"
+    assert captured["dry_run"] is False
+    assert captured["account_id"] == 58
+    assert captured["keep_browser_open_on_login_required"] is True

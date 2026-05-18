@@ -273,12 +273,57 @@ def test_build_text_variants_template_fallback_is_distinct() -> None:
     assert len(set(openings)) == 4
 
 
+def test_build_text_variants_avoids_same_day_texts() -> None:
+    first_batch = build_text_variants(_settings(), ["HUD"], 8)
+    used = [
+        " ".join(
+            [
+                str(item.get("title") or ""),
+                str(item.get("slogan") or ""),
+                str(item.get("opening_text") or ""),
+                *[str(line) for line in item.get("hud_lines") or []],
+            ]
+        )
+        for item in first_batch[:4]
+    ]
+
+    second_batch = build_text_variants(_settings(), ["HUD"], 4, avoid_texts=used)
+    second_keys = {
+        " ".join(
+            [
+                str(item.get("title") or ""),
+                str(item.get("slogan") or ""),
+                str(item.get("opening_text") or ""),
+                *[str(line) for line in item.get("hud_lines") or []],
+            ]
+        ).strip().lower()
+        for item in second_batch
+    }
+
+    assert len(second_batch) == 4
+    assert not second_keys & {item.strip().lower() for item in used}
+
+
 def test_build_headline_variants_fallback_returns_bilingual_rows() -> None:
     variants = build_headline_variants("Gas to Compute", 3, settings=_settings(copy_mode="template"))
 
     assert len(variants) == 3
     assert len(set(variants)) == 3
     assert all(len([line for line in item.splitlines() if line.strip()]) == 2 for item in variants)
+
+
+def test_build_headline_variants_avoids_same_day_headlines() -> None:
+    first_batch = build_headline_variants("Gas to Compute", 5, settings=_settings(copy_mode="template"))
+
+    second_batch = build_headline_variants(
+        "Gas to Compute",
+        3,
+        settings=_settings(copy_mode="template"),
+        avoid_texts=first_batch[:3],
+    )
+
+    assert len(second_batch) == 3
+    assert not set(second_batch) & set(first_batch[:3])
 
 
 def test_beat_duration_hint_expands_to_composition_total() -> None:

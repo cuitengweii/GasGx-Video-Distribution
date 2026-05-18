@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import traceback
+from contextvars import copy_context
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -316,10 +317,15 @@ def trigger_matrix_wechat_job() -> dict[str, Any]:
     def _runner() -> None:
         _run_once(reason="manual")
 
+    context = copy_context()
+
+    def _runner_with_context() -> None:
+        context.run(_runner)
+
     with _LOCK:
         if _RUNNING.is_set():
             return {"ok": False, "status": "already_running"}
-        thread = threading.Thread(target=_runner, name="gasgx-matrix-wechat-manual", daemon=True)
+        thread = threading.Thread(target=_runner_with_context, name="gasgx-matrix-wechat-manual", daemon=True)
         thread.start()
     return {"ok": True, "status": "started"}
 
@@ -362,20 +368,41 @@ def trigger_matrix_wechat_login_check() -> dict[str, Any]:
     return _run_login_check_once(reason="manual")
 
 
-def trigger_matrix_wechat_stats_capture(*, target_date: str = "", limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
+def trigger_matrix_wechat_stats_capture(
+    *,
+    target_date: str = "",
+    limit: int = 0,
+    dry_run: bool = False,
+    account_id: int | None = None,
+    keep_browser_open_on_login_required: bool = False,
+    auto_open_browser: bool = True,
+) -> dict[str, Any]:
     def _runner() -> None:
         if _STATS_RUNNING.is_set():
             return
         _STATS_RUNNING.set()
         try:
-            run_wechat_stats_capture(target_date=target_date, limit=limit, dry_run=dry_run, notify=True)
+            run_wechat_stats_capture(
+                target_date=target_date,
+                limit=limit,
+                dry_run=dry_run,
+                notify=True,
+                account_id=account_id,
+                keep_browser_open_on_login_required=keep_browser_open_on_login_required,
+                auto_open_browser=auto_open_browser,
+            )
         finally:
             _STATS_RUNNING.clear()
+
+    context = copy_context()
+
+    def _runner_with_context() -> None:
+        context.run(_runner)
 
     with _LOCK:
         if _STATS_RUNNING.is_set():
             return {"ok": False, "status": "already_running"}
-        thread = threading.Thread(target=_runner, name="gasgx-matrix-wechat-stats-manual", daemon=True)
+        thread = threading.Thread(target=_runner_with_context, name="gasgx-matrix-wechat-stats-manual", daemon=True)
         thread.start()
     return {"ok": True, "status": "started"}
 

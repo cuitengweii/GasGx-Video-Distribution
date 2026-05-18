@@ -4,11 +4,13 @@ import html
 import json
 import logging
 import threading
+import csv
+import io
 from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -175,6 +177,9 @@ class WechatStatsCapturePayload(BaseModel):
     target_date: str = ""
     limit: int = 0
     dry_run: bool = False
+    account_id: int | None = None
+    keep_browser_open_on_login_required: bool = False
+    auto_open_browser: bool = True
 
 
 class OperatorRolePayload(BaseModel):
@@ -699,6 +704,9 @@ def create_app() -> FastAPI:
             target_date=payload.target_date,
             limit=payload.limit,
             dry_run=payload.dry_run,
+            account_id=payload.account_id,
+            keep_browser_open_on_login_required=payload.keep_browser_open_on_login_required,
+            auto_open_browser=payload.auto_open_browser,
         )
 
     @app.get("/api/login-qr-batches")
@@ -933,6 +941,74 @@ def create_app() -> FastAPI:
     @app.get("/api/stats/analytics")
     def stats_analytics() -> dict[str, list[dict[str, Any]]]:
         return service.list_analytics_items()
+
+    @app.get("/api/stats/weekly-summary")
+    def weekly_summary(platform: str = Query(default="wechat")) -> dict[str, Any]:
+        try:
+            return service.stats_weekly_summary(platform=platform)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/stats/weekly-summary.csv")
+    def weekly_summary_csv(platform: str = Query(default="wechat")) -> Response:
+        try:
+            payload = service.stats_weekly_summary(platform=platform)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "账号ID",
+                "账号标识",
+                "账号名称",
+                "平台",
+                "近7天播放",
+                "近7天互动",
+                "近7天评论",
+                "近7天分享",
+                "近7天净增关注",
+                "近7天新增关注",
+                "近7天取消关注",
+                "当前粉丝",
+                "覆盖天数",
+                "完整覆盖天数",
+                "缺失源",
+                "采集状态",
+                "最近覆盖日期",
+                "最近采集时间",
+            ]
+        )
+        for row in payload.get("rows", []):
+            writer.writerow(
+                [
+                    row.get("account_id") or "",
+                    row.get("account_key") or "",
+                    row.get("display_name") or "",
+                    row.get("platform") or "",
+                    row.get("views_7d") or 0,
+                    row.get("interactions_7d") or 0,
+                    row.get("comments_7d") or 0,
+                    row.get("shares_7d") or 0,
+                    row.get("follower_delta_7d") or 0,
+                    row.get("new_followers_7d") or 0,
+                    row.get("unfollows_7d") or 0,
+                    row.get("followers_current") or 0,
+                    row.get("coverage_days") or 0,
+                    row.get("complete_days") or 0,
+                    ",".join(row.get("missing_sources") or []),
+                    row.get("capture_status") or "",
+                    row.get("latest_covered_date") or "",
+                    row.get("latest_capture_time") or "",
+                ]
+            )
+        end_date = str(payload.get("window", {}).get("end_date") or "").strip()
+        filename = f"wechat-weekly-summary-{end_date}.csv" if end_date else "wechat-weekly-summary.csv"
+        return Response(
+            content="\ufeff" + output.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @app.post("/api/stats/import")
     def import_stats(payload: dict[str, Any]) -> dict[str, Any]:

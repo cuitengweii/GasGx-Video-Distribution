@@ -622,12 +622,16 @@
     </section>
 
     <section id="stats" class="view">
-      <section class="client-dashboard">
+      <div class="stats-mode-tabs panel">
+        <button class="btn secondary active" id="stats-mode-dashboard" type="button" data-stats-mode="dashboard">数据统计</button>
+        <button class="btn secondary" id="stats-mode-capture" type="button" data-stats-mode="capture">临时采集</button>
+      </div>
+      <section class="client-dashboard" id="stats-tab-dashboard">
         <div class="dashboard-filters panel">
           <label>时间维度
             <select id="stats-period">
-              <option selected>昨日</option>
-              <option>近7天</option>
+              <option>昨日</option>
+              <option selected>近7天</option>
               <option>近30天</option>
             </select>
           </label>
@@ -645,8 +649,8 @@
               <option>全部账号</option>
             </select>
           </label>
-          <button class="btn primary" id="matrix-stats-capture-run-now" type="button">开始采集</button>
-          <span class="system-status" id="matrix-stats-capture-status">未加载</span>
+          <a class="btn secondary" id="stats-weekly-export" href="/api/stats/weekly-summary.csv?platform=wechat" target="_blank" rel="noopener">下载近7天CSV</a>
+          <span class="system-status" id="stats-weekly-window">近7天汇总未加载</span>
         </div>
         <div id="stats-overview" class="metric-grid client-overview"></div>
         <div class="dashboard-grid two-col">
@@ -719,6 +723,32 @@
             <div class="panel-head"><h2>通知 TOP 问题</h2><span class="system-status">机器人</span></div>
             <div id="notification-sla-top" class="risk-list"></div>
           </section>
+        </div>
+      </section>
+      <section class="client-dashboard hidden" id="stats-tab-capture">
+        <div class="panel stats-capture-panel">
+          <div class="panel-head">
+            <div>
+              <h2>单账号临时采集</h2>
+              <p class="muted">仅支持一次采集一个视频号账号。流程：先登录该账号，再执行采集，最后手动刷新状态。</p>
+            </div>
+            <span class="system-status" id="matrix-stats-capture-status">未加载</span>
+          </div>
+          <div class="stats-capture-controls">
+            <label>采集账号
+              <select id="stats-capture-account-filter">
+                <option value="">请选择账号</option>
+              </select>
+            </label>
+            <button class="btn secondary" id="stats-temp-capture-open-login" type="button">登录该账号</button>
+            <button class="btn primary" id="stats-temp-capture-run-now" type="button">采集该账号</button>
+            <button class="btn ghost" id="stats-temp-capture-refresh-status" type="button">刷新状态</button>
+          </div>
+          <div class="stats-capture-summary">
+            <span class="system-status" id="stats-capture-lock-status">锁状态：空闲</span>
+            <span class="system-status" id="stats-capture-last-run">最近运行：未加载</span>
+          </div>
+          <div class="muted" id="stats-capture-tip">建议：点击“登录该账号”打开浏览器完成登录后，再点击“采集该账号”。</div>
         </div>
       </section>
     </section>

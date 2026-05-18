@@ -1275,6 +1275,12 @@ label > input, label > select, label > textarea { margin-top:8px; }
   color: var(--muted);
   font-size: 12px;
 }
+.sidebar-field-hint {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
 .input-with-unit {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 34px;

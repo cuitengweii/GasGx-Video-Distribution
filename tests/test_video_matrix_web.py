@@ -328,12 +328,14 @@ def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path
         "target_fps": 30,
         "composition_sequence": [{"category_id": "category_D", "duration": 2.2}],
         "headline_ai_enabled": True,
+        "ai_prompt_hint": "突出真实场景\n避免夸张\nhttps://example.com",
     }
 
     video_matrix_api._run_generate_job("test-job", request, tmp_path / "bgm.mp3", None)
 
     assert captured["composition_sequence"] == [{"category_id": "category_D", "duration": 2.2}]
     assert captured["text_overrides"]["headline_ai_enabled"] is True
+    assert captured["text_overrides"]["ai_prompt_hint"] == "突出真实场景\n避免夸张"
     assert captured["settings"].video_duration_min == 8
     assert captured["settings"].video_duration_max == 24
     assert captured["settings"].target_fps == 30
@@ -523,6 +525,8 @@ def test_video_matrix_generation_history_is_saved_and_loaded_locally(monkeypatch
     assert history["segment_keys"] == {"clip-1:0.5:1.0"}
     assert history["bgm_names"] == {"fresh.mp3"}
     assert history["features"][0]["bgm_name"] == "fresh.mp3"
+    assert history["daily_headlines"] == {"Slogan"}
+    assert history["daily_texts"] == {"Title Slogan HUD"}
     assert json.loads(history_path.read_text(encoding="utf-8"))[0]["assets"][0]["dedupe"]["status"] == "pass"
 
 

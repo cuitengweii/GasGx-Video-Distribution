@@ -61,6 +61,9 @@ def run_pipeline(
     speed_mode: str = "quality",
     asset_callback: AssetCallback | None = None,
 ) -> list[RenderedAsset]:
+    ai_prompt_hint = str((text_overrides or {}).get("ai_prompt_hint") or "").strip()
+    daily_texts = [str(item).strip() for item in (text_overrides or {}).get("daily_texts") or [] if str(item).strip()]
+    daily_headlines = [str(item).strip() for item in (text_overrides or {}).get("daily_headlines") or [] if str(item).strip()]
     _notify(progress_callback, "ingestion", 0.05, "Collecting and normalizing source clips")
     if telemetry is not None:
         with telemetry.span("ingestion", "ingest_sources"):
@@ -153,6 +156,8 @@ def run_pipeline(
                 history_features=history_features,
                 bgm_name=bgm_path.name,
                 bgm_duration=bgm_duration,
+                ai_prompt_hint=ai_prompt_hint,
+                avoid_texts=daily_texts,
             )
         telemetry.event("planning", "variants_ready", {"variant_count": len(variants), **planning_payload})
     else:
@@ -170,8 +175,10 @@ def run_pipeline(
             history_features=history_features,
             bgm_name=bgm_path.name,
             bgm_duration=bgm_duration,
+            ai_prompt_hint=ai_prompt_hint,
+            avoid_texts=daily_texts,
         )
-    _apply_text_overrides(variants, text_overrides, settings, language=copy_language)
+    _apply_text_overrides(variants, text_overrides, settings, language=copy_language, ai_prompt_hint=ai_prompt_hint, avoid_headlines=daily_headlines)
     template_copy = _copy_template_path().read_text(encoding="utf-8")
     active_cover_template = _resolve_cover_template_config(cover_template_id, cover_template_config)
     active_ending_cover_template = ending_cover_template_config or active_cover_template
@@ -231,6 +238,7 @@ def run_pipeline(
                     telemetry.variant(variant.sequence_number) if telemetry is not None else None,
                     speed_mode,
                     ffmpeg_threads,
+                    ai_prompt_hint=ai_prompt_hint,
                     bgm_start_offset=variant.bgm_start_offset,
                     publish_day_code=publish_day_code,
                     publish_sequence_number=publish_sequence_start + variant.sequence_number - 1,
@@ -358,6 +366,8 @@ def _apply_text_overrides(
     settings: ProjectSettings,
     *,
     language: str = "zh",
+    ai_prompt_hint: str = "",
+    avoid_headlines: list[str] | set[str] | None = None,
 ) -> None:
     if not text_overrides:
         return
@@ -375,11 +385,15 @@ def _apply_text_overrides(
             len(variants),
             language=language,
             settings=settings,
+            extra_prompt=ai_prompt_hint,
+            avoid_texts=avoid_headlines,
         )
 
     for variant in variants:
         if headline_ai_enabled and headline_variants:
             variant.slogan = headline_variants.pop(0)
+        elif headline_ai_enabled:
+            pass
         elif headline:
             variant.slogan = headline
         if subhead:

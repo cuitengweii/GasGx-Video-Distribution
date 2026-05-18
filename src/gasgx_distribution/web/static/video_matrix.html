@@ -54,6 +54,15 @@
           <input id="headlineAiEnabled" type="checkbox" />
           <label for="headlineAiEnabled">上标题 AI 按数量生成</label>
         </div>
+        <label for="aiPromptHint">AI 追加提示语
+          <textarea
+            id="aiPromptHint"
+            rows="4"
+            maxlength="240"
+            placeholder="示例：突出海外低成本发电、强调真实场景、语气更克制专业"
+          ></textarea>
+        </label>
+        <p id="aiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
       </section>
 
       <section class="sidebar-group">

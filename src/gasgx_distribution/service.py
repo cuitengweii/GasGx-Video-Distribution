@@ -13,7 +13,7 @@ from io import BytesIO
 import sqlite3
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from threading import Lock, Thread
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -5098,7 +5098,7 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
         "--collection-name",
         str(settings.get("collection_name") or ""),
     ]
-    caption = mp._caption_with_topics(settings)
+    caption = mp.caption_for_publish(settings, source_video)
     if caption:
         cmd.extend(["--caption", caption])
     if bool(settings.get("declare_original")):
@@ -7369,6 +7369,53 @@ def _normalize_account_stats_snapshot(item: dict[str, Any], *, captured_at: int 
     }
 
 
+_ACCOUNT_STATS_VALUE_FIELDS = (
+    "views",
+    "likes",
+    "comments",
+    "shares",
+    "messages",
+    "followers",
+    "follower_delta",
+    "profile_visits",
+    "leads",
+    "completed_rate",
+    "interaction_rate",
+    "works_count",
+)
+
+
+def _stats_raw_dict(value: Any) -> dict[str, Any]:
+    payload = _json_payload(value, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _merge_account_stats_payload(existing: dict[str, Any] | None, payload: dict[str, Any], provided_fields: set[str]) -> dict[str, Any]:
+    if not existing:
+        return payload
+    incoming_raw = _stats_raw_dict(payload.get("raw_json"))
+    merged = dict(payload)
+    for field in _ACCOUNT_STATS_VALUE_FIELDS:
+        if field in provided_fields:
+            continue
+        if field in {"completed_rate", "interaction_rate"}:
+            merged[field] = _stats_float(existing.get(field))
+        else:
+            merged[field] = _stats_int(existing.get(field))
+    existing_raw = _stats_raw_dict(existing.get("raw_json"))
+    merged_raw = copy.deepcopy(existing_raw) if existing_raw else {}
+    if incoming_raw:
+        merged_raw.update({key: value for key, value in incoming_raw.items() if key != "sources"})
+    merged_raw.setdefault("capture_window", incoming_raw.get("capture_window") or existing_raw.get("capture_window") or "rolling_7d")
+    merged_raw.setdefault("sources", {})
+    merged_raw["sources"].update(existing_raw.get("sources") if isinstance(existing_raw.get("sources"), dict) else {})
+    merged_raw["sources"].update(incoming_raw.get("sources") if isinstance(incoming_raw.get("sources"), dict) else {})
+    merged["raw_json"] = _stats_json(merged_raw)
+    merged["source"] = "wechat_official_csv" if payload.get("source") == "wechat_official_csv" else str(existing.get("source") or payload.get("source") or "wechat_stats_capture")
+    merged["created_at"] = int(existing.get("created_at") or merged.get("created_at") or now_ts())
+    return merged
+
+
 def _normalize_video_stats_snapshot(item: dict[str, Any], *, captured_at: int | None = None) -> dict[str, Any]:
     ts = now_ts() if captured_at is None else int(captured_at)
     video_ref = str(item.get("video_ref") or item.get("feed_id") or "").strip()
@@ -7393,11 +7440,21 @@ def _normalize_video_stats_snapshot(item: dict[str, Any], *, captured_at: int | 
 
 def upsert_wechat_account_stats_snapshot(item: dict[str, Any]) -> dict[str, Any]:
     ensure_database()
+    provided_fields = {field for field in _ACCOUNT_STATS_VALUE_FIELDS if field in item}
     payload = _normalize_account_stats_snapshot(item)
     if payload["account_id"] <= 0 or not payload["stat_date"]:
         raise ValueError("account_id and stat_date are required")
     if brand_database_backend() == "supabase":
         client = _brand_supabase()
+        existing = client.select_one(
+            "wechat_stats_account_snapshots",
+            filters={
+                "account_id": payload["account_id"],
+                "platform": payload["platform"],
+                "stat_date": payload["stat_date"],
+            },
+        )
+        payload = _merge_account_stats_payload(existing if isinstance(existing, dict) else None, payload, provided_fields)
         row = client.upsert(
             "wechat_stats_account_snapshots",
             {**payload, "raw_json": _json_payload(payload["raw_json"], {})},
@@ -7406,6 +7463,16 @@ def upsert_wechat_account_stats_snapshot(item: dict[str, Any]) -> dict[str, Any]
         _invalidate_supabase_read_cache("dashboard_summary", "stats:all", "stats:accounts")
         return row
     with connect() as conn:
+        existing_row = conn.execute(
+            """
+            SELECT *
+            FROM wechat_stats_account_snapshots
+            WHERE account_id = ? AND platform = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (payload["account_id"], payload["platform"], payload["stat_date"]),
+        ).fetchone()
+        payload = _merge_account_stats_payload(dict_from_row(existing_row) if existing_row else None, payload, provided_fields)
         conn.execute(
             """
             INSERT INTO wechat_stats_account_snapshots(
@@ -7681,6 +7748,233 @@ def latest_wechat_account_stats_index() -> dict[int, dict[str, Any]]:
         if account_id > 0 and account_id not in result:
             result[account_id] = row
     return result
+
+
+def _active_wechat_accounts() -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for account in list_accounts():
+        if str(account.get("status") or "").strip().lower() != "active":
+            continue
+        wechat_enabled = False
+        for platform in account.get("platforms") or []:
+            if normalize_platform(str(platform.get("platform") or "")) != "wechat":
+                continue
+            enabled = platform.get("enabled")
+            if enabled is None:
+                wechat_enabled = True
+                break
+            if isinstance(enabled, str):
+                if enabled.strip().lower() not in {"0", "false", "off", "no"}:
+                    wechat_enabled = True
+                    break
+            elif bool(enabled):
+                wechat_enabled = True
+                break
+        if wechat_enabled:
+            result.append(account)
+    result.sort(key=lambda item: int(item.get("id") or 0))
+    return result
+
+
+def _parse_iso_day(value: Any) -> date | None:
+    token = str(value or "").strip()[:10]
+    if not token:
+        return None
+    try:
+        return date.fromisoformat(token)
+    except ValueError:
+        return None
+
+
+def stats_weekly_summary(platform: str = "wechat") -> dict[str, Any]:
+    token = normalize_platform(str(platform or "wechat")) or "wechat"
+    if token != "wechat":
+        raise ValueError("weekly summary currently supports platform=wechat")
+    accounts = _active_wechat_accounts()
+    account_map = {int(item.get("id") or 0): item for item in accounts if int(item.get("id") or 0) > 0}
+    rows = list_wechat_account_stats()
+    today = date.today()
+    available_days = [
+        day
+        for row in rows
+        if int(row.get("account_id") or 0) in account_map
+        for day in [_parse_iso_day(row.get("stat_date"))]
+        if day is not None
+    ]
+    window_end = max(available_days) if available_days else today
+    window_start = window_end - timedelta(days=6)
+    window_days = [window_start + timedelta(days=offset) for offset in range(7)]
+    window_tokens = {item.isoformat() for item in window_days}
+
+    latest_run = latest_wechat_stats_capture_run()
+    latest_payload = _json_payload(latest_run.get("payload_json"), {}) if isinstance(latest_run, dict) else {}
+    login_required_ids: set[int] = set()
+    for item in latest_payload.get("results", []) if isinstance(latest_payload, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") == "skipped" and str(item.get("reason") or "") == "login_required":
+            account_id = int(item.get("account_id") or 0)
+            if account_id > 0:
+                login_required_ids.add(account_id)
+
+    best_rows: dict[tuple[int, str], dict[str, Any]] = {}
+    for row in rows:
+        account_id = int(row.get("account_id") or 0)
+        if account_id not in account_map:
+            continue
+        day = str(row.get("stat_date") or "")
+        if day not in window_tokens:
+            continue
+        key = (account_id, day)
+        current = best_rows.get(key)
+        if current is None or int(row.get("captured_at") or 0) >= int(current.get("captured_at") or 0):
+            best_rows[key] = row
+
+    now_sec = now_ts()
+    stale_cutoff = now_sec - 7 * 86400
+    output_rows: list[dict[str, Any]] = []
+    totals = {
+        "views_7d": 0,
+        "likes_7d": 0,
+        "interactions_7d": 0,
+        "comments_7d": 0,
+        "shares_7d": 0,
+        "follower_delta_7d": 0,
+        "new_followers_7d": 0,
+        "unfollows_7d": 0,
+    }
+    status_counts: dict[str, int] = {}
+    alerts: list[dict[str, Any]] = []
+
+    for account_id, account in account_map.items():
+        source_by_day: dict[str, set[str]] = {}
+        covered_days: set[str] = set()
+        latest_captured_at = 0
+        latest_covered_day = ""
+        latest_follower_day = ""
+        current_followers = 0
+        views_7d = 0
+        likes_7d = 0
+        comments_7d = 0
+        shares_7d = 0
+        follower_delta_7d = 0
+        new_followers_7d = 0
+        unfollows_7d = 0
+
+        for day in sorted(window_tokens):
+            row = best_rows.get((account_id, day))
+            if not row:
+                continue
+            covered_days.add(day)
+            if day > latest_covered_day:
+                latest_covered_day = day
+            latest_captured_at = max(latest_captured_at, int(row.get("captured_at") or 0))
+            views_7d += _stats_int(row.get("views"))
+            likes_7d += _stats_int(row.get("likes"))
+            comments_7d += _stats_int(row.get("comments"))
+            shares_7d += _stats_int(row.get("shares"))
+            follower_delta_7d += _stats_int(row.get("follower_delta"))
+            if day >= latest_follower_day:
+                latest_follower_day = day
+                current_followers = _stats_int(row.get("followers"))
+            raw = _stats_raw_dict(row.get("raw_json"))
+            sources = raw.get("sources") if isinstance(raw.get("sources"), dict) else {}
+            keys = {str(key) for key in sources.keys()}
+            if keys:
+                source_by_day[day] = keys
+            follower_source = sources.get("follower") if isinstance(sources, dict) else {}
+            if isinstance(follower_source, dict):
+                new_followers_7d += _stats_int(follower_source.get("new_followers"))
+                unfollows_7d += _stats_int(follower_source.get("unfollows"))
+
+        missing_sources: set[str] = set()
+        complete_days = 0
+        for day in sorted(window_tokens):
+            keys = source_by_day.get(day, set())
+            if {"follower", "post"}.issubset(keys):
+                complete_days += 1
+                continue
+            if "follower" not in keys:
+                missing_sources.add("follower")
+            if "post" not in keys:
+                missing_sources.add("post")
+
+        coverage_days = len(covered_days)
+        stale = latest_captured_at <= 0 or latest_captured_at < stale_cutoff
+        if account_id in login_required_ids:
+            capture_status = "未登录"
+        elif coverage_days < 7 or stale:
+            capture_status = "近7天缺口"
+        elif missing_sources == {"follower"}:
+            capture_status = "缺关注者"
+        elif missing_sources == {"post"}:
+            capture_status = "缺视频"
+        elif missing_sources:
+            capture_status = "缺关注者+缺视频"
+        else:
+            capture_status = "完整"
+
+        status_counts[capture_status] = status_counts.get(capture_status, 0) + 1
+        if capture_status != "完整":
+            alerts.append(
+                {
+                    "account_id": account_id,
+                    "account_key": account.get("account_key"),
+                    "display_name": account.get("display_name") or account.get("account_key") or f"账号 {account_id}",
+                    "capture_status": capture_status,
+                    "coverage_days": coverage_days,
+                    "missing_sources": sorted(missing_sources),
+                }
+            )
+
+        interactions_7d = likes_7d + comments_7d + shares_7d
+        row_payload = {
+            "account_id": account_id,
+            "account_key": account.get("account_key"),
+            "display_name": account.get("display_name") or account.get("account_key") or f"账号 {account_id}",
+            "platform": token,
+            "views_7d": views_7d,
+            "likes_7d": likes_7d,
+            "interactions_7d": interactions_7d,
+            "comments_7d": comments_7d,
+            "shares_7d": shares_7d,
+            "follower_delta_7d": follower_delta_7d,
+            "new_followers_7d": new_followers_7d,
+            "unfollows_7d": unfollows_7d,
+            "followers_current": current_followers,
+            "coverage_days": coverage_days,
+            "complete_days": complete_days,
+            "missing_sources": sorted(missing_sources),
+            "capture_status": capture_status,
+            "latest_covered_date": latest_covered_day,
+            "latest_captured_at": latest_captured_at,
+            "latest_capture_time": datetime.fromtimestamp(latest_captured_at).strftime("%Y-%m-%d %H:%M:%S") if latest_captured_at > 0 else "",
+        }
+        output_rows.append(row_payload)
+        totals["views_7d"] += views_7d
+        totals["likes_7d"] += likes_7d
+        totals["interactions_7d"] += interactions_7d
+        totals["comments_7d"] += comments_7d
+        totals["shares_7d"] += shares_7d
+        totals["follower_delta_7d"] += follower_delta_7d
+        totals["new_followers_7d"] += new_followers_7d
+        totals["unfollows_7d"] += unfollows_7d
+
+    output_rows.sort(key=lambda item: int(item.get("account_id") or 0))
+    return {
+        "platform": token,
+        "generated_at": now_sec,
+        "window": {
+            "start_date": window_start.isoformat(),
+            "end_date": window_end.isoformat(),
+            "days": [item.isoformat() for item in window_days],
+        },
+        "account_total": len(output_rows),
+        "totals": totals,
+        "status_counts": status_counts,
+        "rows": output_rows,
+        "alerts": alerts,
+    }
 
 
 def upsert_wechat_stats_capture_run(payload: dict[str, Any]) -> dict[str, Any]:

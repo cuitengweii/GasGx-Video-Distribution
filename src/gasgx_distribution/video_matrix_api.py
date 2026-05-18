@@ -7,6 +7,7 @@ import random
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -84,6 +85,9 @@ CDN_AUDIO_STREAMS = [
     "https://cdn.jsdelivr.net/gh/mdn/webaudio-examples@master/audio-analyser/viper.mp3",
     "https://cdn.jsdelivr.net/gh/mdn/webaudio-examples@master/step-sequencer/parsley/kick.mp3",
 ]
+AI_PROMPT_HINT_MAX_CHARS = 240
+AI_PROMPT_HINT_MAX_LINES = 4
+AI_PROMPT_HINT_URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
 
 if load_dotenv is not None:
     load_dotenv(ROOT / ".env")
@@ -539,17 +543,20 @@ def get_state() -> dict[str, Any]:
 
 @router.post("/state")
 def post_state(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized_payload = dict(payload or {})
+    if "ai_prompt_hint" in normalized_payload:
+        normalized_payload["ai_prompt_hint"] = _normalize_ai_prompt_hint(normalized_payload.get("ai_prompt_hint"))
     if service.brand_database_backend() == "supabase":
         current, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
         state = dict(current.get("ui_state") or {})
-        state.update(payload)
+        state.update(normalized_payload)
         current["ui_state"] = state
         if _save_video_matrix_app_setting(current):
             return {"ok": True, "ui_state": state}
         _save_local_ui_state(state)
         return {"ok": True, "ui_state": state}
     state = _load_local_ui_state()
-    state.update(payload)
+    state.update(normalized_payload)
     _save_local_ui_state(state)
     return {"ok": True, "ui_state": state}
 
@@ -996,6 +1003,7 @@ async def generate(
     source_files: list[UploadFile] | None = File(None),
 ) -> dict[str, Any]:
     request = json.loads(payload)
+    request["ai_prompt_hint"] = _normalize_ai_prompt_hint(request.get("ai_prompt_hint"))
     job_id = uuid.uuid4().hex[:12]
     temp_root = TMP_DIR / job_id
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -1077,6 +1085,7 @@ def _run_generate_job(
 ) -> None:
     trace = trace or GenerationTrace(job_id, TELEMETRY_LOG_ROOT, _request_telemetry_summary(request, bgm_path, source_root))
     try:
+        request["ai_prompt_hint"] = _normalize_ai_prompt_hint(request.get("ai_prompt_hint"))
         settings = _settings()
         if request.get("video_duration_min") is not None:
             settings.video_duration_min = max(
@@ -1133,6 +1142,8 @@ def _run_generate_job(
             _persist_job_state(job_id)
 
         with trace.span("pipeline", "run_pipeline"):
+            output_types = set(request.get("output_options") or ["mp4"])
+            output_types.add("txt")
             assets = run_pipeline(
                 settings=settings,
                 bgm_path=bgm_path,
@@ -1140,7 +1151,7 @@ def _run_generate_job(
                 source_root=source_root,
                 output_root=Path(request["output_root"]).expanduser().resolve() if request.get("output_root") else None,
                 progress_callback=progress,
-                output_types=set(request.get("output_options") or ["mp4"]),
+                output_types=output_types,
                 copy_language=str(request.get("copy_language") or "zh"),
                 max_workers=int(request.get("max_workers") or 3),
                 recent_limits=recent_limits,
@@ -1164,6 +1175,9 @@ def _run_generate_job(
                     "hud_text": str(request.get("hud_text") or ""),
                     "follow_text": str(request.get("follow_text") or ""),
                     "headline_ai_enabled": bool(request.get("headline_ai_enabled")),
+                    "ai_prompt_hint": str(request.get("ai_prompt_hint") or ""),
+                    "daily_texts": sorted(str(item) for item in generation_history.get("daily_texts") or [] if str(item).strip()),
+                    "daily_headlines": sorted(str(item) for item in generation_history.get("daily_headlines") or [] if str(item).strip()),
                 },
             )
         try:
@@ -1343,7 +1357,15 @@ def _recent_bgm_names(limit: int = 5000) -> set[str]:
 
 
 def _load_generation_history(limit: int) -> dict[str, Any]:
-    history: dict[str, Any] = {"signatures": set(), "clip_ids": set(), "segment_keys": set(), "bgm_names": set(), "features": []}
+    history: dict[str, Any] = {
+        "signatures": set(),
+        "clip_ids": set(),
+        "segment_keys": set(),
+        "bgm_names": set(),
+        "features": [],
+        "daily_texts": set(),
+        "daily_headlines": set(),
+    }
     if service.brand_database_backend() != "supabase":
         return _load_local_generation_history(history, limit)
     capped = str(max(1, int(limit or 5000)))
@@ -1375,6 +1397,16 @@ def _load_generation_history(limit: int) -> dict[str, Any]:
     history["bgm_names"] = {str(row.get("bgm_filename") or "").strip() for row in runs if str(row.get("bgm_filename") or "").strip()}
     history["features"] = [_history_feature_from_asset_row(row) for row in assets]
     history["features"] = [item for item in history["features"] if item]
+    for row in assets:
+        metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+        hud_lines = metadata.get("hud_lines") if isinstance(metadata.get("hud_lines"), list) else []
+        _collect_daily_text_history(
+            history,
+            row.get("title"),
+            row.get("slogan"),
+            hud_lines,
+            row.get("created_at"),
+        )
     return history
 
 
@@ -1390,12 +1422,20 @@ def _load_local_generation_history(history: dict[str, Any], limit: int) -> dict[
             continue
         run = record.get("run") if isinstance(record.get("run"), dict) else record
         bgm_filename = str(run.get("bgm_filename") or record.get("bgm_filename") or "").strip()
+        run_created_at = run.get("created_at") or record.get("created_at")
         if bgm_filename:
             history["bgm_names"].add(bgm_filename)
         assets = record.get("assets") if isinstance(record.get("assets"), list) else []
         for asset in reversed(assets):
             if not isinstance(asset, dict) or asset_count >= cap:
                 continue
+            _collect_daily_text_history(
+                history,
+                asset.get("title"),
+                asset.get("slogan"),
+                asset.get("hud_lines") if isinstance(asset.get("hud_lines"), list) else [],
+                asset.get("created_at") or run_created_at,
+            )
             signature = str(asset.get("signature") or "").strip()
             if signature:
                 history["signatures"].add(signature)
@@ -1417,6 +1457,37 @@ def _load_local_generation_history(history: dict[str, Any], limit: int) -> dict[
         if asset_count >= cap:
             break
     return history
+
+
+def _collect_daily_text_history(
+    history: dict[str, Any],
+    title: Any,
+    slogan: Any,
+    hud_lines: list[Any],
+    created_at: Any,
+) -> None:
+    if not _is_today_timestamp(created_at):
+        return
+    headline = _history_text_value(slogan)
+    if headline:
+        history.setdefault("daily_headlines", set()).add(headline)
+    text_key = _history_text_value(" ".join([str(title or ""), str(slogan or ""), *[str(line or "") for line in hud_lines]]))
+    if text_key:
+        history.setdefault("daily_texts", set()).add(text_key)
+
+
+def _is_today_timestamp(value: Any) -> bool:
+    try:
+        ts = int(value)
+    except (TypeError, ValueError):
+        return False
+    if ts <= 0:
+        return False
+    return datetime.fromtimestamp(ts).date() == date.today()
+
+
+def _history_text_value(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").replace("\r\n", "\n")).strip()
 
 
 def _history_feature_from_local_asset(asset: dict[str, Any], bgm_filename: str = "") -> dict[str, Any]:
@@ -1756,6 +1827,18 @@ def _hud_lines(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
+def _normalize_ai_prompt_hint(raw: Any) -> str:
+    text = str(raw or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+    text = AI_PROMPT_HINT_URL_RE.sub("", text)
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    normalized = "\n".join(lines[:AI_PROMPT_HINT_MAX_LINES]).strip()
+    if len(normalized) > AI_PROMPT_HINT_MAX_CHARS:
+        normalized = normalized[:AI_PROMPT_HINT_MAX_CHARS].strip()
+    return normalized
+
+
 def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
     keys = {
         "output_count",
@@ -1774,6 +1857,7 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "render_speed_mode",
         "headline",
         "headline_ai_enabled",
+        "ai_prompt_hint",
         "subhead",
         "follow_text",
         "hud_text",

@@ -52,6 +52,7 @@ def render_variant(
     telemetry: Any | None = None,
     speed_mode: str = "quality",
     ffmpeg_threads: int | None = None,
+    ai_prompt_hint: str = "",
     bgm_start_offset: float = 0.0,
     publish_day_code: str | None = None,
     publish_sequence_number: int | None = None,
@@ -193,7 +194,14 @@ def render_variant(
         if copy_path is not None:
             with _span(telemetry, "render", "copy_write", {"copy_path": copy_path, "copy_language": copy_language}):
                 copy_path.write_text(
-                    build_marketing_copy(variant, settings, copy_language, template_copy, outro_text),
+                    build_marketing_copy(
+                        variant,
+                        settings,
+                        copy_language,
+                        template_copy,
+                        outro_text,
+                        extra_prompt=ai_prompt_hint,
+                    ),
                     encoding="utf-8",
                 )
 
