@@ -66,6 +66,9 @@ def run_pipeline(
     telemetry: Any | None = None,
     speed_mode: str = "quality",
     asset_callback: AssetCallback | None = None,
+    mining_bgm_path: Path | None = None,
+    mining_bgm_volume: float | None = None,
+    library_bgm_volume: float | None = None,
 ) -> list[RenderedAsset]:
     ai_prompt_hint = str((text_overrides or {}).get("ai_prompt_hint") or "").strip()
     daily_texts = [str(item).strip() for item in (text_overrides or {}).get("daily_texts") or [] if str(item).strip()]
@@ -255,6 +258,9 @@ def run_pipeline(
                     ffmpeg_threads,
                     ai_prompt_hint=ai_prompt_hint,
                     bgm_start_offset=variant.bgm_start_offset,
+                    mining_bgm_path=mining_bgm_path,
+                    mining_bgm_volume=mining_bgm_volume,
+                    library_bgm_volume=library_bgm_volume,
                     publish_day_code=publish_day_code,
                     publish_sequence_number=publish_sequence_start + variant.sequence_number - 1,
                 ): variant.sequence_number

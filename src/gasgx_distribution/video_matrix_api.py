@@ -90,6 +90,9 @@ AI_PROMPT_HINT_MAX_LINES = 4
 AI_PROMPT_HINT_URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
 HUD_TEXT_MAX_LINES = 2
 HUD_TEXT_MAX_CHARS_PER_LINE = 10
+MINING_BGM_PATH = ROOT / "runtime" / "video_matrix" / "mining" / "mining.mp3"
+DEFAULT_MINING_BGM_VOLUME = 1.0
+DEFAULT_LIBRARY_BGM_VOLUME = 0.35
 
 if load_dotenv is not None:
     load_dotenv(ROOT / ".env")
@@ -1064,6 +1067,9 @@ def _request_telemetry_summary(request: dict[str, Any], bgm_path: Path, source_r
         "bgm_source": request.get("bgm_source") or "Local library",
         "bgm_filename": bgm_path.name,
         "bgm_path": bgm_path,
+        "mining_bgm_path": str(MINING_BGM_PATH) if MINING_BGM_PATH.exists() else "",
+        "mining_bgm_volume": _audio_mix_level(request.get("mining_bgm_volume"), default=DEFAULT_MINING_BGM_VOLUME),
+        "library_bgm_volume": _audio_mix_level(request.get("library_bgm_volume"), default=DEFAULT_LIBRARY_BGM_VOLUME),
         "source_mode": request.get("source_mode") or "",
         "source_root": source_root,
         "active_category_ids": request.get("active_category_ids") or [],
@@ -1124,6 +1130,9 @@ def _run_generate_job(
         speed_mode = str(request.get("render_speed_mode") or "quality")
         if speed_mode not in {"quality", "fast_first"}:
             speed_mode = "quality"
+        mining_bgm_path = MINING_BGM_PATH.resolve() if MINING_BGM_PATH.exists() else None
+        mining_bgm_volume = _audio_mix_level(request.get("mining_bgm_volume"), default=DEFAULT_MINING_BGM_VOLUME)
+        library_bgm_volume = _audio_mix_level(request.get("library_bgm_volume"), default=DEFAULT_LIBRARY_BGM_VOLUME)
 
         def progress(stage: str, value: float, message: str) -> None:
             _jobs[job_id].update({"status": "running", "stage": stage, "progress": value, "message": message})
@@ -1168,6 +1177,9 @@ def _run_generate_job(
                 telemetry=trace,
                 speed_mode=speed_mode,
                 asset_callback=on_asset_ready,
+                mining_bgm_path=mining_bgm_path,
+                mining_bgm_volume=mining_bgm_volume,
+                library_bgm_volume=library_bgm_volume,
                 text_overrides={
                     "headline": str(request.get("headline") or ""),
                     "subhead": str(request.get("subhead") or ""),
@@ -1884,6 +1896,8 @@ def _normalize_request_text_fields(request: dict[str, Any]) -> dict[str, Any]:
     normalized["follow_text_ai_prompt_hint"] = _normalize_limited_prompt_hint(normalized.get("follow_text_ai_prompt_hint"))
     normalized["hud_ai_prompt_hint"] = _normalize_limited_prompt_hint(normalized.get("hud_ai_prompt_hint"))
     normalized["hud_text"] = _normalize_hud_text(normalized.get("hud_text"))
+    normalized["mining_bgm_volume"] = _audio_mix_level(normalized.get("mining_bgm_volume"), default=DEFAULT_MINING_BGM_VOLUME)
+    normalized["library_bgm_volume"] = _audio_mix_level(normalized.get("library_bgm_volume"), default=DEFAULT_LIBRARY_BGM_VOLUME)
     return normalized
 
 
@@ -1925,10 +1939,20 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "ending_cover_template",
         "bgm_source",
         "bgm_library_id",
+        "mining_bgm_volume",
+        "library_bgm_volume",
         "composition_sequence",
         "composition_customized",
     }
     return {key: request[key] for key in keys if key in request}
+
+
+def _audio_mix_level(raw: Any, *, default: float) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(0.0, min(2.0, value))
 
 
 def _request_composition_sequence(request: dict[str, Any], settings: ProjectSettings) -> list[dict[str, Any]]:

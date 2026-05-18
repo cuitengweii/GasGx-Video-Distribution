@@ -47,6 +47,8 @@
         <label>并行线程<div class="range-with-value"><input id="maxWorkers" type="range" min="1" max="6" /><output id="maxWorkersValue"></output></div></label>
         <label>最小节拍分析时长<div class="input-with-unit"><input id="videoDurationMin" class="number-field" type="number" min="1" max="120" step="0.5" value="8" /><span>秒</span></div></label>
         <label>最大节拍分析时长<div class="input-with-unit"><input id="videoDurationMax" class="number-field" type="number" min="4" max="120" step="0.5" value="12" /><span>秒</span></div></label>
+        <label>矿场主音乐音量<div class="range-with-value"><input id="miningBgmVolume" type="range" min="0" max="2" step="0.05" /><output id="miningBgmVolumeValue"></output></div></label>
+        <label>背景音乐音量<div class="range-with-value"><input id="libraryBgmVolume" type="range" min="0" max="2" step="0.05" /><output id="libraryBgmVolumeValue"></output></div></label>
         <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
         <div class="sidebar-radio-field"><span>生成速度</span><div class="radio-row" id="renderSpeedModeGroup"></div></div>
         <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option></select></label>
@@ -54,7 +56,7 @@
           <input id="headlineAiEnabled" type="checkbox" />
           <label for="headlineAiEnabled">上标题 AI 按数量生成</label>
         </div>
-        <label for="aiPromptHint">AI 追加提示语
+        <label for="aiPromptHint">上标题 AI 参考提示语
           <textarea
             id="aiPromptHint"
             rows="4"
@@ -63,6 +65,66 @@
           ></textarea>
         </label>
         <p id="aiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+        <div class="sidebar-checkbox-field">
+          <input id="descriptionAiEnabled" type="checkbox" />
+          <label for="descriptionAiEnabled">视频描述 AI 生成</label>
+        </div>
+        <label for="descriptionText">固定视频描述
+          <textarea
+            id="descriptionText"
+            rows="4"
+            placeholder="关闭 AI 时使用固定描述；留空则沿用模板文案"
+          ></textarea>
+        </label>
+        <label for="descriptionAiPromptHint">视频描述 AI 参考提示语
+          <textarea
+            id="descriptionAiPromptHint"
+            rows="4"
+            maxlength="240"
+            placeholder="示例：避免夸张词，突出数据和场景事实"
+          ></textarea>
+        </label>
+        <p id="descriptionAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+        <div class="sidebar-checkbox-field">
+          <input id="followTextAiEnabled" type="checkbox" />
+          <label for="followTextAiEnabled">片尾文案 AI 生成</label>
+        </div>
+        <label for="followTextFixed">固定片尾文案
+          <textarea
+            id="followTextFixed"
+            rows="3"
+            placeholder="关闭 AI 时使用固定片尾文案"
+          ></textarea>
+        </label>
+        <label for="followTextAiPromptHint">片尾文案 AI 参考提示语
+          <textarea
+            id="followTextAiPromptHint"
+            rows="4"
+            maxlength="240"
+            placeholder="示例：简洁克制，不要口号堆砌"
+          ></textarea>
+        </label>
+        <p id="followTextAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+        <div class="sidebar-checkbox-field">
+          <input id="hudAiEnabled" type="checkbox" />
+          <label for="hudAiEnabled">HUD 文案 AI 生成</label>
+        </div>
+        <label for="hudTextFixed">固定 HUD 文案
+          <textarea
+            id="hudTextFixed"
+            rows="3"
+            placeholder="最多 2 行，每行最多 10 字"
+          ></textarea>
+        </label>
+        <label for="hudAiPromptHint">HUD AI 参考提示语
+          <textarea
+            id="hudAiPromptHint"
+            rows="4"
+            maxlength="240"
+            placeholder="示例：两行短句，偏工业风，不使用链接"
+          ></textarea>
+        </label>
+        <p id="hudAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
       </section>
 
       <section class="sidebar-group">

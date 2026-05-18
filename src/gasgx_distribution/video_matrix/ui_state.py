@@ -31,6 +31,8 @@ DEFAULT_UI_STATE: dict[str, Any] = {
     "follow_text_ai_prompt_hint": "",
     "bgm_source": "Local library",
     "bgm_library_id": "",
+    "mining_bgm_volume": 1.0,
+    "library_bgm_volume": 0.35,
     "composition_customized": False,
     "composition_sequence": [
         {"category_id": "category_A", "duration": 1.5},

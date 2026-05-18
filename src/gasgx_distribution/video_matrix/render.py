@@ -54,6 +54,9 @@ def render_variant(
     ffmpeg_threads: int | None = None,
     ai_prompt_hint: str = "",
     bgm_start_offset: float = 0.0,
+    mining_bgm_path: Path | None = None,
+    mining_bgm_volume: float | None = None,
+    library_bgm_volume: float | None = None,
     publish_day_code: str | None = None,
     publish_sequence_number: int | None = None,
 ) -> RenderedAsset:
@@ -159,6 +162,12 @@ def render_variant(
             }
             if bgm_start_offset:
                 concat_kwargs["bgm_start_offset"] = max(0.0, float(bgm_start_offset or 0.0))
+            if mining_bgm_path is not None:
+                concat_kwargs["mining_bgm_path"] = mining_bgm_path
+            if mining_bgm_volume is not None:
+                concat_kwargs["mining_bgm_volume"] = float(mining_bgm_volume)
+            if library_bgm_volume is not None:
+                concat_kwargs["library_bgm_volume"] = float(library_bgm_volume)
             concat_video(filter_complex, inputs, body_output_path, **concat_kwargs)
         if video_ending_path is not None:
             with _span(

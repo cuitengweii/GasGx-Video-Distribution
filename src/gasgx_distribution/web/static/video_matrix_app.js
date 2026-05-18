@@ -1,4 +1,4 @@
-const $ = (id) => document.getElementById(id);
+﻿const $ = (id) => document.getElementById(id);
 let state = {};
 let templates = {};
 let coverTemplates = {};
@@ -23,117 +23,119 @@ let videoTemplateThumbScaleBound = false;
 const AI_PROMPT_HINT_MAX_CHARS = 240;
 const AI_PROMPT_HINT_MAX_LINES = 4;
 const AI_PROMPT_HINT_URL_RE = /(https?:\/\/\S+|www\.\S+)/gi;
+const HUD_TEXT_MAX_LINES = 2;
+const HUD_TEXT_MAX_CHARS_PER_LINE = 10;
 
 const narrativeTemplateNameMap = {
-  quick_showcase: "快切展示",
-  faq_explainer: "FAQ 教程",
-  contrast_compare: "反差对比",
-  step_list: "清单步骤",
-  voiceover_broll: "口播挂画面",
+  quick_showcase: "蹇垏灞曠ず",
+  faq_explainer: "FAQ 鏁欑▼",
+  contrast_compare: "鍙嶅樊瀵规瘮",
+  step_list: "娓呭崟姝ラ",
+  voiceover_broll: "鍙ｆ挱鎸傜敾闈?,
 };
 
 const narrativeAccountPoolNameMap = {
-  result_showcase: "成果展示",
-  tutorial_faq: "教程答疑",
-  contrast: "反差对比",
-  howto_steps: "步骤清单",
-  onsite_voice: "现场口播",
+  result_showcase: "鎴愭灉灞曠ず",
+  tutorial_faq: "鏁欑▼绛旂枒",
+  contrast: "鍙嶅樊瀵规瘮",
+  howto_steps: "姝ラ娓呭崟",
+  onsite_voice: "鐜板満鍙ｆ挱",
 };
 
 const jobStepLabels = [
-  ["queued", "任务提交", 0, ["queued"]],
-  ["ingest_scan", "扫描素材", 5, ["ingestion"]],
-  ["ingestion", "整理素材", 12, ["ingestion"]],
-  ["hud", "准备数据字幕", 20, ["hud"]],
-  ["beat", "分析音乐节奏", 30, ["beat"]],
-  ["planning", "规划去重方案", 42, ["planning"]],
-  ["render_start", "启动渲染", 45, ["render"]],
-  ["render", "生成视频", 56, ["render"]],
-  ["render_wait", "等待导出", 82, ["render"]],
-  ["finalizing", "整理导出文件", 97, ["finalizing"]],
-  ["complete", "完成", 100, ["complete"]],
+  ["queued", "浠诲姟鎻愪氦", 0, ["queued"]],
+  ["ingest_scan", "鎵弿绱犳潗", 5, ["ingestion"]],
+  ["ingestion", "鏁寸悊绱犳潗", 12, ["ingestion"]],
+  ["hud", "鍑嗗鏁版嵁瀛楀箷", 20, ["hud"]],
+  ["beat", "鍒嗘瀽闊充箰鑺傚", 30, ["beat"]],
+  ["planning", "瑙勫垝鍘婚噸鏂规", 42, ["planning"]],
+  ["render_start", "鍚姩娓叉煋", 45, ["render"]],
+  ["render", "鐢熸垚瑙嗛", 56, ["render"]],
+  ["render_wait", "绛夊緟瀵煎嚭", 82, ["render"]],
+  ["finalizing", "鏁寸悊瀵煎嚭鏂囦欢", 97, ["finalizing"]],
+  ["complete", "瀹屾垚", 100, ["complete"]],
 ];
 
 const jobMessages = {
-  queued: "任务已提交，正在等待开始。",
-  ingestion: "正在读取并整理素材视频，请确认素材目录里有视频文件。",
-  hud: "正在准备视频里的字幕背板数据和文字信息。",
-  beat: "正在分析背景音乐节奏，用于卡点混剪。",
-  planning: "正在规划每条视频的叙事骨架、素材组合和低成本去重。",
-  render: "正在调用 FFmpeg 生成视频，这一步耗时最长。",
-  finalizing: "正在整理导出的 MP4、封面和文案文件。",
-  complete: "生成完成，可以到输出目录查看文件。",
-  error: "生成失败，请按下方提示处理后重试。",
+  queued: "浠诲姟宸叉彁浜わ紝姝ｅ湪绛夊緟寮€濮嬨€?,
+  ingestion: "姝ｅ湪璇诲彇骞舵暣鐞嗙礌鏉愯棰戯紝璇风‘璁ょ礌鏉愮洰褰曢噷鏈夎棰戞枃浠躲€?,
+  hud: "姝ｅ湪鍑嗗瑙嗛閲岀殑瀛楀箷鑳屾澘鏁版嵁鍜屾枃瀛椾俊鎭€?,
+  beat: "姝ｅ湪鍒嗘瀽鑳屾櫙闊充箰鑺傚锛岀敤浜庡崱鐐规贩鍓€?,
+  planning: "姝ｅ湪瑙勫垝姣忔潯瑙嗛鐨勫彊浜嬮鏋躲€佺礌鏉愮粍鍚堝拰浣庢垚鏈幓閲嶃€?,
+  render: "姝ｅ湪璋冪敤 FFmpeg 鐢熸垚瑙嗛锛岃繖涓€姝ヨ€楁椂鏈€闀裤€?,
+  finalizing: "姝ｅ湪鏁寸悊瀵煎嚭鐨?MP4銆佸皝闈㈠拰鏂囨鏂囦欢銆?,
+  complete: "鐢熸垚瀹屾垚锛屽彲浠ュ埌杈撳嚭鐩綍鏌ョ湅鏂囦欢銆?,
+  error: "鐢熸垚澶辫触锛岃鎸変笅鏂规彁绀哄鐞嗗悗閲嶈瘯銆?,
 };
 
 const backendJobMessageMap = {
-  "Queued": "任务已提交，正在排队准备。请保持当前页面打开，系统会自动开始处理。",
-  "Collecting and normalizing source clips": "正在扫描并整理素材视频，按分类目录读取可用片段。",
-  "Preparing GasGx data HUD": "正在准备视频里的字幕背板数据、标题和字幕字段。",
-  "Analyzing BGM beat grid": "正在分析背景音乐节拍网格，用于后续卡点混剪。",
-  "Planning de-duplicated video variants": "正在规划每条视频的叙事骨架和去重策略，命中重复会自动重剪。",
-  "Finalizing preview assets and manifests": "正在整理导出的 MP4、预览文件和清单。",
+  "Queued": "浠诲姟宸叉彁浜わ紝姝ｅ湪鎺掗槦鍑嗗銆傝淇濇寔褰撳墠椤甸潰鎵撳紑锛岀郴缁熶細鑷姩寮€濮嬪鐞嗐€?,
+  "Collecting and normalizing source clips": "姝ｅ湪鎵弿骞舵暣鐞嗙礌鏉愯棰戯紝鎸夊垎绫荤洰褰曡鍙栧彲鐢ㄧ墖娈点€?,
+  "Preparing GasGx data HUD": "姝ｅ湪鍑嗗瑙嗛閲岀殑瀛楀箷鑳屾澘鏁版嵁銆佹爣棰樺拰瀛楀箷瀛楁銆?,
+  "Analyzing BGM beat grid": "姝ｅ湪鍒嗘瀽鑳屾櫙闊充箰鑺傛媿缃戞牸锛岀敤浜庡悗缁崱鐐规贩鍓€?,
+  "Planning de-duplicated video variants": "姝ｅ湪瑙勫垝姣忔潯瑙嗛鐨勫彊浜嬮鏋跺拰鍘婚噸绛栫暐锛屽懡涓噸澶嶄細鑷姩閲嶅壀銆?,
+  "Finalizing preview assets and manifests": "姝ｅ湪鏁寸悊瀵煎嚭鐨?MP4銆侀瑙堟枃浠跺拰娓呭崟銆?,
 };
 
 const coverFields = [
-  ["name", "模板名称", "text"], ["brand", "品牌文字", "text"], ["eyebrow", "眉标文字", "text"], ["cta", "CTA 按钮文字", "text"],
-  ["align", "文字对齐", "select"], ["brand_y", "品牌 Y", "range", 0, 420], ["headline_y", "主标题 Y", "range", 0, 1320],
-  ["subhead_y", "副标题 Y", "range", 0, 1500], ["hud_y", "字幕背板 Y", "range", 0, 1780], ["cta_y", "CTA Y", "range", 0, 1840],
-  ["primary_color", "主文字色", "color"], ["secondary_color", "副文字色", "color"], ["accent_color", "强调色", "color"],
-  ["tint_color", "背景罩色", "color"], ["gradient_color", "渐变色", "color"], ["panel_color", "字幕背板面板色", "color"],
-  ["tint_opacity", "背景罩透明度", "rangeFloat", 0, 1], ["gradient_opacity", "渐变透明度", "rangeFloat", 0, 1],
-  ["panel_opacity", "字幕背板面板透明度", "rangeFloat", 0, 1],
+  ["name", "妯℃澘鍚嶇О", "text"], ["brand", "鍝佺墝鏂囧瓧", "text"], ["eyebrow", "鐪夋爣鏂囧瓧", "text"], ["cta", "CTA 鎸夐挳鏂囧瓧", "text"],
+  ["align", "鏂囧瓧瀵归綈", "select"], ["brand_y", "鍝佺墝 Y", "range", 0, 420], ["headline_y", "涓绘爣棰?Y", "range", 0, 1320],
+  ["subhead_y", "鍓爣棰?Y", "range", 0, 1500], ["hud_y", "瀛楀箷鑳屾澘 Y", "range", 0, 1780], ["cta_y", "CTA Y", "range", 0, 1840],
+  ["primary_color", "涓绘枃瀛楄壊", "color"], ["secondary_color", "鍓枃瀛楄壊", "color"], ["accent_color", "寮鸿皟鑹?, "color"],
+  ["tint_color", "鑳屾櫙缃╄壊", "color"], ["gradient_color", "娓愬彉鑹?, "color"], ["panel_color", "瀛楀箷鑳屾澘闈㈡澘鑹?, "color"],
+  ["tint_opacity", "鑳屾櫙缃╅€忔槑搴?, "rangeFloat", 0, 1], ["gradient_opacity", "娓愬彉閫忔槑搴?, "rangeFloat", 0, 1],
+  ["panel_opacity", "瀛楀箷鑳屾澘闈㈡澘閫忔槑搴?, "rangeFloat", 0, 1],
 ];
 const videoTemplateFields = [
-  ["name", "模板名称", "text"],
-  ["show_slogan", "显示上标题", "checkbox"],
-  ["show_title", "显示中标题", "checkbox"],
-  ["show_hud", "显示下标题", "checkbox"],
+  ["name", "妯℃澘鍚嶇О", "text"],
+  ["show_slogan", "鏄剧ず涓婃爣棰?, "checkbox"],
+  ["show_title", "鏄剧ず涓爣棰?, "checkbox"],
+  ["show_hud", "鏄剧ず涓嬫爣棰?, "checkbox"],
 ];
 const visualFontOptions = [
-  ["'Microsoft YaHei', 'Noto Sans SC', sans-serif", "雅黑黑体"],
-  ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "广告黑体"],
-  ["'Arial Black', Impact, sans-serif", "重磅标题"],
-  ["Impact, 'Arial Black', sans-serif", "冲击海报"],
-  ["'Bahnschrift Condensed', 'Arial Narrow', sans-serif", "窄体工业"],
-  ["'Trebuchet MS', 'Microsoft YaHei', sans-serif", "现代圆体"],
-  ["'Segoe UI Black', 'Arial Black', sans-serif", "科技粗体"],
-  ["'Franklin Gothic Heavy', 'Arial Black', sans-serif", "商业粗体"],
-  ["Georgia, 'Times New Roman', serif", "高级衬线"],
-  ["'Courier New', Consolas, monospace", "数据等宽"],
+  ["'Microsoft YaHei', 'Noto Sans SC', sans-serif", "闆呴粦榛戜綋"],
+  ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "骞垮憡榛戜綋"],
+  ["'Arial Black', Impact, sans-serif", "閲嶇鏍囬"],
+  ["Impact, 'Arial Black', sans-serif", "鍐插嚮娴锋姤"],
+  ["'Bahnschrift Condensed', 'Arial Narrow', sans-serif", "绐勪綋宸ヤ笟"],
+  ["'Trebuchet MS', 'Microsoft YaHei', sans-serif", "鐜颁唬鍦嗕綋"],
+  ["'Segoe UI Black', 'Arial Black', sans-serif", "绉戞妧绮椾綋"],
+  ["'Franklin Gothic Heavy', 'Arial Black', sans-serif", "鍟嗕笟绮椾綋"],
+  ["Georgia, 'Times New Roman', serif", "楂樼骇琛嚎"],
+  ["'Courier New', Consolas, monospace", "鏁版嵁绛夊"],
 ];
 const videoTextFontOptions = [
-  ["'Microsoft YaHei Bold', 'Microsoft YaHei', 'Noto Sans SC', sans-serif", "中文主标题"],
-  ["'Noto Sans SC Bold', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "中文大屏粗体"],
-  ["SimHei, 'Microsoft YaHei', sans-serif", "中文黑体冲击"],
-  ["DINNextLTPro-Bold, 'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "英文主标题 DIN"],
-  ["'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "英文主标题 Black"],
-  ["Impact, 'Arial Black', 'Microsoft YaHei', sans-serif", "英文主标题 Impact"],
-  ["'Arial Black', Impact, 'Microsoft YaHei', sans-serif", "中英混排粗黑"],
-  ["Bahnschrift, 'Bahnschrift Condensed', 'Microsoft YaHei', sans-serif", "工业科技风"],
-  ["Consolas, 'Courier New', 'Microsoft YaHei', monospace", "数据机甲风"],
-  ["'Alibaba PuHuiTi Heavy', 'Microsoft YaHei', 'Noto Sans SC', sans-serif", "阿里普惠重黑"],
-  ["'Source Han Sans Heavy', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "思源重黑"],
-  ["'HarmonyOS Sans SC Bold', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "鸿蒙粗黑"],
-  ["YouSheBiaoTiHei, SimHei, 'Microsoft YaHei', sans-serif", "优设标题黑"],
-  ["'DIN Condensed', DINNextLTPro-Bold, Bahnschrift, 'Microsoft YaHei', sans-serif", "DIN 压缩广告"],
-  ["'Franklin Gothic Heavy', 'Arial Black', 'Microsoft YaHei', sans-serif", "硬核广告"],
-  ["'Cooper Black', Georgia, 'Microsoft YaHei', serif", "复古胖字"],
-  ["'Showcard Gothic', 'Arial Black', 'Microsoft YaHei', sans-serif", "招牌漫画"],
-  ["SimSun, 'Microsoft YaHei', serif", "中文宋体刊头"],
-  ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "中文广告黑体"],
-  ["'Trebuchet MS', 'Microsoft YaHei', sans-serif", "英文圆体科技"],
+  ["'Microsoft YaHei Bold', 'Microsoft YaHei', 'Noto Sans SC', sans-serif", "涓枃涓绘爣棰?],
+  ["'Noto Sans SC Bold', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "涓枃澶у睆绮椾綋"],
+  ["SimHei, 'Microsoft YaHei', sans-serif", "涓枃榛戜綋鍐插嚮"],
+  ["DINNextLTPro-Bold, 'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "鑻辨枃涓绘爣棰?DIN"],
+  ["'Segoe UI Black', Impact, 'Microsoft YaHei', sans-serif", "鑻辨枃涓绘爣棰?Black"],
+  ["Impact, 'Arial Black', 'Microsoft YaHei', sans-serif", "鑻辨枃涓绘爣棰?Impact"],
+  ["'Arial Black', Impact, 'Microsoft YaHei', sans-serif", "涓嫳娣锋帓绮楅粦"],
+  ["Bahnschrift, 'Bahnschrift Condensed', 'Microsoft YaHei', sans-serif", "宸ヤ笟绉戞妧椋?],
+  ["Consolas, 'Courier New', 'Microsoft YaHei', monospace", "鏁版嵁鏈虹敳椋?],
+  ["'Alibaba PuHuiTi Heavy', 'Microsoft YaHei', 'Noto Sans SC', sans-serif", "闃块噷鏅儬閲嶉粦"],
+  ["'Source Han Sans Heavy', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "鎬濇簮閲嶉粦"],
+  ["'HarmonyOS Sans SC Bold', 'Noto Sans SC', 'Microsoft YaHei', sans-serif", "楦胯挋绮楅粦"],
+  ["YouSheBiaoTiHei, SimHei, 'Microsoft YaHei', sans-serif", "浼樿鏍囬榛?],
+  ["'DIN Condensed', DINNextLTPro-Bold, Bahnschrift, 'Microsoft YaHei', sans-serif", "DIN 鍘嬬缉骞垮憡"],
+  ["'Franklin Gothic Heavy', 'Arial Black', 'Microsoft YaHei', sans-serif", "纭牳骞垮憡"],
+  ["'Cooper Black', Georgia, 'Microsoft YaHei', serif", "澶嶅彜鑳栧瓧"],
+  ["'Showcard Gothic', 'Arial Black', 'Microsoft YaHei', sans-serif", "鎷涚墝婕敾"],
+  ["SimSun, 'Microsoft YaHei', serif", "涓枃瀹嬩綋鍒婂ご"],
+  ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "涓枃骞垮憡榛戜綋"],
+  ["'Trebuchet MS', 'Microsoft YaHei', sans-serif", "鑻辨枃鍦嗕綋绉戞妧"],
   ["Georgia, 'Times New Roman', 'Microsoft YaHei', serif", "English Serif Luxe"],
   ["'Lucida Console', 'Courier New', 'Microsoft YaHei', monospace", "English Data Mono"],
   ["'Comic Sans MS', 'Arial Black', 'Microsoft YaHei', sans-serif", "English Pop Comic"],
 ];
 const fontPreviewEnglish = "GasGx";
-const fontPreviewChinese = "盖斯基克斯";
+const fontPreviewChinese = "鐩栨柉鍩哄厠鏂?;
 function fontSamplePreviewHtml(label) {
   const normalized = String(label || "");
-  const chineseOnly = /中文|阿里|思源|鸿蒙|优设/.test(normalized);
-  const englishOnly = /英文|English|DIN|硬核|复古|招牌/.test(normalized);
-  if (chineseOnly && !/中英/.test(normalized)) {
+  const chineseOnly = /涓枃|闃块噷|鎬濇簮|楦胯挋|浼樿/.test(normalized);
+  const englishOnly = /鑻辨枃|English|DIN|纭牳|澶嶅彜|鎷涚墝/.test(normalized);
+  if (chineseOnly && !/涓嫳/.test(normalized)) {
     return `<span class="font-sample-cn">${escapeHtml(fontPreviewChinese)}</span>`;
   }
   if (englishOnly) {
@@ -151,46 +153,46 @@ function visualDropdownOptionsHtml(options, selectedValue, command) {
   `).join("");
 }
 const textEffectOptions = [
-  ["none", "无动效"],
-  ["fade-in", "淡入"],
-  ["fade-out", "淡出"],
-  ["fade-in-out", "淡入后淡出"],
-  ["pulse", "呼吸放大"],
-  ["glow", "霓虹闪光"],
-  ["slide-up", "上浮入场"],
-  ["slide-down", "下滑入场"],
-  ["slide-left", "左滑入场"],
-  ["slide-right", "右滑入场"],
-  ["shake", "轻微震动"],
-  ["typewriter", "打字机"],
-  ["pop", "弹跳强调"],
-  ["blink", "闪烁"],
-  ["wave", "波浪摆动"],
-  ["jitter", "高频轻微抖动"],
-  ["zoom-in", "放大入场"],
-  ["shadow-pop", "阴影冲击"],
+  ["none", "鏃犲姩鏁?],
+  ["fade-in", "娣″叆"],
+  ["fade-out", "娣″嚭"],
+  ["fade-in-out", "娣″叆鍚庢贰鍑?],
+  ["pulse", "鍛煎惛鏀惧ぇ"],
+  ["glow", "闇撹櫣闂厜"],
+  ["slide-up", "涓婃诞鍏ュ満"],
+  ["slide-down", "涓嬫粦鍏ュ満"],
+  ["slide-left", "宸︽粦鍏ュ満"],
+  ["slide-right", "鍙虫粦鍏ュ満"],
+  ["shake", "杞诲井闇囧姩"],
+  ["typewriter", "鎵撳瓧鏈?],
+  ["pop", "寮硅烦寮鸿皟"],
+  ["blink", "闂儊"],
+  ["wave", "娉㈡氮鎽嗗姩"],
+  ["jitter", "楂橀杞诲井鎶栧姩"],
+  ["zoom-in", "鏀惧ぇ鍏ュ満"],
+  ["shadow-pop", "闃村奖鍐插嚮"],
 ];
 const textStyleOptions = [
-  ["none", "基础文字"],
-  ["soft-shadow", "柔和阴影"],
-  ["hard-shadow", "硬阴影"],
-  ["outline", "黑色描边"],
-  ["white-outline", "白色描边"],
-  ["glow", "外发光"],
-  ["neon", "霓虹字"],
-  ["gradient", "双色渐变"],
-  ["reflection", "文字倒影"],
+  ["none", "鍩虹鏂囧瓧"],
+  ["soft-shadow", "鏌斿拰闃村奖"],
+  ["hard-shadow", "纭槾褰?],
+  ["outline", "榛戣壊鎻忚竟"],
+  ["white-outline", "鐧借壊鎻忚竟"],
+  ["glow", "澶栧彂鍏?],
+  ["neon", "闇撹櫣瀛?],
+  ["gradient", "鍙岃壊娓愬彉"],
+  ["reflection", "鏂囧瓧鍊掑奖"],
 ];
 const coverMaskModeOptions = [
-  ["none", "无蒙版"],
-  ["top_gradient", "上渐变蒙版"],
-  ["bottom_gradient", "下渐变蒙版"],
-  ["dual_gradient", "上下渐变蒙版"],
-  ["full", "全蒙版"],
+  ["none", "鏃犺挋鐗?],
+  ["top_gradient", "涓婃笎鍙樿挋鐗?],
+  ["bottom_gradient", "涓嬫笎鍙樿挋鐗?],
+  ["dual_gradient", "涓婁笅娓愬彉钂欑増"],
+  ["full", "鍏ㄨ挋鐗?],
 ];
 const endingTemplateModeOptions = [
-  ["dynamic", "文字片尾"],
-  ["random", "视频片尾"],
+  ["dynamic", "鏂囧瓧鐗囧熬"],
+  ["random", "瑙嗛鐗囧熬"],
 ];
 const PREVIEW_FRAME_PLACEHOLDER = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bwidth%3A100%25%3Bheight%3A100%25%3Boverflow%3Ahidden%3Bbackground%3A%23050505%3Bcolor-scheme%3Adark%3B%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E";
 const VIDEO_TEMPLATE_DEFAULT_TEXT_WIDTH = 760;
@@ -201,22 +203,53 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-function sanitizeAiPromptHint(value) {
+function sanitizeLimitedPrompt(value, maxChars = AI_PROMPT_HINT_MAX_CHARS, maxLines = AI_PROMPT_HINT_MAX_LINES) {
   const text = String(value || "").replace(/\r\n/g, "\n").replace(AI_PROMPT_HINT_URL_RE, "").trim();
   if (!text) return "";
   const lines = text
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(0, AI_PROMPT_HINT_MAX_LINES);
-  const merged = lines.join("\n").slice(0, AI_PROMPT_HINT_MAX_CHARS);
+    .slice(0, maxLines);
+  const merged = lines.join("\n").slice(0, maxChars);
   return merged.trim();
+}
+
+function sanitizeAiPromptHint(value) {
+  return sanitizeLimitedPrompt(value, AI_PROMPT_HINT_MAX_CHARS, AI_PROMPT_HINT_MAX_LINES);
 }
 
 function aiPromptHintLineCount(value) {
   const text = String(value || "").trim();
   if (!text) return 0;
   return text.split("\n").length;
+}
+
+function truncateNonSpaceChars(value, maxChars) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || maxChars <= 0) return "";
+  let count = 0;
+  let out = "";
+  for (const char of text) {
+    if (/\s/.test(char)) {
+      if (out && !out.endsWith(" ")) out += " ";
+      continue;
+    }
+    if (count >= maxChars) break;
+    out += char;
+    count += 1;
+  }
+  return out.trim();
+}
+
+function sanitizeHudText(value) {
+  const lines = String(value || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => truncateNonSpaceChars(line, HUD_TEXT_MAX_CHARS_PER_LINE))
+    .filter(Boolean)
+    .slice(0, HUD_TEXT_MAX_LINES);
+  return lines.join("\n");
 }
 
 function replaceSelection(value, start, end, insertText) {
@@ -233,6 +266,51 @@ function syncAiPromptHintMeta(value) {
   meta.textContent = `限制：最多 ${AI_PROMPT_HINT_MAX_LINES} 行、最多 ${AI_PROMPT_HINT_MAX_CHARS} 字符，链接会被自动移除。已用 ${value.length}/${AI_PROMPT_HINT_MAX_CHARS} 字符，${lineCount}/${AI_PROMPT_HINT_MAX_LINES} 行。`;
 }
 
+function syncPromptHintMeta(metaId, value) {
+  const meta = $(metaId);
+  if (!meta) return;
+  const lineCount = aiPromptHintLineCount(value);
+  meta.textContent = `限制：最多 ${AI_PROMPT_HINT_MAX_LINES} 行、最多 ${AI_PROMPT_HINT_MAX_CHARS} 字符，链接会被自动移除。已用 ${value.length}/${AI_PROMPT_HINT_MAX_CHARS} 字符，${lineCount}/${AI_PROMPT_HINT_MAX_LINES} 行。`;
+}
+
+function bindPromptHintField(inputId, stateKey, metaId) {
+  const input = $(inputId);
+  if (!input) return;
+  const normalized = sanitizeAiPromptHint(state[stateKey] || "");
+  state[stateKey] = normalized;
+  input.value = normalized;
+  if (metaId) syncPromptHintMeta(metaId, normalized);
+  input.onkeydown = (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    const nextRaw = replaceSelection(input.value, start, end, "\n");
+    const nextValue = sanitizeAiPromptHint(nextRaw);
+    if (aiPromptHintLineCount(nextValue) > AI_PROMPT_HINT_MAX_LINES || nextValue === input.value) {
+      event.preventDefault();
+    }
+  };
+  input.onpaste = (event) => {
+    const pasted = String(event.clipboardData?.getData("text") || "");
+    if (!pasted) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    const nextRaw = replaceSelection(input.value, start, end, pasted.replace(/\r\n/g, "\n"));
+    const nextValue = sanitizeAiPromptHint(nextRaw);
+    event.preventDefault();
+    input.value = nextValue;
+    state[stateKey] = nextValue;
+    if (metaId) syncPromptHintMeta(metaId, nextValue);
+    scheduleStateSave();
+  };
+  input.oninput = () => {
+    const nextValue = sanitizeAiPromptHint(input.value);
+    if (nextValue !== input.value) input.value = nextValue;
+    state[stateKey] = nextValue;
+    if (metaId) syncPromptHintMeta(metaId, nextValue);
+    scheduleStateSave();
+  };
+}
 function bindMobileSidebarToggle() {
   const toggle = $("mobileSidebarToggle");
   if (!toggle) return;
@@ -241,12 +319,12 @@ function bindMobileSidebarToggle() {
     if (!media.matches) {
       document.body.classList.remove("mobile-sidebar-open");
       toggle.setAttribute("aria-expanded", "false");
-      toggle.textContent = "展开参数";
+      toggle.textContent = "灞曞紑鍙傛暟";
       return;
     }
     const open = document.body.classList.contains("mobile-sidebar-open");
     toggle.setAttribute("aria-expanded", open ? "true" : "false");
-    toggle.textContent = open ? "收起参数" : "展开参数";
+    toggle.textContent = open ? "鏀惰捣鍙傛暟" : "灞曞紑鍙傛暟";
   };
   toggle.onclick = (event) => {
     event.stopPropagation();
@@ -270,7 +348,7 @@ function bindMobileSidebarToggle() {
   sync();
 }
 
-function loadingInline(label = "加载中...") {
+function loadingInline(label = "鍔犺浇涓?..") {
   return `<div class="loading-inline"><span class="loading-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
 
@@ -281,12 +359,12 @@ function buttonIconLabel(icon, label) {
   return `<span class="button-icon" aria-hidden="true">${escapeHtml(icon)}</span><span>${escapeHtml(label)}</span>`;
 }
 
-function setPanelLoading(id, label = "加载中...") {
+function setPanelLoading(id, label = "鍔犺浇涓?..") {
   const node = $(id);
   if (node) node.innerHTML = loadingInline(label);
 }
 
-function setImageLoading(id, label = "生成预览中...") {
+function setImageLoading(id, label = "鐢熸垚棰勮涓?..") {
   const image = $(id);
   if (!image) return;
   const holder = image.closest(".preview-stage");
@@ -300,7 +378,7 @@ function clearImageLoading(id) {
   holder?.removeAttribute("data-loading-label");
 }
 
-function pulseImageLoading(id, label = "应用中...") {
+function pulseImageLoading(id, label = "搴旂敤涓?..") {
   setImageLoading(id, label);
   window.clearTimeout(pulseImageLoading.timers?.[id]);
   pulseImageLoading.timers = pulseImageLoading.timers || {};
@@ -330,10 +408,10 @@ function refreshPhonePreviewFrame(id, payload = null) {
 
 function setInitialLoading() {
   ["sourceDirs", "recentLimits", "compositionRows", "videoTemplateForm", "coverForm", "endingTemplateForm", "bgmPanel"].forEach((id) => setPanelLoading(id));
-  setPanelLoading("videoTemplateGallery", "加载正文模板...");
-  setImageLoading("videoTemplatePreview", "加载正文预览...");
-  setImageLoading("coverPreview", "加载封面预览...");
-  setImageLoading("endingTemplatePreview", "加载片尾预览...");
+  setPanelLoading("videoTemplateGallery", "鍔犺浇姝ｆ枃妯℃澘...");
+  setImageLoading("videoTemplatePreview", "鍔犺浇姝ｆ枃棰勮...");
+  setImageLoading("coverPreview", "鍔犺浇灏侀潰棰勮...");
+  setImageLoading("endingTemplatePreview", "鍔犺浇鐗囧熬棰勮...");
 }
 
 async function init() {
@@ -370,7 +448,7 @@ async function init() {
   await refreshAllPreviews();
   if (normalizedSelection) {
     scheduleStateSave();
-    log("已自动回退到可用模板，旧模板 ID 不存在。");
+    log("宸茶嚜鍔ㄥ洖閫€鍒板彲鐢ㄦā鏉匡紝鏃фā鏉?ID 涓嶅瓨鍦ㄣ€?);
   }
 }
 
@@ -380,10 +458,16 @@ function renderSidebar(data) {
   $("maxWorkersValue").textContent = `${$("maxWorkers").value}`;
   $("videoDurationMin").value = state.video_duration_min || settings.video_duration_min || 9;
   $("videoDurationMax").value = state.video_duration_max || settings.video_duration_max || 15;
+  $("miningBgmVolume").value = clamp(Number(state.mining_bgm_volume ?? 1), 0, 2).toFixed(2);
+  $("libraryBgmVolume").value = clamp(Number(state.library_bgm_volume ?? 0.35), 0, 2).toFixed(2);
+  $("miningBgmVolumeValue").textContent = Number($("miningBgmVolume").value).toFixed(2);
+  $("libraryBgmVolumeValue").textContent = Number($("libraryBgmVolume").value).toFixed(2);
   syncNumber("outputCount");
   syncNumber("videoDurationMin");
   syncNumber("videoDurationMax");
   syncRange("maxWorkers");
+  syncRange("miningBgmVolume");
+  syncRange("libraryBgmVolume");
   renderSidebarTemplateSelectors();
   const outputRoot = state.output_root || settings.output_root;
   $("outputRoot").dataset.fullPath = outputRoot;
@@ -393,7 +477,7 @@ function renderSidebar(data) {
   $("outputOptions").onchange = scheduleStateSave;
   $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 30), scheduleStateSave);
-  renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "快速首出"], ["quality", "标准质量"]], String(state.render_speed_mode || "quality"), scheduleStateSave);
+  renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "蹇€熼鍑?], ["quality", "鏍囧噯璐ㄩ噺"]], String(state.render_speed_mode || "quality"), scheduleStateSave);
   const headlineAiToggle = $("headlineAiEnabled");
   if (headlineAiToggle) {
     headlineAiToggle.checked = Boolean(state.headline_ai_enabled);
@@ -485,14 +569,14 @@ function renderSource(data) {
         <span class="badge" title="${escapeHtml(data.source_dirs[category.id] || "")}">${escapeHtml(category.id)}</span>
       </label>
       <input type="hidden" data-composition-category value="${escapeHtml(category.id)}">
-      <input data-category-label value="${escapeHtml(category.label || category.id)}" aria-label="${escapeHtml(category.id)}目录名称" ${checked ? "" : "disabled"}>
+      <input data-category-label value="${escapeHtml(category.label || category.id)}" aria-label="${escapeHtml(category.id)}鐩綍鍚嶇О" ${checked ? "" : "disabled"}>
       <label class="composition-unit-field composition-material-count">
-        <span>采用最新前</span>
-        <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="${escapeHtml(category.label)}最新素材数量" ${checked ? "" : "disabled"}>
-        <span>条</span>
+        <span>閲囩敤鏈€鏂板墠</span>
+        <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="鏈€鏂扮礌鏉愭暟閲? aria-label="${escapeHtml(category.label)}鏈€鏂扮礌鏉愭暟閲? ${checked ? "" : "disabled"}>
+        <span>鏉?/span>
       </label>
-      <span class="source-total-count">素材总数：<b>${totalCount}</b></span>
-      <button type="button" data-source-open data-path="${escapeHtml(data.source_dirs[category.id] || "")}">打开目录</button>
+      <span class="source-total-count">绱犳潗鎬绘暟锛?b>${totalCount}</b></span>
+      <button type="button" data-source-open data-path="${escapeHtml(data.source_dirs[category.id] || "")}">鎵撳紑鐩綍</button>
     </div>`;
   }).join("");
   $("sourceDirs").querySelectorAll("[data-source-open]").forEach((btn) => btn.onclick = () => openFolder(btn.dataset.path));
@@ -527,8 +611,8 @@ function renderSource(data) {
     };
   });
   $("addCategory").onclick = addMaterialCategory;
-  $("sourceCounts").textContent = "算法：按视频碎片分类目录读取素材；每次按照目录把最新拍摄的短视频上传进对应的目录；勾选素材目录并设置最新素材数量后，系统会自动计算片段时长并按行顺序组合混剪。";
-  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "智能分类轮换算法"]], "Category folders", () => {
+  $("sourceCounts").textContent = "绠楁硶锛氭寜瑙嗛纰庣墖鍒嗙被鐩綍璇诲彇绱犳潗锛涙瘡娆℃寜鐓х洰褰曟妸鏈€鏂版媿鎽勭殑鐭棰戜笂浼犺繘瀵瑰簲鐨勭洰褰曪紱鍕鹃€夌礌鏉愮洰褰曞苟璁剧疆鏈€鏂扮礌鏉愭暟閲忓悗锛岀郴缁熶細鑷姩璁＄畻鐗囨鏃堕暱骞舵寜琛岄『搴忕粍鍚堟贩鍓€?;
+  renderRadio("sourceModeGroup", "source_mode", [["Category folders", "鏅鸿兘鍒嗙被杞崲绠楁硶"]], "Category folders", () => {
     updateSourceMode();
     scheduleStateSave();
   });
@@ -545,7 +629,7 @@ function renderNarrativeTemplates(data = { settings }) {
   const categoryNames = Object.fromEntries(categories.map((category) => [category.id, category.label || category.id]));
   let html = "";
   if (!templates.length) {
-    html = `<div class="narrative-empty">当前未配置叙事骨架，将沿用生成结构顺序。</div>`;
+    html = `<div class="narrative-empty">褰撳墠鏈厤缃彊浜嬮鏋讹紝灏嗘部鐢ㄧ敓鎴愮粨鏋勯『搴忋€?/div>`;
     containers.forEach((container) => { container.innerHTML = html; });
     return;
   }
@@ -557,14 +641,14 @@ function renderNarrativeTemplates(data = { settings }) {
           const name = categoryNames[categoryId] || categoryId;
           return `<span title="${escapeHtml(categoryId)}">${escapeHtml(name)}<b>${Number(row.duration || 0).toFixed(1)}s</b></span>`;
         }).join("")
-      : `<span>沿用生成结构</span>`;
+      : `<span>娌跨敤鐢熸垚缁撴瀯</span>`;
     return `<article class="narrative-template-card" data-narrative-template="${escapeHtml(template.id)}">
       <div class="narrative-template-head">
         <strong>${index + 1}. ${escapeHtml(narrativeTemplateDisplayName(template))}</strong>
-        <code title="${escapeHtml(template.id)}">模板 ${index + 1}</code>
+        <code title="${escapeHtml(template.id)}">妯℃澘 ${index + 1}</code>
       </div>
       <div class="narrative-template-path">${steps}</div>
-      <small>账号池：${escapeHtml(narrativeAccountPoolDisplayName(template.account_pool_id || template.id))}</small>
+      <small>璐﹀彿姹狅細${escapeHtml(narrativeAccountPoolDisplayName(template.account_pool_id || template.id))}</small>
     </article>`;
   }).join("");
   containers.forEach((container) => { container.innerHTML = html; });
@@ -585,7 +669,7 @@ async function addMaterialCategory() {
   const input = $("newCategoryLabel");
   const label = input.value.trim();
   if (!label) {
-    log("请先输入目录名称。");
+    log("璇峰厛杈撳叆鐩綍鍚嶇О銆?);
     return;
   }
   await api("/api/video-matrix/material-categories", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({label})});
@@ -594,7 +678,7 @@ async function addMaterialCategory() {
   state = data.ui_state; settings = data.settings;
   renderSource(data);
   renderComposition(data);
-  log(`已添加素材目录：${label}`);
+  log(`宸叉坊鍔犵礌鏉愮洰褰曪細${label}`);
 }
 
 async function renameMaterialCategory(button, data) {
@@ -603,7 +687,7 @@ async function renameMaterialCategory(button, data) {
   const input = row?.querySelector("[data-category-label]");
   const label = input?.value.trim() || "";
   if (!categoryId || !label) {
-    log("请先输入目录名称。");
+    log("璇峰厛杈撳叆鐩綍鍚嶇О銆?);
     return;
   }
   if (input?.dataset.savedValue === label) return;
@@ -618,7 +702,7 @@ async function renameMaterialCategory(button, data) {
     state = nextData.ui_state; settings = nextData.settings;
     renderSource(nextData);
     renderComposition(nextData);
-    log(`已保存素材目录名称：${label}`);
+    log(`宸蹭繚瀛樼礌鏉愮洰褰曞悕绉帮細${label}`);
   } finally {
     button.disabled = false;
   }
@@ -645,10 +729,10 @@ function renderComposition(data = { settings }) {
         <span>${index + 1}</span>
         <select data-composition-category>${options}</select>
         <label class="composition-unit-field composition-material-count">
-          <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="最新素材数量" aria-label="最新素材数量" />
-          <span>条素材</span>
+          <input data-composition-limit list="recentLimitOptions" type="text" inputmode="numeric" pattern="[1-9]|10" value="${limit}" placeholder="1-10" title="鏈€鏂扮礌鏉愭暟閲? aria-label="鏈€鏂扮礌鏉愭暟閲? />
+          <span>鏉＄礌鏉?/span>
         </label>
-        <button type="button" data-composition-remove>删除</button>
+        <button type="button" data-composition-remove>鍒犻櫎</button>
       </div>`;
   }).join("");
   $("compositionRows").querySelectorAll(".composition-row").forEach((row) => {
@@ -738,7 +822,7 @@ function addCompositionRow() {
 function removeCompositionRow(index) {
   updateCompositionState();
   if (state.composition_sequence.length <= 1) {
-    log("生成结构至少保留 1 个片段。");
+    log("鐢熸垚缁撴瀯鑷冲皯淇濈暀 1 涓墖娈点€?);
     return;
   }
   state.composition_sequence.splice(index, 1);
@@ -786,13 +870,13 @@ function renderCoverTemplateMenu() {
       trigger.setAttribute("aria-expanded", "false");
       trigger.disabled = true;
       trigger.classList.add("is-loading");
-      trigger.innerHTML = buttonLoadingInline("切换中...");
+      trigger.innerHTML = buttonLoadingInline("鍒囨崲涓?..");
       try {
         await selectCoverTemplate(button.dataset.coverTemplate);
       } finally {
         trigger.disabled = false;
         trigger.classList.remove("is-loading");
-        trigger.innerHTML = buttonIconLabel("⇄", "模板切换");
+        trigger.innerHTML = buttonIconLabel("鈬?, "妯℃澘鍒囨崲");
       }
     };
   });
@@ -816,23 +900,23 @@ function numberedTemplateName(prefix, id, item, index, pattern) {
 }
 
 function coverTemplateDisplayName(id, item, index = Object.keys(coverTemplates).indexOf(id)) {
-  return numberedTemplateName("第一屏封面模板", id, item, index, /(?:第一屏封面模板|九宫格图片模板)\s*(\d+)/);
+  return numberedTemplateName("绗竴灞忓皝闈㈡ā鏉?, id, item, index, /(?:绗竴灞忓皝闈㈡ā鏉縷涔濆鏍煎浘鐗囨ā鏉?\s*(\d+)/);
 }
 
 function videoTemplateDisplayName(id, item, index = Object.keys(templates).indexOf(id)) {
-  return numberedTemplateName("视频叠层模板", id, item, index, /视频叠层模板\s*(\d+)/);
+  return numberedTemplateName("瑙嗛鍙犲眰妯℃澘", id, item, index, /瑙嗛鍙犲眰妯℃澘\s*(\d+)/);
 }
 
 function endingTemplateDisplayName(id, item, index = Object.keys(endingCoverTemplates()).indexOf(id)) {
-  return numberedTemplateName("片尾封面模板", id, item, index, /(?:片尾封面模板|片尾模板)\s*(\d+)/);
+  return numberedTemplateName("鐗囧熬灏侀潰妯℃澘", id, item, index, /(?:鐗囧熬灏侀潰妯℃澘|鐗囧熬妯℃澘)\s*(\d+)/);
 }
 
 async function selectVideoTemplate(templateId, options = {}) {
   if (!templateId || !templates[templateId]) return;
   const refreshTemplateGallery = options.refreshTemplateGallery !== false;
   selectedVideoTemplate = templateId;
-  setImageLoading("videoTemplatePreview", "切换正文模板...");
-  if (refreshTemplateGallery) setPanelLoading("videoTemplateGallery", "切换正文模板...");
+  setImageLoading("videoTemplatePreview", "鍒囨崲姝ｆ枃妯℃澘...");
+  if (refreshTemplateGallery) setPanelLoading("videoTemplateGallery", "鍒囨崲姝ｆ枃妯℃澘...");
   if ($("sidebarVideoTemplate")) $("sidebarVideoTemplate").value = templateId;
   renderVideoTemplateEditor();
   await saveTemplateSelection();
@@ -844,38 +928,38 @@ function renderCoverEditor() {
   const t = coverTemplates[selectedCover];
   if (!t) {
     clearImageLoading("coverPreview");
-    $("previewCaption").textContent = "第一屏模板缺失，请切换到可用模板";
-    $("coverForm").innerHTML = `<div class="muted">当前模板不存在，请从左侧“第一屏封面模板”重新选择。</div>`;
+    $("previewCaption").textContent = "绗竴灞忔ā鏉跨己澶憋紝璇峰垏鎹㈠埌鍙敤妯℃澘";
+    $("coverForm").innerHTML = `<div class="muted">褰撳墠妯℃澘涓嶅瓨鍦紝璇蜂粠宸︿晶鈥滅涓€灞忓皝闈㈡ā鏉库€濋噸鏂伴€夋嫨銆?/div>`;
     return;
   }
   applyIndependentCoverDefaults(t);
   const independentCover = isIndependentCover(t);
-  $("previewCaption").textContent = `${selectedCover} / ${coverTemplateDisplayName(selectedCover, t)}${independentCover ? " / 独立视频封面" : ""}`;
+  $("previewCaption").textContent = `${selectedCover} / ${coverTemplateDisplayName(selectedCover, t)}${independentCover ? " / 鐙珛瑙嗛灏侀潰" : ""}`;
   renderCoverTemplateMenu();
   const toggle = $("coverLayoutToggle");
   if (toggle) {
-    toggle.innerHTML = independentCover ? buttonIconLabel("☷", "列表效果预览") : buttonIconLabel("▣", "独立封面预览");
+    toggle.innerHTML = independentCover ? buttonIconLabel("鈽?, "鍒楄〃鏁堟灉棰勮") : buttonIconLabel("鈻?, "鐙珛灏侀潰棰勮");
     toggle.classList.toggle("active", independentCover);
     toggle.onclick = toggleCoverLayout;
   }
   const maskModeOptions = coverMaskModeOptions.map(([value, label]) =>
     `<option value="${value}" ${value === coverTemplateValue(t, "mask_mode", "bottom_gradient") ? "selected" : ""}>${label}</option>`
   ).join("");
-  const html = [`<h3>可视化调整</h3>`, `
-    <label>模板名称<input data-key="name" type="text" value="${escapeHtml(t.name || "")}"></label>
-    <div class="cover-section-title">蒙版编辑区</div>
-    <label>蒙版类型<select data-key="mask_mode">${maskModeOptions}</select></label>
-    <label>蒙版颜色<input data-key="mask_color" type="color" value="${escapeHtml(coverTemplateValue(t, "mask_color", t.gradient_color || t.tint_color || "#071015"))}"></label>
-    ${rangeControlHtml({key: "mask_opacity", label: "蒙版透明度", min: 0, max: 1, step: 0.01, value: coverTemplateValue(t, "mask_opacity", t.gradient_opacity ?? t.tint_opacity ?? 0.35), className: "cover-template-control"})}
-    <div class="cover-section-title">独立封面文字</div>
-    <label>Logo文字<input data-key="single_cover_logo_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_logo_text", "GasGx"))}"></label>
-    <label>Slogan文字<input data-key="single_cover_slogan_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_slogan_text", defaultSingleCoverSlogan()))}"></label>
-    <label>一句话视频描述<textarea data-key="single_cover_title_text" rows="3">${escapeHtml(coverTemplateValue(t, "single_cover_title_text", defaultSingleCoverTitle()))}</textarea></label>
+  const html = [`<h3>鍙鍖栬皟鏁?/h3>`, `
+    <label>妯℃澘鍚嶇О<input data-key="name" type="text" value="${escapeHtml(t.name || "")}"></label>
+    <div class="cover-section-title">钂欑増缂栬緫鍖?/div>
+    <label>钂欑増绫诲瀷<select data-key="mask_mode">${maskModeOptions}</select></label>
+    <label>钂欑増棰滆壊<input data-key="mask_color" type="color" value="${escapeHtml(coverTemplateValue(t, "mask_color", t.gradient_color || t.tint_color || "#071015"))}"></label>
+    ${rangeControlHtml({key: "mask_opacity", label: "钂欑増閫忔槑搴?, min: 0, max: 1, step: 0.01, value: coverTemplateValue(t, "mask_opacity", t.gradient_opacity ?? t.tint_opacity ?? 0.35), className: "cover-template-control"})}
+    <div class="cover-section-title">鐙珛灏侀潰鏂囧瓧</div>
+    <label>Logo鏂囧瓧<input data-key="single_cover_logo_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_logo_text", "GasGx"))}"></label>
+    <label>Slogan鏂囧瓧<input data-key="single_cover_slogan_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_slogan_text", defaultSingleCoverSlogan()))}"></label>
+    <label>涓€鍙ヨ瘽瑙嗛鎻忚堪<textarea data-key="single_cover_title_text" rows="3">${escapeHtml(coverTemplateValue(t, "single_cover_title_text", defaultSingleCoverTitle()))}</textarea></label>
     ${coverVisualToolbarHtml(t)}
-    <p class="visual-editor-hint">点击预览里的文字或按钮后拖动定位；工具栏可调整字号、颜色、对齐和文字内容。</p>
+    <p class="visual-editor-hint">鐐瑰嚮棰勮閲岀殑鏂囧瓧鎴栨寜閽悗鎷栧姩瀹氫綅锛涘伐鍏锋爮鍙皟鏁村瓧鍙枫€侀鑹层€佸榻愬拰鏂囧瓧鍐呭銆?/p>
     <div class="template-actions cover-template-actions">
-      <button type="button" id="saveCover">保存</button>
-      <button type="button" id="saveCoverAsNew">新建保存</button>
+      <button type="button" id="saveCover">淇濆瓨</button>
+      <button type="button" id="saveCoverAsNew">鏂板缓淇濆瓨</button>
     </div>`];
   $("coverForm").innerHTML = html.join("");
   $("coverForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
@@ -907,32 +991,32 @@ function renderEndingTemplatePanel(data) {
   const mode = state.ending_template_mode || "dynamic";
   const selected = endingTemplateSelectedName();
   const modeButtons = endingTemplateModeOptions.map(([value, label]) =>
-    `<button type="button" class="${mode === value ? "active" : ""} ${endingModeLoading === value ? "is-loading" : ""}" data-ending-mode="${value}" ${endingModeLoading ? "disabled" : ""}>${endingModeLoading === value ? buttonLoadingInline("切换中...") : label}</button>`
+    `<button type="button" class="${mode === value ? "active" : ""} ${endingModeLoading === value ? "is-loading" : ""}" data-ending-mode="${value}" ${endingModeLoading ? "disabled" : ""}>${endingModeLoading === value ? buttonLoadingInline("鍒囨崲涓?..") : label}</button>`
   ).join("");
   const options = localTemplates.length
     ? localTemplates.map((item) => `<option value="${escapeHtml(item.name)}" ${selected === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")
-    : `<option value="">目录内暂无视频片尾素材</option>`;
+    : `<option value="">鐩綍鍐呮殏鏃犺棰戠墖灏剧礌鏉?/option>`;
   $("endingTemplateForm").innerHTML = `
-    <h3>片尾模板调整区</h3>
+    <h3>鐗囧熬妯℃澘璋冩暣鍖?/h3>
     <div id="endingTemplateUploadStatus" class="ending-template-upload-status" hidden></div>
     <div class="template-tabs ending-mode-tabs">${modeButtons}</div>
     ${mode === "dynamic" ? endingCoverEditorHtml() : ""}
     ${mode === "random" ? endingRandomMaterialHtml(localTemplates) : ""}
     <div class="ending-template-upload-row">
       <label class="ending-template-upload">
-        <span>上传片尾 MP4</span>
+        <span>涓婁紶鐗囧熬 MP4</span>
         <div class="ending-template-upload-trigger">
-          <span class="ending-template-upload-btn">选择文件</span>
-          <span id="endingTemplateUploadName" class="ending-template-upload-name">未选择任何文件</span>
+          <span class="ending-template-upload-btn">閫夋嫨鏂囦欢</span>
+          <span id="endingTemplateUploadName" class="ending-template-upload-name">鏈€夋嫨浠讳綍鏂囦欢</span>
           <input id="endingTemplateUpload" type="file" accept=".mp4,video/mp4">
         </div>
-        <small>仅支持 MP4，建议文件名保持原始素材名，上传后会进入片尾目录。</small>
+        <small>浠呮敮鎸?MP4锛屽缓璁枃浠跺悕淇濇寔鍘熷绱犳潗鍚嶏紝涓婁紶鍚庝細杩涘叆鐗囧熬鐩綍銆?/small>
       </label>
     </div>
     <div class="ending-template-dir-row ${mode === "random" ? "" : "hidden"}">
       <code title="${escapeHtml(endingTemplateState.directory)}">${escapeHtml(shortPath(endingTemplateState.directory))}</code>
-      <span class="badge">${localTemplates.length} 个素材</span>
-      <button id="openEndingTemplateDirInline" class="secondary" type="button">打开</button>
+      <span class="badge">${localTemplates.length} 涓礌鏉?/span>
+      <button id="openEndingTemplateDirInline" class="secondary" type="button">鎵撳紑</button>
     </div>
   `;
   $("endingTemplateForm").querySelectorAll("[data-ending-mode]").forEach((button) => {
@@ -954,30 +1038,30 @@ function renderEndingTemplatePanel(data) {
     const file = $("endingTemplateUpload").files?.[0];
     const fileName = $("endingTemplateUploadName");
     if (!file) {
-      if (fileName) fileName.textContent = "未选择任何文件";
+      if (fileName) fileName.textContent = "鏈€夋嫨浠讳綍鏂囦欢";
       return;
     }
     if (fileName) fileName.textContent = file.name;
     if (!/\.mp4$/i.test(file.name)) {
-      showEndingTemplateUploadStatus("仅支持 MP4 文件，请重新选择。", "warn");
+      showEndingTemplateUploadStatus("浠呮敮鎸?MP4 鏂囦欢锛岃閲嶆柊閫夋嫨銆?, "warn");
       $("endingTemplateUpload").value = "";
-      if (fileName) fileName.textContent = "未选择任何文件";
+      if (fileName) fileName.textContent = "鏈€夋嫨浠讳綍鏂囦欢";
       return;
     }
     const form = new FormData();
     form.append("file", file);
     try {
-      showEndingTemplateUploadStatus("正在上传片尾 MP4...", "loading");
+      showEndingTemplateUploadStatus("姝ｅ湪涓婁紶鐗囧熬 MP4...", "loading");
       await api("/api/video-matrix/ending-templates/upload", { method: "POST", body: form });
       $("endingTemplateUpload").value = "";
-      if (fileName) fileName.textContent = "未选择任何文件";
+      if (fileName) fileName.textContent = "鏈€夋嫨浠讳綍鏂囦欢";
       const data = await api("/api/video-matrix/state");
       renderEndingTemplatePanel(data);
       await refreshEndingTemplatePreview();
-      showEndingTemplateUploadStatus(`上传成功：${file.name}`, "success");
-      log(`已上传片尾素材：${file.name}`);
+      showEndingTemplateUploadStatus(`涓婁紶鎴愬姛锛?{file.name}`, "success");
+      log(`宸蹭笂浼犵墖灏剧礌鏉愶細${file.name}`);
     } catch (error) {
-      showEndingTemplateUploadStatus(`上传失败：${error.message}`, "error");
+      showEndingTemplateUploadStatus(`涓婁紶澶辫触锛?{error.message}`, "error");
     }
   };
 }
@@ -999,7 +1083,7 @@ async function switchEndingTemplateMode(mode, sourceButton = null) {
   endingModeLoading = mode;
   if (sourceButton) {
     sourceButton.classList.add("is-loading");
-    sourceButton.innerHTML = buttonLoadingInline("切换中...");
+    sourceButton.innerHTML = buttonLoadingInline("鍒囨崲涓?..");
   }
   $("endingTemplateForm")?.querySelectorAll("[data-ending-mode]").forEach((item) => item.disabled = true);
   state.ending_template_mode = mode;
@@ -1034,14 +1118,14 @@ function endingRandomMaterialHtml(localTemplates) {
       <label class="ending-material-row">
         <input data-ending-template-choice type="checkbox" value="${escapeHtml(item.name)}" ${selected.has(item.name) ? "checked" : ""}>
         <span>${escapeHtml(item.name)}</span>
-        <small>${item.type === "video" ? "视频" : "图片"}</small>
+        <small>${item.type === "video" ? "瑙嗛" : "鍥剧墖"}</small>
         ${item.type === "video" ? endingPreviewToggleButtonHtml(item.name) : ""}
       </label>`).join("")
-    : `<div class="ending-template-empty compact">暂无视频片尾素材，请先上传到目录。</div>`;
+    : `<div class="ending-template-empty compact">鏆傛棤瑙嗛鐗囧熬绱犳潗锛岃鍏堜笂浼犲埌鐩綍銆?/div>`;
   return `
-    <div class="cover-section-title">视频片尾选择</div>
+    <div class="cover-section-title">瑙嗛鐗囧熬閫夋嫨</div>
     <div class="ending-material-list">${rows}</div>
-    <p class="visual-editor-hint">从 video_matrix\\ending_template 勾选备用视频片尾；生成时会从已勾选素材里随机取一个。</p>`;
+    <p class="visual-editor-hint">浠?video_matrix\\ending_template 鍕鹃€夊鐢ㄨ棰戠墖灏撅紱鐢熸垚鏃朵細浠庡凡鍕鹃€夌礌鏉愰噷闅忔満鍙栦竴涓€?/p>`;
 }
 
 function bindEndingRandomMaterials() {
@@ -1069,7 +1153,7 @@ function endingPreviewToggleButtonHtml(name) {
   const icon = active
     ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6.5h4v11H7zM13 6.5h4v11h-4z"></path></svg>`
     : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4L18 12 8 5.8Z"></path></svg>`;
-  return `<button class="ending-preview-toggle ${active ? "active" : ""}" type="button" data-ending-preview-toggle="${escapeHtml(name)}" title="${active ? "停止预览" : "播放预览"}" aria-label="${active ? "停止预览" : "播放预览"}">${icon}</button>`;
+  return `<button class="ending-preview-toggle ${active ? "active" : ""}" type="button" data-ending-preview-toggle="${escapeHtml(name)}" title="${active ? "鍋滄棰勮" : "鎾斁棰勮"}" aria-label="${active ? "鍋滄棰勮" : "鎾斁棰勮"}">${icon}</button>`;
 }
 
 function endingCoverTemplate() {
@@ -1085,7 +1169,7 @@ function endingCoverTemplate() {
 function isInheritedEndingCoverName(name) {
   const value = String(name || "").trim();
   if (!value || value === "Ending Cover") return true;
-  if (/^片尾模板\s*\d+$/i.test(value)) return true;
+  if (/^鐗囧熬妯℃澘\s*\d+$/i.test(value)) return true;
   return Object.values(coverTemplates || {}).some((template) => String(template?.name || "").trim() === value);
 }
 
@@ -1095,7 +1179,7 @@ function ensureEndingCoverTemplates() {
     : JSON.parse(JSON.stringify(coverTemplates[selectedCover] || {}));
   applyIndependentCoverDefaults(fallback);
   fallback.cover_layout = "single_video";
-  if (isInheritedEndingCoverName(fallback.name)) fallback.name = "片尾封面模板 01";
+  if (isInheritedEndingCoverName(fallback.name)) fallback.name = "鐗囧熬灏侀潰妯℃澘 01";
   if (!state.ending_cover_templates || typeof state.ending_cover_templates !== "object") {
     state.ending_cover_templates = { ending_cover_template_01: fallback };
   }
@@ -1129,13 +1213,13 @@ function renderEndingTemplateMenu() {
       trigger.setAttribute("aria-expanded", "false");
       trigger.disabled = true;
       trigger.classList.add("is-loading");
-      trigger.innerHTML = buttonLoadingInline("切换中...");
+      trigger.innerHTML = buttonLoadingInline("鍒囨崲涓?..");
       try {
         await selectEndingCoverTemplate(button.dataset.endingCoverTemplate);
       } finally {
         trigger.disabled = false;
         trigger.classList.remove("is-loading");
-        trigger.innerHTML = buttonIconLabel("⇄", "模板切换");
+        trigger.innerHTML = buttonIconLabel("鈬?, "妯℃澘鍒囨崲");
       }
     };
   });
@@ -1146,7 +1230,7 @@ async function selectEndingCoverTemplate(templateId) {
   if (!templateId || !templateMap[templateId]) return;
   state.ending_cover_template_id = templateId;
   state.ending_cover_template = JSON.parse(JSON.stringify(templateMap[templateId]));
-  setImageLoading("endingTemplatePreview", "切换片尾模板...");
+  setImageLoading("endingTemplatePreview", "鍒囨崲鐗囧熬妯℃澘...");
   renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
   await saveState();
   await refreshEndingTemplatePreview();
@@ -1158,21 +1242,21 @@ function endingCoverEditorHtml() {
     `<option value="${value}" ${value === coverTemplateValue(t, "mask_mode", "bottom_gradient") ? "selected" : ""}>${label}</option>`
   ).join("");
   return `
-    <label>模板名称<input data-ending-cover-key="name" type="text" value="${escapeHtml(t.name || "片尾封面模板 01")}"></label>
-    <div class="cover-section-title">蒙版编辑区</div>
-    <label>蒙版类型<select data-ending-cover-key="mask_mode">${maskModeOptions}</select></label>
-    <label>蒙版颜色<input data-ending-cover-key="mask_color" type="color" value="${escapeHtml(coverTemplateValue(t, "mask_color", t.gradient_color || t.tint_color || "#071015"))}"></label>
-    ${rangeControlHtml({key: "ending-mask-opacity", label: "蒙版透明度", min: 0, max: 1, step: 0.01, value: coverTemplateValue(t, "mask_opacity", t.gradient_opacity ?? t.tint_opacity ?? 0.35), className: "ending-cover-control"})}
-    <div class="cover-section-title">独立封面文字</div>
-    <label>Logo文字<input data-ending-cover-key="single_cover_logo_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_logo_text", "GasGx"))}"></label>
-    <label>Slogan文字<input data-ending-cover-key="single_cover_slogan_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_slogan_text", defaultSingleCoverSlogan()))}"></label>
-    <label>片尾文案<textarea data-ending-cover-key="single_cover_title_text" rows="3">${escapeHtml(coverTemplateValue(t, "single_cover_title_text", $("followText").value || state.follow_text || defaultSingleCoverTitle()))}</textarea></label>
+    <label>妯℃澘鍚嶇О<input data-ending-cover-key="name" type="text" value="${escapeHtml(t.name || "鐗囧熬灏侀潰妯℃澘 01")}"></label>
+    <div class="cover-section-title">钂欑増缂栬緫鍖?/div>
+    <label>钂欑増绫诲瀷<select data-ending-cover-key="mask_mode">${maskModeOptions}</select></label>
+    <label>钂欑増棰滆壊<input data-ending-cover-key="mask_color" type="color" value="${escapeHtml(coverTemplateValue(t, "mask_color", t.gradient_color || t.tint_color || "#071015"))}"></label>
+    ${rangeControlHtml({key: "ending-mask-opacity", label: "钂欑増閫忔槑搴?, min: 0, max: 1, step: 0.01, value: coverTemplateValue(t, "mask_opacity", t.gradient_opacity ?? t.tint_opacity ?? 0.35), className: "ending-cover-control"})}
+    <div class="cover-section-title">鐙珛灏侀潰鏂囧瓧</div>
+    <label>Logo鏂囧瓧<input data-ending-cover-key="single_cover_logo_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_logo_text", "GasGx"))}"></label>
+    <label>Slogan鏂囧瓧<input data-ending-cover-key="single_cover_slogan_text" type="text" value="${escapeHtml(coverTemplateValue(t, "single_cover_slogan_text", defaultSingleCoverSlogan()))}"></label>
+    <label>鐗囧熬鏂囨<textarea data-ending-cover-key="single_cover_title_text" rows="3">${escapeHtml(coverTemplateValue(t, "single_cover_title_text", $("followText").value || state.follow_text || defaultSingleCoverTitle()))}</textarea></label>
     ${coverVisualToolbarHtml(t, "ending-cover-visual-toolbar")}
     <div class="template-actions ending-template-actions">
-      <button type="button" id="saveEndingCover">保存</button>
-      <button type="button" id="saveEndingCoverAsNew">新建保存</button>
+      <button type="button" id="saveEndingCover">淇濆瓨</button>
+      <button type="button" id="saveEndingCoverAsNew">鏂板缓淇濆瓨</button>
     </div>
-    <p class="visual-editor-hint">点击片尾预览里的文字后拖动定位；这组设置只影响文字片尾。</p>`;
+    <p class="visual-editor-hint">鐐瑰嚮鐗囧熬棰勮閲岀殑鏂囧瓧鍚庢嫋鍔ㄥ畾浣嶏紱杩欑粍璁剧疆鍙奖鍝嶆枃瀛楃墖灏俱€?/p>`;
 }
 
 function bindEndingCoverEditor() {
@@ -1200,7 +1284,7 @@ function updateEndingCoverTemplateField(input) {
     $("followText").value = input.value;
     state.follow_text = input.value;
   }
-  setImageLoading("endingTemplatePreview", "应用片尾封面参数...");
+  setImageLoading("endingTemplatePreview", "搴旂敤鐗囧熬灏侀潰鍙傛暟...");
   refreshEndingTemplatePreview();
   scheduleStateSave();
 }
@@ -1209,23 +1293,23 @@ function nextEndingCoverTemplateMeta(templateMap) {
   let next = 1;
   Object.entries(templateMap || {}).forEach(([id, template]) => {
     const idMatch = String(id).match(/^ending_cover_template_(\d+)$/);
-    const nameMatch = String(template?.name || "").match(/^片尾封面模板\s*(\d+)$/);
+    const nameMatch = String(template?.name || "").match(/^鐗囧熬灏侀潰妯℃澘\s*(\d+)$/);
     const value = Math.max(Number(idMatch?.[1] || 0), Number(nameMatch?.[1] || 0));
     if (value >= next) next = value + 1;
   });
   const serial = String(next).padStart(2, "0");
-  return { id: `ending_cover_template_${serial}`, name: `片尾封面模板 ${serial}` };
+  return { id: `ending_cover_template_${serial}`, name: `鐗囧熬灏侀潰妯℃澘 ${serial}` };
 }
 
 async function saveCurrentEndingCoverTemplate() {
   const template = endingCoverTemplate();
   const selectedId = state.ending_cover_template_id;
   const button = $("saveEndingCover");
-  const label = button?.textContent || "保存";
+  const label = button?.textContent || "淇濆瓨";
   if (button) {
     button.disabled = true;
     button.classList.add("is-loading");
-    button.innerHTML = buttonLoadingInline("保存中...");
+    button.innerHTML = buttonLoadingInline("淇濆瓨涓?..");
   }
   try {
     state.ending_cover_templates[selectedId] = JSON.parse(JSON.stringify(template));
@@ -1234,15 +1318,15 @@ async function saveCurrentEndingCoverTemplate() {
     pendingTemplateSave = "";
     renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
     await refreshEndingTemplatePreview();
-    log(`已保存片尾模板：${template.name || selectedId}`);
-    showTemplateActionStatus("保存成功", "endingTemplateForm");
+    log(`宸蹭繚瀛樼墖灏炬ā鏉匡細${template.name || selectedId}`);
+    showTemplateActionStatus("淇濆瓨鎴愬姛", "endingTemplateForm");
   } catch (error) {
     if (button) {
       button.disabled = false;
       button.classList.remove("is-loading");
       button.textContent = label;
     }
-    log(`片尾模板保存失败：${error.message}`);
+    log(`鐗囧熬妯℃澘淇濆瓨澶辫触锛?{error.message}`);
   }
 }
 
@@ -1250,11 +1334,11 @@ async function saveEndingCoverAsNewTemplate() {
   const sourceTemplate = endingCoverTemplate();
   const nextMeta = nextEndingCoverTemplateMeta(endingCoverTemplates());
   const button = $("saveEndingCoverAsNew");
-  const label = button?.textContent || "新建保存";
+  const label = button?.textContent || "鏂板缓淇濆瓨";
   if (button) {
     button.disabled = true;
     button.classList.add("is-loading");
-    button.innerHTML = buttonLoadingInline("新建中...");
+    button.innerHTML = buttonLoadingInline("鏂板缓涓?..");
   }
   try {
     const newTemplate = JSON.parse(JSON.stringify(sourceTemplate));
@@ -1268,15 +1352,15 @@ async function saveEndingCoverAsNewTemplate() {
     pendingTemplateSave = "";
     renderEndingTemplatePanel({ ending_templates: endingTemplateState.local, ending_template_dir: endingTemplateState.directory });
     await refreshEndingTemplatePreview();
-    log(`已新建片尾模板：${nextMeta.name}`);
-    showTemplateActionStatus("新建保存成功", "endingTemplateForm");
+    log(`宸叉柊寤虹墖灏炬ā鏉匡細${nextMeta.name}`);
+    showTemplateActionStatus("鏂板缓淇濆瓨鎴愬姛", "endingTemplateForm");
   } catch (error) {
     if (button) {
       button.disabled = false;
       button.classList.remove("is-loading");
       button.textContent = label;
     }
-    log(`片尾模板新建失败：${error.message}`);
+    log(`鐗囧熬妯℃澘鏂板缓澶辫触锛?{error.message}`);
   }
 }
 
@@ -1321,15 +1405,15 @@ async function refreshEndingTemplatePreview() {
       assetBox.innerHTML = asset.type === "video"
         ? `<video data-ending-preview-video src="${escapeHtml(asset.url)}" muted loop controls playsinline ${endingPreviewOverrideName ? "autoplay" : ""}></video>`
         : `<img src="${escapeHtml(asset.url)}" alt="">`;
-      caption.textContent = `${mode === "random" ? "视频片尾素材预览" : "指定视频片尾"} / ${asset.name}`;
+      caption.textContent = `${mode === "random" ? "瑙嗛鐗囧熬绱犳潗棰勮" : "鎸囧畾瑙嗛鐗囧熬"} / ${asset.name}`;
       if (asset.type === "video" && endingPreviewOverrideName) {
         const video = assetBox.querySelector("[data-ending-preview-video]");
         video?.play?.().catch(() => {});
       }
     } else {
-      assetBox.innerHTML = `<div class="ending-template-empty">暂无视频片尾素材</div>`;
+      assetBox.innerHTML = `<div class="ending-template-empty">鏆傛棤瑙嗛鐗囧熬绱犳潗</div>`;
       assetBox.classList.remove("hidden");
-      caption.textContent = `${shortPath(endingTemplateState.directory)} / 0 个素材`;
+      caption.textContent = `${shortPath(endingTemplateState.directory)} / 0 涓礌鏉恅;
     }
     clearImageLoading("endingTemplatePreview");
     return;
@@ -1353,7 +1437,7 @@ async function refreshEndingTemplatePreview() {
       background_image_urls: modelImages.map((image) => image.url).filter(Boolean),
     });
   }
-  caption.textContent = `文字片尾 / ${template.name || "Ending Cover"}`;
+  caption.textContent = `鏂囧瓧鐗囧熬 / ${template.name || "Ending Cover"}`;
   clearImageLoading("endingTemplatePreview");
 }
 
@@ -1362,11 +1446,11 @@ function isIndependentCover(template) {
 }
 
 function defaultSingleCoverTitle() {
-  return "全球领先的搁浅天然气算力变现引擎";
+  return "鍏ㄧ悆棰嗗厛鐨勬悂娴呭ぉ鐒舵皵绠楀姏鍙樼幇寮曟搸";
 }
 
 function defaultSingleCoverSlogan() {
-  return "终结废气 | 重塑能源 | 就地变现";
+  return "缁堢粨搴熸皵 | 閲嶅鑳芥簮 | 灏卞湴鍙樼幇";
 }
 
 function applyIndependentCoverDefaults(template) {
@@ -1389,7 +1473,7 @@ async function toggleCoverLayout() {
   applyIndependentCoverDefaults(template);
   template.cover_layout = isIndependentCover(template) ? "profile" : "single_video";
   renderCoverEditor();
-  setImageLoading("coverPreview", "切换封面布局...");
+  setImageLoading("coverPreview", "鍒囨崲灏侀潰甯冨眬...");
   await refreshMainPreview();
   scheduleCoverTemplateSave();
 }
@@ -1399,7 +1483,7 @@ function coverTemplateValue(template, key, fallback = "") {
 }
 
 function defaultCoverTileTitles() {
-  return ["燃气发电机组并网测试", "油田伴生气资源再利用", "移动式算力中心部署", "野外发电设备日常维护", "零燃除：变废为宝", "集装箱数据中心内景", "高效燃气轮机运行状态", "夜间井场持续发电作业", "极寒环境设备启动测试"];
+  return ["鐕冩皵鍙戠數鏈虹粍骞剁綉娴嬭瘯", "娌圭敯浼寸敓姘旇祫婧愬啀鍒╃敤", "绉诲姩寮忕畻鍔涗腑蹇冮儴缃?, "閲庡鍙戠數璁惧鏃ュ父缁存姢", "闆剁噧闄わ細鍙樺簾涓哄疂", "闆嗚绠辨暟鎹腑蹇冨唴鏅?, "楂樻晥鐕冩皵杞満杩愯鐘舵€?, "澶滈棿浜曞満鎸佺画鍙戠數浣滀笟", "鏋佸瘨鐜璁惧鍚姩娴嬭瘯"];
 }
 
 function updateCoverTemplateField(input) {
@@ -1407,7 +1491,7 @@ function updateCoverTemplateField(input) {
   if (!template || !input) return;
   const key = input.dataset.key;
   template[key] = input.type === "range" || input.type === "number" ? Number(input.value) : input.value;
-  setImageLoading("coverPreview", "应用封面参数...");
+  setImageLoading("coverPreview", "搴旂敤灏侀潰鍙傛暟...");
   refreshAllPreviews();
   scheduleCoverTemplateSave();
 }
@@ -1418,15 +1502,15 @@ function coverVisualToolbarHtml(template, extraClass = "") {
     `<option value="${escapeHtml(value)}" ${value === fontValue ? "selected" : ""}>${label}</option>`
   ).join("");
   return `
-    <div class="visual-toolbar-panel cover-visual-toolbar ${extraClass}" aria-label="封面可视化工具">
-      <button type="button" data-cover-command="size-down" title="缩小字号">A-</button>
-      <button type="button" data-cover-command="size-up" title="放大字号">A+</button>
-      <button type="button" data-cover-command="edit" title="编辑文字">编辑</button>
-      <button type="button" data-cover-command="align" data-value="left" title="左对齐">左齐</button>
-      <button type="button" data-cover-command="align" data-value="center" title="居中对齐">居中</button>
-      <button type="button" data-cover-command="align" data-value="right" title="右对齐">右齐</button>
+    <div class="visual-toolbar-panel cover-visual-toolbar ${extraClass}" aria-label="灏侀潰鍙鍖栧伐鍏?>
+      <button type="button" data-cover-command="size-down" title="缂╁皬瀛楀彿">A-</button>
+      <button type="button" data-cover-command="size-up" title="鏀惧ぇ瀛楀彿">A+</button>
+      <button type="button" data-cover-command="edit" title="缂栬緫鏂囧瓧">缂栬緫</button>
+      <button type="button" data-cover-command="align" data-value="left" title="宸﹀榻?>宸﹂綈</button>
+      <button type="button" data-cover-command="align" data-value="center" title="灞呬腑瀵归綈">灞呬腑</button>
+      <button type="button" data-cover-command="align" data-value="right" title="鍙冲榻?>鍙抽綈</button>
       <select data-cover-command="font-family">${fontOptions}</select>
-      <label class="color-swatch-button" title="文字颜色">
+      <label class="color-swatch-button" title="鏂囧瓧棰滆壊">
         <svg class="color-picker-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3a9 9 0 0 0 0 18h1.4a2 2 0 0 0 1.7-3l-.2-.4a1.7 1.7 0 0 1 1.5-2.6H18a6 6 0 0 0 0-12h-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
           <circle cx="7.5" cy="10" r="1.3" fill="currentColor"/>
@@ -1435,7 +1519,7 @@ function coverVisualToolbarHtml(template, extraClass = "") {
           <circle cx="16.8" cy="11.5" r="1.3" fill="currentColor"/>
         </svg>
         <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
-        <input data-cover-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
+        <input data-cover-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="鏂囧瓧棰滆壊">
       </label>
     </div>`;
 }
@@ -1461,9 +1545,9 @@ function bindCoverVisualToolbar(formId = "coverForm", previewId = "coverPreview"
 function postCoverTemplateCommand(command, value = "", previewId = "coverPreview") {
   coverEditingContext = previewId === "endingTemplatePreview" ? "ending" : "cover";
   if (previewId === "endingTemplatePreview") {
-    pulseImageLoading("endingTemplatePreview", "应用片尾封面参数...");
+    pulseImageLoading("endingTemplatePreview", "搴旂敤鐗囧熬灏侀潰鍙傛暟...");
   } else {
-    pulseImageLoading("coverPreview", "应用封面参数...");
+    pulseImageLoading("coverPreview", "搴旂敤灏侀潰鍙傛暟...");
   }
   $(previewId)?.contentWindow?.postMessage({
     type: "gasgx-cover-template-command",
@@ -1484,8 +1568,8 @@ function renderVideoTemplateEditor() {
   if (!template) return;
   const visibilityChecks = [];
   const html = [
-    `<h3>模板调整区</h3>`,
-    `<label>模板名称<input data-key="name" type="text" value="${escapeHtml(template.name || "")}"></label>`,
+    `<h3>妯℃澘璋冩暣鍖?/h3>`,
+    `<label>妯℃澘鍚嶇О<input data-key="name" type="text" value="${escapeHtml(template.name || "")}"></label>`,
     visualTemplateToolbarHtml(template),
   ];
   for (const [key, label, type, min, max] of videoTemplateFields) {
@@ -1494,7 +1578,7 @@ function renderVideoTemplateEditor() {
     if (type === "checkbox") {
       visibilityChecks.push(`<label class="check-row"><input data-key="${key}" type="checkbox" ${value ? "checked" : ""}><span>${label}</span></label>`);
     } else if (type === "select") {
-      html.push(`<label>${label}<select data-key="${key}"><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>`);
+      html.push(`<label>${label}<select data-key="${key}"><option value="left">宸﹀榻?/option><option value="center">灞呬腑</option><option value="right">鍙冲榻?/option></select></label>`);
     } else if (type === "range") {
       html.push(rangeControlHtml({key, label, min, max, value, className: "template-control"}));
     } else if (type === "rangeFloat") {
@@ -1508,8 +1592,8 @@ function renderVideoTemplateEditor() {
   }
   html.push(`
     <div class="template-actions">
-      <button type="button" id="saveVideoTemplate">保存当前</button>
-      <button type="button" id="cloneVideoTemplate" title="基于当前正文模板新建保存">新建保存</button>
+      <button type="button" id="saveVideoTemplate">淇濆瓨褰撳墠</button>
+      <button type="button" id="cloneVideoTemplate" title="鍩轰簬褰撳墠姝ｆ枃妯℃澘鏂板缓淇濆瓨">鏂板缓淇濆瓨</button>
     </div>`);
   $("videoTemplateForm").innerHTML = html.join("");
   $("videoTemplateForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
@@ -1547,61 +1631,61 @@ function visualTemplateToolbarHtml(template) {
   const effectOptions = visualDropdownOptionsHtml(textEffectOptions, effectValue, "text-effect");
   const styleOptions = visualDropdownOptionsHtml(textStyleOptions, styleValue, "text-style");
   return `
-    <div class="visual-toolbar-panel" aria-label="文字可视化工具">
-      <div class="visual-target-tabs" aria-label="叠层选择">
-        <button type="button" data-visual-command="select-target" data-value="slogan" title="选择上标题">上标题</button>
-        <button type="button" data-visual-command="select-target" data-value="title" title="选择中标题">中标题</button>
-        <button type="button" data-visual-command="select-target" data-value="hud" title="选择下标题">下标题</button>
+    <div class="visual-toolbar-panel" aria-label="鏂囧瓧鍙鍖栧伐鍏?>
+      <div class="visual-target-tabs" aria-label="鍙犲眰閫夋嫨">
+        <button type="button" data-visual-command="select-target" data-value="slogan" title="閫夋嫨涓婃爣棰?>涓婃爣棰?/button>
+        <button type="button" data-visual-command="select-target" data-value="title" title="閫夋嫨涓爣棰?>涓爣棰?/button>
+        <button type="button" data-visual-command="select-target" data-value="hud" title="閫夋嫨涓嬫爣棰?>涓嬫爣棰?/button>
       </div>
-      <div class="visual-control-section visual-text-controls" aria-label="文字调整区">
-        <div class="visual-section-title">文字调整区</div>
-        <button type="button" data-visual-command="text-align" data-value="left" title="文字靠左">文左</button>
-        <button type="button" data-visual-command="text-align" data-value="center" title="文字居中">文中</button>
-        <button type="button" data-visual-command="text-align" data-value="right" title="文字靠右">文右</button>
-        <button type="button" data-visual-command="text-width-down" title="缩小文字框">框W-</button>
-        <button type="button" data-visual-command="text-width-up" title="放大文字框">框W+</button>
-        <button type="button" data-visual-command="size-down" title="缩小字号">A-</button>
-        <button type="button" data-visual-command="size-up" title="放大字号">A+</button>
-        <button type="button" data-visual-command="edit" title="编辑文字">编辑</button>
-        <label class="color-swatch-button" title="文字颜色">
+      <div class="visual-control-section visual-text-controls" aria-label="鏂囧瓧璋冩暣鍖?>
+        <div class="visual-section-title">鏂囧瓧璋冩暣鍖?/div>
+        <button type="button" data-visual-command="text-align" data-value="left" title="鏂囧瓧闈犲乏">鏂囧乏</button>
+        <button type="button" data-visual-command="text-align" data-value="center" title="鏂囧瓧灞呬腑">鏂囦腑</button>
+        <button type="button" data-visual-command="text-align" data-value="right" title="鏂囧瓧闈犲彸">鏂囧彸</button>
+        <button type="button" data-visual-command="text-width-down" title="缂╁皬鏂囧瓧妗?>妗哤-</button>
+        <button type="button" data-visual-command="text-width-up" title="鏀惧ぇ鏂囧瓧妗?>妗哤+</button>
+        <button type="button" data-visual-command="size-down" title="缂╁皬瀛楀彿">A-</button>
+        <button type="button" data-visual-command="size-up" title="鏀惧ぇ瀛楀彿">A+</button>
+        <button type="button" data-visual-command="edit" title="缂栬緫鏂囧瓧">缂栬緫</button>
+        <label class="color-swatch-button" title="鏂囧瓧棰滆壊">
           ${colorPickerIconSvg()}
           <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
-          <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
+          <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="鏂囧瓧棰滆壊">
         </label>
-        <div class="font-sample-picker" role="listbox" aria-label="字体样张选择">
+        <div class="font-sample-picker" role="listbox" aria-label="瀛椾綋鏍峰紶閫夋嫨">
           ${fontSamples}
         </div>
-        <label class="visual-effect-control">文字样式
+        <label class="visual-effect-control">鏂囧瓧鏍峰紡
           <div class="visual-dropdown">
             <button type="button" class="visual-dropdown-trigger" data-visual-dropdown-trigger aria-expanded="false">${escapeHtml(styleLabel)}</button>
             <div class="visual-dropdown-menu" role="listbox">${styleOptions}</div>
           </div>
         </label>
-        <label class="visual-effect-control">文字动效
+        <label class="visual-effect-control">鏂囧瓧鍔ㄦ晥
           <div class="visual-dropdown">
             <button type="button" class="visual-dropdown-trigger" data-visual-dropdown-trigger aria-expanded="false">${escapeHtml(effectLabel)}</button>
             <div class="visual-dropdown-menu" role="listbox">${effectOptions}</div>
           </div>
         </label>
       </div>
-      <div class="visual-control-section visual-hud-controls" aria-label="字幕背板调整区">
-        <div class="visual-section-title">字幕背板调整区</div>
-        <button type="button" data-visual-command="background-full" title="背景自动顶满宽度">满宽</button>
-        <button type="button" data-visual-command="background-partial-center" title="背景居中块">居中块</button>
-        <button type="button" data-visual-command="width-down" title="缩小背景宽度">W-</button>
-        <button type="button" data-visual-command="width-up" title="放大背景宽度">W+</button>
-        <button type="button" data-visual-command="height-down" title="缩小背景高度">H-</button>
-        <button type="button" data-visual-command="height-up" title="放大背景高度">H+</button>
-        <button type="button" data-visual-command="bar-align" data-value="left" title="字幕背板左对齐">左齐</button>
-        <button type="button" data-visual-command="bar-align" data-value="center" title="字幕背板居中对齐">居中</button>
-        <button type="button" data-visual-command="bar-align" data-value="right" title="字幕背板右对齐">右齐</button>
-        <label class="color-swatch-button" title="字幕背板背景色">
+      <div class="visual-control-section visual-hud-controls" aria-label="瀛楀箷鑳屾澘璋冩暣鍖?>
+        <div class="visual-section-title">瀛楀箷鑳屾澘璋冩暣鍖?/div>
+        <button type="button" data-visual-command="background-full" title="鑳屾櫙鑷姩椤舵弧瀹藉害">婊″</button>
+        <button type="button" data-visual-command="background-partial-center" title="鑳屾櫙灞呬腑鍧?>灞呬腑鍧?/button>
+        <button type="button" data-visual-command="width-down" title="缂╁皬鑳屾櫙瀹藉害">W-</button>
+        <button type="button" data-visual-command="width-up" title="鏀惧ぇ鑳屾櫙瀹藉害">W+</button>
+        <button type="button" data-visual-command="height-down" title="缂╁皬鑳屾櫙楂樺害">H-</button>
+        <button type="button" data-visual-command="height-up" title="鏀惧ぇ鑳屾櫙楂樺害">H+</button>
+        <button type="button" data-visual-command="bar-align" data-value="left" title="瀛楀箷鑳屾澘宸﹀榻?>宸﹂綈</button>
+        <button type="button" data-visual-command="bar-align" data-value="center" title="瀛楀箷鑳屾澘灞呬腑瀵归綈">灞呬腑</button>
+        <button type="button" data-visual-command="bar-align" data-value="right" title="瀛楀箷鑳屾澘鍙冲榻?>鍙抽綈</button>
+        <label class="color-swatch-button" title="瀛楀箷鑳屾澘鑳屾櫙鑹?>
           ${colorPickerIconSvg()}
           <span class="color-current-dot" style="background:${escapeHtml(hudColor)}"></span>
-          <input data-visual-command="hud-bg-color" type="color" value="${escapeHtml(hudColor)}" aria-label="字幕背板背景色">
+          <input data-visual-command="hud-bg-color" type="color" value="${escapeHtml(hudColor)}" aria-label="瀛楀箷鑳屾澘鑳屾櫙鑹?>
         </label>
-        <label class="visual-opacity-control">字幕背板透明度<input data-visual-command="opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(hudOpacity.toFixed(2))}"><output>${escapeHtml(hudOpacity.toFixed(2))}</output></label>
-        <label class="visual-opacity-control">字幕背板圆角<input data-visual-command="hud-radius" type="range" min="0" max="100" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
+        <label class="visual-opacity-control">瀛楀箷鑳屾澘閫忔槑搴?input data-visual-command="opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(hudOpacity.toFixed(2))}"><output>${escapeHtml(hudOpacity.toFixed(2))}</output></label>
+        <label class="visual-opacity-control">瀛楀箷鑳屾澘鍦嗚<input data-visual-command="hud-radius" type="range" min="0" max="100" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
       </div>
     </div>`;
 }
@@ -1695,7 +1779,7 @@ function updateColorSwatch(input) {
 }
 
 function postVisualTemplateCommand(command, value = "", scope = "") {
-  pulseImageLoading("videoTemplatePreview", "应用模板参数...");
+  pulseImageLoading("videoTemplatePreview", "搴旂敤妯℃澘鍙傛暟...");
   $("videoTemplatePreview")?.contentWindow?.postMessage({
     type: "gasgx-video-template-command",
     command,
@@ -1712,7 +1796,7 @@ function updateVideoTemplateField(input) {
   else template[key] = input.value;
   const out = input.parentElement.querySelector("output");
   if (out) out.textContent = input.value;
-  setImageLoading("videoTemplatePreview", "应用模板参数...");
+  setImageLoading("videoTemplatePreview", "搴旂敤妯℃澘鍙傛暟...");
   refreshVideoTemplatePreview();
   refreshVideoTemplateGallery({ showLoading: false });
   scheduleVideoTemplateSave();
@@ -1846,7 +1930,7 @@ function renderVideoTemplateBackgrounds() {
   const node = $("videoTemplateBackgrounds");
   if (!node) return;
   if (!modelImages.length) {
-    node.innerHTML = `<span class="muted">modelimg 目录暂无可预览图片</span>`;
+    node.innerHTML = `<span class="muted">modelimg 鐩綍鏆傛棤鍙瑙堝浘鐗?/span>`;
     return;
   }
   node.innerHTML = modelImages.map((image) => `
@@ -1877,7 +1961,7 @@ async function refreshVideoTemplatePreview() {
 }
 
 async function refreshVideoTemplateGallery(options = {}) {
-  if (options.showLoading !== false) setPanelLoading("videoTemplateGallery", "生成正文模板列表...");
+  if (options.showLoading !== false) setPanelLoading("videoTemplateGallery", "鐢熸垚姝ｆ枃妯℃澘鍒楄〃...");
   const cards = [];
   Object.entries(templates).forEach(([id, template], index) => {
     cards.push(`<div class="cover-card video-template-card ${id === selectedVideoTemplate ? "active" : ""}" data-id="${id}">${videoTemplateCardPreviewHtml(id, template)}<button type="button" class="video-template-name-button" data-template-name="${escapeHtml(id)}">${escapeHtml(videoTemplateDisplayName(id, template, index))}</button></div>`);
@@ -1899,7 +1983,7 @@ async function refreshVideoTemplateGallery(options = {}) {
 
 function videoTemplateCardPreviewHtml(templateId, template) {
   const hasBg = Boolean(selectedModelImageUrl || modelImages[0]?.url);
-  if (!hasBg) return `<div class="video-template-thumb empty"><span>暂无背景图</span></div>`;
+  if (!hasBg) return `<div class="video-template-thumb empty"><span>鏆傛棤鑳屾櫙鍥?/span></div>`;
   const payload = videoTemplatePreviewPayload(template);
   return `
     <div class="video-template-thumb">
@@ -1975,35 +2059,35 @@ function videoTemplatePreviewPayload(template) {
 
 async function saveVideoTemplate() {
   const button = $("saveVideoTemplate");
-  const label = button?.textContent || "保存当前";
+  const label = button?.textContent || "淇濆瓨褰撳墠";
   if (button) {
     button.disabled = true;
-    button.textContent = "保存中...";
+    button.textContent = "淇濆瓨涓?..";
   }
   try {
     await api(`/api/video-matrix/templates/${selectedVideoTemplate}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[selectedVideoTemplate])});
     await saveState();
     pendingTemplateSave = "";
-    log(`已保存正文模板：${displayTemplateName(templates[selectedVideoTemplate].name || selectedVideoTemplate)}`);
+    log(`宸蹭繚瀛樻鏂囨ā鏉匡細${displayTemplateName(templates[selectedVideoTemplate].name || selectedVideoTemplate)}`);
     renderVideoTemplateSelector();
     renderVideoTemplateEditor();
-    showTemplateActionStatus("保存成功");
+    showTemplateActionStatus("淇濆瓨鎴愬姛");
   } catch (error) {
     if (button) {
       button.disabled = false;
       button.textContent = label;
     }
-    log(`正文模板保存失败：${error.message}`);
+    log(`姝ｆ枃妯℃澘淇濆瓨澶辫触锛?{error.message}`);
   }
 }
 
 async function cloneVideoTemplate() {
   const button = $("cloneVideoTemplate");
-  const label = button?.textContent || "新建保存";
+  const label = button?.textContent || "鏂板缓淇濆瓨";
   if (button) {
     button.disabled = true;
     button.classList.add("is-loading");
-    button.innerHTML = buttonLoadingInline("新建中...");
+    button.innerHTML = buttonLoadingInline("鏂板缓涓?..");
   }
   const sourceTemplate = templates[selectedVideoTemplate];
   if (!sourceTemplate) {
@@ -2026,15 +2110,15 @@ async function cloneVideoTemplate() {
     renderVideoTemplateEditor();
     await refreshVideoTemplatePreview();
     await refreshVideoTemplateGallery();
-    log(`已基于当前正文模板新建：${nextName}`);
-    showTemplateActionStatus("新建保存成功");
+    log(`宸插熀浜庡綋鍓嶆鏂囨ā鏉挎柊寤猴細${nextName}`);
+    showTemplateActionStatus("鏂板缓淇濆瓨鎴愬姛");
   } catch (error) {
     if (button) {
       button.disabled = false;
       button.classList.remove("is-loading");
       button.textContent = label;
     }
-    log(`正文模板新建失败：${error.message}`);
+    log(`姝ｆ枃妯℃澘鏂板缓澶辫触锛?{error.message}`);
   }
 }
 
@@ -2068,12 +2152,12 @@ function nextCoverTemplateMeta(templateMap) {
   let next = 1;
   Object.entries(templateMap || {}).forEach(([id, template]) => {
     const idMatch = String(id).match(/^cover_template_(\d+)$/);
-    const nameMatch = String(template?.name || "").match(/^第一屏封面模板\s*(\d+)$/);
+    const nameMatch = String(template?.name || "").match(/^绗竴灞忓皝闈㈡ā鏉縗s*(\d+)$/);
     const value = Math.max(Number(idMatch?.[1] || 0), Number(nameMatch?.[1] || 0));
     if (value >= next) next = value + 1;
   });
   const serial = String(next).padStart(2, "0");
-  return { id: `cover_template_${serial}`, name: `第一屏封面模板 ${serial}` };
+  return { id: `cover_template_${serial}`, name: `绗竴灞忓皝闈㈡ā鏉?${serial}` };
 }
 
 async function refreshMainPreview() {
@@ -2101,7 +2185,7 @@ async function refreshMainPreview() {
 async function selectCoverTemplate(templateId) {
   if (!templateId || !coverTemplates[templateId]) return;
   selectedCover = templateId;
-  setImageLoading("coverPreview", "切换第一屏模板...");
+  setImageLoading("coverPreview", "鍒囨崲绗竴灞忔ā鏉?..");
   if ($("sidebarCoverTemplate")) $("sidebarCoverTemplate").value = templateId;
   renderCoverSelector();
   renderCoverEditor();
@@ -2123,11 +2207,11 @@ async function saveCoverAsNewTemplate() {
   const previousTemplates = {...coverTemplates};
   const nextMeta = nextCoverTemplateMeta(coverTemplates);
   const button = $("saveCoverAsNew");
-  const label = button?.textContent || "新建保存";
+  const label = button?.textContent || "鏂板缓淇濆瓨";
   if (button) {
     button.disabled = true;
     button.classList.add("is-loading");
-    button.innerHTML = buttonLoadingInline("新建中...");
+    button.innerHTML = buttonLoadingInline("鏂板缓涓?..");
   }
   const newTemplate = JSON.parse(JSON.stringify(sourceTemplate));
   applyIndependentCoverDefaults(newTemplate);
@@ -2144,8 +2228,8 @@ async function saveCoverAsNewTemplate() {
     renderCoverSelector();
     renderCoverEditor();
     await refreshMainPreview();
-    log(`已新建独立封面模板：${nextMeta.name}`);
-    showTemplateActionStatus("新建保存成功", "coverForm");
+    log(`宸叉柊寤虹嫭绔嬪皝闈㈡ā鏉匡細${nextMeta.name}`);
+    showTemplateActionStatus("鏂板缓淇濆瓨鎴愬姛", "coverForm");
   } catch (error) {
     coverTemplates = previousTemplates;
     selectedCover = previousCover;
@@ -2156,7 +2240,7 @@ async function saveCoverAsNewTemplate() {
       button.classList.remove("is-loading");
       button.textContent = label;
     }
-    log(`第一屏新模板保存失败：${error.message}`);
+    log(`绗竴灞忔柊妯℃澘淇濆瓨澶辫触锛?{error.message}`);
   }
 }
 
@@ -2164,29 +2248,29 @@ async function saveCurrentCoverTemplate() {
   const template = coverTemplates[selectedCover];
   if (!template) return;
   const button = $("saveCover");
-  const label = button?.textContent || "保存";
+  const label = button?.textContent || "淇濆瓨";
   if (button) {
     button.disabled = true;
     button.classList.add("is-loading");
-    button.innerHTML = buttonLoadingInline("保存中...");
+    button.innerHTML = buttonLoadingInline("淇濆瓨涓?..");
   }
   try {
     applyIndependentCoverDefaults(template);
     await api(`/api/video-matrix/cover-templates/${selectedCover}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(template)});
     await saveTemplateSelection();
     pendingTemplateSave = "";
-    log(`已保存第一屏模板：${template.name || selectedCover}`);
+    log(`宸蹭繚瀛樼涓€灞忔ā鏉匡細${template.name || selectedCover}`);
     renderCoverSelector();
     renderCoverEditor();
     await refreshMainPreview();
-    showTemplateActionStatus("保存成功", "coverForm");
+    showTemplateActionStatus("淇濆瓨鎴愬姛", "coverForm");
   } catch (error) {
     if (button) {
       button.disabled = false;
       button.classList.remove("is-loading");
       button.textContent = label;
     }
-    log(`第一屏模板保存失败：${error.message}`);
+    log(`绗竴灞忔ā鏉夸繚瀛樺け璐ワ細${error.message}`);
   }
 }
 
@@ -2207,7 +2291,7 @@ function buildCoverTemplateVariants(sourceTemplate) {
     const serial = String(index + 1).padStart(2, "0");
     return [`cover_template_${serial}`, {
       ...source,
-      name: `九宫格图片模板 ${serial}`,
+      name: `涔濆鏍煎浘鐗囨ā鏉?${serial}`,
       cover_layout: "profile",
       mask_mode: maskMode,
       mask_color: maskColor,
@@ -2228,7 +2312,7 @@ const scheduleVideoTemplateSave = debounce(async () => {
     if (pendingTemplateSave === `video:${templateId}`) pendingTemplateSave = "";
     renderVideoTemplateSelector();
   } catch (error) {
-    log(`正文模板自动保存失败：${error.message}`);
+    log(`姝ｆ枃妯℃澘鑷姩淇濆瓨澶辫触锛?{error.message}`);
   }
 }, 700);
 
@@ -2241,7 +2325,7 @@ const scheduleCoverTemplateSave = debounce(async () => {
     if (pendingTemplateSave === `cover:${templateId}`) pendingTemplateSave = "";
     renderCoverSelector();
   } catch (error) {
-    log(`第一屏模板自动保存失败：${error.message}`);
+    log(`绗竴灞忔ā鏉胯嚜鍔ㄤ繚瀛樺け璐ワ細${error.message}`);
   }
 }, 700);
 
@@ -2253,7 +2337,7 @@ async function saveTemplateSelection() {
 async function saveState() {
   state = collectState();
   await api("/api/video-matrix/state", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(state)});
-  log("当前设置已保存");
+  log("褰撳墠璁剧疆宸蹭繚瀛?);
 }
 
 const scheduleStateSave = debounce(async () => {
@@ -2277,7 +2361,7 @@ async function resolvePreviewVideoPath() {
 async function openPreviewVideoPage() {
   const path = await resolvePreviewVideoPath();
   if (!path) {
-    log("没有找到可预览的视频。请先生成视频，或确认最终视频生成目录里有 MP4。");
+    log("娌℃湁鎵惧埌鍙瑙堢殑瑙嗛銆傝鍏堢敓鎴愯棰戯紝鎴栫‘璁ゆ渶缁堣棰戠敓鎴愮洰褰曢噷鏈?MP4銆?);
   }
   const url = path
     ? `/static/video_matrix_preview.html?path=${encodeURIComponent(path)}`
@@ -2296,18 +2380,18 @@ async function generate() {
   try {
     const statePayload = collectState();
     displayedJobPercent = 0;
-    showGenerationWaitOverlay(true, { progress: 0, message: "正在提交生成任务..." });
+    showGenerationWaitOverlay(true, { progress: 0, message: "姝ｅ湪鎻愪氦鐢熸垚浠诲姟..." });
     button.disabled = true;
-    button.textContent = "提交中...";
-    updateJobStatus({ status: "queued", stage: "queued", progress: 0, message: "正在提交生成任务..." });
+    button.textContent = "鎻愪氦涓?..";
+    updateJobStatus({ status: "queued", stage: "queued", progress: 0, message: "姝ｅ湪鎻愪氦鐢熸垚浠诲姟..." });
     if (!bgmLibraryState.local.length) {
-      throw new Error("本地背景音乐库还没有可用 MP3。请把 MP3 文件放入左侧问号提示里的目录，然后刷新页面。");
+      throw new Error("鏈湴鑳屾櫙闊充箰搴撹繕娌℃湁鍙敤 MP3銆傝鎶?MP3 鏂囦欢鏀惧叆宸︿晶闂彿鎻愮ず閲岀殑鐩綍锛岀劧鍚庡埛鏂伴〉闈€?);
     }
     const form = new FormData();
     form.append("payload", JSON.stringify(statePayload));
     [...($("sourceFiles")?.files || [])].forEach((file) => form.append("source_files", file));
     const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
-    updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
+    updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `浠诲姟宸叉彁浜わ細${job_id}` });
     startJobProgressTicker();
     pollJob(job_id);
   } catch (error) {
@@ -2316,7 +2400,7 @@ async function generate() {
     showGenerationWaitOverlay(false);
   } finally {
     button.disabled = false;
-    if (!lastPreviewPath) button.textContent = "立即生成";
+    if (!lastPreviewPath) button.textContent = "绔嬪嵆鐢熸垚";
   }
 }
 
@@ -2331,13 +2415,13 @@ async function pollJob(jobId) {
     stopJobProgressTicker();
     lastPreviewPath = job.assets?.[0]?.video_path || "";
     const dedupeSummary = summarizeDedupeStatuses(job.assets || []);
-    const dedupeText = dedupeSummary ? ` 去重：${dedupeSummary}。` : " ";
-    updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。${dedupeText}点击按钮可预览第一条视频在视频号里的展示效果。`});
+    const dedupeText = dedupeSummary ? ` 鍘婚噸锛?{dedupeSummary}銆俙 : " ";
+    updateJobStatus({...job, message: `鐢熸垚瀹屾垚锛屽凡瀵煎嚭 ${job.assets.length} 鏉¤棰戙€?{dedupeText}鐐瑰嚮鎸夐挳鍙瑙堢涓€鏉¤棰戝湪瑙嗛鍙烽噷鐨勫睍绀烘晥鏋溿€俙});
     showGenerationWaitOverlay(false);
     const button = $("generateBtn");
     if (lastPreviewPath) {
       button.dataset.mode = "preview";
-      button.textContent = "预览视频";
+      button.textContent = "棰勮瑙嗛";
     }
   } else if ((job.status === "running" || job.status === "queued") && ((job.assets && job.assets.length > 0) || job.first_asset_ready)) {
     const first = job.assets?.[0]?.video_path || "";
@@ -2345,7 +2429,7 @@ async function pollJob(jobId) {
       lastPreviewPath = first;
       const button = $("generateBtn");
       button.dataset.mode = "preview";
-      button.textContent = "预览视频";
+      button.textContent = "棰勮瑙嗛";
     }
     setTimeout(() => pollJob(jobId), 1200);
   } else if (job.status === "error") {
@@ -2375,13 +2459,13 @@ async function runPreflightChecks(statePayload) {
 
   let hasFail = false;
   for (let index = 0; index < checks.length; index += 1) {
-    setPreflightStepStatus(index, "checking", "检查中...");
+    setPreflightStepStatus(index, "checking", "妫€鏌ヤ腑...");
     await wait(80);
     let result;
     try {
       result = await checks[index].run(index);
     } catch (error) {
-      result = { status: "fail", detail: error.message || "预检执行失败" };
+      result = { status: "fail", detail: error.message || "棰勬鎵ц澶辫触" };
     }
     const status = result?.status || "pass";
     if (status === "fail") hasFail = true;
@@ -2392,10 +2476,10 @@ async function runPreflightChecks(statePayload) {
 
   actions.classList.remove("is-running");
   if (!hasFail) {
-    setPreflightSummary("预检通过", "当前保存条件未发现会阻断提交的问题，点击继续进入最终确认。");
+    setPreflightSummary("棰勬閫氳繃", "褰撳墠淇濆瓨鏉′欢鏈彂鐜颁細闃绘柇鎻愪氦鐨勯棶棰橈紝鐐瑰嚮缁х画杩涘叆鏈€缁堢‘璁ゃ€?);
     $("preflightContinue").hidden = false;
     $("preflightCancel").hidden = false;
-    $("preflightCancel").textContent = "返回修改";
+    $("preflightCancel").textContent = "杩斿洖淇敼";
     return new Promise((resolve) => {
       const cleanup = () => {
         $("preflightContinue").onclick = null;
@@ -2420,7 +2504,7 @@ async function runPreflightChecks(statePayload) {
     });
   }
 
-  setPreflightSummary("预检未通过", "请按红色节点提示修正后再点击立即生成。");
+  setPreflightSummary("棰勬鏈€氳繃", "璇锋寜绾㈣壊鑺傜偣鎻愮ず淇鍚庡啀鐐瑰嚮绔嬪嵆鐢熸垚銆?);
   $("preflightCancel").hidden = false;
   return new Promise((resolve) => {
     const close = () => {
@@ -2449,199 +2533,199 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
   const formats = Array.isArray(statePayload.output_options) ? statePayload.output_options.filter(Boolean) : [];
   const categorySummary = activeIds.length
     ? activeIds.map((id) => `${categoryNames[id] || id}(${statePayload.recent_limits?.[id] || 0})`).join(" / ")
-    : "未启用分类";
+    : "鏈惎鐢ㄥ垎绫?;
   const compositionSeconds = composition.reduce((sum, row) => sum + Number(row.duration || 0), 0);
   const compositionSummary = composition.length
     ? composition.map((row, index) => `${index + 1}.${categoryNames[row.category_id] || row.category_id} ${Number(row.duration || 0).toFixed(1)}s`).join(" / ")
-    : "未配置结构";
+    : "鏈厤缃粨鏋?;
   const endingSummary = statePayload.ending_template_mode === "random"
-    ? `视频片尾 / 已选 ${selectedEndingNames.length || "目录全部"} / 目录 ${shortPath(statePayload.ending_template_dir || "")}`
-    : `文字片尾 / ${statePayload.ending_cover_template?.name || "未命名模板"}`;
+    ? `瑙嗛鐗囧熬 / 宸查€?${selectedEndingNames.length || "鐩綍鍏ㄩ儴"} / 鐩綍 ${shortPath(statePayload.ending_template_dir || "")}`
+    : `鏂囧瓧鐗囧熬 / ${statePayload.ending_cover_template?.name || "鏈懡鍚嶆ā鏉?}`;
   return [
     {
-      title: "连接生成接口",
-      pendingText: "读取最新素材、模板、BGM 和片尾目录状态。",
-      readyText: "接口可用，已读取最新状态。",
-      configText: "接口 /api/video-matrix/state；用于刷新素材数量、模板列表、BGM 曲库和片尾目录。",
+      title: "杩炴帴鐢熸垚鎺ュ彛",
+      pendingText: "璇诲彇鏈€鏂扮礌鏉愩€佹ā鏉裤€丅GM 鍜岀墖灏剧洰褰曠姸鎬併€?,
+      readyText: "鎺ュ彛鍙敤锛屽凡璇诲彇鏈€鏂扮姸鎬併€?,
+      configText: "鎺ュ彛 /api/video-matrix/state锛涚敤浜庡埛鏂扮礌鏉愭暟閲忋€佹ā鏉垮垪琛ㄣ€丅GM 鏇插簱鍜岀墖灏剧洰褰曘€?,
       run: async (index) => {
-        await animatePreflightProgress(index, 0, "开始连接接口...");
+        await animatePreflightProgress(index, 0, "寮€濮嬭繛鎺ユ帴鍙?..");
         const data = await api("/api/video-matrix/state");
         setLiveData(data);
-        await animatePreflightProgress(index, 100, "接口状态读取完成。");
-        return { status: "pass", detail: "接口可用，已读取最新状态。" };
+        await animatePreflightProgress(index, 100, "鎺ュ彛鐘舵€佽鍙栧畬鎴愩€?);
+        return { status: "pass", detail: "鎺ュ彛鍙敤锛屽凡璇诲彇鏈€鏂扮姸鎬併€? };
       },
     },
     {
-      title: "输出参数",
-      pendingText: "检查数量、并行、帧率、节拍分析时长和输出目录。",
-      readyText: "输出参数完整。",
-      configText: `数量 ${statePayload.output_count} / 并行 ${statePayload.max_workers} / 帧率 ${statePayload.target_fps}fps / 速度 ${statePayload.render_speed_mode || "quality"} / 节拍 ${statePayload.video_duration_min}-${statePayload.video_duration_max}s / 输出 ${formats.join(", ") || "未选择"} / 目录 ${shortPath(statePayload.output_root || "")}`,
+      title: "杈撳嚭鍙傛暟",
+      pendingText: "妫€鏌ユ暟閲忋€佸苟琛屻€佸抚鐜囥€佽妭鎷嶅垎鏋愭椂闀垮拰杈撳嚭鐩綍銆?,
+      readyText: "杈撳嚭鍙傛暟瀹屾暣銆?,
+      configText: `鏁伴噺 ${statePayload.output_count} / 骞惰 ${statePayload.max_workers} / 甯х巼 ${statePayload.target_fps}fps / 閫熷害 ${statePayload.render_speed_mode || "quality"} / 鑺傛媿 ${statePayload.video_duration_min}-${statePayload.video_duration_max}s / 杈撳嚭 ${formats.join(", ") || "鏈€夋嫨"} / 鐩綍 ${shortPath(statePayload.output_root || "")}`,
       run: async (index) => {
-        await animatePreflightProgress(index, 15, "检查生成数量和并行线程...");
+        await animatePreflightProgress(index, 15, "妫€鏌ョ敓鎴愭暟閲忓拰骞惰绾跨▼...");
         const formats = Array.isArray(statePayload.output_options) ? statePayload.output_options.filter(Boolean) : [];
-        if (!Number.isFinite(statePayload.output_count) || statePayload.output_count < 1) return { status: "fail", detail: "生成数量必须大于 0。" };
-        if (!Number.isFinite(statePayload.max_workers) || statePayload.max_workers < 1) return { status: "fail", detail: "并行线程必须大于 0。" };
-        await animatePreflightProgress(index, 45, "检查目标帧率和输出格式...");
-        if (![30, 60].includes(Number(statePayload.target_fps))) return { status: "fail", detail: "目标帧率只能是 30 或 60。" };
-        if (!formats.length) return { status: "fail", detail: "至少需要选择一种输出格式。" };
-        await animatePreflightProgress(index, 75, "检查输出目录和节拍时长...");
-        if (!String(statePayload.output_root || "").trim()) return { status: "fail", detail: "最终视频生成目录不能为空。" };
-        if (Number(statePayload.video_duration_min) > Number(statePayload.video_duration_max)) return { status: "fail", detail: "最小节拍分析时长不能大于最大节拍分析时长。" };
-        await animatePreflightProgress(index, 100, "输出参数检查完成。");
-        return { status: "pass", detail: `${statePayload.output_count} 条 / ${statePayload.max_workers} 线程 / ${statePayload.target_fps}fps / ${formats.join(", ")}` };
+        if (!Number.isFinite(statePayload.output_count) || statePayload.output_count < 1) return { status: "fail", detail: "鐢熸垚鏁伴噺蹇呴』澶т簬 0銆? };
+        if (!Number.isFinite(statePayload.max_workers) || statePayload.max_workers < 1) return { status: "fail", detail: "骞惰绾跨▼蹇呴』澶т簬 0銆? };
+        await animatePreflightProgress(index, 45, "妫€鏌ョ洰鏍囧抚鐜囧拰杈撳嚭鏍煎紡...");
+        if (![30, 60].includes(Number(statePayload.target_fps))) return { status: "fail", detail: "鐩爣甯х巼鍙兘鏄?30 鎴?60銆? };
+        if (!formats.length) return { status: "fail", detail: "鑷冲皯闇€瑕侀€夋嫨涓€绉嶈緭鍑烘牸寮忋€? };
+        await animatePreflightProgress(index, 75, "妫€鏌ヨ緭鍑虹洰褰曞拰鑺傛媿鏃堕暱...");
+        if (!String(statePayload.output_root || "").trim()) return { status: "fail", detail: "鏈€缁堣棰戠敓鎴愮洰褰曚笉鑳戒负绌恒€? };
+        if (Number(statePayload.video_duration_min) > Number(statePayload.video_duration_max)) return { status: "fail", detail: "鏈€灏忚妭鎷嶅垎鏋愭椂闀夸笉鑳藉ぇ浜庢渶澶ц妭鎷嶅垎鏋愭椂闀裤€? };
+        await animatePreflightProgress(index, 100, "杈撳嚭鍙傛暟妫€鏌ュ畬鎴愩€?);
+        return { status: "pass", detail: `${statePayload.output_count} 鏉?/ ${statePayload.max_workers} 绾跨▼ / ${statePayload.target_fps}fps / ${formats.join(", ")}` };
       },
     },
     {
-      title: "模板可用性",
-      pendingText: "检查第一屏封面模板和正文叠层模板是否存在。",
-      readyText: "模板配置可用。",
-      configText: `正文叠层 ${statePayload.template_id || "未选择"} / 第一屏封面 ${statePayload.cover_template_id || "未选择"}`,
+      title: "妯℃澘鍙敤鎬?,
+      pendingText: "妫€鏌ョ涓€灞忓皝闈㈡ā鏉垮拰姝ｆ枃鍙犲眰妯℃澘鏄惁瀛樺湪銆?,
+      readyText: "妯℃澘閰嶇疆鍙敤銆?,
+      configText: `姝ｆ枃鍙犲眰 ${statePayload.template_id || "鏈€夋嫨"} / 绗竴灞忓皝闈?${statePayload.cover_template_id || "鏈€夋嫨"}`,
       run: async (index) => {
-        await animatePreflightProgress(index, 20, "检查正文叠层模板...");
+        await animatePreflightProgress(index, 20, "妫€鏌ユ鏂囧彔灞傛ā鏉?..");
         const live = getLiveData() || {};
         const liveVideoTemplates = live.templates || templates || {};
         const liveCoverTemplates = live.cover_templates || coverTemplates || {};
-        if (!liveVideoTemplates[statePayload.template_id]) return { status: "fail", detail: `正文叠层模板不存在：${statePayload.template_id || "未选择"}` };
-        await animatePreflightProgress(index, 55, "检查第一屏封面模板...");
-        if (!liveCoverTemplates[statePayload.cover_template_id]) return { status: "fail", detail: `第一屏封面模板不存在：${statePayload.cover_template_id || "未选择"}` };
-        await animatePreflightProgress(index, 100, "模板检查完成。");
-        return { status: "pass", detail: `正文 ${statePayload.template_id} / 封面 ${statePayload.cover_template_id}` };
+        if (!liveVideoTemplates[statePayload.template_id]) return { status: "fail", detail: `姝ｆ枃鍙犲眰妯℃澘涓嶅瓨鍦細${statePayload.template_id || "鏈€夋嫨"}` };
+        await animatePreflightProgress(index, 55, "妫€鏌ョ涓€灞忓皝闈㈡ā鏉?..");
+        if (!liveCoverTemplates[statePayload.cover_template_id]) return { status: "fail", detail: `绗竴灞忓皝闈㈡ā鏉夸笉瀛樺湪锛?{statePayload.cover_template_id || "鏈€夋嫨"}` };
+        await animatePreflightProgress(index, 100, "妯℃澘妫€鏌ュ畬鎴愩€?);
+        return { status: "pass", detail: `姝ｆ枃 ${statePayload.template_id} / 灏侀潰 ${statePayload.cover_template_id}` };
       },
     },
     {
-      title: "本地 BGM",
-      pendingText: "检查本地背景音乐库是否有可用 MP3。",
-      readyText: "BGM 可用。",
-      configText: `来源 Local library / 已选 ${statePayload.bgm_library_id || "未指定，生成时随机"} / 曲库目录 ${shortPath(bgmLibraryState.directory || "")}`,
+      title: "鏈湴 BGM",
+      pendingText: "妫€鏌ユ湰鍦拌儗鏅煶涔愬簱鏄惁鏈夊彲鐢?MP3銆?,
+      readyText: "BGM 鍙敤銆?,
+      configText: `鏉ユ簮 Local library / 宸查€?${statePayload.bgm_library_id || "鏈寚瀹氾紝鐢熸垚鏃堕殢鏈?} / 鏇插簱鐩綍 ${shortPath(bgmLibraryState.directory || "")}`,
       run: async (index) => {
-        await animatePreflightProgress(index, 25, "读取本地曲库...");
+        await animatePreflightProgress(index, 25, "璇诲彇鏈湴鏇插簱...");
         const live = getLiveData() || {};
         const localBgm = Array.isArray(live.local_bgm) ? live.local_bgm : bgmLibraryState.local;
-        if (!localBgm.length) return { status: "fail", detail: "本地背景音乐库没有可用 MP3。" };
-        await animatePreflightProgress(index, 70, "核对已选 BGM...");
-        if (statePayload.bgm_library_id && !localBgm.includes(statePayload.bgm_library_id)) return { status: "fail", detail: `已选 BGM 不在本地曲库：${statePayload.bgm_library_id}` };
-        await animatePreflightProgress(index, 100, "BGM 检查完成。");
-        return { status: "pass", detail: statePayload.bgm_library_id ? `已选 ${statePayload.bgm_library_id}` : `本地曲库 ${localBgm.length} 首，生成时随机取 1 首。` };
+        if (!localBgm.length) return { status: "fail", detail: "鏈湴鑳屾櫙闊充箰搴撴病鏈夊彲鐢?MP3銆? };
+        await animatePreflightProgress(index, 70, "鏍稿宸查€?BGM...");
+        if (statePayload.bgm_library_id && !localBgm.includes(statePayload.bgm_library_id)) return { status: "fail", detail: `宸查€?BGM 涓嶅湪鏈湴鏇插簱锛?{statePayload.bgm_library_id}` };
+        await animatePreflightProgress(index, 100, "BGM 妫€鏌ュ畬鎴愩€?);
+        return { status: "pass", detail: statePayload.bgm_library_id ? `宸查€?${statePayload.bgm_library_id}` : `鏈湴鏇插簱 ${localBgm.length} 棣栵紝鐢熸垚鏃堕殢鏈哄彇 1 棣栥€俙 };
       },
     },
     {
-      title: "分类素材",
-      pendingText: "逐个类目检查可用素材数量。",
-      readyText: "启用分类都有素材。",
-      configText: `启用 ${activeIds.length} 类 / 最近素材上限：${categorySummary}`,
+      title: "鍒嗙被绱犳潗",
+      pendingText: "閫愪釜绫荤洰妫€鏌ュ彲鐢ㄧ礌鏉愭暟閲忋€?,
+      readyText: "鍚敤鍒嗙被閮芥湁绱犳潗銆?,
+      configText: `鍚敤 ${activeIds.length} 绫?/ 鏈€杩戠礌鏉愪笂闄愶細${categorySummary}`,
       run: async (index) => {
         const live = getLiveData() || {};
         const counts = live.category_counts || {};
-        if (!activeIds.length) return { status: "fail", detail: "至少需要启用一个素材分类。" };
+        if (!activeIds.length) return { status: "fail", detail: "鑷冲皯闇€瑕佸惎鐢ㄤ竴涓礌鏉愬垎绫汇€? };
         const empty = [];
         for (let categoryIndex = 0; categoryIndex < activeIds.length; categoryIndex += 1) {
           const id = activeIds[categoryIndex];
           const percent = Math.round((categoryIndex / activeIds.length) * 100);
           const label = categoryNames[id] || id;
-          await animatePreflightProgress(index, percent, `检索 ${label}：${Number(counts[id] || 0)} 个素材`);
+          await animatePreflightProgress(index, percent, `妫€绱?${label}锛?{Number(counts[id] || 0)} 涓礌鏉恅);
           await wait(80);
           if (Number(counts[id] || 0) < 1) empty.push(id);
         }
-        await animatePreflightProgress(index, 100, "分类素材逐项检索完成。");
-        if (empty.length) return { status: "fail", detail: `这些分类没有素材：${empty.map((id) => categoryNames[id] || id).join("、")}` };
+        await animatePreflightProgress(index, 100, "鍒嗙被绱犳潗閫愰」妫€绱㈠畬鎴愩€?);
+        if (empty.length) return { status: "fail", detail: `杩欎簺鍒嗙被娌℃湁绱犳潗锛?{empty.map((id) => categoryNames[id] || id).join("銆?)}` };
         const total = activeIds.reduce((sum, id) => sum + Number(counts[id] || 0), 0);
-        return { status: "pass", detail: `${activeIds.length} 个分类可用，共 ${total} 个素材。` };
+        return { status: "pass", detail: `${activeIds.length} 涓垎绫诲彲鐢紝鍏?${total} 涓礌鏉愩€俙 };
       },
     },
     {
-      title: "生成结构",
-      pendingText: "检查片段分类和算法时长配置。",
-      readyText: "生成结构可用。",
-      configText: `结构 ${composition.length} 段 / 合计约 ${compositionSeconds.toFixed(1)}s / ${compositionSummary}`,
+      title: "鐢熸垚缁撴瀯",
+      pendingText: "妫€鏌ョ墖娈靛垎绫诲拰绠楁硶鏃堕暱閰嶇疆銆?,
+      readyText: "鐢熸垚缁撴瀯鍙敤銆?,
+      configText: `缁撴瀯 ${composition.length} 娈?/ 鍚堣绾?${compositionSeconds.toFixed(1)}s / ${compositionSummary}`,
       run: async (index) => {
         const live = getLiveData() || {};
         const counts = live.category_counts || {};
-        if (!composition.length) return { status: "fail", detail: "生成结构不能为空。" };
-        await animatePreflightProgress(index, 12, "检查算法片段时长...");
+        if (!composition.length) return { status: "fail", detail: "鐢熸垚缁撴瀯涓嶈兘涓虹┖銆? };
+        await animatePreflightProgress(index, 12, "妫€鏌ョ畻娉曠墖娈垫椂闀?..");
         const invalidDuration = composition.find((row) => !Number.isFinite(Number(row.duration)) || Number(row.duration) <= 0);
-        if (invalidDuration) return { status: "fail", detail: "生成结构里存在无效算法片段时长。" };
+        if (invalidDuration) return { status: "fail", detail: "鐢熸垚缁撴瀯閲屽瓨鍦ㄦ棤鏁堢畻娉曠墖娈垫椂闀裤€? };
         for (let rowIndex = 0; rowIndex < composition.length; rowIndex += 1) {
           const row = composition[rowIndex];
           const percent = 18 + Math.round(((rowIndex + 1) / composition.length) * 58);
-          await animatePreflightProgress(index, percent, `核对结构第 ${rowIndex + 1} 段：${categoryNames[row.category_id] || row.category_id}`);
+          await animatePreflightProgress(index, percent, `鏍稿缁撴瀯绗?${rowIndex + 1} 娈碉細${categoryNames[row.category_id] || row.category_id}`);
           await wait(45);
         }
         const missing = composition
           .map((row) => row.category_id)
           .filter((id) => !activeIds.includes(id) || Number(counts[id] || 0) < 1);
-        if (missing.length) return { status: "fail", detail: `结构引用了未启用或无素材分类：${[...new Set(missing)].map((id) => categoryNames[id] || id).join("、")}` };
-        await animatePreflightProgress(index, 100, "生成结构检查完成。");
+        if (missing.length) return { status: "fail", detail: `缁撴瀯寮曠敤浜嗘湭鍚敤鎴栨棤绱犳潗鍒嗙被锛?{[...new Set(missing)].map((id) => categoryNames[id] || id).join("銆?)}` };
+        await animatePreflightProgress(index, 100, "鐢熸垚缁撴瀯妫€鏌ュ畬鎴愩€?);
         const seconds = composition.reduce((sum, row) => sum + Number(row.duration || 0), 0);
         const maxDuration = Number(statePayload.video_duration_max || 0);
         const status = seconds > maxDuration ? "warn" : "pass";
         const detail = status === "warn"
-          ? `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒，超过最大节拍分析 ${maxDuration.toFixed(1)} 秒。优化建议：把最大节拍分析时长调到不低于 ${Math.ceil(seconds)} 秒，或减少生成结构片段秒数；不调整也能继续，系统会按结构总时长兜底。`
-          : `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒。`;
+          ? `缁撴瀯 ${composition.length} 娈碉紝鍚堣绾?${seconds.toFixed(1)} 绉掞紝瓒呰繃鏈€澶ц妭鎷嶅垎鏋?${maxDuration.toFixed(1)} 绉掋€備紭鍖栧缓璁細鎶婃渶澶ц妭鎷嶅垎鏋愭椂闀胯皟鍒颁笉浣庝簬 ${Math.ceil(seconds)} 绉掞紝鎴栧噺灏戠敓鎴愮粨鏋勭墖娈电鏁帮紱涓嶈皟鏁翠篃鑳界户缁紝绯荤粺浼氭寜缁撴瀯鎬绘椂闀垮厹搴曘€俙
+          : `缁撴瀯 ${composition.length} 娈碉紝鍚堣绾?${seconds.toFixed(1)} 绉掋€俙;
         return { status, detail };
       },
     },
     {
-      title: "片尾配置",
-      pendingText: "检查文字片尾模板或视频片尾素材是否可读取。",
-      readyText: "片尾配置可用。",
+      title: "鐗囧熬閰嶇疆",
+      pendingText: "妫€鏌ユ枃瀛楃墖灏炬ā鏉挎垨瑙嗛鐗囧熬绱犳潗鏄惁鍙鍙栥€?,
+      readyText: "鐗囧熬閰嶇疆鍙敤銆?,
       configText: endingSummary,
       run: async (index) => {
         const mode = statePayload.ending_template_mode || "dynamic";
-        await animatePreflightProgress(index, 20, "识别片尾模式...");
+        await animatePreflightProgress(index, 20, "璇嗗埆鐗囧熬妯″紡...");
         if (mode === "dynamic") {
-          if (!statePayload.ending_cover_template) return { status: "fail", detail: "文字片尾缺少片尾封面模板配置。" };
-          await animatePreflightProgress(index, 100, "文字片尾模板检查完成。");
-          return { status: "pass", detail: "使用文字片尾模板。" };
+          if (!statePayload.ending_cover_template) return { status: "fail", detail: "鏂囧瓧鐗囧熬缂哄皯鐗囧熬灏侀潰妯℃澘閰嶇疆銆? };
+          await animatePreflightProgress(index, 100, "鏂囧瓧鐗囧熬妯℃澘妫€鏌ュ畬鎴愩€?);
+          return { status: "pass", detail: "浣跨敤鏂囧瓧鐗囧熬妯℃澘銆? };
         }
         const live = getLiveData() || {};
         const endingItems = Array.isArray(live.ending_templates) ? live.ending_templates : endingTemplateState.local;
         const endingNames = new Set(endingItems.map((item) => item.name));
-        if (!endingItems.length) return { status: "fail", detail: "视频片尾目录没有可用素材。" };
-        await animatePreflightProgress(index, 55, "核对已选视频片尾...");
+        if (!endingItems.length) return { status: "fail", detail: "瑙嗛鐗囧熬鐩綍娌℃湁鍙敤绱犳潗銆? };
+        await animatePreflightProgress(index, 55, "鏍稿宸查€夎棰戠墖灏?..");
         if (selectedEndingNames.length) {
           const missing = selectedEndingNames.filter((name) => !endingNames.has(name));
-          if (missing.length) return { status: "fail", detail: `已选视频片尾不存在：${missing.join("、")}` };
-          await animatePreflightProgress(index, 100, "已选视频片尾检查完成。");
-          return { status: "pass", detail: `随机范围 ${selectedEndingNames.length} 个已选视频片尾。` };
+          if (missing.length) return { status: "fail", detail: `宸查€夎棰戠墖灏句笉瀛樺湪锛?{missing.join("銆?)}` };
+          await animatePreflightProgress(index, 100, "宸查€夎棰戠墖灏炬鏌ュ畬鎴愩€?);
+          return { status: "pass", detail: `闅忔満鑼冨洿 ${selectedEndingNames.length} 涓凡閫夎棰戠墖灏俱€俙 };
         }
-        await animatePreflightProgress(index, 100, "视频片尾目录检查完成。");
-        return { status: "pass", detail: `未指定视频片尾，随机范围为目录内 ${endingItems.length} 个素材。` };
+        await animatePreflightProgress(index, 100, "瑙嗛鐗囧熬鐩綍妫€鏌ュ畬鎴愩€?);
+        return { status: "pass", detail: `鏈寚瀹氳棰戠墖灏撅紝闅忔満鑼冨洿涓虹洰褰曞唴 ${endingItems.length} 涓礌鏉愩€俙 };
       },
     },
     {
-      title: "生成文案",
-      pendingText: "检查字幕背板和片尾文案。",
-      readyText: "文案字段可用。",
-      configText: `字幕背板 ${shortText(statePayload.hud_text, 32) || "空"} / 片尾 ${shortText(statePayload.follow_text, 32) || "空"} / 上标题 ${statePayload.headline_ai_enabled ? "AI 批量生成" : "固定文案"}`,
+      title: "鐢熸垚鏂囨",
+      pendingText: "妫€鏌ュ瓧骞曡儗鏉垮拰鐗囧熬鏂囨銆?,
+      readyText: "鏂囨瀛楁鍙敤銆?,
+      configText: `瀛楀箷鑳屾澘 ${shortText(statePayload.hud_text, 32) || "绌?} / 鐗囧熬 ${shortText(statePayload.follow_text, 32) || "绌?} / 涓婃爣棰?${statePayload.headline_ai_enabled ? "AI 鎵归噺鐢熸垚" : "鍥哄畾鏂囨"}`,
       run: async (index) => {
-        await animatePreflightProgress(index, 55, "检查字幕背板和片尾文案...");
+        await animatePreflightProgress(index, 55, "妫€鏌ュ瓧骞曡儗鏉垮拰鐗囧熬鏂囨...");
         const emptyFields = [
-          ["字幕背板文本", statePayload.hud_text],
-          ["片尾文案", statePayload.follow_text],
+          ["瀛楀箷鑳屾澘鏂囨湰", statePayload.hud_text],
+          ["鐗囧熬鏂囨", statePayload.follow_text],
         ].filter(([, value]) => !String(value || "").trim()).map(([label]) => label);
-        await animatePreflightProgress(index, 100, "文案字段检查完成。");
-        if (emptyFields.length) return { status: "warn", detail: `${emptyFields.join("、")}为空，仍可生成但画面文案会变少。` };
-        return { status: "pass", detail: statePayload.headline_ai_enabled ? "字幕背板、片尾文案可用；上标题将按生成数量由 AI 批量生成。" : "字幕背板、片尾文案可用；上标题使用固定文案。" };
+        await animatePreflightProgress(index, 100, "鏂囨瀛楁妫€鏌ュ畬鎴愩€?);
+        if (emptyFields.length) return { status: "warn", detail: `${emptyFields.join("銆?)}涓虹┖锛屼粛鍙敓鎴愪絾鐢婚潰鏂囨浼氬彉灏戙€俙 };
+        return { status: "pass", detail: statePayload.headline_ai_enabled ? "瀛楀箷鑳屾澘銆佺墖灏炬枃妗堝彲鐢紱涓婃爣棰樺皢鎸夌敓鎴愭暟閲忕敱 AI 鎵归噺鐢熸垚銆? : "瀛楀箷鑳屾澘銆佺墖灏炬枃妗堝彲鐢紱涓婃爣棰樹娇鐢ㄥ浐瀹氭枃妗堛€? };
       },
     },
     {
-      title: "提交完整性",
-      pendingText: "检查即将提交给生成接口的核心字段。",
-      readyText: "提交载荷完整。",
-      configText: `核心字段：模板、封面、BGM、片尾、分类、生成结构、输出目录；提交格式 FormData + payload JSON`,
+      title: "鎻愪氦瀹屾暣鎬?,
+      pendingText: "妫€鏌ュ嵆灏嗘彁浜ょ粰鐢熸垚鎺ュ彛鐨勬牳蹇冨瓧娈点€?,
+      readyText: "鎻愪氦杞借嵎瀹屾暣銆?,
+      configText: `鏍稿績瀛楁锛氭ā鏉裤€佸皝闈€丅GM銆佺墖灏俱€佸垎绫汇€佺敓鎴愮粨鏋勩€佽緭鍑虹洰褰曪紱鎻愪氦鏍煎紡 FormData + payload JSON`,
       run: async (index) => {
-        await animatePreflightProgress(index, 25, "核对核心字段...");
+        await animatePreflightProgress(index, 25, "鏍稿鏍稿績瀛楁...");
         const required = ["template_id", "cover_template_id", "output_root", "composition_sequence", "active_category_ids"];
         const missing = required.filter((key) => {
           const value = statePayload[key];
           return Array.isArray(value) ? !value.length : !value;
         });
-        await animatePreflightProgress(index, 70, "核对片尾和 BGM 字段...");
+        await animatePreflightProgress(index, 70, "鏍稿鐗囧熬鍜?BGM 瀛楁...");
         if (statePayload.ending_template_mode === "random" && !statePayload.ending_template_dir) missing.push("ending_template_dir");
         if (statePayload.bgm_source !== "Local library") missing.push("bgm_source");
-        await animatePreflightProgress(index, 100, "提交载荷检查完成。");
-        if (missing.length) return { status: "fail", detail: `提交字段不完整：${missing.join("、")}` };
-        return { status: "pass", detail: "核心字段完整，可以进入最终确认。" };
+        await animatePreflightProgress(index, 100, "鎻愪氦杞借嵎妫€鏌ュ畬鎴愩€?);
+        if (missing.length) return { status: "fail", detail: `鎻愪氦瀛楁涓嶅畬鏁达細${missing.join("銆?)}` };
+        return { status: "pass", detail: "鏍稿績瀛楁瀹屾暣锛屽彲浠ヨ繘鍏ユ渶缁堢‘璁ゃ€? };
       },
     },
   ];
@@ -2650,23 +2734,23 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
 function preflightChecksHtml(checks) {
   return `
     <div class="preflight-summary">
-      <strong data-preflight-summary-title>正在预检</strong>
-      <span data-preflight-summary-detail>逐项确认当前生成条件，失败项会阻止提交。</span>
+      <strong data-preflight-summary-title>姝ｅ湪棰勬</strong>
+      <span data-preflight-summary-detail>閫愰」纭褰撳墠鐢熸垚鏉′欢锛屽け璐ラ」浼氶樆姝㈡彁浜ゃ€?/span>
     </div>
     <ol class="preflight-list">
       ${checks.map((check, index) => `
         <li class="preflight-step" data-preflight-step="${index}">
-          <span class="preflight-status" data-preflight-status>·</span>
+          <span class="preflight-status" data-preflight-status>路</span>
           <div>
             <strong>${escapeHtml(check.title)}</strong>
-            <div class="preflight-config">${escapeHtml(check.configText || "使用当前页面已保存配置。")}</div>
+            <div class="preflight-config">${escapeHtml(check.configText || "浣跨敤褰撳墠椤甸潰宸蹭繚瀛橀厤缃€?)}</div>
             <small data-preflight-detail>${escapeHtml(check.pendingText || "")}</small>
             <div class="preflight-progress-wrap">
               <div class="preflight-progress" aria-hidden="true"><div data-preflight-progress></div></div>
               <span data-preflight-percent>0%</span>
             </div>
           </div>
-          <span class="preflight-badge" data-preflight-badge>等待</span>
+          <span class="preflight-badge" data-preflight-badge>绛夊緟</span>
         </li>
       `).join("")}
     </ol>
@@ -2688,10 +2772,10 @@ function setPreflightStepStatus(index, status, detail) {
   const icon = node.querySelector("[data-preflight-status]");
   const badge = node.querySelector("[data-preflight-badge]");
   const detailNode = node.querySelector("[data-preflight-detail]");
-  const icons = { checking: "...", pass: "✓", warn: "!", fail: "×" };
-  const labels = { checking: "检查中", pass: "通过", warn: "提醒", fail: "失败" };
-  if (icon) icon.textContent = icons[status] || "·";
-  if (badge) badge.textContent = labels[status] || "等待";
+  const icons = { checking: "...", pass: "鉁?, warn: "!", fail: "脳" };
+  const labels = { checking: "妫€鏌ヤ腑", pass: "閫氳繃", warn: "鎻愰啋", fail: "澶辫触" };
+  if (icon) icon.textContent = icons[status] || "路";
+  if (badge) badge.textContent = labels[status] || "绛夊緟";
   if (detailNode) detailNode.textContent = detail || "";
   if (status === "checking") setPreflightProgress(index, 0);
   if (status === "pass" || status === "warn" || status === "fail") setPreflightProgress(index, 100);
@@ -2747,35 +2831,35 @@ function generationConfirmHtml(statePayload) {
   const categories = materialCategories({ settings });
   const categoryNames = Object.fromEntries(categories.map((category) => [category.id, category.label]));
   const compositionRows = (statePayload.composition_sequence || []).map((row, index) =>
-    `<tr><td>${index + 1}</td><td>${escapeHtml(categoryNames[row.category_id] || row.category_id)}</td><td>${escapeHtml(row.category_id)}</td><td>${Number(row.duration || 0).toFixed(1)} 秒（参考）</td></tr>`
-  ).join("") || `<tr><td colspan="4">未配置生成结构</td></tr>`;
+    `<tr><td>${index + 1}</td><td>${escapeHtml(categoryNames[row.category_id] || row.category_id)}</td><td>${escapeHtml(row.category_id)}</td><td>${Number(row.duration || 0).toFixed(1)} 绉掞紙鍙傝€冿級</td></tr>`
+  ).join("") || `<tr><td colspan="4">鏈厤缃敓鎴愮粨鏋?/td></tr>`;
   return `
     <div class="confirm-summary">
-      <div><span>生成数量</span><strong>${statePayload.output_count}</strong></div>
-      <div><span>并行线程</span><strong>${statePayload.max_workers}</strong></div>
-      <div><span>最小节拍分析</span><strong>${statePayload.video_duration_min} 秒</strong></div>
-      <div><span>最大节拍分析</span><strong>${statePayload.video_duration_max} 秒</strong></div>
-      <div><span>目标帧率</span><strong>${statePayload.target_fps} fps</strong></div>
-      <div><span>生成速度</span><strong>${escapeHtml(statePayload.render_speed_mode || "quality")}</strong></div>
-      <div><span>输出格式</span><strong>${escapeHtml((statePayload.output_options || []).join(", "))}</strong></div>
+      <div><span>鐢熸垚鏁伴噺</span><strong>${statePayload.output_count}</strong></div>
+      <div><span>骞惰绾跨▼</span><strong>${statePayload.max_workers}</strong></div>
+      <div><span>鏈€灏忚妭鎷嶅垎鏋?/span><strong>${statePayload.video_duration_min} 绉?/strong></div>
+      <div><span>鏈€澶ц妭鎷嶅垎鏋?/span><strong>${statePayload.video_duration_max} 绉?/strong></div>
+      <div><span>鐩爣甯х巼</span><strong>${statePayload.target_fps} fps</strong></div>
+      <div><span>鐢熸垚閫熷害</span><strong>${escapeHtml(statePayload.render_speed_mode || "quality")}</strong></div>
+      <div><span>杈撳嚭鏍煎紡</span><strong>${escapeHtml((statePayload.output_options || []).join(", "))}</strong></div>
     </div>
     <section>
-      <h4>输出目录</h4>
+      <h4>杈撳嚭鐩綍</h4>
       <code>${escapeHtml(statePayload.output_root)}</code>
     </section>
     <section>
-      <h4>生成结构</h4>
-      <table><thead><tr><th>#</th><th>分类</th><th>ID</th><th>基础计划时长</th></tr></thead><tbody>${compositionRows}</tbody></table>
-      <small>提示：最终片段时长由动态算法按节拍和素材有效区间实时调整，这里仅展示基础计划值。</small>
+      <h4>鐢熸垚缁撴瀯</h4>
+      <table><thead><tr><th>#</th><th>鍒嗙被</th><th>ID</th><th>鍩虹璁″垝鏃堕暱</th></tr></thead><tbody>${compositionRows}</tbody></table>
+      <small>鎻愮ず锛氭渶缁堢墖娈垫椂闀跨敱鍔ㄦ€佺畻娉曟寜鑺傛媿鍜岀礌鏉愭湁鏁堝尯闂村疄鏃惰皟鏁达紝杩欓噷浠呭睍绀哄熀纭€璁″垝鍊笺€?/small>
     </section>
     <section class="confirm-algorithm">
-      <h4>本次算法框架</h4>
+      <h4>鏈绠楁硶妗嗘灦</h4>
       <ol>
-        <li>按启用分类读取素材目录，每类最多取“最近素材”数量对应的新文件。</li>
-        <li>将候选素材归一化为 1080:1920、${statePayload.target_fps}fps 的短视频片段库。</li>
-        <li>按叙事骨架、分类顺序和片段秒数，为每条视频抽取不同素材片段。</li>
-        <li>分析本地背景音乐节拍，把片段切换点尽量对齐节奏窗口。</li>
-        <li>按当前模板、字幕背板文本和片尾文案并行渲染，导出到最终视频目录。</li>
+        <li>鎸夊惎鐢ㄥ垎绫昏鍙栫礌鏉愮洰褰曪紝姣忕被鏈€澶氬彇鈥滄渶杩戠礌鏉愨€濇暟閲忓搴旂殑鏂版枃浠躲€?/li>
+        <li>灏嗗€欓€夌礌鏉愬綊涓€鍖栦负 1080:1920銆?{statePayload.target_fps}fps 鐨勭煭瑙嗛鐗囨搴撱€?/li>
+        <li>鎸夊彊浜嬮鏋躲€佸垎绫婚『搴忓拰鐗囨绉掓暟锛屼负姣忔潯瑙嗛鎶藉彇涓嶅悓绱犳潗鐗囨銆?/li>
+        <li>鍒嗘瀽鏈湴鑳屾櫙闊充箰鑺傛媿锛屾妸鐗囨鍒囨崲鐐瑰敖閲忓榻愯妭濂忕獥鍙ｃ€?/li>
+        <li>鎸夊綋鍓嶆ā鏉裤€佸瓧骞曡儗鏉挎枃鏈拰鐗囧熬鏂囨骞惰娓叉煋锛屽鍑哄埌鏈€缁堣棰戠洰褰曘€?/li>
       </ol>
     </section>
   `;
@@ -2811,6 +2895,8 @@ function collectState() {
     ending_cover_templates: state.ending_cover_templates,
     ending_cover_template: endingCoverTemplate,
     bgm_source: "Local library", bgm_library_id: selectedBgmLibraryId(),
+    mining_bgm_volume: Number($("miningBgmVolume")?.value || state.mining_bgm_volume || 1),
+    library_bgm_volume: Number($("libraryBgmVolume")?.value || state.library_bgm_volume || 0.35),
     composition_sequence: state.composition_sequence,
     composition_customized: Boolean(state.composition_customized),
     active_category_ids: selectedActiveCategoryIds(categories),
@@ -2878,9 +2964,9 @@ function materialCategories(data = { settings }) {
   const source = data.settings || settings;
   const categories = Array.isArray(source.material_categories) ? source.material_categories : [];
   return categories.length ? categories : [
-    { id: "category_A", label: "A 类" },
-    { id: "category_B", label: "B 类" },
-    { id: "category_C", label: "C 类" },
+    { id: "category_A", label: "A 绫? },
+    { id: "category_B", label: "B 绫? },
+    { id: "category_C", label: "C 绫? },
   ];
 }
 
@@ -2907,17 +2993,17 @@ function narrativeTemplateSequence(template) {
 function narrativeTemplateDisplayName(template) {
   const id = typeof template === "object" ? String(template.id || "").trim() : String(template || "").trim();
   const rawName = typeof template === "object" ? String(template.name || "").trim() : "";
-  return narrativeTemplateNameMap[id] || rawName || id || "默认结构";
+  return narrativeTemplateNameMap[id] || rawName || id || "榛樿缁撴瀯";
 }
 
 function narrativeAccountPoolDisplayName(poolId) {
   const id = String(poolId || "").trim();
-  return narrativeAccountPoolNameMap[id] || narrativeTemplateNameMap[id] || id || "默认账号池";
+  return narrativeAccountPoolNameMap[id] || narrativeTemplateNameMap[id] || id || "榛樿璐﹀彿姹?;
 }
 
 function narrativeTemplateLabel(templateId) {
   const id = String(templateId || "").trim();
-  if (!id) return "默认结构";
+  if (!id) return "榛樿缁撴瀯";
   const template = narrativeTemplates().find((item) => item.id === id);
   return template ? narrativeTemplateDisplayName(template) : narrativeTemplateDisplayName(id);
 }
@@ -2929,7 +3015,7 @@ function shortPath(value) {
 
 function shortText(value, maxLength = 36) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}鈥 : text;
 }
 
 function outputRootPath() {
@@ -2949,16 +3035,16 @@ function renderBgm(data) {
   if (!bgmPanel) return;
   bgmPanel.innerHTML = `
     <div class="bgm-label-row">
-      <strong>本地背景音乐</strong>
-      <button class="help-dot" type="button" aria-label="背景音乐目录" title="把 MP3 文件放到：${escapeHtml(localBgmDir)}">?</button>
+      <strong>鏈湴鑳屾櫙闊充箰</strong>
+      <button class="help-dot" type="button" aria-label="鑳屾櫙闊充箰鐩綍" title="鎶?MP3 鏂囦欢鏀惧埌锛?{escapeHtml(localBgmDir)}">?</button>
     </div>
     <p id="bgmLibraryHint" class="bgm-library-hint"></p>
     <div class="links bgm-links"></div>`;
   $("bgmLibraryHint").textContent = localBgm.length
     ? (state.bgm_library_id
-      ? `已选中唯一背景音乐：${state.bgm_library_id}`
-      : `已找到 ${localBgm.length} 首本地音频，未选中时生成会随机取 1 首：${localBgmDir}`)
-    : `请把 MP3 文件放入：${localBgmDir}，然后刷新页面。`;
+      ? `宸查€変腑鍞竴鑳屾櫙闊充箰锛?{state.bgm_library_id}`
+      : `宸叉壘鍒?${localBgm.length} 棣栨湰鍦伴煶棰戯紝鏈€変腑鏃剁敓鎴愪細闅忔満鍙?1 棣栵細${localBgmDir}`)
+    : `璇锋妸 MP3 鏂囦欢鏀惧叆锛?{localBgmDir}锛岀劧鍚庡埛鏂伴〉闈€俙;
   document.querySelector("#bgmPanel .links").innerHTML = Object.values(data.bgm_library || {}).map(item => `<a href="${item.download_page}" target="_blank" rel="noopener">${item.name}</a>`).join("");
 }
 function toggleBgmLibraryPopover() {
@@ -2975,23 +3061,23 @@ function toggleBgmLibraryPopover() {
   const localList = sortedLocalBgm.length
     ? sortedLocalBgm.map((name) => `
       <li class="bgm-local-item ${name === selectedBgm ? "is-selected" : ""}" data-bgm-name="${escapeHtml(name)}">
-        <button type="button" class="bgm-local-select" data-bgm-select="${escapeHtml(name)}" aria-pressed="${name === selectedBgm ? "true" : "false"}" title="设为本次唯一背景音乐">
+        <button type="button" class="bgm-local-select" data-bgm-select="${escapeHtml(name)}" aria-pressed="${name === selectedBgm ? "true" : "false"}" title="璁句负鏈鍞竴鑳屾櫙闊充箰">
           <span class="bgm-select-check" aria-hidden="true"></span>
           <span>${escapeHtml(name)}</span>
         </button>
         <audio controls preload="none" src="/api/video-matrix/bgm/${encodeURIComponent(name)}"></audio>
       </li>`).join("")
-    : "<li>暂无本地 MP3 文件</li>";
+    : "<li>鏆傛棤鏈湴 MP3 鏂囦欢</li>";
   panel.innerHTML = `
     <div class="bgm-popover-head">
       <div>
-        <strong>本地曲库列表</strong>
-        <small title="${escapeHtml(bgmLibraryState.directory)}">下载目录：${escapeHtml(shortPath(bgmLibraryState.directory))}</small>
+        <strong>鏈湴鏇插簱鍒楄〃</strong>
+        <small title="${escapeHtml(bgmLibraryState.directory)}">涓嬭浇鐩綍锛?{escapeHtml(shortPath(bgmLibraryState.directory))}</small>
       </div>
-      <button id="toggleBgmLibrarySize" type="button" class="secondary">收起</button>
+      <button id="toggleBgmLibrarySize" type="button" class="secondary">鏀惰捣</button>
     </div>
     <section class="bgm-local-section">
-      <strong>本地曲库</strong>
+      <strong>鏈湴鏇插簱</strong>
       <ul>${localList}</ul>
     </section>
   `;
@@ -3042,7 +3128,7 @@ function renderRadio(containerId, name, options, selected, onchange) {
 function radioValue(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value || ""; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function syncNumber(id) { const el = $(id); if (!el) return; el.oninput = () => { let value = Number(el.value || 3); value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value)); if (String(value) !== el.value) el.value = value; if (id === "outputCount") $("metricCount").textContent = el.value; scheduleStateSave(); }; }
-function syncRange(id) { bindRangeControl(id, () => { if (id === "outputCount") $("metricCount").textContent = $(id).value; if (id === "maxWorkers") { $("metricWorkers").textContent = $(id).value; $("maxWorkersValue").textContent = $(id).value; } scheduleStateSave(); }); }
+function syncRange(id) { bindRangeControl(id, () => { if (id === "outputCount") $("metricCount").textContent = $(id).value; if (id === "maxWorkers") { $("metricWorkers").textContent = $(id).value; $("maxWorkersValue").textContent = $(id).value; } if (id === "miningBgmVolume") $("miningBgmVolumeValue").textContent = Number($(id).value).toFixed(2); if (id === "libraryBgmVolume") $("libraryBgmVolumeValue").textContent = Number($(id).value).toFixed(2); scheduleStateSave(); }); }
 function rangeControlHtml({ id = "", key = "", label, min, max, step = 1, value, className = "" }) {
   const attr = key ? `data-key="${escapeHtml(key)}"` : "";
   const rangeId = id || `control-${key}`;
@@ -3133,10 +3219,10 @@ function renderDedupeReport(job) {
       const narrativeName = narrativeTemplateLabel(narrativeId);
       const avoidanceSummary = dedupeAvoidanceSummary(reasons, dedupe);
       const scores = [
-        ["视觉", report.visual_score],
-        ["音频", report.audio_score],
-        ["文本", report.text_score],
-        ["结构", report.structure_score],
+        ["瑙嗚", report.visual_score],
+        ["闊抽", report.audio_score],
+        ["鏂囨湰", report.text_score],
+        ["缁撴瀯", report.structure_score],
       ].map(([label, value]) => `<span class="dedupe-score ${scoreRiskClass(value)}">${label} ${scorePercent(value)}</span>`).join("");
       const reasonChips = reasons.map((reason) =>
         `<span class="dedupe-reason ${reasonRiskClass(reason)}">${escapeHtml(dedupeReasonLabel(reason))}</span>`
@@ -3144,19 +3230,19 @@ function renderDedupeReport(job) {
     return `<article class="dedupe-report-row">
       <div class="dedupe-report-main">
         <span class="dedupe-status ${escapeHtml(displayStatus)}">${escapeHtml(dedupeStatusLabel(displayStatus, retryCount))}</span>
-        <strong>${escapeHtml(String(asset.name || asset.video_path || `视频 ${index + 1}`).split(/[\\/]/).pop())}</strong>
+        <strong>${escapeHtml(String(asset.name || asset.video_path || `瑙嗛 ${index + 1}`).split(/[\\/]/).pop())}</strong>
       </div>
       <p class="dedupe-conclusion">${escapeHtml(dedupeConclusion(displayStatus, reasons, retryCount))}</p>
-      <div class="dedupe-narrative"><span>骨架</span><b title="${escapeHtml(narrativeId)}">${escapeHtml(narrativeName)}</b></div>
-      <div class="dedupe-avoidance"><span>避重来源</span><b>${escapeHtml(avoidanceSummary)}</b></div>
+      <div class="dedupe-narrative"><span>楠ㄦ灦</span><b title="${escapeHtml(narrativeId)}">${escapeHtml(narrativeName)}</b></div>
+      <div class="dedupe-avoidance"><span>閬块噸鏉ユ簮</span><b>${escapeHtml(avoidanceSummary)}</b></div>
       <div class="dedupe-scores">${scores}</div>
       <div class="dedupe-reasons">${reasonChips}</div>
       <div class="dedupe-suggestion">${escapeHtml(dedupeSuggestion(reasons, report))}</div>
     </article>`;
   }).join("");
   box.innerHTML = `<div class="dedupe-report-head">
-    <strong>去重报告</strong>
-    <span>${escapeHtml(summarizeDedupeStatuses(assets) || "等待更多结果")}</span>
+    <strong>鍘婚噸鎶ュ憡</strong>
+    <span>${escapeHtml(summarizeDedupeStatuses(assets) || "绛夊緟鏇村缁撴灉")}</span>
   </div><div class="dedupe-report-list">${rows}</div>`;
   box.classList.remove("hidden");
 }
@@ -3176,19 +3262,19 @@ function summarizeDedupeStatuses(assets) {
   });
   return Object.entries(counts)
     .map(([status, count]) => `${dedupeStatusLabel(status)} ${count}`)
-    .join("，");
+    .join("锛?);
 }
 
 function dedupeStatusLabel(status, retryCount = 0) {
-  if (status === "recut_passed" && retryCount > 0) return `重剪 ${retryCount} 次通过`;
+  if (status === "recut_passed" && retryCount > 0) return `閲嶅壀 ${retryCount} 娆￠€氳繃`;
   return ({
-    pass: "通过",
-    suggest_recut: "建议重剪",
-    recut_passed: "重剪后通过",
-    manual_review: "人工复核",
-    retry: "待重剪",
-    borderline: "边界重复",
-  })[status] || status || "通过";
+    pass: "閫氳繃",
+    suggest_recut: "寤鸿閲嶅壀",
+    recut_passed: "閲嶅壀鍚庨€氳繃",
+    manual_review: "浜哄伐澶嶆牳",
+    retry: "寰呴噸鍓?,
+    borderline: "杈圭晫閲嶅",
+  })[status] || status || "閫氳繃";
 }
 
 function dedupePriorityWeight(status) {
@@ -3203,13 +3289,13 @@ function dedupePriorityWeight(status) {
 }
 
 function dedupeConclusion(status, reasons, retryCount = 0) {
-  if (status === "manual_review") return "需复核：重复风险较高，请人工确认。";
-  if (reasons.includes("preflight_limited_pool")) return "前置避重已降级：可用素材或文本候选不足，系统选择了当前最低风险版本。";
-  if (status === "suggest_recut") return "建议重剪：单项相似度偏高，直接发布容易撞首屏或文案。";
-  if (status === "recut_passed") return retryCount > 0 ? `通过：系统已自动重剪 ${retryCount} 次。` : "通过：系统已自动重剪。";
-  if (reasons.includes("same_hook_clip")) return "注意：Hook 镜头相同，建议关注首屏差异。";
-  if (reasons.includes("text_near") || reasons.includes("structure_near")) return "注意：文本或结构接近，当前仍在阈值内。";
-  return "通过：未发现明显重复。";
+  if (status === "manual_review") return "闇€澶嶆牳锛氶噸澶嶉闄╄緝楂橈紝璇蜂汉宸ョ‘璁ゃ€?;
+  if (reasons.includes("preflight_limited_pool")) return "鍓嶇疆閬块噸宸查檷绾э細鍙敤绱犳潗鎴栨枃鏈€欓€変笉瓒筹紝绯荤粺閫夋嫨浜嗗綋鍓嶆渶浣庨闄╃増鏈€?;
+  if (status === "suggest_recut") return "寤鸿閲嶅壀锛氬崟椤圭浉浼煎害鍋忛珮锛岀洿鎺ュ彂甯冨鏄撴挒棣栧睆鎴栨枃妗堛€?;
+  if (status === "recut_passed") return retryCount > 0 ? `閫氳繃锛氱郴缁熷凡鑷姩閲嶅壀 ${retryCount} 娆°€俙 : "閫氳繃锛氱郴缁熷凡鑷姩閲嶅壀銆?;
+  if (reasons.includes("same_hook_clip")) return "娉ㄦ剰锛欻ook 闀滃ご鐩稿悓锛屽缓璁叧娉ㄩ灞忓樊寮傘€?;
+  if (reasons.includes("text_near") || reasons.includes("structure_near")) return "娉ㄦ剰锛氭枃鏈垨缁撴瀯鎺ヨ繎锛屽綋鍓嶄粛鍦ㄩ槇鍊煎唴銆?;
+  return "閫氳繃锛氭湭鍙戠幇鏄庢樉閲嶅銆?;
 }
 
 function dedupeDisplayStatus(status, reasons, report = {}) {
@@ -3223,54 +3309,54 @@ function dedupeDisplayStatus(status, reasons, report = {}) {
 
 function dedupeReasonLabel(reason) {
   return ({
-    low_cost_dedupe_passed: "低成本检测通过",
-    signature_exact: "组合签名重复",
-    segment_exact: "片段重复",
-    same_hook_clip: "Hook 镜头相同",
-    hook_offset_shifted: "Hook 已错开起点",
-    visual_plan_key_reuse: "首屏组合重复",
-    visual_near: "画面高度相似",
-    same_bgm: "BGM 相同",
-    same_bgm_offset_shifted: "BGM 已错开起点",
-    text_near: "标题/字幕近似",
-    structure_near: "叙事结构近似",
-    same_structure_variant: "结构变体相同",
-    visual_preflight_ok: "视觉前置避重",
-    visual_preflight_avoided: "视觉候选已避让",
-    ai_text_variant: "AI 文本变体",
-    template_text_variant: "模板文本变体",
-    text_preflight_avoided: "文本候选已避让",
-    structure_preflight_ok: "结构前置避重",
-    structure_preflight_avoided: "结构候选已避让",
-    bgm_offset_used: "BGM 随机切片",
-    preflight_limited_pool: "候选池不足",
+    low_cost_dedupe_passed: "浣庢垚鏈娴嬮€氳繃",
+    signature_exact: "缁勫悎绛惧悕閲嶅",
+    segment_exact: "鐗囨閲嶅",
+    same_hook_clip: "Hook 闀滃ご鐩稿悓",
+    hook_offset_shifted: "Hook 宸查敊寮€璧风偣",
+    visual_plan_key_reuse: "棣栧睆缁勫悎閲嶅",
+    visual_near: "鐢婚潰楂樺害鐩镐技",
+    same_bgm: "BGM 鐩稿悓",
+    same_bgm_offset_shifted: "BGM 宸查敊寮€璧风偣",
+    text_near: "鏍囬/瀛楀箷杩戜技",
+    structure_near: "鍙欎簨缁撴瀯杩戜技",
+    same_structure_variant: "缁撴瀯鍙樹綋鐩稿悓",
+    visual_preflight_ok: "瑙嗚鍓嶇疆閬块噸",
+    visual_preflight_avoided: "瑙嗚鍊欓€夊凡閬胯",
+    ai_text_variant: "AI 鏂囨湰鍙樹綋",
+    template_text_variant: "妯℃澘鏂囨湰鍙樹綋",
+    text_preflight_avoided: "鏂囨湰鍊欓€夊凡閬胯",
+    structure_preflight_ok: "缁撴瀯鍓嶇疆閬块噸",
+    structure_preflight_avoided: "缁撴瀯鍊欓€夊凡閬胯",
+    bgm_offset_used: "BGM 闅忔満鍒囩墖",
+    preflight_limited_pool: "鍊欓€夋睜涓嶈冻",
   })[reason] || String(reason || "");
 }
 
 function dedupeAvoidanceSummary(reasons, dedupe = {}) {
   const items = [];
-  if (reasons.includes("visual_preflight_ok") || reasons.includes("visual_preflight_avoided") || dedupe.visual_plan_key) items.push("首屏调度");
-  if (reasons.includes("ai_text_variant")) items.push("AI 文本");
-  if (reasons.includes("template_text_variant")) items.push("模板文本");
-  if (reasons.includes("structure_preflight_ok") || reasons.includes("structure_preflight_avoided") || dedupe.structure_variant_id) items.push("结构轮换");
-  if (reasons.includes("bgm_offset_used") || dedupe.bgm_start_offset > 0) items.push("BGM 切片");
-  return items.length ? Array.from(new Set(items)).join(" / ") : "常规去重";
+  if (reasons.includes("visual_preflight_ok") || reasons.includes("visual_preflight_avoided") || dedupe.visual_plan_key) items.push("棣栧睆璋冨害");
+  if (reasons.includes("ai_text_variant")) items.push("AI 鏂囨湰");
+  if (reasons.includes("template_text_variant")) items.push("妯℃澘鏂囨湰");
+  if (reasons.includes("structure_preflight_ok") || reasons.includes("structure_preflight_avoided") || dedupe.structure_variant_id) items.push("缁撴瀯杞崲");
+  if (reasons.includes("bgm_offset_used") || dedupe.bgm_start_offset > 0) items.push("BGM 鍒囩墖");
+  return items.length ? Array.from(new Set(items)).join(" / ") : "甯歌鍘婚噸";
 }
 
 function dedupeSuggestion(reasons, report = {}) {
   const visual = Number(report.visual_score || 0);
   const text = Number(report.text_score || 0);
   const structure = Number(report.structure_score || 0);
-  if (reasons.includes("signature_exact") || reasons.includes("segment_exact")) return "解决方案：丢弃该候选，重新抽取镜头组合。";
-  if (reasons.includes("preflight_limited_pool")) return "解决方案：补充更多 Hook 素材、AI 文本候选或 BGM 长音频，降低候选池不足带来的重复风险。";
-  if (reasons.includes("visual_preflight_avoided")) return "解决方案：Hook 候选不足，建议补充同类首屏素材或增加可用起点标注。";
-  if (reasons.includes("text_preflight_avoided")) return "解决方案：AI 文本候选不足，建议增加素材标签或扩大 Spark 文案生成数量。";
-  if (reasons.includes("structure_preflight_avoided")) return "解决方案：叙事结构候选不足，建议增加分类素材或扩展骨架变体。";
-  if (reasons.includes("same_hook_clip") || reasons.includes("visual_near") || visual >= 0.9) return "解决方案：换 Hook 镜头，或把首 1 秒切到不同分类/不同起点，再换封面帧。";
-  if (reasons.includes("text_near") || text >= 0.96) return "解决方案：重写字幕第一句和标题，避免同一句开头连续出现。";
-  if (reasons.includes("structure_near") || structure >= 0.86) return "解决方案：换叙事骨架或打乱镜头顺序。";
-  if (reasons.includes("same_bgm")) return "解决方案：换 BGM，或至少错开音乐起点。";
-  return "解决方案：无需处理，可进入发布池。";
+  if (reasons.includes("signature_exact") || reasons.includes("segment_exact")) return "瑙ｅ喅鏂规锛氫涪寮冭鍊欓€夛紝閲嶆柊鎶藉彇闀滃ご缁勫悎銆?;
+  if (reasons.includes("preflight_limited_pool")) return "瑙ｅ喅鏂规锛氳ˉ鍏呮洿澶?Hook 绱犳潗銆丄I 鏂囨湰鍊欓€夋垨 BGM 闀块煶棰戯紝闄嶄綆鍊欓€夋睜涓嶈冻甯︽潵鐨勯噸澶嶉闄┿€?;
+  if (reasons.includes("visual_preflight_avoided")) return "瑙ｅ喅鏂规锛欻ook 鍊欓€変笉瓒筹紝寤鸿琛ュ厖鍚岀被棣栧睆绱犳潗鎴栧鍔犲彲鐢ㄨ捣鐐规爣娉ㄣ€?;
+  if (reasons.includes("text_preflight_avoided")) return "瑙ｅ喅鏂规锛欰I 鏂囨湰鍊欓€変笉瓒筹紝寤鸿澧炲姞绱犳潗鏍囩鎴栨墿澶?Spark 鏂囨鐢熸垚鏁伴噺銆?;
+  if (reasons.includes("structure_preflight_avoided")) return "瑙ｅ喅鏂规锛氬彊浜嬬粨鏋勫€欓€変笉瓒筹紝寤鸿澧炲姞鍒嗙被绱犳潗鎴栨墿灞曢鏋跺彉浣撱€?;
+  if (reasons.includes("same_hook_clip") || reasons.includes("visual_near") || visual >= 0.9) return "瑙ｅ喅鏂规锛氭崲 Hook 闀滃ご锛屾垨鎶婇 1 绉掑垏鍒颁笉鍚屽垎绫?涓嶅悓璧风偣锛屽啀鎹㈠皝闈㈠抚銆?;
+  if (reasons.includes("text_near") || text >= 0.96) return "瑙ｅ喅鏂规锛氶噸鍐欏瓧骞曠涓€鍙ュ拰鏍囬锛岄伩鍏嶅悓涓€鍙ュ紑澶磋繛缁嚭鐜般€?;
+  if (reasons.includes("structure_near") || structure >= 0.86) return "瑙ｅ喅鏂规锛氭崲鍙欎簨楠ㄦ灦鎴栨墦涔遍暅澶撮『搴忋€?;
+  if (reasons.includes("same_bgm")) return "瑙ｅ喅鏂规锛氭崲 BGM锛屾垨鑷冲皯閿欏紑闊充箰璧风偣銆?;
+  return "瑙ｅ喅鏂规锛氭棤闇€澶勭悊锛屽彲杩涘叆鍙戝竷姹犮€?;
 }
 
 function scoreRiskClass(value) {
@@ -3307,7 +3393,7 @@ function updateGenerationWaitOverlay(job, percent) {
   const fill = $("generationWaitFill");
   const label = $("generationWaitPercent");
   if (title) title.textContent = localizedJobTitle(job, stage);
-  if (detail) detail.textContent = `${localizedJobMessage(job, stage)} 页面已锁定，防止误触。`;
+  if (detail) detail.textContent = `${localizedJobMessage(job, stage)} 椤甸潰宸查攣瀹氾紝闃叉璇Е銆俙;
   if (fill) fill.style.width = `${value}%`;
   if (label) label.textContent = `${value}%`;
 }
@@ -3317,7 +3403,7 @@ function startJobProgressTicker() {
     const current = displayedJobPercent;
     const next = current < 95 ? current + 1 : current;
     if (next !== current) {
-      updateJobStatus({ ...(lastJobSnapshot || { status: "running", stage: "render", message: "视频生成中，系统会以 1% 为单位持续刷新等待进度。" }), progress: next / 100 });
+      updateJobStatus({ ...(lastJobSnapshot || { status: "running", stage: "render", message: "瑙嗛鐢熸垚涓紝绯荤粺浼氫互 1% 涓哄崟浣嶆寔缁埛鏂扮瓑寰呰繘搴︺€? }), progress: next / 100 });
     }
   }, 1400);
 }
@@ -3327,40 +3413,40 @@ function stopJobProgressTicker() {
 }
 function log(text) { updateJobStatus({ status: "running", stage: "queued", progress: 0, message: text }); }
 function localizedJobTitle(job, stage) {
-  if (job.status === "error") return "生成失败，请查看下方提示";
-  if (job.status === "complete") return "生成完成，视频已导出";
+  if (job.status === "error") return "鐢熸垚澶辫触锛岃鏌ョ湅涓嬫柟鎻愮ず";
+  if (job.status === "complete") return "鐢熸垚瀹屾垚锛岃棰戝凡瀵煎嚭";
   const titles = {
-    queued: "任务已提交，正在等待开始",
-    ingestion: "正在扫描并整理素材",
-    hud: "正在准备视频数据和字幕",
-    beat: "正在分析背景音乐节奏",
-    planning: "正在规划混剪方案",
-    render: "正在生成视频，请耐心等待",
-    finalizing: "正在整理导出文件",
+    queued: "浠诲姟宸叉彁浜わ紝姝ｅ湪绛夊緟寮€濮?,
+    ingestion: "姝ｅ湪鎵弿骞舵暣鐞嗙礌鏉?,
+    hud: "姝ｅ湪鍑嗗瑙嗛鏁版嵁鍜屽瓧骞?,
+    beat: "姝ｅ湪鍒嗘瀽鑳屾櫙闊充箰鑺傚",
+    planning: "姝ｅ湪瑙勫垝娣峰壀鏂规",
+    render: "姝ｅ湪鐢熸垚瑙嗛锛岃鑰愬績绛夊緟",
+    finalizing: "姝ｅ湪鏁寸悊瀵煎嚭鏂囦欢",
   };
-  return titles[stage] || "正在处理，请稍等";
+  return titles[stage] || "姝ｅ湪澶勭悊锛岃绋嶇瓑";
 }
 function localizedJobMessage(job, stage) {
   if (job.error) return job.error;
   const message = String(job.message || "").trim();
-  if (!message) return jobMessages[stage] || "正在处理，请稍等。";
+  if (!message) return jobMessages[stage] || "姝ｅ湪澶勭悊锛岃绋嶇瓑銆?;
   if (backendJobMessageMap[message]) return backendJobMessageMap[message];
   const rendered = message.match(/^Rendered video (\d+)\/(\d+)$/);
-  if (rendered) return `正在生成视频：已完成 ${rendered[1]} / ${rendered[2]} 条。`;
+  if (rendered) return `姝ｅ湪鐢熸垚瑙嗛锛氬凡瀹屾垚 ${rendered[1]} / ${rendered[2]} 鏉°€俙;
   const rendering = message.match(/^Rendering (\d+) videos with (\d+) workers$/);
-  if (rendering) return `正在启动视频生成：共 ${rendering[1]} 条，并行线程 ${rendering[2]} 个。`;
+  if (rendering) return `姝ｅ湪鍚姩瑙嗛鐢熸垚锛氬叡 ${rendering[1]} 鏉★紝骞惰绾跨▼ ${rendering[2]} 涓€俙;
   const completed = message.match(/^Completed (\d+) exports$/);
-  if (completed) return `生成完成，已导出 ${completed[1]} 条视频。`;
+  if (completed) return `鐢熸垚瀹屾垚锛屽凡瀵煎嚭 ${completed[1]} 鏉¤棰戙€俙;
   return displayTemplateName(message);
 }
 function displayTemplateName(value) {
   return String(value || "")
-    .replace(/\bCopy\b/g, "副本")
-    .replace(/\bMode\b/g, "模式")
-    .replace(/\bCenter\b/g, "居中")
-    .replace(/\bBrand\b/g, "品牌")
-    .replace(/\bClean Data\b/g, "清爽数据")
-    .replace(/\bImpact Hud\b/g, "冲击字幕背板")
+    .replace(/\bCopy\b/g, "鍓湰")
+    .replace(/\bMode\b/g, "妯″紡")
+    .replace(/\bCenter\b/g, "灞呬腑")
+    .replace(/\bBrand\b/g, "鍝佺墝")
+    .replace(/\bClean Data\b/g, "娓呯埥鏁版嵁")
+    .replace(/\bImpact Hud\b/g, "鍐插嚮瀛楀箷鑳屾澘")
     .replace(/_/g, " ");
 }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch])); }
@@ -3386,4 +3472,5 @@ window.addEventListener("message", (event) => {
 });
 
 init().catch((err) => log(err.message));
+
 

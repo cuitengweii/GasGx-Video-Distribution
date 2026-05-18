@@ -149,6 +149,9 @@ def concat_video(
     inputs: list[Path],
     output: Path,
     bgm_path: Path | None = None,
+    mining_bgm_path: Path | None = None,
+    mining_bgm_volume: float = 1.0,
+    library_bgm_volume: float = 0.35,
     speed_mode: str = "quality",
     threads: int | None = None,
     bgm_start_offset: float = 0.0,
@@ -161,13 +164,17 @@ def concat_video(
     threads = max(1, threads or resolve_ffmpeg_threads())
     try:
         failures: list[str] = []
+        mining_track = mining_bgm_path.resolve() if mining_bgm_path is not None and mining_bgm_path.exists() else None
         for filter_mode in ("new", "legacy"):
             for include_bgm in ((True, False) if bgm_path is not None else (False,)):
-                command = _build_concat_command(
+                command, command_filter_script_path = _build_concat_command(
                     ffmpeg=ffmpeg,
                     inputs=inputs,
                     output=output,
                     bgm_path=bgm_path if include_bgm else None,
+                    mining_bgm_path=mining_track,
+                    mining_bgm_volume=mining_bgm_volume,
+                    library_bgm_volume=library_bgm_volume,
                     filter_script_path=filter_script_path,
                     filter_mode=filter_mode,
                     profile=profile,
@@ -183,6 +190,9 @@ def concat_video(
                     # Older ffmpeg builds don't understand the new script syntax.
                     if filter_mode == "new" and "Unrecognized option '-/filter_complex'" in str(exc):
                         break
+                finally:
+                    if command_filter_script_path is not None:
+                        command_filter_script_path.unlink(missing_ok=True)
         raise FFmpegError("\n".join(failures))
     finally:
         filter_script_path.unlink(missing_ok=True)
@@ -194,26 +204,49 @@ def _build_concat_command(
     inputs: list[Path],
     output: Path,
     bgm_path: Path | None,
+    mining_bgm_path: Path | None,
+    mining_bgm_volume: float,
+    library_bgm_volume: float,
     filter_script_path: Path,
     filter_mode: str,
     profile: dict[str, str],
     threads: int,
     speed_mode: str,
     bgm_start_offset: float,
-) -> list[str]:
+) -> tuple[list[str], Path | None]:
     command = [ffmpeg, "-y"]
     for clip in inputs:
         command.extend(["-i", str(clip)])
+    library_audio_index: int | None = None
+    mining_audio_index: int | None = None
+    next_audio_index = len(inputs)
     if bgm_path is not None:
         command.extend(["-stream_loop", "-1"])
         offset = max(0.0, float(bgm_start_offset or 0.0))
         if offset:
             command.extend(["-ss", f"{offset:.3f}"])
         command.extend(["-i", str(bgm_path)])
+        library_audio_index = next_audio_index
+        next_audio_index += 1
+    if mining_bgm_path is not None:
+        command.extend(["-stream_loop", "-1", "-i", str(mining_bgm_path)])
+        mining_audio_index = next_audio_index
+        next_audio_index += 1
+    mix_script_path: Path | None = None
+    effective_filter_script_path = filter_script_path
+    if library_audio_index is not None and mining_audio_index is not None:
+        mix_script_path = _build_audio_mix_filter_script(
+            filter_script_path,
+            library_audio_index=library_audio_index,
+            mining_audio_index=mining_audio_index,
+            mining_bgm_volume=mining_bgm_volume,
+            library_bgm_volume=library_bgm_volume,
+        )
+        effective_filter_script_path = mix_script_path
     if filter_mode == "new":
-        command.extend(["-/filter_complex", str(filter_script_path)])
+        command.extend(["-/filter_complex", str(effective_filter_script_path)])
     else:
-        command.extend(["-filter_complex_script", str(filter_script_path)])
+        command.extend(["-filter_complex_script", str(effective_filter_script_path)])
     command.extend(
         [
             "-map",
@@ -230,11 +263,35 @@ def _build_concat_command(
             profile["crf"],
         ]
     )
-    if bgm_path is not None:
+    if library_audio_index is not None and mining_audio_index is not None:
         command.extend(
             [
                 "-map",
-                f"{len(inputs)}:a",
+                "[aout]",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k" if speed_mode == "fast_first" else "192k",
+                "-shortest",
+            ]
+        )
+    elif mining_audio_index is not None:
+        command.extend(
+            [
+                "-map",
+                f"{mining_audio_index}:a",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k" if speed_mode == "fast_first" else "192k",
+                "-shortest",
+            ]
+        )
+    elif library_audio_index is not None:
+        command.extend(
+            [
+                "-map",
+                f"{library_audio_index}:a",
                 "-c:a",
                 "aac",
                 "-b:a",
@@ -245,7 +302,35 @@ def _build_concat_command(
     else:
         command.append("-an")
     command.append(str(output))
-    return command
+    return command, mix_script_path
+
+
+def _build_audio_mix_filter_script(
+    filter_script_path: Path,
+    *,
+    library_audio_index: int,
+    mining_audio_index: int,
+    mining_bgm_volume: float,
+    library_bgm_volume: float,
+) -> Path:
+    base_filter = filter_script_path.read_text(encoding="utf-8")
+    mining_volume = _clamp_audio_mix_level(mining_bgm_volume)
+    library_volume = _clamp_audio_mix_level(library_bgm_volume)
+    audio_filter = (
+        f"[{library_audio_index}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        f"volume={library_volume:.3f}[bgm_aux];"
+        f"[{mining_audio_index}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        f"volume={mining_volume:.3f}[bgm_main];"
+        "[bgm_main][bgm_aux]amix=inputs=2:duration=shortest:dropout_transition=2,"
+        "alimiter=limit=0.95[aout]"
+    )
+    mixed_script = filter_script_path.with_name(f"{filter_script_path.stem}.mix{filter_script_path.suffix}")
+    mixed_script.write_text(f"{base_filter};{audio_filter}", encoding="utf-8")
+    return mixed_script
+
+
+def _clamp_audio_mix_level(value: float) -> float:
+    return max(0.0, min(2.0, float(value or 0.0)))
 
 
 def append_video_tail(

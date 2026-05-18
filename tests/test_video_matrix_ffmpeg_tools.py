@@ -51,7 +51,8 @@ def test_concat_video_uses_filter_complex_script(monkeypatch, tmp_path: Path) ->
 
     def fake_run_command(args):
         captured["args"] = list(args)
-        script_path = Path(captured["args"][captured["args"].index("-filter_complex_script") + 1])
+        option = "-filter_complex_script" if "-filter_complex_script" in captured["args"] else "-/filter_complex"
+        script_path = Path(captured["args"][captured["args"].index(option) + 1])
         captured["script_path"] = script_path
         captured["script_text"] = script_path.read_text(encoding="utf-8")
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
@@ -65,7 +66,7 @@ def test_concat_video_uses_filter_complex_script(monkeypatch, tmp_path: Path) ->
     ffmpeg_tools.concat_video(long_filter, [tmp_path / "clip.mp4"], output)
 
     args = captured["args"]
-    assert "-filter_complex_script" in args
+    assert "-filter_complex_script" in args or "-/filter_complex" in args
     assert "-filter_complex" not in args
     assert long_filter not in args
     assert captured["script_text"] == long_filter
@@ -95,6 +96,39 @@ def test_concat_video_seeks_bgm_offset_before_audio_input(monkeypatch, tmp_path:
     assert args[ss_index + 1] == "12.345"
     assert args[ss_index - 2:ss_index] == ["-stream_loop", "-1"]
     assert args[ss_index + 2:ss_index + 4] == ["-i", str(tmp_path / "long.mp3")]
+
+
+def test_concat_video_builds_audio_mix_when_mining_track_is_available(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    mining = tmp_path / "mining.mp3"
+    mining.write_bytes(b"mining")
+
+    def fake_run_command(args):
+        captured["args"] = list(args)
+        option = "-filter_complex_script" if "-filter_complex_script" in captured["args"] else "-/filter_complex"
+        script_path = Path(captured["args"][captured["args"].index(option) + 1])
+        captured["script_text"] = script_path.read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ffmpeg_tools, "resolve_binary", lambda name: name)
+    monkeypatch.setattr(ffmpeg_tools, "run_command", fake_run_command)
+
+    ffmpeg_tools.concat_video(
+        "[0:v]null[vout]",
+        [tmp_path / "clip.mp4"],
+        tmp_path / "rendered.mp4",
+        bgm_path=tmp_path / "library.mp3",
+        mining_bgm_path=mining,
+        mining_bgm_volume=1.2,
+        library_bgm_volume=0.3,
+    )
+
+    args = captured["args"]
+    assert "-map" in args
+    assert "[aout]" in args
+    assert "amix=inputs=2:duration=shortest:dropout_transition=2" in str(captured["script_text"])
+    assert "volume=1.200" in str(captured["script_text"])
+    assert "volume=0.300" in str(captured["script_text"])
 
 
 def test_ffmpeg_runtime_health_reports_binary_paths(monkeypatch) -> None:

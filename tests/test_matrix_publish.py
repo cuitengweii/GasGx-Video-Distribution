@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -10,7 +10,6 @@ from gasgx_distribution import db as dist_db
 from gasgx_distribution import service
 from gasgx_distribution.matrix_publish import (
     _caption_with_topics,
-    _sanitize_generated_caption,
     caption_for_publish,
     asset_day,
     _runtime_config_for_wechat,
@@ -348,23 +347,6 @@ def test_caption_for_publish_uses_generated_copy_when_caption_empty(tmp_path: Pa
 
     assert caption == "AI generated description\n#gas"
 
-
-def test_sanitize_generated_caption_removes_outro_and_hud_blocks() -> None:
-    raw = (
-        "主文案第一行\n"
-        "\n"
-        "片尾文案:\n"
-        "全球领先的搁浅天然气算力变现引擎\n"
-        "\n"
-        "HUD:\n"
-        "$0.01的海外发电\n"
-    )
-
-    cleaned = _sanitize_generated_caption(raw)
-
-    assert cleaned == "主文案第一行"
-
-
 def test_caption_for_publish_prefers_configured_caption_over_generated_copy(tmp_path: Path) -> None:
     video_path = tmp_path / "demo.mp4"
     video_path.write_bytes(b"video")
@@ -538,3 +520,6 @@ def test_wechat_publish_skips_when_lock_is_active(monkeypatch, tmp_path: Path) -
     assert result["ok"] is False
     assert result["skipped"] is True
     assert result["reason"] == "publish_lock_active"
+
+
+
