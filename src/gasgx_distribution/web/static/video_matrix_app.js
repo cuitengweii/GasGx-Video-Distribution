@@ -252,6 +252,20 @@ function sanitizeHudText(value) {
   return lines.join("\n");
 }
 
+function syncFollowTextFixedField(value) {
+  const field = $("followTextFixed");
+  if (!field) return;
+  const nextValue = String(value || "");
+  if (field.value !== nextValue) field.value = nextValue;
+}
+
+function syncHudTextFixedField(value) {
+  const field = $("hudTextFixed");
+  if (!field) return;
+  const nextValue = sanitizeHudText(value || "");
+  if (field.value !== nextValue) field.value = nextValue;
+}
+
 function replaceSelection(value, start, end, insertText) {
   const safeValue = String(value || "");
   const from = Math.max(0, Number(start || 0));
@@ -486,43 +500,72 @@ function renderSidebar(data) {
       scheduleStateSave();
     };
   }
-  const aiPromptHint = $("aiPromptHint");
-  if (aiPromptHint) {
-    const normalizedHint = sanitizeAiPromptHint(state.ai_prompt_hint || "");
-    state.ai_prompt_hint = normalizedHint;
-    aiPromptHint.value = normalizedHint;
-    syncAiPromptHintMeta(normalizedHint);
-    aiPromptHint.onkeydown = (event) => {
-      if (event.key !== "Enter" || event.isComposing) return;
-      const start = aiPromptHint.selectionStart ?? aiPromptHint.value.length;
-      const end = aiPromptHint.selectionEnd ?? start;
-      const nextRaw = replaceSelection(aiPromptHint.value, start, end, "\n");
-      const nextValue = sanitizeAiPromptHint(nextRaw);
-      if (aiPromptHintLineCount(nextValue) > AI_PROMPT_HINT_MAX_LINES || nextValue === aiPromptHint.value) {
-        event.preventDefault();
-      }
-    };
-    aiPromptHint.onpaste = (event) => {
-      const pasted = String(event.clipboardData?.getData("text") || "");
-      if (!pasted) return;
-      const start = aiPromptHint.selectionStart ?? aiPromptHint.value.length;
-      const end = aiPromptHint.selectionEnd ?? start;
-      const nextRaw = replaceSelection(aiPromptHint.value, start, end, pasted.replace(/\r\n/g, "\n"));
-      const nextValue = sanitizeAiPromptHint(nextRaw);
-      event.preventDefault();
-      aiPromptHint.value = nextValue;
-      state.ai_prompt_hint = nextValue;
-      syncAiPromptHintMeta(nextValue);
-      scheduleStateSave();
-    };
-    aiPromptHint.oninput = () => {
-      const nextValue = sanitizeAiPromptHint(aiPromptHint.value);
-      if (nextValue !== aiPromptHint.value) aiPromptHint.value = nextValue;
-      state.ai_prompt_hint = nextValue;
-      syncAiPromptHintMeta(nextValue);
+  bindPromptHintField("aiPromptHint", "ai_prompt_hint", "aiPromptHintMeta");
+  const descriptionAiToggle = $("descriptionAiEnabled");
+  if (descriptionAiToggle) {
+    descriptionAiToggle.checked = Boolean(state.description_ai_enabled);
+    descriptionAiToggle.onchange = () => {
+      state.description_ai_enabled = descriptionAiToggle.checked;
       scheduleStateSave();
     };
   }
+  const descriptionText = $("descriptionText");
+  if (descriptionText) {
+    descriptionText.value = state.description_text || "";
+    descriptionText.oninput = () => {
+      state.description_text = descriptionText.value;
+      scheduleStateSave();
+    };
+  }
+  bindPromptHintField("descriptionAiPromptHint", "description_ai_prompt_hint", "descriptionAiPromptHintMeta");
+  const followTextAiToggle = $("followTextAiEnabled");
+  if (followTextAiToggle) {
+    followTextAiToggle.checked = Boolean(state.follow_text_ai_enabled);
+    followTextAiToggle.onchange = () => {
+      state.follow_text_ai_enabled = followTextAiToggle.checked;
+      scheduleStateSave();
+    };
+  }
+  const followTextFixed = $("followTextFixed");
+  if (followTextFixed) {
+    const fixedFollow = state.follow_text || "";
+    followTextFixed.value = fixedFollow;
+    const hiddenFollow = $("followText");
+    if (hiddenFollow) hiddenFollow.value = fixedFollow;
+    followTextFixed.oninput = () => {
+      const value = followTextFixed.value;
+      state.follow_text = value;
+      if (hiddenFollow) hiddenFollow.value = value;
+      scheduleStateSave();
+      refreshEndingTemplatePreview();
+    };
+  }
+  bindPromptHintField("followTextAiPromptHint", "follow_text_ai_prompt_hint", "followTextAiPromptHintMeta");
+  const hudAiToggle = $("hudAiEnabled");
+  if (hudAiToggle) {
+    hudAiToggle.checked = Boolean(state.hud_ai_enabled);
+    hudAiToggle.onchange = () => {
+      state.hud_ai_enabled = hudAiToggle.checked;
+      scheduleStateSave();
+    };
+  }
+  const hudTextFixed = $("hudTextFixed");
+  if (hudTextFixed) {
+    const normalizedHud = sanitizeHudText(state.hud_text || "");
+    state.hud_text = normalizedHud;
+    hudTextFixed.value = normalizedHud;
+    const hiddenHud = $("hudText");
+    if (hiddenHud) hiddenHud.value = normalizedHud;
+    hudTextFixed.oninput = () => {
+      const value = sanitizeHudText(hudTextFixed.value);
+      if (value !== hudTextFixed.value) hudTextFixed.value = value;
+      state.hud_text = value;
+      if (hiddenHud) hiddenHud.value = value;
+      scheduleStateSave();
+      debounce(refreshAllPreviews, 250)();
+    };
+  }
+  bindPromptHintField("hudAiPromptHint", "hud_ai_prompt_hint", "hudAiPromptHintMeta");
   renderBgm(data);
   $("saveState").onclick = toggleBgmLibraryPopover;
   $("openBgmDir").onclick = () => openFolder(bgmLibraryState.directory);
@@ -835,9 +878,19 @@ function renderTextSettings() {
   $("headline").value = state.headline || "";
   $("subhead").value = state.subhead || "";
   $("followText").value = state.follow_text || "";
-  $("hudText").value = state.hud_text || "";
+  $("hudText").value = sanitizeHudText(state.hud_text || "");
+  state.hud_text = $("hudText").value;
+  syncFollowTextFixedField($("followText").value);
+  syncHudTextFixedField($("hudText").value);
   ["headline", "subhead", "followText", "hudText"].forEach((id) => {
     $(id).addEventListener("input", scheduleStateSave);
+  });
+  $("followText").addEventListener("input", () => syncFollowTextFixedField($("followText").value));
+  $("hudText").addEventListener("input", () => {
+    const value = sanitizeHudText($("hudText").value);
+    if (value !== $("hudText").value) $("hudText").value = value;
+    state.hud_text = value;
+    syncHudTextFixedField(value);
   });
   ["headline", "subhead", "hudText"].forEach((id) => $(id).addEventListener("input", debounce(refreshAllPreviews, 250)));
   $("generateBtn").onclick = generate;

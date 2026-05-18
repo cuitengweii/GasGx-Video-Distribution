@@ -328,7 +328,10 @@ def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path
         "target_fps": 30,
         "composition_sequence": [{"category_id": "category_D", "duration": 2.2}],
         "headline_ai_enabled": True,
-        "ai_prompt_hint": "绐佸嚭鐪熷疄鍦烘櫙\n閬垮厤澶稿紶\nhttps://example.com",`r`n        "mining_bgm_volume": 1.18,`r`n        "library_bgm_volume": 0.27,`r`n    }
+        "ai_prompt_hint": "绐佸嚭鐪熷疄鍦烘櫙\n閬垮厤澶稿紶\nhttps://example.com",
+        "mining_bgm_volume": 1.18,
+        "library_bgm_volume": 0.27,
+    }
 
     video_matrix_api._run_generate_job("test-job", request, tmp_path / "bgm.mp3", None)
 
@@ -337,7 +340,10 @@ def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path
     assert captured["text_overrides"]["ai_prompt_hint"] == "绐佸嚭鐪熷疄鍦烘櫙\n閬垮厤澶稿紶"
     assert captured["settings"].video_duration_min == 8
     assert captured["settings"].video_duration_max == 24
-    assert captured["settings"].target_fps == 30`r`n    assert captured["mining_bgm_volume"] == 1.18`r`n    assert captured["library_bgm_volume"] == 0.27`r`n    assert isinstance(captured["existing_signatures"], set)
+    assert captured["settings"].target_fps == 30
+    assert captured["mining_bgm_volume"] == 1.18
+    assert captured["library_bgm_volume"] == 0.27
+    assert isinstance(captured["existing_signatures"], set)
 
 
 def test_video_matrix_generate_prefers_current_request_template_snapshot(monkeypatch, tmp_path) -> None:
