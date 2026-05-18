@@ -21,7 +21,13 @@ from .ingestion import ingest_sources
 from .models import RenderedAsset
 from .render import render_variant
 from .settings import ProjectSettings
-from .spark_text import build_headline_variants
+from .spark_text import (
+    build_description_variants,
+    build_follow_text_variants,
+    build_headline_variants,
+    build_hud_variants,
+    normalize_hud_lines,
+)
 from ..paths import get_paths
 
 
@@ -178,7 +184,15 @@ def run_pipeline(
             ai_prompt_hint=ai_prompt_hint,
             avoid_texts=daily_texts,
         )
-    _apply_text_overrides(variants, text_overrides, settings, language=copy_language, ai_prompt_hint=ai_prompt_hint, avoid_headlines=daily_headlines)
+    _apply_text_overrides(
+        variants,
+        text_overrides,
+        settings,
+        language=copy_language,
+        ai_prompt_hint=ai_prompt_hint,
+        avoid_headlines=daily_headlines,
+        avoid_texts=daily_texts,
+    )
     template_copy = _copy_template_path().read_text(encoding="utf-8")
     active_cover_template = _resolve_cover_template_config(cover_template_id, cover_template_config)
     active_ending_cover_template = ending_cover_template_config or active_cover_template
@@ -216,6 +230,7 @@ def run_pipeline(
     with (telemetry.span("render", "render_batch", {"variant_count": total, "worker_count": worker_count, "ffmpeg_threads": ffmpeg_threads}) if telemetry is not None else _nullcontext()):
         executor = ThreadPoolExecutor(max_workers=worker_count)
         try:
+            default_follow_text = str((text_overrides or {}).get("follow_text") or "")
             futures = {
                 executor.submit(
                     render_variant,
@@ -232,7 +247,7 @@ def run_pipeline(
                     active_cover_template,
                     active_ending_cover_template,
                     cover_intro_seconds,
-                    (text_overrides or {}).get("follow_text", ""),
+                    getattr(variant, "ending_follow_text", "") or default_follow_text,
                     outro_seconds,
                     ending_template_path,
                     telemetry.variant(variant.sequence_number) if telemetry is not None else None,
@@ -368,14 +383,23 @@ def _apply_text_overrides(
     language: str = "zh",
     ai_prompt_hint: str = "",
     avoid_headlines: list[str] | set[str] | None = None,
+    avoid_texts: list[str] | set[str] | None = None,
 ) -> None:
     if not text_overrides:
         return
     headline = str(text_overrides.get("headline") or "").strip()
     subhead = str(text_overrides.get("subhead") or "").strip()
+    description_text = str(text_overrides.get("description_text") or "").strip()
     hud_text = str(text_overrides.get("hud_text") or "").strip()
+    follow_text = str(text_overrides.get("follow_text") or "").strip()
     headline_ai_enabled = bool(text_overrides.get("headline_ai_enabled"))
-    hud_lines = [line.strip() for line in hud_text.splitlines() if line.strip()]
+    description_ai_enabled = bool(text_overrides.get("description_ai_enabled"))
+    follow_text_ai_enabled = bool(text_overrides.get("follow_text_ai_enabled"))
+    hud_ai_enabled = bool(text_overrides.get("hud_ai_enabled"))
+    description_ai_prompt_hint = str(text_overrides.get("description_ai_prompt_hint") or "").strip()
+    follow_text_ai_prompt_hint = str(text_overrides.get("follow_text_ai_prompt_hint") or "").strip()
+    hud_ai_prompt_hint = str(text_overrides.get("hud_ai_prompt_hint") or "").strip()
+    hud_lines = normalize_hud_lines(hud_text.splitlines())
 
     headline_variants: list[str] = []
     if headline_ai_enabled and variants:
@@ -389,17 +413,61 @@ def _apply_text_overrides(
             avoid_texts=avoid_headlines,
         )
 
-    for variant in variants:
-        if headline_ai_enabled and headline_variants:
-            variant.slogan = headline_variants.pop(0)
-        elif headline_ai_enabled:
-            pass
-        elif headline:
+    description_variants: list[str] = []
+    if description_ai_enabled and variants:
+        seed_description = description_text or f"{str(variants[0].title or '').strip()}\n{str(variants[0].slogan or '').strip()}".strip()
+        description_variants = build_description_variants(
+            seed_description,
+            len(variants),
+            language=language,
+            settings=settings,
+            extra_prompt=description_ai_prompt_hint or ai_prompt_hint,
+            avoid_texts=avoid_texts,
+        )
+
+    follow_text_variants: list[str] = []
+    if follow_text_ai_enabled and variants:
+        seed_follow = follow_text or "Follow GasGx for more field power cases"
+        follow_text_variants = build_follow_text_variants(
+            seed_follow,
+            len(variants),
+            language=language,
+            settings=settings,
+            extra_prompt=follow_text_ai_prompt_hint or ai_prompt_hint,
+            avoid_texts=avoid_texts,
+        )
+
+    hud_text_variants: list[list[str]] = []
+    if hud_ai_enabled and variants:
+        seed_hud = hud_lines or list(getattr(variants[0], "hud_lines", []) or [])
+        hud_text_variants = build_hud_variants(
+            seed_hud,
+            len(variants),
+            language=language,
+            settings=settings,
+            extra_prompt=hud_ai_prompt_hint or ai_prompt_hint,
+            avoid_texts=avoid_texts,
+        )
+
+    for index, variant in enumerate(variants):
+        if headline_ai_enabled and index < len(headline_variants):
+            variant.slogan = headline_variants[index]
+        elif not headline_ai_enabled and headline:
             variant.slogan = headline
         if subhead:
             variant.title = subhead
-        if hud_lines:
+        if hud_ai_enabled and index < len(hud_text_variants):
+            variant.hud_lines = hud_text_variants[index]
+        elif hud_lines:
             variant.hud_lines = hud_lines
+        if follow_text_ai_enabled and index < len(follow_text_variants):
+            variant.ending_follow_text = follow_text_variants[index]
+        elif follow_text:
+            variant.ending_follow_text = follow_text
+        if description_ai_enabled and index < len(description_variants):
+            variant.publish_description = description_variants[index]
+        elif description_text:
+            variant.publish_description = description_text
 
 
 def _copy_template_path() -> Path:

@@ -97,6 +97,8 @@ class VideoVariant:
     cover_frame_hash: str = ""
     content_fingerprint: str = ""
     bgm_fingerprint: str = ""
+    ending_follow_text: str = ""
+    publish_description: str = ""
     dedupe_result: "DedupeResult | None" = None
 
 

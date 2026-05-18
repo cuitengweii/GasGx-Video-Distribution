@@ -58,6 +58,8 @@ LATIN_RE = re.compile(r"[A-Za-z]")
 EXTRA_PROMPT_MAX_CHARS = 240
 EXTRA_PROMPT_MAX_LINES = 4
 EXTRA_PROMPT_URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
+HUD_MAX_LINES = 2
+HUD_MAX_CHARS_PER_LINE = 10
 
 
 def _normalize_extra_prompt(raw: str) -> str:
@@ -144,6 +146,94 @@ def build_headline_variants(
             target_count,
             avoid_texts=avoid_texts,
         )
+    return merged[:target_count]
+
+
+def build_description_variants(
+    seed_description: str,
+    count: int,
+    *,
+    language: str = "zh",
+    settings: ProjectSettings | None = None,
+    extra_prompt: str = "",
+    avoid_texts: Iterable[str] | None = None,
+) -> list[str]:
+    target_count = max(1, int(count or 1))
+    seed = str(seed_description or "").strip()
+    spark_variants = _try_spark_description_variants(
+        settings=settings,
+        seed_description=seed,
+        count=target_count,
+        language=language,
+        extra_prompt=extra_prompt,
+        avoid_texts=avoid_texts,
+    )
+    fallback_variants = _fallback_description_variants(seed, target_count)
+    return _normalize_simple_text_variants([*spark_variants, *fallback_variants], target_count, avoid_texts=avoid_texts)
+
+
+def build_follow_text_variants(
+    seed_text: str,
+    count: int,
+    *,
+    language: str = "zh",
+    settings: ProjectSettings | None = None,
+    extra_prompt: str = "",
+    avoid_texts: Iterable[str] | None = None,
+) -> list[str]:
+    target_count = max(1, int(count or 1))
+    seed = str(seed_text or "").strip()
+    spark_variants = _try_spark_follow_text_variants(
+        settings=settings,
+        seed_text=seed,
+        count=target_count,
+        language=language,
+        extra_prompt=extra_prompt,
+        avoid_texts=avoid_texts,
+    )
+    fallback_variants = _fallback_follow_text_variants(seed, target_count)
+    normalized = _normalize_simple_text_variants([*spark_variants, *fallback_variants], target_count, avoid_texts=avoid_texts)
+    if not normalized:
+        return _fallback_follow_text_variants(seed, target_count)
+    return normalized
+
+
+def normalize_hud_lines(lines: Iterable[str], *, max_lines: int = HUD_MAX_LINES, max_chars_per_line: int = HUD_MAX_CHARS_PER_LINE) -> list[str]:
+    normalized: list[str] = []
+    for raw in lines:
+        text = _normalize_hud_line(raw, max_chars=max_chars_per_line)
+        if not text:
+            continue
+        normalized.append(text)
+        if len(normalized) >= max_lines:
+            break
+    return normalized
+
+
+def build_hud_variants(
+    seed_lines: Iterable[str],
+    count: int,
+    *,
+    language: str = "zh",
+    settings: ProjectSettings | None = None,
+    extra_prompt: str = "",
+    avoid_texts: Iterable[str] | None = None,
+) -> list[list[str]]:
+    target_count = max(1, int(count or 1))
+    seed = normalize_hud_lines(seed_lines)
+    spark_variants = _try_spark_hud_variants(
+        settings=settings,
+        seed_lines=seed,
+        count=target_count,
+        language=language,
+        extra_prompt=extra_prompt,
+        avoid_texts=avoid_texts,
+    )
+    fallback_variants = _fallback_hud_variants(seed, target_count)
+    merged = _normalize_hud_variants([*spark_variants, *fallback_variants], target_count, avoid_texts=avoid_texts)
+    if len(merged) < target_count:
+        refill = _fallback_hud_variants(seed, target_count * 3)
+        merged = _normalize_hud_variants([*merged, *refill], target_count, avoid_texts=avoid_texts)
     return merged[:target_count]
 
 
@@ -271,6 +361,124 @@ def _try_spark_headline_variants(
     return lines
 
 
+def _try_spark_description_variants(
+    *,
+    settings: ProjectSettings | None,
+    seed_description: str,
+    count: int,
+    language: str,
+    extra_prompt: str = "",
+    avoid_texts: Iterable[str] | None = None,
+) -> list[str]:
+    client = _spark_client(settings)
+    if client is None:
+        return []
+    target_language = LANGUAGE_LABELS.get(language, "Chinese")
+    request_count = max(count * 2, count + 2)
+    prompt = (
+        f"Generate {request_count} unique short social-video descriptions for GasGx in {target_language}.\n"
+        "Output JSON only: {\"variants\":[\"...\"]}.\n"
+        "Do not include links, hashtags, markdown, labels, or section titles.\n"
+        "Each item should be concise and publication-ready."
+    )
+    if seed_description:
+        prompt = f"{prompt}\nReference description:\n{seed_description}"
+    guidance = _normalize_extra_prompt(extra_prompt)
+    if guidance:
+        prompt = f"{prompt}\nAdditional guidance (must follow):\n{guidance}"
+    avoid_prompt = _avoidance_prompt(avoid_texts)
+    if avoid_prompt:
+        prompt = f"{prompt}\nAvoid reusing these same-day descriptions:\n{avoid_prompt}"
+    payload = _extract_json_payload(client.chat(prompt))
+    raw_variants = payload.get("variants") if isinstance(payload, dict) else []
+    if not isinstance(raw_variants, list):
+        return []
+    return [str(item or "").strip() for item in raw_variants if str(item or "").strip()]
+
+
+def _try_spark_follow_text_variants(
+    *,
+    settings: ProjectSettings | None,
+    seed_text: str,
+    count: int,
+    language: str,
+    extra_prompt: str = "",
+    avoid_texts: Iterable[str] | None = None,
+) -> list[str]:
+    client = _spark_client(settings)
+    if client is None:
+        return []
+    target_language = LANGUAGE_LABELS.get(language, "Chinese")
+    request_count = max(count * 2, count + 2)
+    prompt = (
+        f"Generate {request_count} unique ending follow-copy lines for GasGx in {target_language}.\n"
+        "Output JSON only: {\"variants\":[\"...\"]}.\n"
+        "Each line should be concise, natural, and contain no links."
+    )
+    if seed_text:
+        prompt = f"{prompt}\nReference follow copy:\n{seed_text}"
+    guidance = _normalize_extra_prompt(extra_prompt)
+    if guidance:
+        prompt = f"{prompt}\nAdditional guidance (must follow):\n{guidance}"
+    avoid_prompt = _avoidance_prompt(avoid_texts)
+    if avoid_prompt:
+        prompt = f"{prompt}\nAvoid reusing these same-day follow copies:\n{avoid_prompt}"
+    payload = _extract_json_payload(client.chat(prompt))
+    raw_variants = payload.get("variants") if isinstance(payload, dict) else []
+    if not isinstance(raw_variants, list):
+        return []
+    return [str(item or "").strip() for item in raw_variants if str(item or "").strip()]
+
+
+def _try_spark_hud_variants(
+    *,
+    settings: ProjectSettings | None,
+    seed_lines: list[str],
+    count: int,
+    language: str,
+    extra_prompt: str = "",
+    avoid_texts: Iterable[str] | None = None,
+) -> list[list[str]]:
+    client = _spark_client(settings)
+    if client is None:
+        return []
+    target_language = LANGUAGE_LABELS.get(language, "Chinese")
+    request_count = max(count * 2, count + 2)
+    prompt = (
+        f"Generate {request_count} unique HUD text pairs for GasGx in {target_language}.\n"
+        "Each item must contain exactly 2 short lines.\n"
+        f"Each line must be <= {HUD_MAX_CHARS_PER_LINE} non-space characters.\n"
+        "Output JSON only: {\"variants\":[{\"lines\":[\"...\",\"...\"]}]}\n"
+        "Do not include links."
+    )
+    if seed_lines:
+        prompt = f"{prompt}\nReference HUD lines: {' | '.join(seed_lines)}"
+    guidance = _normalize_extra_prompt(extra_prompt)
+    if guidance:
+        prompt = f"{prompt}\nAdditional guidance (must follow):\n{guidance}"
+    avoid_prompt = _avoidance_prompt(avoid_texts)
+    if avoid_prompt:
+        prompt = f"{prompt}\nAvoid reusing these same-day HUD texts:\n{avoid_prompt}"
+    payload = _extract_json_payload(client.chat(prompt))
+    raw_variants = payload.get("variants") if isinstance(payload, dict) else []
+    if not isinstance(raw_variants, list):
+        return []
+    variants: list[list[str]] = []
+    for item in raw_variants:
+        if isinstance(item, dict):
+            lines = item.get("lines") or item.get("hud_lines") or []
+        elif isinstance(item, list):
+            lines = item
+        elif isinstance(item, str):
+            lines = str(item).replace("|", "\n").splitlines()
+        else:
+            lines = []
+        normalized = normalize_hud_lines([str(line) for line in lines])
+        if normalized:
+            variants.append(normalized)
+    return variants
+
+
 def _extract_json_payload(output: str | None) -> dict[str, Any]:
     text = str(output or "").strip()
     if not text:
@@ -283,6 +491,123 @@ def _extract_json_payload(output: str | None) -> dict[str, Any]:
         pass
     payload = extract_json_object(text)
     return payload if isinstance(payload, dict) else {}
+
+
+def _normalize_simple_text_variants(raw_items: list[str], count: int, *, avoid_texts: Iterable[str] | None = None) -> list[str]:
+    variants: list[str] = []
+    seen: set[str] = set()
+    avoid_keys = _text_key_set(avoid_texts)
+    for item in raw_items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = _text_key(text)
+        if not key or key in seen or key in avoid_keys:
+            continue
+        seen.add(key)
+        variants.append(text)
+        if len(variants) >= count:
+            break
+    return variants
+
+
+def _normalize_hud_line(text: str, *, max_chars: int = HUD_MAX_CHARS_PER_LINE) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return ""
+    if _content_length(clean) <= max_chars:
+        return clean
+    out: list[str] = []
+    count = 0
+    for char in clean:
+        if char.isspace():
+            if out and out[-1] != " ":
+                out.append(" ")
+            continue
+        if count >= max_chars:
+            break
+        out.append(char)
+        count += 1
+    return "".join(out).strip()
+
+
+def _normalize_hud_variants(raw_items: list[list[str]], count: int, *, avoid_texts: Iterable[str] | None = None) -> list[list[str]]:
+    variants: list[list[str]] = []
+    seen: set[str] = set()
+    avoid_keys = _text_key_set(avoid_texts)
+    for item in raw_items:
+        lines = normalize_hud_lines(item)
+        if not lines:
+            continue
+        key = _text_key(" | ".join(lines))
+        if not key or key in seen or key in avoid_keys:
+            continue
+        seen.add(key)
+        variants.append(lines)
+        if len(variants) >= count:
+            break
+    return variants
+
+
+def _fallback_description_variants(seed_description: str, count: int) -> list[str]:
+    seed = seed_description.strip()
+    seeds = [
+        seed,
+        "GasGx gas engines convert field gas into stable onsite power for productive loads.",
+        "Deploy generator sets near gas source to reduce waste and deliver reliable electricity.",
+        "Turn stranded gas into continuous power and improve project-level energy efficiency.",
+        "GasGx supports remote industrial and compute loads with practical field power systems.",
+    ]
+    variants: list[str] = []
+    for index in range(max(1, count)):
+        base = seeds[index % len(seeds)].strip()
+        if not base:
+            continue
+        if index >= len(seeds):
+            base = f"{base} Batch {index + 1}"
+        variants.append(base)
+    return variants
+
+
+def _fallback_follow_text_variants(seed_text: str, count: int) -> list[str]:
+    seed = seed_text.strip()
+    seeds = [
+        seed,
+        "Follow GasGx for field power updates",
+        "See more onsite gas power cases",
+        "Track new gas engine deployments",
+        "Watch more real site operations",
+    ]
+    variants: list[str] = []
+    for index in range(max(1, count)):
+        base = seeds[index % len(seeds)].strip()
+        if not base:
+            continue
+        if index >= len(seeds):
+            base = f"{base} {index + 1}"
+        variants.append(base)
+    return variants
+
+
+def _fallback_hud_variants(seed_lines: list[str], count: int) -> list[list[str]]:
+    seed = normalize_hud_lines(seed_lines)
+    seeds = [
+        seed,
+        ["Gas to Power", "Stable Output"],
+        ["Onsite Energy", "Field Ready"],
+        ["Low Cost kWh", "Remote Load"],
+        ["Engine + Genset", "24/7 Supply"],
+    ]
+    variants: list[list[str]] = []
+    for index in range(max(1, count)):
+        base = seeds[index % len(seeds)] or ["GasGx Power", "Field Deploy"]
+        normalized = normalize_hud_lines(base)
+        if not normalized:
+            continue
+        if index >= len(seeds):
+            normalized = normalize_hud_lines([f"{normalized[0]} {index + 1}", normalized[-1]])
+        variants.append(normalized)
+    return variants
 
 
 def _try_spark_copy(

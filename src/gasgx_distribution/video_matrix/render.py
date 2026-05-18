@@ -78,6 +78,7 @@ def render_variant(
     day_code = _resolve_publish_day_code(publish_day_code)
     display_sequence_number = _resolve_publish_sequence_number(publish_sequence_number, variant.sequence_number)
     sequence_tag = f"{day_code}-{display_sequence_number}"
+    resolved_outro_text = str(outro_text or getattr(variant, "ending_follow_text", "") or "").strip()
 
     try:
         if telemetry is not None:
@@ -103,13 +104,13 @@ def render_variant(
                 render_intro_cover(intro_frame, intro_cover, variant, settings, cover_template_config)
             intro_cover_path = intro_cover
         outro_cover_path = None
-        if ending_template_path is None and ending_cover_template_config is not None and outro_text.strip() and outro_seconds > 0:
+        if ending_template_path is None and ending_cover_template_config is not None and resolved_outro_text and outro_seconds > 0:
             last_segment = variant.segments[-1]
             timestamp = last_segment.start_time + max(0.0, last_segment.duration - 0.2)
             with _span(telemetry, "render", "outro_extract_frame", {"source": last_segment.clip.normalized_path, "timestamp": timestamp}):
                 _extract_frame_or_fallback(last_segment.clip.normalized_path, outro_frame, timestamp=timestamp)
             with _span(telemetry, "render", "outro_cover_render", {"ending_template": ending_cover_template_config.get("name", "") if isinstance(ending_cover_template_config, dict) else ""}):
-                render_outro_cover(outro_frame, outro_cover, settings, ending_cover_template_config, outro_text.strip(), variant.hud_lines)
+                render_outro_cover(outro_frame, outro_cover, settings, ending_cover_template_config, resolved_outro_text, variant.hud_lines)
             outro_cover_path = outro_cover
 
         video_ending_path = ending_template_path if _is_video_ending(ending_template_path) else None
@@ -193,15 +194,18 @@ def render_variant(
 
         if copy_path is not None:
             with _span(telemetry, "render", "copy_write", {"copy_path": copy_path, "copy_language": copy_language}):
-                copy_path.write_text(
-                    build_marketing_copy(
+                publish_description = str(getattr(variant, "publish_description", "") or "").strip()
+                if not publish_description:
+                    publish_description = build_marketing_copy(
                         variant,
                         settings,
                         copy_language,
                         template_copy,
-                        outro_text,
+                        resolved_outro_text,
                         extra_prompt=ai_prompt_hint,
-                    ),
+                    )
+                copy_path.write_text(
+                    publish_description,
                     encoding="utf-8",
                 )
 
@@ -223,8 +227,9 @@ def render_variant(
                             "cover_path": str(cover_path) if cover_path else None,
                             "cover_template_id": cover_template_id,
                             "cover_intro_seconds": cover_intro_seconds if intro_cover_path is not None else 0,
-                            "outro_text": outro_text,
+                            "outro_text": resolved_outro_text,
                             "outro_seconds": outro_seconds if outro_cover_path is not None else 0,
+                            "publish_description": str(getattr(variant, "publish_description", "") or ""),
                             "copy_path": str(copy_path) if copy_path else None,
                             "copy_language": copy_language,
                             "publish_sequence_tag": sequence_tag,

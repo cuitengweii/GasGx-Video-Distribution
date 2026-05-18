@@ -88,6 +88,8 @@ CDN_AUDIO_STREAMS = [
 AI_PROMPT_HINT_MAX_CHARS = 240
 AI_PROMPT_HINT_MAX_LINES = 4
 AI_PROMPT_HINT_URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
+HUD_TEXT_MAX_LINES = 2
+HUD_TEXT_MAX_CHARS_PER_LINE = 10
 
 if load_dotenv is not None:
     load_dotenv(ROOT / ".env")
@@ -543,9 +545,7 @@ def get_state() -> dict[str, Any]:
 
 @router.post("/state")
 def post_state(payload: dict[str, Any]) -> dict[str, Any]:
-    normalized_payload = dict(payload or {})
-    if "ai_prompt_hint" in normalized_payload:
-        normalized_payload["ai_prompt_hint"] = _normalize_ai_prompt_hint(normalized_payload.get("ai_prompt_hint"))
+    normalized_payload = _normalize_request_text_fields(dict(payload or {}))
     if service.brand_database_backend() == "supabase":
         current, _ = _complete_video_matrix_state(_video_matrix_app_setting({}) or {})
         state = dict(current.get("ui_state") or {})
@@ -1002,8 +1002,7 @@ async def generate(
     bgm_file: UploadFile | None = File(None),
     source_files: list[UploadFile] | None = File(None),
 ) -> dict[str, Any]:
-    request = json.loads(payload)
-    request["ai_prompt_hint"] = _normalize_ai_prompt_hint(request.get("ai_prompt_hint"))
+    request = _normalize_request_text_fields(json.loads(payload))
     job_id = uuid.uuid4().hex[:12]
     temp_root = TMP_DIR / job_id
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -1085,7 +1084,7 @@ def _run_generate_job(
 ) -> None:
     trace = trace or GenerationTrace(job_id, TELEMETRY_LOG_ROOT, _request_telemetry_summary(request, bgm_path, source_root))
     try:
-        request["ai_prompt_hint"] = _normalize_ai_prompt_hint(request.get("ai_prompt_hint"))
+        request = _normalize_request_text_fields(request)
         settings = _settings()
         if request.get("video_duration_min") is not None:
             settings.video_duration_min = max(
@@ -1172,10 +1171,17 @@ def _run_generate_job(
                 text_overrides={
                     "headline": str(request.get("headline") or ""),
                     "subhead": str(request.get("subhead") or ""),
+                    "description_text": str(request.get("description_text") or ""),
                     "hud_text": str(request.get("hud_text") or ""),
                     "follow_text": str(request.get("follow_text") or ""),
                     "headline_ai_enabled": bool(request.get("headline_ai_enabled")),
+                    "description_ai_enabled": bool(request.get("description_ai_enabled")),
+                    "follow_text_ai_enabled": bool(request.get("follow_text_ai_enabled")),
+                    "hud_ai_enabled": bool(request.get("hud_ai_enabled")),
                     "ai_prompt_hint": str(request.get("ai_prompt_hint") or ""),
+                    "description_ai_prompt_hint": str(request.get("description_ai_prompt_hint") or ""),
+                    "follow_text_ai_prompt_hint": str(request.get("follow_text_ai_prompt_hint") or ""),
+                    "hud_ai_prompt_hint": str(request.get("hud_ai_prompt_hint") or ""),
                     "daily_texts": sorted(str(item) for item in generation_history.get("daily_texts") or [] if str(item).strip()),
                     "daily_headlines": sorted(str(item) for item in generation_history.get("daily_headlines") or [] if str(item).strip()),
                 },
@@ -1827,15 +1833,57 @@ def _hud_lines(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
-def _normalize_ai_prompt_hint(raw: Any) -> str:
+def _normalize_limited_prompt_hint(raw: Any, *, max_chars: int = AI_PROMPT_HINT_MAX_CHARS, max_lines: int = AI_PROMPT_HINT_MAX_LINES) -> str:
     text = str(raw or "").replace("\r\n", "\n").strip()
     if not text:
         return ""
     text = AI_PROMPT_HINT_URL_RE.sub("", text)
     lines = [line.strip() for line in text.split("\n") if line.strip()]
-    normalized = "\n".join(lines[:AI_PROMPT_HINT_MAX_LINES]).strip()
-    if len(normalized) > AI_PROMPT_HINT_MAX_CHARS:
-        normalized = normalized[:AI_PROMPT_HINT_MAX_CHARS].strip()
+    normalized = "\n".join(lines[: max(1, int(max_lines))]).strip()
+    if len(normalized) > max_chars:
+        normalized = normalized[: max(1, int(max_chars))].strip()
+    return normalized
+
+
+def _normalize_ai_prompt_hint(raw: Any) -> str:
+    return _normalize_limited_prompt_hint(raw, max_chars=AI_PROMPT_HINT_MAX_CHARS, max_lines=AI_PROMPT_HINT_MAX_LINES)
+
+
+def _truncate_non_space_chars(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not compact:
+        return ""
+    count = 0
+    out: list[str] = []
+    for char in compact:
+        if char.isspace():
+            if out and out[-1] != " ":
+                out.append(" ")
+            continue
+        if count >= max_chars:
+            break
+        out.append(char)
+        count += 1
+    return "".join(out).strip()
+
+
+def _normalize_hud_text(raw: Any) -> str:
+    text = str(raw or "").replace("\r\n", "\n")
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    normalized = [_truncate_non_space_chars(line, HUD_TEXT_MAX_CHARS_PER_LINE) for line in lines]
+    normalized = [line for line in normalized if line][:HUD_TEXT_MAX_LINES]
+    return "\n".join(normalized)
+
+
+def _normalize_request_text_fields(request: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(request or {})
+    normalized["ai_prompt_hint"] = _normalize_ai_prompt_hint(normalized.get("ai_prompt_hint"))
+    normalized["description_ai_prompt_hint"] = _normalize_limited_prompt_hint(normalized.get("description_ai_prompt_hint"))
+    normalized["follow_text_ai_prompt_hint"] = _normalize_limited_prompt_hint(normalized.get("follow_text_ai_prompt_hint"))
+    normalized["hud_ai_prompt_hint"] = _normalize_limited_prompt_hint(normalized.get("hud_ai_prompt_hint"))
+    normalized["hud_text"] = _normalize_hud_text(normalized.get("hud_text"))
     return normalized
 
 
@@ -1858,9 +1906,16 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "headline",
         "headline_ai_enabled",
         "ai_prompt_hint",
+        "description_text",
+        "description_ai_enabled",
+        "description_ai_prompt_hint",
         "subhead",
         "follow_text",
+        "follow_text_ai_enabled",
+        "follow_text_ai_prompt_hint",
         "hud_text",
+        "hud_ai_enabled",
+        "hud_ai_prompt_hint",
         "ending_template_mode",
         "ending_template_id",
         "ending_template_ids",

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -543,7 +543,7 @@ def _runtime_config_for_wechat(settings: dict[str, Any], workspace: Path) -> Pat
             "platforms": {
                 "wechat": {
                     "collection_name": str(settings.get("collection_name") or ""),
-                    "short_title": str(settings.get("short_title") or "GasGx燃气发电挖矿"),
+                    "short_title": str(settings.get("short_title") or "GasGx鐕冩皵鍙戠數鎸栫熆"),
                     "location": str(settings.get("location") or ""),
                     "save_draft": str(settings.get("publish_mode") or "publish") == "draft",
                     "publish_now": str(settings.get("publish_mode") or "publish") != "draft",
@@ -554,7 +554,7 @@ def _runtime_config_for_wechat(settings: dict[str, Any], workspace: Path) -> Pat
             },
         },
         "collection_name": str(settings.get("collection_name") or ""),
-        "short_title": str(settings.get("short_title") or "GasGx燃气发电挖矿"),
+        "short_title": str(settings.get("short_title") or "GasGx鐕冩皵鍙戠數鎸栫熆"),
         "location": str(settings.get("location") or ""),
         "topics": str(settings.get("topics") or ""),
     }
@@ -631,19 +631,9 @@ def _asset_generated_caption(source_video: Path) -> str:
             continue
     return ""
 
-
-def _sanitize_generated_caption(text: str) -> str:
-    content = str(text or "").replace("\r\n", "\n")
-    # Drop template-only blocks that should not appear in publish descriptions.
-    content = re.sub(r"(?ims)^\s*片尾文案\s*:\s*\n(?:.+\n?)*?(?=^\s*HUD\s*:|^\s*$)", "", content)
-    content = re.sub(r"(?ims)^\s*HUD\s*:\s*\n(?:.+\n?)*?(?=^\s*$|$)", "", content)
-    lines = [line.strip() for line in content.split("\n") if line.strip()]
-    return "\n".join(lines).strip()
-
-
 def caption_for_publish(settings: dict[str, Any], source_video: Path) -> str:
     configured_caption = str(settings.get("caption") or "").strip()
-    generated_caption = _sanitize_generated_caption(_asset_generated_caption(source_video))
+    generated_caption = _asset_generated_caption(source_video).strip()
     topics = str(settings.get("topics") or "").strip()
     base = configured_caption or generated_caption
     if base and topics:
@@ -947,3 +937,5 @@ def run_matrix_publish(
 
 def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
     return run_matrix_publish(limit=limit, dry_run=dry_run, platforms=frozenset({"wechat"}))
+
+
