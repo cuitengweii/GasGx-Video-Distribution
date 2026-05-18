@@ -1336,6 +1336,7 @@ function updateEndingCoverTemplateField(input) {
   if (key === "single_cover_title_text") {
     $("followText").value = input.value;
     state.follow_text = input.value;
+    syncFollowTextFixedField(input.value);
   }
   setImageLoading("endingTemplatePreview", "搴旂敤鐗囧熬灏侀潰鍙傛暟...");
   refreshEndingTemplatePreview();
@@ -1959,6 +1960,7 @@ function applyEndingCoverTextUpdates(text) {
       if (templateKey === "single_cover_title_text") {
         $("followText").value = value;
         state.follow_text = value;
+        syncFollowTextFixedField(value);
       }
     }
   });
