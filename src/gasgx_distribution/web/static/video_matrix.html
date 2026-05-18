@@ -34,7 +34,7 @@
         applyEmbeddedShellTheme(event.data.theme);
       });
     </script>
-    <link rel="stylesheet" href="/static/video_matrix_styles.css?v=dedupe-scroll-20260512" />
+    <link rel="stylesheet" href="/static/video_matrix_styles.css?v=copycard-tight-20260518b" />
   </head>
   <body>
     <aside class="sidebar">
@@ -55,16 +55,17 @@
         <details class="copy-card">
           <summary class="copy-card-head">
             <div>
-              <span>01</span>
+              <span class="copy-card-index">01</span>
               <b>上标题 / 副标题</b>
-              <p>上标题可固定，也可按数量让 AI 生成；副标题默认用固定文案。</p>
             </div>
             <div class="copy-card-badges">
-              <span class="copy-badge">固定</span>
               <span class="copy-badge copy-badge-ai">AI</span>
             </div>
           </summary>
           <div class="copy-card-body">
+            <div class="copy-card-body-meta">
+              <p>上标题可固定，也可按数量让 AI 生成；副标题默认用固定文案。</p>
+            </div>
             <div class="copy-card-column">
               <label for="headline">固定上标题
                 <textarea
@@ -101,16 +102,17 @@
         <details class="copy-card">
           <summary class="copy-card-head">
             <div>
-              <span>02</span>
+              <span class="copy-card-index">02</span>
               <b>视频描述</b>
-              <p>关闭 AI 时用固定描述；开启 AI 时按提示语为每条视频生成不同描述。</p>
             </div>
             <div class="copy-card-badges">
-              <span class="copy-badge">固定</span>
               <span class="copy-badge copy-badge-ai">AI</span>
             </div>
           </summary>
           <div class="copy-card-body">
+            <div class="copy-card-body-meta">
+              <p>关闭 AI 时用固定描述；开启 AI 时按提示语为每条视频生成不同描述。</p>
+            </div>
             <div class="copy-card-column">
               <label for="descriptionText">固定视频描述
                 <textarea
@@ -140,16 +142,17 @@
         <details class="copy-card">
           <summary class="copy-card-head">
             <div>
-              <span>03</span>
+              <span class="copy-card-index">03</span>
               <b>片尾文案</b>
-              <p>用于视频最后一屏的收口文案，也可以开 AI 批量生成不同版本。</p>
             </div>
             <div class="copy-card-badges">
-              <span class="copy-badge">固定</span>
               <span class="copy-badge copy-badge-ai">AI</span>
             </div>
           </summary>
           <div class="copy-card-body">
+            <div class="copy-card-body-meta">
+              <p>用于视频最后一屏的收口文案，也可以开 AI 批量生成不同版本。</p>
+            </div>
             <div class="copy-card-column">
               <label for="followText">固定片尾文案
                 <textarea
@@ -179,16 +182,17 @@
         <details class="copy-card">
           <summary class="copy-card-head">
             <div>
-              <span>04</span>
+              <span class="copy-card-index">04</span>
               <b>HUD 文案</b>
-              <p>HUD 只保留短句，适合两行显示；AI 开启后也会自动控制长度。</p>
             </div>
             <div class="copy-card-badges">
-              <span class="copy-badge">固定</span>
               <span class="copy-badge copy-badge-ai">AI</span>
             </div>
           </summary>
           <div class="copy-card-body">
+            <div class="copy-card-body-meta">
+              <p>HUD 只保留短句，适合两行显示；AI 开启后也会自动控制长度。</p>
+            </div>
             <div class="copy-card-column">
               <label for="hudText">固定 HUD 文案
                 <textarea

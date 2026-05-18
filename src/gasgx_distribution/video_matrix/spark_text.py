@@ -216,7 +216,7 @@ def build_description_variants(
         avoid_texts=avoid_texts,
     )
     fallback_variants = _fallback_description_variants(seed, target_count)
-    return _normalize_simple_text_variants([*spark_variants, *fallback_variants], target_count, avoid_texts=avoid_texts)
+    return _normalize_bilingual_description_variants([*spark_variants, *fallback_variants], target_count, avoid_texts=avoid_texts)
 
 
 def build_follow_text_variants(
@@ -424,7 +424,9 @@ def _try_spark_description_variants(
     request_count = max(count * 2, count + 2)
     prompt = (
         f"Generate {request_count} unique short social-video descriptions for GasGx in {target_language}.\n"
-        "Output JSON only: {\"variants\":[\"...\"]}.\n"
+        "Each item must be exactly two lines: line 1 English, line 2 Chinese.\n"
+        "Do not mix languages in the same line.\n"
+        "Output JSON only: {\"variants\":[{\"en\":\"...\",\"zh\":\"...\"}]} or {\"variants\":[\"EN line\\n中文行\"]}.\n"
         "Do not include links, hashtags, markdown, labels, or section titles.\n"
         "Each item should be concise and publication-ready."
     )
@@ -440,7 +442,27 @@ def _try_spark_description_variants(
     raw_variants = payload.get("variants") if isinstance(payload, dict) else []
     if not isinstance(raw_variants, list):
         return []
-    return [clean_generated_text(str(item or "")).strip() for item in raw_variants if clean_generated_text(str(item or "")).strip()]
+    variants: list[str] = []
+    for item in raw_variants:
+        text = ""
+        if isinstance(item, dict):
+            en = clean_generated_text(str(item.get("en") or item.get("english") or "")).strip()
+            zh = clean_generated_text(str(item.get("zh") or item.get("chinese") or "")).strip()
+            if en and zh:
+                text = f"{en}\n{zh}"
+            else:
+                text = str(item.get("text") or item.get("description") or "").strip()
+        elif isinstance(item, list) and len(item) >= 2:
+            en = clean_generated_text(str(item[0] or "")).strip()
+            zh = clean_generated_text(str(item[1] or "")).strip()
+            if en and zh:
+                text = f"{en}\n{zh}"
+        else:
+            text = str(item or "").strip()
+        normalized = _normalize_bilingual_description(text)
+        if normalized:
+            variants.append(normalized)
+    return variants
 
 
 def _try_spark_follow_text_variants(
@@ -558,6 +580,36 @@ def _normalize_simple_text_variants(raw_items: list[str], count: int, *, avoid_t
     return variants
 
 
+def _normalize_bilingual_description(text: str) -> str | None:
+    lines = [clean_generated_text(line).strip() for line in str(text or "").replace("\r\n", "\n").split("\n") if line.strip()]
+    if len(lines) != 2:
+        return None
+    english, chinese = lines
+    if not LATIN_RE.search(english):
+        return None
+    if not CJK_RE.search(chinese):
+        return None
+    return f"{english}\n{chinese}"
+
+
+def _normalize_bilingual_description_variants(raw_items: list[str], count: int, *, avoid_texts: Iterable[str] | None = None) -> list[str]:
+    variants: list[str] = []
+    seen: set[str] = set()
+    avoid_keys = _text_key_set(avoid_texts)
+    for item in raw_items:
+        normalized = _normalize_bilingual_description(item)
+        if not normalized:
+            continue
+        key = _text_key(normalized)
+        if not key or key in seen or key in avoid_keys:
+            continue
+        seen.add(key)
+        variants.append(normalized)
+        if len(variants) >= count:
+            break
+    return variants
+
+
 def _normalize_hud_line(text: str, *, max_chars: int = HUD_MAX_CHARS_PER_LINE) -> str:
     clean = clean_generated_text(str(text or ""))
     if not clean:
@@ -597,30 +649,53 @@ def _normalize_hud_variants(raw_items: list[list[str]], count: int, *, avoid_tex
 
 
 def _fallback_description_variants(seed_description: str, count: int) -> list[str]:
-    seed = seed_description.strip()
+    seed = _normalize_bilingual_description(seed_description)
     seeds = [
-        seed,
-        "GasGx gas engines convert field gas into stable onsite power for productive loads.",
-        "Deploy generator sets near gas source to reduce waste and deliver reliable electricity.",
-        "Turn stranded gas into continuous power and improve project-level energy efficiency.",
-        "GasGx supports remote industrial and compute loads with practical field power systems.",
-        "Build onsite power from field gas and keep industrial loads running steadily.",
-        "Turn excess gas into usable electricity with practical deployment and lower waste.",
+        seed or (
+            "GasGx turns stranded gas into stable onsite power.\n"
+            "GasGx 把搁浅天然气转成稳定的现场电力。"
+        ),
+        (
+            "Deploy generator sets near the gas source to reduce waste.\n"
+            "在气源附近部署发电机组，减少浪费。"
+        ),
+        (
+            "Turn stranded gas into continuous power and improve efficiency.\n"
+            "把搁浅天然气转成持续电力，提升能效。"
+        ),
+        (
+            "GasGx supports remote industrial and compute loads.\n"
+            "GasGx 支持远程工业和算力负载。"
+        ),
+        (
+            "Build onsite power from field gas and keep loads running steadily.\n"
+            "把现场气源转成就地供电，让负载稳定运行。"
+        ),
+        (
+            "Turn excess gas into usable electricity with practical deployment.\n"
+            "把富余气源转成可用电力，适合落地部署。"
+        ),
+        (
+            "Reduce flaring while creating reliable onsite power.\n"
+            "减少放空的同时，生成可靠的现场电力。"
+        ),
     ]
     variants: list[str] = []
     for index in range(max(1, count)):
-        base = seeds[index % len(seeds)].strip()
+        base = seeds[index % len(seeds)]
         if not base:
             continue
         if index >= len(seeds):
             extras = [
-                "for onsite deployment",
-                "for practical field use",
-                "for remote power cases",
-                "with stable output focus",
-                "with low-cost energy delivery",
+                ("for onsite deployment", "适合现场部署"),
+                ("for practical field use", "适合现场使用"),
+                ("for remote power cases", "适合远程供电场景"),
+                ("with stable output focus", "强调稳定输出"),
+                ("with low-cost energy delivery", "强调低成本供能"),
             ]
-            base = f"{base} {extras[(index - len(seeds)) % len(extras)]}"
+            extra_en, extra_zh = extras[(index - len(seeds)) % len(extras)]
+            english, chinese = base.split("\n", 1)
+            base = f"{english} {extra_en}\n{chinese}，{extra_zh}"
         variants.append(base)
     return variants
 

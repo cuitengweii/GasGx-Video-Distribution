@@ -3757,6 +3757,7 @@ def _terminal_summary(windows: list[dict[str, Any]], groups: list[dict[str, Any]
         "total": total,
         "success": success,
         "active_windows": len([item for item in windows if item.get("enabled")]),
+        "remaining_material_videos": _remaining_material_video_count(),
         "today_materials": int(today_materials),
     }
 

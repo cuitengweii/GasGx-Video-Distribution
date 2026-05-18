@@ -3300,10 +3300,10 @@ function syncTerminalWechatSummary(summary, windows) {
   const summaryNode = document.querySelector(".terminal-wechat-summary");
   if (summaryNode) {
     summaryNode.innerHTML = `
-      <div class="metric"><span>已完成账号数</span><strong>${summary.success || 0}</strong></div>
       <div class="metric"><span>总账号数</span><strong>${summary.total || 0}</strong></div>
-      <div class="metric"><span>活跃窗数量</span><strong>${summary.active_windows || 0}</strong></div>
-      <div class="metric"><span>当日素材数量</span><strong>${summary.today_materials || 0}</strong></div>
+      <div class="metric"><span>已完成账号数</span><strong>${summary.success || 0}</strong></div>
+      <div class="metric"><span>当日素材剩余数量</span><strong>${summary.remaining_material_videos || 0}</strong></div>
+      <div class="metric"><span>当日总素材数量</span><strong>${summary.today_materials || 0}</strong></div>
     `;
   }
   const progress = document.querySelector("#terminal-global-progress");
@@ -3614,15 +3614,9 @@ function syncTerminalWechatGridHeight() {
   const panel = document.querySelector("#terminal-matrix-workspace .terminal-group-panel");
   const grid = panel?.querySelector(".terminal-workspace.terminal-workspace-wechat");
   if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) return;
-  const panelStyle = window.getComputedStyle(panel);
-  const gap = Number.parseFloat(panelStyle.rowGap || panelStyle.gap || "0") || 0;
-  const siblings = Array.from(panel.children).filter((child) => child !== grid && !(child instanceof HTMLElement && child.hidden));
-  const usedHeight = siblings.reduce((total, child) => {
-    if (!(child instanceof HTMLElement)) return total;
-    return total + child.getBoundingClientRect().height;
-  }, 0);
-  const totalGap = Math.max(0, (siblings.length + 1) - 1) * gap;
-  const available = Math.floor(panel.clientHeight - usedHeight - totalGap);
+  const panelRect = panel.getBoundingClientRect();
+  const gridRect = grid.getBoundingClientRect();
+  const available = Math.floor(panelRect.bottom - gridRect.top - 13);
   if (available <= 0) return;
   const clamped = Math.max(220, available);
   const nextValue = `${clamped}px`;
@@ -3954,10 +3948,10 @@ function renderTerminalExecution() {
             </div>
           </div>
           <div class="terminal-wechat-summary">
-            <div class="metric"><span>已完成账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.success || 0)}</strong></div>
             <div class="metric"><span>总账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.total || 0)}</strong></div>
-            <div class="metric"><span>活跃窗数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.active_windows || 0)}</strong></div>
-            <div class="metric"><span>当日素材数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.today_materials || 0)}</strong></div>
+            <div class="metric"><span>已完成账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.success || 0)}</strong></div>
+            <div class="metric"><span>当日素材剩余数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.remaining_material_videos || 0)}</strong></div>
+            <div class="metric"><span>当日总素材数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.today_materials || 0)}</strong></div>
           </div>
           ${showWechatLoadingState ? `<p class="system-action-state muted">正在拉取终端执行状态，请稍候…</p>` : ""}
           <div class="terminal-workspace terminal-workspace-wechat"></div>
@@ -5975,6 +5969,7 @@ function activateView(view, updateHash = true) {
   button.classList.add("active");
   section.classList.add("active");
   currentView = view;
+  document.body.classList.toggle("terminal-execution-active", view === "terminal-execution");
   document.body.classList.toggle("video-matrix-active", view === "video-matrix");
   document.body.classList.remove("mobile-nav-open");
   document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", "false");
