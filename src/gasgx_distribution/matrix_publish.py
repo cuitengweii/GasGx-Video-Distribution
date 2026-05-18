@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -631,9 +632,18 @@ def _asset_generated_caption(source_video: Path) -> str:
     return ""
 
 
+def _sanitize_generated_caption(text: str) -> str:
+    content = str(text or "").replace("\r\n", "\n")
+    # Drop template-only blocks that should not appear in publish descriptions.
+    content = re.sub(r"(?ims)^\s*片尾文案\s*:\s*\n(?:.+\n?)*?(?=^\s*HUD\s*:|^\s*$)", "", content)
+    content = re.sub(r"(?ims)^\s*HUD\s*:\s*\n(?:.+\n?)*?(?=^\s*$|$)", "", content)
+    lines = [line.strip() for line in content.split("\n") if line.strip()]
+    return "\n".join(lines).strip()
+
+
 def caption_for_publish(settings: dict[str, Any], source_video: Path) -> str:
     configured_caption = str(settings.get("caption") or "").strip()
-    generated_caption = _asset_generated_caption(source_video)
+    generated_caption = _sanitize_generated_caption(_asset_generated_caption(source_video))
     topics = str(settings.get("topics") or "").strip()
     base = configured_caption or generated_caption
     if base and topics:
