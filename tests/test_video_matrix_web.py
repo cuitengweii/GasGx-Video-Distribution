@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -100,14 +100,14 @@ def test_video_matrix_api_state_and_preview() -> None:
     assert payload["local_bgm_dir"].endswith("runtime\\video_matrix\\bgm") or payload["local_bgm_dir"].endswith("runtime/video_matrix/bgm")
     labels = [item["label"] for item in payload["settings"]["material_categories"]]
     for expected in [
-        "矿机部分",
-        "集装箱部分",
-        "发电机部分",
-        "各显示器部分",
-        "传感器部分",
-        "施工过程",
-        "测试动线",
-        "工厂全貌",
+        "鐭挎満閮ㄥ垎",
+        "闆嗚绠遍儴鍒?,
+        "鍙戠數鏈洪儴鍒?,
+        "鍚勬樉绀哄櫒閮ㄥ垎",
+        "浼犳劅鍣ㄩ儴鍒?,
+        "鏂藉伐杩囩▼",
+        "娴嬭瘯鍔ㄧ嚎",
+        "宸ュ巶鍏ㄨ矊",
     ]:
         assert expected in labels
     assert "category_H" in payload["source_dirs"]
@@ -328,18 +328,16 @@ def test_video_matrix_generate_passes_composition_sequence(monkeypatch, tmp_path
         "target_fps": 30,
         "composition_sequence": [{"category_id": "category_D", "duration": 2.2}],
         "headline_ai_enabled": True,
-        "ai_prompt_hint": "突出真实场景\n避免夸张\nhttps://example.com",
-    }
+        "ai_prompt_hint": "绐佸嚭鐪熷疄鍦烘櫙\n閬垮厤澶稿紶\nhttps://example.com",`r`n        "mining_bgm_volume": 1.18,`r`n        "library_bgm_volume": 0.27,`r`n    }
 
     video_matrix_api._run_generate_job("test-job", request, tmp_path / "bgm.mp3", None)
 
     assert captured["composition_sequence"] == [{"category_id": "category_D", "duration": 2.2}]
     assert captured["text_overrides"]["headline_ai_enabled"] is True
-    assert captured["text_overrides"]["ai_prompt_hint"] == "突出真实场景\n避免夸张"
+    assert captured["text_overrides"]["ai_prompt_hint"] == "绐佸嚭鐪熷疄鍦烘櫙\n閬垮厤澶稿紶"
     assert captured["settings"].video_duration_min == 8
     assert captured["settings"].video_duration_max == 24
-    assert captured["settings"].target_fps == 30
-    assert isinstance(captured["existing_signatures"], set)
+    assert captured["settings"].target_fps == 30`r`n    assert captured["mining_bgm_volume"] == 1.18`r`n    assert captured["library_bgm_volume"] == 0.27`r`n    assert isinstance(captured["existing_signatures"], set)
 
 
 def test_video_matrix_generate_prefers_current_request_template_snapshot(monkeypatch, tmp_path) -> None:
@@ -403,6 +401,8 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
         "video_duration_max": 18,
         "target_fps": 30,
         "bgm_library_id": "selected.mp3",
+        "mining_bgm_volume": 1.25,
+        "library_bgm_volume": 0.22,
     }
 
     video_matrix_api._run_generate_job("persist-job", request, tmp_path / "bgm.mp3", None)
@@ -415,6 +415,8 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
     assert state["target_fps"] == 30
     assert state["headline_ai_enabled"] is True
     assert state["bgm_library_id"] == "selected.mp3"
+    assert state["mining_bgm_volume"] == 1.25
+    assert state["library_bgm_volume"] == 0.22
     assert "transcript_text" not in state
 
 
@@ -604,7 +606,7 @@ def test_video_matrix_full_clone_page_exists() -> None:
 
     assert response.status_code == 200
     html = response.text
-    assert "GasGx 短视频矩阵批量生成工具" in html
+    assert "GasGx 鐭棰戠煩闃垫壒閲忕敓鎴愬伐鍏? in html
     assert "/static/video_matrix_app.js" in html
     assert "/static/video_matrix_styles.css" in html
 
@@ -627,11 +629,11 @@ def test_video_matrix_can_add_named_material_category(monkeypatch, tmp_path) -> 
 
     client = TestClient(create_app())
 
-    response = client.post("/api/video-matrix/material-categories", json={"label": "泵站细节"})
+    response = client.post("/api/video-matrix/material-categories", json={"label": "娉电珯缁嗚妭"})
 
     assert response.status_code == 200
     state = client.get("/api/video-matrix/state").json()
-    assert any(item["label"] == "泵站细节" for item in state["settings"]["material_categories"])
+    assert any(item["label"] == "娉电珯缁嗚妭" for item in state["settings"]["material_categories"])
     assert "category_custom_1" not in state["source_dirs"]
     assert "category_I" in state["source_dirs"]
     assert "category_J" in state["source_dirs"]
@@ -642,8 +644,8 @@ def test_video_matrix_state_migrates_legacy_custom_category_refs(monkeypatch) ->
     stored = {
         "settings": {
             "material_categories": [
-                {"id": "category_I", "label": "测试"},
-                {"id": "category_J", "label": "电控"},
+                {"id": "category_I", "label": "娴嬭瘯"},
+                {"id": "category_J", "label": "鐢垫帶"},
             ],
             "recent_limits": {"category_custom_1": 6, "category_custom_2": 5},
             "composition_sequence": [{"category_id": "category_custom_1", "duration": 2.0}],
@@ -710,12 +712,12 @@ def test_video_matrix_can_rename_material_category(monkeypatch, tmp_path) -> Non
 
     client = TestClient(create_app())
 
-    response = client.post("/api/video-matrix/material-categories/category_A", json={"label": "矿机改名"})
+    response = client.post("/api/video-matrix/material-categories/category_A", json={"label": "鐭挎満鏀瑰悕"})
 
     assert response.status_code == 200
     state = client.get("/api/video-matrix/state").json()
     categories = state["settings"]["material_categories"]
-    assert any(item["id"] == "category_A" and item["label"] == "矿机改名" for item in categories)
+    assert any(item["id"] == "category_A" and item["label"] == "鐭挎満鏀瑰悕" for item in categories)
 
 
 def test_video_matrix_uses_random_local_bgm_when_no_track_is_selected(monkeypatch, tmp_path) -> None:
@@ -997,3 +999,4 @@ def test_video_matrix_model_images_endpoint(monkeypatch, tmp_path) -> None:
     payload = response.json()
     assert payload["directory"] == str(image_dir)
     assert payload["images"] == [{"name": "sample.png", "url": "/api/video-matrix/model-images/sample.png"}]
+
