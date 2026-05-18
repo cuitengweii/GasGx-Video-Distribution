@@ -52,79 +52,169 @@
         <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
         <div class="sidebar-radio-field"><span>生成速度</span><div class="radio-row" id="renderSpeedModeGroup"></div></div>
         <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option></select></label>
-        <div class="sidebar-checkbox-field">
-          <input id="headlineAiEnabled" type="checkbox" />
-          <label for="headlineAiEnabled">上标题 AI 按数量生成</label>
-        </div>
-        <label for="aiPromptHint">上标题 AI 参考提示语
-          <textarea
-            id="aiPromptHint"
-            rows="4"
-            maxlength="240"
-            placeholder="示例：突出海外低成本发电、强调真实场景、语气更克制专业"
-          ></textarea>
-        </label>
-        <p id="aiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
-        <div class="sidebar-checkbox-field">
-          <input id="descriptionAiEnabled" type="checkbox" />
-          <label for="descriptionAiEnabled">视频描述 AI 生成</label>
-        </div>
-        <label for="descriptionText">固定视频描述
-          <textarea
-            id="descriptionText"
-            rows="4"
-            placeholder="关闭 AI 时使用固定描述；留空则沿用模板文案"
-          ></textarea>
-        </label>
-        <label for="descriptionAiPromptHint">视频描述 AI 参考提示语
-          <textarea
-            id="descriptionAiPromptHint"
-            rows="4"
-            maxlength="240"
-            placeholder="示例：避免夸张词，突出数据和场景事实"
-          ></textarea>
-        </label>
-        <p id="descriptionAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
-        <div class="sidebar-checkbox-field">
-          <input id="followTextAiEnabled" type="checkbox" />
-          <label for="followTextAiEnabled">片尾文案 AI 生成</label>
-        </div>
-        <label for="followTextFixed">固定片尾文案
-          <textarea
-            id="followTextFixed"
-            rows="3"
-            placeholder="关闭 AI 时使用固定片尾文案"
-          ></textarea>
-        </label>
-        <label for="followTextAiPromptHint">片尾文案 AI 参考提示语
-          <textarea
-            id="followTextAiPromptHint"
-            rows="4"
-            maxlength="240"
-            placeholder="示例：简洁克制，不要口号堆砌"
-          ></textarea>
-        </label>
-        <p id="followTextAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
-        <div class="sidebar-checkbox-field">
-          <input id="hudAiEnabled" type="checkbox" />
-          <label for="hudAiEnabled">HUD 文案 AI 生成</label>
-        </div>
-        <label for="hudTextFixed">固定 HUD 文案
-          <textarea
-            id="hudTextFixed"
-            rows="3"
-            placeholder="最多 2 行，每行最多 10 字"
-          ></textarea>
-        </label>
-        <label for="hudAiPromptHint">HUD AI 参考提示语
-          <textarea
-            id="hudAiPromptHint"
-            rows="4"
-            maxlength="240"
-            placeholder="示例：两行短句，偏工业风，不使用链接"
-          ></textarea>
-        </label>
-        <p id="hudAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+        <details class="copy-card">
+          <summary class="copy-card-head">
+            <div>
+              <span>01</span>
+              <b>上标题 / 副标题</b>
+              <p>上标题可固定，也可按数量让 AI 生成；副标题默认用固定文案。</p>
+            </div>
+            <div class="copy-card-badges">
+              <span class="copy-badge">固定</span>
+              <span class="copy-badge copy-badge-ai">AI</span>
+            </div>
+          </summary>
+          <div class="copy-card-body">
+            <div class="copy-card-column">
+              <label for="headline">固定上标题
+                <textarea
+                  id="headline"
+                  rows="3"
+                  placeholder="关闭 AI 时使用这句上标题"
+                ></textarea>
+              </label>
+              <label for="subhead">固定副标题
+                <textarea
+                  id="subhead"
+                  rows="3"
+                  placeholder="副标题补充说明，留空也可以"
+                ></textarea>
+              </label>
+            </div>
+            <div class="copy-card-column copy-card-ai">
+              <div class="sidebar-checkbox-field copy-card-toggle">
+                <input id="headlineAiEnabled" type="checkbox" />
+                <label for="headlineAiEnabled">启用 AI 批量生成上标题</label>
+              </div>
+              <label for="aiPromptHint">上标题 AI 参考提示语
+                <textarea
+                  id="aiPromptHint"
+                  rows="4"
+                  maxlength="240"
+                  placeholder="示例：突出海外低成本发电、强调真实场景、语气更克制专业"
+                ></textarea>
+              </label>
+              <p id="aiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+            </div>
+          </div>
+        </details>
+        <details class="copy-card">
+          <summary class="copy-card-head">
+            <div>
+              <span>02</span>
+              <b>视频描述</b>
+              <p>关闭 AI 时用固定描述；开启 AI 时按提示语为每条视频生成不同描述。</p>
+            </div>
+            <div class="copy-card-badges">
+              <span class="copy-badge">固定</span>
+              <span class="copy-badge copy-badge-ai">AI</span>
+            </div>
+          </summary>
+          <div class="copy-card-body">
+            <div class="copy-card-column">
+              <label for="descriptionText">固定视频描述
+                <textarea
+                  id="descriptionText"
+                  rows="4"
+                  placeholder="关闭 AI 时使用固定描述；留空则沿用模板文案"
+                ></textarea>
+              </label>
+            </div>
+            <div class="copy-card-column copy-card-ai">
+              <div class="sidebar-checkbox-field copy-card-toggle">
+                <input id="descriptionAiEnabled" type="checkbox" />
+                <label for="descriptionAiEnabled">启用 AI 生成视频描述</label>
+              </div>
+              <label for="descriptionAiPromptHint">视频描述 AI 参考提示语
+                <textarea
+                  id="descriptionAiPromptHint"
+                  rows="4"
+                  maxlength="240"
+                  placeholder="示例：避免夸张词，突出数据和场景事实"
+                ></textarea>
+              </label>
+              <p id="descriptionAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+            </div>
+          </div>
+        </details>
+        <details class="copy-card">
+          <summary class="copy-card-head">
+            <div>
+              <span>03</span>
+              <b>片尾文案</b>
+              <p>用于视频最后一屏的收口文案，也可以开 AI 批量生成不同版本。</p>
+            </div>
+            <div class="copy-card-badges">
+              <span class="copy-badge">固定</span>
+              <span class="copy-badge copy-badge-ai">AI</span>
+            </div>
+          </summary>
+          <div class="copy-card-body">
+            <div class="copy-card-column">
+              <label for="followText">固定片尾文案
+                <textarea
+                  id="followText"
+                  rows="3"
+                  placeholder="关闭 AI 时使用固定片尾文案"
+                ></textarea>
+              </label>
+            </div>
+            <div class="copy-card-column copy-card-ai">
+              <div class="sidebar-checkbox-field copy-card-toggle">
+                <input id="followTextAiEnabled" type="checkbox" />
+                <label for="followTextAiEnabled">启用 AI 生成片尾文案</label>
+              </div>
+              <label for="followTextAiPromptHint">片尾文案 AI 参考提示语
+                <textarea
+                  id="followTextAiPromptHint"
+                  rows="4"
+                  maxlength="240"
+                  placeholder="示例：简洁克制，不要口号化，偏工程感"
+                ></textarea>
+              </label>
+              <p id="followTextAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+            </div>
+          </div>
+        </details>
+        <details class="copy-card">
+          <summary class="copy-card-head">
+            <div>
+              <span>04</span>
+              <b>HUD 文案</b>
+              <p>HUD 只保留短句，适合两行显示；AI 开启后也会自动控制长度。</p>
+            </div>
+            <div class="copy-card-badges">
+              <span class="copy-badge">固定</span>
+              <span class="copy-badge copy-badge-ai">AI</span>
+            </div>
+          </summary>
+          <div class="copy-card-body">
+            <div class="copy-card-column">
+              <label for="hudText">固定 HUD 文案
+                <textarea
+                  id="hudText"
+                  rows="3"
+                  placeholder="最多 2 行，每行最多 10 字"
+                ></textarea>
+              </label>
+            </div>
+            <div class="copy-card-column copy-card-ai">
+              <div class="sidebar-checkbox-field copy-card-toggle">
+                <input id="hudAiEnabled" type="checkbox" />
+                <label for="hudAiEnabled">启用 AI 生成 HUD 文案</label>
+              </div>
+              <label for="hudAiPromptHint">HUD AI 参考提示语
+                <textarea
+                  id="hudAiPromptHint"
+                  rows="4"
+                  maxlength="240"
+                  placeholder="示例：两行短句，偏工业风，不使用链接"
+                ></textarea>
+              </label>
+              <p id="hudAiPromptHintMeta" class="sidebar-field-hint">限制：最多 4 行、最多 240 字符，链接会被自动移除。</p>
+            </div>
+          </div>
+        </details>
       </section>
 
       <section class="sidebar-group">
@@ -173,10 +263,6 @@
       </section>
 
       <section class="side-editor generation-panel">
-        <input id="headline" type="hidden" />
-        <input id="subhead" type="hidden" />
-        <input id="followText" type="hidden" />
-        <input id="hudText" type="hidden" />
         <button id="generateBtn" class="primary" type="button">立即生成</button>
         <div id="jobLog" class="job-status-card">
           <div class="job-status-head">

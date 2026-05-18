@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GasGx Video Distribution</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
   <link rel="stylesheet" href="/static/styles.css?v=20260507-helpcenter-standalone-doc-page">
 </head>
 <body>
@@ -622,6 +626,49 @@
     </section>
 
     <section id="stats" class="view">
+      <section class="stats-tongji-shell">
+        <div class="stats-tongji-title">
+          <h1>近7日数据快览</h1>
+          <p>聚合数据来源：视频详情数据 + 关注者增长数据 (统计周期: 2026/05/11 - 05/17)</p>
+        </div>
+        <div id="tongji-overview" class="tongji-overview"></div>
+        <div class="tongji-chart-grid">
+          <section class="tongji-card">
+            <div class="tongji-card-head">
+              <h2>关注者增减推演模型</h2>
+            </div>
+            <div id="followerChart" class="tongji-chart"></div>
+          </section>
+          <section class="tongji-card">
+            <div class="tongji-card-head">
+              <h2>视频播放与互动链路</h2>
+            </div>
+            <div id="videoChart" class="tongji-chart"></div>
+          </section>
+        </div>
+        <section class="tongji-data-card">
+            <div class="tongji-data-head">
+              <h2>近7日关注与互动数据明细</h2>
+            <span class="tongji-data-badge">已聚合 2 个数据源</span>
+          </div>
+          <div class="tongji-data-scroll">
+            <table class="tongji-data-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>关注者总数</th>
+                  <th>新增/取关</th>
+                  <th class="split-head">播放总量</th>
+                  <th>喜欢/推荐</th>
+                  <th>分享/评论</th>
+                  <th>视频引流关注</th>
+                </tr>
+              </thead>
+              <tbody id="tongji-data-matrix"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
       <div class="stats-mode-tabs panel">
         <button class="btn secondary active" id="stats-mode-dashboard" type="button" data-stats-mode="dashboard">数据统计</button>
         <button class="btn secondary" id="stats-mode-capture" type="button" data-stats-mode="capture">临时采集</button>
@@ -649,24 +696,27 @@
               <option>全部账号</option>
             </select>
           </label>
-          <a class="btn secondary" id="stats-weekly-export" href="/api/stats/weekly-summary.csv?platform=wechat" target="_blank" rel="noopener">下载近7天CSV</a>
-          <span class="system-status" id="stats-weekly-window">近7天汇总未加载</span>
         </div>
-        <div id="stats-overview" class="metric-grid client-overview"></div>
-        <div class="dashboard-grid two-col">
+        <div class="dashboard-grid">
           <section class="panel dashboard-panel">
-            <div class="panel-head"><h2>账号矩阵统计</h2><span class="system-status">账号分层</span></div>
-            <div class="chart-row">
-              <div class="donut-chart" style="--a:42%;--b:70%;--c:88%"><span>异常<br>12%</span></div>
-              <div class="kpi-list">
-                <div><span>矩阵平均完播率</span><strong>38.6%</strong></div>
-                <div><span>矩阵平均互动率</span><strong>7.9%</strong></div>
-                <div><span>异常账号占比</span><strong>12%</strong></div>
+            <div class="panel-head"><h2>账号矩阵统计</h2><span class="system-status">采集状态分布</span></div>
+            <div class="matrix-collection-shell">
+              <div class="matrix-status-column">
+              <div id="matrix-status-donut" class="donut-chart"><span id="matrix-status-donut-label">异常<br>12%</span></div>
+              <div class="matrix-mini-strip">
+                  <div><span>完播率</span><strong id="matrix-average-completed-rate">38.6%</strong></div>
+                  <div><span>互动率</span><strong id="matrix-average-interaction-rate">7.9%</strong></div>
+                  <div><span>异常占比</span><strong id="matrix-abnormal-rate">12%</strong></div>
+                </div>
               </div>
+              <div class="matrix-collection-grid" id="matrix-collection-grid"></div>
             </div>
+            <div class="matrix-status-band" id="matrix-status-band"></div>
             <div class="table-tools"><input id="account-stats-search" placeholder="搜索账号 / 平台 / 标签"><span>支持排序、分页、搜索筛选</span></div>
             <div id="account-stats-table" class="data-table"></div>
           </section>
+        </div>
+        <div class="dashboard-grid">
           <section class="panel dashboard-panel">
             <div class="panel-head"><h2>作品内容数据</h2><span class="system-status">TOP10</span></div>
             <div class="content-rank">
@@ -732,7 +782,6 @@
               <h2>单账号临时采集</h2>
               <p class="muted">仅支持一次采集一个视频号账号。流程：先登录该账号，再执行采集，最后手动刷新状态。</p>
             </div>
-            <span class="system-status" id="matrix-stats-capture-status">未加载</span>
           </div>
           <div class="stats-capture-controls">
             <label>采集账号

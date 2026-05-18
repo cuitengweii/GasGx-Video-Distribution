@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GasGx - 视频号全局数据监测大屏</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        /* ==========================================
+           GasGx UI v6.1 核心颜色与系统变量 (Theme Tokens)
+           ========================================== */
+        :root {
+            --bg-main: #0F0F0F;
+            --bg-card: #202020;
+            --text-primary: #E0E0E0;
+            --text-secondary: #888888;
+            --text-on-primary: #0F0F0F;
+            --border-line: #333333;
+            --accent-aurora: #5DD62C;
+            --accent-aurora-rgb-40: rgba(93, 214, 44, 0.4);
+            
+            --status-success: #28A745;
+            --status-warning: #FF9900;
+            --status-danger: #FF3366;
+            --status-info: #00A3FF;
+        }
+
+        body {
+            background-color: var(--bg-main);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+        }
+
+        .font-mono-num {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* 顶导幽灵按钮化 (Ghosting) */
+        .ghost-btn {
+            background-color: transparent;
+            color: var(--text-secondary);
+            transition: all 0.2s ease;
+        }
+        .ghost-btn:hover {
+            background-color: rgba(255, 255, 255, 0.04);
+            color: var(--accent-aurora);
+        }
+        .ghost-btn.active {
+            color: var(--accent-aurora);
+            background-color: rgba(93, 214, 44, 0.1);
+            border-bottom: 2px solid var(--accent-aurora);
+        }
+
+        /* 主按钮强制对比度接管 */
+        .btn-primary {
+            background-color: var(--accent-aurora);
+            color: var(--text-on-primary) !important;
+            font-weight: 700;
+            border: none;
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover {
+            box-shadow: 0 0 16px var(--accent-aurora-rgb-40);
+            filter: brightness(1.15);
+        }
+
+        /* 卡片基础与毛玻璃 (Glassmorphism) */
+        .gas-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-line);
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
+            position: relative;
+            overflow: hidden;
+        }
+        .glass-panel {
+            background: rgba(15, 15, 15, 0.85);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border-line);
+        }
+
+        /* 呼吸发光特效 (Breathing Glow) */
+        .glow-metric {
+            color: var(--accent-aurora);
+            text-shadow: 0 0 16px var(--accent-aurora-rgb-40);
+        }
+
+        /* 表格工业风定制 */
+        .gas-table th {
+            background-color: #161616;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-line);
+        }
+        .gas-table tr {
+            transition: background-color 0.2s;
+            border-bottom: 1px solid #2A2A2A;
+        }
+        .gas-table tr:hover {
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+        .gas-table td {
+            padding: 12px 16px;
+        }
+    </style>
+</head>
+<body>
+
+    <header class="sticky top-0 z-50 glass-panel px-6 py-4 flex justify-between items-center">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded bg-[var(--accent-aurora)] flex items-center justify-center text-[var(--text-on-primary)] font-black text-lg">
+                Gx
+            </div>
+            <span class="text-xl font-bold tracking-widest font-mono-num ml-1">GasGx <span class="text-[var(--text-secondary)] text-xs font-normal">OS v6.1</span></span>
+        </div>
+        <nav class="flex gap-1">
+            <button class="ghost-btn px-5 py-2 text-sm font-medium">概览 (Overview)</button>
+            <button class="ghost-btn px-5 py-2 text-sm font-medium active">多维聚合大盘 (Aggregated)</button>
+            <button class="ghost-btn px-5 py-2 text-sm font-medium">流量漏斗 (Funnel)</button>
+        </nav>
+        <div class="flex items-center gap-4">
+            <span class="text-xs font-mono-num text-[var(--accent-aurora)] flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-[var(--accent-aurora)] animate-pulse"></span>
+                实时同步中
+            </span>
+            <button class="btn-primary px-6 py-2 rounded-sm text-sm tracking-wide">导出双端报告</button>
+        </div>
+    </header>
+
+    <main class="p-8 max-w-[1400px] mx-auto space-y-6">
+        
+        <div class="flex justify-between items-end">
+            <div>
+                <h1 class="text-2xl font-bold tracking-wide">流量与关注者转化全局监控</h1>
+                <p class="text-[var(--text-secondary)] mt-2 text-sm">聚合数据来源：视频详情数据 + 关注者增长数据 (统计周期: 2026/05/11 - 05/17)</p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div class="gas-card p-6 border-t-2 border-t-[var(--accent-aurora)]">
+                <span class="text-[var(--text-secondary)] text-xs font-bold tracking-wider uppercase mb-1 block">Total Followers</span>
+                <span class="text-sm font-medium mb-3 block">总关注者资产</span>
+                <div class="flex items-end gap-3">
+                    <span class="font-mono-num text-5xl font-black glow-metric">1,573</span>
+                </div>
+            </div>
+            <div class="gas-card p-6 border-t-2 border-t-[var(--status-info)]">
+                <span class="text-[var(--text-secondary)] text-xs font-bold tracking-wider uppercase mb-1 block">7-Day Plays</span>
+                <span class="text-sm font-medium mb-3 block">7日累计播放量</span>
+                <div class="flex items-end gap-3">
+                    <span class="font-mono-num text-4xl font-bold text-[var(--status-info)]">4,646</span>
+                    <span class="text-xs text-[var(--text-secondary)] mb-1">次</span>
+                </div>
+            </div>
+            <div class="gas-card p-6 border-t-2 border-t-[var(--status-warning)]">
+                <span class="text-[var(--text-secondary)] text-xs font-bold tracking-wider uppercase mb-1 block">7-Day New Follows</span>
+                <span class="text-sm font-medium mb-3 block">7日新增关注转化</span>
+                <div class="flex items-end gap-3">
+                    <span class="font-mono-num text-4xl font-bold text-[var(--status-warning)]">+20</span>
+                    <span class="text-xs text-[var(--text-secondary)] mb-1">人</span>
+                </div>
+            </div>
+            <div class="gas-card p-6 border-t-2 border-t-[#9C27B0]">
+                <span class="text-[var(--text-secondary)] text-xs font-bold tracking-wider uppercase mb-1 block">Total Interactions</span>
+                <span class="text-sm font-medium mb-3 block">7日综合互动 (赞/评/转)</span>
+                <div class="flex items-end gap-3">
+                    <span class="font-mono-num text-4xl font-bold text-[#9C27B0]">28</span>
+                    <span class="text-xs text-[var(--text-secondary)] mb-1">次</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="gas-card p-6">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="text-base font-bold text-[var(--text-primary)]">关注者增减推演模型</h2>
+                </div>
+                <div id="followerChart" class="w-full h-[320px]"></div>
+            </div>
+            <div class="gas-card p-6">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="text-base font-bold text-[var(--text-primary)]">视频播放与互动链路</h2>
+                </div>
+                <div id="videoChart" class="w-full h-[320px]"></div>
+            </div>
+        </div>
+
+        <div class="gas-card overflow-hidden">
+            <div class="p-5 bg-[#161616] flex justify-between items-center">
+                <h2 class="text-base font-bold">底层数据流明细 (Data Matrix)</h2>
+                <span class="text-xs text-[var(--accent-aurora)] border border-[var(--accent-aurora-rgb-40)] px-2 py-1 rounded bg-[rgba(93,214,44,0.05)]">已聚合 2 个数据源</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="gas-table w-full text-left text-sm whitespace-nowrap">
+                    <thead>
+                        <tr>
+                            <th class="px-6 py-4 font-bold tracking-wider uppercase text-xs">时间节点</th>
+                            <th class="px-6 py-4 font-bold tracking-wider uppercase text-xs">关注者总数</th>
+                            <th class="px-6 py-4 font-bold tracking-wider uppercase text-xs">新增/取关</th>
+                            <th class="px-6 py-4 font-bold tracking-wider uppercase text-xs border-l border-[#333]">播放总量</th>
+                            <th class="px-6 py-4 font-bold tracking-wider uppercase text-xs">喜欢/推荐</th>
+                            <th class="px-6 py-4 font-bold tracking-wider uppercase text-xs">分享/评论</th>
+                            <th class="px-6 py-4 font-bold tracking-wider uppercase text-xs text-[var(--status-warning)]">视频引流关注</th>
+                        </tr>
+                    </thead>
+                    <tbody class="font-mono-num">
+                        <tr>
+                            <td>2026/05/17</td><td class="glow-metric font-bold">1573</td><td><span class="text-[var(--status-success)]">+11</span> / <span class="text-[var(--status-danger)]">-1</span></td><td class="border-l border-[#333] text-[var(--status-info)]">1059</td><td>2 / 1</td><td>3 / 1</td><td class="text-[var(--status-warning)]">10</td>
+                        </tr>
+                        <tr>
+                            <td>2026/05/16</td><td>1563</td><td><span class="text-[var(--status-success)]">+4</span> / <span class="text-[var(--text-secondary)]">0</span></td><td class="border-l border-[#333] text-[var(--status-info)]">454</td><td>3 / 0</td><td>1 / 0</td><td class="text-[var(--status-warning)]">4</td>
+                        </tr>
+                        <tr>
+                            <td>2026/05/15</td><td>1559</td><td><span class="text-[var(--status-success)]">+2</span> / <span class="text-[var(--text-secondary)]">0</span></td><td class="border-l border-[#333] text-[var(--status-info)]">223</td><td>4 / 0</td><td>0 / 0</td><td class="text-[var(--status-warning)]">2</td>
+                        </tr>
+                        <tr>
+                            <td>2026/05/14</td><td>1557</td><td><span class="text-[var(--text-secondary)]">0</span> / <span class="text-[var(--text-secondary)]">0</span></td><td class="border-l border-[#333] text-[var(--status-info)]">84</td><td>0 / 0</td><td>0 / 0</td><td class="text-[var(--text-secondary)]">0</td>
+                        </tr>
+                        <tr>
+                            <td>2026/05/13</td><td>1557</td><td><span class="text-[var(--status-success)]">+2</span> / <span class="text-[var(--status-danger)]">-1</span></td><td class="border-l border-[#333] text-[var(--status-info)]">286</td><td>0 / 0</td><td>0 / 1</td><td class="text-[var(--status-warning)]">1</td>
+                        </tr>
+                        <tr>
+                            <td>2026/05/12</td><td>1556</td><td><span class="text-[var(--status-success)]">+1</span> / <span class="text-[var(--text-secondary)]">0</span></td><td class="border-l border-[#333] text-[var(--status-info)]">2539</td><td>5 / 2</td><td>6 / 0</td><td class="text-[var(--status-warning)]">1</td>
+                        </tr>
+                        <tr>
+                            <td>2026/05/11</td><td>1555</td><td><span class="text-[var(--text-secondary)]">0</span> / <span class="text-[var(--text-secondary)]">0</span></td><td class="border-l border-[#333] text-[var(--text-secondary)]">1</td><td>0 / 0</td><td>0 / 0</td><td class="text-[var(--text-secondary)]">0</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            // 公共 X 轴时间 (逆序，从 11日 到 17日)
+            const dates = ['05/11', '05/12', '05/13', '05/14', '05/15', '05/16', '05/17'];
+
+            // 统一的高级 Tooltip 规范 (GasGx UI 毛玻璃)
+            const tooltipStyle = {
+                backgroundColor: 'rgba(20, 20, 20, 0.85)',
+                borderColor: 'rgba(93, 214, 44, 0.3)',
+                borderWidth: 1,
+                textStyle: { color: '#E0E0E0', fontFamily: 'JetBrains Mono' },
+                backdropFilter: 'blur(12px)',
+                padding: 12
+            };
+
+            /* ========================================================
+               图表1：关注者增减推演 (Followers Chart)
+               ======================================================== */
+            const followChartDom = document.getElementById('followerChart');
+            const followChart = echarts.init(followChartDom, 'dark');
+
+            const totalFollowers = [1555, 1556, 1557, 1557, 1559, 1563, 1573];
+            const newFollowers = [0, 1, 2, 0, 2, 4, 11];
+            const unfollowers = [0, 0, -1, 0, 0, 0, -1]; // 取消关注转负值
+
+            const followOption = {
+                backgroundColor: 'transparent',
+                tooltip: { trigger: 'axis', ...tooltipStyle },
+                grid: { left: '3%', right: '3%', bottom: '5%', top: '15%', containLabel: true },
+                xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: '#333' } } },
+                yAxis: [
+                    { type: 'value', splitLine: { lineStyle: { color: '#333', type: 'dashed' } } },
+                    { type: 'value', min: 1540, splitLine: { show: false } }
+                ],
+                series: [
+                    {
+                        name: '关注总数',
+                        type: 'line',
+                        yAxisIndex: 1,
+                        smooth: true,
+                        itemStyle: { color: '#5DD62C' },
+                        lineStyle: { width: 3, shadowColor: 'rgba(93, 214, 44, 0.5)', shadowBlur: 10 },
+                        areaStyle: {
+                            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                { offset: 0, color: 'rgba(93, 214, 44, 0.3)' },
+                                { offset: 1, color: 'rgba(93, 214, 44, 0)' }
+                            ])
+                        },
+                        data: totalFollowers
+                    },
+                    {
+                        name: '新增关注',
+                        type: 'bar',
+                        barWidth: '30%',
+                        itemStyle: { color: '#FF9900', borderRadius: [2, 2, 0, 0] },
+                        data: newFollowers
+                    },
+                    {
+                        name: '取消关注',
+                        type: 'bar',
+                        barWidth: '30%',
+                        itemStyle: { color: '#FF3366', borderRadius: [0, 0, 2, 2] },
+                        data: unfollowers
+                    }
+                ]
+            };
+            followChart.setOption(followOption);
+
+            /* ========================================================
+               图表2：视频播放与互动 (Video Performance Chart)
+               ======================================================== */
+            const videoChartDom = document.getElementById('videoChart');
+            const videoChart = echarts.init(videoChartDom, 'dark');
+
+            const videoPlays = [1, 2539, 286, 84, 223, 454, 1059];
+            const videoInteractions = [0, 13, 2, 0, 6, 8, 16]; // 喜欢+评论+分享+推荐+由于视频带来的关注
+
+            const videoOption = {
+                backgroundColor: 'transparent',
+                tooltip: { trigger: 'axis', ...tooltipStyle },
+                grid: { left: '3%', right: '3%', bottom: '5%', top: '15%', containLabel: true },
+                xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: '#333' } } },
+                yAxis: [
+                    { type: 'value', name: '播放量', splitLine: { lineStyle: { color: '#333', type: 'dashed' } } },
+                    { type: 'value', name: '总互动', splitLine: { show: false } }
+                ],
+                series: [
+                    {
+                        name: '播放量',
+                        type: 'bar',
+                        barWidth: '40%',
+                        itemStyle: { color: '#00A3FF', borderRadius: [2, 2, 0, 0] },
+                        data: videoPlays
+                    },
+                    {
+                        name: '综合互动量',
+                        type: 'line',
+                        yAxisIndex: 1,
+                        smooth: true,
+                        itemStyle: { color: '#9C27B0' },
+                        lineStyle: { width: 3, shadowColor: 'rgba(156, 39, 176, 0.5)', shadowBlur: 10 },
+                        data: videoInteractions
+                    }
+                ]
+            };
+            videoChart.setOption(videoOption);
+
+            // 响应式调整
+            window.addEventListener('resize', function() {
+                followChart.resize();
+                videoChart.resize();
+            });
+        });
+    </script>
+</body>
+</html>

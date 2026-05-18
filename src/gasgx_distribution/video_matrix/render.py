@@ -17,7 +17,7 @@ from .font_config import build_font_candidates_for_family
 from .cover import render_intro_cover, render_outro_cover
 from .models import RenderedAsset, VideoVariant
 from .settings import ProjectSettings
-from .spark_text import build_marketing_copy
+from .spark_text import build_marketing_copy, clean_generated_text, sanitize_headline_text
 from .templates import coerce_template
 ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
@@ -213,6 +213,7 @@ def render_variant(
                         resolved_outro_text,
                         extra_prompt=ai_prompt_hint,
                     )
+                publish_description = clean_generated_text(publish_description)
                 copy_path.write_text(
                     publish_description,
                     encoding="utf-8",
@@ -323,8 +324,10 @@ def _build_filter_complex(
     template = coerce_template(template_config)
     explicit_template_keys = set((template_config or {}).keys())
     hud_text = " | ".join(variant.hud_lines)
-    slogan = variant.slogan
-    title = variant.title
+    slogan = sanitize_headline_text(variant.slogan)
+    title = sanitize_headline_text(variant.title)
+    variant.slogan = slogan
+    variant.title = title
     background_overlay_index: int | None = None
     background_overlay_path = _render_background_overlay(template, text_dir.parent / "template_background_overlay.png" if text_dir else None)
     if background_overlay_path is not None:

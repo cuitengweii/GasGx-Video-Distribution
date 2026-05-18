@@ -26,7 +26,9 @@ from .spark_text import (
     build_follow_text_variants,
     build_headline_variants,
     build_hud_variants,
+    clean_generated_text,
     normalize_hud_lines,
+    sanitize_headline_text,
 )
 from ..paths import get_paths
 
@@ -393,11 +395,11 @@ def _apply_text_overrides(
 ) -> None:
     if not text_overrides:
         return
-    headline = str(text_overrides.get("headline") or "").strip()
-    subhead = str(text_overrides.get("subhead") or "").strip()
-    description_text = str(text_overrides.get("description_text") or "").strip()
-    hud_text = str(text_overrides.get("hud_text") or "").strip()
-    follow_text = str(text_overrides.get("follow_text") or "").strip()
+    headline = sanitize_headline_text(str(text_overrides.get("headline") or "")).strip()
+    subhead = sanitize_headline_text(str(text_overrides.get("subhead") or "")).strip()
+    description_text = clean_generated_text(str(text_overrides.get("description_text") or "")).strip()
+    hud_text = clean_generated_text(str(text_overrides.get("hud_text") or "")).strip()
+    follow_text = clean_generated_text(str(text_overrides.get("follow_text") or "")).strip()
     headline_ai_enabled = bool(text_overrides.get("headline_ai_enabled"))
     description_ai_enabled = bool(text_overrides.get("description_ai_enabled"))
     follow_text_ai_enabled = bool(text_overrides.get("follow_text_ai_enabled"))

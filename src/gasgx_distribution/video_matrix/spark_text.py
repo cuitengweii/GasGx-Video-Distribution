@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import unicodedata
 from typing import Any, Iterable
 
 from cybercar.common.xfyun_spark import SparkAIClient, extract_json_object
@@ -18,38 +19,38 @@ LANGUAGE_LABELS = {
 }
 
 TEXT_VARIANT_TOPICS = [
-    ("现场负载", "燃气机组稳定带载", "现场气源转成稳定电力"),
-    ("余气利用", "把废气变成可用能源", "减少放散同时提升用能效率"),
-    ("机组巡检", "关键参数一眼看懂", "从气源到发电保持连续输出"),
-    ("矿场供能", "低成本电力支撑算力", "让边远场站也能稳定运行"),
-    ("项目交付", "模块化部署更快落地", "机组、控制和负载协同启动"),
-    ("运维对比", "少浪费，多输出", "把不稳定燃气变成可管理电力"),
+    ("燃气现场发电", "稳定供电", "把现场废气转成稳定电力"),
+    ("弃气变算力", "算力变现", "把废气转成可用收益"),
+    ("分布式能源", "就地供能", "适配矿场和工业负载"),
+    ("低成本供电", "可靠输出", "让现场设备持续运行"),
+    ("移动式电站", "快速部署", "几天完成上线"),
+    ("油气伴生气", "持续利用", "把闲置资源变成电"),
 ]
 
 TEXT_VARIANT_EXPANSION_TOPICS = [
-    ("现场气源", "现场气源直接转电力", "把现场天然气转成可用电力"),
-    ("移动电站", "模块化机组快速到场", "让偏远现场也能快速起电"),
-    ("矿场电力", "低成本电力支撑算力", "用稳定电力支撑持续算力"),
-    ("余气回收", "少放散 多产出", "把原本浪费的气变成收益"),
-    ("并机供能", "多机组协同带载", "让负载波动也保持稳定输出"),
-    ("项目落地", "设备 控制 负载一体交付", "从气源到用电现场快速闭环"),
-    ("运维巡检", "关键参数清晰可见", "让现场运行状态一眼看懂"),
-    ("海外能源", "靠近气源部署电力", "把电力建在能源最接近的地方"),
-    ("工业负载", "燃气机组稳定带载", "为连续生产提供现场电力"),
-    ("收益路径", "气 电 算力形成闭环", "让能源资产产生持续现金流"),
-    ("快速部署", "集装箱方案缩短周期", "把复杂电站压缩成可交付模块"),
-    ("低价电力", "一美分电力打开新场景", "用更低电力成本提升项目空间"),
+    ("现场供电方案", "降本增效", "适合边远站点和临时项目"),
+    ("天然气发电系统", "稳定运行", "支持全天候连续发电"),
+    ("分布式电力模块", "按需扩容", "从试点快速扩展"),
+    ("工业负载供能", "适配场景", "服务数据中心和工厂"),
+    ("野外电力站", "快速落地", "适合井场和工地"),
+    ("绿色能源利用", "减少浪费", "提升每一份气的价值"),
+    ("撬装式发电", "灵活部署", "可移动可复制"),
+    ("油气资源再利用", "持续变现", "让废气变成电力资产"),
+    ("远程站点供电", "稳定可控", "保障关键设备不停机"),
+    ("现场能源改造", "一步到位", "减少施工和维护成本"),
+    ("零碳改造路径", "高效落地", "兼顾排放和收益"),
+    ("热电联供优化", "综合利用", "提升整体能效"),
 ]
 
 TEXT_VARIANT_ANGLES = [
-    ("真实现场", "现场实拍感更强"),
-    ("交付视角", "突出项目落地"),
-    ("运维视角", "强调稳定运行"),
-    ("成本视角", "突出用电成本"),
-    ("海外视角", "面向海外气源场景"),
-    ("算力视角", "强调能源变现"),
-    ("设备视角", "突出机组能力"),
-    ("效率视角", "减少浪费提升输出"),
+    ("Field Ready", "现场就绪"),
+    ("Stable Output", "稳定输出"),
+    ("Fast Deploy", "快速部署"),
+    ("Low Cost", "低成本"),
+    ("High Uptime", "高可用"),
+    ("Remote Site", "远程站点"),
+    ("Clean Power", "清洁供能"),
+    ("Value Recovery", "价值回收"),
 ]
 
 DEFAULT_HEADLINE_SEED = "Gas Engines That Turn Field Gas Into Power"
@@ -60,6 +61,8 @@ EXTRA_PROMPT_MAX_LINES = 4
 EXTRA_PROMPT_URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
 HUD_MAX_LINES = 2
 HUD_MAX_CHARS_PER_LINE = 10
+LIST_MARKER_PREFIX_RE = re.compile(r"^\s*(?:[\-*•·]+\s*)?(?:\(?\d{1,3}\)?[.)、:：\-]\s+)+")
+LIST_MARKER_SUFFIX_RE = re.compile(r"\s+(?:[\-*•·]+\s*)?(?:\(?\d{1,3}\)?[.)、:：\-]?)\s*$")
 
 
 def _normalize_extra_prompt(raw: str) -> str:
@@ -74,6 +77,50 @@ def _normalize_extra_prompt(raw: str) -> str:
     return normalized
 
 
+def clean_generated_text(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in str(text or "").replace("\r\n", "\n").split("\n"):
+        line = _clean_generated_text_line(raw_line)
+        if line:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def sanitize_headline_text(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in clean_generated_text(text).splitlines():
+        line = _sanitize_headline_line(raw_line)
+        if line:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _clean_generated_text_line(text: str) -> str:
+    line = unicodedata.normalize("NFKC", str(text or "")).replace("\r\n", "\n").strip()
+    if not line:
+        return ""
+    line = re.sub(r"\s+", " ", line)
+    tokens = line.split(" ")
+    if len(tokens) > 2 and re.fullmatch(r"(?:#\d{1,3}|\(?\d{1,3}\)?[.)、:：\-]?|\d{1,3})", tokens[0]):
+        tokens = tokens[1:]
+    if len(tokens) > 2 and re.fullmatch(r"(?:#\d{1,3}|\(?\d{1,3}\)?[.)、:：\-]?|\d{1,3})", tokens[-1]):
+        tokens = tokens[:-1]
+    line = " ".join(tokens).strip()
+    line = LIST_MARKER_PREFIX_RE.sub("", line).strip()
+    line = LIST_MARKER_SUFFIX_RE.sub("", line).strip()
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _sanitize_headline_line(text: str) -> str:
+    line = unicodedata.normalize("NFKC", str(text or "")).strip()
+    if not line:
+        return ""
+    line = re.sub(r"\s+", " ", line)
+    line = re.sub(r"\s+(?:#\d{1,3}|\(?\d{1,3}\)?[.)、:：\-]?)(?=\s*$)", "", line).strip()
+    line = re.sub(r"^(?:#\d{1,3}|\(?\d{1,3}\)?[.)、:：\-]?|\d{1,3})\s+", "", line).strip()
+    return re.sub(r"\s+", " ", line).strip()
+
+
 def build_marketing_copy(
     variant: VideoVariant,
     settings: ProjectSettings,
@@ -84,7 +131,7 @@ def build_marketing_copy(
 ) -> str:
     local_copy = _local_copy(variant, settings, template_copy, ending_follow_text)
     spark_copy = _try_spark_copy(variant, settings, language, ending_follow_text, extra_prompt=extra_prompt)
-    return spark_copy or local_copy
+    return clean_generated_text(spark_copy or local_copy)
 
 
 def build_text_variants(
@@ -393,7 +440,7 @@ def _try_spark_description_variants(
     raw_variants = payload.get("variants") if isinstance(payload, dict) else []
     if not isinstance(raw_variants, list):
         return []
-    return [str(item or "").strip() for item in raw_variants if str(item or "").strip()]
+    return [clean_generated_text(str(item or "")).strip() for item in raw_variants if clean_generated_text(str(item or "")).strip()]
 
 
 def _try_spark_follow_text_variants(
@@ -427,7 +474,7 @@ def _try_spark_follow_text_variants(
     raw_variants = payload.get("variants") if isinstance(payload, dict) else []
     if not isinstance(raw_variants, list):
         return []
-    return [str(item or "").strip() for item in raw_variants if str(item or "").strip()]
+    return [clean_generated_text(str(item or "")).strip() for item in raw_variants if clean_generated_text(str(item or "")).strip()]
 
 
 def _try_spark_hud_variants(
@@ -498,7 +545,7 @@ def _normalize_simple_text_variants(raw_items: list[str], count: int, *, avoid_t
     seen: set[str] = set()
     avoid_keys = _text_key_set(avoid_texts)
     for item in raw_items:
-        text = str(item or "").strip()
+        text = clean_generated_text(str(item or "")).strip()
         if not text:
             continue
         key = _text_key(text)
@@ -512,7 +559,7 @@ def _normalize_simple_text_variants(raw_items: list[str], count: int, *, avoid_t
 
 
 def _normalize_hud_line(text: str, *, max_chars: int = HUD_MAX_CHARS_PER_LINE) -> str:
-    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    clean = clean_generated_text(str(text or ""))
     if not clean:
         return ""
     if _content_length(clean) <= max_chars:
@@ -557,6 +604,8 @@ def _fallback_description_variants(seed_description: str, count: int) -> list[st
         "Deploy generator sets near gas source to reduce waste and deliver reliable electricity.",
         "Turn stranded gas into continuous power and improve project-level energy efficiency.",
         "GasGx supports remote industrial and compute loads with practical field power systems.",
+        "Build onsite power from field gas and keep industrial loads running steadily.",
+        "Turn excess gas into usable electricity with practical deployment and lower waste.",
     ]
     variants: list[str] = []
     for index in range(max(1, count)):
@@ -564,7 +613,14 @@ def _fallback_description_variants(seed_description: str, count: int) -> list[st
         if not base:
             continue
         if index >= len(seeds):
-            base = f"{base} Batch {index + 1}"
+            extras = [
+                "for onsite deployment",
+                "for practical field use",
+                "for remote power cases",
+                "with stable output focus",
+                "with low-cost energy delivery",
+            ]
+            base = f"{base} {extras[(index - len(seeds)) % len(extras)]}"
         variants.append(base)
     return variants
 
@@ -577,6 +633,8 @@ def _fallback_follow_text_variants(seed_text: str, count: int) -> list[str]:
         "See more onsite gas power cases",
         "Track new gas engine deployments",
         "Watch more real site operations",
+        "Get more practical energy deployment ideas",
+        "See more low-cost onsite power builds",
     ]
     variants: list[str] = []
     for index in range(max(1, count)):
@@ -584,7 +642,13 @@ def _fallback_follow_text_variants(seed_text: str, count: int) -> list[str]:
         if not base:
             continue
         if index >= len(seeds):
-            base = f"{base} {index + 1}"
+            extras = [
+                "for field updates",
+                "for site deployment notes",
+                "for practical power cases",
+                "for more build stories",
+            ]
+            base = f"{base} {extras[(index - len(seeds)) % len(extras)]}"
         variants.append(base)
     return variants
 
@@ -597,6 +661,8 @@ def _fallback_hud_variants(seed_lines: list[str], count: int) -> list[list[str]]
         ["Onsite Energy", "Field Ready"],
         ["Low Cost kWh", "Remote Load"],
         ["Engine + Genset", "24/7 Supply"],
+        ["Gas Field", "Power Live"],
+        ["Site Build", "Clean Output"],
     ]
     variants: list[list[str]] = []
     for index in range(max(1, count)):
@@ -605,7 +671,8 @@ def _fallback_hud_variants(seed_lines: list[str], count: int) -> list[list[str]]
         if not normalized:
             continue
         if index >= len(seeds):
-            normalized = normalize_hud_lines([f"{normalized[0]} {index + 1}", normalized[-1]])
+            modifiers = ["Field", "Site", "Power", "Ready"]
+            normalized = normalize_hud_lines([f"{normalized[0]} {modifiers[(index - len(seeds)) % len(modifiers)]}", normalized[-1]])
         variants.append(normalized)
     return variants
 
@@ -660,25 +727,27 @@ def _fallback_text_variants(settings: ProjectSettings, hud_lines: list[str], cou
     base_hud = [str(line).strip() for line in hud_lines if str(line).strip()]
     topics = [*TEXT_VARIANT_TOPICS, *TEXT_VARIANT_EXPANSION_TOPICS]
     variants: list[dict[str, object]] = []
+    total_topics = len(topics)
+    total_angles = len(TEXT_VARIANT_ANGLES)
     for index in range(max(1, count)):
-        topic, slogan_tail, hud_line = topics[index % len(topics)]
-        cycle = index // len(topics)
+        topic, slogan_tail, hud_line = topics[index % total_topics]
+        cycle = index // total_topics
         title_base = titles[index % len(titles)]
-        title = titles[index % len(titles)] if index == 0 else f"{topic}：{titles[index % len(titles)]}"
+        title = title_base if index == 0 else f"{topic}: {title_base}"
         slogan = slogans[index % len(slogans)] if index == 0 else slogan_tail
-        variant_hud = base_hud if index == 0 and base_hud else [hud_line]
+        opening_text = hud_line
         if index == 0:
-            title = title_base
             slogan = slogans[index % len(slogans)]
-            opening_text = hud_line
-        else:
-            angle, angle_tail = TEXT_VARIANT_ANGLES[cycle % len(TEXT_VARIANT_ANGLES)]
-            title = f"{topic}: {title_base}" if cycle == 0 else f"{topic}: {title_base} - {angle}"
-            slogan = slogan_tail if cycle == 0 else f"{slogan_tail} | {angle_tail}"
-            opening_text = hud_line if cycle == 0 else f"{hud_line}，{angle_tail}"
-            variant_hud = [opening_text]
+        elif cycle > 0:
+            angle, angle_tail = TEXT_VARIANT_ANGLES[cycle % total_angles]
+            title = f"{topic}: {title_base} - {angle}"
+            slogan = f"{slogan_tail} | {angle_tail}"
+            opening_text = f"{hud_line} · {angle_tail}"
+        variant_hud = [opening_text]
         if index > 0 and base_hud:
             variant_hud = [opening_text, *base_hud[:1]]
+        elif index == 0 and base_hud:
+            variant_hud = base_hud
         variants.append(
             {
                 "id": f"{source}_{index + 1:02d}",
@@ -697,10 +766,10 @@ def _normalize_text_variants(raw_items: list[dict[str, object]], count: int, *, 
     seen: set[str] = set()
     avoid_keys = _text_key_set(avoid_texts)
     for item in raw_items:
-        title = str(item.get("title") or "").strip()
-        slogan = str(item.get("slogan") or "").strip()
-        hud_lines = [str(line).strip() for line in item.get("hud_lines") or [] if str(line).strip()]
-        opening_text = str(item.get("opening_text") or "").strip()
+        title = clean_generated_text(str(item.get("title") or "")).strip()
+        slogan = clean_generated_text(str(item.get("slogan") or "")).strip()
+        hud_lines = [clean_generated_text(str(line)).strip() for line in item.get("hud_lines") or [] if str(line).strip()]
+        opening_text = clean_generated_text(str(item.get("opening_text") or "")).strip()
         key = " ".join([title, slogan, opening_text, *hud_lines]).strip().lower()
         normalized_key = _text_key(key)
         display_key = _text_key(" ".join([title, slogan, *hud_lines]))
@@ -791,7 +860,7 @@ def _avoidance_prompt(items: Iterable[str] | None, *, max_items: int = 30) -> st
 
 
 def _normalize_bilingual_headline(text: str) -> str | None:
-    lines = [line.strip() for line in str(text or "").replace("\r\n", "\n").split("\n") if line.strip()]
+    lines = [sanitize_headline_text(line).strip() for line in str(text or "").replace("\r\n", "\n").split("\n") if line.strip()]
     if len(lines) != 2:
         return None
     en, zh = lines
@@ -810,23 +879,32 @@ def _fallback_headline_variants(seed: str, count: int, *, min_len: int, max_len:
     seed = seed.strip() or DEFAULT_HEADLINE_SEED
     topics = [
         ("Field Gas to Stable Power", "现场燃气转稳定电力"),
-        ("Turn Waste Gas Into Hashrate", "把废气变成算力收益"),
-        ("Deploy Power Where Gas Lives", "气源在哪里 电力就部署到哪里"),
-        ("Industrial Load, Onsite Energy", "工业负载配套就地能源"),
-        ("Generator Sets for Remote Sites", "偏远站点也能稳定供电"),
-        ("Lower Flaring, Higher Output", "更少放散 更高产出"),
-        ("Gas Engines Built for Uptime", "燃气机组为持续运行而生"),
-        ("From Gas Source to Digital Value", "从气源到数字价值闭环"),
+        ("Turn Waste Gas Into Hashrate", "把废气变成算力"),
+        ("Deploy Power Where Gas Lives", "有气的地方就能发电"),
+        ("Industrial Load, Onsite Energy", "工业负载，本地供能"),
+        ("Generator Sets for Remote Sites", "适合远程站点的发电机组"),
+        ("Lower Flaring, Higher Output", "减少放空，提升产出"),
+        ("Gas Engines Built for Uptime", "为高可用而生的燃气发动机"),
+        ("From Gas Source to Digital Value", "从气源到数字价值"),
     ]
     variants: list[str] = []
     seen: set[str] = set()
 
+    modifiers = [
+        ("Onsite Power", "现场供电"),
+        ("Field Ready", "现场可用"),
+        ("Industrial Load", "工业负载"),
+        ("Remote Sites", "远程站点"),
+        ("Clean Output", "清洁输出"),
+        ("Stable Supply", "稳定供给"),
+    ]
     for index in range(max(count * 2, len(topics))):
         en_base, zh_base = topics[index % len(topics)]
         suffix = index // len(topics)
         if suffix > 0:
-            en = f"{en_base} {suffix + 1}"
-            zh = f"{zh_base}{suffix + 1}"
+            mod_en, mod_zh = modifiers[(suffix - 1) % len(modifiers)]
+            en = f"{en_base} {mod_en}"
+            zh = f"{zh_base} · {mod_zh}"
         else:
             en = en_base
             zh = zh_base

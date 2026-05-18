@@ -494,8 +494,8 @@ def _mutate_candidate(
         _mutate_segment_order(candidate, rng)
         return "shuffle_order"
     if mutation == 3:
-        candidate.title = f"{candidate.title} #{step + candidate.sequence_number}"
-        candidate.slogan = f"{candidate.slogan} route {candidate.sequence_number:02d}"
+        candidate.title = f"{candidate.title} · Field Cut"
+        candidate.slogan = f"{candidate.slogan} · Onsite Angle"
         return "rewrite_opening_text"
     if mutation == 4:
         candidate.lut_strength = round(candidate.lut_strength + rng.uniform(-0.025, 0.025), 4)

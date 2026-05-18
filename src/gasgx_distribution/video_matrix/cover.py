@@ -8,6 +8,7 @@ from .font_config import build_font_candidates, build_font_candidates_for_family
 from .cover_templates import coerce_cover_template
 from .models import VideoVariant
 from .settings import ProjectSettings
+from .spark_text import sanitize_headline_text
 
 
 def render_intro_cover(
@@ -285,7 +286,7 @@ def _coerce_float(value: object, fallback: float) -> float:
 
 
 def _cover_title_summary(headline: str, fallback: str, *, max_chars: int = 10) -> str:
-    source = str(headline or "").replace("\\n", "\n").strip()
+    source = sanitize_headline_text(str(headline or "").replace("\\n", "\n")).strip()
     if not source:
         return str(fallback or "")
     lines = [line.strip() for line in source.splitlines() if line.strip()]
@@ -405,7 +406,7 @@ def _tile_titles(value: str) -> list[str]:
         "油田伴生气资源再利用",
         "移动式算力中心部署",
         "野外发电设备日常维护",
-        "零燃除：变废为宝",
+        "零燃放：变废为宝",
         "集装箱数据中心内景",
         "高效燃气轮机运行状态",
         "夜间井场持续发电作业",

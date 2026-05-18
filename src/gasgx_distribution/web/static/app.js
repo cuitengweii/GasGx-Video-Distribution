@@ -67,7 +67,7 @@ const state = {
   stats: [],
   statsCaptureStatus: {},
   weeklySummary: {},
-  statsMode: "dashboard",
+  statsMode: "capture",
   summary: {},
   distributionSettings: { common: {}, platforms: {} },
   matrixJobStatus: {},
@@ -164,6 +164,9 @@ const terminalButtonCooldownByKey = new Map();
 let terminalButtonCooldownTimer = null;
 let terminalErrorModalSignature = "";
 let terminalFullLoadingCount = 0;
+let tongjiFollowerChart = null;
+let tongjiVideoChart = null;
+let tongjiResizeBound = false;
 
 const TERMINAL_BROWSER_WARMUP_TIMEOUT_MS = 12000;
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -173,6 +176,30 @@ const DATABASE_DICTIONARY_LOCALE_KEY = "gasgx-db-dictionary-locale";
 const SETTINGS_CARD_KEY = "gasgx-settings-card";
 const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
+
+const TONGJI_SNAPSHOT = {
+  overview: [
+    { en: "TOTAL FOLLOWERS", cn: "总关注者资产", value: "1,573", unit: "", accent: "accent-green" },
+    { en: "7-DAY PLAYS", cn: "7日累计播放量", value: "4,646", unit: "次", accent: "accent-info" },
+    { en: "7-DAY NEW FOLLOWS", cn: "7日新增关注转化", value: "+20", unit: "人", accent: "accent-warning" },
+    { en: "TOTAL INTERACTIONS", cn: "7日综合互动(赞/评/转)", value: "28", unit: "次", accent: "accent-violet" },
+  ],
+  dates: ["05/11", "05/12", "05/13", "05/14", "05/15", "05/16", "05/17"],
+  totalFollowers: [1555, 1556, 1557, 1557, 1559, 1563, 1573],
+  newFollowers: [0, 1, 2, 0, 2, 4, 11],
+  unfollowers: [0, 0, -1, 0, 0, 0, -1],
+  videoPlays: [1, 2539, 286, 84, 223, 454, 1059],
+  videoInteractions: [0, 13, 2, 0, 6, 8, 16],
+  matrixRows: [
+    ["2026/05/17", "1573", "+11", "-1", "1059", "2", "1", "3", "1", "10"],
+    ["2026/05/16", "1563", "+4", "0", "454", "3", "0", "1", "0", "4"],
+    ["2026/05/15", "1559", "+2", "0", "223", "4", "0", "0", "0", "2"],
+    ["2026/05/14", "1557", "0", "0", "84", "0", "0", "0", "0", "0"],
+    ["2026/05/13", "1557", "+2", "-1", "286", "0", "0", "0", "1", "1"],
+    ["2026/05/12", "1556", "+1", "0", "2539", "5", "2", "6", "0", "1"],
+    ["2026/05/11", "1555", "0", "0", "1", "0", "0", "0", "0", "0"],
+  ],
+};
 
 const FEATURE_ENTRIES = [
   { id: "overview", label: "总览", group: "业务工作台" },
@@ -4030,9 +4057,17 @@ function renderStatsCapturePanel() {
   const lastRunNode = document.querySelector("#stats-capture-last-run");
   if (lastRunNode) {
     const runId = latest.run_id || "-";
-    const status = latest.status || "-";
-    const counts = `captured ${latest.captured_accounts || 0} / skipped ${latest.skipped_accounts || 0} / failed ${latest.failed_accounts || 0}`;
-    lastRunNode.textContent = `最近运行：${runId} · ${status} · ${counts}`;
+    const statusLabel = {
+      completed: "已完成",
+      captured: "已采集",
+      running: "进行中",
+      partial_failed: "部分失败",
+      failed: "失败",
+      skipped: "已跳过",
+      pending: "待处理",
+    }[String(latest.status || "").toLowerCase()] || (latest.status || "-");
+    const counts = `已采集 ${latest.captured_accounts || 0} / 跳过 ${latest.skipped_accounts || 0} / 失败 ${latest.failed_accounts || 0}`;
+    lastRunNode.textContent = `最近运行：${runId} · ${statusLabel} · ${counts}`;
   }
   const captureAccountFilter = document.querySelector("#stats-capture-account-filter");
   if (captureAccountFilter) {
@@ -4049,23 +4084,148 @@ function renderStatsCapturePanel() {
   }
 }
 
+function renderTongjiSection() {
+  const overviewNode = document.querySelector("#tongji-overview");
+  if (overviewNode) {
+    overviewNode.innerHTML = TONGJI_SNAPSHOT.overview.map((card) => `
+      <article class="tongji-card ${card.accent}">
+        <small class="tongji-card-en">${card.en}</small>
+        <span class="tongji-card-cn">${card.cn}</span>
+        <div class="tongji-card-value">
+          <strong>${card.value}</strong>
+          ${card.unit ? `<span class="unit">${card.unit}</span>` : ""}
+        </div>
+      </article>
+    `).join("");
+  }
+
+  const matrixNode = document.querySelector("#tongji-data-matrix");
+  if (matrixNode) {
+    matrixNode.innerHTML = TONGJI_SNAPSHOT.matrixRows.map((row) => {
+      const [date, followers, deltaUp, deltaDown, plays, likes, recommend, shares, comments, traffic] = row;
+      const signedPositive = deltaUp === "0" ? `<span class="muted-cell">0</span>` : `<span class="${deltaUp.startsWith("-") ? "negative" : "positive"}">${deltaUp}</span>`;
+      const signedNegative = deltaDown === "0" ? `<span class="muted-cell">0</span>` : `<span class="${deltaDown.startsWith("-") ? "negative" : "positive"}">${deltaDown}</span>`;
+      const playCellClass = Number(plays || 0) > 0 ? "blue-cell" : "muted-cell";
+      const trafficCellClass = Number(traffic || 0) > 0 ? "orange-cell" : "muted-cell";
+      return `
+        <tr>
+          <td class="time-cell">${date}</td>
+          <td class="green-cell">${followers}</td>
+          <td>${signedPositive} / ${signedNegative}</td>
+          <td class="split-cell ${playCellClass}">${plays}</td>
+          <td>${likes} / ${recommend}</td>
+          <td>${shares} / ${comments}</td>
+          <td class="${trafficCellClass}">${traffic}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  if (!window.echarts) return;
+
+  const tooltipStyle = {
+    backgroundColor: "rgba(20, 20, 20, 0.85)",
+    borderColor: "rgba(93, 214, 44, 0.3)",
+    borderWidth: 1,
+    textStyle: { color: "#E0E0E0", fontFamily: "JetBrains Mono" },
+    backdropFilter: "blur(12px)",
+    padding: 12,
+  };
+
+  const followerDom = document.getElementById("followerChart");
+  if (followerDom) {
+    tongjiFollowerChart = window.echarts.getInstanceByDom(followerDom) || window.echarts.init(followerDom, "dark");
+    tongjiFollowerChart.setOption({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis", ...tooltipStyle },
+      grid: { left: "3%", right: "3%", bottom: "5%", top: "15%", containLabel: true },
+      xAxis: { type: "category", data: TONGJI_SNAPSHOT.dates, axisLine: { lineStyle: { color: "#333" } }, axisTick: { show: false } },
+      yAxis: [
+        { type: "value", splitLine: { lineStyle: { color: "#333", type: "dashed" } }, axisLabel: { color: "#c7c7c7" } },
+        { type: "value", min: 1540, splitLine: { show: false }, axisLabel: { color: "#c7c7c7" } },
+      ],
+      series: [
+        {
+          name: "关注总数",
+          type: "line",
+          yAxisIndex: 1,
+          smooth: true,
+          symbolSize: 7,
+          itemStyle: { color: "#5DD62C" },
+          lineStyle: { width: 3, shadowColor: "rgba(93, 214, 44, 0.5)", shadowBlur: 10 },
+          areaStyle: {
+            color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: "rgba(93, 214, 44, 0.3)" },
+              { offset: 1, color: "rgba(93, 214, 44, 0)" },
+            ]),
+          },
+          data: TONGJI_SNAPSHOT.totalFollowers,
+        },
+        {
+          name: "新增关注",
+          type: "bar",
+          barWidth: "30%",
+          itemStyle: { color: "#FF9900", borderRadius: [2, 2, 0, 0] },
+          data: TONGJI_SNAPSHOT.newFollowers,
+        },
+        {
+          name: "取关关注",
+          type: "bar",
+          barWidth: "30%",
+          itemStyle: { color: "#FF3366", borderRadius: [0, 0, 2, 2] },
+          data: TONGJI_SNAPSHOT.unfollowers,
+        },
+      ],
+    }, true);
+  }
+
+  const videoDom = document.getElementById("videoChart");
+  if (videoDom) {
+    tongjiVideoChart = window.echarts.getInstanceByDom(videoDom) || window.echarts.init(videoDom, "dark");
+    tongjiVideoChart.setOption({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis", ...tooltipStyle },
+      grid: { left: "3%", right: "3%", bottom: "5%", top: "15%", containLabel: true },
+      xAxis: { type: "category", data: TONGJI_SNAPSHOT.dates, axisLine: { lineStyle: { color: "#333" } }, axisTick: { show: false } },
+      yAxis: [
+        { type: "value", name: "播放量", splitLine: { lineStyle: { color: "#333", type: "dashed" } }, axisLabel: { color: "#c7c7c7" } },
+        { type: "value", name: "总互动", splitLine: { show: false }, axisLabel: { color: "#c7c7c7" } },
+      ],
+      series: [
+        {
+          name: "播放量",
+          type: "bar",
+          barWidth: "40%",
+          itemStyle: { color: "#00A3FF", borderRadius: [2, 2, 0, 0] },
+          data: TONGJI_SNAPSHOT.videoPlays,
+        },
+        {
+          name: "综合互动量",
+          type: "line",
+          yAxisIndex: 1,
+          smooth: true,
+          symbolSize: 7,
+          itemStyle: { color: "#9C27B0" },
+          lineStyle: { width: 3, shadowColor: "rgba(156, 39, 176, 0.5)", shadowBlur: 10 },
+          data: TONGJI_SNAPSHOT.videoInteractions,
+        },
+      ],
+    }, true);
+  }
+
+  if (!tongjiResizeBound) {
+    window.addEventListener("resize", () => {
+      tongjiFollowerChart?.resize();
+      tongjiVideoChart?.resize();
+    });
+    tongjiResizeBound = true;
+  }
+}
+
 function renderStats() {
-  setStatsMode(state.statsMode || "dashboard");
+  setStatsMode(state.statsMode || "capture");
+  renderTongjiSection();
   renderStatsCapturePanel();
-  const summary = state.summary || {};
-  const overview = [
-    ["矩阵账号总数", summary.accounts || 4, "+8.4%", "up"],
-    ["累计作品总量", 186, "+18.6%", "up"],
-    ["累计总曝光", "68.4万", "+24.8%", "up"],
-    ["累计总播放", "28.6万", "+19.2%", "up"],
-    ["矩阵总粉丝", "4.8万", "+9.7%", "up"],
-    ["周期净增粉丝", 3280, "+14.5%", "up"],
-    ["累计互动量", "2.6万", "+11.3%", "up"],
-    ["累计线索量", 426, "-3.2%", "down"],
-  ];
-  document.querySelector("#stats-overview").innerHTML = overview.map(([label, value, change, trend]) => `
-    <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
-  `).join("");
 
   const statsWindowNode = document.querySelector("#stats-weekly-window");
   if (statsWindowNode) {
@@ -4097,17 +4257,18 @@ function renderStats() {
     ["发电机组案例", "小红书", "低流量", "18,400", "3,420", "3,180", "+92", "28.4%", "4.1%", 5, "潜力账号", "低流量"],
     ["燃气发动机现场", "快手", "休眠", "9,860", "1,160", "1,204", "-36", "22.6%", "2.8%", 1, "低效账号", "长期断更"],
   ];
-  const accountHeaders = ["账号名称", "平台", "状态", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "分层", "异常"];
+  const accountHeaders = ["账号名称", "平台", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "采集状态"];
   let sortIndex = 0;
   let sortDir = 1;
   const renderAccountTable = () => {
     const keyword = document.querySelector("#account-stats-search")?.value.trim().toLowerCase() || "";
     const filtered = accounts
+      .map((row) => [row[0], row[1], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10]])
       .filter((row) => row.join(" ").toLowerCase().includes(keyword))
       .sort((a, b) => String(a[sortIndex]).localeCompare(String(b[sortIndex]), "zh-Hans-CN", { numeric: true }) * sortDir);
     document.querySelector("#account-stats-table").innerHTML = `
       <table><thead><tr>${accountHeaders.map((header, index) => `<th><button type="button" data-account-sort="${index}">${header}</button></th>`).join("")}</tr></thead>
-      <tbody>${filtered.map((row) => `<tr>${row.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`).join("")}</tbody></table>
+      <tbody>${filtered.map((row) => `<tr>${row.map((cell, index) => `<td>${index >= 9 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`).join("")}</tbody></table>
       <div class="table-pager">第 1 / 1 页 · ${filtered.length} 条账号</div>
     `;
     document.querySelectorAll("[data-account-sort]").forEach((button) => {
@@ -4169,33 +4330,161 @@ function renderStats() {
 function renderStatsWeeklySummary() {
   const summary = state.weeklySummary || {};
   const rows = Array.isArray(summary.rows) ? summary.rows : [];
-  if (!rows.length) return;
   const formatNumber = (value) => Number(value || 0).toLocaleString("zh-Hans-CN");
   const formatSigned = (value) => {
     const number = Number(value || 0);
     const prefix = number >= 0 ? "+" : "";
     return `${prefix}${formatNumber(number)}`;
   };
+  const formatPercent = (value, digits = 1) => `${Number(value || 0).toFixed(digits)}%`;
+  const parsePercent = (value) => {
+    if (typeof value === "number") return value;
+    const parsed = Number(String(value || "").replace("%", ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const average = (values) => {
+    const nums = values.map((value) => Number(value || 0)).filter((value) => Number.isFinite(value));
+    if (!nums.length) return 0;
+    return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+  };
   const pct = (a, b) => {
     const total = Number(b || 0);
     if (!total) return "0.0%";
     return `${((Number(a || 0) / total) * 100).toFixed(1)}%`;
   };
-  const totals = summary.totals || {};
   const statusCounts = summary.status_counts || {};
-  const missingCount = Number(summary.account_total || 0) - Number(statusCounts["完整"] || 0);
-  const overview = [
-    ["启用视频号账号", Number(summary.account_total || 0), "", "up"],
-    ["近7天总播放", formatNumber(totals.views_7d || 0), "", "up"],
-    ["近7天总互动", formatNumber(totals.interactions_7d || 0), "", "up"],
-    ["近7天净增关注", formatSigned(totals.follower_delta_7d || 0), "", Number(totals.follower_delta_7d || 0) >= 0 ? "up" : "down"],
-    ["完整覆盖账号", Number(statusCounts["完整"] || 0), "", "up"],
-    ["待处理账号", missingCount > 0 ? missingCount : 0, "", missingCount > 0 ? "down" : "up"],
-  ];
-  document.querySelector("#stats-overview").innerHTML = overview.map(([label, value, change, trend]) => `
-    <div class="metric client-metric"><span>${label}</span><strong>${value}</strong><em class="${trend}">${change}</em></div>
-  `).join("");
-
+  const matrixDonutNode = document.querySelector("#matrix-status-donut");
+  const matrixDonutLabel = document.querySelector("#matrix-status-donut-label");
+  const matrixCollectionGridNode = document.querySelector("#matrix-collection-grid");
+  const matrixStatusBandNode = document.querySelector("#matrix-status-band");
+  const averageCompletedNode = document.querySelector("#matrix-average-completed-rate");
+  const averageInteractionNode = document.querySelector("#matrix-average-interaction-rate");
+  const abnormalRateNode = document.querySelector("#matrix-abnormal-rate");
+  const analyticsRows = Array.isArray(state.analytics?.account_rank)
+    ? state.analytics.account_rank.map((item) => item.row).filter(Boolean)
+    : [];
+  const totalAccounts = rows.length || Object.values(statusCounts).reduce((sum, value) => sum + Number(value || 0), 0) || analyticsRows.length;
+  const completeCount = Number(statusCounts.完整 || 0);
+  const abnormalCount = Math.max(0, totalAccounts - completeCount);
+  const abnormalPercent = totalAccounts ? (abnormalCount / totalAccounts) * 100 : 0;
+  const completedRate = average(analyticsRows.map((row) => parsePercent(row[7])));
+  const interactionRate = average(analyticsRows.map((row) => parsePercent(row[8])));
+  const totals = rows.reduce((acc, row) => {
+    acc.followers += Number(row.followers_current || 0);
+    acc.newFollowers += Number(row.new_followers_7d || 0);
+    acc.unfollows += Number(row.unfollows_7d || 0);
+    acc.views += Number(row.views_7d || 0);
+    acc.likes += Number(row.likes_7d || 0);
+    acc.comments += Number(row.comments_7d || 0);
+    acc.shares += Number(row.shares_7d || 0);
+    acc.traffic += Number(row.follower_delta_7d || 0);
+    return acc;
+  }, {
+    followers: 0,
+    newFollowers: 0,
+    unfollows: 0,
+    views: 0,
+    likes: 0,
+    comments: 0,
+    shares: 0,
+    traffic: 0,
+  });
+  const statusPalette = {
+    完整: "#5dd62c",
+    "近7天缺口": "#ffb02e",
+    "缺关注者": "#28d7c4",
+    "缺视频": "#4ca3ff",
+    "缺关注者+缺视频": "#8f73ff",
+    未登录: "#ff4d5f",
+  };
+  if (matrixDonutNode && totalAccounts > 0) {
+    const order = ["完整", "近7天缺口", "缺关注者", "缺视频", "缺关注者+缺视频", "未登录"];
+    const segments = order
+      .map((key) => [key, Number(statusCounts[key] || 0)])
+      .filter(([, count]) => count > 0);
+    const fallbackSegments = segments.length ? segments : [["完整", totalAccounts]];
+    const gradient = [];
+    let offset = 0;
+    for (const [key, count] of fallbackSegments) {
+      const start = (offset / totalAccounts) * 100;
+      offset += count;
+      const end = (offset / totalAccounts) * 100;
+      gradient.push(`${statusPalette[key] || "#8e8e8e"} ${start.toFixed(1)}% ${end.toFixed(1)}%`);
+    }
+    matrixDonutNode.style.background = `conic-gradient(${gradient.join(", ")})`;
+    matrixDonutNode.style.boxShadow = "inset 0 0 0 32px #101010";
+  }
+  if (matrixDonutLabel) {
+    matrixDonutLabel.innerHTML = `异常<br>${formatPercent(abnormalPercent)}`;
+  }
+  if (averageCompletedNode) averageCompletedNode.textContent = formatPercent(completedRate);
+  if (averageInteractionNode) averageInteractionNode.textContent = formatPercent(interactionRate);
+  if (abnormalRateNode) abnormalRateNode.textContent = formatPercent(abnormalPercent);
+  if (matrixCollectionGridNode) {
+    const cards = [
+      {
+        label: "关注者总数",
+        value: formatNumber(totals.followers),
+        note: `覆盖 ${formatNumber(totalAccounts)} 个账号`,
+        accent: "green",
+      },
+      {
+        label: "新增/取关",
+        value: `${formatSigned(totals.newFollowers)} / ${totals.unfollows ? `-${formatNumber(totals.unfollows)}` : "0"}`,
+        note: `净增 ${formatSigned(totals.traffic)}`,
+        accent: "orange",
+      },
+      {
+        label: "播放总量",
+        value: formatNumber(totals.views),
+        note: `账号均值 ${formatNumber(totalAccounts ? Math.round(totals.views / totalAccounts) : 0)}`,
+        accent: "blue",
+      },
+      {
+        label: "喜欢/推荐",
+        value: `${formatNumber(totals.likes)} / ${formatNumber(totals.comments)}`,
+        note: `互动基数 ${formatNumber(totals.likes + totals.comments)}`,
+        accent: "violet",
+      },
+      {
+        label: "分享/评论",
+        value: `${formatNumber(totals.shares)} / ${formatNumber(totals.comments)}`,
+        note: `传播强度 ${formatNumber(totals.shares + totals.comments)}`,
+        accent: "cyan",
+      },
+      {
+        label: "视频引流关注",
+        value: formatNumber(totals.newFollowers),
+        note: `近7天净增 ${formatSigned(totals.traffic)}`,
+        accent: "amber",
+      },
+    ];
+    matrixCollectionGridNode.innerHTML = cards.map((card) => `
+      <article class="matrix-collection-card accent-${card.accent}">
+        <span>${card.label}</span>
+        <strong>${card.value}</strong>
+        <em>${card.note}</em>
+      </article>
+    `).join("");
+  }
+  if (matrixStatusBandNode) {
+    const bandOrder = ["完整", "近7天缺口", "缺关注者", "缺视频", "缺关注者+缺视频", "未登录"];
+    matrixStatusBandNode.innerHTML = bandOrder.map((key) => {
+      const count = Number(statusCounts[key] || 0);
+      const share = totalAccounts ? ((count / totalAccounts) * 100).toFixed(1) : "0.0";
+      const color = statusPalette[key] || "#8e8e8e";
+      return `
+        <article class="matrix-status-pill">
+          <i style="--status-color:${color}"></i>
+          <div>
+            <strong>${key}</strong>
+            <span>${count} 个 · ${share}%</span>
+          </div>
+        </article>
+      `;
+    }).join("");
+  }
+  if (!rows.length) return;
   const statsWindowNode = document.querySelector("#stats-weekly-window");
   if (statsWindowNode) {
     const windowInfo = summary.window || {};
@@ -4216,28 +4505,29 @@ function renderStatsWeeklySummary() {
       return token.includes(keyword);
     })
     .sort((a, b) => Number(b.views_7d || 0) - Number(a.views_7d || 0));
-  const headers = ["账号名称", "平台", "状态", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "分层", "异常"];
+  const headers = ["账号名称", "平台", "关注者总数", "新增/取关", "播放总量", "喜欢/推荐", "分享/评论", "视频引流关注", "采集状态"];
   document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${tableRows.map((row) => {
-    const interactions = Number(row.interactions_7d || 0);
     const views = Number(row.views_7d || 0);
-    const coverage = Number(row.coverage_days || 0);
-    const missingText = (row.missing_sources || []).join(",") || (row.capture_status === "完整" ? "" : row.capture_status);
-    const tier = row.capture_status === "完整" ? "完整覆盖" : (row.capture_status === "未登录" ? "登录失效" : "待补采");
+    const followers = Number(row.followers_current || 0);
+    const newFollowers = Number(row.new_followers_7d || 0);
+    const unfollows = Number(row.unfollows_7d || 0);
+    const likes = Number(row.likes_7d || 0);
+    const shares = Number(row.shares_7d || 0);
+    const comments = Number(row.comments_7d || 0);
+    const traffic = Math.max(0, newFollowers);
+    const captureText = row.capture_status || "未知";
     const cells = [
       `${row.display_name || row.account_key || `账号 ${row.account_id}`}`,
       "视频号",
-      row.capture_status || "-",
+      formatNumber(followers),
+      `${formatSigned(newFollowers)} / ${unfollows ? `-${formatNumber(unfollows)}` : "0"}`,
       formatNumber(views),
-      formatNumber(views),
-      formatNumber(row.followers_current || 0),
-      formatSigned(row.follower_delta_7d || 0),
-      "-",
-      pct(interactions, views),
-      `${coverage}/7`,
-      tier,
-      missingText,
+      `${formatNumber(likes)} / ${formatNumber(comments)}`,
+      `${formatNumber(shares)} / ${formatNumber(comments)}`,
+      formatNumber(traffic),
+      captureText,
     ];
-    return `<tr>${cells.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`;
+    return `<tr>${cells.map((cell, index) => `<td>${index >= 8 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`;
   }).join("")}</tbody></table><div class="table-pager">第 1 / 1 页 · ${tableRows.length} 条账号</div>`;
 
   const alerts = Array.isArray(summary.alerts) ? summary.alerts : [];
@@ -4253,17 +4543,14 @@ function renderStatsWeeklySummary() {
 function renderAnalyticsFromDatabase() {
   const analytics = state.analytics || {};
   if (!Object.keys(analytics).length) return;
-  const overview = analytics.overview || [];
-  if (overview.length) {
-    document.querySelector("#stats-overview").innerHTML = [
-      { label: "矩阵账号总数", value: state.summary?.accounts || 0, change: "+8.4%", trend: "up" },
-      ...overview,
-    ].map((item) => `<div class="metric client-metric"><span>${item.label}</span><strong>${item.value}</strong><em class="${item.trend || "up"}">${item.change || ""}</em></div>`).join("");
-  }
   const accounts = (analytics.account_rank || []).map((item) => item.row).filter(Boolean);
-  if (accounts.length) {
-    const headers = ["账号名称", "平台", "状态", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "分层", "异常"];
-    document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${accounts.map((row) => `<tr>${row.map((cell, index) => `<td>${index >= 10 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`).join("")}</tbody></table><div class="table-pager">1 / 1 · ${accounts.length} 条账号</div>`;
+  const hasWeeklyRows = Array.isArray(state.weeklySummary?.rows) && state.weeklySummary.rows.length > 0;
+  if (accounts.length && !hasWeeklyRows) {
+    const headers = ["账号名称", "平台", "关注者总数", "新增/取关", "播放总量", "喜欢/推荐", "分享/评论", "视频引流关注", "采集状态"];
+    document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${accounts.map((row) => {
+      const cells = [row[0], row[1], row[5], row[6], row[3], row[7], row[8], row[9], row[10]];
+      return `<tr>${cells.map((cell, index) => `<td>${index >= 8 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`;
+    }).join("")}</tbody></table><div class="table-pager">1 / 1 · ${accounts.length} 条账号</div>`;
   }
   const works = analytics.content_top || [];
   if (works.length) document.querySelector("#content-top-list").innerHTML = works.map((item, index) => `<article class="rank-row"><span>${index + 1}</span><strong>${item.title}</strong><em>${item.value}</em><b>${item.tag}</b></article>`).join("");
