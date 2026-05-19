@@ -644,6 +644,7 @@ def template_preview(payload: dict[str, Any]) -> dict[str, str]:
         slogan=str(payload.get("slogan") or ""),
         title=str(payload.get("title") or ""),
         background=background,
+        sequence_tag=str(payload.get("sequence_tag") or ""),
     )
     buffer = BytesIO()
     image.save(buffer, format="PNG")

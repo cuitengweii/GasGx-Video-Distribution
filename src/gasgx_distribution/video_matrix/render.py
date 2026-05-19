@@ -17,6 +17,7 @@ from .font_config import build_font_candidates_for_family
 from .cover import render_intro_cover, render_outro_cover
 from .models import RenderedAsset, VideoVariant
 from .settings import ProjectSettings
+from .watermark import build_watermark_overlay
 from .spark_text import build_marketing_copy, clean_generated_text, sanitize_headline_text
 from .templates import coerce_template
 ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -323,6 +324,7 @@ def _build_filter_complex(
         labels.append("[intro]")
     template = coerce_template(template_config)
     explicit_template_keys = set((template_config or {}).keys())
+    watermark_overlay_path = _render_watermark_overlay(template, text_dir.parent / "template_watermark_overlay.png" if text_dir else None, settings.target_width, settings.target_height, sequence_tag)
     hud_text = " | ".join(variant.hud_lines)
     slogan = sanitize_headline_text(variant.slogan)
     title = sanitize_headline_text(variant.title)
@@ -333,6 +335,10 @@ def _build_filter_complex(
     if background_overlay_path is not None:
         inputs = [*inputs, background_overlay_path]
         background_overlay_index = len(inputs) - 1
+    watermark_overlay_index: int | None = None
+    if watermark_overlay_path is not None:
+        inputs = [*inputs, watermark_overlay_path]
+        watermark_overlay_index = len(inputs) - 1
     for idx, segment in enumerate(variant.segments):
         crop_x = max(0, (settings.target_width * variant.zoom - settings.target_width) / 2 + variant.x_offset)
         crop_y = max(0, (settings.target_height * variant.zoom - settings.target_height) / 2 + variant.y_offset)
@@ -357,15 +363,38 @@ def _build_filter_complex(
             speed_mode=speed_mode,
             sequence_tag=sequence_tag,
         )
+        chain_parts: list[str] = []
+        chain = base_chain
+        current_label: str | None = None
         if background_overlay_index is not None:
             chain = (
-                f"{base_chain},format=rgba[seg{idx}base];"
-                f"[seg{idx}base][{background_overlay_index}:v]overlay=0:0:format=auto"
-                f"{text_filters},format=yuv420p[v{idx}]"
+                f"{chain},format=rgba[seg{idx}base];"
+                f"[seg{idx}base][{background_overlay_index}:v]overlay=0:0:format=auto[seg{idx}bg]"
             )
+            chain_parts.append(chain)
+            current_label = f"[seg{idx}bg]"
+        if text_filters:
+            if current_label is not None:
+                chain = f"{current_label}{text_filters}[seg{idx}text]"
+            else:
+                chain = f"{chain}{text_filters}[seg{idx}text]"
+            chain_parts.append(chain)
+            current_label = f"[seg{idx}text]"
+        if watermark_overlay_index is not None:
+            if current_label is not None:
+                chain = f"{current_label}[{watermark_overlay_index}:v]overlay=0:0:format=auto[seg{idx}wm]"
+            else:
+                chain = (
+                    f"{chain},format=rgba[seg{idx}base];"
+                    f"[seg{idx}base][{watermark_overlay_index}:v]overlay=0:0:format=auto[seg{idx}wm]"
+                )
+            chain_parts.append(chain)
+            current_label = f"[seg{idx}wm]"
+        if current_label is not None:
+            chain_parts.append(f"{current_label},format=yuv420p[v{idx}]")
+            chains.append(";".join(chain_parts))
         else:
-            chain = f"{base_chain}{text_filters}[v{idx}]"
-        chains.append(chain)
+            chains.append(f"{chain},format=yuv420p[v{idx}]")
         labels.append(f"[v{idx}]")
     if outro_cover_path is not None and outro_seconds > 0:
         inputs = [*inputs, outro_cover_path]
@@ -523,7 +552,7 @@ def _overlay_filters(
                 speed_mode=speed_mode,
             )
         )
-    if template.get("show_sequence_tag", True) and sequence_tag.strip():
+    if "watermark_mode" not in explicit_template_keys and template.get("show_sequence_tag", True) and sequence_tag.strip():
         filters.append(_sequence_tag_filter(template, sequence_tag.strip()))
     return "," + ",".join(filters) if filters else ""
 
@@ -606,6 +635,23 @@ def _render_background_overlay(template: dict[str, Any], target_path: Path | Non
             draw.rounded_rectangle(box, radius=radius, fill=(red, green, blue, alpha))
         else:
             draw.rectangle(box, fill=(red, green, blue, alpha))
+    overlay.save(target_path)
+    return target_path
+
+
+def _render_watermark_overlay(
+    template: dict[str, Any],
+    target_path: Path | None,
+    width: int,
+    height: int,
+    sequence_tag: str,
+) -> Path | None:
+    if target_path is None:
+        return None
+    overlay = build_watermark_overlay(template, (width, height), sequence_tag=sequence_tag)
+    if overlay is None:
+        return None
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     overlay.save(target_path)
     return target_path
 

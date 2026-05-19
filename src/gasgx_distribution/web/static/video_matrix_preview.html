@@ -239,6 +239,41 @@
             overflow: hidden;
         }
 
+        .vm-template-watermark-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 6;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .vm-template-watermark-layer[hidden] {
+            display: none !important;
+        }
+
+        .vm-template-watermark-text {
+            position: absolute;
+            white-space: nowrap;
+            line-height: 1;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            text-shadow: 0 2px 8px rgba(0,0,0,.65);
+            user-select: none;
+        }
+
+        .vm-template-watermark-image {
+            position: absolute;
+            object-fit: contain;
+            user-select: none;
+        }
+
+        .vm-template-watermark-tile {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
         .vm-template-hud-bar {
             position: absolute;
             left: 0;
@@ -1347,6 +1382,7 @@
                 <div id="templateSlogan" class="vm-template-text vm-template-slogan vm-template-editable" data-template-target="slogan"></div>
                 <div id="templateTitle" class="vm-template-text vm-template-title vm-template-editable" data-template-target="title"></div>
                 <div id="templateHudText" class="vm-template-text vm-template-hud vm-template-editable" data-template-target="hud"></div>
+                <div id="templateWatermarkLayer" class="vm-template-watermark-layer" aria-hidden="true"></div>
                 <div id="centerGuides" class="vm-center-guides"></div>
                 <div id="visualToolbar" class="vm-visual-toolbar">
                     <button id="sizeDown" type="button">-</button>
@@ -1515,6 +1551,7 @@
       const templateLayer = document.querySelector(".vm-template-layer");
       const backgroundImage = document.getElementById("templateBackgroundImage");
       const templateMask = document.getElementById("templateMaskBg");
+      const watermarkLayer = document.getElementById("templateWatermarkLayer");
       const previewPlay = document.getElementById("previewPlay");
       const previewStop = document.getElementById("previewStop");
       const singleMode = document.getElementById("singleMode");
@@ -1940,6 +1977,169 @@
         node.classList.add(`text-style-${normalized}`);
       }
 
+      function sanitizeWatermarkText(value) {
+        return String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "").slice(0, 10);
+      }
+
+      function watermarkMode(template) {
+        return String(template?.watermark_mode || "none").trim().toLowerCase();
+      }
+
+      function watermarkPosition(template) {
+        const mode = String(template?.watermark_position || "bottom_right").trim().toLowerCase();
+        return ["top_center", "bottom_center", "top_left", "top_right", "bottom_left", "bottom_right"].includes(mode) ? mode : "bottom_right";
+      }
+
+      function watermarkTileMode(template) {
+        const mode = String(template?.watermark_tile_mode || "none").trim().toLowerCase();
+        return ["none", "straight", "diagonal"].includes(mode) ? mode : "none";
+      }
+
+      function watermarkText(template, payload) {
+        if (watermarkMode(template) === "auto") return sanitizeWatermarkText(payload?.sequence_tag || "");
+        return sanitizeWatermarkText(template?.watermark_text || "");
+      }
+
+      function watermarkFontFamily(template) {
+        return template?.watermark_font_family || template?.hud_font_family || template?.sequence_tag_font_family || "'Noto Sans SC', sans-serif";
+      }
+
+      function watermarkOpacity(template) {
+        return clamp(Number(template?.watermark_opacity ?? 0.58), 0, 1);
+      }
+
+      function watermarkFontSize(template) {
+        return Math.max(12, Math.min(180, Number(template?.watermark_font_size ?? 32)));
+      }
+
+      function watermarkPreviewPosition(layer, node, position) {
+        const width = layer?.clientWidth || PREVIEW_WIDTH;
+        const height = layer?.clientHeight || PREVIEW_HEIGHT;
+        const itemWidth = node?.offsetWidth || 0;
+        const itemHeight = node?.offsetHeight || 0;
+        const scaleX = width / 1080;
+        const scaleY = height / 1920;
+        const marginX = 56 * scaleX;
+        const marginY = 68 * scaleY;
+        if (position === "top_center") return { left: Math.max(0, (width - itemWidth) / 2), top: marginY };
+        if (position === "bottom_center") return { left: Math.max(0, (width - itemWidth) / 2), top: Math.max(0, height - itemHeight - marginY) };
+        if (position === "top_left") return { left: marginX, top: marginY };
+        if (position === "top_right") return { left: Math.max(0, width - itemWidth - marginX), top: marginY };
+        if (position === "bottom_left") return { left: marginX, top: Math.max(0, height - itemHeight - marginY) };
+        return { left: Math.max(0, width - itemWidth - marginX), top: Math.max(0, height - itemHeight - marginY) };
+      }
+
+      function renderWatermarkLayer(template, payload) {
+        if (!watermarkLayer) return;
+        watermarkLayer.replaceChildren();
+        const mode = watermarkMode(template);
+        if (mode === "none" || !template?.watermark_mode) {
+          watermarkLayer.hidden = true;
+          return;
+        }
+        const text = watermarkText(template, payload);
+        const opacity = watermarkOpacity(template);
+        watermarkLayer.hidden = false;
+        if (mode === "image") {
+          const imageUrl = template?.watermark_image_data_url || "";
+          if (!imageUrl) {
+            watermarkLayer.hidden = true;
+            return;
+          }
+          const img = document.createElement("img");
+          img.className = "vm-template-watermark-image";
+          img.alt = "watermark";
+          img.src = imageUrl;
+          img.style.maxWidth = "200px";
+          img.style.maxHeight = "200px";
+          img.style.opacity = String(opacity);
+          img.style.visibility = "hidden";
+          const positionImage = () => {
+            const coords = watermarkPreviewPosition(watermarkLayer, img, watermarkPosition(template));
+            img.style.left = `${coords.left}px`;
+            img.style.top = `${coords.top}px`;
+            img.style.visibility = "visible";
+          };
+          img.onload = positionImage;
+          watermarkLayer.appendChild(img);
+          if (img.complete) positionImage();
+          return;
+        }
+        if (!text) {
+          watermarkLayer.hidden = true;
+          return;
+        }
+        const color = template?.watermark_color || "#ffffff";
+        const fontFamily = watermarkFontFamily(template);
+        const fontSize = watermarkFontSize(template);
+        const tileMode = watermarkTileMode(template);
+        if (tileMode === "none") {
+          const node = document.createElement("div");
+          node.className = "vm-template-watermark-text";
+          node.textContent = text;
+          node.style.fontFamily = fontFamily;
+          node.style.fontSize = designSize(fontSize);
+          node.style.color = color;
+          node.style.opacity = String(opacity);
+          node.style.visibility = "hidden";
+          watermarkLayer.appendChild(node);
+          const coords = watermarkPreviewPosition(watermarkLayer, node, watermarkPosition(template));
+          node.style.left = `${coords.left}px`;
+          node.style.top = `${coords.top}px`;
+          node.style.visibility = "visible";
+          return;
+        }
+        const tile = document.createElement("div");
+        tile.className = "vm-template-watermark-tile";
+        const wrapper = document.createElement("div");
+        wrapper.style.position = "absolute";
+        wrapper.style.left = "-25%";
+        wrapper.style.top = "-25%";
+        wrapper.style.width = "150%";
+        wrapper.style.height = "150%";
+        wrapper.style.pointerEvents = "none";
+        wrapper.style.transformOrigin = "center";
+        if (tileMode === "diagonal") {
+          wrapper.style.transform = "rotate(-28deg)";
+        }
+        const previewFontSize = Math.max(12, Number(designSize(fontSize).replace("px", "")));
+        const probe = document.createElement("div");
+        probe.className = "vm-template-watermark-text";
+        probe.textContent = text;
+        probe.style.fontFamily = fontFamily;
+        probe.style.fontSize = `${previewFontSize}px`;
+        probe.style.color = color;
+        probe.style.opacity = String(opacity);
+        probe.style.visibility = "hidden";
+        tile.appendChild(wrapper);
+        tile.appendChild(probe);
+        watermarkLayer.appendChild(tile);
+        const sampleWidth = Math.max(1, probe.offsetWidth || previewFontSize * Math.max(4, text.length));
+        const sampleHeight = Math.max(1, probe.offsetHeight || previewFontSize * 1.4);
+        probe.remove();
+        const gapX = tileMode === "diagonal" ? Math.max(220, sampleWidth + 120) : Math.max(180, sampleWidth + 96);
+        const gapY = tileMode === "diagonal" ? Math.max(160, sampleHeight + 80) : Math.max(140, sampleHeight + 72);
+        const layerWidth = watermarkLayer.clientWidth || PREVIEW_WIDTH;
+        const layerHeight = watermarkLayer.clientHeight || PREVIEW_HEIGHT;
+        for (let top = -gapY; top < layerHeight + gapY; top += gapY) {
+          for (let left = -gapX; left < layerWidth + gapX; left += gapX) {
+            const item = document.createElement("div");
+            item.className = "vm-template-watermark-text";
+            item.textContent = text;
+            item.style.fontFamily = fontFamily;
+            item.style.fontSize = `${previewFontSize}px`;
+            item.style.color = color;
+            item.style.opacity = String(opacity);
+            item.style.left = `${left}px`;
+            item.style.top = `${top}px`;
+            if (tileMode === "diagonal") {
+              item.style.transform = "translateZ(0)";
+            }
+            wrapper.appendChild(item);
+          }
+        }
+      }
+
       function applyTemplatePayload(payload) {
         if (!payload) return;
         if (payload.cover_mode) {
@@ -1971,6 +2171,7 @@
         setLayerText("templateSlogan", template.show_slogan, payload.slogan, template.slogan_x, template.slogan_y, template.slogan_font_size, textColorValue("slogan", template));
         setLayerText("templateTitle", template.show_title, payload.title, template.title_x, template.title_y, template.title_font_size, textColorValue("title", template));
         setLayerText("templateHudText", template.show_hud, payload.hud_text, template.hud_x, template.hud_y, template.hud_font_size, textColorValue("hud", template));
+        renderWatermarkLayer(template, payload);
       }
 
       function applyCoverProfilePayload(payload) {

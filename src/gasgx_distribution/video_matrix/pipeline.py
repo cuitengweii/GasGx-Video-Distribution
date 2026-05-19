@@ -270,6 +270,7 @@ def run_pipeline(
             }
             completed = 0
             failed = 0
+            first_error = ""
             for future in as_completed(futures):
                 sequence_number = futures[future]
                 try:
@@ -277,6 +278,8 @@ def run_pipeline(
                     enrich_rendered_asset_dedupe(asset, bgm_path)
                 except Exception as exc:  # noqa: BLE001
                     failed += 1
+                    if not first_error:
+                        first_error = str(exc)
                     if telemetry is not None:
                         telemetry.event(
                             "render",
@@ -298,6 +301,9 @@ def run_pipeline(
                 if asset_callback is not None:
                     asset_callback(asset, completed, total)
                 _notify(progress_callback, "render", progress, f"Rendered video {completed}/{total}")
+            if failed >= total and not assets:
+                detail = f": {first_error}" if first_error else ""
+                raise RuntimeError(f"All {total} video render jobs failed{detail}")
         finally:
             executor.shutdown(wait=True)
     _notify(progress_callback, "finalizing", 0.97, "Finalizing preview assets and manifests")

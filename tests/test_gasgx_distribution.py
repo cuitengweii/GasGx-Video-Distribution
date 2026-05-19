@@ -1530,6 +1530,10 @@ def test_video_matrix_template_preview_returns_png(monkeypatch, tmp_path: Path) 
                 "show_hud": True,
                 "show_slogan": True,
                 "show_title": True,
+                "watermark_mode": "auto",
+                "watermark_position": "bottom_right",
+                "watermark_font_size": 36,
+                "watermark_color": "#FFFFFF",
                 "hud_bar_y": 1700,
                 "hud_bar_height": 140,
                 "hud_bar_width": 760,
@@ -1550,6 +1554,7 @@ def test_video_matrix_template_preview_returns_png(monkeypatch, tmp_path: Path) 
             "slogan": "Stop Flaring. Start Hashing.",
             "title": "Gas To Compute",
             "hud_text": "Gas Input -> Power\nPower -> Hashrate",
+            "sequence_tag": "0516-01",
         },
     )
 

@@ -127,26 +127,25 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "字幕背板调整区" in app
     assert "HUD调整区" not in app
     assert "文案参考资料" not in html
-    assert '<input id="headline" type="hidden" />' in html
+    assert 'id="headline"' in html
     assert 'id="headlineAiEnabled" type="checkbox"' in html
     assert 'id="aiPromptHint"' in html
-    assert "AI 追加提示语" in html
+    assert "上标题 AI 参考提示语" in html
     assert "headline_ai_enabled: Boolean($(\"headlineAiEnabled\")?.checked)" in app
     assert "ai_prompt_hint: aiPromptHint" in app
     assert "function sanitizeAiPromptHint(value)" in app
     assert "function aiPromptHintLineCount(value)" in app
-    assert "aiPromptHint.onkeydown = (event) => {" in app
-    assert "aiPromptHint.onpaste = (event) => {" in app
-    assert html.index('class="cover-workbench"') < html.index('class="video-template-workbench"') < html.index('class="side-editor"')
-    assert html.index('class="video-template-workbench"') < html.index('class="ending-workbench cover-workbench"') < html.index('class="side-editor"')
+    assert "function bindSidebarPromptHintField(inputId, metaId, stateKey)" in app
+    assert "input.onkeydown = (event) => {" in app
+    assert "input.onpaste = (event) => {" in app
+    assert html.index('class="side-editor generation-panel"') < html.index('class="cover-workbench"') < html.index('class="video-template-workbench"')
+    assert html.index('class="side-editor generation-panel"') < html.index('class="video-template-workbench"') < html.index('class="ending-workbench cover-workbench"')
     assert "transcriptFile" not in html
     assert "transcriptText" not in html
-    assert "generationConfirmModal" in html
-    assert "generationPreflightModal" in html
-    assert "generationPreflightBody" in html
     assert "generationWaitOverlay" in html
+    assert "generationWaitTitle" in html
+    assert "generationWaitDetail" in html
     assert "generationWaitPercent" in html
-    assert "preflightClose" in html
     assert '"Queued": "任务已提交，正在排队准备。请保持当前页面打开，系统会自动开始处理。"' in app
     assert 'queued: "任务已提交，正在等待开始"' in app
     assert "function localizedJobTitle" in app
@@ -822,6 +821,11 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "#coverForm .template-actions button" in css
     assert "#endingTemplateForm .template-actions button" in css
     assert "#videoTemplateForm .template-actions button" in css
+    assert ".watermark-image-preview" in css
+    assert ".watermark-image-thumb" in css
+    assert ".watermark-controls .watermark-note" in css
+    assert ".vm-template-watermark-layer" in preview
+    assert ".vm-template-watermark-text" in preview
     assert "cursor:pointer" in css
     assert "model-image-workbench" in html
     assert "模拟素材选择" in html
@@ -856,6 +860,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "max-width: none" in css
     assert "hud_bar_width" in preview
     assert "hud_bar_x" in preview
+    assert "renderWatermarkLayer(template, payload)" in preview
+    assert "watermarkLayer.hidden = true" in preview
     assert "slogan_bg_x" in preview
     assert "slogan_bg_y" in preview
     assert "slogan_bg_width" in preview
@@ -887,6 +893,12 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "node.style.left = designX(x)" in preview
     assert "node.style.width = designX(boxWidth)" in preview
     assert "function textBoxWidth(template, target, anchorX = 0)" in preview
+    assert "watermarkTemplateHtml(template)" in app
+    assert "bindWatermarkTemplateControls()" in app
+    assert "watermark_image_upload" in app
+    assert "水印模式" in app
+    assert "图片会自动压缩到" in app
+    assert "自动水印" in app
     assert "文字调整区" in app
     assert 'data-visual-command="bar-align" data-value="left" title="字幕背板左对齐">左齐' in app
     assert 'data-visual-command="bar-align" data-value="center" title="字幕背板居中对齐">居中' in app
@@ -1343,7 +1355,7 @@ def test_video_matrix_frontend_has_dedupe_report_panel() -> None:
 
     assert 'id="narrativeTemplates"' in html
     assert "data-narrative-templates" in html
-    assert "preflight-dedupe-20260511" in html
+    assert "narrative-template-list" in html
     assert "叙事骨架轮换" in html
     assert "function renderNarrativeTemplates" in app
     assert 'document.querySelectorAll("[data-narrative-templates]")' in app

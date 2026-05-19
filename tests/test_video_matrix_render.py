@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
@@ -10,6 +12,7 @@ from gasgx_distribution.video_matrix import render
 from gasgx_distribution.video_matrix.ffmpeg_tools import FFmpegError
 from gasgx_distribution.video_matrix.models import ClipMetadata, SegmentPlan, VideoVariant
 from gasgx_distribution.video_matrix.settings import ProjectSettings
+from gasgx_distribution.video_matrix.watermark import build_watermark_overlay, resolve_watermark_text, sanitize_watermark_text
 
 
 def _settings(output_root: Path) -> ProjectSettings:
@@ -563,3 +566,94 @@ def test_render_variant_uses_publish_sequence_number_for_sequence_tag(monkeypatc
     )
 
     assert "text=0516-23" in captured["filter_complex"]
+
+
+def test_overlay_filters_skip_legacy_sequence_tag_when_watermark_mode_is_explicit() -> None:
+    template = render.coerce_template(
+        {
+            "show_hud": False,
+            "show_slogan": False,
+            "show_title": False,
+            "watermark_mode": "text",
+            "watermark_text": "GasGx",
+            "watermark_position": "top_left",
+        }
+    )
+
+    filters = render._overlay_filters(
+        template,
+        hud_text="",
+        slogan="",
+        title="",
+        explicit_template_keys=set(template),
+        sequence_tag="0516-2",
+    )
+
+    assert filters == ""
+
+
+def test_build_filter_complex_preserves_watermark_overlay_chain(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    text_dir = tmp_path / "render" / "text_layers"
+    template = {
+        "show_hud": False,
+        "show_slogan": False,
+        "show_title": False,
+        "watermark_mode": "text",
+        "watermark_text": "GasGx",
+        "watermark_position": "top_left",
+    }
+
+    filter_complex, inputs = render._build_filter_complex(
+        _variant(source),
+        _settings(tmp_path),
+        template_config=template,
+        text_dir=text_dir,
+    )
+
+    assert "template_watermark_overlay.png" not in filter_complex
+    assert inputs[-1].name == "template_watermark_overlay.png"
+    assert ";;" not in filter_complex
+    assert ",,overlay" not in filter_complex
+    assert "No such filter" not in filter_complex
+    assert "[seg0base]" in filter_complex
+    assert "[seg0wm],format=yuv420p[v0]" in filter_complex
+
+
+def test_watermark_helpers_support_auto_text_and_image_overlay() -> None:
+    assert sanitize_watermark_text("12345678901") == "1234567890"
+    assert sanitize_watermark_text("中英\nWatermark") == "中英Watermark"
+    assert resolve_watermark_text({"watermark_mode": "auto", "watermark_text": "ignored"}, "0516-01") == "0516-01"
+
+    text_overlay = build_watermark_overlay(
+        {
+            "watermark_mode": "text",
+            "watermark_text": "测试Watermark",
+            "watermark_position": "top_left",
+            "watermark_font_size": 72,
+            "watermark_color": "#FF0000",
+            "watermark_opacity": 0.78,
+        },
+        (1080, 1920),
+    )
+    assert text_overlay is not None
+    assert text_overlay.getbbox() is not None
+
+    image = Image.new("RGBA", (320, 240), (255, 0, 0, 255))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    image_overlay = build_watermark_overlay(
+        {
+            "watermark_mode": "image",
+            "watermark_image_data_url": f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}",
+            "watermark_position": "bottom_right",
+            "watermark_opacity": 0.6,
+        },
+        (1080, 1920),
+    )
+    assert image_overlay is not None
+    bbox = image_overlay.getbbox()
+    assert bbox is not None
+    assert bbox[2] - bbox[0] <= 200
+    assert bbox[3] - bbox[1] <= 200

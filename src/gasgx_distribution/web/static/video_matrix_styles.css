@@ -2290,6 +2290,54 @@ button.secondary { background:#151515; color:var(--text); border:1px solid #3333
 .visual-opacity-control {
   grid-column: 1 / -1;
 }
+.watermark-controls .watermark-manual-text-row,
+.watermark-controls .watermark-appearance-row,
+.watermark-controls .watermark-image-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.watermark-controls .watermark-manual-text-row input[type="text"] {
+  width: 100%;
+}
+.watermark-controls .watermark-note {
+  color: rgba(229, 243, 233, .78);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.watermark-controls .watermark-color-control {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  color: #f6fff3;
+  font-size: 12px;
+  font-weight: 900;
+}
+.watermark-controls .watermark-color-control input[type="color"] {
+  width: 52px;
+  min-width: 52px;
+  height: 30px;
+  padding: 2px;
+  border-radius: 8px;
+}
+.watermark-image-meta {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.watermark-image-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.visual-file-control input[type="file"] {
+  width: 100%;
+}
 .visual-toolbar-panel button {
   width: auto;
   min-width: 38px;

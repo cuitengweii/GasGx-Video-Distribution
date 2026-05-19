@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 from .font_config import build_font_candidates
 from .settings import ProjectSettings
 from .templates import coerce_template
+from .watermark import build_watermark_overlay
 
 
 def render_video_template_preview_image(
@@ -16,6 +17,7 @@ def render_video_template_preview_image(
     slogan: str = "",
     title: str = "",
     background: Image.Image | None = None,
+    sequence_tag: str = "",
 ) -> Image.Image:
     template = coerce_template(template_config)
     explicit_template_keys = set((template_config or {}).keys())
@@ -72,6 +74,9 @@ def render_video_template_preview_image(
             max_lines=_template_max_lines(template, "title", 12),
         )
 
+    watermark_overlay = build_watermark_overlay(template, base.size, sequence_tag=sequence_tag)
+    if watermark_overlay is not None:
+        base = Image.alpha_composite(base, watermark_overlay)
     return Image.alpha_composite(base, overlay).convert("RGB")
 
 

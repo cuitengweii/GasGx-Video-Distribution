@@ -90,6 +90,27 @@ const videoTemplateFields = [
   ["show_title", "显示中标题", "checkbox"],
   ["show_hud", "显示下标题", "checkbox"],
 ];
+const watermarkModeOptions = [
+  ["none", "关闭"],
+  ["text", "文字水印"],
+  ["image", "图片水印"],
+  ["auto", "自动水印"],
+];
+const watermarkPositionOptions = [
+  ["top_center", "顶部居中"],
+  ["bottom_center", "底部居中"],
+  ["top_left", "顶部靠左"],
+  ["top_right", "顶部靠右"],
+  ["bottom_left", "底部靠左"],
+  ["bottom_right", "底部靠右"],
+];
+const watermarkTileOptions = [
+  ["none", "不平铺"],
+  ["straight", "正向平铺"],
+  ["diagonal", "斜向平铺"],
+];
+const WATERMARK_TEXT_MAX_CHARS = 10;
+const WATERMARK_IMAGE_MAX_SIZE = 200;
 const visualFontOptions = [
   ["'Microsoft YaHei', 'Noto Sans SC', sans-serif", "雅黑黑体"],
   ["'Microsoft JhengHei', 'Microsoft YaHei', sans-serif", "广告黑体"],
@@ -211,6 +232,16 @@ function sanitizeAiPromptHint(value) {
     .slice(0, AI_PROMPT_HINT_MAX_LINES);
   const merged = lines.join("\n").slice(0, AI_PROMPT_HINT_MAX_CHARS);
   return merged.trim();
+}
+
+function sanitizeWatermarkText(value) {
+  return String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "").slice(0, WATERMARK_TEXT_MAX_CHARS);
+}
+
+function watermarkPreviewSequenceTag() {
+  const now = new Date();
+  const monthDay = `${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  return `${monthDay}-01`;
 }
 
 function aiPromptHintLineCount(value) {
@@ -1540,6 +1571,7 @@ function renderVideoTemplateEditor() {
   if (visibilityChecks.length) {
     html.push(`<div class="template-visibility-row">${visibilityChecks.join("")}</div>`);
   }
+  html.push(watermarkTemplateHtml(template));
   html.push(`
     <div class="template-actions">
       <button type="button" id="saveVideoTemplate">保存当前</button>
@@ -1548,6 +1580,7 @@ function renderVideoTemplateEditor() {
   $("videoTemplateForm").innerHTML = html.join("");
   $("videoTemplateForm").querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
     const key = input.dataset.key;
+    if (input.type === "file") return;
     if (input.type === "checkbox") input.checked = Boolean(template[key]);
     else input.value = template[key] ?? input.value;
     if (input.classList.contains("control-number")) return;
@@ -1558,6 +1591,7 @@ function renderVideoTemplateEditor() {
     bindRangeControl(control.dataset.key, () => updateVideoTemplateField(control.querySelector('input[type="range"]')));
   });
   bindVisualTemplateToolbar();
+  bindWatermarkTemplateControls();
   $("saveVideoTemplate").onclick = saveVideoTemplate;
   $("cloneVideoTemplate").onclick = cloneVideoTemplate;
 }
@@ -1636,6 +1670,61 @@ function visualTemplateToolbarHtml(template) {
         </label>
         <label class="visual-opacity-control">字幕背板透明度<input data-visual-command="opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(hudOpacity.toFixed(2))}"><output>${escapeHtml(hudOpacity.toFixed(2))}</output></label>
         <label class="visual-opacity-control">字幕背板圆角<input data-visual-command="hud-radius" type="range" min="0" max="100" step="1" value="${escapeHtml(String(Math.round(hudRadius)))}"><output>${escapeHtml(String(Math.round(hudRadius)))}</output></label>
+      </div>
+    </div>`;
+}
+
+function watermarkTemplateHtml(template) {
+  const mode = template.watermark_mode || "none";
+  const text = sanitizeWatermarkText(template.watermark_text || "");
+  const position = template.watermark_position || "bottom_right";
+  const color = template.watermark_color || "#ffffff";
+  const opacity = Number(template.watermark_opacity ?? 0.58);
+  const fontSize = Number(template.watermark_font_size ?? 32);
+  const tileMode = template.watermark_tile_mode || "none";
+  const imageUrl = template.watermark_image_data_url || "";
+  const imageLabel = template.watermark_image_name || (imageUrl ? "已选择图片" : "未选择图片");
+  const textControlsVisible = mode === "text" || mode === "auto";
+  const imageControlsVisible = mode === "image";
+  const positionVisible = mode !== "none";
+  return `
+    <div class="visual-control-section watermark-controls" aria-label="水印设置">
+      <div class="visual-section-title">正文水印</div>
+      <label class="visual-select-control">水印模式
+        <select data-key="watermark_mode">
+          ${watermarkModeOptions.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === mode ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="watermark-manual-text-row" ${mode === "text" ? "" : "hidden"}>
+        <label>水印文字<input data-key="watermark_text" type="text" maxlength="${WATERMARK_TEXT_MAX_CHARS}" value="${escapeHtml(text)}" placeholder="最多 10 个字"></label>
+        <div class="watermark-note">支持中英文，换行会自动去除，最长 ${WATERMARK_TEXT_MAX_CHARS} 字。</div>
+      </div>
+      <label class="visual-select-control" ${positionVisible ? "" : "hidden"}>展示位置
+        <select data-key="watermark_position">
+          ${watermarkPositionOptions.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === position ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="watermark-appearance-row" ${textControlsVisible ? "" : "hidden"}>
+        <label class="watermark-color-control" title="文字颜色">文字颜色
+          <input data-key="watermark_color" type="color" value="${escapeHtml(color)}" aria-label="文字颜色">
+        </label>
+        <label class="visual-opacity-control">文字透明度<input data-key="watermark_opacity" type="range" min="0" max="1" step="0.01" value="${escapeHtml(opacity.toFixed(2))}"><output>${escapeHtml(opacity.toFixed(2))}</output></label>
+        <label class="visual-opacity-control">字号<input data-key="watermark_font_size" type="range" min="12" max="180" step="1" value="${escapeHtml(String(Math.round(fontSize)))}"><output>${escapeHtml(String(Math.round(fontSize)))}</output></label>
+        <label class="visual-select-control">平铺方式
+          <select data-key="watermark_tile_mode">
+            ${watermarkTileOptions.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === tileMode ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+      <div class="watermark-image-row" ${imageControlsVisible ? "" : "hidden"}>
+        <label class="visual-file-control">图片水印
+          <input data-key="watermark_image_upload" type="file" accept="image/*">
+        </label>
+        <div class="watermark-image-meta">
+          <div class="watermark-image-name ${imageUrl ? "" : "muted"}">${escapeHtml(imageLabel)}</div>
+          <div class="watermark-note">图片会自动压缩到 ${WATERMARK_IMAGE_MAX_SIZE}×${WATERMARK_IMAGE_MAX_SIZE}px 以内。</div>
+          <button type="button" data-watermark-clear-image ${imageUrl ? "" : "disabled"}>清除图片</button>
+        </div>
       </div>
     </div>`;
 }
@@ -1723,9 +1812,102 @@ function updateVisualOutput(input) {
 }
 
 function updateColorSwatch(input) {
-  if (input?.dataset.visualCommand !== "color" && input?.dataset.visualCommand !== "hud-bg-color" && input?.dataset.coverCommand !== "color") return;
+  if (input?.dataset.visualCommand !== "color" && input?.dataset.visualCommand !== "hud-bg-color" && input?.dataset.coverCommand !== "color" && input?.dataset.key !== "watermark_color") return;
   const swatch = input.closest(".color-swatch-button")?.querySelector(".color-current-dot");
   if (swatch) swatch.style.background = input.value;
+}
+
+function syncWatermarkTemplateControls() {
+  const form = $("videoTemplateForm");
+  const template = templates[selectedVideoTemplate] || {};
+  if (!form) return;
+  const mode = String(template.watermark_mode || "none").trim().toLowerCase();
+  form.querySelectorAll(".watermark-manual-text-row").forEach((node) => {
+    node.hidden = mode !== "text";
+  });
+  form.querySelectorAll(".watermark-appearance-row").forEach((node) => {
+    node.hidden = !(mode === "text" || mode === "auto");
+  });
+  form.querySelectorAll(".watermark-image-row").forEach((node) => {
+    node.hidden = mode !== "image";
+  });
+  const positionLabel = form.querySelector('select[data-key="watermark_position"]')?.closest("label");
+  if (positionLabel) positionLabel.hidden = mode === "none";
+}
+
+function bindWatermarkTemplateControls() {
+  const form = $("videoTemplateForm");
+  const template = templates[selectedVideoTemplate];
+  if (!form || !template) return;
+  syncWatermarkTemplateControls();
+  renderWatermarkImageMeta(template);
+  const uploadInput = form.querySelector('input[data-key="watermark_image_upload"]');
+  if (uploadInput) {
+    uploadInput.onchange = async () => {
+      const file = uploadInput.files?.[0];
+      if (!file) return;
+      try {
+        const dataUrl = await resizeWatermarkImageFile(file);
+        template.watermark_image_data_url = dataUrl;
+        template.watermark_image_name = file.name || "watermark.png";
+        renderWatermarkImageMeta(template);
+        refreshVideoTemplatePreview();
+        refreshVideoTemplateGallery({ showLoading: false });
+        scheduleVideoTemplateSave();
+      } catch (error) {
+        log(`水印图片处理失败：${error.message}`);
+      } finally {
+        uploadInput.value = "";
+      }
+    };
+  }
+  const clearButton = form.querySelector("[data-watermark-clear-image]");
+  if (clearButton) {
+    clearButton.onclick = () => {
+      delete template.watermark_image_data_url;
+      delete template.watermark_image_name;
+      renderWatermarkImageMeta(template);
+      refreshVideoTemplatePreview();
+      refreshVideoTemplateGallery({ showLoading: false });
+      scheduleVideoTemplateSave();
+    };
+  }
+}
+
+function renderWatermarkImageMeta(template) {
+  const nameNode = $("videoTemplateForm")?.querySelector(".watermark-image-name");
+  if (!nameNode) return;
+  const imageUrl = template?.watermark_image_data_url || "";
+  const clearButton = $("videoTemplateForm")?.querySelector("[data-watermark-clear-image]");
+  if (clearButton) clearButton.disabled = !imageUrl;
+  nameNode.textContent = template?.watermark_image_name || (imageUrl ? "已选择图片" : "未选择图片");
+}
+
+function resizeWatermarkImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("无法读取图片"));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("图片加载失败"));
+      image.onload = () => {
+        const scale = Math.min(1, WATERMARK_IMAGE_MAX_SIZE / Math.max(image.width || 1, image.height || 1));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round((image.width || 1) * scale));
+        canvas.height = Math.max(1, Math.round((image.height || 1) * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("无法创建画布"));
+          return;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      image.src = String(reader.result || "");
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function postVisualTemplateCommand(command, value = "", scope = "") {
@@ -1741,9 +1923,14 @@ function postVisualTemplateCommand(command, value = "", scope = "") {
 function updateVideoTemplateField(input) {
   const template = templates[selectedVideoTemplate];
   const key = input.dataset.key;
+  if (!template || !key) return;
   if (input.type === "checkbox") template[key] = input.checked;
   else if (input.type === "range") template[key] = Number(input.value);
+  else if (key === "watermark_text") template[key] = sanitizeWatermarkText(input.value);
   else template[key] = input.value;
+  if (key === "watermark_text" && input.value !== template[key]) input.value = template[key];
+  if (key === "watermark_mode") syncWatermarkTemplateControls();
+  updateColorSwatch(input);
   const out = input.parentElement.querySelector("output");
   if (out) out.textContent = input.value;
   setImageLoading("videoTemplatePreview", "应用模板参数...");
@@ -1763,6 +1950,12 @@ function applyVisualTemplateUpdates(updates) {
     const out = input.parentElement.querySelector("output");
     if (out) out.textContent = value;
   });
+  if ("watermark_image_data_url" in updates || "watermark_image_name" in updates) {
+    renderWatermarkImageMeta(template);
+  }
+  if ("watermark_mode" in updates || "watermark_position" in updates || "watermark_tile_mode" in updates) {
+    syncWatermarkTemplateControls();
+  }
   refreshVideoTemplateGallery({ showLoading: false });
   scheduleVideoTemplateSave();
 }
@@ -1997,6 +2190,7 @@ function toggleTemplateCardVideo(video) {
 }
 
 function videoTemplatePreviewPayload(template) {
+  const mode = String(template?.watermark_mode || "none").trim().toLowerCase();
   return {
     template,
     slogan: $("headline").value,
@@ -2004,6 +2198,7 @@ function videoTemplatePreviewPayload(template) {
     hud_text: $("hudText").value,
     background_image_url: selectedModelImageUrl,
     show_template_mask: false,
+    sequence_tag: mode === "auto" ? watermarkPreviewSequenceTag() : "",
   };
 }
 
@@ -2321,6 +2516,9 @@ async function openPreviewVideoPage() {
 
 async function generate() {
   const button = $("generateBtn");
+  if (!settings || !Object.keys(settings).length) {
+    throw new Error("页面初始化未完成。请刷新页面后重试。");
+  }
   if (lastPreviewPath && button.dataset.mode === "preview") {
     await openPreviewVideoPage();
     return;
@@ -2359,33 +2557,50 @@ function wait(ms) {
 }
 
 async function pollJob(jobId) {
-  const job = await api(`/api/video-matrix/jobs/${jobId}`);
-  updateJobStatus(job);
-  if (job.status === "complete") {
-    stopJobProgressTicker();
-    lastPreviewPath = job.assets?.[0]?.video_path || "";
-    const dedupeSummary = summarizeDedupeStatuses(job.assets || []);
-    const dedupeText = dedupeSummary ? ` 去重：${dedupeSummary}。` : " ";
-    updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。${dedupeText}点击按钮可预览第一条视频在视频号里的展示效果。`});
-    showGenerationWaitOverlay(false);
-    const button = $("generateBtn");
-    if (lastPreviewPath) {
-      button.dataset.mode = "preview";
-      button.textContent = "预览视频";
-    }
-  } else if ((job.status === "running" || job.status === "queued") && ((job.assets && job.assets.length > 0) || job.first_asset_ready)) {
-    const first = job.assets?.[0]?.video_path || "";
-    if (first) {
-      lastPreviewPath = first;
+  try {
+    const job = await api(`/api/video-matrix/jobs/${jobId}`);
+    updateJobStatus(job);
+    if (job.status === "complete") {
+      stopJobProgressTicker();
+      lastPreviewPath = job.assets?.[0]?.video_path || "";
+      const dedupeSummary = summarizeDedupeStatuses(job.assets || []);
+      const dedupeText = dedupeSummary ? ` 去重：${dedupeSummary}。` : " ";
+      updateJobStatus({...job, message: `生成完成，已导出 ${job.assets.length} 条视频。${dedupeText}点击按钮可预览第一条视频在视频号里的展示效果。`});
+      showGenerationWaitOverlay(false);
       const button = $("generateBtn");
-      button.dataset.mode = "preview";
-      button.textContent = "预览视频";
+      if (lastPreviewPath) {
+        button.dataset.mode = "preview";
+        button.textContent = "预览视频";
+      }
+    } else if ((job.status === "running" || job.status === "queued") && ((job.assets && job.assets.length > 0) || job.first_asset_ready)) {
+      const first = job.assets?.[0]?.video_path || "";
+      if (first) {
+        lastPreviewPath = first;
+        const button = $("generateBtn");
+        button.dataset.mode = "preview";
+        button.textContent = "预览视频";
+      }
+      setTimeout(() => {
+        pollJob(jobId).catch((error) => handleJobPollingError(jobId, error));
+      }, 1200);
+    } else if (job.status === "error") {
+      stopJobProgressTicker();
+      showGenerationWaitOverlay(false);
+    } else {
+      setTimeout(() => {
+        pollJob(jobId).catch((error) => handleJobPollingError(jobId, error));
+      }, 1200);
     }
-    setTimeout(() => pollJob(jobId), 1200);
-  } else if (job.status === "error") {
-    stopJobProgressTicker();
-    showGenerationWaitOverlay(false);
-  } else setTimeout(() => pollJob(jobId), 1200);
+  } catch (error) {
+    handleJobPollingError(jobId, error);
+  }
+}
+
+function handleJobPollingError(jobId, error) {
+  const message = error?.message ? `轮询生成任务失败：${error.message}` : "轮询生成任务失败";
+  stopJobProgressTicker();
+  showGenerationWaitOverlay(false);
+  updateJobStatus({ status: "error", stage: "error", progress: 0, message, error: message, job_id: jobId });
 }
 
 async function runPreflightChecks(statePayload) {
@@ -3413,6 +3628,26 @@ function displayTemplateName(value) {
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch])); }
 function debounce(fn, ms) { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); }; }
 
+function handleInitError(err) {
+  const message = err?.message ? `页面初始化失败：${err.message}` : "页面初始化失败";
+  stopJobProgressTicker();
+  showGenerationWaitOverlay(false);
+  updateJobStatus({ status: "error", stage: "error", progress: 0, message, error: message });
+}
+
+function bindGenerateButtonFallback() {
+  const button = $("generateBtn");
+  if (!button || typeof button.onclick === "function") return;
+  button.onclick = () => {
+    generate().catch((error) => {
+      const message = error?.message || "生成启动失败";
+      updateJobStatus({ status: "error", stage: "error", progress: 0, message, error: message });
+      stopJobProgressTicker();
+      showGenerationWaitOverlay(false);
+    });
+  };
+}
+
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-update") return;
   applyVisualTemplateUpdates(event.data.updates);
@@ -3432,5 +3667,6 @@ window.addEventListener("message", (event) => {
   applyCoverTextUpdates(event.data.text);
 });
 
-init().catch((err) => log(err.message));
+bindGenerateButtonFallback();
+init().catch(handleInitError);
 

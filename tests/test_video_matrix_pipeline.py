@@ -114,6 +114,33 @@ def test_run_pipeline_keeps_successful_renders_when_one_variant_fails(monkeypatc
     assert completed == [1]
 
 
+def test_run_pipeline_raises_when_all_renders_fail(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    settings = _settings(tmp_path)
+    (tmp_path / "config" / "video_matrix").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "video_matrix" / "copy_template.txt").write_text("{title}", encoding="utf-8")
+    variants = [_variant(source, 1), _variant(source, 2)]
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(pipeline, "get_paths", lambda: FakePaths())
+    monkeypatch.setattr(pipeline, "ingest_sources", lambda *_args, **_kwargs: [variants[0].segments[0].clip])
+    monkeypatch.setattr(pipeline, "build_hud_payload", lambda _settings: {"hud": True})
+    monkeypatch.setattr(pipeline, "detect_beat_grid", lambda *_args, **_kwargs: [0.1, 0.2])
+    monkeypatch.setattr(pipeline, "plan_variants", lambda *_args, **_kwargs: variants)
+    monkeypatch.setattr(pipeline, "render_variant", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ffmpeg failed")))
+
+    with pytest.raises(RuntimeError, match="All 2 video render jobs failed: ffmpeg failed"):
+        pipeline.run_pipeline(
+            settings,
+            bgm_path=tmp_path / "bgm.mp3",
+            output_root=tmp_path,
+            max_workers=2,
+        )
+
+
 def test_run_pipeline_uses_conservative_default_worker_count(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
