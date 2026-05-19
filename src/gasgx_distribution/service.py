@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from threading import Lock, Thread
+from threading import Lock, RLock, Thread
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from contextvars import ContextVar
 from contextlib import contextmanager
@@ -27,6 +27,8 @@ from PIL import Image, ImageStat
 
 from cybercar import engine
 from cybercar.settings import apply_runtime_environment as apply_cybercar_environment
+from cybercar.settings import get_paths as get_cybercar_paths
+from cybercar.settings import load_app_config, save_app_config
 
 from .db import connect, database_path, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
@@ -156,6 +158,7 @@ FEATURE_ENTRIES = [
     {"id": "terminal-execution", "label": "终端执行", "group": "业务工作台"},
     {"id": "stats", "label": "数据统计", "group": "业务工作台"},
     {"id": "ai-robot", "label": "AI机器人", "group": "业务工作台"},
+    {"id": "interaction-management", "label": "互动管理", "group": "业务工作台"},
     {"id": "video-matrix", "label": "视频生成", "group": "业务工作台"},
     {"id": "user-center", "label": "用户中心", "group": "系统管理"},
     {"id": "notifications", "label": "通知中心", "group": "系统管理"},
@@ -164,7 +167,7 @@ FEATURE_ENTRIES = [
 ]
 DEFAULT_ROLE_PERMISSIONS = {
     "super_admin": [item["id"] for item in FEATURE_ENTRIES],
-    "publisher": ["overview", "accounts", "settings", "tasks", "terminal-execution", "video-matrix", "user-center", "notifications", "help-center"],
+    "publisher": ["overview", "accounts", "settings", "tasks", "terminal-execution", "interaction-management", "video-matrix", "user-center", "notifications", "help-center"],
     "material_manager": ["overview", "accounts", "video-matrix", "user-center", "notifications", "help-center"],
     "data_monitor": ["overview", "stats", "user-center", "notifications", "help-center"],
 }
@@ -173,6 +176,17 @@ DEFAULT_ROLE_NAMES = {
     "publisher": "发布员",
     "material_manager": "素材维护员",
     "data_monitor": "数据监控员",
+}
+_INTERACTION_MANAGEMENT_LOCK = RLock()
+_INTERACTION_MANAGEMENT_STATE: dict[str, Any] = {
+    "running": False,
+    "kind": "",
+    "status": "idle",
+    "started_at": "",
+    "finished_at": "",
+    "message": "",
+    "error": "",
+    "last_result": {},
 }
 _brand_runtime: ContextVar[dict[str, Any] | None] = ContextVar("gasgx_brand_runtime", default=None)
 
@@ -1321,6 +1335,147 @@ def save_distribution_settings_db(payload: dict[str, Any]) -> dict[str, Any]:
     settings = save_local_distribution_settings(payload)
     _save_app_setting("distribution_settings", settings)
     return settings
+
+
+def load_interaction_management_config() -> dict[str, Any]:
+    app_config = load_app_config()
+    return {
+        "comment_reply": dict(app_config.get("comment_reply") or {}),
+        "private_message_reply": dict(app_config.get("private_message_reply") or {}),
+        "spark_ai": dict(app_config.get("spark_ai") or {}),
+        "chrome": dict(app_config.get("chrome") or {}),
+    }
+
+
+def save_interaction_management_config(payload: dict[str, Any]) -> dict[str, Any]:
+    current = load_app_config()
+    next_config = dict(current)
+    if isinstance(payload.get("comment_reply"), dict):
+        next_config["comment_reply"] = copy.deepcopy(payload["comment_reply"])
+    if isinstance(payload.get("private_message_reply"), dict):
+        next_config["private_message_reply"] = copy.deepcopy(payload["private_message_reply"])
+    if isinstance(payload.get("spark_ai"), dict):
+        next_config["spark_ai"] = copy.deepcopy(payload["spark_ai"])
+    if isinstance(payload.get("chrome"), dict):
+        next_config["chrome"] = copy.deepcopy(payload["chrome"])
+    save_app_config(next_config)
+    return load_interaction_management_config()
+
+
+def interaction_management_status() -> dict[str, Any]:
+    with _INTERACTION_MANAGEMENT_LOCK:
+        status = copy.deepcopy(_INTERACTION_MANAGEMENT_STATE)
+    status["config"] = load_interaction_management_config()
+    return status
+
+
+def _interaction_management_update_state(**updates: Any) -> dict[str, Any]:
+    with _INTERACTION_MANAGEMENT_LOCK:
+        _INTERACTION_MANAGEMENT_STATE.update(updates)
+        snapshot = copy.deepcopy(_INTERACTION_MANAGEMENT_STATE)
+    snapshot["config"] = load_interaction_management_config()
+    return snapshot
+
+
+def _interaction_management_reset_state(*, kind: str = "", status: str = "idle", message: str = "", error: str = "", last_result: Any = None) -> dict[str, Any]:
+    return _interaction_management_update_state(
+        running=False,
+        kind=str(kind or "").strip(),
+        status=str(status or "idle").strip() or "idle",
+        started_at="",
+        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        message=str(message or "").strip(),
+        error=str(error or "").strip(),
+        last_result=copy.deepcopy(last_result) if last_result is not None else {},
+    )
+
+
+def _interaction_management_start(kind: str, message: str) -> None:
+    _interaction_management_update_state(
+        running=True,
+        kind=str(kind or "").strip(),
+        status="running",
+        started_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        finished_at="",
+        message=str(message or "").strip(),
+        error="",
+        last_result={},
+    )
+
+
+def _interaction_management_run_async(kind: str, runner) -> dict[str, Any]:
+    with _INTERACTION_MANAGEMENT_LOCK:
+        if bool(_INTERACTION_MANAGEMENT_STATE.get("running")):
+            raise ValueError("interaction task already running")
+        _interaction_management_start(kind, f"{kind} running")
+
+    def _runner() -> None:
+        try:
+            result = runner()
+            snapshot = _interaction_management_reset_state(
+                kind=kind,
+                status="completed" if bool(result.get("ok")) else "failed",
+                message=str(result.get("reason") or "").strip() or f"{kind} completed",
+                error=str(result.get("error") or "").strip(),
+                last_result=result,
+            )
+            snapshot["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with _INTERACTION_MANAGEMENT_LOCK:
+                _INTERACTION_MANAGEMENT_STATE.update(snapshot)
+        except Exception as exc:
+            snapshot = _interaction_management_reset_state(
+                kind=kind,
+                status="failed",
+                message=f"{kind} failed",
+                error=str(exc),
+                last_result={"ok": False, "reason": kind, "error": str(exc)},
+            )
+            snapshot["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with _INTERACTION_MANAGEMENT_LOCK:
+                _INTERACTION_MANAGEMENT_STATE.update(snapshot)
+
+    Thread(target=_runner, daemon=True).start()
+    return interaction_management_status()
+
+
+def run_interaction_comment_reply(*, max_posts: int = 0, max_replies: int = 0, latest_only: bool = False, debug: bool = False) -> dict[str, Any]:
+    def _runner() -> dict[str, Any]:
+        app_config = load_app_config()
+        chrome_cfg = app_config.get("chrome") if isinstance(app_config.get("chrome"), dict) else {}
+        notify_cfg = app_config.get("notify") if isinstance(app_config.get("notify"), dict) else {}
+        return engine.run_wechat_comment_reply(
+            workspace=engine.init_workspace(str(get_paths().runtime_root)),
+            runtime_config=app_config,
+            debug_port=int(chrome_cfg.get("wechat_debug_port") or 9334),
+            chrome_user_data_dir=str(get_cybercar_paths().wechat_profile_dir),
+            max_posts_override=max_posts,
+            max_replies_override=max_replies,
+            latest_only=latest_only,
+            debug=debug,
+            notify_env_prefix=str(notify_cfg.get("env_prefix") or "CYBERCAR_NOTIFY_"),
+        )
+
+    return _interaction_management_run_async("comment", _runner)
+
+
+def run_interaction_private_message_reply(*, max_conversations: int = 0, max_replies: int = 0, latest_only: bool = False, debug: bool = False) -> dict[str, Any]:
+    def _runner() -> dict[str, Any]:
+        app_config = load_app_config()
+        chrome_cfg = app_config.get("chrome") if isinstance(app_config.get("chrome"), dict) else {}
+        notify_cfg = app_config.get("notify") if isinstance(app_config.get("notify"), dict) else {}
+        return engine.run_wechat_private_message_reply(
+            workspace=engine.init_workspace(str(get_paths().runtime_root)),
+            runtime_config=app_config,
+            debug_port=int(chrome_cfg.get("wechat_debug_port") or 9334),
+            chrome_user_data_dir=str(get_cybercar_paths().wechat_profile_dir),
+            max_conversations_override=max_conversations,
+            max_replies_override=max_replies,
+            latest_only=latest_only,
+            debug=debug,
+            notify_env_prefix=str(notify_cfg.get("env_prefix") or "CYBERCAR_NOTIFY_"),
+        )
+
+    return _interaction_management_run_async("private_message", _runner)
 
 
 def list_operator_wechats() -> list[str]:
@@ -3460,6 +3615,9 @@ def _apply_terminal_daily_rollover(state: dict[str, Any]) -> bool:
     if int(state.get("probe_cursor") or 0) != 0:
         state["probe_cursor"] = 0
         changed = True
+    if state.get("emergency_publish_runs"):
+        state["emergency_publish_runs"] = []
+        changed = True
     return changed
 
 
@@ -3733,6 +3891,7 @@ def terminal_execution_state() -> dict[str, Any]:
         "profile_by_platform": state.get("profile_by_platform") or _terminal_profile_by_platform(),
         "initialized": bool(state.get("initialized")) or bool(windows),
         "login_started": login_started,
+        "emergency_publish_runs": _terminal_emergency_publish_runs(state),
         "summary": _terminal_summary(windows, groups),
     }
     cached["value"] = result
@@ -4421,6 +4580,52 @@ def _terminal_assigned_asset_keys(state: dict[str, Any], publish_date: str) -> s
     return assigned
 
 
+def _terminal_reserved_asset_keys(state: dict[str, Any], publish_date: str) -> set[str]:
+    reserved = _terminal_assigned_asset_keys(state, publish_date)
+    for run in _terminal_emergency_publish_runs(state):
+        if str(run.get("publish_date") or "") != str(publish_date):
+            continue
+        status = str(run.get("status") or "").strip().lower()
+        if status not in {"running", "success"}:
+            continue
+        asset_key = str(run.get("asset_key") or "").strip()
+        if asset_key:
+            reserved.add(asset_key)
+    return reserved
+
+
+def _terminal_record_matrix_publish_consumed(*, asset_key: str, account_id: int, platform: str, publish_date: str, video: str) -> None:
+    from . import matrix_publish as mp
+
+    state = mp._load_state()
+    consumed = list(state.get("consumed", [])) if isinstance(state.get("consumed"), list) else []
+    target = (str(asset_key or "").strip(), int(account_id or 0), str(platform or "").strip(), str(publish_date or "").strip())
+    for item in consumed:
+        if not isinstance(item, dict):
+            continue
+        current = (
+            str(item.get("asset_key") or "").strip(),
+            int(item.get("account_id") or 0),
+            str(item.get("platform") or "").strip(),
+            str(item.get("publish_date") or "").strip(),
+        )
+        if current == target:
+            return
+    consumed.append(
+        {
+            "asset_key": target[0],
+            "account_id": target[1],
+            "platform": target[2],
+            "publish_date": target[3],
+            "success": True,
+            "finished_at": int(time.time()),
+            "asset_metadata": mp._asset_manifest_metadata(Path(str(video))),
+        }
+    )
+    state["consumed"] = consumed[-500:]
+    mp._save_state(state)
+
+
 def _carry_terminal_window_runtime(window: dict[str, Any], previous: dict[str, Any]) -> bool:
     accounts = window.get("accounts") or []
     previous_accounts = previous.get("accounts") or []
@@ -4636,6 +4841,11 @@ def _terminal_current_account(window: dict[str, Any]) -> dict[str, Any] | None:
         return None
     current = accounts[current_index]
     return current if isinstance(current, dict) else None
+
+
+def _terminal_emergency_publish_runs(state: dict[str, Any]) -> list[dict[str, Any]]:
+    runs = state.get("emergency_publish_runs") or []
+    return [item for item in runs if isinstance(item, dict)]
 
 
 def _terminal_run_matches_current(run: dict[str, Any] | None, current: dict[str, Any] | None) -> bool:
@@ -5056,7 +5266,7 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
     publish_date = datetime.now().astimezone().date().isoformat()
     used = mp._consumed_index(today=publish_date)
     state_payload = state if isinstance(state, dict) else _load_terminal_state_with_rollover()
-    assigned = _terminal_assigned_asset_keys(state_payload, publish_date)
+    assigned = _terminal_reserved_asset_keys(state_payload, publish_date)
     source_video: Path | None = None
     for path in candidates:
         asset_key = mp._relative_asset_key(path)
@@ -5358,18 +5568,69 @@ def _poll_terminal_publish_runs(windows: list[dict[str, Any]]) -> bool:
     return changed
 
 
+def _poll_terminal_emergency_publish_runs(state: dict[str, Any]) -> bool:
+    changed = False
+    runs = state.get("emergency_publish_runs") or []
+    if not isinstance(runs, list):
+        return False
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        if str(run.get("status") or "").strip().lower() != "running":
+            continue
+        pid = int(run.get("pid") or 0)
+        if pid <= 0:
+            run["status"] = "failed"
+            run["finished_at"] = now_ts()
+            run["error_stage"] = "publish_run"
+            run["error_title"] = "发布执行失败"
+            run["error"] = "invalid publish pid"
+            changed = True
+            continue
+        if _pid_is_running(pid):
+            continue
+        if _terminal_publish_log_has_success_marker(run):
+            run["status"] = "success"
+            run["finished_at"] = now_ts()
+            run["error_stage"] = ""
+            run["error_title"] = ""
+            run["error"] = ""
+            if not bool(run.get("consumed_recorded")):
+                _terminal_record_matrix_publish_consumed(
+                    asset_key=str(run.get("asset_key") or ""),
+                    account_id=int(run.get("account_id") or 0),
+                    platform=str(run.get("platform") or "wechat"),
+                    publish_date=str(run.get("publish_date") or ""),
+                    video=str(run.get("video") or ""),
+                )
+                run["consumed_recorded"] = True
+        else:
+            run["status"] = "failed"
+            run["finished_at"] = now_ts()
+            reason = _terminal_publish_failure_reason(run)
+            run["error_stage"] = "publish_run"
+            run["error_title"] = "发布执行失败"
+            run["error"] = reason
+        changed = True
+    return changed
+
+
 def poll_terminal_execution(*, allow_browser_open: bool = True, allow_login_probe: bool = True) -> dict[str, Any]:
     state = _load_terminal_state_with_rollover()
-    if not bool(state.get("login_started")):
+    emergency_runs = _terminal_emergency_publish_runs(state)
+    has_active_emergency_runs = any(str(run.get("status") or "").strip().lower() == "running" for run in emergency_runs)
+    if not bool(state.get("login_started")) and not has_active_emergency_runs:
         return terminal_execution_state()
     windows = [window for window in (state.get("windows") or []) if isinstance(window, dict)]
     normalized = False
-    for window in windows:
-        normalized = _normalize_terminal_window_runtime(window) or normalized
+    if bool(state.get("login_started")):
+        for window in windows:
+            normalized = _normalize_terminal_window_runtime(window) or normalized
     publish_changed = _poll_terminal_publish_runs(windows)
+    emergency_publish_changed = _poll_terminal_emergency_publish_runs(state)
     cleared_probe_at = int(state.get("next_probe_at") or 0) != 0
     state["next_probe_at"] = 0
-    if normalized or publish_changed or cleared_probe_at:
+    if normalized or publish_changed or emergency_publish_changed or cleared_probe_at:
         _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -5590,6 +5851,33 @@ def confirm_terminal_login_ready(window_id: int) -> dict[str, Any]:
     _terminal_set_manual_flags(current, login_clicked=True, publish_clicked=False, next_clicked=False)
     target["manual_available_at"] = 0
     state["next_probe_at"] = 0
+    _save_terminal_state(state)
+    return terminal_execution_state()
+
+
+def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
+    state = _load_terminal_state_with_rollover()
+    account = get_account(account_id)
+    if account is None:
+        raise KeyError("account not found")
+    platform_row = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == "wechat"), None)
+    if not platform_row:
+        raise RuntimeError("wechat platform config missing")
+    try:
+        runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
+        if runtime.get("browser_open") is not True:
+            open_account_browser(account_id, "wechat", apply_marker=False)
+    except Exception:
+        # Emergency supplemental publish must keep going even if the login browser
+        # is already open or the debug-port/profile state is slightly stale.
+        pass
+    run = _start_terminal_wechat_publish({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
+    run["kind"] = "emergency"
+    run["display_name"] = str(account.get("display_name") or account.get("account_key") or account_id)
+    run["account_key"] = str(account.get("account_key") or "")
+    runs = _terminal_emergency_publish_runs(state)
+    runs.append(run)
+    state["emergency_publish_runs"] = runs[-20:]
     _save_terminal_state(state)
     return terminal_execution_state()
 
@@ -6142,31 +6430,10 @@ def _video_key(path: Path) -> str:
 
 def _remaining_material_video_count() -> int:
     try:
-        material_dir = resolve_material_dir()
+        from . import matrix_publish as mp
+        return mp.count_remaining_today_candidate_videos()
     except Exception:
         return 0
-    if not material_dir.exists():
-        return 0
-    state_path = get_paths().runtime_root / "matrix_publish_state.json"
-    used: set[str] = set()
-    if state_path.exists():
-        try:
-            payload = json.loads(state_path.read_text(encoding="utf-8-sig"))
-            if isinstance(payload, dict):
-                used = set(str(item) for item in payload.get("used_videos", []))
-        except Exception:
-            used = set()
-    remaining = 0
-    for path in material_dir.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
-            continue
-        try:
-            key = _video_key(path)
-        except OSError:
-            continue
-        if key not in used:
-            remaining += 1
-    return remaining
 
 
 def open_material_directory(raw_path: str) -> dict[str, Any]:

@@ -190,6 +190,13 @@ class OperatorPermissionsPayload(BaseModel):
     permissions: list[str] = Field(default_factory=list)
 
 
+class InteractionManagementConfigPayload(BaseModel):
+    comment_reply: dict[str, Any] = Field(default_factory=dict)
+    private_message_reply: dict[str, Any] = Field(default_factory=dict)
+    spark_ai: dict[str, Any] = Field(default_factory=dict)
+    chrome: dict[str, Any] = Field(default_factory=dict)
+
+
 def create_app() -> FastAPI:
     control_plane.ensure_control_database()
     service.ensure_database()
@@ -682,6 +689,32 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         return {**verification, "message_id": message.get("id")}
 
+    @app.get("/api/interaction-management/config")
+    def interaction_management_config() -> dict[str, Any]:
+        return service.load_interaction_management_config()
+
+    @app.put("/api/interaction-management/config")
+    def save_interaction_management_config(payload: InteractionManagementConfigPayload) -> dict[str, Any]:
+        return service.save_interaction_management_config(_model_payload(payload))
+
+    @app.get("/api/interaction-management/status")
+    def interaction_management_status() -> dict[str, Any]:
+        return service.interaction_management_status()
+
+    @app.post("/api/interaction-management/comment/run")
+    def interaction_management_comment_run() -> dict[str, Any]:
+        try:
+            return service.run_interaction_comment_reply()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/interaction-management/private-msg/run")
+    def interaction_management_private_message_run() -> dict[str, Any]:
+        try:
+            return service.run_interaction_private_message_reply()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.get("/api/jobs/matrix-wechat/status")
     def matrix_wechat_job_status() -> dict[str, Any]:
         return scheduler_status()
@@ -889,6 +922,18 @@ def create_app() -> FastAPI:
             return service.check_login_status(account_id, platform)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_id}/platforms/{platform}/emergency-publish")
+    def emergency_publish(account_id: int, platform: str) -> dict[str, Any]:
+        try:
+            with _TERMINAL_EXECUTION_API_LOCK:
+                if platform != "wechat":
+                    raise ValueError("unsupported platform")
+                return service.start_terminal_emergency_wechat_publish(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/tasks")
     def create_task(payload: TaskPayload) -> dict[str, Any]:

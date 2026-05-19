@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=20260507-helpcenter-standalone-doc-page">
+  <link rel="stylesheet" href="/static/styles.css?v=20260519-interaction-management-layout-fix">
 </head>
 <body>
   <section class="login-screen" id="login-screen" aria-labelledby="login-title">
@@ -48,13 +48,14 @@
     <nav>
       <span class="nav-group-label">业务工作台</span>
       <button class="nav-btn active" data-view="overview" data-permission="overview">总览</button>
-      <button class="nav-btn" data-view="accounts" data-permission="accounts">账号矩阵</button>
-      <button class="nav-btn" data-view="settings" data-permission="settings">公共设置</button>
-      <button class="nav-btn" data-view="tasks" data-permission="tasks">任务中心</button>
-      <button class="nav-btn" data-view="terminal-execution" data-permission="terminal-execution">终端执行</button>
+      <button class="nav-btn" data-view="ai-robot" data-permission="ai-robot">运营客服</button>
+      <span class="nav-group-label">矩阵管理</span>
+      <button class="nav-btn" data-view="accounts" data-permission="accounts">账号管理</button>
+      <button class="nav-btn" data-view="video-matrix" data-permission="video-matrix">生成视频</button>
+      <button class="nav-btn" data-view="settings" data-permission="settings">发布配置</button>
+      <button class="nav-btn" data-view="terminal-execution" data-permission="terminal-execution">批量发布</button>
+      <button class="nav-btn" data-view="interaction-management" data-permission="interaction-management">粉丝互动</button>
       <button class="nav-btn" data-view="stats" data-permission="stats">数据统计</button>
-      <button class="nav-btn" data-view="ai-robot" data-permission="ai-robot">AI机器人</button>
-      <button class="nav-btn" data-view="video-matrix" data-permission="video-matrix">视频生成</button>
       <span class="nav-group-label">系统管理</span>
       <button class="nav-btn" data-view="user-center" data-permission="user-center">用户中心</button>
       <button class="nav-btn" data-view="notifications" data-permission="notifications">通知中心</button>
@@ -81,7 +82,7 @@
     <header class="topbar">
       <div class="topbar-title">
         <div>
-          <h1 id="page-title">账号矩阵维护系统</h1>
+          <h1 id="page-title">业务总览</h1>
           <p id="page-description">独立账号、独立浏览器、发布/评论/私信/统计任务入口</p>
         </div>
       </div>
@@ -968,6 +969,10 @@
           </div>
         </section>
       </div>
+    </section>
+
+    <section id="interaction-management" class="view">
+      <div id="interaction-management-root"></div>
     </section>
 
     <section id="help-center" class="view">

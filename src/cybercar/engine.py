@@ -168,8 +168,8 @@ DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
     "douyin": "赛博皮卡现车：aawbcc",
 }
 DEFAULT_KUAISHOU_RANDOM_SCHEDULE_MAX_MINUTES = 45
-COMMENT_INTERACTION_WAIT_MIN_SECONDS = 3.0
-COMMENT_INTERACTION_WAIT_MAX_SECONDS = 10.0
+COMMENT_INTERACTION_WAIT_MIN_SECONDS = 1.0
+COMMENT_INTERACTION_WAIT_MAX_SECONDS = 5.0
 CREATE_POST_URL = "https://channels.weixin.qq.com/platform/post/create"
 WECHAT_MICRO_CREATE_POST_URL = "https://channels.weixin.qq.com/micro/content/post/create"
 DOUYIN_CREATE_POST_URL = "https://creator.douyin.com/creator-micro/content/upload"
@@ -661,6 +661,7 @@ DEFAULT_NOTIFY_ENV_PREFIX = "CYBERCAR_NOTIFY_"
 WECHAT_POST_LIST_URL = "https://channels.weixin.qq.com/platform/post/list"
 WECHAT_COMMENT_MANAGER_URL = "https://channels.weixin.qq.com/platform/interaction/comment?isImageMode=0"
 WECHAT_COMMENT_MANAGER_URL_TOKEN = "/platform/interaction/comment"
+WECHAT_PRIVATE_MESSAGE_MANAGER_URL = "https://channels.weixin.qq.com/platform/private_msg"
 DOUYIN_CONTENT_MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage"
 XIAOHONGSHU_NOTE_MANAGE_URL = "https://creator.xiaohongshu.com/note/manage"
 KUAISHOU_CONTENT_MANAGE_URL = "https://cp.kuaishou.com/article/manage"
@@ -668,6 +669,9 @@ BILIBILI_UPLOAD_MANAGER_URL = "https://member.bilibili.com/platform/upload-manag
 WECHAT_COMMENT_REPLY_STATE_FILE = "wechat_comment_reply_state.json"
 WECHAT_COMMENT_REPLY_MARKDOWN_FILE = "wechat_comment_reply_records.md"
 WECHAT_COMMENT_REPLY_RETENTION_DAYS = 30
+WECHAT_PRIVATE_MESSAGE_REPLY_STATE_FILE = "wechat_private_message_reply_state.json"
+WECHAT_PRIVATE_MESSAGE_REPLY_MARKDOWN_FILE = "wechat_private_message_reply_records.md"
+WECHAT_PRIVATE_MESSAGE_REPLY_RETENTION_DAYS = 30
 LEGACY_BROKEN_WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
     "你是特斯拉 Cybertruck 社区管理员。"
     "你必须只输出 JSON 对象，格式为 {\"reply\":\"...\"}。"
@@ -712,25 +716,51 @@ WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
     "\u4e0d\u8981\u5192\u5145\u5b98\u65b9\uff0c\u4e5f\u4e0d\u8981\u548c\u81ea\u5df1\u5bf9\u8bdd\u3002"
 )
 DEFAULT_COMMENT_REPLY_FALLBACKS = [
-    "\u8fd9\u6761\u5f88\u6709\u611f\u89c9\uff0c\u8c22\u8c22\u4f60\u3002",
-    "\u6211\u4e5f\u5f88\u5403\u8fd9\u79cd\u6c14\u8d28\u3002",
-    "\u8c22\u8c22\u4f60\uff0c\u771f\u7684\u5f88\u6709\u5171\u9e23\u3002",
-    "\u770b\u5230\u8fd9\u6761\u6211\u4e5f\u5f88\u5174\u594b\u3002",
+    "谢谢关注 GasGx，欢迎继续交流。",
+    "感谢支持，我们会持续更新更多内容。",
+    "收到，后续有问题欢迎随时留言。",
+    "很高兴和你交流，GasGx 一直在。",
 ]
 DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE = (
-    "\u8bf7\u4f60\u4f5c\u4e3a\u4e00\u4e2a\u559c\u6b22 Cybertruck \u7684\u7231\u597d\u8005\uff0c"
-    "\u9488\u5bf9\u7528\u6237\u8bc4\u8bba\u751f\u6210\u4e00\u53e5\u4e2d\u6587\u56de\u590d\u3002\n"
+    "请你以 GasGx 官方客服身份，针对视频号评论生成一句中文回复。\n"
     "\u89c6\u9891\u6807\u9898\uff1a{post_title}\n"
     "\u53d1\u5e03\u65f6\u95f4\uff1a{post_published_text}\n"
     "\u7528\u6237\u6635\u79f0\uff1a{comment_author}\n"
     "\u8bc4\u8bba\u65f6\u95f4\uff1a{comment_time}\n"
     "\u7528\u6237\u8bc4\u8bba\uff1a{comment_content}\n"
-    "\u8981\u6c42\uff1a"
-    "\u56de\u590d\u8981\u50cf\u771f\u4eba\u4ea4\u6d41\uff0c"
-    "\u4ee5\u559c\u6b22 Cybertruck \u7684\u89c6\u89d2\u56de\u5e94\uff0c"
-    "\u76ee\u6807\u5b57\u6570 {reply_target_chars} \u5b57\uff0c"
-    "\u5141\u8bb8\u8303\u56f4 {reply_min_chars}-{reply_max_chars} \u5b57\uff0c"
-    "\u4e0d\u8981\u6362\u884c\uff0c\u4e0d\u8981\u5916\u94fe\uff0c\u53ea\u8fd4\u56de JSON\u3002"
+    "回复目标字数：{reply_target_chars} 字，允许范围 {reply_min_chars}-{reply_max_chars} 字。\n"
+    "要求：语气友好、专业、简短自然；不要编造价格、库存或交期；如果用户咨询采购、方案或技术问题，可温和引导补充功率范围、燃气类型/热值、使用场景、项目地区、并网/离网等信息；不要换行，不要外链，只返回 JSON。"
+)
+WECHAT_COMMENT_REPLY_SYSTEM_PROMPT = (
+    "你是 GasGx 官方客服。"
+    "你必须只输出 JSON 对象，格式为 {\"reply\":\"...\"}。"
+    "reply 必须是单行中文，友好、专业、简短自然，8-40 字。"
+    "不要编造价格、库存或交期。"
+    "如果对方咨询采购、方案、售后或技术问题，可以温和引导补充功率范围、燃气类型/热值、使用场景、项目地区、并网/离网等信息。"
+    "不要外链，不要引导到无关话题。"
+)
+DEFAULT_PRIVATE_MESSAGE_REPLY_FALLBACKS = [
+    "您好，我是 GasGx 客服，请问您这边主要想了解哪一类方案？",
+    "您好，可以简单说下功率范围和使用场景，我帮您继续对接。",
+    "感谢私信 GasGx，您方便补充一下项目地区和燃气类型吗？",
+    "您好，您这边是咨询采购、售后还是合作？我来帮您跟进。",
+]
+DEFAULT_PRIVATE_MESSAGE_REPLY_PROMPT_TEMPLATE = (
+    "请你以 GasGx 官方客服身份，回复视频号私信。\n"
+    "会话昵称：{conversation_name}\n"
+    "最近消息时间：{message_time}\n"
+    "最近消息内容：{message_content}\n"
+    "会话摘要：{conversation_summary}\n"
+    "回复目标字数：{reply_target_chars} 字，允许范围 {reply_min_chars}-{reply_max_chars} 字。\n"
+    "要求：像人工客服一样自然、友好、专业；优先接住采购、方案、售后、合作等咨询；可以温和追问功率范围、燃气类型/热值、使用场景、项目地区、并网/离网、联系方式；不要编造价格、库存或交期；不要换行，不要外链，只返回 JSON。"
+)
+WECHAT_PRIVATE_MESSAGE_REPLY_SYSTEM_PROMPT = (
+    "你是 GasGx 官方客服，在私信场景回复用户。"
+    "你必须只输出 JSON 对象，格式为 {\"reply\":\"...\"}。"
+    "reply 必须是单行中文，友好、专业、自然，30-120 字。"
+    "优先接住采购、方案、售后、合作、咨询等消息。"
+    "可以主动追问功率范围、燃气类型/热值、使用场景、项目地区、并网/离网、联系方式。"
+    "不要承诺价格、库存或交期，不要编造信息，不要外链。"
 )
 PLATFORM_NOTIFY_NAME = {
     "wechat": "视频号",
@@ -4467,9 +4497,25 @@ def _default_runtime_config() -> dict[str, Any]:
             "min_like_to_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MIN_SECONDS),
             "max_like_to_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
             "auto_like": True,
-            "self_author_markers": ["cybercar"],
+            "self_author_markers": ["gasgx", "gasgx官方客服", "gasgx | 天然气发电"],
             "prompt_template": DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE,
             "fallback_replies": DEFAULT_COMMENT_REPLY_FALLBACKS.copy(),
+            "launch_background": True,
+            "debug": False,
+        },
+        "private_message_reply": {
+            "enabled": True,
+            "max_conversations_per_run": 20,
+            "max_replies_per_run": 20,
+            "reply_min_chars": 30,
+            "reply_max_chars": 120,
+            "min_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MIN_SECONDS),
+            "max_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
+            "min_action_delay_seconds": int(COMMENT_INTERACTION_WAIT_MIN_SECONDS),
+            "max_action_delay_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
+            "self_author_markers": ["gasgx", "gasgx官方客服"],
+            "prompt_template": DEFAULT_PRIVATE_MESSAGE_REPLY_PROMPT_TEMPLATE,
+            "fallback_replies": DEFAULT_PRIVATE_MESSAGE_REPLY_FALLBACKS.copy(),
             "launch_background": True,
             "debug": False,
         },
@@ -4820,6 +4866,95 @@ def _merge_comment_reply_config(raw: Any) -> dict[str, Any]:
     return cfg
 
 
+def _merge_private_message_reply_config(raw: Any) -> dict[str, Any]:
+    defaults = _default_runtime_config()["private_message_reply"]
+    cfg = dict(defaults)
+    if not isinstance(raw, dict):
+        return cfg
+    cfg["enabled"] = _to_bool(raw.get("enabled"), default=bool(defaults["enabled"]))
+    try:
+        cfg["max_conversations_per_run"] = max(
+            1,
+            int(raw.get("max_conversations_per_run", defaults["max_conversations_per_run"])),
+        )
+    except Exception:
+        cfg["max_conversations_per_run"] = int(defaults["max_conversations_per_run"])
+    try:
+        cfg["max_replies_per_run"] = max(1, int(raw.get("max_replies_per_run", defaults["max_replies_per_run"])))
+    except Exception:
+        cfg["max_replies_per_run"] = int(defaults["max_replies_per_run"])
+    try:
+        cfg["reply_min_chars"] = max(5, int(raw.get("reply_min_chars", defaults["reply_min_chars"])))
+    except Exception:
+        cfg["reply_min_chars"] = int(defaults["reply_min_chars"])
+    try:
+        cfg["reply_max_chars"] = max(5, int(raw.get("reply_max_chars", defaults["reply_max_chars"])))
+    except Exception:
+        cfg["reply_max_chars"] = int(defaults["reply_max_chars"])
+    cfg["reply_max_chars"] = max(int(cfg["reply_min_chars"]), int(cfg["reply_max_chars"]))
+    try:
+        cfg["min_reply_interval_seconds"] = max(
+            0,
+            int(raw.get("min_reply_interval_seconds", defaults["min_reply_interval_seconds"])),
+        )
+    except Exception:
+        cfg["min_reply_interval_seconds"] = int(defaults["min_reply_interval_seconds"])
+    try:
+        cfg["max_reply_interval_seconds"] = max(
+            cfg["min_reply_interval_seconds"],
+            int(raw.get("max_reply_interval_seconds", defaults["max_reply_interval_seconds"])),
+        )
+    except Exception:
+        cfg["max_reply_interval_seconds"] = max(
+            cfg["min_reply_interval_seconds"],
+            int(defaults["max_reply_interval_seconds"]),
+        )
+    try:
+        cfg["min_action_delay_seconds"] = max(
+            0,
+            int(raw.get("min_action_delay_seconds", defaults["min_action_delay_seconds"])),
+        )
+    except Exception:
+        cfg["min_action_delay_seconds"] = int(defaults["min_action_delay_seconds"])
+    try:
+        cfg["max_action_delay_seconds"] = max(
+            cfg["min_action_delay_seconds"],
+            int(raw.get("max_action_delay_seconds", defaults["max_action_delay_seconds"])),
+        )
+    except Exception:
+        cfg["max_action_delay_seconds"] = max(
+            cfg["min_action_delay_seconds"],
+            int(defaults["max_action_delay_seconds"]),
+        )
+    cfg["launch_background"] = _to_bool(raw.get("launch_background"), default=bool(defaults["launch_background"]))
+    cfg["debug"] = _to_bool(raw.get("debug"), default=bool(defaults["debug"]))
+    prompt_template = str(raw.get("prompt_template", "") or "").strip()
+    if prompt_template:
+        cfg["prompt_template"] = prompt_template
+    else:
+        cfg["prompt_template"] = str(defaults["prompt_template"])
+    fallback_replies = raw.get("fallback_replies")
+    if isinstance(fallback_replies, list):
+        clean = [
+            _single_line_preview(str(item or "").strip(), limit=90)
+            for item in fallback_replies
+            if str(item or "").strip()
+        ]
+        cfg["fallback_replies"] = clean or list(defaults["fallback_replies"])
+    else:
+        cfg["fallback_replies"] = list(defaults["fallback_replies"])
+    self_author_markers = raw.get("self_author_markers")
+    if isinstance(self_author_markers, list):
+        cfg["self_author_markers"] = [
+            str(item or "").strip().lower()
+            for item in self_author_markers
+            if str(item or "").strip()
+        ] or list(defaults["self_author_markers"])
+    else:
+        cfg["self_author_markers"] = list(defaults["self_author_markers"])
+    return cfg
+
+
 def _merge_platform_collection_names(raw: Any, fallback: str = "") -> dict[str, str]:
     result: dict[str, str] = {}
     if isinstance(raw, dict):
@@ -5003,6 +5138,7 @@ def _load_runtime_config(config_path: str) -> dict[str, Any]:
     merged["x_download"] = _merge_x_download_config(payload.get("x_download"))
     merged["spark_ai"] = _merge_spark_ai_config(payload.get("spark_ai"))
     merged["comment_reply"] = _merge_comment_reply_config(payload.get("comment_reply"))
+    merged["private_message_reply"] = _merge_private_message_reply_config(payload.get("private_message_reply"))
     return merged
 
 
@@ -5248,6 +5384,390 @@ def _apply_comment_reply_like_to_reply_wait(
     )
     time.sleep(wait_seconds)
     return float(wait_seconds)
+
+
+def _private_message_reply_state_path(workspace: Workspace) -> Path:
+    return workspace.root / "runtime" / WECHAT_PRIVATE_MESSAGE_REPLY_STATE_FILE
+
+
+def _private_message_reply_markdown_path(workspace: Workspace) -> Path:
+    return workspace.root / "runtime" / WECHAT_PRIVATE_MESSAGE_REPLY_MARKDOWN_FILE
+
+
+def _load_private_message_reply_state(workspace: Workspace) -> dict[str, Any]:
+    path = _private_message_reply_state_path(workspace)
+    if not path.exists():
+        return {"updated_at": "", "items": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"updated_at": "", "items": {}}
+    if not isinstance(payload, dict):
+        return {"updated_at": "", "items": {}}
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        items = {}
+    return {
+        "updated_at": str(payload.get("updated_at") or "").strip(),
+        "items": items,
+    }
+
+
+def _save_private_message_reply_state(workspace: Workspace, state: dict[str, Any]) -> None:
+    path = _private_message_reply_state_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _append_private_message_reply_markdown(path: Path, platform_name: str, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = str(record.get("replied_at") or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    platform = str(platform_name or "").strip().lower() or "unknown"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"## {stamp} | {platform}\n\n")
+        handle.write("```json\n")
+        handle.write(json.dumps(record, ensure_ascii=False, indent=2))
+        handle.write("\n```\n\n")
+
+
+def _prune_private_message_reply_state_items(items: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(items, dict):
+        return {}
+    cutoff = datetime.now() - timedelta(days=WECHAT_PRIVATE_MESSAGE_REPLY_RETENTION_DAYS)
+    kept: dict[str, Any] = {}
+    for fingerprint, raw in items.items():
+        if not isinstance(raw, dict):
+            continue
+        replied_at = str(raw.get("replied_at") or "").strip()
+        if not replied_at:
+            continue
+        try:
+            replied_dt = datetime.strptime(replied_at, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            kept[str(fingerprint)] = raw
+            continue
+        if replied_dt >= cutoff:
+            kept[str(fingerprint)] = raw
+    return kept
+
+
+def _parse_private_message_reply_timestamp(raw: Any) -> Optional[datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _latest_private_message_reply_time(items: dict[str, Any]) -> Optional[datetime]:
+    latest: Optional[datetime] = None
+    if not isinstance(items, dict):
+        return None
+    for value in items.values():
+        if not isinstance(value, dict):
+            continue
+        parsed = _parse_private_message_reply_timestamp(value.get("replied_at"))
+        if parsed is None:
+            continue
+        if latest is None or parsed > latest:
+            latest = parsed
+    return latest
+
+
+def _private_message_reply_wait_plan(
+    reply_cfg: dict[str, Any],
+    *,
+    last_reply_at: Optional[datetime],
+    now: Optional[datetime] = None,
+) -> dict[str, float]:
+    min_interval = max(0.0, float(reply_cfg.get("min_reply_interval_seconds") or 0))
+    max_interval = max(min_interval, float(reply_cfg.get("max_reply_interval_seconds") or min_interval))
+    if last_reply_at is None or max_interval <= 0:
+        return {
+            "target_interval_seconds": 0.0,
+            "elapsed_seconds": 0.0,
+            "wait_seconds": 0.0,
+        }
+    current = now or datetime.now()
+    elapsed_seconds = max(0.0, (current - last_reply_at).total_seconds())
+    target_interval = min_interval if max_interval <= min_interval else random.uniform(min_interval, max_interval)
+    wait_seconds = max(0.0, target_interval - elapsed_seconds)
+    return {
+        "target_interval_seconds": float(target_interval),
+        "elapsed_seconds": float(elapsed_seconds),
+        "wait_seconds": float(wait_seconds),
+    }
+
+
+def _apply_private_message_reply_wait(
+    reply_cfg: dict[str, Any],
+    *,
+    last_reply_at: Optional[datetime],
+    debug: bool,
+) -> Optional[datetime]:
+    plan = _private_message_reply_wait_plan(reply_cfg, last_reply_at=last_reply_at)
+    wait_seconds = float(plan.get("wait_seconds") or 0.0)
+    if wait_seconds > 0:
+        _log(
+            "[PrivateMessageReply] Humanized reply wait: "
+            f"wait={wait_seconds:.1f}s "
+            f"elapsed={float(plan.get('elapsed_seconds') or 0.0):.1f}s "
+            f"target={float(plan.get('target_interval_seconds') or 0.0):.1f}s"
+        )
+        time.sleep(wait_seconds)
+        return datetime.now()
+    if last_reply_at is not None and float(plan.get("target_interval_seconds") or 0.0) > 0:
+        _log(
+            "[PrivateMessageReply] Humanized reply wait skipped: "
+            f"elapsed={float(plan.get('elapsed_seconds') or 0.0):.1f}s "
+            f">= target={float(plan.get('target_interval_seconds') or 0.0):.1f}s"
+        )
+    return last_reply_at
+
+
+def _private_message_action_delay_plan(reply_cfg: dict[str, Any]) -> dict[str, float]:
+    min_delay = max(0.0, float(reply_cfg.get("min_action_delay_seconds") or 0))
+    max_delay = max(min_delay, float(reply_cfg.get("max_action_delay_seconds") or min_delay))
+    if max_delay <= 0:
+        return {
+            "min_delay_seconds": float(min_delay),
+            "max_delay_seconds": float(max_delay),
+            "delay_seconds": 0.0,
+        }
+    delay_seconds = min_delay if max_delay <= min_delay else random.uniform(min_delay, max_delay)
+    return {
+        "min_delay_seconds": float(min_delay),
+        "max_delay_seconds": float(max_delay),
+        "delay_seconds": float(delay_seconds),
+    }
+
+
+def _apply_private_message_action_delay(
+    reply_cfg: dict[str, Any],
+    *,
+    debug: bool,
+    reason: str,
+) -> float:
+    plan = _private_message_action_delay_plan(reply_cfg)
+    delay_seconds = float(plan.get("delay_seconds") or 0.0)
+    if delay_seconds > 0:
+        _private_message_reply_log(
+            debug,
+            (
+                "[PrivateMessageReply] Humanized action delay "
+                f"({str(reason or '').strip() or 'step'}): "
+                f"delay={delay_seconds:.1f}s "
+                f"range={float(plan.get('min_delay_seconds') or 0.0):.1f}-"
+                f"{float(plan.get('max_delay_seconds') or 0.0):.1f}s"
+            ),
+        )
+        time.sleep(delay_seconds)
+    return delay_seconds
+
+
+def _page_run_js(page: Any, js: str, *args: Any) -> Any:
+    if hasattr(page, "run_js"):
+        if len(args) == 0:
+            return page.run_js(js)
+        if len(args) == 1:
+            return page.run_js(js, args[0])
+        return page.run_js(js, *args)
+    if hasattr(page, "evaluate"):
+        if len(args) == 0:
+            return page.evaluate(js)
+        if len(args) == 1:
+            return page.evaluate(js, args[0])
+        return page.evaluate(js, *args)
+    raise AttributeError("page does not support run_js or evaluate")
+
+
+def _private_message_reply_log(debug: bool, message: str) -> None:
+    if debug:
+        _log(f"[PrivateMessageReply] {message}")
+
+
+def _private_message_reply_fingerprint(conversation: dict[str, Any]) -> str:
+    source = str(conversation.get("conversation_source") or "").strip().lower()
+    raw = "|".join(
+        [
+            source,
+            str(conversation.get("conversation_id") or conversation.get("conversation_key") or "").strip(),
+            str(conversation.get("conversation_name") or "").strip(),
+            str(conversation.get("message_time") or "").strip(),
+            str(conversation.get("message_content") or "").strip(),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
+
+
+def _remember_private_message_reply(
+    items: dict[str, Any],
+    *,
+    fingerprint: str,
+    conversation: dict[str, Any],
+    reply_text: str,
+    reply_provider: str = "",
+) -> dict[str, Any]:
+    replied_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    record = {
+        "fingerprint": str(fingerprint or "").strip(),
+        "conversation_source": str(conversation.get("conversation_source") or "").strip(),
+        "conversation_tab_label": str(conversation.get("conversation_tab_label") or "").strip(),
+        "conversation_id": str(conversation.get("conversation_id") or conversation.get("conversation_key") or "").strip(),
+        "conversation_name": str(conversation.get("conversation_name") or "").strip(),
+        "message_time": str(conversation.get("message_time") or "").strip(),
+        "message_preview": _single_line_preview(str(conversation.get("message_content") or "").strip(), limit=120),
+        "conversation_profile": str(conversation.get("conversation_profile") or "").strip(),
+        "fan_profile_name": str(conversation.get("fan_profile_name") or "").strip(),
+        "fan_profile_preview": str(conversation.get("profile_preview") or "").strip(),
+        "reply_text": str(reply_text or "").strip(),
+        "reply_provider": str(reply_provider or "").strip(),
+        "replied_at": replied_at,
+    }
+    items[str(fingerprint or "").strip()] = record
+    return record
+
+
+def _conversation_summary_text(conversation: dict[str, Any]) -> str:
+    summary = str(conversation.get("conversation_summary") or "").strip()
+    if summary:
+        return summary
+    last_message = _single_line_preview(str(conversation.get("message_content") or "").strip(), limit=120)
+    if last_message:
+        return last_message
+    unread = str(conversation.get("unread_count") or "").strip()
+    if unread:
+        return f"未读 {unread} 条"
+    return ""
+
+
+def _conversation_profile_text(conversation: dict[str, Any]) -> str:
+    profile = str(
+        conversation.get("conversation_profile")
+        or conversation.get("fan_profile_text")
+        or conversation.get("fan_profile")
+        or ""
+    ).strip()
+    if profile:
+        return profile
+    profile_name = str(conversation.get("profile_name") or conversation.get("fan_profile_name") or "").strip()
+    profile_preview = str(conversation.get("profile_preview") or "").strip()
+    if profile_name and profile_preview:
+        return f"{profile_name}\n{profile_preview}"
+    if profile_name:
+        return profile_name
+    return profile_preview
+
+
+def _build_private_message_reply_payload(
+    *,
+    conversation: dict[str, Any],
+    spark_ai: Optional[dict[str, Any]],
+    prompt_template: str,
+    fallback_replies: list[str],
+    min_chars: int,
+    max_chars: int,
+) -> dict[str, str]:
+    reply_min_chars = max(5, int(min_chars or 5))
+    reply_max_chars = max(reply_min_chars, int(max_chars or 120))
+    reply_target_chars = random.randint(reply_min_chars, reply_max_chars)
+    fallback_pool = [str(item or "").strip() for item in fallback_replies if str(item or "").strip()]
+    if not fallback_pool:
+        fallback_pool = DEFAULT_PRIVATE_MESSAGE_REPLY_FALLBACKS.copy()
+    fallback_candidates = [
+        item
+        for item in fallback_pool
+        if _comment_reply_length_ok(_sanitize_comment_reply_text(item, reply_max_chars), reply_min_chars, reply_max_chars)
+    ] or fallback_pool
+    fallback_text = random.choice(fallback_candidates)
+
+    client = SharedSparkAIClient(spark_ai, timeout_seconds=SPARK_CHAT_TIMEOUT_SECONDS)
+    if client.is_ready():
+        conversation_name = str(conversation.get("conversation_name") or "").strip()
+        conversation_summary = _conversation_summary_text(conversation)
+        conversation_profile = _conversation_profile_text(conversation)
+        conversation_history = str(
+            conversation.get("conversation_history")
+            or conversation_summary
+            or conversation_profile
+            or str(conversation.get("message_content") or "").strip()
+        ).strip()
+        prompt = str(prompt_template or "").format(
+            conversation_name=conversation_name,
+            conversation_title=str(conversation.get("conversation_title") or conversation_name or conversation_summary).strip(),
+            message_time=str(conversation.get("message_time") or "").strip(),
+            message_content=str(conversation.get("message_content") or "").strip(),
+            conversation_summary=conversation_summary,
+            conversation_history=conversation_history,
+            conversation_profile=conversation_profile,
+            conversation_source=str(conversation.get("conversation_source") or "").strip(),
+            conversation_tab_label=str(conversation.get("conversation_tab_label") or "").strip(),
+            reply_min_chars=reply_min_chars,
+            reply_max_chars=reply_max_chars,
+            reply_target_chars=reply_target_chars,
+        )
+        raw = client.chat(prompt, system_prompt=WECHAT_PRIVATE_MESSAGE_REPLY_SYSTEM_PROMPT)
+        payload = shared_extract_json_object(raw or "")
+        candidate = ""
+        if isinstance(payload, dict):
+            candidate = str(payload.get("reply") or "").strip()
+        if not candidate:
+            candidate = str(raw or "").strip()
+        clean = _sanitize_comment_reply_text(candidate, max_chars=reply_max_chars)
+        if clean and _comment_reply_length_ok(clean, reply_min_chars, reply_max_chars) and not _looks_like_broken_comment_reply(clean):
+            return {"reply_text": clean, "reply_provider": "spark"}
+
+    fallback_clean = _sanitize_comment_reply_text(fallback_text, max_chars=reply_max_chars)
+    if _looks_like_broken_comment_reply(fallback_clean):
+        return {"reply_text": "", "reply_provider": "fallback"}
+    if _comment_reply_length_ok(fallback_clean, reply_min_chars, reply_max_chars):
+        return {"reply_text": fallback_clean, "reply_provider": "fallback"}
+    return {"reply_text": "", "reply_provider": "fallback"}
+
+
+def generate_private_message_reply_result(
+    *,
+    conversation: dict[str, Any],
+    spark_ai: Optional[dict[str, Any]],
+    prompt_template: str,
+    fallback_replies: list[str],
+    min_chars: int,
+    max_chars: int,
+) -> dict[str, str]:
+    return _build_private_message_reply_payload(
+        conversation=conversation,
+        spark_ai=spark_ai,
+        prompt_template=prompt_template,
+        fallback_replies=fallback_replies,
+        min_chars=min_chars,
+        max_chars=max_chars,
+    )
+
+
+def generate_private_message_reply(
+    *,
+    conversation: dict[str, Any],
+    spark_ai: Optional[dict[str, Any]],
+    prompt_template: str,
+    fallback_replies: list[str],
+    min_chars: int,
+    max_chars: int,
+) -> str:
+    return str(
+        generate_private_message_reply_result(
+            conversation=conversation,
+            spark_ai=spark_ai,
+            prompt_template=prompt_template,
+            fallback_replies=fallback_replies,
+            min_chars=min_chars,
+            max_chars=max_chars,
+        ).get("reply_text")
+        or ""
+    )
 
 
 def _humanized_wechat_comment_pause(
@@ -5861,7 +6381,7 @@ def _collect_recent_commented_posts(page: ChromiumPage, limit: int, debug: bool 
         cards = extract_wechat_post_cards(page)
         before = len(collected)
         for card in cards:
-            if int(card.get("comment_count") or 0) <= 0 and not bool(card.get("has_comments")):
+            if int(card.get("comment_count") or 0) < 1:
                 continue
             post_key = str(card.get("post_key") or "").strip()
             if not post_key or post_key in seen_keys:
@@ -5894,364 +6414,21 @@ def _collect_recent_commented_posts(page: ChromiumPage, limit: int, debug: bool 
 
 
 def _wechat_post_prefers_store_open(post: dict[str, Any]) -> bool:
-    if not isinstance(post, dict):
-        return False
-    source = str(post.get("source") or "").strip().lower()
-    if source == "store":
-        return True
-    return bool(str(post.get("object_id") or "").strip() or str(post.get("export_id") or "").strip())
+    from .services.engagement import wechat_comment_manager as _wechat_comment_manager
+
+    return _wechat_comment_manager.prefers_store_open(post)
 
 
 def _open_comment_manager_via_store(page: ChromiumPage, post: dict[str, Any], timeout_seconds: float = 10.0) -> bool:
-    args = {
-        "title": str(post.get("title") or "").strip(),
-        "published_text": str(post.get("published_text") or "").strip(),
-        "object_id": str(post.get("object_id") or "").strip(),
-        "export_id": str(post.get("export_id") or "").strip(),
-    }
-    js = WECHAT_COMMENT_DOC_HELPER_JS + """
-    return ((args) => {
-      function norm(value) {
-        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
-      }
-      function asText(value) {
-        if (value === null || value === undefined) return '';
-        const kind = typeof value;
-        if (kind === 'string' || kind === 'number' || kind === 'boolean') return String(value);
-        return '';
-      }
-      function digits(value) {
-        return norm(value).replace(/[^\\d]/g, '');
-      }
-      function samePublished(left, right) {
-        const a = norm(left);
-        const b = norm(right);
-        if (!a || !b) return !a && !b;
-        if (a === b || a.includes(b) || b.includes(a)) return true;
-        const da = digits(a);
-        const db = digits(b);
-        return !!da && !!db && (da === db || da.endsWith(db) || db.endsWith(da));
-      }
-      function fuzzyTitleMatch(left, right) {
-        const a = norm(left);
-        const b = norm(right);
-        if (!a || !b) return false;
-        if (a === b || a.includes(b) || b.includes(a)) return true;
-        const minPrefix = Math.min(a.length, b.length, 18);
-        return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
-      }
-      function pickStore(scope) {
-        if (!scope) return null;
-        try {
-          const rootStore = scope._store;
-          if (rootStore && rootStore.commentStore) return rootStore.commentStore;
-        } catch (e) {}
-        return null;
-      }
-      function collectStores() {
-        const stores = [];
-        const seen = new Set();
-        function pushStore(candidate) {
-          if (!candidate) return;
-          if (seen.has(candidate)) return;
-          seen.add(candidate);
-          stores.push(candidate);
-        }
-        const scopes = [window];
-        try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
-        try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
-        for (const scope of scopes) {
-          pushStore(pickStore(scope));
-        }
-        for (const frame of Array.from(document.querySelectorAll('iframe'))) {
-          try {
-            pushStore(pickStore(frame.contentWindow || null));
-          } catch (e) {}
-        }
-        return stores;
-      }
-      function resolveStore() {
-        const stores = collectStores();
-        if (!stores.length) return null;
-        let best = stores[0];
-        let bestScore = -1;
-        stores.forEach((store, index) => {
-          const feedCount = Array.isArray(store && store.commentFeeds) ? store.commentFeeds.length : 0;
-          const commentCount = Array.isArray(store && store.commentList) ? store.commentList.length : 0;
-          const hasCurrentExport = !!norm(store && store.currentExportId);
-          const isIframeStore = !!(store && store.isIframeForWxAd);
-          const score =
-            (feedCount > 0 ? 1000 : 0)
-            + (commentCount > 0 ? 500 : 0)
-            + (hasCurrentExport ? 50 : 0)
-            + (isIframeStore ? 10 : 0)
-            - index;
-          if (score > bestScore) {
-            bestScore = score;
-            best = store;
-          }
-        });
-        return best;
-      }
-      const store = resolveStore();
-      if (!store) return { ok: false, reason: 'comment_store_missing' };
-      if (typeof store.getCommentFeeds === 'function') {
-        try {
-          const ret = store.getCommentFeeds();
-          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
-        } catch (e) {}
-      }
-      const feeds = Array.isArray(store.commentFeeds) ? store.commentFeeds : [];
-      const targetTitle = norm(args && args.title);
-      const targetPublished = norm(args && args.published_text);
-      const targetObjectId = norm(args && args.object_id);
-      const targetExportId = norm(args && args.export_id);
-      const matched = feeds.find((feed) => {
-        const objectId = norm(feed && (feed.objectId || feed.object_id || feed.objectID || ''));
-        const exportId = norm(feed && (feed.exportId || feed.export_id || feed.postId || objectId || ''));
-        if (targetObjectId && objectId && targetObjectId === objectId) return true;
-        if (targetExportId && exportId && targetExportId === exportId) return true;
-        const title = (() => {
-          const desc = feed && feed.desc;
-          const objectDesc = feed && feed.objectDesc;
-          return norm(
-            feed && (
-              asText(feed.title)
-              || asText(feed.feed_title)
-              || asText(feed.feedDesc)
-              || asText(desc && (desc.description || desc.desc || desc.content))
-              || asText(objectDesc && (objectDesc.description || objectDesc.desc || objectDesc.content))
-              || asText(feed.content)
-              || ''
-            )
-          );
-        })();
-        const published = norm(feed && (feed.published_text || feed.publishTimeDesc || feed.createTimeDesc || feed.publishTime || feed.createTimeText || feed.createTime || ''));
-        if (targetPublished && !samePublished(published, targetPublished)) return false;
-        if (!targetTitle) return !!(title || published || objectId || exportId);
-        return fuzzyTitleMatch(title, targetTitle);
-      }) || null;
-      if (!matched) {
-        return {
-          ok: false,
-          reason: 'store_feed_not_found',
-          feed_count: feeds.length,
-        };
-      }
-      const objectId = norm(matched.objectId || matched.object_id || matched.objectID || targetObjectId || '');
-      const exportId = norm(matched.exportId || matched.export_id || matched.postId || objectId || targetExportId || '');
-      if (typeof store.setFirstFeed === 'function') {
-        try {
-          const ret = store.setFirstFeed(matched);
-          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
-        } catch (e) {}
-      }
-      if (exportId && typeof store.setCurrentExportId === 'function') {
-        try {
-          const ret = store.setCurrentExportId(exportId);
-          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
-        } catch (e) {}
-      }
-      if (typeof store.getResetCurrentList === 'function') {
-        try {
-          const ret = store.getResetCurrentList();
-          if (ret && typeof ret.then === 'function') ret.then(() => {}).catch(() => {});
-        } catch (e) {}
-      }
-      const detailDoc = resolveWechatCommentDoc();
-      const hasDetail = !!(detailDoc && detailDoc.querySelector && detailDoc.querySelector('.feed-detail'));
-      const commentCount = Array.isArray(store.commentList) ? store.commentList.length : 0;
-      return {
-        ok: true,
-        reason: 'store_feed_selected',
-        feed_title: norm(matched.title || matched.feed_title || matched.feedDesc || matched.desc || ''),
-        object_id: objectId,
-        export_id: exportId,
-        comment_count: commentCount,
-        has_detail: hasDetail,
-      };
-    })(arguments[0]);
-    """
-    try:
-        result = page.run_js(js, args)
-    except Exception as exc:
-        _comment_reply_log(True, f"[CommentReply] Native store open failed: {exc}")
-        return False
-    if not isinstance(result, dict) or not bool(result.get("ok")):
-        _comment_reply_log(
-            True,
-            "[CommentReply] Native store open not ready: "
-            + json.dumps(result if isinstance(result, dict) else {"payload": str(result)}, ensure_ascii=False),
-        )
-        return False
+    from .services.engagement import wechat_comment_manager as _wechat_comment_manager
 
-    def _store_ready() -> bool:
-        probe_js = WECHAT_COMMENT_DOC_HELPER_JS + """
-        return (() => {
-          function pickStore(scope) {
-            if (!scope) return null;
-            try {
-              const rootStore = scope._store;
-              if (rootStore && rootStore.commentStore) return rootStore.commentStore;
-            } catch (e) {}
-            return null;
-          }
-          function resolveStore() {
-            const scopes = [window];
-            try { if (window.parent && window.parent !== window) scopes.push(window.parent); } catch (e) {}
-            try { if (window.top && window.top !== window && !scopes.includes(window.top)) scopes.push(window.top); } catch (e) {}
-            for (const scope of scopes) {
-              const found = pickStore(scope);
-              if (found) return found;
-            }
-            for (const frame of Array.from(document.querySelectorAll('iframe'))) {
-              try {
-                const found = pickStore(frame.contentWindow || null);
-                if (found) return found;
-              } catch (e) {}
-            }
-            return null;
-          }
-          const doc = resolveWechatCommentDoc();
-          if (doc && doc.querySelector && doc.querySelector('.feed-detail')) return true;
-          const store = resolveStore();
-          const count = store && Array.isArray(store.commentList) ? store.commentList.length : 0;
-          return count > 0;
-        })();
-        """
-        try:
-            return bool(page.run_js(probe_js))
-        except Exception:
-            return False
-
-    ready = bool(_wait_until(_store_ready, timeout_seconds=max(2.0, float(timeout_seconds)), poll_seconds=0.35))
-    if not ready:
-        _comment_reply_log(True, f"[CommentReply] Native store open timeout: {json.dumps(result, ensure_ascii=False)}")
-    return ready
+    return _wechat_comment_manager.open_comment_manager_via_store(page, post, timeout_seconds=timeout_seconds)
 
 
 def open_comment_manager(page: ChromiumPage, post: dict[str, Any], timeout_seconds: float = 10.0) -> bool:
-    title = str(post.get("title") or "").strip()
-    published_text = str(post.get("published_text") or "").strip()
-    if _wechat_post_prefers_store_open(post):
-        if _open_comment_manager_via_store(page, post, timeout_seconds=timeout_seconds):
-            return True
-    js = WECHAT_COMMENT_DOC_HELPER_JS + """
-    return ((targetTitle, targetPublishedText) => {
-      function norm(value) {
-        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
-      }
-      function digits(value) {
-        return norm(value).replace(/[^\\d]/g, '');
-      }
-      function samePublished(left, right) {
-        const a = norm(left);
-        const b = norm(right);
-        if (!a || !b) return !a && !b;
-        if (a === b || a.includes(b) || b.includes(a)) return true;
-        const da = digits(a);
-        const db = digits(b);
-        return !!da && !!db && (da === db || da.endsWith(db) || db.endsWith(da));
-      }
-      function fuzzyTitleMatch(left, right) {
-        const a = norm(left);
-        const b = norm(right);
-        if (!a || !b) return false;
-        if (a === b || a.includes(b) || b.includes(a)) return true;
-        const minPrefix = Math.min(a.length, b.length, 18);
-        return minPrefix >= 8 && a.slice(0, minPrefix) === b.slice(0, minPrefix);
-      }
-      function readTitle(node) {
-        const titleNode = node && node.querySelector(".feed-title, [class*='feed-title'], .post-title, [class*='post-title'], [data-testid*='title']");
-        if (titleNode) return norm(titleNode.innerText || titleNode.textContent || '');
-        const fallbackText = norm(node && (node.innerText || node.textContent || ''));
-        return fallbackText.split(' ').slice(0, 24).join(' ');
-      }
-      function readPublished(node) {
-        const timeNode = node && node.querySelector(".feed-time, [class*='feed-time'], .post-time, [class*='post-time'], [class*='publish-time'], time");
-        return norm(timeNode ? (timeNode.innerText || timeNode.textContent || '') : '');
-      }
-      function click(el) {
-        if (!el) return false;
-        try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
-        const eventInit = { bubbles: true, cancelable: true, view: window };
-        try { el.click(); return true; } catch (e) {}
-        try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
-        return false;
-      }
-      function clickEntry(card) {
-        const candidates = [
-          ['comment-total', card && card.querySelector('.feed-comment-total')],
-          ['comment-icon', card && card.querySelector('.weui-icon-outlined-comment')],
-          ['comment-action', card && card.querySelector('.feed-tool-item.comment, .action-item.comment, [class*="comment"][class*="action"], [data-testid*="comment"], [data-role*="comment"]')],
-          ['feed-content', card && card.querySelector('.feed-content')],
-          ['feed-title', card && card.querySelector('.feed-title')],
-          ['feed-image', card && card.querySelector('.feed-img')],
-          ['feed-card', card],
-        ];
-        for (const pair of candidates) {
-          const name = pair[0];
-          const node = pair[1];
-          if (node && click(node)) return name;
-        }
-        return '';
-      }
-      const doc = resolveWechatCommentDoc();
-      const cards = Array.from(doc.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
-      const targetTitleNorm = norm(targetTitle);
-      const targetPublishedNorm = norm(targetPublishedText);
-      const exactCard = cards.find((node) => {
-        const title = readTitle(node);
-        const published = readPublished(node);
-        return title === targetTitleNorm && samePublished(published, targetPublishedNorm);
-      });
-      const fuzzyCard = exactCard || cards.find((node) => {
-        const title = readTitle(node);
-        const published = readPublished(node);
-        if (targetPublishedNorm && !samePublished(published, targetPublishedNorm)) return false;
-        if (!targetTitleNorm) return !!(title || published);
-        return fuzzyTitleMatch(title, targetTitleNorm);
-      });
-      const card = fuzzyCard;
-      const visibleCards = cards.slice(0, 5).map((node) => ({
-        title: readTitle(node),
-        published_text: readPublished(node),
-      }));
-      if (!card) return { ok: false, reason: 'feed_not_found', visible_cards: visibleCards };
-      const clickedTarget = clickEntry(card);
-      return {
-        ok: !!clickedTarget,
-        reason: clickedTarget ? 'feed_clicked' : 'feed_click_failed',
-        clicked_target: clickedTarget,
-        visible_cards: visibleCards,
-      };
-    })(arguments[0], arguments[1]);
-    """
-    try:
-        result = page.run_js(js, title, published_text)
-    except Exception as exc:
-        _log(f"[CommentReply] Open comment manager failed: {exc}")
-        return False
-    if isinstance(result, dict) and not bool(result.get("ok")):
-        _comment_reply_log(
-            True,
-            "[CommentReply] Native comment manager target not opened: "
-            f"reason={result.get('reason') or 'unknown'} title={title!r} published={published_text!r} "
-            f"clicked_target={result.get('clicked_target') or '-'} visible_cards={result.get('visible_cards')!r}",
-        )
-        if _wechat_post_prefers_store_open(post):
-            return _open_comment_manager_via_store(page, post, timeout_seconds=timeout_seconds)
-        return False
-    confirm_js = WECHAT_COMMENT_DOC_HELPER_JS + """
-    return (() => {
-      const doc = resolveWechatCommentDoc();
-      return !!doc.querySelector('.feed-detail');
-    })();
-    """
-    try:
-      return bool(_wait_until(lambda: page.run_js(confirm_js), timeout_seconds=timeout_seconds, poll_seconds=0.35))
-    except Exception:
-      return False
+    from .services.engagement import wechat_comment_manager as _wechat_comment_manager
+
+    return _wechat_comment_manager.open_comment_manager(page, post, timeout_seconds=timeout_seconds)
 
 
 def _collect_native_comment_manager_diagnostics(page: ChromiumPage) -> dict[str, Any]:
@@ -6563,91 +6740,82 @@ def _build_wechat_comment_login_failure_result(
     }
 
 
-def extract_comments(page: ChromiumPage) -> list[dict[str, Any]]:
-    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+def _wechat_comment_contexts(page: Any, timeout_seconds: float = 2.0) -> list[Any]:
+    contexts = [page]
+    try:
+        frames = list(page.get_frames(timeout=max(0.2, min(4.0, float(timeout_seconds)))))
+    except Exception:
+        frames = []
+    for frame in frames:
+        if frame not in contexts:
+            contexts.append(frame)
+    return contexts
+
+
+def extract_comments(page: ChromiumPage, self_author_markers: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    markers = [str(item or "").strip().lower() for item in (self_author_markers or _default_runtime_config()["comment_reply"].get("self_author_markers") or []) if str(item or "").strip()]
+    markers_payload = json.dumps(markers, ensure_ascii=False)
+    ready_js = """
     return (() => {
-      function norm(value) {
-        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
-      }
-      function isVisible(node) {
-        if (!node) return false;
-        const style = window.getComputedStyle(node);
-        const rect = node.getBoundingClientRect();
-        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
-      }
-      function fallbackContent(item, author, timeText) {
-        let reduced = norm(item.innerText || item.textContent || '');
-        const noise = [
-          author,
-          timeText,
-          '鍥炲',
-          '鍒犻櫎',
-          '缃《',
-          '鎶曡瘔',
-          '绉诲叆榛戝悕鍗?,
-          '浠呰兘缃《涓€鏉¤瘎璁?,
-          '鍙栨秷',
-          '鏇挎崲缃《',
-          '浣滆€呰禐杩?,
-          '鐐硅禐',
-        ].filter(Boolean);
-        for (const token of noise) {
-          reduced = reduced.split(norm(token)).join(' ');
-        }
-        reduced = norm(reduced.replace(/^\\d+\\s*/, ''));
-        if (reduced) return reduced;
-        return item.querySelector('img, emoji, [class*="emoji"], [data-type*="emoji"], svg') ? '[emoji]' : '';
-      }
-      const doc = resolveWechatCommentDoc();
-      const root = doc.querySelector('.feed-detail') || doc;
-      const items = Array.from(root.querySelectorAll('.comment-item'))
-        .filter((node) => !node.closest('.comment-reply-list'));
-      return items.map((item, index) => {
-        let content = norm(item.querySelector('.comment-content') ? item.querySelector('.comment-content').innerText : '');
-        let author = '';
-        let timeText = '';
-        const authorCandidate = item.querySelector('.comment-author, .comment-user-name, [class*="author"], [class*="name"]');
-        if (authorCandidate) author = norm(authorCandidate.innerText || authorCandidate.textContent || '');
-        const metaNodes = Array.from(item.querySelectorAll('span, div'));
-        for (const node of metaNodes) {
-          const text = norm(node.innerText || node.textContent || '');
-          if (!text) continue;
-          if (!timeText && /(\\d{4}[\\/-]\\d{1,2}[\\/-]\\d{1,2})|(\\d{1,2}:\\d{2})/.test(text)) {
-            timeText = text;
-          }
-          if (!author && text !== content && text.length <= 40 && !/鍥炲|璇勮|浣滆€呭洖澶嶈繃/.test(text)) {
-            author = text;
-          }
-          if (author && timeText) break;
-        }
-        if (!content) {
-          const altContent = item.querySelector('.comment-text, [class*="comment-content"], [class*="content"], [data-role*="content"]');
-          content = norm(altContent ? altContent.innerText || altContent.textContent || '' : '');
-        }
-        if (!content) {
-          content = fallbackContent(item, author, timeText);
-        }
-        const replyList = item.querySelector('.comment-reply-list');
-        const hasReply = !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]'));
-        const likeAction = item.querySelector('.like-action');
-        const useNode = likeAction ? likeAction.querySelector('use') : null;
-        const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
-        const liked = /fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction ? likeAction.className : ''));
-        return {
-          index,
-          author,
-          content,
-          time_text: timeText,
-          has_reply: hasReply,
-          liked,
-        };
-      }).filter((item) => item.content || item.author || item.time_text);
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      return items.length > 0;
     })();
     """
     try:
-        payload = page.run_js(js)
+        def _comments_ready() -> bool:
+            for context in _wechat_comment_contexts(page):
+                try:
+                    if bool(context.run_js(ready_js)):
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        if not _wait_until(_comments_ready, timeout_seconds=10.0, poll_seconds=0.35):
+            return []
     except Exception:
-        payload = []
+        return []
+    js = """
+    return Array.from(document.querySelectorAll('.comment-item'))
+      .filter((node) => !node.closest('.comment-reply-list'))
+      .map((item, index) => {
+        function norm(value) {
+          return String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+        }
+        function selfReply(replyList, markers) {
+          if (!replyList || !Array.isArray(markers) || !markers.length) return false;
+          const blob = norm(replyList.innerText || replyList.textContent || '').toLowerCase();
+          return markers.some((marker) => marker && blob.includes(norm(marker).toLowerCase()));
+        }
+        const authorNode = item.querySelector('.comment-user-name, .comment-author, [class*="author"], [class*="name"]');
+        const timeNode = item.querySelector('.comment-time');
+        const contentNode = item.querySelector('.comment-content, [class*="comment-content"], [class*="content"], [data-role*="content"]');
+        const replyList = item.querySelector('.comment-reply-list');
+        const likeAction = item.querySelector('.like-action');
+        const useNode = likeAction ? likeAction.querySelector('use') : null;
+        const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
+        return {
+          index,
+          text: norm(item.innerText || item.textContent || ''),
+          author: norm(authorNode ? authorNode.innerText || authorNode.textContent || '' : ''),
+          time_text: norm(timeNode ? timeNode.innerText || timeNode.textContent || '' : ''),
+          content: norm(contentNode ? contentNode.innerText || contentNode.textContent || '' : ''),
+          has_reply: !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]')),
+          has_self_reply: selfReply(replyList, JSON.parse(arguments[0] || '[]')),
+          liked: /fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction ? likeAction.className : '')),
+        };
+      });
+    """
+    payload = []
+    for context in _wechat_comment_contexts(page):
+        try:
+            candidate = context.run_js(js, markers_payload)
+        except Exception:
+            continue
+        if isinstance(candidate, list):
+            payload = candidate
+            if candidate:
+                break
     if not isinstance(payload, list):
         return []
     comments: list[dict[str, Any]] = []
@@ -6658,13 +6826,15 @@ def extract_comments(page: ChromiumPage) -> list[dict[str, Any]]:
             index = max(0, int(item.get("index") or 0))
         except Exception:
             index = 0
+        content = str(item.get("content") or item.get("text") or "").strip()
         comments.append(
             {
                 "index": index,
                 "author": str(item.get("author") or "").strip(),
-                "content": str(item.get("content") or "").strip(),
+                "content": content,
                 "time_text": str(item.get("time_text") or "").strip(),
                 "has_reply": bool(item.get("has_reply")),
+                "has_self_reply": bool(item.get("has_self_reply")),
                 "liked": bool(item.get("liked")),
             }
         )
@@ -6672,7 +6842,7 @@ def extract_comments(page: ChromiumPage) -> list[dict[str, Any]]:
 
 
 def like_comment_if_needed(page: ChromiumPage, comment_index: int) -> bool:
-    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    js = """
     return ((commentIndex) => {
       function click(el) {
         if (!el) return false;
@@ -6682,8 +6852,7 @@ def like_comment_if_needed(page: ChromiumPage, comment_index: int) -> bool:
         try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
         return false;
       }
-      const doc = resolveWechatCommentDoc();
-      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return { ok: false, reason: 'comment_not_found' };
       const likeAction = item.querySelector('.like-action') || item.querySelector('.action-item.like-action');
@@ -6696,18 +6865,44 @@ def like_comment_if_needed(page: ChromiumPage, comment_index: int) -> bool:
       return { ok: click(likeAction), skipped: false };
     })(arguments[0]);
     """
-    try:
-        result = page.run_js(js, int(comment_index))
-    except Exception:
-        return False
-    return bool(isinstance(result, dict) and result.get("ok"))
+    for context in _wechat_comment_contexts(page):
+        try:
+            result = context.run_js(js, int(comment_index))
+        except Exception:
+            continue
+        if isinstance(result, dict) and result.get("ok"):
+            return True
+    return False
 
 
 def _open_comment_reply_box(page: ChromiumPage, comment_index: int) -> bool:
-    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    ready_js = """
+    return ((commentIndex) => {
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return false;
+      return !!(item.querySelector('textarea.create-input') || item.querySelector('textarea') || item.querySelector('.weui-icon-outlined-comment'));
+    })(arguments[0]);
+    """
+    try:
+        def _item_ready() -> bool:
+            for context in _wechat_comment_contexts(page):
+                try:
+                    if bool(context.run_js(ready_js, int(comment_index))):
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        if not _wait_until(_item_ready, timeout_seconds=8.0, poll_seconds=0.3):
+            return False
+    except Exception:
+        return False
+
+    js = """
     return ((commentIndex) => {
       function norm(value) {
-        return String(value || '').replace(/\\s+/g, ' ').trim();
+        return String(value || '').replace(/\s+/g, ' ').trim();
       }
       function click(el) {
         if (!el) return false;
@@ -6717,39 +6912,73 @@ def _open_comment_reply_box(page: ChromiumPage, comment_index: int) -> bool:
         try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
         return false;
       }
-      const doc = resolveWechatCommentDoc();
-      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return { ok: false, reason: 'comment_not_found' };
+      const existingTextarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
+      if (existingTextarea) return { ok: true, reason: 'editor_already_open' };
       const icon = item.querySelector('.weui-icon-outlined-comment');
-      const button = (icon && icon.closest('.action-item')) || Array.from(item.querySelectorAll('.action-item')).find((node) => /鍥炲/.test(norm(node.innerText || node.textContent || '')));
+      if (icon && click(icon)) return { ok: true, reason: 'clicked_icon' };
+      const button = (icon && icon.closest('.action-item')) || Array.from(item.querySelectorAll('.action-item')).find((node) => /???/.test(norm(node.innerText || node.textContent || '')));
       if (!button) return { ok: false, reason: 'reply_button_not_found' };
       return { ok: click(button), reason: 'clicked' };
     })(arguments[0]);
     """
-    try:
-        result = page.run_js(js, int(comment_index))
-    except Exception:
-        return False
+    result = None
+    for context in _wechat_comment_contexts(page):
+        try:
+            candidate = context.run_js(js, int(comment_index))
+        except Exception:
+            continue
+        result = candidate
+        if isinstance(candidate, dict) and candidate.get("ok"):
+            break
     if not isinstance(result, dict) or not result.get("ok"):
         return False
-    editor_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    editor_js = """
     return ((commentIndex) => {
-      const doc = resolveWechatCommentDoc();
-      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return false;
       return !!(item.querySelector('textarea.create-input') || item.querySelector('textarea'));
     })(arguments[0]);
     """
-    return bool(_wait_until(lambda: page.run_js(editor_js, int(comment_index)), timeout_seconds=8.0, poll_seconds=0.3))
+    try:
+        def _editor_ready() -> bool:
+            for context in _wechat_comment_contexts(page):
+                try:
+                    if bool(context.run_js(editor_js, int(comment_index))):
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        return bool(_wait_until(_editor_ready, timeout_seconds=8.0, poll_seconds=0.3))
+    except Exception:
+        return False
 
 
 def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> bool:
-    if not _open_comment_reply_box(page, comment_index):
+    editor_ready_js = """
+    return ((commentIndex) => {
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return false;
+      return !!(item.querySelector('textarea.create-input') || item.querySelector('textarea'));
+    })(arguments[0]);
+    """
+    editor_ready = False
+    for context in _wechat_comment_contexts(page):
+        try:
+            if bool(context.run_js(editor_ready_js, int(comment_index))):
+                editor_ready = True
+                break
+        except Exception:
+            continue
+    if not editor_ready and not _open_comment_reply_box(page, comment_index):
         return False
     _humanized_publish_reaction_pause("wechat comment reply editor focus")
-    focus_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    focus_js = """
     return ((commentIndex) => {
       function clearValue(textarea) {
         const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
@@ -6761,8 +6990,7 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
         textarea.dispatchEvent(new Event('change', { bubbles: true }));
       }
-      const doc = resolveWechatCommentDoc();
-      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return { ok: false, reason: 'comment_not_found' };
       const textarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
@@ -6774,10 +7002,14 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
       return { ok: true, reason: 'focused' };
     })(arguments[0]);
     """
-    try:
-        focused = page.run_js(focus_js, int(comment_index))
-    except Exception:
-        focused = None
+    focused = None
+    for context in _wechat_comment_contexts(page):
+        try:
+            focused = context.run_js(focus_js, int(comment_index))
+        except Exception:
+            continue
+        if isinstance(focused, dict) and focused.get("ok"):
+            break
     if not isinstance(focused, dict) or not focused.get("ok"):
         return False
 
@@ -6787,13 +7019,12 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
     except Exception:
         pass
 
-    verify_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    verify_js = """
     return ((commentIndex, replyText) => {
       function norm(value) {
-        return String(value || '').replace(/\\s+/g, ' ').trim();
+        return String(value || '').replace(/\s+/g, ' ').trim();
       }
-      const doc = resolveWechatCommentDoc();
-      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return false;
       const textarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
@@ -6802,21 +7033,23 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
     })(arguments[0], arguments[1]);
     """
     typed = False
-    try:
-        typed = bool(
-            _wait_until(
-                lambda: page.run_js(verify_js, int(comment_index), clean_reply_text),
-                timeout_seconds=4.0,
-                poll_seconds=0.2,
+    for context in _wechat_comment_contexts(page):
+        try:
+            typed = bool(
+                _wait_until(
+                    lambda: context.run_js(verify_js, int(comment_index), clean_reply_text),
+                    timeout_seconds=4.0,
+                    poll_seconds=0.2,
+                )
             )
-        )
-    except Exception:
-        typed = False
+        except Exception:
+            typed = False
+        if typed:
+            break
     if not typed:
-        fallback_fill_js = WECHAT_COMMENT_DOC_HELPER_JS + """
+        fallback_fill_js = """
         return ((commentIndex, replyText) => {
-          const doc = resolveWechatCommentDoc();
-          const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+          const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
           const item = items[Number(commentIndex)];
           if (!item) return false;
           const textarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
@@ -6832,15 +7065,66 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
           return true;
         })(arguments[0], arguments[1]);
         """
-        try:
-            typed = bool(page.run_js(fallback_fill_js, int(comment_index), clean_reply_text))
-        except Exception:
-            typed = False
+        for context in _wechat_comment_contexts(page):
+            try:
+                typed = bool(context.run_js(fallback_fill_js, int(comment_index), clean_reply_text))
+            except Exception:
+                typed = False
+            if typed:
+                break
     if not typed:
         return False
 
+    blur_js = """
+    return ((commentIndex) => {
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return false;
+      const textarea = item.querySelector('textarea.create-input') || item.querySelector('textarea');
+      if (!textarea) return false;
+      try { textarea.blur(); } catch (e) {}
+      try { textarea.dispatchEvent(new FocusEvent('blur', { bubbles: true })); } catch (e) {}
+      try { textarea.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); } catch (e) {}
+      try { document.body && document.body.click && document.body.click(); } catch (e) {}
+      return true;
+    })(arguments[0]);
+    """
+    for context in _wechat_comment_contexts(page):
+        try:
+            if context.run_js(blur_js, int(comment_index)):
+                break
+        except Exception:
+            pass
+
+    submit_ready_js = """
+    return ((commentIndex) => {
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const item = items[Number(commentIndex)];
+      if (!item) return '';
+      const submit = item.querySelector('.tag-wrap.primary');
+      if (!submit) return '';
+      return String(submit.className || '');
+    })(arguments[0]);
+    """
+    submit_class = ""
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        submit_class = ""
+        for context in _wechat_comment_contexts(page):
+            try:
+                submit_class = str(context.run_js(submit_ready_js, int(comment_index)) or "")
+            except Exception:
+                submit_class = ""
+            if submit_class and "disabled" not in submit_class:
+                break
+        if submit_class and "disabled" not in submit_class:
+            break
+        _humanized_wechat_comment_retry_pause(page, "wechat comment submit ready retry")
+    if not submit_class or "disabled" in submit_class:
+        return False
+
     _humanized_publish_reaction_pause("wechat comment submit click")
-    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    js = """
     return ((commentIndex) => {
       function click(el) {
         if (!el) return false;
@@ -6850,8 +7134,7 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
         try { el.dispatchEvent(new MouseEvent('click', eventInit)); return true; } catch (e) {}
         return false;
       }
-      const doc = resolveWechatCommentDoc();
-      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return { ok: false, reason: 'comment_not_found' };
       const submit = item.querySelector('.tag-wrap.primary')
@@ -6860,42 +7143,46 @@ def submit_reply(page: ChromiumPage, comment_index: int, reply_text: str) -> boo
       return { ok: click(submit), reason: 'submitted' };
     })(arguments[0]);
     """
-    try:
-        result = page.run_js(js, int(comment_index))
-    except Exception:
-        return False
-    return bool(isinstance(result, dict) and result.get("ok"))
+    for context in _wechat_comment_contexts(page):
+        try:
+            result = context.run_js(js, int(comment_index))
+        except Exception:
+            continue
+        if isinstance(result, dict) and result.get("ok"):
+            return True
+    return False
 
 
 def wait_reply_confirm(page: ChromiumPage, comment_index: int, reply_text: str, timeout_seconds: float = 12.0) -> bool:
     target_text = re.sub(r"\s+", "", str(reply_text or "").strip())
-    js = WECHAT_COMMENT_DOC_HELPER_JS + """
+    js = """
     return ((commentIndex, targetText) => {
       function norm(value) {
-        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, '').trim();
+        return String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, '').trim();
       }
-      const doc = resolveWechatCommentDoc();
-      const bodyText = norm(doc && (doc.innerText || doc.textContent || ''));
-      if (bodyText.includes(norm(targetText)) || bodyText.includes('宸插洖澶?)) {
-        return true;
-      }
-      const items = Array.from(doc.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
+      const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return false;
-      const itemText = norm(item.innerText || item.textContent || '');
-      if (targetText && itemText.includes(norm(targetText))) return true;
       const replyList = item.querySelector('.comment-reply-list');
-      return !!(replyList && replyList.querySelector('.comment-item, .comment-content'));
+      if (!replyList || !targetText) return false;
+      const replyText = norm(replyList.innerText || replyList.textContent || '');
+      return replyText.includes(norm(targetText));
     })(arguments[0], arguments[1]);
     """
-    try:
-        matched = _wait_until(
-            lambda: page.run_js(js, int(comment_index), target_text),
-            timeout_seconds=timeout_seconds,
-            poll_seconds=0.4,
-        )
-    except Exception:
-        matched = False
+    matched = False
+    for context in _wechat_comment_contexts(page):
+        try:
+            matched = bool(
+                _wait_until(
+                    lambda: context.run_js(js, int(comment_index), target_text),
+                    timeout_seconds=timeout_seconds,
+                    poll_seconds=0.4,
+                )
+            )
+        except Exception:
+            matched = False
+        if matched:
+            break
     return bool(matched)
 
 
@@ -7293,7 +7580,7 @@ def _playwright_collect_recent_commented_posts(frame: Any, limit: int, debug: bo
             seen_any_cards = True
         before = len(collected)
         for card in cards:
-            if int(card.get("comment_count") or 0) <= 0 and not bool(card.get("has_comments")):
+            if int(card.get("comment_count") or 0) < 1:
                 continue
             post_key = str(card.get("post_key") or "").strip()
             if not post_key or post_key in seen_keys:
@@ -7851,9 +8138,39 @@ def _playwright_open_comment_manager(
             }
             return '';
           }
+          function collectDocs(root, seen, output) {
+            if (!root || seen.has(root)) return;
+            seen.add(root);
+            output.push(root);
+            const frames = Array.from(root.querySelectorAll ? root.querySelectorAll('iframe') : []);
+            for (const frame of frames) {
+              try {
+                const doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+                if (doc && doc.querySelector) collectDocs(doc, seen, output);
+              } catch (e) {}
+            }
+            const hosts = Array.from(root.querySelectorAll ? root.querySelectorAll('wujie-app') : []);
+            for (const host of hosts) {
+              try {
+                const shadow = host.shadowRoot;
+                if (shadow && shadow.querySelector) collectDocs(shadow, seen, output);
+              } catch (e) {}
+            }
+          }
+          const docs = [];
+          collectDocs(document, new Set(), docs);
+          const cards = [];
+          const seenCards = new Set();
+          for (const doc of docs) {
+            const found = Array.from(doc.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
+            for (const card of found) {
+              if (!card || seenCards.has(card)) continue;
+              seenCards.add(card);
+              cards.push(card);
+            }
+          }
           const targetTitle = norm(args && args.title);
           const targetPublished = norm(args && args.published_text);
-          const cards = Array.from(document.querySelectorAll(".comment-feed-wrap, [class*='comment-feed'], .feed-item, [class*='feed-item'], .post-item, [class*='post-item'], .finder-card, .finder-card-flex, .comment-view, [class*='finder-card'], [data-testid*='feed'], [data-testid*='post']"));
           const exactCard = cards.find((node) => {
             const title = readTitle(node);
             const published = readPublished(node);
@@ -7970,17 +8287,28 @@ def _playwright_open_comment_manager(
     return False
 
 
-def _playwright_extract_comments(frame: Any) -> list[dict[str, Any]]:
+def _playwright_extract_comments(frame: Any, self_author_markers: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    markers = [str(item or "").strip().lower() for item in (self_author_markers or _default_runtime_config()["comment_reply"].get("self_author_markers") or []) if str(item or "").strip()]
     js = """
-    () => {
+    (selfMarkers) => {
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
       }
-      function isVisible(node) {
-        if (!node) return false;
-        const style = window.getComputedStyle(node);
-        const rect = node.getBoundingClientRect();
-        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+      function lower(value) {
+        return norm(value).toLowerCase();
+      }
+      function hasSelfReply(replyList) {
+        if (!replyList || !Array.isArray(selfMarkers) || !selfMarkers.length) return false;
+        const replyItems = Array.from(replyList.querySelectorAll('.comment-item, [class*="reply-item"], [class*="comment-item"], [class*="reply"], [class*="content"]'));
+        return replyItems.some((replyItem) => {
+          const authorNode = replyItem.querySelector('.comment-author, .comment-user-name, [class*="author"], [class*="name"]');
+          const blob = lower([
+            authorNode ? (authorNode.innerText || authorNode.textContent || '') : '',
+            replyItem.innerText || '',
+            replyItem.textContent || '',
+          ].join(' '));
+          return selfMarkers.some((marker) => marker && blob.includes(lower(marker)));
+        });
       }
       function fallbackContent(item, author, timeText) {
         let reduced = norm(item.innerText || item.textContent || '');
@@ -8025,26 +8353,30 @@ def _playwright_extract_comments(frame: Any) -> list[dict[str, Any]]:
           const useNode = likeAction ? likeAction.querySelector('use') : null;
           const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
           const liked = /fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction ? likeAction.className : ''));
-          return { index, author, content, time_text: timeText, has_reply: hasReply, liked };
+          return { index, author, content, time_text: timeText, has_reply: hasReply, has_self_reply: hasSelfReply(replyList), liked };
         }).filter((item) => item.content || item.author || item.time_text);
     }
     """
     try:
-        payload = frame.evaluate(js)
+        payload = frame.evaluate(js, markers)
     except Exception:
         payload = []
     return payload if isinstance(payload, list) else []
 
 
-def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], debug: bool = False) -> list[dict[str, Any]]:
+def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], debug: bool = False, self_author_markers: Optional[list[str]] = None) -> list[dict[str, Any]]:
     args = {
         "object_id": str(post.get("object_id") or "").strip(),
         "export_id": str(post.get("export_id") or "").strip(),
+        "self_author_markers": [str(item or "").strip().lower() for item in (self_author_markers or []) if str(item or "").strip()],
     }
     js = """
     async (args) => {
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function lower(value) {
+        return norm(value).toLowerCase();
       }
       function pickStore(scope) {
         if (!scope) return null;
@@ -8119,6 +8451,19 @@ def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], deb
           return false;
         }) || null;
       }
+      function hasSelfReply(item) {
+        const markers = Array.isArray(args && args.self_author_markers) ? args.self_author_markers : [];
+        if (!markers.length) return false;
+        const replies = Array.isArray(item && item.levelTwoComment) ? item.levelTwoComment : [];
+        return replies.some((reply) => {
+          const blob = lower([
+            reply && (reply.commentNickname || reply.nickname || reply.commentUserName || reply.author || reply.userName || ''),
+            reply && (reply.commentContent || reply.content || reply.replyContent || ''),
+            reply && (reply.commentCreatetime || reply.commentTime || reply.createTime || reply.time || ''),
+          ].join(' '));
+          return markers.some((marker) => marker && blob.includes(lower(marker)));
+        });
+      }
       const store = resolveStore();
       if (!store) return { ok: false, reason: 'comment_store_missing', comments: [] };
       const targetObjectId = norm(args && args.object_id);
@@ -8143,6 +8488,7 @@ def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], deb
           content: norm(item && (item.commentContent || item.content || item.replyContent || '')),
           time_text: norm(item && (item.commentCreatetime || item.createTime || item.time || '')),
           has_reply: lv2.length > 0,
+          has_self_reply: hasSelfReply(item),
           liked: Number(item && (item.likeFlag || item.commentLikeFlag || 0)) > 0,
           comment_id: norm(item && (item.commentId || item.comment_id || '')),
           reply_comment_id: norm(item && (item.replyCommentId || item.reply_comment_id || item.commentId || '')),
@@ -8192,6 +8538,7 @@ def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], deb
                 "content": str(item.get("content") or "").strip(),
                 "time_text": str(item.get("time_text") or "").strip(),
                 "has_reply": bool(item.get("has_reply")),
+                "has_self_reply": bool(item.get("has_self_reply")),
                 "liked": bool(item.get("liked")),
                 "comment_id": str(item.get("comment_id") or "").strip(),
                 "reply_comment_id": str(item.get("reply_comment_id") or "").strip(),
@@ -8487,13 +8834,12 @@ def _playwright_wait_store_reply_confirm(
                 (item for item in comments if str(item.get("comment_id") or "").strip() == target_comment_id),
                 None,
             )
-            if matched and bool(matched.get("has_reply")):
-                if not target_reply:
-                    return True
+            if matched:
                 content = re.sub(r"\s+", "", str(matched.get("content") or "").strip())
-                if target_reply in content:
+                if target_reply and target_reply in content:
                     return True
-                return True
+                if bool(matched.get("has_self_reply")):
+                    return True
         _humanized_wechat_comment_retry_pause(page, "wechat store reply confirm retry")
     return False
 
@@ -8744,6 +9090,26 @@ def _playwright_submit_reply(frame: Any, comment_index: int, reply_text: str) ->
                 _humanized_wechat_comment_retry_pause(page, "wechat comment reply fallback typing verify retry")
         if not typed:
             return False
+        blur_js = """
+        (commentIndex) => {
+          const root = document.querySelector('.feed-detail') || document;
+          const items = Array.from(root.querySelectorAll('.comment-item'))
+            .filter((node) => !node.closest('.comment-reply-list'));
+          const item = items[Number(commentIndex)];
+          if (!item) return false;
+          const textarea = item.querySelector('textarea.create-input, textarea');
+          if (!textarea) return false;
+          try { textarea.blur(); } catch (e) {}
+          try { textarea.dispatchEvent(new FocusEvent('blur', { bubbles: true })); } catch (e) {}
+          try { textarea.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); } catch (e) {}
+          try { document.body && document.body.click && document.body.click(); } catch (e) {}
+          return true;
+        }
+        """
+        try:
+            frame.evaluate(blur_js, int(comment_index))
+        except Exception:
+            pass
         submit_ready_js = """
         (commentIndex) => {
           const root = document.querySelector('.feed-detail') || document;
@@ -8802,15 +9168,13 @@ def _playwright_wait_reply_confirm(frame: Any, comment_index: int, reply_text: s
       }
       const commentIndex = Number(args && args.comment_index || 0);
       const targetText = norm(args && args.reply_text || '');
-      const bodyText = norm((document.body || document.documentElement).innerText || '');
-      if (targetText && bodyText.includes(targetText)) return true;
       const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[commentIndex];
       if (!item) return false;
-      const itemText = norm(item.innerText || item.textContent || '');
-      if (targetText && itemText.includes(targetText)) return true;
       const replyList = item.querySelector('.comment-reply-list');
-      return !!(replyList && replyList.querySelector('.comment-item, .comment-content'));
+      if (!replyList || !targetText) return false;
+      const replyText = norm(replyList.innerText || replyList.textContent || '');
+      return replyText.includes(targetText);
     }
     """
     deadline = time.time() + max(2.0, float(timeout_seconds))
@@ -9141,9 +9505,14 @@ def run_wechat_comment_reply(
                             playwright_needs_native_retry = True
                             _comment_reply_log(debug_enabled, "Playwright frame missing while reading comments")
                             break
-                        comments = _playwright_extract_comments(pw_frame)
+                        comments = _playwright_extract_comments(pw_frame, comment_cfg.get("self_author_markers"))
                         if not comments:
-                            store_comments = _playwright_extract_comments_from_store(pw_page, post, debug=debug_enabled)
+                            store_comments = _playwright_extract_comments_from_store(
+                                pw_page,
+                                post,
+                                debug=debug_enabled,
+                                self_author_markers=comment_cfg.get("self_author_markers"),
+                            )
                             if store_comments:
                                 comments = store_comments
                                 _comment_reply_log(debug_enabled, f"Playwright store comments in manager: {len(comments)}")
@@ -9168,10 +9537,10 @@ def run_wechat_comment_reply(
                                     f"Skip comment: already-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
                                 )
                                 continue
-                            if bool(comment.get("has_reply")):
+                            if bool(comment.get("has_self_reply")):
                                 _comment_reply_log(
                                     debug_enabled,
-                                    f"Skip comment: has-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                                    f"Skip comment: self-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
                                 )
                                 continue
                             reply_result = generate_comment_reply_result(
@@ -9456,7 +9825,7 @@ def run_wechat_comment_reply(
             seen_comment_fingerprints: set[str] = set()
             stagnant_rounds = 0
             for _ in range(8):
-                comments = extract_comments(page)
+                comments = extract_comments(page, list(comment_cfg.get("self_author_markers") or []))
                 _comment_reply_log(debug_enabled, f"Visible comments in manager: {len(comments)}")
                 sent_in_round = False
                 for comment in comments:
@@ -9476,10 +9845,10 @@ def run_wechat_comment_reply(
                             f"Skip comment: already-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
                         )
                         continue
-                    if bool(comment.get("has_reply")):
+                    if bool(comment.get("has_self_reply")):
                         _comment_reply_log(
                             debug_enabled,
-                            f"Skip comment: has-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                            f"Skip comment: self-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
                         )
                         continue
 
@@ -9629,6 +9998,662 @@ def run_wechat_comment_reply(
         "posts_selected": len(posts),
         "replies_sent": len(reply_records),
         "likes_sent": likes_sent,
+    }
+
+
+def _build_wechat_private_message_login_failure_result(
+    workspace: Workspace,
+    *,
+    reason: str,
+    login_notify_result: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload = dict(login_notify_result) if isinstance(login_notify_result, dict) else {}
+    return {
+        "ok": False,
+        "reason": str(reason or "").strip() or "private_message_login_required",
+        "state_path": str(_private_message_reply_state_path(workspace)),
+        "records": [],
+        "conversations_scanned": 0,
+        "conversations_selected": 0,
+        "replies_sent": 0,
+        "login_required": bool(payload.get("needs_login")),
+        "login_notify_sent": bool(payload.get("sent")),
+        "login_notification_mode": str(payload.get("notification_mode") or "").strip(),
+        "login_notification_error": str(payload.get("error") or "").strip(),
+        "login_qr_error": str((payload.get("qr_result") or {}).get("error") or "").strip()
+        if isinstance(payload.get("qr_result"), dict)
+        else "",
+        "login_url": str(payload.get("url") or "").strip(),
+    }
+
+
+def _activate_wechat_private_message_tab(page: Any, tab_text: str, debug: bool = False) -> dict[str, Any]:
+    js = """
+    return ((args) => {
+      const targetText = String(args && args.tab_text || '').trim();
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function getRoot() {
+        const host = document.querySelector('wujie-app');
+        return host && host.shadowRoot ? host.shadowRoot : document;
+      }
+      function isVisible(node) {
+        if (!node || !node.getBoundingClientRect) return false;
+        const style = window.getComputedStyle(node);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 8 && rect.height > 8;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (error) {}
+        try { node.click(); return true; } catch (error) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (error) {}
+        return false;
+      }
+      const root = getRoot();
+      const navRoots = Array.from(root.querySelectorAll('.weui-desktop-tab__nav, [class*="tab__nav"], [class*="tab-title"]'));
+      const candidates = [];
+      for (const navRoot of navRoots.length ? navRoots : [root]) {
+        candidates.push(...Array.from(navRoot.querySelectorAll('a, button, li, span, div')));
+      }
+      const tab = candidates.filter(isVisible).find((node) => {
+        const text = norm(node.innerText || node.textContent || '');
+        return text === targetText || text.includes(targetText);
+      }) || null;
+      if (!tab) return { ok: false, reason: 'private_message_tab_not_found', tab_text: targetText };
+      const clicked = click(tab);
+      return {
+        ok: clicked,
+        reason: clicked ? 'private_message_tab_clicked' : 'private_message_tab_click_failed',
+        tab_text: norm(tab.innerText || tab.textContent || ''),
+      };
+    })(arguments[0]);
+    """
+    try:
+        payload = _page_run_js(page, js, {"tab_text": str(tab_text or "")})
+    except Exception as exc:
+        _private_message_reply_log(debug, f"Private message tab activate failed: {exc}")
+        return {"ok": False, "reason": "private_message_tab_activate_failed", "error": str(exc), "tab_text": str(tab_text or "")}
+    return payload if isinstance(payload, dict) else {"ok": False, "reason": "private_message_tab_activate_failed", "tab_text": str(tab_text or "")}
+
+
+def _activate_wechat_private_message_greeting_tab(page: Any, debug: bool = False) -> dict[str, Any]:
+    return _activate_wechat_private_message_tab(page, "打招呼消息", debug=debug)
+
+
+def _read_wechat_private_message_fan_info(page: Any, debug: bool = False) -> dict[str, Any]:
+    js = """
+    return (() => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function getRoot() {
+        const host = document.querySelector('wujie-app');
+        return host && host.shadowRoot ? host.shadowRoot : document;
+      }
+      function readText(scope, selectors) {
+        if (!scope) return '';
+        for (const selector of selectors) {
+          const node = scope.querySelector(selector);
+          if (node && norm(node.innerText || node.textContent || '')) {
+            return norm(node.innerText || node.textContent || '');
+          }
+        }
+        return '';
+      }
+      const root = getRoot();
+      const scopes = Array.from(root.querySelectorAll([
+        '.profile-left',
+        '[class*="profile-left"]',
+        '.profile-info',
+        '[class*="profile-info"]',
+        '.session-dialog',
+        '.content-left',
+        '.content-right'
+      ].join(','))).filter(Boolean);
+      const fallbackScopes = scopes.length ? scopes : [root];
+      for (const scope of fallbackScopes) {
+        const name = readText(scope, [
+          '.profile-name',
+          '[class*="profile-name"]',
+          '.nickname',
+          '[class*="nickname"]',
+          '.name',
+          '[class*="name"]',
+          'strong',
+          'b'
+        ]);
+        const summary = norm(scope.innerText || scope.textContent || '');
+        if (name || summary) {
+          return {
+            ok: true,
+            profile_name: name,
+            profile_text: summary,
+            profile_preview: summary.slice(0, 180),
+          };
+        }
+      }
+      return { ok: false, reason: 'fan_info_not_found' };
+    })();
+    """
+    try:
+        payload = _page_run_js(page, js)
+    except Exception as exc:
+        _private_message_reply_log(debug, f"Fan info read failed: {exc}")
+        return {"ok": False, "reason": "fan_info_read_failed", "error": str(exc)}
+    return payload if isinstance(payload, dict) else {"ok": False, "reason": "fan_info_read_failed"}
+
+
+def _collect_wechat_private_message_conversations(page: Any, limit: int, debug: bool = False) -> list[dict[str, Any]]:
+    js = """
+    return ((args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function getRoot() {
+        const host = document.querySelector('wujie-app');
+        return host && host.shadowRoot ? host.shadowRoot : document;
+      }
+      function isVisible(node) {
+        if (!node || !node.getBoundingClientRect) return false;
+        const style = window.getComputedStyle(node);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 8 && rect.height > 8;
+      }
+      function read(node, selectors) {
+        if (!node) return '';
+        for (const selector of selectors) {
+          const found = node.querySelector(selector);
+          if (found && norm(found.innerText || found.textContent || '')) return norm(found.innerText || found.textContent || '');
+        }
+        return '';
+      }
+      const limit = Math.max(1, Number(args && args.limit || 1));
+      const selectorList = [
+        '.session-wrap',
+        '.session-item',
+        '.conversation-item',
+        '.chat-item',
+        '[data-conversation-id]',
+        '[data-thread-id]',
+        '[data-testid*="conversation"]',
+        '[data-testid*="chat"]',
+        '.message-list-item',
+        '[role="listitem"]',
+        'li'
+      ];
+      const root = getRoot();
+      const nodes = Array.from(root.querySelectorAll(selectorList.join(','))).filter(isVisible);
+      const items = [];
+      const seen = new Set();
+      nodes.forEach((node, index) => {
+        const name = read(node, ['.name', '[class*="name"]', '.title', '[class*="title"]', 'strong', 'b']);
+        const preview = read(node, ['.last-message', '[class*="preview"]', '.desc', '[class*="desc"]', '[class*="message"]']) || norm(node.innerText || node.textContent || '');
+        const time = read(node, ['time', '.time', '[class*="time"]']);
+        const unread = read(node, ['.unread', '[class*="unread"]']);
+        const href = norm(node.getAttribute('href') || node.dataset?.href || node.dataset?.conversationId || node.getAttribute('data-conversation-id') || '');
+        const key = norm(href || name || preview || String(index));
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        items.push({
+          conversation_index: index,
+          conversation_key: key,
+          conversation_id: norm(node.getAttribute('data-conversation-id') || node.dataset?.conversationId || href || String(index)),
+          conversation_name: name,
+          message_content: preview,
+          message_time: time,
+          unread_count: unread,
+          item_text: norm(node.innerText || node.textContent || ''),
+        });
+      });
+      return { ok: true, conversations: items.slice(0, limit), total: items.length };
+    })(arguments[0]);
+    """
+    try:
+        payload = _page_run_js(page, js, {"limit": int(limit)})
+    except Exception as exc:
+        _private_message_reply_log(debug, f"Conversation collect failed: {exc}")
+        return []
+    if not isinstance(payload, dict):
+        return []
+    conversations = payload.get("conversations")
+    if not isinstance(conversations, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in conversations:
+        if not isinstance(item, dict):
+            continue
+        if not str(item.get("conversation_name") or item.get("message_content") or "").strip():
+            continue
+        result.append(item)
+    return result
+
+
+def _open_wechat_private_message_conversation(page: Any, conversation_index: int, debug: bool = False) -> dict[str, Any]:
+    js = """
+    return ((args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function getRoot() {
+        const host = document.querySelector('wujie-app');
+        return host && host.shadowRoot ? host.shadowRoot : document;
+      }
+      function isVisible(node) {
+        if (!node || !node.getBoundingClientRect) return false;
+        const style = window.getComputedStyle(node);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 8 && rect.height > 8;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (error) {}
+        try { node.click(); return true; } catch (error) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (error) {}
+        return false;
+      }
+      const index = Math.max(0, Number(args && args.conversation_index || 0));
+      const selectorList = [
+        '.session-wrap',
+        '.session-item',
+        '.conversation-item',
+        '.chat-item',
+        '[data-conversation-id]',
+        '[data-thread-id]',
+        '[data-testid*="conversation"]',
+        '[data-testid*="chat"]',
+        '.message-list-item',
+        '[role="listitem"]',
+        'li'
+      ];
+      const root = getRoot();
+      const nodes = Array.from(root.querySelectorAll(selectorList.join(','))).filter(isVisible);
+      const node = nodes[index];
+      if (!node) return { ok: false, reason: 'conversation_not_found', total: nodes.length };
+      const clicked = click(node);
+      return {
+        ok: clicked,
+        reason: clicked ? 'opened' : 'conversation_click_failed',
+        conversation_index: index,
+        conversation_name: norm(node.innerText || node.textContent || '').slice(0, 120),
+      };
+    })(arguments[0]);
+    """
+    try:
+        payload = _page_run_js(page, js, {"conversation_index": int(conversation_index)})
+    except Exception as exc:
+        _private_message_reply_log(debug, f"Conversation open failed: {exc}")
+        return {"ok": False, "reason": "conversation_open_failed", "error": str(exc)}
+    return payload if isinstance(payload, dict) else {"ok": False, "reason": "conversation_open_failed"}
+
+
+def _submit_wechat_private_message_reply(page: Any, reply_text: str, debug: bool = False) -> dict[str, Any]:
+    js = """
+    return ((args) => {
+      function norm(value) {
+        return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+      }
+      function getRoot() {
+        const host = document.querySelector('wujie-app');
+        return host && host.shadowRoot ? host.shadowRoot : document;
+      }
+      function isVisible(node) {
+        if (!node || !node.getBoundingClientRect) return false;
+        const style = window.getComputedStyle(node);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 8 && rect.height > 8;
+      }
+      function click(node) {
+        if (!node) return false;
+        try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (error) {}
+        try { node.click(); return true; } catch (error) {}
+        try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (error) {}
+        return false;
+      }
+      function fillEditor(node, text) {
+        if (!node) return false;
+        try { node.focus(); } catch (error) {}
+        const value = String(text || '');
+        const tag = String(node.tagName || '').toLowerCase();
+        if (tag === 'textarea' || tag === 'input') {
+          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+          if (setter && setter.set) setter.set.call(node, value);
+          else node.value = value;
+          node.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+          node.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          return true;
+        }
+        if (node.isContentEditable) {
+          node.innerText = value;
+          node.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: value, inputType: 'insertText' }));
+          return true;
+        }
+        return false;
+      }
+      function findEditor() {
+        const root = getRoot();
+        const selectors = [
+          'textarea.edit_area',
+          'textarea[name="textarea"]',
+          '.footer textarea.edit_area',
+          '.footer .content textarea',
+          '.content textarea.edit_area',
+          'textarea',
+          'input[type="text"]',
+          '[contenteditable="true"]',
+          '[role="textbox"]',
+          '.chat-input textarea',
+          '.message-input textarea',
+          '.editor textarea'
+        ];
+        for (const selector of selectors) {
+          const nodes = Array.from(root.querySelectorAll(selector)).filter(isVisible);
+          if (nodes.length) return nodes[0];
+        }
+        return null;
+      }
+      function findSendButton() {
+        const root = getRoot();
+        const selectors = [
+          '.weui-desktop-btn_wrap button',
+          'button.weui-desktop-btn.weui-desktop-btn_default',
+          'button.weui-desktop-btn_default',
+          'button',
+          '[role="button"]'
+        ];
+        const nodes = Array.from(root.querySelectorAll(selectors.join(','))).filter(isVisible);
+        return nodes.find((node) => {
+          const text = norm(node.innerText || node.textContent || '');
+          return text === '发送' || text.includes('发送') || /Send|回复/.test(text);
+        }) || null;
+      }
+      const text = norm(args && args.reply_text);
+      if (!text) return { ok: false, reason: 'empty_reply' };
+      const editor = findEditor();
+      if (!editor) return { ok: false, reason: 'editor_missing' };
+      if (!fillEditor(editor, text)) return { ok: false, reason: 'editor_fill_failed' };
+      const button = findSendButton();
+      if (button && click(button)) {
+        return { ok: true, reason: 'sent_button', reply_text: text };
+      }
+      try {
+        editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+        editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+      } catch (error) {}
+      return { ok: true, reason: 'sent_enter', reply_text: text };
+    })(arguments[0]);
+    """
+    try:
+        payload = _page_run_js(page, js, {"reply_text": str(reply_text or "")})
+    except Exception as exc:
+        _private_message_reply_log(debug, f"Reply submit failed: {exc}")
+        return {"ok": False, "reason": "reply_submit_failed", "error": str(exc)}
+    return payload if isinstance(payload, dict) else {"ok": False, "reason": "reply_submit_failed"}
+
+
+def run_wechat_private_message_reply(
+    *,
+    workspace: Workspace,
+    runtime_config: dict[str, Any],
+    debug_port: int = DEFAULT_WECHAT_DEBUG_PORT,
+    chrome_path: Optional[str] = None,
+    chrome_user_data_dir: str = DEFAULT_WECHAT_CHROME_USER_DATA_DIR,
+    auto_open_chrome: bool = True,
+    max_conversations_override: int = 0,
+    max_replies_override: int = 0,
+    latest_only: bool = False,
+    debug: bool = False,
+    telegram_bot_identifier: str = "",
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+    telegram_registry_file: str = "",
+    telegram_timeout_seconds: int = 20,
+    telegram_api_base: str = "",
+    notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+) -> dict[str, Any]:
+    reply_cfg = _merge_private_message_reply_config(runtime_config.get("private_message_reply"))
+    if not bool(reply_cfg.get("enabled")):
+        return {
+            "ok": False,
+            "reason": "private_message_reply_disabled",
+            "state_path": str(_private_message_reply_state_path(workspace)),
+            "records": [],
+            "conversations_scanned": 0,
+            "conversations_selected": 0,
+            "replies_sent": 0,
+        }
+
+    max_conversations = max(1, int(max_conversations_override or reply_cfg.get("max_conversations_per_run") or 1))
+    max_replies = 1 if latest_only else max(1, int(max_replies_override or reply_cfg.get("max_replies_per_run") or 1))
+    reply_min_chars = max(5, int(reply_cfg.get("reply_min_chars") or 30))
+    reply_max_chars = max(reply_min_chars, int(reply_cfg.get("reply_max_chars") or 120))
+    debug_enabled = bool(debug or reply_cfg.get("debug"))
+
+    state = _load_private_message_reply_state(workspace)
+    items = _prune_private_message_reply_state_items(state.get("items") if isinstance(state, dict) else {})
+    state["items"] = items
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    last_reply_at = _latest_private_message_reply_time(items)
+
+    page: Any | None = None
+    native_connect_error = ""
+
+    def _ensure_native_page() -> Any | None:
+        nonlocal page, native_connect_error
+        if page is not None:
+            return page
+        try:
+            page = _connect_chrome(
+                debug_port=debug_port,
+                auto_open_chrome=auto_open_chrome,
+                chrome_path=chrome_path,
+                chrome_user_data_dir=chrome_user_data_dir,
+                startup_url=WECHAT_POST_LIST_URL,
+            )
+            try:
+                if hasattr(page, "goto"):
+                    page.goto(WECHAT_PRIVATE_MESSAGE_MANAGER_URL)
+                else:
+                    page.get(WECHAT_PRIVATE_MESSAGE_MANAGER_URL)
+            except Exception:
+                pass
+            _check_wechat_login_ready(
+                page,
+                chrome_user_data_dir=chrome_user_data_dir,
+                open_url=WECHAT_PRIVATE_MESSAGE_MANAGER_URL,
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id,
+                telegram_bot_identifier=telegram_bot_identifier,
+                telegram_registry_file=telegram_registry_file,
+                telegram_timeout_seconds=telegram_timeout_seconds,
+                telegram_api_base=telegram_api_base,
+                notify_env_prefix=notify_env_prefix,
+            )
+            native_connect_error = ""
+            return page
+        except Exception as exc:
+            native_connect_error = str(exc)
+            _private_message_reply_log(True, f"Native connect failed: {native_connect_error}")
+            return None
+
+    def _ensure_page() -> Any | None:
+        playwright_bundle = _connect_playwright_wechat_comment_page(debug_port, WECHAT_PRIVATE_MESSAGE_MANAGER_URL)
+        if playwright_bundle:
+            _playwright, _browser, pw_page = playwright_bundle
+            try:
+                pw_page.goto(WECHAT_PRIVATE_MESSAGE_MANAGER_URL, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            try:
+                _check_wechat_login_ready(
+                    pw_page,
+                    chrome_user_data_dir=chrome_user_data_dir,
+                    open_url=WECHAT_PRIVATE_MESSAGE_MANAGER_URL,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    telegram_bot_identifier=telegram_bot_identifier,
+                    telegram_registry_file=telegram_registry_file,
+                    telegram_timeout_seconds=telegram_timeout_seconds,
+                    telegram_api_base=telegram_api_base,
+                    notify_env_prefix=notify_env_prefix,
+                )
+            except Exception as exc:
+                _private_message_reply_log(True, f"Playwright login check failed: {exc}")
+            return pw_page
+        return _ensure_native_page()
+
+    page = _ensure_page()
+    if page is None:
+        return {
+            "ok": False,
+            "reason": "private_message_connect_failed",
+            "state_path": str(_private_message_reply_state_path(workspace)),
+            "records": [],
+            "conversations_scanned": 0,
+            "conversations_selected": 0,
+            "replies_sent": 0,
+            "error": native_connect_error,
+        }
+
+    login_gate_result = _maybe_notify_wechat_comment_login_required(
+        page=page,
+        chrome_user_data_dir=chrome_user_data_dir,
+        open_url=WECHAT_PRIVATE_MESSAGE_MANAGER_URL,
+        login_reason="private_message_reply",
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_bot_identifier=telegram_bot_identifier,
+        telegram_registry_file=telegram_registry_file,
+        telegram_timeout_seconds=telegram_timeout_seconds,
+        telegram_api_base=telegram_api_base,
+        notify_env_prefix=notify_env_prefix,
+    )
+    if bool(login_gate_result.get("needs_login")) and not bool(login_gate_result.get("skipped")):
+        return _build_wechat_private_message_login_failure_result(
+            workspace,
+            reason="private_message_login_required",
+            login_notify_result=login_gate_result,
+        )
+
+    reply_records: list[dict[str, Any]] = []
+    scanned_count = 0
+    selected_count = 0
+    self_markers = [str(item or "").strip().lower() for item in reply_cfg.get("self_author_markers") or [] if str(item or "").strip()]
+    tab_specs = [
+        {"source": "private_message", "label": "私信"},
+        {"source": "greeting_message", "label": "打招呼消息"},
+    ]
+
+    for tab_spec in tab_specs:
+        if len(reply_records) >= max_replies:
+            break
+        tab_source = str(tab_spec.get("source") or "").strip()
+        tab_label = str(tab_spec.get("label") or "").strip()
+        activate_result = _activate_wechat_private_message_tab(page, tab_label, debug=debug_enabled)
+        if debug_enabled:
+            _private_message_reply_log(debug_enabled, f"Tab result ({tab_label}): {json.dumps(activate_result, ensure_ascii=False)}")
+        if not bool(activate_result.get("ok")):
+            continue
+        _apply_private_message_action_delay(reply_cfg, debug=debug_enabled, reason=f"activate {tab_label}")
+
+        conversations = _collect_wechat_private_message_conversations(page, max_conversations, debug=debug_enabled)
+        scanned_count += len(conversations)
+        selected_count += len(conversations)
+        if not conversations:
+            continue
+
+        for conversation in conversations:
+            if len(reply_records) >= max_replies:
+                break
+            if not isinstance(conversation, dict):
+                continue
+            conversation = dict(conversation)
+            conversation["conversation_tab_label"] = tab_label
+            if tab_source == "greeting_message":
+                conversation["conversation_source"] = tab_source
+            name = str(conversation.get("conversation_name") or "").strip()
+            preview = str(conversation.get("message_content") or "").strip()
+            lower_blob = f"{name} {preview}".lower()
+            if self_markers and any(marker and marker in lower_blob for marker in self_markers):
+                _private_message_reply_log(debug_enabled, f"Skip conversation[{tab_label}]: self marker matched preview={_single_line_preview(preview, 80)}")
+                continue
+            fingerprint = _private_message_reply_fingerprint(conversation)
+            if fingerprint in items:
+                _private_message_reply_log(debug_enabled, f"Skip conversation[{tab_label}]: already replied fp={fingerprint}")
+                continue
+            reply_result = generate_private_message_reply_result(
+                conversation=conversation,
+                spark_ai=runtime_config.get("spark_ai") if isinstance(runtime_config.get("spark_ai"), dict) else {},
+                prompt_template=str(reply_cfg.get("prompt_template") or DEFAULT_PRIVATE_MESSAGE_REPLY_PROMPT_TEMPLATE),
+                fallback_replies=list(reply_cfg.get("fallback_replies") or DEFAULT_PRIVATE_MESSAGE_REPLY_FALLBACKS),
+                min_chars=reply_min_chars,
+                max_chars=reply_max_chars,
+            )
+            reply_text = str(reply_result.get("reply_text") or "").strip()
+            if not reply_text:
+                _private_message_reply_log(debug_enabled, f"Skip conversation[{tab_label}]: empty reply fp={fingerprint}")
+                continue
+            last_reply_at = _apply_private_message_reply_wait(reply_cfg, last_reply_at=last_reply_at, debug=debug_enabled)
+            open_result = _open_wechat_private_message_conversation(page, int(conversation.get("conversation_index") or 0), debug=debug_enabled)
+            if not bool(open_result.get("ok")):
+                _private_message_reply_log(
+                    debug_enabled,
+                    f"Conversation open failed[{tab_label}] fp={fingerprint}: {json.dumps(open_result, ensure_ascii=False)}",
+                )
+                continue
+            _apply_private_message_action_delay(reply_cfg, debug=debug_enabled, reason=f"open conversation {tab_label}")
+            fan_info = _read_wechat_private_message_fan_info(page, debug=debug_enabled)
+            if bool(fan_info.get("ok")):
+                conversation["conversation_profile"] = str(fan_info.get("profile_text") or "").strip()
+                conversation["fan_profile_name"] = str(fan_info.get("profile_name") or "").strip()
+                conversation["profile_preview"] = str(fan_info.get("profile_preview") or "").strip()
+                if not str(conversation.get("conversation_name") or "").strip():
+                    conversation["conversation_name"] = str(fan_info.get("profile_name") or "").strip()
+            elif debug_enabled:
+                _private_message_reply_log(debug_enabled, f"Fan info unavailable[{tab_label}] fp={fingerprint}: {json.dumps(fan_info, ensure_ascii=False)}")
+            _apply_private_message_action_delay(reply_cfg, debug=debug_enabled, reason=f"before submit reply {tab_label}")
+            submit_result = _submit_wechat_private_message_reply(page, reply_text, debug=debug_enabled)
+            if not bool(submit_result.get("ok")):
+                _private_message_reply_log(
+                    debug_enabled,
+                    f"Reply submit failed[{tab_label}] fp={fingerprint}: {json.dumps(submit_result, ensure_ascii=False)}",
+                )
+                continue
+            record = _remember_private_message_reply(
+                items,
+                fingerprint=fingerprint,
+                conversation=conversation,
+                reply_text=reply_text,
+                reply_provider=str(reply_result.get("reply_provider") or ""),
+            )
+            _append_private_message_reply_markdown(_private_message_reply_markdown_path(workspace), "wechat", record)
+            reply_records.append(record)
+            state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            state["items"] = items
+            _save_private_message_reply_state(workspace, state)
+            last_reply_at = _parse_private_message_reply_timestamp(record.get("replied_at")) or datetime.now()
+            _private_message_reply_log(
+                debug_enabled,
+                f"Replied conversation[{tab_label}] fp={fingerprint} name={_single_line_preview(name, 48)} reply={_single_line_preview(reply_text, 80)}",
+            )
+
+    state["items"] = _prune_private_message_reply_state_items(items)
+    state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _save_private_message_reply_state(workspace, state)
+    return {
+        "ok": True,
+        "reason": "",
+        "state_path": str(_private_message_reply_state_path(workspace)),
+        "markdown_path": str(_private_message_reply_markdown_path(workspace)),
+        "records": reply_records,
+        "conversations_scanned": scanned_count,
+        "conversations_selected": selected_count,
+        "replies_sent": len(reply_records),
     }
 
 
@@ -29243,6 +30268,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-process", action="store_true")
     parser.add_argument("--skip-upload", action="store_true")
     parser.add_argument("--wechat-comment-reply", action="store_true", help="Run WeChat like/reply automation only.")
+    parser.add_argument("--wechat-private-message-reply", action="store_true", help="Run WeChat private message reply automation only.")
     parser.add_argument("--comment-max-posts", type=int, default=0, help="Max recent posts to scan for comments.")
     parser.add_argument("--comment-max-replies", type=int, default=0, help="Max auto replies per run.")
     parser.add_argument("--comment-test-latest", action="store_true", help="Only test replying to latest comment.")
@@ -29296,6 +30322,39 @@ def main() -> int:
                     "posts_selected": int(result.get("posts_selected") or 0),
                     "replies_sent": int(result.get("replies_sent") or 0),
                     "likes_sent": int(result.get("likes_sent") or 0),
+                    "state_path": str(result.get("state_path") or ""),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0 if bool(result.get("ok")) else 1
+    if bool(getattr(args, "wechat_private_message_reply", False)):
+        result = run_wechat_private_message_reply(
+            workspace=workspace,
+            runtime_config=runtime_config,
+            debug_port=max(1, int(getattr(args, "wechat_debug_port", DEFAULT_WECHAT_DEBUG_PORT) or DEFAULT_WECHAT_DEBUG_PORT)),
+            chrome_path=chrome_path,
+            chrome_user_data_dir=(
+                (getattr(args, "wechat_chrome_user_data_dir", "") or "").strip() or DEFAULT_WECHAT_CHROME_USER_DATA_DIR
+            ),
+            auto_open_chrome=not bool(getattr(args, "no_auto_open_chrome", False)),
+            debug=bool(getattr(args, "comment_debug", False)),
+            telegram_bot_token=str(getattr(args, "telegram_bot_token", "") or "").strip(),
+            telegram_chat_id=str(getattr(args, "telegram_chat_id", "") or "").strip(),
+            telegram_registry_file=str(getattr(args, "telegram_registry_file", "") or "").strip(),
+            telegram_timeout_seconds=max(10, int(getattr(args, "telegram_timeout_seconds", 20) or 20)),
+            telegram_api_base=str(getattr(args, "telegram_api_base", "") or "").strip(),
+            notify_env_prefix=str(getattr(args, "notify_env_prefix", DEFAULT_NOTIFY_ENV_PREFIX) or DEFAULT_NOTIFY_ENV_PREFIX),
+        )
+        _log(
+            "[PrivateMessageReply] Result: "
+            + json.dumps(
+                {
+                    "ok": bool(result.get("ok")),
+                    "reason": str(result.get("reason") or ""),
+                    "conversations_scanned": int(result.get("conversations_scanned") or 0),
+                    "conversations_selected": int(result.get("conversations_selected") or 0),
+                    "replies_sent": int(result.get("replies_sent") or 0),
                     "state_path": str(result.get("state_path") or ""),
                 },
                 ensure_ascii=False,

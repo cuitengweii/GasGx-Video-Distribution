@@ -2014,3 +2014,189 @@ def test_send_platform_login_text_notification_is_disabled() -> None:
     assert result["ok"] is True
     assert result["sent"] is False
     assert result["skipped"] is True
+
+
+def test_activate_wechat_private_message_greeting_tab_prefers_explicit_nav_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+    scripts: list[str] = []
+    args_list: list[dict[str, Any]] = []
+
+    def fake_page_run_js(_page: Any, script: str, *args: Any) -> dict[str, Any]:
+        scripts.append(script)
+        if args:
+            args_list.append(args[0])
+        return {"ok": True, "reason": "greeting_tab_clicked", "tab_text": "打招呼消息"}
+
+    monkeypatch.setattr(engine, "_page_run_js", fake_page_run_js)
+
+    result = engine._activate_wechat_private_message_greeting_tab(object())
+
+    assert result["ok"] is True
+    assert scripts
+    assert args_list and args_list[0]["tab_text"] == "打招呼消息"
+    assert "wujie-app" in scripts[0]
+    assert ".weui-desktop-tab__nav" in scripts[0]
+    assert "targetText" in scripts[0]
+
+
+def test_collect_wechat_private_message_conversations_prefers_session_wrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    scripts: list[str] = []
+
+    def fake_page_run_js(_page: Any, script: str, *_args: Any) -> dict[str, Any]:
+        scripts.append(script)
+        return {
+            "ok": True,
+            "conversations": [
+                {
+                    "conversation_index": 0,
+                    "conversation_key": "CyberCar",
+                    "conversation_id": "CyberCar",
+                    "conversation_name": "CyberCar",
+                    "message_content": "如何联系",
+                    "message_time": "05月19日 05:48",
+                    "unread_count": "1",
+                    "item_text": "CyberCar 如何联系",
+                }
+            ],
+            "total": 1,
+        }
+
+    monkeypatch.setattr(engine, "_page_run_js", fake_page_run_js)
+
+    conversations = engine._collect_wechat_private_message_conversations(object(), 1)
+
+    assert conversations[0]["conversation_name"] == "CyberCar"
+    assert scripts
+    assert "wujie-app" in scripts[0]
+    assert ".session-wrap" in scripts[0]
+    assert "[data-conversation-id]" in scripts[0]
+
+
+def test_activate_wechat_private_message_tab_uses_requested_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    scripts: list[str] = []
+    args_list: list[dict[str, Any]] = []
+
+    def fake_page_run_js(_page: Any, script: str, *args: Any) -> dict[str, Any]:
+        scripts.append(script)
+        if args:
+            args_list.append(args[0])
+        return {"ok": True, "reason": "private_message_tab_clicked", "tab_text": "私信"}
+
+    monkeypatch.setattr(engine, "_page_run_js", fake_page_run_js)
+
+    result = engine._activate_wechat_private_message_tab(object(), "私信")
+
+    assert result["ok"] is True
+    assert scripts
+    assert args_list and args_list[0]["tab_text"] == "私信"
+    assert "wujie-app" in scripts[0]
+    assert "targetText" in scripts[0]
+
+
+def test_open_wechat_private_message_conversation_prefers_session_wrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    scripts: list[str] = []
+
+    def fake_page_run_js(_page: Any, script: str, *_args: Any) -> dict[str, Any]:
+        scripts.append(script)
+        return {"ok": True, "reason": "opened", "conversation_index": 0}
+
+    monkeypatch.setattr(engine, "_page_run_js", fake_page_run_js)
+
+    result = engine._open_wechat_private_message_conversation(object(), 0)
+
+    assert result["ok"] is True
+    assert scripts
+    assert "wujie-app" in scripts[0]
+    assert ".session-wrap" in scripts[0]
+    assert "[role=\"listitem\"]" in scripts[0]
+
+
+def test_submit_wechat_private_message_reply_prefers_edit_area_and_weui_button(monkeypatch: pytest.MonkeyPatch) -> None:
+    scripts: list[str] = []
+
+    def fake_page_run_js(_page: Any, script: str, *_args: Any) -> dict[str, Any]:
+        scripts.append(script)
+        return {"ok": True, "reason": "sent_button", "reply_text": "测试"}
+
+    monkeypatch.setattr(engine, "_page_run_js", fake_page_run_js)
+
+    result = engine._submit_wechat_private_message_reply(object(), "测试")
+
+    assert result["ok"] is True
+    assert scripts
+    assert "wujie-app" in scripts[0]
+    assert "textarea.edit_area" in scripts[0]
+    assert "button.weui-desktop-btn.weui-desktop-btn_default" in scripts[0]
+    assert ".weui-desktop-btn_wrap button" in scripts[0]
+
+
+def test_apply_private_message_action_delay_uses_configured_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    delays: list[float] = []
+    def fake_uniform(start: float, end: float) -> float:
+        delays.append(start)
+        delays.append(end)
+        return 4.5
+
+    monkeypatch.setattr(engine.random, "uniform", fake_uniform)
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: delays.append(seconds))
+
+    result = engine._apply_private_message_action_delay(
+        {
+            "min_action_delay_seconds": 2,
+            "max_action_delay_seconds": 6,
+        },
+        debug=False,
+        reason="before submit reply",
+    )
+
+    assert result == 4.5
+    assert delays == [2.0, 6.0, 4.5]
+
+
+def test_private_message_reply_fingerprint_distinguishes_source() -> None:
+    base = {
+        "conversation_id": "123",
+        "conversation_name": "CyberCar",
+        "message_time": "05月19日 08:09",
+        "message_content": "你好",
+    }
+    private_fp = engine._private_message_reply_fingerprint(dict(base))
+    greeting_fp = engine._private_message_reply_fingerprint({**base, "conversation_source": "greeting_message"})
+
+    assert private_fp != greeting_fp
+    assert private_fp == engine._private_message_reply_fingerprint(dict(base))
+
+
+def test_build_private_message_reply_payload_includes_conversation_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeClient:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            self.prompt: str | None = None
+
+        def is_ready(self) -> bool:
+            return True
+
+        def chat(self, prompt: str, system_prompt: str | None = None) -> str:
+            self.prompt = prompt
+            assert system_prompt == engine.WECHAT_PRIVATE_MESSAGE_REPLY_SYSTEM_PROMPT
+            assert "粉丝A" in prompt
+            assert "联系方式" in prompt
+            return "{\"reply\":\"你好呀，收到\"}"
+
+    monkeypatch.setattr(engine, "SharedSparkAIClient", FakeClient)
+    monkeypatch.setattr(engine, "shared_extract_json_object", lambda raw: {"reply": "你好呀，收到"})
+
+    result = engine._build_private_message_reply_payload(
+        conversation={
+            "conversation_name": "CyberCar",
+            "message_time": "05月19日 05:48",
+            "message_content": "如何联系",
+            "conversation_profile": "粉丝A\n联系方式：微信",
+        },
+        spark_ai={"model": "fake"},
+        prompt_template="会话：{conversation_name}\n粉丝：{conversation_profile}\n消息：{message_content}",
+        fallback_replies=["备用"],
+        min_chars=1,
+        max_chars=20,
+    )
+
+    assert result["reply_text"] == "你好呀，收到"
+    assert result["reply_provider"] == "spark"

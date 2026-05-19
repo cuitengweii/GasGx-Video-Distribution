@@ -73,6 +73,7 @@ const state = {
   matrixJobStatus: {},
   aiRobotConfigs: [],
   aiRobotMessages: [],
+  interactionManagement: { config: {}, status: {}, history: [] },
   notificationRoutes: [],
   notificationEvents: [],
   notificationPolicies: [],
@@ -153,7 +154,11 @@ const TASK_TYPE_OPTIONS = [
 
 const loadedViews = new Set();
 let currentView = document.querySelector(".nav-btn.active")?.dataset.view || "overview";
+let currentInteractionTab = localStorage.getItem("gasgx-interaction-tab") || "comment";
 let terminalCountdownTimer = null;
+let terminalWechatStatePollTimer = null;
+let terminalWechatStatePollInFlight = false;
+let terminalWechatSelectedAccountId = "";
 const terminalAutoPublishWindowIds = new Set();
 const terminalAutoPublishStageByWindowId = new Map();
 const terminalResetWindowIds = new Set();
@@ -203,13 +208,14 @@ const TONGJI_SNAPSHOT = {
 
 const FEATURE_ENTRIES = [
   { id: "overview", label: "总览", group: "业务工作台" },
-  { id: "accounts", label: "账号矩阵", group: "业务工作台" },
-  { id: "settings", label: "公共设置", group: "业务工作台" },
   { id: "tasks", label: "任务中心", group: "业务工作台" },
-  { id: "terminal-execution", label: "终端执行", group: "业务工作台" },
-  { id: "stats", label: "数据统计", group: "业务工作台" },
-  { id: "ai-robot", label: "AI机器人", group: "业务工作台" },
-  { id: "video-matrix", label: "视频生成", group: "业务工作台" },
+  { id: "ai-robot", label: "运营客服", group: "业务工作台" },
+  { id: "accounts", label: "账号管理", group: "矩阵管理" },
+  { id: "video-matrix", label: "生成视频", group: "矩阵管理" },
+  { id: "settings", label: "发布配置", group: "矩阵管理" },
+  { id: "terminal-execution", label: "批量发布", group: "矩阵管理" },
+  { id: "interaction-management", label: "粉丝互动", group: "矩阵管理" },
+  { id: "stats", label: "数据统计", group: "矩阵管理" },
   { id: "user-center", label: "用户中心", group: "系统管理" },
   { id: "notifications", label: "通知中心", group: "系统管理" },
   { id: "system-settings", label: "系统设置", group: "系统管理" },
@@ -225,7 +231,7 @@ const DEFAULT_AUTH_STATE = {
     },
     publisher: {
       name: "发布员",
-      permissions: ["overview", "accounts", "settings", "tasks", "terminal-execution", "video-matrix", "user-center", "notifications", "help-center"],
+      permissions: ["overview", "accounts", "settings", "tasks", "terminal-execution", "interaction-management", "video-matrix", "user-center", "notifications", "help-center"],
     },
     material_manager: {
       name: "素材维护员",
@@ -270,15 +276,16 @@ const SHELL_THEMES = [
 ];
 
 const VIEW_HEADERS = {
-  overview: ["账号矩阵维护系统", "独立账号、独立浏览器、发布/评论/私信/统计任务入口"],
-  accounts: ["账号矩阵", "维护 GasGx 国内外平台账号、独立浏览器配置和登录状态。"],
+  overview: ["业务总览", "独立账号、独立浏览器、发布/评论/私信/统计任务入口"],
+  accounts: ["账号管理", "维护 GasGx 国内外平台账号、独立浏览器配置和登录状态。"],
   "user-center": ["用户中心", "预留操作者资料、角色权限、工作偏好和本地部署身份入口。"],
-  settings: ["公共设置", "配置发布素材目录、上传策略、平台参数和矩阵发布作业。"],
+  settings: ["发布配置", "配置发布素材目录、上传策略、平台参数和矩阵发布作业。"],
   tasks: ["任务中心", "查看发布、评论、私信、登录检测等任务队列和执行状态。"],
-  "terminal-execution": ["终端执行", "预留本地终端命令执行入口。"],
+  "terminal-execution": ["批量发布", "预留本地终端命令执行入口。"],
   stats: ["数据统计", "短视频账号矩阵数字化营销客户端数据看板。"],
-  "ai-robot": ["AI机器人", "AI客服、企业微信、钉钉、飞书、Telegram 与 WhatsApp 统一接入。"],
-  "video-matrix": ["视频生成", "分类素材、第一屏封面、视频文字、背景音乐和批量导出工作台。"],
+  "ai-robot": ["运营客服", "AI客服、企业微信、钉钉、飞书、Telegram 与 WhatsApp 统一接入。"],
+  "interaction-management": ["粉丝互动", "视频号评论与私信自动回复、弹幕占位入口。"],
+  "video-matrix": ["生成视频", "分类素材、第一屏封面、视频文字、背景音乐和批量导出工作台。"],
   notifications: ["通知中心", "集中展示生成完成、发布失败、登录失效和素材不足提醒。"],
   "system-settings": ["系统设置", "预留本地部署、存储缓存、安全策略和系统维护入口。"],
   "help-center": ["帮助文档", "预留操作手册、部署说明、视频生成流程和常见问题。"],
@@ -1799,6 +1806,27 @@ function platformStatusLabel(status) {
   return labels[normalized] || status || "未知";
 }
 
+function terminalWechatAccountLoginStatusLabel(status) {
+  const normalized = String(status || "unknown").toLowerCase();
+  const labels = {
+    active: "已启用",
+    ready: "已登录",
+    logged_in: "已登录",
+    success: "已登录",
+    ok: "正常",
+    login_required: "需登录",
+    logged_out: "未登录",
+    unavailable: "不可用",
+    failed: "异常",
+    error: "异常",
+    pending: "待检查",
+    checking: "检查中",
+    not_checked: "待检查",
+    unknown: "未知",
+  };
+  return labels[normalized] || platformStatusLabel(status);
+}
+
 function platformStatusClass(status) {
   const normalized = String(status || "unknown").toLowerCase();
   if (["ready", "active", "logged_in", "success", "ok"].includes(normalized)) return "ready";
@@ -2631,6 +2659,36 @@ function terminalWindowIsCompleted(window) {
   return Boolean(window?.completed) || (accounts.length > 0 && currentIndex >= accounts.length) || allSucceeded;
 }
 
+function terminalWechatAccountChoices() {
+  return statsWechatActiveAccounts().map((account) => {
+    const platforms = Array.isArray(account.platforms) ? account.platforms : [];
+    const wechat = platforms.find((item) => String(item.platform || "") === "wechat") || {};
+    const accountId = terminalResolveAccountId(account);
+    const accountName = account.display_name || account.account_key || `账号 ${account.id}`;
+    const profileDir = String(wechat.profile_dir || "").trim();
+    const debugPort = Number(wechat.debug_port || 0);
+    return {
+      accountId,
+      accountName,
+      profileDir,
+      debugPort,
+      label: accountName,
+    };
+  }).filter((item) => Boolean(item.accountId));
+}
+
+function terminalWechatSelectedAccountChoice() {
+  const choices = terminalWechatAccountChoices();
+  if (!choices.length) {
+    terminalWechatSelectedAccountId = "";
+    return null;
+  }
+  const selected = choices.find((item) => String(item.accountId) === String(terminalWechatSelectedAccountId || "").trim())
+    || choices[0];
+  terminalWechatSelectedAccountId = selected.accountId;
+  return selected;
+}
+
 function terminalAutoPublishStageFromStatusText(statusText) {
   const text = String(statusText || "").trim();
   if (!text) return "";
@@ -3197,7 +3255,7 @@ function terminalAccountStatusAvatar(account) {
     : token === "error"
       ? `<svg viewBox="0 0 24 24" role="img" aria-label="状态异常"><path d="M12 3 2.5 20h19zM11 9h2v6h-2zm0 7h2v2h-2z"/></svg>`
       : token === "waiting"
-        ? `<svg viewBox="0 0 24 24" role="img" aria-label="等待扫码"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8z"/><path d="M11 6h2v7h5v2h-7z"/></svg>`
+        ? `<svg viewBox="0 0 24 24" role="img" aria-label="视频号"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8z"/><path d="M11 6h2v7h5v2h-7z"/></svg>`
         : token === "pending"
           ? `<svg viewBox="0 0 24 24" role="img" aria-label="待处理"><path d="M12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6z"/></svg>`
           : `<svg viewBox="0 0 24 24" role="img" aria-label="未登录"><path d="M12 5a7 7 0 1 0 7 7h-2a5 5 0 1 1-5-5z"/></svg>`;
@@ -3436,7 +3494,7 @@ function installGlobalButtonLoading() {
     if (!button || button.disabled || button.classList.contains("loading")) return;
     if (String(button.getAttribute("type") || "").toLowerCase() === "submit") return;
     if (button.dataset.noGlobalLoading === "1") return;
-    if (button.matches("[data-terminal-auto-publish], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-login-open], [data-terminal-cycle-reset], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], [data-save-notification-policy], [data-incident-action], #user-menu-toggle, #top-user-toggle")) return;
+    if (button.matches("[data-terminal-auto-publish], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-login-open], [data-terminal-cycle-reset], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], [data-save-notification-policy], [data-incident-action], [data-interaction-tab], [data-interaction-comment-run], [data-interaction-private-run], [data-interaction-refresh], #interaction-management-save, #user-menu-toggle, #top-user-toggle")) return;
     pulseButtonLoading(button, "处理中");
   }, true);
 }
@@ -3609,6 +3667,35 @@ function renderTerminalDailyQrView(root) {
   requestAnimationFrame(() => syncTerminalWechatGridHeight());
 }
 
+function renderTerminalWechatQuickActionBar() {
+  const choices = terminalWechatAccountChoices();
+  const selected = terminalWechatSelectedAccountChoice();
+  const optionsMarkup = choices.length
+    ? choices.map((choice) => `
+        <option value="${escapeHtml(choice.accountId)}"${String(choice.accountId) === String(selected?.accountId || "") ? " selected" : ""}>
+          ${escapeHtml(choice.label)}
+        </option>
+      `).join("")
+    : `<option value="">暂无可选账号</option>`;
+  const loginDisabled = !selected;
+  const publishDisabled = !selected;
+  const buttonLoadingAttr = " data-no-global-loading=\"1\"";
+  return `
+    <div class="terminal-wechat-quick-action terminal-glass">
+      <div class="terminal-wechat-quick-action-buttons">
+        <button class="btn secondary" type="button" data-terminal-wechat-login-selected${buttonLoadingAttr} ${loginDisabled ? "disabled" : ""}>登录</button>
+        <button class="btn primary" type="button" data-terminal-wechat-publish-selected${buttonLoadingAttr} ${publishDisabled ? "disabled" : ""}>发布</button>
+      </div>
+      <label class="terminal-wechat-account-select-field">
+        <span>指定账号</span>
+        <select id="terminal-wechat-account-select">
+          ${optionsMarkup}
+        </select>
+      </label>
+    </div>
+  `;
+}
+
 function syncTerminalWechatGridHeight() {
   if (terminalCurrentRoute() !== "wechat") return;
   const panel = document.querySelector("#terminal-matrix-workspace .terminal-group-panel");
@@ -3616,7 +3703,8 @@ function syncTerminalWechatGridHeight() {
   if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) return;
   const panelRect = panel.getBoundingClientRect();
   const gridRect = grid.getBoundingClientRect();
-  const available = Math.floor(panelRect.bottom - gridRect.top - 13);
+  const viewportBottom = window.innerHeight || document.documentElement.clientHeight || panelRect.bottom;
+  const available = Math.floor(Math.max(panelRect.bottom, viewportBottom) - gridRect.top - 13);
   if (available <= 0) return;
   const clamped = Math.max(220, available);
   const nextValue = `${clamped}px`;
@@ -3771,12 +3859,19 @@ function updateTerminalQrCountdowns() {
 function startTerminalPolling() {
   if (terminalCountdownTimer) clearInterval(terminalCountdownTimer);
   terminalCountdownTimer = null;
+  if (terminalWechatStatePollTimer) clearInterval(terminalWechatStatePollTimer);
+  terminalWechatStatePollTimer = null;
   if (terminalCurrentRoute() !== "wechat") return;
   if (state.terminalConfigOpen) return;
   const hasAnyQr = (state.terminalExecution.windows || []).some((window) => Boolean(window?.qr_url));
-  if (!hasAnyQr) return;
-  updateTerminalQrCountdowns();
-  terminalCountdownTimer = window.setInterval(updateTerminalQrCountdowns, 1000);
+  const hasSupplementalRuns = terminalWechatHasActiveSupplementalRuns();
+  if (hasAnyQr) {
+    updateTerminalQrCountdowns();
+    terminalCountdownTimer = window.setInterval(updateTerminalQrCountdowns, 1000);
+  }
+  if (hasAnyQr || hasSupplementalRuns) {
+    terminalWechatStatePollTimer = window.setInterval(refreshTerminalWechatState, 2000);
+  }
 }
 
 function terminalCurrentRoute() {
@@ -3790,6 +3885,33 @@ function ensureTerminalQrExpiryWindows() {
       window.qr_expires_at = now + 60;
     }
   });
+}
+
+function terminalWechatHasActiveSupplementalRuns(terminalState = state.terminalExecution) {
+  return Array.isArray(terminalState?.emergency_publish_runs) && terminalState.emergency_publish_runs.some((run) => {
+    const status = String(run?.status || "").toLowerCase();
+    return status === "running";
+  });
+}
+
+async function refreshTerminalWechatState() {
+  if (terminalWechatStatePollInFlight) return;
+  if (terminalCurrentRoute() !== "wechat" || state.terminalConfigOpen) return;
+  terminalWechatStatePollInFlight = true;
+  try {
+    const nextState = await api("/api/terminal-execution/poll", {
+      method: "POST",
+      body: JSON.stringify({ allow_browser_open: true, allow_login_probe: true }),
+    });
+    state.terminalExecution = { ...nextState, loading: false };
+    if (currentView === "terminal-execution" && terminalCurrentRoute() === "wechat") {
+      renderTerminalExecution();
+    }
+  } catch {
+    // Keep the page responsive even if polling briefly fails.
+  } finally {
+    terminalWechatStatePollInFlight = false;
+  }
 }
 
 function terminalSetRoute(route, { updateHash = true } = {}) {
@@ -3847,7 +3969,7 @@ function renderTerminalExecution() {
 
   if (initModal) initModal.classList.toggle("hidden", !state.terminalConfigOpen);
   if (routeHint) routeHint.textContent = route === "wechat"
-    ? "视频号独立流程，配置、扫码队列、窗态和矩阵衔接都在本页闭环。"
+    ? "视频号独立流程，配置、登录队列、窗态和矩阵衔接都在本页闭环。"
     : route === "hub"
       ? "仅列平台入口，不混排扫码窗。"
       : "长会话平台统一模板，检测登录后再打开创作者后台。";
@@ -3857,7 +3979,7 @@ function renderTerminalExecution() {
   if (subtitle) subtitle.textContent = route === "hub"
     ? "平台枢纽页只列入口卡片，不混排视频号多窗。"
     : route === "wechat"
-      ? "视频号独立流程：配置、打开登录浏览器、扫码、发布、进入下一账号。"
+      ? "视频号独立流程：配置、打开登录浏览器、登录、发布、进入下一账号。"
       : "长会话平台：选账号、检测登录、打开创作者后台。";
 
   if (route === "hub") {
@@ -3868,14 +3990,14 @@ function renderTerminalExecution() {
       {
         title: "短会话平台",
         tone: "short",
-        eyebrow: "Daily QR",
+        eyebrow: "每日登录",
         summary: "视频号独立扫码，流程与其它平台分开。",
         items: ["wechat"],
       },
       {
         title: "长会话平台",
         tone: "long",
-        eyebrow: "Persistent Session",
+        eyebrow: "长期会话",
         summary: "复用统一模板，检测登录后进入创作者后台。",
         items: ["douyin", "kuaishou", "xiaohongshu", "bilibili", "tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"],
       },
@@ -3891,18 +4013,17 @@ function renderTerminalExecution() {
             const health = terminalHealthSummary(platform);
             const policy = terminalSessionPolicyLabel(capability.sessionPolicy || (platform === "wechat" ? "daily_qr" : "persistent"));
             const cardDesc = platform === "wechat"
-              ? "每日扫码确认后进入视频号执行窗口。"
+              ? ""
               : "账号与浏览器配置复用同一套长会话入口。";
+            const statusMarkup = platform === "wechat" ? "" : `<div class="terminal-entry-meta" aria-label="${terminalPlatformName(platform)} 状态">${terminalStatusChip(platform, health)}</div>`;
             return `
               <article class="terminal-entry-card ${platform === "wechat" ? "wechat" : "long-session"}">
                 <div class="terminal-entry-head">
-                  <div class="platform-name">${platformLogo(platform)}<strong>${item?.label || terminalPlatformName(platform)}</strong></div>
+                  <div class="platform-name">${platformLogo(platform)}<strong>${terminalPlatformName(platform)}</strong></div>
                   <span class="terminal-policy-chip">${policy}</span>
                 </div>
-                <p class="terminal-entry-desc">${cardDesc}</p>
-                <div class="terminal-entry-meta" aria-label="${terminalPlatformName(platform)} 状态">
-                  ${terminalStatusChip(platform, health)}
-                </div>
+                ${cardDesc ? `<p class="terminal-entry-desc">${cardDesc}</p>` : ""}
+                ${statusMarkup}
                 <div class="terminal-entry-actions">
                   <button class="btn primary" type="button" data-terminal-enter="${platform === "wechat" ? "wechat" : platform}">${terminalCardButtonLabel(platform, health)}</button>
                   <button class="btn secondary" type="button" data-terminal-config-jump="${platform}">账号与浏览器配置</button>
@@ -3926,7 +4047,7 @@ function renderTerminalExecution() {
               <div class="terminal-entry-grid">${cards}</div>
             </section>
           `;
-        }).join("") : `<div class="terminal-empty-state terminal-empty-state-large"><strong>终端执行暂无平台数据</strong><p class="muted">当前只渲染平台入口卡片。请先点击右上角“刷新健康”或检查平台配置后再进入具体平台。</p></div>`}
+        }).join("") : ""}
       </div>
     `;
     startTerminalPolling();
@@ -3947,6 +4068,7 @@ function renderTerminalExecution() {
               <p class="muted">每日登录 / 多窗扫码 / 与素材矩阵的关系在这里闭环。</p>
             </div>
           </div>
+          ${renderTerminalWechatQuickActionBar()}
           <div class="terminal-wechat-summary">
             <div class="metric"><span>总账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.total || 0)}</strong></div>
             <div class="metric"><span>已完成账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.success || 0)}</strong></div>
@@ -5133,6 +5255,312 @@ async function fetchTelegramChatId() {
   }
 }
 
+const INTERACTION_TAB_META = {
+  comment: { label: "评论", description: "公开视频评论自动回复" },
+  private_message: { label: "私信", description: "私信自动回复" },
+  barrage: { label: "弹幕", description: "暂不支持" },
+};
+
+function normalizeInteractionTab(tab) {
+  return Object.prototype.hasOwnProperty.call(INTERACTION_TAB_META, tab) ? tab : "comment";
+}
+
+function syncInteractionNavState() {
+  document.querySelectorAll("[data-interaction-tab]").forEach((button) => {
+    const active = currentView === "interaction-management" && normalizeInteractionTab(button.dataset.interactionTab) === currentInteractionTab;
+    button.classList.toggle("active", active);
+  });
+}
+
+function setInteractionTab(tab) {
+  currentInteractionTab = normalizeInteractionTab(tab);
+  localStorage.setItem("gasgx-interaction-tab", currentInteractionTab);
+  syncInteractionNavState();
+  renderInteractionManagement();
+}
+
+function splitInteractionLines(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function joinInteractionLines(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).join("\n");
+  return String(value || "");
+}
+
+function interactionStatusText(status = {}) {
+  const running = Boolean(status.running);
+  if (running) return "运行中";
+  const value = String(status.status || "").trim();
+  if (value === "completed") return "已完成";
+  if (value === "failed") return "失败";
+  if (value === "idle") return "空闲";
+  return value || "未就绪";
+}
+
+function interactionTaskSummary(kind, result = {}) {
+  const label = kind === "private_message" ? "私信" : "评论";
+  const ok = Boolean(result.ok);
+  const selected = Number(result.conversations_selected || result.posts_selected || 0);
+  const sent = Number(result.replies_sent || 0);
+  const statePath = String(result.state_path || "").trim();
+  return `${label}任务${ok ? "已完成" : "已结束"} · 选中 ${selected} 条 · 发送 ${sent} 条${statePath ? ` · ${statePath}` : ""}`;
+}
+
+function renderInteractionManagement() {
+  const root = document.querySelector("#interaction-management-root");
+  if (!root) return;
+  const config = state.interactionManagement.config || {};
+  const status = state.interactionManagement.status || {};
+  const comment = config.comment_reply || {};
+  const privateMessage = config.private_message_reply || {};
+  const lastResult = status.last_result || {};
+  const history = Array.isArray(lastResult.records) ? lastResult.records : [];
+  const activeTab = normalizeInteractionTab(currentInteractionTab);
+  const statusTone = status.running ? "warning" : (status.status === "failed" ? "danger" : "success");
+  root.innerHTML = `
+    <div class="interaction-management-layout">
+      <section class="panel interaction-management-config-panel">
+        <div class="panel-head">
+          <div>
+            <h2>互动自动回复</h2>
+            <p class="muted">评论与私信走 GasGx 官方客服身份，私信提示语独立配置；弹幕先保留入口，不自动化。</p>
+          </div>
+          <span class="system-status ${statusTone}">${escapeHtml(interactionStatusText(status))}</span>
+        </div>
+        <div class="interaction-tab-switcher">
+          ${Object.entries(INTERACTION_TAB_META).map(([tab, meta]) => `
+            <button class="interaction-tab-btn ${activeTab === tab ? "active" : ""}" type="button" data-interaction-tab="${tab}">
+              <strong>${escapeHtml(meta.label)}</strong>
+              <span>${escapeHtml(meta.description)}</span>
+            </button>
+          `).join("")}
+        </div>
+        <div class="interaction-panel-stack">
+          <section class="interaction-tab-panel ${activeTab === "comment" ? "active" : "hidden"}" data-interaction-panel="comment">
+            <div class="interaction-panel-head">
+              <h3>评论自动回复</h3>
+              <button class="btn primary" type="button" data-interaction-comment-run>立即运行</button>
+            </div>
+            <div class="interaction-form-grid">
+              <label class="interaction-toggle"><input type="checkbox" data-interaction-comment-enabled ${comment.enabled !== false ? "checked" : ""}>启用评论自动回复</label>
+              <label>每次最多扫描视频数<input type="number" min="1" max="200" data-interaction-comment-max-posts value="${Number(comment.max_posts_per_run || 50)}"></label>
+              <label>每次最多回复数<input type="number" min="1" max="100" data-interaction-comment-max-replies value="${Number(comment.max_replies_per_run || 20)}"></label>
+              <label>回复最小字数<input type="number" min="5" max="80" data-interaction-comment-min-chars value="${Number(comment.reply_min_chars || 8)}"></label>
+              <label>回复最大字数<input type="number" min="8" max="120" data-interaction-comment-max-chars value="${Number(comment.reply_max_chars || 40)}"></label>
+              <label>最小回复间隔(秒)<input type="number" min="1" max="60" data-interaction-comment-min-interval value="${Number(comment.min_reply_interval_seconds || 1)}"></label>
+              <label>最大回复间隔(秒)<input type="number" min="1" max="60" data-interaction-comment-max-interval value="${Number(comment.max_reply_interval_seconds || 5)}"></label>
+              <label class="interaction-toggle"><input type="checkbox" data-interaction-comment-auto-like ${comment.auto_like !== false ? "checked" : ""}>自动点赞后再回复</label>
+              <label class="interaction-wide-field">评论提示语<textarea rows="8" data-interaction-comment-prompt>${escapeHtml(joinInteractionLines(comment.prompt_template || ""))}</textarea></label>
+              <label class="interaction-wide-field">评论兜底回复（每行一条）<textarea rows="4" data-interaction-comment-fallbacks>${escapeHtml(joinInteractionLines(comment.fallback_replies || []))}</textarea></label>
+            </div>
+          </section>
+          <section class="interaction-tab-panel ${activeTab === "private_message" ? "active" : "hidden"}" data-interaction-panel="private_message">
+            <div class="interaction-panel-head">
+              <h3>私信自动回复</h3>
+              <button class="btn primary" type="button" data-interaction-private-run>立即运行</button>
+            </div>
+            <p class="muted">运行时会依次处理“私信”和“打招呼消息”两个标签，并按配置的随机延迟执行点击、打开和发送动作。</p>
+            <div class="interaction-form-grid">
+              <label class="interaction-toggle"><input type="checkbox" data-interaction-private-enabled ${privateMessage.enabled !== false ? "checked" : ""}>启用私信自动回复</label>
+              <label>每次最多扫描会话数<input type="number" min="1" max="200" data-interaction-private-max-conversations value="${Number(privateMessage.max_conversations_per_run || 20)}"></label>
+              <label>每次最多回复数<input type="number" min="1" max="100" data-interaction-private-max-replies value="${Number(privateMessage.max_replies_per_run || 20)}"></label>
+              <label>回复最小字数<input type="number" min="10" max="120" data-interaction-private-min-chars value="${Number(privateMessage.reply_min_chars || 30)}"></label>
+              <label>回复最大字数<input type="number" min="20" max="200" data-interaction-private-max-chars value="${Number(privateMessage.reply_max_chars || 120)}"></label>
+              <label>最小回复间隔(秒)<input type="number" min="1" max="60" data-interaction-private-min-interval value="${Number(privateMessage.min_reply_interval_seconds || 1)}"></label>
+              <label>最大回复间隔(秒)<input type="number" min="1" max="60" data-interaction-private-max-interval value="${Number(privateMessage.max_reply_interval_seconds || 5)}"></label>
+              <label>动作随机延迟最小(秒)<input type="number" min="0" max="30" data-interaction-private-action-min value="${Number(privateMessage.min_action_delay_seconds ?? 1)}"></label>
+              <label>动作随机延迟最大(秒)<input type="number" min="0" max="30" data-interaction-private-action-max value="${Number(privateMessage.max_action_delay_seconds ?? 5)}"></label>
+              <label class="interaction-wide-field">私信提示语<textarea rows="8" data-interaction-private-prompt>${escapeHtml(joinInteractionLines(privateMessage.prompt_template || ""))}</textarea></label>
+              <label class="interaction-wide-field">私信兜底回复（每行一条）<textarea rows="4" data-interaction-private-fallbacks>${escapeHtml(joinInteractionLines(privateMessage.fallback_replies || []))}</textarea></label>
+            </div>
+          </section>
+          <section class="interaction-tab-panel ${activeTab === "barrage" ? "active" : "hidden"}" data-interaction-panel="barrage">
+            <div class="interaction-panel-head">
+              <h3>弹幕</h3>
+            </div>
+            <div class="interaction-placeholder">
+              <strong>暂不支持弹幕自动回复</strong>
+              <p class="muted">先保留入口，后续如果视频号弹幕页稳定可用，再补接自动化。</p>
+            </div>
+          </section>
+        </div>
+        <div class="interaction-config-actions">
+          <button class="btn secondary" type="button" data-interaction-refresh>刷新状态</button>
+          <button class="btn primary" type="button" id="interaction-management-save">保存配置</button>
+        </div>
+      </section>
+      <section class="panel interaction-management-status-panel">
+        <div class="panel-head">
+          <div>
+            <h2>运行状态</h2>
+            <p class="muted">后台线程会自动执行当前任务，页面可先离开，稍后再回来查看结果。</p>
+          </div>
+          <span class="system-status ${statusTone}">${escapeHtml(status.message || status.error || "待命")}</span>
+        </div>
+        <div class="interaction-status-grid">
+          <div class="metric"><span>当前任务</span><strong>${escapeHtml(status.kind || "无")}</strong></div>
+          <div class="metric"><span>开始时间</span><strong>${escapeHtml(status.started_at || "-")}</strong></div>
+          <div class="metric"><span>结束时间</span><strong>${escapeHtml(status.finished_at || "-")}</strong></div>
+          <div class="metric"><span>失败信息</span><strong>${escapeHtml(status.error || "-")}</strong></div>
+        </div>
+        <div class="interaction-history">
+          <div class="panel-head compact">
+            <h3>最近结果</h3>
+            <span class="system-status">${escapeHtml(interactionTaskSummary(status.kind, lastResult))}</span>
+          </div>
+          ${history.length ? history.map((item) => `
+            <article class="interaction-history-row">
+              <div class="row-head">
+                <strong>${escapeHtml(item.conversation_name || item.comment_author || item.post_title || "记录")}</strong>
+                <span class="chip">${escapeHtml(item.replied_at || "-")}</span>
+              </div>
+              <div class="muted">${escapeHtml(item.message_preview || item.comment_preview || "")}</div>
+              <div class="interaction-history-reply">${escapeHtml(item.reply_text || "")}</div>
+            </article>
+          `).join("") : `<div class="muted">暂无回复记录</div>`}
+        </div>
+      </section>
+    </div>
+  `;
+
+  root.querySelectorAll("[data-interaction-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setInteractionTab(button.dataset.interactionTab);
+      if (currentView !== "interaction-management") {
+        activateView("interaction-management");
+      } else {
+        renderInteractionManagement();
+      }
+    });
+  });
+
+  root.querySelector("#interaction-management-save")?.addEventListener("click", async (event) => {
+    await saveInteractionManagementConfig(event.currentTarget);
+  });
+
+  root.querySelector("[data-interaction-refresh]")?.addEventListener("click", async (event) => {
+    const restoreButton = setButtonLoading(event.currentTarget, "刷新中");
+    try {
+      await refreshInteractionManagement();
+    } finally {
+      restoreButton();
+    }
+  });
+
+  root.querySelector("[data-interaction-comment-run]")?.addEventListener("click", async (event) => {
+    await runInteractionCommentReply(event.currentTarget);
+  });
+
+  root.querySelector("[data-interaction-private-run]")?.addEventListener("click", async (event) => {
+    await runInteractionPrivateMessageReply(event.currentTarget);
+  });
+}
+
+function collectInteractionManagementConfig() {
+  const root = document.querySelector("#interaction-management-root");
+  if (!root) return null;
+  const existing = state.interactionManagement.config || {};
+  const readNumber = (selector, fallback) => {
+    const value = Number(root.querySelector(selector)?.value || fallback || 0);
+    return Number.isFinite(value) ? value : Number(fallback || 0);
+  };
+  const readBool = (selector, fallback) => {
+    const node = root.querySelector(selector);
+    return node ? Boolean(node.checked) : Boolean(fallback);
+  };
+  const commentPrompt = root.querySelector("[data-interaction-comment-prompt]")?.value || "";
+  const commentFallbacks = root.querySelector("[data-interaction-comment-fallbacks]")?.value || "";
+  const privatePrompt = root.querySelector("[data-interaction-private-prompt]")?.value || "";
+  const privateFallbacks = root.querySelector("[data-interaction-private-fallbacks]")?.value || "";
+  return {
+    comment_reply: {
+      ...existing.comment_reply,
+      enabled: readBool("[data-interaction-comment-enabled]", true),
+      max_posts_per_run: readNumber("[data-interaction-comment-max-posts]", existing.comment_reply?.max_posts_per_run || 50),
+      max_replies_per_run: readNumber("[data-interaction-comment-max-replies]", existing.comment_reply?.max_replies_per_run || 20),
+      reply_min_chars: readNumber("[data-interaction-comment-min-chars]", existing.comment_reply?.reply_min_chars || 8),
+      reply_max_chars: readNumber("[data-interaction-comment-max-chars]", existing.comment_reply?.reply_max_chars || 40),
+      min_reply_interval_seconds: readNumber("[data-interaction-comment-min-interval]", existing.comment_reply?.min_reply_interval_seconds || 1),
+      max_reply_interval_seconds: readNumber("[data-interaction-comment-max-interval]", existing.comment_reply?.max_reply_interval_seconds || 5),
+      auto_like: readBool("[data-interaction-comment-auto-like]", true),
+      prompt_template: commentPrompt,
+      fallback_replies: splitInteractionLines(commentFallbacks),
+    },
+    private_message_reply: {
+      ...existing.private_message_reply,
+      enabled: readBool("[data-interaction-private-enabled]", true),
+      max_conversations_per_run: readNumber("[data-interaction-private-max-conversations]", existing.private_message_reply?.max_conversations_per_run || 20),
+      max_replies_per_run: readNumber("[data-interaction-private-max-replies]", existing.private_message_reply?.max_replies_per_run || 20),
+      reply_min_chars: readNumber("[data-interaction-private-min-chars]", existing.private_message_reply?.reply_min_chars || 30),
+      reply_max_chars: readNumber("[data-interaction-private-max-chars]", existing.private_message_reply?.reply_max_chars || 120),
+      min_reply_interval_seconds: readNumber("[data-interaction-private-min-interval]", existing.private_message_reply?.min_reply_interval_seconds || 1),
+      max_reply_interval_seconds: readNumber("[data-interaction-private-max-interval]", existing.private_message_reply?.max_reply_interval_seconds || 5),
+      min_action_delay_seconds: readNumber("[data-interaction-private-action-min]", existing.private_message_reply?.min_action_delay_seconds || 1),
+      max_action_delay_seconds: readNumber("[data-interaction-private-action-max]", existing.private_message_reply?.max_action_delay_seconds || 5),
+      prompt_template: privatePrompt,
+      fallback_replies: splitInteractionLines(privateFallbacks),
+    },
+    spark_ai: existing.spark_ai || {},
+    chrome: existing.chrome || {},
+  };
+}
+
+async function saveInteractionManagementConfig(button = null) {
+  const restoreButton = setButtonLoading(button || document.querySelector("#interaction-management-save"), "保存中");
+  try {
+    const payload = collectInteractionManagementConfig();
+    if (!payload) throw new Error("互动管理配置面板不存在");
+    state.interactionManagement.config = await api("/api/interaction-management/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    state.interactionManagement.status = await api("/api/interaction-management/status");
+    renderInteractionManagement();
+  } catch (error) {
+    window.alert(`保存互动管理配置失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
+  } finally {
+    restoreButton();
+  }
+}
+
+async function refreshInteractionManagement() {
+  try {
+    state.interactionManagement.config = await api("/api/interaction-management/config");
+    state.interactionManagement.status = await api("/api/interaction-management/status");
+    if (currentView === "interaction-management") renderInteractionManagement();
+  } catch (error) {
+    window.alert(`刷新互动管理状态失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
+  }
+}
+
+async function runInteractionCommentReply(button = null) {
+  const restoreButton = setButtonLoading(button || document.querySelector("[data-interaction-comment-run]"), "运行中");
+  try {
+    state.interactionManagement.status = await api("/api/interaction-management/comment/run", { method: "POST" });
+    renderInteractionManagement();
+  } catch (error) {
+    window.alert(`启动评论自动回复失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
+  } finally {
+    restoreButton();
+  }
+}
+
+async function runInteractionPrivateMessageReply(button = null) {
+  const restoreButton = setButtonLoading(button || document.querySelector("[data-interaction-private-run]"), "运行中");
+  try {
+    state.interactionManagement.status = await api("/api/interaction-management/private-msg/run", { method: "POST" });
+    renderInteractionManagement();
+  } catch (error) {
+    window.alert(`启动私信自动回复失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
+  } finally {
+    restoreButton();
+  }
+}
+
 function renderAiRobot() {
   const form = document.querySelector("#ai-robot-form");
   if (!form) return;
@@ -5468,9 +5896,9 @@ function terminalRouteFromHash(hash = window.location.hash) {
 function terminalHealthSummary(platform) {
   const normalized = String(platform || "").toLowerCase();
   if (normalized === "wechat") {
-    const summary = state.terminalExecution.summary || {};
     if (state.terminalExecution.login_started) {
-      return summary.success === summary.total && summary.total ? "已登录" : "等待扫码";
+      const summary = state.terminalExecution.summary || {};
+      return summary.success === summary.total && summary.total ? "已登录" : "处理中";
     }
     return state.terminalExecution.initialized ? "已配置" : "未检测";
   }
@@ -5537,7 +5965,6 @@ function terminalPlatformCards() {
             </div>
             <span class="chip">${terminalSessionPolicyLabel(capability.sessionPolicy)}</span>
           </div>
-          <p class="muted">${platform === "wechat" ? "视频号独立流程，进入后只处理扫码、窗态和矩阵衔接。" : ""}</p>
           <div class="terminal-entry-meta">
             ${terminalStatusChip(platform, health)}
             <span class="system-status">${capability.canOpenBrowser ? "可打开浏览器" : "未配置浏览器"}</span>
@@ -5693,6 +6120,10 @@ async function loadViewData(view, { force = false } = {}) {
       state.aiRobotConfigs = await api("/api/ai-robots/configs");
       state.aiRobotMessages = await api("/api/ai-robots/messages");
       renderAiRobot();
+    } else if (view === "interaction-management") {
+      state.interactionManagement.config = await api("/api/interaction-management/config");
+      state.interactionManagement.status = await api("/api/interaction-management/status");
+      renderInteractionManagement();
     } else if (view === "notifications") {
       state.notificationEvents = await api("/api/notification-events");
       state.notificationRoutes = await api("/api/notification-routes");
@@ -5969,6 +6400,7 @@ function activateView(view, updateHash = true) {
   button.classList.add("active");
   section.classList.add("active");
   currentView = view;
+  syncInteractionNavState();
   document.body.classList.toggle("terminal-execution-active", view === "terminal-execution");
   document.body.classList.toggle("video-matrix-active", view === "video-matrix");
   document.body.classList.remove("mobile-nav-open");
@@ -6009,6 +6441,38 @@ document.querySelectorAll(".nav-btn").forEach((button) => {
     }
     activateView(button.dataset.view);
   });
+});
+
+document.querySelectorAll("[data-interaction-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    setInteractionTab(button.dataset.interactionTab);
+    if (currentView !== "interaction-management") {
+      activateView("interaction-management");
+    } else {
+      renderInteractionManagement();
+    }
+  });
+});
+
+document.querySelector("#interaction-management-save")?.addEventListener("click", async (event) => {
+  await saveInteractionManagementConfig(event.currentTarget);
+});
+
+document.querySelector("[data-interaction-refresh]")?.addEventListener("click", async (event) => {
+  const restoreButton = setButtonLoading(event.currentTarget, "刷新中");
+  try {
+    await refreshInteractionManagement();
+  } finally {
+    restoreButton();
+  }
+});
+
+document.querySelector("[data-interaction-comment-run]")?.addEventListener("click", async (event) => {
+  await runInteractionCommentReply(event.currentTarget);
+});
+
+document.querySelector("[data-interaction-private-run]")?.addEventListener("click", async (event) => {
+  await runInteractionPrivateMessageReply(event.currentTarget);
 });
 
 document.querySelector("#refresh")?.addEventListener("click", async (event) => {
@@ -6482,6 +6946,16 @@ setInterval(() => {
     })
     .catch(() => {});
 }, 15000);
+
+setInterval(() => {
+  if (!loadedViews.has("interaction-management")) return;
+  api("/api/interaction-management/status")
+    .then((interactionStatus) => {
+      state.interactionManagement.status = interactionStatus;
+      if (currentView === "interaction-management") renderInteractionManagement();
+    })
+    .catch(() => {});
+}, 10000);
 
 setInterval(() => {
   if (!loadedViews.has("stats")) return;
@@ -7311,6 +7785,8 @@ document.addEventListener("click", async (event) => {
   const configJump = event.target.closest("[data-terminal-config-jump]");
   const longDetect = event.target.closest("[data-terminal-long-detect]");
   const longOpen = event.target.closest("[data-terminal-long-open]");
+  const terminalWechatLoginSelected = event.target.closest("[data-terminal-wechat-login-selected]");
+  const terminalWechatPublishSelected = event.target.closest("[data-terminal-wechat-publish-selected]");
   const terminalSave = event.target.closest("#terminal-save-config, [data-terminal-save-config]");
   const terminalCloseInit = event.target.closest("[data-terminal-close-init]");
   const terminalCloseConfig = event.target.closest("[data-terminal-close-config]");
@@ -7318,8 +7794,8 @@ document.addEventListener("click", async (event) => {
   const embeddedEdit = event.target.closest("[data-terminal-edit-action]");
   const terminalStart = event.target.closest("#terminal-start-login");
   const terminalEdit = event.target.closest("#terminal-edit-config");
-  if (!enter && !configJump && !longDetect && !longOpen && !terminalSave && !terminalCloseInit && !terminalCloseConfig && !embeddedStart && !embeddedEdit && !terminalStart && !terminalEdit) return;
-  if (terminalSave || terminalCloseInit || terminalCloseConfig || enter || configJump || longDetect || longOpen || embeddedStart || embeddedEdit || terminalStart || terminalEdit) {
+  if (!enter && !configJump && !longDetect && !longOpen && !terminalWechatLoginSelected && !terminalWechatPublishSelected && !terminalSave && !terminalCloseInit && !terminalCloseConfig && !embeddedStart && !embeddedEdit && !terminalStart && !terminalEdit) return;
+  if (terminalSave || terminalCloseInit || terminalCloseConfig || enter || configJump || longDetect || longOpen || terminalWechatLoginSelected || terminalWechatPublishSelected || embeddedStart || embeddedEdit || terminalStart || terminalEdit) {
     event.stopImmediatePropagation();
   }
   if (terminalCloseInit) {
@@ -7427,6 +7903,68 @@ document.addEventListener("click", async (event) => {
     if (account?.open_url) window.open(account.open_url, "_blank", "noopener,noreferrer");
     return;
   }
+  if (terminalWechatLoginSelected) {
+    const selected = terminalWechatSelectedAccountChoice();
+    if (!selected) {
+      showTerminalErrorModal({
+        stage: "login_browser",
+        title: "登录浏览器打开失败",
+        message: "当前没有可选账号，请先完成终端配置后重试。",
+        context: "指定账号登录",
+        signature: "wechat-selected-login|empty",
+      });
+      return;
+    }
+    const restoreButton = setButtonLoading(terminalWechatLoginSelected, "登录中");
+    terminalErrorModalSignature = "";
+    hideTerminalErrorModal();
+    try {
+      await api(`/api/accounts/${selected.accountId}/platforms/wechat/open-browser`, { method: "POST" });
+      renderTerminalExecution();
+    } catch (error) {
+      showTerminalErrorModal({
+        stage: "login_browser",
+        title: "登录浏览器打开失败",
+        message: error?.message || "登录浏览器打开失败",
+        context: `账号 #${selected.accountId}`,
+        signature: `wechat-selected-login|${selected.accountId}|${error?.message || "unknown"}`,
+      });
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+  if (terminalWechatPublishSelected) {
+    const selected = terminalWechatSelectedAccountChoice();
+    if (!selected) {
+      showTerminalErrorModal({
+        stage: "publish_start",
+        title: "发布启动失败",
+        message: "当前没有可选账号，请先完成终端配置后重试。",
+        context: "指定账号发布",
+        signature: "wechat-selected-publish|empty",
+      });
+      return;
+    }
+    const restoreButton = setButtonLoading(terminalWechatPublishSelected, "发布中");
+    terminalErrorModalSignature = "";
+    hideTerminalErrorModal();
+    try {
+      state.terminalExecution = await api(`/api/accounts/${selected.accountId}/platforms/wechat/emergency-publish`, { method: "POST" });
+      renderTerminalExecution();
+    } catch (error) {
+      showTerminalErrorModal({
+        stage: "publish_start",
+        title: "发布启动失败",
+        message: error?.message || "发布启动失败",
+        context: `账号 #${selected.accountId}`,
+        signature: `wechat-selected-publish|${selected.accountId}|${error?.message || "unknown"}`,
+      });
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
   if (terminalStart) {
     const route = terminalCurrentRoute();
     if (route === "hub") {
@@ -7463,6 +8001,13 @@ document.addEventListener("click", async (event) => {
     const account = terminalLongSessionAccounts(route)[0];
     if (account?.open_url) window.open(account.open_url, "_blank", "noopener,noreferrer");
   }
+}, true);
+
+document.addEventListener("change", (event) => {
+  const select = event.target.closest("#terminal-wechat-account-select");
+  if (!select) return;
+  terminalWechatSelectedAccountId = String(select.value || "").trim();
+  renderTerminalExecution();
 }, true);
 
 window.addEventListener("load", () => {

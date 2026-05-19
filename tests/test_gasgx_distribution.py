@@ -6,6 +6,7 @@ import hmac
 import hashlib
 import sqlite3
 import time
+from datetime import date, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -2197,6 +2198,46 @@ def test_dashboard_summary_counts_remaining_material_videos(monkeypatch, tmp_pat
     assert summary["remaining_material_videos"] == 2
 
 
+def test_terminal_summary_counts_today_remaining_materials(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    material_dir = tmp_path / "runtime" / "materials" / "videos" / "20260518_batch"
+    material_dir.mkdir(parents=True)
+    first = material_dir / "alpha.mp4"
+    second = material_dir / "beta.mp4"
+    third = material_dir / "gamma.mp4"
+    first.write_bytes(b"alpha")
+    second.write_bytes(b"beta")
+    third.write_bytes(b"gamma")
+    os.utime(first, (1000, 1000))
+    os.utime(second, (2000, 2000))
+    os.utime(third, (3000, 3000))
+
+    monkeypatch.setattr(matrix_publish, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(matrix_publish, "_today_date", lambda _tz: date(2026, 5, 18))
+    monkeypatch.setattr(matrix_publish, "get_paths", lambda: type("P", (), {"runtime_root": tmp_path / "runtime"})())
+    monkeypatch.setattr(matrix_publish, "resolve_material_dir", lambda material_dir_override=None: tmp_path / "runtime" / "materials" / "videos")
+    consumed_today = matrix_publish._relative_asset_key(first)
+    consumed_yesterday = matrix_publish._relative_asset_key(second)
+    (tmp_path / "runtime" / "matrix_publish_state.json").write_text(
+        json.dumps(
+            {
+                "consumed": [
+                    {"asset_key": consumed_today, "account_id": 1, "platform": "wechat", "publish_date": "2026-05-18"},
+                    {"asset_key": consumed_yesterday, "account_id": 2, "platform": "wechat", "publish_date": "2026-05-17"},
+                ],
+                "runs": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    summary = service._terminal_summary([], [])
+
+    assert summary["today_materials"] == 3
+    assert summary["remaining_material_videos"] == 2
+
+
 def test_open_browser_uses_account_specific_profile(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     account = service.create_account({"account_key": "gasgx-x-01", "display_name": "GasGx X 01", "platforms": ["x"]})
@@ -2893,6 +2934,64 @@ def test_terminal_config_update_preserves_active_qr_for_same_window(monkeypatch,
     assert window["qr_expires_at"] == 1560
     assert window["accounts"][0]["status"] == "waiting_qr"
     assert window["manual_available_at"] == 1234
+
+
+def test_terminal_emergency_publish_route_does_not_mutate_windows(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Emergency A",
+            "display_name": "GasGx Emergency A",
+            "platforms": ["wechat"],
+            "notes": "运营微信: aamecc",
+        }
+    )
+    service.start_terminal_execution({"windows": [{"id": 1, "enabled": True, "operator_wechat": "aamecc", "color": "#F97316"}]})
+    runtime_dir = tmp_path / "runtime"
+    material_dir = runtime_dir / "materials" / "videos" / "20260518_batch"
+    material_dir.mkdir(parents=True, exist_ok=True)
+    sample = material_dir / "sample.mp4"
+    sample.write_bytes(b"sample")
+    os.utime(sample, (1000, 1000))
+
+    monkeypatch.setattr(
+        service,
+        "open_account_browser",
+        lambda account_id, platform, *, apply_marker=True: (_ for _ in ()).throw(
+            RuntimeError("debug port 9222 is already used by another browser profile")
+        ),
+    )
+    monkeypatch.setattr(service, "load_platform_publish_settings", lambda platform: {"publish_mode": "publish", "upload_timeout": 120, "caption": "caption", "topics": "", "collection_name": "", "declare_original": False})
+    import gasgx_distribution.matrix_publish as mp
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 18))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [sample])
+    monkeypatch.setattr(mp, "_consumed_index", lambda today=None: set())
+    monkeypatch.setattr(mp, "prepare_workspace", lambda item: item.workspace.mkdir(parents=True, exist_ok=True))
+    popen_calls: list[dict[str, Any]] = []
+
+    class FakeProcess:
+        pid = 4321
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append({"cmd": list(cmd), "env": dict(kwargs.get("env") or {})})
+        return FakeProcess()
+
+    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
+    client = TestClient(create_app())
+
+    response = client.post(f"/api/accounts/{account['id']}/platforms/wechat/emergency-publish")
+
+    assert response.status_code == 200
+    payload = response.json()
+    window = payload["windows"][0]
+    assert window["current_index"] == 0
+    assert window.get("publish_run") in ({}, None)
+    assert len(payload["emergency_publish_runs"]) == 1
+    assert payload["emergency_publish_runs"][0]["account_id"] == account["id"]
+    assert popen_calls
+    assert "--wechat-publish-now" in popen_calls[0]["cmd"]
 
 
 def test_terminal_config_update_clears_stale_qr_when_window_operator_changes(monkeypatch, tmp_path: Path) -> None:

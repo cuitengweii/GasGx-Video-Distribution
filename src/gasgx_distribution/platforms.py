@@ -22,11 +22,11 @@ class PlatformCapability:
 
 
 SUPPORTED_PLATFORMS: tuple[PlatformCapability, ...] = (
-    PlatformCapability("wechat", "视频号", "cn", True, True, True, True, False, True, "https://channels.weixin.qq.com/platform/post/create"),
-    PlatformCapability("douyin", "抖音", "cn", True, True, True, True, False, True, "https://creator.douyin.com/creator-micro/content/upload"),
-    PlatformCapability("kuaishou", "快手", "cn", True, True, True, True, False, True, "https://cp.kuaishou.com/article/publish/video"),
-    PlatformCapability("xiaohongshu", "小红书", "cn", True, True, True, False, False, True, "https://creator.xiaohongshu.com/publish/publish"),
-    PlatformCapability("bilibili", "B站", "cn", True, True, True, False, False, True, "https://member.bilibili.com/platform/upload/video/frame"),
+    PlatformCapability("wechat", "Video Channel", "cn", True, True, True, True, True, True, "https://channels.weixin.qq.com/platform/post/create"),
+    PlatformCapability("douyin", "Douyin", "cn", True, True, True, True, False, True, "https://creator.douyin.com/creator-micro/content/upload"),
+    PlatformCapability("kuaishou", "Kuaishou", "cn", True, True, True, True, False, True, "https://cp.kuaishou.com/article/publish/video"),
+    PlatformCapability("xiaohongshu", "Xiaohongshu", "cn", True, True, True, False, False, True, "https://creator.xiaohongshu.com/publish/publish"),
+    PlatformCapability("bilibili", "Bilibili", "cn", True, True, True, False, False, True, "https://member.bilibili.com/platform/upload/video/frame"),
     PlatformCapability("x", "X", "global", True, True, True, False, True, True, "https://x.com/compose/post"),
     PlatformCapability("linkedin", "LinkedIn", "global", True, False, False, False, False, True, "https://www.linkedin.com/"),
     PlatformCapability("facebook", "Facebook", "global", True, False, False, False, False, True, "https://www.facebook.com/"),

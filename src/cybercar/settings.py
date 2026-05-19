@@ -105,6 +105,15 @@ def load_app_config() -> dict[str, Any]:
     return _load_json(_repo_root() / "config" / "app.json")
 
 
+def save_app_config(payload: dict[str, Any]) -> dict[str, Any]:
+    path = _repo_root() / "config" / "app.json"
+    data = dict(payload) if isinstance(payload, dict) else {}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    load_app_config.cache_clear()
+    return data
+
+
 @lru_cache(maxsize=1)
 def load_profile_config() -> dict[str, Any]:
     return _load_json(_repo_root() / "config" / "profiles.json")

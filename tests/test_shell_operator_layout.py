@@ -25,13 +25,10 @@ def test_overview_keeps_operator_friendly_entry_layout() -> None:
     assert '/api/terminal-execution/state' in app
     assert '/api/terminal-execution/start' in app
     assert '/api/terminal-execution/start-login' in app
-    assert '/api/terminal-execution/poll' not in app
+    assert '/api/terminal-execution/poll' in app
     assert '/api/terminal-execution/windows/' in app
     assert '/accounts/' in app
     assert '/qr' in app
-    assert 'confirm-login' in app
-    assert 'data-terminal-confirm-login' in app
-    assert 'confirm-publish-success' in app
     assert 'data-terminal-confirm-success' in app
     assert 'data-terminal-qr-refresh' in app
     assert 'data-terminal-qr-countdown' in app

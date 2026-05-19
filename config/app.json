@@ -175,21 +175,46 @@
     "max_posts_per_run": 50,
     "max_replies_per_run": 20,
     "reply_min_chars": 5,
-    "reply_max_chars": 20,
-    "min_reply_interval_seconds": 3,
-    "max_reply_interval_seconds": 10,
-    "min_like_to_reply_interval_seconds": 3,
-    "max_like_to_reply_interval_seconds": 10,
+    "reply_max_chars": 40,
+    "min_reply_interval_seconds": 1,
+    "max_reply_interval_seconds": 5,
+    "min_like_to_reply_interval_seconds": 1,
+    "max_like_to_reply_interval_seconds": 5,
     "auto_like": true,
     "self_author_markers": [
-      "cybercar"
+      "gasgx",
+      "gasgx官方客服",
+      "gasgx | 天然气发电"
     ],
-    "prompt_template": "\u8bf7\u4f60\u4f5c\u4e3a\u4e00\u4e2a\u559c\u6b22 Cybertruck \u7684\u7231\u597d\u8005\uff0c\u9488\u5bf9\u7528\u6237\u8bc4\u8bba\u751f\u6210\u4e00\u53e5\u4e2d\u6587\u56de\u590d\u3002\\n\u89c6\u9891\u6807\u9898\uff1a{post_title}\\n\u53d1\u5e03\u65f6\u95f4\uff1a{post_published_text}\\n\u7528\u6237\u6635\u79f0\uff1a{comment_author}\\n\u8bc4\u8bba\u65f6\u95f4\uff1a{comment_time}\\n\u7528\u6237\u8bc4\u8bba\uff1a{comment_content}\\n\u8981\u6c42\uff1a\u56de\u590d\u81ea\u7136\u3001\u771f\u8bda\u3001\u6709\u5171\u9e23\uff0c\u76ee\u6807\u5b57\u6570 {reply_target_chars} \u5b57\uff0c\u5141\u8bb8\u8303\u56f4 {reply_min_chars}-{reply_max_chars} \u5b57\uff0c\u4e0d\u8981\u6362\u884c\uff0c\u4e0d\u8981\u5916\u94fe\uff0c\u53ea\u8fd4\u56de JSON\u3002",
+    "prompt_template": "请你作为 GasGx 官方客服，针对用户评论生成一条中文回复。\\n品牌身份：GasGx 官方客服\\n视频标题：{post_title}\\n发布时间：{post_published_text}\\n用户昵称：{comment_author}\\n评论时间：{comment_time}\\n用户评论：{comment_content}\\n要求：回复自然、友好、专业、简短，像真人客服；不编造价格、库存、交期；如涉及采购或技术问题，优先温和引导对方补充功率范围、燃气类型、应用场景、项目地区等信息；目标字数 {reply_target_chars} 字，允许范围 {reply_min_chars}-{reply_max_chars} 字；不要换行，不要外链，不要引导到其他平台；只返回 JSON。",
     "fallback_replies": [
-      "\u8c22\u8c22\u559c\u6b22\uff0c\u4e00\u8d77\u89c1\u8bc1\u66f4\u591a\u7cbe\u5f69\u3002",
-      "\u611f\u8c22\u5173\u6ce8\uff0c\u6b22\u8fce\u7ee7\u7eed\u4ea4\u6d41\u60f3\u6cd5\u3002",
-      "\u5f88\u6709\u5171\u9e23\uff0c\u671f\u5f85\u548c\u4f60\u7ee7\u7eed\u804a\u3002",
-      "\u8c22\u8c22\u652f\u6301\uff0c\u540e\u9762\u8fd8\u6709\u66f4\u591a\u60ca\u559c\u3002"
+      "感谢关注，GasGx 随时为你服务。",
+      "这个问题很关键，我们可以继续帮你看。",
+      "收到，GasGx 官方客服这边先帮你记下。",
+      "谢谢留言，欢迎继续补充细节。"
+    ],
+    "launch_background": true,
+    "debug": false
+  },
+  "private_message_reply": {
+    "enabled": true,
+    "max_conversations_per_run": 20,
+    "max_replies_per_run": 20,
+    "reply_min_chars": 30,
+    "reply_max_chars": 120,
+    "min_reply_interval_seconds": 1,
+    "max_reply_interval_seconds": 5,
+    "min_action_delay_seconds": 1,
+    "max_action_delay_seconds": 5,
+    "self_author_markers": [
+      "gasgx",
+      "gasgx官方客服"
+    ],
+    "prompt_template": "你是 GasGx 官方客服，正在与一位用户进行一对一私信沟通。\\n请根据会话上下文和用户的最新消息，生成一条自然、专业、像真人客服的中文回复。\\n品牌身份：GasGx 官方客服\\n会话标题：{conversation_title}\\n联系人昵称：{conversation_name}\\n最近消息时间：{message_time}\\n最近消息内容：{message_content}\\n会话上下文：{conversation_history}\\n要求：先接住用户问题，再给出有帮助的答复；如果信息不够，可以礼貌追问关键参数，包括功率范围、燃气类型/热值、使用场景、项目地区、并网/离网、联系方式等；不要承诺未确认的价格、库存、交期或交付结果；语气稳定、清楚、友好；目标字数 {reply_target_chars} 字，允许范围 {reply_min_chars}-{reply_max_chars} 字；不要换行，不要外链，不要表情堆砌；只返回 JSON。",
+    "fallback_replies": [
+      "您好，这边是 GasGx 官方客服。为了更准确帮您判断方案，方便补充一下功率范围、使用场景和项目地区吗？",
+      "收到您的私信了，我们先帮您看下。您这边方便再说一下燃气类型、功率需求以及是否并网吗？",
+      "您好，GasGx 官方客服在。为了尽快给您匹配建议，麻烦补充一下应用场景和大概的功率范围。"
     ],
     "launch_background": true,
     "debug": false

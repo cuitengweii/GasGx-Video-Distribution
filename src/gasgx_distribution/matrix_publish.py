@@ -316,6 +316,23 @@ def list_candidate_videos(*, include_used: bool = False) -> list[Path]:
     return today_videos
 
 
+def _today_consumed_asset_keys(today: str) -> set[str]:
+    keys: set[str] = set()
+    for item in _consumed_records():
+        publish_date = str(item.get("publish_date") or "").strip()
+        asset_key = str(item.get("asset_key") or "").strip()
+        if publish_date == today and asset_key:
+            keys.add(asset_key)
+    return keys
+
+
+def count_remaining_today_candidate_videos() -> int:
+    tz = _load_timezone()
+    today = _today_date(tz).isoformat()
+    consumed_asset_keys = _today_consumed_asset_keys(today)
+    return sum(1 for path in list_candidate_videos() if _relative_asset_key(path) not in consumed_asset_keys)
+
+
 def _account_platform_slots(accounts: list[dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     slots: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for account in accounts:

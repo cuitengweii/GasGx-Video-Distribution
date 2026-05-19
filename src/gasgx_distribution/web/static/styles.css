@@ -202,6 +202,34 @@ nav {
   margin: 10px 0 2px;
 }
 
+.nav-subgroup {
+  display: grid;
+  gap: 6px;
+  margin: -2px 0 4px 14px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(93, 214, 44, 0.16);
+}
+
+.nav-subbtn {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.nav-subbtn:hover,
+.nav-subbtn.active {
+  color: var(--accent-aurora);
+  background: var(--accent-soft);
+  border-color: rgba(93, 214, 44, 0.2);
+}
+
 .nav-btn,
 .btn {
   border: 1px solid transparent;
@@ -808,6 +836,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 14px;
 }
 
@@ -1232,6 +1261,188 @@ select option {
   display: inline-flex;
   gap: 10px;
   justify-content: flex-start;
+}
+
+.interaction-management-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.interaction-management-layout .panel {
+  min-width: 0;
+}
+
+.interaction-management-config-panel,
+.interaction-management-status-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.interaction-tab-switcher {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.interaction-tab-btn {
+  display: grid;
+  gap: 4px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: #111111;
+  text-align: left;
+  cursor: pointer;
+}
+
+.interaction-tab-btn strong {
+  color: var(--text-primary);
+}
+
+.interaction-tab-btn.active {
+  color: var(--accent-aurora);
+  border-color: rgba(93, 214, 44, 0.36);
+  background: var(--accent-soft);
+}
+
+.interaction-panel-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.interaction-tab-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.interaction-tab-panel.hidden {
+  display: none;
+}
+
+.interaction-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.interaction-panel-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.interaction-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.interaction-form-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.interaction-form-grid input,
+.interaction-form-grid textarea {
+  width: 100%;
+}
+
+.interaction-toggle {
+  grid-column: 1 / -1;
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.interaction-toggle input[type="checkbox"] {
+  width: auto;
+  min-width: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  box-shadow: none;
+}
+
+.interaction-toggle {
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(93, 214, 44, 0.14);
+  border-radius: 8px;
+  background: rgba(16, 16, 16, 0.72);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.interaction-toggle:hover {
+  border-color: rgba(93, 214, 44, 0.24);
+  background: rgba(18, 22, 18, 0.92);
+}
+
+.interaction-wide-field {
+  grid-column: 1 / -1;
+}
+
+.interaction-placeholder {
+  min-height: 120px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  border: 1px dashed rgba(93, 214, 44, 0.24);
+  border-radius: 8px;
+  background: rgba(16, 16, 16, 0.72);
+  padding: 18px;
+}
+
+.interaction-config-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.interaction-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.interaction-history {
+  display: grid;
+  gap: 12px;
+}
+
+.interaction-history-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  background: #161616;
+}
+
+.interaction-history-reply {
+  color: var(--text-primary);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.interaction-management-status-panel .system-status {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.interaction-status-grid .metric {
+  min-width: 0;
+}
+
+.interaction-status-grid .metric strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 22px;
 }
 
 .ai-callback-field {
@@ -2200,6 +2411,50 @@ select option {
   .task-filter-grid {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
+
+  .interaction-management-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .interaction-form-grid,
+  .interaction-status-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1320px) {
+  .interaction-management-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .interaction-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .topbar-title {
+    flex: 1 1 320px;
+  }
+
+  .interaction-management-status-panel .interaction-status-grid,
+  .interaction-management-config-panel .interaction-tab-switcher {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 980px) {
+  .interaction-status-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 1400px) {
@@ -2268,6 +2523,14 @@ select option {
     padding-bottom: 0;
   }
 
+  body.mobile-nav-open .sidebar nav .nav-subgroup {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding-left: 0;
+    border-left: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   body.mobile-nav-open .sidebar .sidebar-user-panel {
     display: block;
     position: static;
@@ -2291,6 +2554,14 @@ select option {
     font-size: 13px;
     line-height: 1.28;
     white-space: normal;
+  }
+
+  .nav-subbtn {
+    text-align: center;
+    justify-content: center;
+    min-height: 36px;
+    padding: 7px 6px;
+    font-size: 12px;
   }
 
   .split,
@@ -2322,6 +2593,16 @@ select option {
 
   .page-toolbar .btn {
     flex: 1 1 150px;
+  }
+
+  .interaction-tab-switcher {
+    grid-template-columns: 1fr;
+  }
+
+  .interaction-panel-head,
+  .interaction-config-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .operation-focus-grid,
@@ -3236,6 +3517,7 @@ select option {
   display: inline-flex;
   align-items: center;
   min-height: 28px;
+  min-width: 0;
   padding: 5px 10px;
   border: 1px solid rgba(93, 214, 44, 0.24);
   border-radius: 999px;
@@ -3251,6 +3533,18 @@ select option {
   border-color: rgba(255, 77, 95, 0.36);
   color: #ff4d5f;
   background: rgba(255, 77, 95, 0.12);
+}
+
+.system-status.warning {
+  border-color: rgba(255, 176, 46, 0.36);
+  color: #ffb02e;
+  background: rgba(255, 176, 46, 0.12);
+}
+
+.system-status.success {
+  border-color: rgba(93, 214, 44, 0.32);
+  color: var(--accent-aurora);
+  background: rgba(93, 214, 44, 0.12);
 }
 
 .health-list {
@@ -4541,7 +4835,8 @@ body.terminal-execution-active #page-description {
 }
 
 #terminal-execution.view.active {
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .terminal-entry-grid,
@@ -4708,6 +5003,46 @@ body.terminal-execution-active #page-description {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.terminal-wechat-quick-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px 14px;
+  align-items: end;
+  padding: 14px 16px;
+  border: 1px solid rgba(93, 214, 44, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(22, 26, 22, 0.95), rgba(15, 19, 16, 0.95));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.015);
+}
+
+.terminal-wechat-quick-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.terminal-wechat-account-select-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.terminal-wechat-account-select-field > span {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.terminal-wechat-account-select-field select {
+  min-height: 42px;
+}
+
+.terminal-wechat-account-note {
+  grid-column: 1 / -1;
+  margin-top: -2px;
+}
+
 #terminal-execution[data-terminal-route="wechat"] .terminal-global-header {
   padding: 10px 28px;
 }
@@ -4725,6 +5060,9 @@ body.terminal-execution-active #page-description {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   gap: 8px;
   padding-top: 8px;
   padding-bottom: 10px;
@@ -4746,6 +5084,10 @@ body.terminal-execution-active #page-description {
 
 #terminal-execution[data-terminal-route="wechat"] .terminal-wechat-summary {
   gap: 8px;
+}
+
+#terminal-execution[data-terminal-route="wechat"] .terminal-wechat-quick-action {
+  margin-top: 2px;
 }
 
 #terminal-execution[data-terminal-route="wechat"] .terminal-route-actions {
@@ -6108,6 +6450,10 @@ body.sidebar-collapsed .terminal-init-modal {
   .terminal-workspace.terminal-workspace-wechat {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .terminal-wechat-quick-action {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -6132,6 +6478,14 @@ body.sidebar-collapsed .terminal-init-modal {
 
   .terminal-workspace.terminal-workspace-wechat {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terminal-wechat-quick-action-buttons {
+    width: 100%;
+  }
+
+  .terminal-wechat-quick-action-buttons .btn {
+    flex: 1 1 calc(50% - 4px);
   }
 }
 
