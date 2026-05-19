@@ -1631,6 +1631,64 @@ def test_apply_comment_reply_action_delay_uses_configured_range(monkeypatch: pyt
     assert delays == [4.5]
 
 
+def test_wait_reply_confirm_scans_broader_reply_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    scripts: list[str] = []
+
+    class FakeContext:
+        def run_js(self, script: str, *args: Any) -> bool:
+            scripts.append(str(script))
+            assert args == (0, "ok")
+            return True
+
+    class FakePage:
+        pass
+
+    monkeypatch.setattr(engine, "_wechat_comment_contexts", lambda _page, timeout_seconds=2.0: [FakeContext()])
+    monkeypatch.setattr(engine, "_wait_until", lambda predicate, **_kwargs: bool(predicate()))
+
+    assert engine.wait_reply_confirm(FakePage(), 0, "ok") is True
+    assert scripts
+    assert any("comment-replies" in script and "sub-comment" in script for script in scripts)
+
+
+def test_playwright_wait_reply_confirm_scans_broader_reply_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    scripts: list[str] = []
+
+    class FakeFrame:
+        def evaluate(self, script: str, *args: Any) -> bool:
+            scripts.append(str(script))
+            assert args == ({"comment_index": 0, "reply_text": "ok"},)
+            return True
+
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_wait_until", lambda predicate, **_kwargs: bool(predicate()))
+
+    assert engine._playwright_wait_reply_confirm(FakeFrame(), 0, "ok") is True
+    assert scripts
+    assert any("comment-replies" in script and "sub-comment" in script for script in scripts)
+
+
+def test_confirm_reply_from_post_submit_snapshot_accepts_has_reply_transition() -> None:
+    before_comment = {
+        "index": 1,
+        "author": "黄维平",
+        "content": "天然气怎么发电",
+        "time_text": "2026/05/17 09:43",
+        "has_reply": False,
+    }
+    after_comments = [
+        {"index": 0, "author": "其他用户", "content": "x", "time_text": "2分钟前", "has_reply": False},
+        {"index": 1, "author": "黄维平", "content": "天然气怎么发电", "time_text": "2026/05/17 09:43", "has_reply": True},
+    ]
+
+    assert engine._confirm_reply_from_post_submit_snapshot(
+        before_comment=before_comment,
+        after_comments=after_comments,
+        reply_text="收到，方便的话麻烦再补充一下项目背景。",
+        self_author_markers=("GasGx", "作者"),
+    )
+
+
 def test_humanized_wechat_comment_pause_prefers_page_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     timeout_calls: list[int] = []
     sleep_calls: list[float] = []

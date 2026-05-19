@@ -6878,10 +6878,45 @@ def extract_comments(page: ChromiumPage, self_author_markers: Optional[list[str]
         function norm(value) {
           return String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
         }
-        function selfReply(replyList, markers) {
-          if (!replyList || !Array.isArray(markers) || !markers.length) return false;
-          const blob = norm(replyList.innerText || replyList.textContent || '').toLowerCase();
-          return markers.some((marker) => marker && blob.includes(norm(marker).toLowerCase()));
+        function collectReplyNodes(item) {
+          const selectors = [
+            '.comment-reply-list',
+            '.comment-replies',
+            '.comment-reply',
+            '.reply-list',
+            '.reply-item',
+            '.reply-content',
+            '.sub-comment-list',
+            '[class*="comment-reply"]',
+            '[class*="reply-list"]',
+            '[class*="reply-item"]',
+            '[class*="reply-content"]',
+            '[class*="sub-comment"]',
+          ].join(', ');
+          const nodes = new Set();
+          const pushNode = (node) => {
+            if (node && node !== item) nodes.add(node);
+          };
+          Array.from(item.querySelectorAll(selectors)).forEach(pushNode);
+          Array.from(item.querySelectorAll('.comment-item')).forEach(pushNode);
+          return Array.from(nodes);
+        }
+        function replyNodeHasContent(node) {
+          if (!node) return false;
+          const text = norm(node.innerText || node.textContent || '');
+          if (text) return true;
+          return !!node.querySelector('.comment-item, .comment-content, [class*="comment-item"], [class*="reply-item"], [class*="reply-content"], [class*="sub-comment"]');
+        }
+        function selfReply(item, markers) {
+          if (!Array.isArray(markers) || !markers.length) return false;
+          const replyNodes = collectReplyNodes(item).filter(replyNodeHasContent);
+          return replyNodes.some((replyItem) => {
+            const blob = norm([
+              replyItem && (replyItem.innerText || replyItem.textContent || ''),
+              replyItem && (replyItem.getAttribute && replyItem.getAttribute('aria-label') || ''),
+            ].join(' ')).toLowerCase();
+            return markers.some((marker) => marker && blob.includes(norm(marker).toLowerCase()));
+          });
         }
         const authorNode = item.querySelector('.comment-user-name, .comment-author, [class*="author"], [class*="name"]');
         const timeNode = item.querySelector('.comment-time');
@@ -6890,14 +6925,15 @@ def extract_comments(page: ChromiumPage, self_author_markers: Optional[list[str]
         const likeAction = item.querySelector('.like-action');
         const useNode = likeAction ? likeAction.querySelector('use') : null;
         const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
+        const replyNodes = collectReplyNodes(item).filter(replyNodeHasContent);
         return {
           index,
           text: norm(item.innerText || item.textContent || ''),
           author: norm(authorNode ? authorNode.innerText || authorNode.textContent || '' : ''),
           time_text: norm(timeNode ? timeNode.innerText || timeNode.textContent || '' : ''),
           content: norm(contentNode ? contentNode.innerText || contentNode.textContent || '' : ''),
-          has_reply: !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]')),
-          has_self_reply: selfReply(replyList, JSON.parse(arguments[0] || '[]')),
+          has_reply: !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]')) || replyNodes.length > 0,
+          has_self_reply: selfReply(item, JSON.parse(arguments[0] || '[]')),
           liked: /fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction ? likeAction.className : '')),
         };
       });
@@ -7256,12 +7292,41 @@ def wait_reply_confirm(page: ChromiumPage, comment_index: int, reply_text: str, 
       function norm(value) {
         return String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, '').trim();
       }
+      function collectReplyNodes(item) {
+        const selectors = [
+          '.comment-reply-list',
+          '.comment-replies',
+          '.comment-reply',
+          '.reply-list',
+          '.reply-item',
+          '.reply-content',
+          '.sub-comment-list',
+          '[class*="comment-reply"]',
+          '[class*="reply-list"]',
+          '[class*="reply-item"]',
+          '[class*="reply-content"]',
+          '[class*="sub-comment"]',
+        ].join(', ');
+        const nodes = new Set();
+        const pushNode = (node) => {
+          if (node && node !== item) nodes.add(node);
+        };
+        Array.from(item.querySelectorAll(selectors)).forEach(pushNode);
+        Array.from(item.querySelectorAll('.comment-item')).forEach(pushNode);
+        return Array.from(nodes);
+      }
+      function replyNodeHasContent(node) {
+        if (!node) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        if (text) return true;
+        return !!node.querySelector('.comment-item, .comment-content, [class*="comment-item"], [class*="reply-item"], [class*="reply-content"], [class*="sub-comment"]');
+      }
       const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[Number(commentIndex)];
       if (!item) return false;
-      const replyList = item.querySelector('.comment-reply-list');
-      if (!replyList || !targetText) return false;
-      const replyText = norm(replyList.innerText || replyList.textContent || '');
+      const replyNodes = collectReplyNodes(item).filter(replyNodeHasContent);
+      if (!replyNodes.length || !targetText) return false;
+      const replyText = norm(replyNodes.map((node) => node.innerText || node.textContent || '').join(' '));
       return replyText.includes(norm(targetText));
     })(arguments[0], arguments[1]);
     """
@@ -8393,9 +8458,38 @@ def _playwright_extract_comments(frame: Any, self_author_markers: Optional[list[
       function lower(value) {
         return norm(value).toLowerCase();
       }
-      function hasSelfReply(replyList) {
-        if (!replyList || !Array.isArray(selfMarkers) || !selfMarkers.length) return false;
-        const replyItems = Array.from(replyList.querySelectorAll('.comment-item, [class*="reply-item"], [class*="comment-item"], [class*="reply"], [class*="content"]'));
+      function collectReplyNodes(item) {
+        const selectors = [
+          '.comment-reply-list',
+          '.comment-replies',
+          '.comment-reply',
+          '.reply-list',
+          '.reply-item',
+          '.reply-content',
+          '.sub-comment-list',
+          '[class*="comment-reply"]',
+          '[class*="reply-list"]',
+          '[class*="reply-item"]',
+          '[class*="reply-content"]',
+          '[class*="sub-comment"]',
+        ].join(', ');
+        const nodes = new Set();
+        const pushNode = (node) => {
+          if (node && node !== item) nodes.add(node);
+        };
+        Array.from(item.querySelectorAll(selectors)).forEach(pushNode);
+        Array.from(item.querySelectorAll('.comment-item')).forEach(pushNode);
+        return Array.from(nodes);
+      }
+      function replyNodeHasContent(node) {
+        if (!node) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        if (text) return true;
+        return !!node.querySelector('.comment-item, .comment-content, [class*="comment-item"], [class*="reply-item"], [class*="reply-content"], [class*="sub-comment"]');
+      }
+      function hasSelfReply(item) {
+        if (!Array.isArray(selfMarkers) || !selfMarkers.length) return false;
+        const replyItems = collectReplyNodes(item).filter(replyNodeHasContent);
         return replyItems.some((replyItem) => {
           const authorNode = replyItem.querySelector('.comment-author, .comment-user-name, [class*="author"], [class*="name"]');
           const blob = lower([
@@ -8444,12 +8538,13 @@ def _playwright_extract_comments(frame: Any, self_author_markers: Optional[list[
             content = fallbackContent(item, author, timeText);
           }
           const replyList = item.querySelector('.comment-reply-list');
-          const hasReply = !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]'));
+          const hasReplyNodes = collectReplyNodes(item).filter(replyNodeHasContent);
+          const hasReply = !!(replyList && replyList.querySelector('.comment-item, .comment-content, [class*="comment-item"]')) || hasReplyNodes.length > 0;
           const likeAction = item.querySelector('.like-action');
           const useNode = likeAction ? likeAction.querySelector('use') : null;
           const likeHref = useNode ? (useNode.getAttribute('xlink:href') || useNode.getAttribute('href') || '') : '';
           const liked = /fill-thumb|active|liked/.test(String(likeHref || '') + ' ' + String(likeAction ? likeAction.className : ''));
-          return { index, author, content, time_text: timeText, has_reply: hasReply, has_self_reply: hasSelfReply(replyList), liked };
+          return { index, author, content, time_text: timeText, has_reply: hasReply, has_self_reply: hasSelfReply(item), liked };
         }).filter((item) => item.content || item.author || item.time_text);
     }
     """
@@ -8550,7 +8645,14 @@ def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], deb
       function hasSelfReply(item) {
         const markers = Array.isArray(args && args.self_author_markers) ? args.self_author_markers : [];
         if (!markers.length) return false;
-        const replies = Array.isArray(item && item.levelTwoComment) ? item.levelTwoComment : [];
+        const replies = [
+          ...(Array.isArray(item && item.levelTwoComment) ? item.levelTwoComment : []),
+          ...(Array.isArray(item && item.commentReplyList) ? item.commentReplyList : []),
+          ...(Array.isArray(item && item.replyList) ? item.replyList : []),
+          ...(Array.isArray(item && item.replies) ? item.replies : []),
+          ...(Array.isArray(item && item.children) ? item.children : []),
+          ...(Array.isArray(item && item.subCommentList) ? item.subCommentList : []),
+        ];
         return replies.some((reply) => {
           const blob = lower([
             reply && (reply.commentNickname || reply.nickname || reply.commentUserName || reply.author || reply.userName || ''),
@@ -8577,7 +8679,14 @@ def _playwright_extract_comments_from_store(page: Any, post: dict[str, Any], deb
       }
       const commentList = Array.isArray(store.commentList) ? store.commentList : [];
       const comments = commentList.map((item, index) => {
-        const lv2 = Array.isArray(item && item.levelTwoComment) ? item.levelTwoComment : [];
+        const lv2 = [
+          ...(Array.isArray(item && item.levelTwoComment) ? item.levelTwoComment : []),
+          ...(Array.isArray(item && item.commentReplyList) ? item.commentReplyList : []),
+          ...(Array.isArray(item && item.replyList) ? item.replyList : []),
+          ...(Array.isArray(item && item.replies) ? item.replies : []),
+          ...(Array.isArray(item && item.children) ? item.children : []),
+          ...(Array.isArray(item && item.subCommentList) ? item.subCommentList : []),
+        ];
         return {
           index,
           author: norm(item && (item.commentNickname || item.nickname || item.commentUserName || '')),
@@ -9262,14 +9371,43 @@ def _playwright_wait_reply_confirm(frame: Any, comment_index: int, reply_text: s
       function norm(value) {
         return String(value || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, '').trim();
       }
+      function collectReplyNodes(item) {
+        const selectors = [
+          '.comment-reply-list',
+          '.comment-replies',
+          '.comment-reply',
+          '.reply-list',
+          '.reply-item',
+          '.reply-content',
+          '.sub-comment-list',
+          '[class*="comment-reply"]',
+          '[class*="reply-list"]',
+          '[class*="reply-item"]',
+          '[class*="reply-content"]',
+          '[class*="sub-comment"]',
+        ].join(', ');
+        const nodes = new Set();
+        const pushNode = (node) => {
+          if (node && node !== item) nodes.add(node);
+        };
+        Array.from(item.querySelectorAll(selectors)).forEach(pushNode);
+        Array.from(item.querySelectorAll('.comment-item')).forEach(pushNode);
+        return Array.from(nodes);
+      }
+      function replyNodeHasContent(node) {
+        if (!node) return false;
+        const text = norm(node.innerText || node.textContent || '');
+        if (text) return true;
+        return !!node.querySelector('.comment-item, .comment-content, [class*="comment-item"], [class*="reply-item"], [class*="reply-content"], [class*="sub-comment"]');
+      }
       const commentIndex = Number(args && args.comment_index || 0);
       const targetText = norm(args && args.reply_text || '');
       const items = Array.from(document.querySelectorAll('.comment-item')).filter((node) => !node.closest('.comment-reply-list'));
       const item = items[commentIndex];
       if (!item) return false;
-      const replyList = item.querySelector('.comment-reply-list');
-      if (!replyList || !targetText) return false;
-      const replyText = norm(replyList.innerText || replyList.textContent || '');
+      const replyNodes = collectReplyNodes(item).filter(replyNodeHasContent);
+      if (!replyNodes.length || !targetText) return false;
+      const replyText = norm(replyNodes.map((node) => node.innerText || node.textContent || '').join(' '));
       return replyText.includes(targetText);
     }
     """
@@ -9344,6 +9482,73 @@ def generate_comment_reply(
             return clean
     fallback_clean = _sanitize_comment_reply_text(fallback_text, max_chars=max_chars)
     return "" if _looks_like_broken_comment_reply(fallback_clean) else fallback_clean
+
+
+def _compact_comment_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip()
+
+
+def _is_self_author_name(author: Any, self_author_markers: Sequence[str]) -> bool:
+    author_text = _compact_comment_text(author).lower()
+    if not author_text:
+        return False
+    for marker in self_author_markers or ():
+        marker_text = _compact_comment_text(marker).lower()
+        if marker_text and (author_text == marker_text or marker_text in author_text):
+            return True
+    return False
+
+
+def _comments_roughly_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_author = _compact_comment_text(left.get("author"))
+    right_author = _compact_comment_text(right.get("author"))
+    left_content = _compact_comment_text(left.get("content"))
+    right_content = _compact_comment_text(right.get("content"))
+    left_time = _compact_comment_text(left.get("time_text"))
+    right_time = _compact_comment_text(right.get("time_text"))
+
+    author_match = bool(
+        left_author
+        and right_author
+        and (left_author == right_author or left_author in right_author or right_author in left_author)
+    )
+    content_match = bool(
+        left_content
+        and right_content
+        and (left_content == right_content or left_content in right_content or right_content in left_content)
+    )
+    time_match = bool(left_time and right_time and (left_time == right_time or left_time in right_time or right_time in left_time))
+    return (author_match and content_match) or (content_match and time_match) or (author_match and time_match)
+
+
+def _confirm_reply_from_post_submit_snapshot(
+    before_comment: dict[str, Any],
+    after_comments: Sequence[dict[str, Any]],
+    reply_text: str,
+    self_author_markers: Sequence[str],
+) -> bool:
+    if not isinstance(before_comment, dict) or not after_comments:
+        return False
+
+    if bool(before_comment.get("has_reply")):
+        return True
+
+    matched_after = next((item for item in after_comments if _comments_roughly_match(before_comment, item)), None)
+    if isinstance(matched_after, dict) and bool(matched_after.get("has_reply")):
+        return True
+
+    target = _compact_comment_text(reply_text)
+    if not target:
+        return False
+    for item in after_comments:
+        if not isinstance(item, dict):
+            continue
+        if not _is_self_author_name(item.get("author"), self_author_markers):
+            continue
+        content = _compact_comment_text(item.get("content"))
+        if content and (target in content or content in target):
+            return True
+    return False
 
 
 def _comment_reply_length_ok(text: str, min_chars: int, max_chars: int) -> bool:
@@ -10003,7 +10208,18 @@ def run_wechat_comment_reply(
                                 login_notify_result=login_notify_result,
                             )
                         continue
-                    if not wait_reply_confirm(page, int(comment.get("index") or 0), reply_text):
+                    confirmed = wait_reply_confirm(page, int(comment.get("index") or 0), reply_text)
+                    if not confirmed:
+                        post_submit_comments = extract_comments(page, list(comment_cfg.get("self_author_markers") or []))
+                        confirmed = _confirm_reply_from_post_submit_snapshot(
+                            before_comment=comment,
+                            after_comments=post_submit_comments,
+                            reply_text=reply_text,
+                            self_author_markers=list(comment_cfg.get("self_author_markers") or []),
+                        )
+                        if confirmed:
+                            _comment_reply_log(debug_enabled, "Reply confirm recovered by post-submit snapshot")
+                    if not confirmed:
                         _comment_reply_log(debug_enabled, "Reply confirm timeout")
                         login_notify_result = _maybe_notify_wechat_comment_login_required(
                             page=page,
