@@ -481,7 +481,7 @@
             <div class="telegram-setup-card" id="telegram-setup-card" hidden>
               <div class="telegram-setup-head">
                 <strong>Telegram 快速配置</strong>
-                <span>只需要填写 Bot Token</span>
+                <span>先填写 Bot Token，再获取或手动填写 Chat ID</span>
               </div>
               <ol class="setup-steps">
                 <li>在 Telegram 里找 @BotFather 创建机器人，把 Bot Token 粘贴到下面。</li>
@@ -507,7 +507,7 @@
                 <span>打开 Telegram 后，点 Start 或发送 hi，再回到这里保存配置。</span>
               </div>
               <div class="muted" id="telegram-chat-id-state"></div>
-              <p class="muted">系统会自动获取 Chat ID，并把发送地址、密钥和目标会话保存到数据库。</p>
+              <p class="muted">系统会在你和机器人完成一次会话后自动获取 Chat ID。若自动获取不到，也可以手动填写后再保存。</p>
             </div>
             <label class="ai-webhook-url-field">Webhook URL
               <input name="webhook_url" placeholder="https://...">
@@ -528,7 +528,7 @@
               <input name="target_id" placeholder="chat_id / open_conversation_id">
             </label>
             <label class="ai-test-message-field">测试消息
-              <textarea name="test_text" rows="4">GasGx AI robot test message</textarea>
+              <textarea name="test_text" rows="4">机器人测试通知</textarea>
             </label>
             <div class="ai-config-actions">
               <button class="btn primary" id="ai-save-config-panel" type="button">保存配置</button>
@@ -1173,6 +1173,6 @@
       if (host) node.textContent = host;
     })();
   </script>
-  <script src="/static/app.js?v=20260517-terminal-cooldown-25"></script>
+  <script src="/static/app.js?v=20260519-notifications-cn-5"></script>
 </body>
 </html>

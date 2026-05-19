@@ -1504,6 +1504,11 @@ select option {
   display: none;
 }
 
+.ai-config-form.telegram-simple-mode .telegram-chat-id-field,
+.ai-config-form.telegram-simple-mode .telegram-helper-actions {
+  display: grid;
+}
+
 .ai-config-form.telegram-simple-mode .ai-platform-picker,
 .ai-config-form.telegram-simple-mode .ai-advanced-field,
 .ai-config-form.telegram-simple-mode .ai-telegram-default-field {
@@ -1707,6 +1712,79 @@ select option {
   align-items: center;
   gap: 14px;
   padding: 14px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.bot-channel-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: rgba(93, 214, 44, 0.18);
+}
+
+.bot-channel-card.is-configured {
+  border-color: rgba(93, 214, 44, 0.42);
+  background: linear-gradient(145deg, rgba(19, 35, 18, 0.98), rgba(14, 22, 15, 0.94));
+  box-shadow: 0 0 0 1px rgba(93, 214, 44, 0.08), 0 14px 32px rgba(0, 0, 0, 0.32);
+}
+
+.bot-channel-card.is-configured::before {
+  width: 4px;
+  background: linear-gradient(180deg, rgba(93, 214, 44, 0.98), rgba(93, 214, 44, 0.28));
+}
+
+.bot-channel-card.is-enabled .bot-channel-badge.configured {
+  color: #d7ffd0;
+  border-color: rgba(93, 214, 44, 0.28);
+  background: rgba(93, 214, 44, 0.18);
+}
+
+.bot-channel-card.is-disabled {
+  border-color: rgba(255, 194, 87, 0.22);
+}
+
+.bot-channel-card.is-empty {
+  background: #0f0f0f;
+}
+
+.bot-channel-card:hover {
+  transform: translateY(-1px);
+}
+
+.bot-channel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.bot-channel-title-row strong {
+  margin-bottom: 0;
+}
+
+.bot-channel-badge {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid rgba(93, 214, 44, 0.16);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.bot-channel-badge.configured {
+  color: var(--accent-aurora);
+  background: rgba(93, 214, 44, 0.08);
+}
+
+.bot-channel-badge.unconfigured {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .bot-logo {

@@ -4840,6 +4840,104 @@ function notificationEventLabel(eventType) {
   return String(matched?.label || token || "通知");
 }
 
+const NOTIFICATION_SEVERITY_LABELS = {
+  critical: "严重",
+  blocking: "阻断",
+  error: "错误",
+  warning: "警告",
+  info: "信息",
+};
+
+const NOTIFICATION_PLATFORM_LABELS = {
+  wechat: "视频号",
+  douyin: "抖音",
+  wecom: "企业微信",
+  dingtalk: "钉钉",
+  lark: "飞书",
+  telegram: "电报",
+  whatsapp: "WhatsApp",
+};
+
+const NOTIFICATION_SUBTYPE_LABELS = {
+  wechat_login_qr: {
+    qr_generated: "二维码已生成",
+    qr_updated: "二维码已更新",
+    login_required: "需要登录",
+  },
+  login_status: {
+    expired: "登录已失效",
+    expiring_soon: "即将失效",
+    failed: "登录失败",
+    inspection_result: "巡检结果",
+  },
+  publish_result: {
+    published: "已发布",
+    failed: "发布失败",
+    upload_failed: "上传失败",
+    draft_saved: "草稿已保存",
+    uploaded_only: "仅上传",
+    queued: "已入队",
+    running: "进行中",
+    cancelled: "已取消",
+  },
+  video_generation: {
+    completed: "已完成",
+    failed: "失败",
+    interrupted: "中断",
+  },
+  material_issue: {
+    insufficient: "素材不足",
+    category_incomplete: "分类不完整",
+    skipped_unusable: "跳过不可用素材",
+  },
+  system_error: {
+    dependency_unavailable: "依赖不可用",
+    scheduler_failed: "调度失败",
+    job_failed: "作业失败",
+    storage_error: "存储错误",
+    config_error: "配置错误",
+  },
+  ops_summary: {
+    daily_sent: "日报已发送",
+    daily_failed: "日报发送失败",
+    summary_sent: "汇总已发送",
+    summary_failed: "汇总发送失败",
+  },
+  action_required: {
+    confirmation_required: "需要确认",
+    configuration_required: "需要配置",
+    queue_backlog: "队列积压",
+  },
+};
+
+const NOTIFICATION_GENERIC_SUBTYPE_LABELS = {
+  route_probe: "联调",
+};
+
+function notificationSeverityLabel(severity) {
+  const token = String(severity || "").trim().toLowerCase();
+  return NOTIFICATION_SEVERITY_LABELS[token] || token || "信息";
+}
+
+function notificationPlatformLabel(platform) {
+  const token = String(platform || "").trim().toLowerCase();
+  return NOTIFICATION_PLATFORM_LABELS[token] || aiPlatformLabel(token) || token || "通用";
+}
+
+function notificationSubtypeLabel(eventType, subtype) {
+  const eventToken = String(eventType || "").trim();
+  const subtypeToken = String(subtype || "").trim();
+  if (!subtypeToken) return "";
+  return NOTIFICATION_SUBTYPE_LABELS[eventToken]?.[subtypeToken] || NOTIFICATION_GENERIC_SUBTYPE_LABELS[subtypeToken] || subtypeToken;
+}
+
+function notificationSubtypesLabel(eventType, subtypes) {
+  return (Array.isArray(subtypes) ? subtypes : [])
+    .map((subtype) => notificationSubtypeLabel(eventType, subtype))
+    .filter(Boolean)
+    .join(" / ");
+}
+
 function setNotificationRouteState(message, tone = "") {
   const node = document.querySelector("#notification-route-state");
   if (!node) return;
@@ -4898,6 +4996,28 @@ function notificationDuration(seconds) {
   return `${Math.round(value)} 秒`;
 }
 
+function notificationHistoryContent(item, payload, eventType, platform) {
+  const rawText = String(payload.text || payload.summary || item.summary || "").trim();
+  if (/^GasGx AI robot test message$/.test(rawText)) {
+    return "机器人测试通知";
+  }
+  const routeProbeLike = Boolean(payload?.route_probe) || /通知链路联调/.test(rawText) || /route_probe/.test(rawText);
+  if (routeProbeLike) {
+    const severity = String(payload.severity || "").trim();
+    const title = String(payload.title || `通知链路联调：${notificationEventLabel(eventType)}`).trim();
+    const summary = `通知路由已开启（${notificationEventLabel(eventType)} → ${notificationPlatformLabel(platform)}）`;
+    const subtypeLabel = notificationSubtypeLabel(eventType, payload.subtype || "route_probe") || "联调";
+    const parts = [];
+    if (severity) parts.push(`【${notificationSeverityLabel(severity)}】${title}`);
+    else parts.push(title);
+    parts.push(`摘要：${summary}`);
+    parts.push(`类型：${notificationEventLabel(eventType)} / ${subtypeLabel}`);
+    if (platform) parts.push(`平台：${notificationPlatformLabel(platform)}`);
+    return parts.join(" · ");
+  }
+  return rawText.length > 280 ? `${rawText.slice(0, 280)}...` : rawText;
+}
+
 function renderOperationNotifications() {
   const routeNode = document.querySelector("#operation-notice-routes");
   const policyNode = document.querySelector("#notification-policy-list");
@@ -4921,21 +5041,21 @@ function renderOperationNotifications() {
       const byPlatform = Object.fromEntries(eventRoutes.map((item) => [item.platform, item]));
       const routeButtons = ["telegram", "dingtalk", "wecom"].map((platform) => {
         const enabled = Boolean(byPlatform[platform]?.enabled);
-        return `<button class="btn btn-sm ${enabled ? "primary" : "ghost"}" data-notice-route="${eventType}" data-notice-platform="${platform}" data-notice-enabled="${enabled ? "0" : "1"}">${aiPlatformLabel(platform)} ${enabled ? "开启" : "关闭"}</button>`;
+        return `<button class="btn btn-sm ${enabled ? "primary" : "ghost"}" data-notice-route="${eventType}" data-notice-platform="${platform}" data-notice-enabled="${enabled ? "0" : "1"}">${notificationPlatformLabel(platform)} ${enabled ? "开启" : "关闭"}</button>`;
       }).join("");
       const severity = first.default_severity || "info";
       const cardClass = severity === "critical" || severity === "blocking" ? "danger" : severity === "warning" || severity === "error" ? "warning" : "info";
-      const subtypes = (first.subtypes || []).join(" / ");
+      const subtypes = notificationSubtypesLabel(eventType, first.subtypes || []);
       return `
         <article class="notification-card ${cardClass}">
           <span class="notification-dot"></span>
           <div>
             <strong>${escapeHtml(first.label || eventType)}</strong>
             <p>${escapeHtml(first.source || "")}</p>
-            <p>${escapeHtml(eventType)}${subtypes ? ` · ${escapeHtml(subtypes)}` : ""}</p>
+            <p>${escapeHtml(notificationEventLabel(eventType))}${subtypes ? ` · ${escapeHtml(subtypes)}` : ""}</p>
             <div class="inline-actions">${routeButtons}</div>
           </div>
-          <time>${escapeHtml(severity)}</time>
+          <time>${escapeHtml(notificationSeverityLabel(severity))}</time>
         </article>
       `;
     }).join("");
@@ -4946,17 +5066,17 @@ function renderOperationNotifications() {
       const targets = new Set(policy.target_platforms || []);
       const escalationTargets = new Set(policy.escalation_platforms || []);
       const platformToggles = ["telegram", "dingtalk", "wecom"].map((platform) => `
-        <label class="notification-check"><input type="checkbox" data-policy-target="${platform}" ${targets.has(platform) ? "checked" : ""}>${aiPlatformLabel(platform)}</label>
+        <label class="notification-check"><input type="checkbox" data-policy-target="${platform}" ${targets.has(platform) ? "checked" : ""}>${notificationPlatformLabel(platform)}</label>
       `).join("");
       const escalationToggles = ["telegram", "dingtalk", "wecom"].map((platform) => `
-        <label class="notification-check"><input type="checkbox" data-policy-escalation-target="${platform}" ${escalationTargets.has(platform) ? "checked" : ""}>${aiPlatformLabel(platform)}</label>
+        <label class="notification-check"><input type="checkbox" data-policy-escalation-target="${platform}" ${escalationTargets.has(platform) ? "checked" : ""}>${notificationPlatformLabel(platform)}</label>
       `).join("");
       return `
         <article class="notification-card ${notificationSeverityTone(policy.severity)} notification-policy-card" data-policy-card="${escapeHtml(policy.event_type)}" data-policy-severity="${escapeHtml(policy.severity)}">
           <span class="notification-dot"></span>
           <div>
             <strong>${escapeHtml(policy.label || notificationEventLabel(policy.event_type))} · 策略</strong>
-            <p>默认 ${escapeHtml(policy.severity)} · 空目标表示跟随上方路由开关。</p>
+            <p>默认 ${escapeHtml(notificationSeverityLabel(policy.severity))} · 空目标表示跟随上方路由开关。</p>
             <div class="notification-policy-grid">
               <label>启用<select data-policy-enabled><option value="true" ${policy.enabled ? "selected" : ""}>启用</option><option value="false" ${!policy.enabled ? "selected" : ""}>停用外发</option></select></label>
               <label>冷却秒数<input type="number" min="0" data-policy-cooldown value="${Number(policy.cooldown_seconds || 0)}"></label>
@@ -4969,7 +5089,7 @@ function renderOperationNotifications() {
             <div class="notification-check-row"><span>升级</span>${escalationToggles}</div>
             <div class="inline-actions"><button class="btn btn-sm primary" type="button" data-save-notification-policy>保存策略</button></div>
           </div>
-          <time>${escapeHtml(policy.event_type)}</time>
+          <time>${escapeHtml(notificationEventLabel(policy.event_type))}</time>
         </article>
       `;
     }).join("") : "";
@@ -4980,13 +5100,15 @@ function renderOperationNotifications() {
       const tone = status === "resolved" || status === "ignored" ? "success" : notificationSeverityTone(incident.severity);
       const summary = String(incident.summary || incident.payload?.summary || "").trim() || "暂无摘要";
       const owner = incident.assigned_to || incident.owner_hint || "未指派";
+      const eventLabel = notificationEventLabel(incident.event_type);
+      const platformLabel = notificationPlatformLabel(incident.platform || "");
       return `
         <article class="notification-card ${tone}">
           <span class="notification-dot"></span>
           <div>
-            <strong>${escapeHtml(incident.title || notificationEventLabel(incident.event_type))}</strong>
+            <strong>${escapeHtml(incident.title || eventLabel)}</strong>
             <p>${escapeHtml(summary)}</p>
-            <p>${escapeHtml(notificationIncidentStatusLabel(status))} · ${escapeHtml(incident.event_type)} · ${escapeHtml(incident.platform || "通用")} · ${Number(incident.occurrence_count || 1)} 次 · ${escapeHtml(owner)}</p>
+            <p>${escapeHtml(notificationIncidentStatusLabel(status))} · ${escapeHtml(eventLabel)} · ${escapeHtml(platformLabel)} · ${Number(incident.occurrence_count || 1)} 次 · ${escapeHtml(owner)}</p>
             <div class="inline-actions">
               <button class="btn btn-sm ghost" type="button" data-incident-action="ack" data-incident-id="${incident.id}" ${status !== "open" ? "disabled" : ""}>确认</button>
               <button class="btn btn-sm ghost" type="button" data-incident-action="assign" data-incident-id="${incident.id}" ${status === "resolved" || status === "ignored" ? "disabled" : ""}>指派给我</button>
@@ -5019,7 +5141,7 @@ function renderOperationNotifications() {
           <span class="notification-dot"></span>
           <div>
             <strong>待扫码批次 ${escapeHtml(batch.batch_id)}</strong>
-            <p>${escapeHtml(items.map((item) => `${item.display_name || item.account_key} / port ${item.debug_port}`).join("；") || "等待巡检结果")}</p>
+            <p>${escapeHtml(items.map((item) => `${item.display_name || item.account_key} / 端口 ${item.debug_port}`).join("；") || "等待巡检结果")}</p>
           </div>
           <time>${formatTime(batch.created_at)}</time>
         </article>
@@ -5048,16 +5170,15 @@ function renderOperationNotifications() {
         sending: "发送中",
         unsupported: "未启用",
       }[status] || status || "未知";
-      const rawText = String(payload.text || payload.summary || item.summary || "").trim() || "暂无正文";
-      const content = rawText.length > 280 ? `${rawText.slice(0, 280)}...` : rawText;
-      const title = `${notificationEventLabel(eventType)} · ${platform ? aiPlatformLabel(platform) : "通用"}`;
+      const content = notificationHistoryContent(item, payload, eventType, platform) || "暂无正文";
+      const title = `${notificationEventLabel(eventType)} · ${platform ? notificationPlatformLabel(platform) : "通用"}`;
       return `
         <article class="notification-card ${cardTone}">
           <span class="notification-dot"></span>
           <div>
             <strong>${escapeHtml(title)}</strong>
             <p>${escapeHtml(content)}</p>
-            <p>${escapeHtml(eventType)} · ${escapeHtml(statusLabel)}</p>
+            <p>${escapeHtml(notificationEventLabel(eventType))} · ${escapeHtml(statusLabel)}</p>
           </div>
           <time>${formatTime(item.updated_at || item.created_at)}</time>
         </article>
@@ -5573,11 +5694,14 @@ function renderAiRobot() {
   document.querySelector("#ai-config-state").textContent = configured.length && !editingPlatform ? "已配置" : (config.enabled ? "已启用" : "未启用");
   renderBoundAiRobotPlatforms();
   document.querySelector("#ai-channel-grid").innerHTML = visibleAiRobotConfigs().map((item) => `
-    <article class="bot-channel-card">
+    <article class="bot-channel-card ${item.webhook_url ? "is-configured" : "is-empty"} ${item.enabled ? "is-enabled" : "is-disabled"}">
       ${aiRobotLogo(item.platform)}
       <div>
-        <strong>${aiPlatformLabel(item.platform)}</strong>
-        <p>${item.webhook_url ? "已配置" : "未配置"} · ${item.enabled ? "通知开启" : "通知关闭"} · ${item.has_signing_secret ? "验签密钥已保存" : "无需验签密钥"}</p>
+        <div class="bot-channel-title-row">
+          <strong>${aiPlatformLabel(item.platform)}</strong>
+          <span class="bot-channel-badge ${item.webhook_url ? "configured" : "unconfigured"}">${item.webhook_url ? "已配置" : "未配置"}</span>
+        </div>
+        <p>${item.enabled ? "通知开启" : "通知关闭"} · ${item.has_signing_secret ? "验签密钥已保存" : "无需验签密钥"}</p>
       </div>
       <button class="btn secondary" type="button" data-ai-platform="${item.platform}">配置</button>
     </article>
@@ -5597,10 +5721,24 @@ function renderAiRobot() {
     messageToggle.textContent = state.aiRobotMessagesCollapsed ? "展开" : "最近 100 条";
   }
   messageList.innerHTML = state.aiRobotMessages.length
-    ? state.aiRobotMessages.map((item) => `<article class="task-row">
-        <div><strong>#${item.id} ${aiPlatformLabel(item.platform)}</strong><span>${item.summary || item.message_type}</span></div>
-        <span class="task-status">${item.status}</span>
-      </article>`).join("")
+    ? state.aiRobotMessages.map((item) => {
+        const payload = notificationMessagePayload(item);
+        const eventType = String(item.message_type || payload.message_type || "text").trim();
+        const platform = String(item.platform || payload.platform || "").trim();
+        const preview = notificationHistoryContent(item, payload, eventType, platform) || item.summary || item.message_type || "暂无正文";
+        const statusLabel = {
+          sent: "已发送",
+          failed: "发送失败",
+          retry: "重试中",
+          pending: "待发送",
+          sending: "发送中",
+          unsupported: "未启用",
+        }[String(item.status || "").toLowerCase()] || String(item.status || "") || "未知";
+        return `<article class="task-row">
+        <div><strong>#${item.id} ${notificationPlatformLabel(item.platform)}</strong><span>${escapeHtml(preview)}</span></div>
+        <span class="task-status">${escapeHtml(statusLabel)}</span>
+      </article>`;
+      }).join("")
     : `<div class="muted">暂无机器人消息队列。</div>`;
 }
 
@@ -6744,11 +6882,14 @@ document.querySelector("#ai-save-config")?.addEventListener("click", async (even
       }
       const chatId = String(form.elements.telegram_chat_id?.value || "").trim();
       if (token) {
+        if (!chatId) {
+          throw new Error("Telegram 需要先获取 Chat ID。请点击“打开机器人聊天”，在 Telegram 里发送 Start 或 hi 后再保存，或者手动填写 Chat ID。");
+        }
         form.elements.platform.value = "telegram";
         form.elements.enabled.value = "true";
         form.elements.bot_name.value = form.elements.bot_name.value || "GasGx Telegram Bot";
         form.elements.webhook_url.value = telegramWebhookUrl(token);
-        form.elements.target_id.value = chatId || form.elements.target_id.value;
+        form.elements.target_id.value = chatId;
         form.elements.webhook_secret.value = "";
         if (!form.elements.signing_secret.value) {
           form.elements.signing_secret.value = `gasgx-${Date.now().toString(36)}`;
@@ -6817,8 +6958,8 @@ async function sendAiRobotTest(platform, button) {
   const form = document.querySelector("#ai-robot-form");
   const stateNode = document.querySelector("#ai-config-state");
   const text = form && !form.hidden && form.elements.platform.value === platform
-    ? (form.elements.test_text.value || "GasGx AI robot test message")
-    : "GasGx AI robot test message";
+    ? (form.elements.test_text.value || "机器人测试通知")
+    : "机器人测试通知";
   stateNode.textContent = "发送中...";
   stateNode.classList.remove("danger");
   let finalButtonText = "";
@@ -7089,15 +7230,15 @@ document.addEventListener("click", async (event) => {
       state.notificationRoutes = await api("/api/notification-routes");
       state.aiRobotMessages = await api("/api/ai-robots/messages");
       if (!enabled) {
-        setNotificationRouteState(`${notificationEventLabel(eventType)} · ${aiPlatformLabel(platform)} 已关闭`);
+        setNotificationRouteState(`${notificationEventLabel(eventType)} · ${notificationPlatformLabel(platform)} 已关闭`);
       } else {
         const probe = result?.probe || {};
         const probeStatus = String(probe.status || "").toLowerCase();
         if (probeStatus === "sent") {
-          setNotificationRouteState(`${notificationEventLabel(eventType)} · ${aiPlatformLabel(platform)} 联调通知已发送`);
+          setNotificationRouteState(`${notificationEventLabel(eventType)} · ${notificationPlatformLabel(platform)} 联调通知已发送`);
         } else {
           const detail = String(probe.error || probe.summary || probe.status || "未发送").trim();
-          setNotificationRouteState(`${notificationEventLabel(eventType)} · ${aiPlatformLabel(platform)} 联调失败：${detail}`, "danger");
+          setNotificationRouteState(`${notificationEventLabel(eventType)} · ${notificationPlatformLabel(platform)} 联调失败：${detail}`, "danger");
         }
       }
       renderOperationNotifications();

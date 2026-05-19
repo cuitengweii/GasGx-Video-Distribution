@@ -26,6 +26,7 @@ import requests
 from PIL import Image, ImageStat
 
 from cybercar import engine
+from cybercar.common.telegram_api import call_telegram_api
 from cybercar.settings import apply_runtime_environment as apply_cybercar_environment
 from cybercar.settings import get_paths as get_cybercar_paths
 from cybercar.settings import load_app_config, save_app_config
@@ -126,6 +127,88 @@ NOTIFICATION_PLATFORMS = {"telegram", "dingtalk", "wecom"}
 NOTIFICATION_OPEN_STATUSES = {"open", "acknowledged", "assigned"}
 NOTIFICATION_CLOSED_STATUSES = {"resolved", "ignored"}
 NOTIFICATION_POLICY_SEVERITY_ORDER = {"critical": 5, "blocking": 4, "error": 3, "warning": 2, "info": 1}
+NOTIFICATION_SEVERITY_LABELS = {
+    "critical": "严重",
+    "blocking": "阻断",
+    "error": "错误",
+    "warning": "警告",
+    "info": "信息",
+}
+NOTIFICATION_FIELD_LABELS = {
+    "account": "账号",
+    "account_id": "账号ID",
+    "platform": "平台",
+    "task_id": "任务ID",
+    "run_id": "运行ID",
+    "action": "操作",
+    "owner_hint": "负责人",
+    "source_url": "来源",
+    "action_url": "处理",
+}
+NOTIFICATION_PLATFORM_LABELS = {
+    "wechat": "视频号",
+    "douyin": "抖音",
+    "wecom": "企业微信",
+    "dingtalk": "钉钉",
+    "lark": "飞书",
+    "telegram": "电报",
+    "whatsapp": "WhatsApp",
+}
+NOTIFICATION_SUBTYPE_LABELS = {
+    "wechat_login_qr": {
+        "qr_generated": "二维码已生成",
+        "qr_updated": "二维码已更新",
+        "login_required": "需要登录",
+    },
+    "login_status": {
+        "expired": "登录已失效",
+        "expiring_soon": "即将失效",
+        "failed": "登录失败",
+        "inspection_result": "巡检结果",
+    },
+    "publish_result": {
+        "published": "已发布",
+        "failed": "发布失败",
+        "upload_failed": "上传失败",
+        "draft_saved": "草稿已保存",
+        "uploaded_only": "仅上传",
+        "queued": "已入队",
+        "running": "进行中",
+        "cancelled": "已取消",
+    },
+    "video_generation": {
+        "completed": "已完成",
+        "failed": "失败",
+        "interrupted": "中断",
+    },
+    "material_issue": {
+        "insufficient": "素材不足",
+        "category_incomplete": "分类不完整",
+        "skipped_unusable": "跳过不可用素材",
+    },
+    "system_error": {
+        "dependency_unavailable": "依赖不可用",
+        "scheduler_failed": "调度失败",
+        "job_failed": "作业失败",
+        "storage_error": "存储错误",
+        "config_error": "配置错误",
+    },
+    "ops_summary": {
+        "daily_sent": "日报已发送",
+        "daily_failed": "日报发送失败",
+        "summary_sent": "汇总已发送",
+        "summary_failed": "汇总发送失败",
+    },
+    "action_required": {
+        "confirmation_required": "需要确认",
+        "configuration_required": "需要配置",
+        "queue_backlog": "队列积压",
+    },
+}
+
+NOTIFICATION_GENERIC_SUBTYPE_LABELS = {
+    "route_probe": "联调",
+}
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
 BRAND_INLINE_ASSET_MAX_CHARS = int(os.getenv("GASGX_BRAND_INLINE_ASSET_MAX_CHARS", "200000") or 200000)
 BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_account_prefix,created_at,updated_at"
@@ -2005,10 +2088,10 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
     config = get_ai_robot_config(token)
     supported = bool(config and config.get("enabled") and config.get("webhook_url"))
     status = "pending" if supported else "unsupported"
-    summary = "queued for robot sender" if supported else f"{token} robot is not enabled or missing webhook_url"
+    summary = "已进入机器人发送队列" if supported else f"{NOTIFICATION_PLATFORM_LABELS.get(token, token)} 机器人未启用或缺少 Webhook 地址"
     message = dict(payload or {})
     if test:
-        message.setdefault("text", "GasGx AI robot test message")
+        message.setdefault("text", "机器人测试通知")
         message["test"] = True
     ts = now_ts()
     if brand_database_backend() == "supabase":
@@ -2469,24 +2552,33 @@ def list_notification_event_definitions() -> list[dict[str, Any]]:
 def _notification_text(event_type: str, payload: dict[str, Any]) -> str:
     meta = NOTIFICATION_EVENT_META.get(event_type, {"label": event_type})
     subtype = str(payload.get("subtype") or "").strip()
-    title = str(payload.get("title") or meta["label"]).strip()
+    title = str(payload.get("title") or meta["label"] or event_type).strip()
     summary = str(payload.get("summary") or payload.get("reason") or "").strip()
     severity = str(payload.get("severity") or meta.get("default_severity") or "info").strip()
-    lines = [f"[{severity}] {title}"]
+    severity_label = NOTIFICATION_SEVERITY_LABELS.get(severity.lower(), severity)
+    title = title or str(meta.get("label") or event_type)
+    lines = [f"【{severity_label}】{title}"]
+    lines.append(f"事件: {str(meta.get('label') or event_type)}")
     if subtype:
-        lines.append(f"类型: {event_type}/{subtype}")
+        subtype_label = (
+            NOTIFICATION_SUBTYPE_LABELS.get(event_type, {}).get(subtype)
+            or NOTIFICATION_GENERIC_SUBTYPE_LABELS.get(subtype, subtype)
+        )
+        lines.append(f"类型: {str(meta.get('label') or event_type)} / {subtype_label}")
     else:
-        lines.append(f"类型: {event_type}")
+        lines.append(f"类型: {str(meta.get('label') or event_type)}")
     if summary:
         lines.append(f"摘要: {summary}")
     for key in ("account", "account_id", "platform", "task_id", "run_id", "action", "owner_hint"):
         value = str(payload.get(key) or "").strip()
         if value:
-            lines.append(f"{key}: {value}")
-    for key, label in (("source_url", "来源"), ("action_url", "处理")):
+            if key == "platform":
+                value = NOTIFICATION_PLATFORM_LABELS.get(value, value)
+            lines.append(f"{NOTIFICATION_FIELD_LABELS.get(key, key)}: {value}")
+    for key in ("source_url", "action_url"):
         value = str(payload.get(key) or "").strip()
         if value:
-            lines.append(f"{label}: {value}")
+            lines.append(f"{NOTIFICATION_FIELD_LABELS.get(key, key)}: {value}")
     return "\n".join(lines)
 
 
@@ -3106,12 +3198,14 @@ def send_notification_route_probe(event_type: str, platform: str) -> dict[str, A
     if token not in NOTIFICATION_PLATFORMS:
         raise ValueError("notification platform must be telegram, dingtalk, or wecom")
     meta = NOTIFICATION_EVENT_META[event]
+    event_label = str(meta.get("label") or event).strip()
+    platform_label = NOTIFICATION_PLATFORM_LABELS.get(token, token)
     payload: dict[str, Any] = {
         "message_type": event,
         "subtype": "route_probe",
         "severity": meta.get("default_severity") or "info",
-        "title": f"通知链路联调：{meta.get('label') or event}",
-        "summary": f"通知路由已开启（{event} -> {token}）",
+        "title": f"通知链路联调：{event_label}",
+        "summary": f"通知路由已开启（{event_label} → {platform_label}）",
         "platform": token,
         "event_type": event,
         "route_probe": True,
@@ -6023,7 +6117,7 @@ def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
         for row in claimed:
             _brand_supabase().update(
                 "ai_robot_messages",
-                {"status": "sending", "summary": "claimed by robot sender", "last_attempt_at": ts, "updated_at": ts},
+                {"status": "sending", "summary": "已被机器人发送器领取", "last_attempt_at": ts, "updated_at": ts},
                 filters={"id": row["id"]},
             )
             row["status"] = "sending"
@@ -6049,7 +6143,7 @@ def _claim_ai_robot_messages(limit: int) -> list[dict[str, Any]]:
             conn.execute(
                 """
                 UPDATE ai_robot_messages
-                SET status = 'sending', summary = 'claimed by robot sender', last_attempt_at = ?, updated_at = ?
+                SET status = 'sending', summary = '已被机器人发送器领取', last_attempt_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (ts, ts, row["id"]),
@@ -6169,7 +6263,7 @@ def _robot_http_request(
 
 def _mark_ai_robot_message_sending(message: dict[str, Any]) -> dict[str, Any]:
     ts = now_ts()
-    payload = {"status": "sending", "summary": "claimed by robot sender", "last_attempt_at": ts, "updated_at": ts}
+    payload = {"status": "sending", "summary": "已被机器人发送器领取", "last_attempt_at": ts, "updated_at": ts}
     if brand_database_backend() == "supabase":
         row = _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
         _invalidate_supabase_read_cache("ai_robot_messages")
@@ -6189,7 +6283,7 @@ def _mark_ai_robot_message_sending(message: dict[str, Any]) -> dict[str, Any]:
 
 def _mark_ai_robot_message_sent(message: dict[str, Any]) -> dict[str, Any]:
     ts = now_ts()
-    payload = {"status": "sent", "summary": "sent by robot sender", "error": "", "sent_at": ts, "updated_at": ts}
+    payload = {"status": "sent", "summary": "机器人消息发送成功", "error": "", "sent_at": ts, "updated_at": ts}
     if brand_database_backend() == "supabase":
         row = _brand_supabase().update("ai_robot_messages", payload, filters={"id": message["id"]})
         _invalidate_supabase_read_cache("ai_robot_messages")
@@ -6211,7 +6305,7 @@ def _mark_ai_robot_message_failed(message: dict[str, Any], error: str) -> dict[s
     ts = now_ts()
     retry_count = int(message.get("retry_count") or 0) + 1
     status = "failed" if retry_count >= AI_ROBOT_RETRY_LIMIT else "retry"
-    summary = "robot sender failed; retry scheduled" if status == "retry" else "robot sender failed; retry limit reached"
+    summary = "机器人发送失败，已安排重试" if status == "retry" else "机器人发送失败，已达重试上限"
     safe_error = _redact_ai_robot_error(error)
     payload = {
         "status": status,
@@ -6249,11 +6343,22 @@ def resolve_telegram_bot_setup(token: str) -> dict[str, Any]:
     if not bot_token:
         raise ValueError("telegram bot token is required")
     timeout = float(os.getenv("AI_ROBOT_SEND_TIMEOUT", "10") or 10)
-    me_response = requests.get(f"https://api.telegram.org/bot{bot_token}/getMe", timeout=timeout)
-    me_payload = _telegram_json(me_response)
-    username = str(((me_payload.get("result") or {}).get("username")) or "")
-    updates_response = requests.get(f"https://api.telegram.org/bot{bot_token}/getUpdates", timeout=timeout)
-    updates_payload = _telegram_json(updates_response)
+    try:
+        me_payload = call_telegram_api(
+            bot_token=bot_token,
+            method="getMe",
+            timeout_seconds=int(timeout),
+            use_post=False,
+        )
+        username = str(((me_payload.get("result") or {}).get("username")) or "")
+        updates_payload = call_telegram_api(
+            bot_token=bot_token,
+            method="getUpdates",
+            timeout_seconds=int(timeout),
+            use_post=False,
+        )
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
     updates = updates_payload.get("result") if isinstance(updates_payload.get("result"), list) else []
     chat = next(
         (
@@ -6272,16 +6377,6 @@ def resolve_telegram_bot_setup(token: str) -> dict[str, Any]:
         "chat_id": chat_id,
         "webhook_url": f"https://api.telegram.org/bot{bot_token}/sendMessage",
     }
-
-
-def _telegram_json(response: requests.Response) -> dict[str, Any]:
-    try:
-        payload = response.json()
-    except Exception as exc:
-        raise ValueError("telegram returned a non-json response") from exc
-    if response.status_code >= 400 or payload.get("ok") is False:
-        raise ValueError(str(payload.get("description") or f"telegram returned {response.status_code}"))
-    return payload
 
 
 def _matrix_publish_success_counts() -> dict[int, int]:

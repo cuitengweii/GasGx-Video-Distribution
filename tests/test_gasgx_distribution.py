@@ -378,7 +378,51 @@ def test_notification_route_api_can_send_probe_message(monkeypatch, tmp_path: Pa
     assert payload["probe"]["status"] == "sent"
     assert sent[-1]["url"] == "https://example.test/bot"
     assert sent[-1]["json"]["chat_id"] == "chat-1"
-    assert "action_required" in str(sent[-1]["json"]["text"])
+    assert "通知链路联调" in str(sent[-1]["json"]["text"])
+    assert "人工处理" in str(sent[-1]["json"]["text"])
+    assert "通知路由已开启（人工处理 → 电报）" in str(sent[-1]["json"]["text"])
+
+
+def test_notification_text_uses_chinese_labels_for_material_issue(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    text = service._notification_text(
+        "material_issue",
+        {
+            "subtype": "insufficient",
+            "title": "素材不足",
+            "summary": "当天可用素材不够，请尽快补充。",
+            "account_id": 7,
+            "platform": "wechat",
+        },
+    )
+
+    assert "【警告】素材不足" in text
+    assert "事件: 素材问题" in text
+    assert "类型: 素材问题 / 素材不足" in text
+    assert "摘要: 当天可用素材不够，请尽快补充。" in text
+    assert "账号ID: 7" in text
+    assert "平台: 视频号" in text
+
+
+def test_notification_text_uses_chinese_labels_for_video_generation(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    text = service._notification_text(
+        "video_generation",
+        {
+            "subtype": "completed",
+            "title": "视频生成完成",
+            "summary": "全部账号已处理完毕。",
+            "platform": "wechat",
+        },
+    )
+
+    assert "【警告】视频生成完成" in text
+    assert "事件: 视频生成" in text
+    assert "类型: 视频生成 / 已完成" in text
+    assert "摘要: 全部账号已处理完毕。" in text
+    assert "平台: 视频号" in text
 
 
 def test_notification_policy_dedupes_incidents_and_tracks_actions(monkeypatch, tmp_path: Path) -> None:
@@ -2144,21 +2188,20 @@ def test_ai_robot_sender_worker_sends_and_records_failures(monkeypatch, tmp_path
 def test_telegram_resolve_uses_local_api(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
 
-    class FakeResponse:
-        def __init__(self, payload: dict[str, object]) -> None:
-            self._payload = payload
-            self.status_code = 200
+    calls: list[str] = []
 
-        def json(self) -> dict[str, object]:
-            return self._payload
+    def fake_call_telegram_api(*, bot_token: str, method: str, timeout_seconds: int, use_post: bool, **_: object) -> dict[str, object]:
+        assert bot_token == "SECRET_TOKEN"
+        assert timeout_seconds >= 5
+        assert use_post is False
+        calls.append(method)
+        if method == "getMe":
+            return {"ok": True, "result": {"username": "GasGxBot"}}
+        if method == "getUpdates":
+            return {"ok": True, "result": [{"message": {"chat": {"id": -10042}}}]}
+        raise AssertionError(method)
 
-    def fake_get(url: str, timeout: float) -> FakeResponse:
-        assert "SECRET_TOKEN" in url
-        if url.endswith("/getMe"):
-            return FakeResponse({"ok": True, "result": {"username": "GasGxBot"}})
-        return FakeResponse({"ok": True, "result": [{"message": {"chat": {"id": -10042}}}]})
-
-    monkeypatch.setattr("gasgx_distribution.service.requests.get", fake_get)
+    monkeypatch.setattr("gasgx_distribution.service.call_telegram_api", fake_call_telegram_api)
     client = TestClient(create_app())
 
     response = client.post("/api/ai-robots/telegram/resolve", json={"token": "SECRET_TOKEN"})
@@ -2168,6 +2211,7 @@ def test_telegram_resolve_uses_local_api(monkeypatch, tmp_path: Path) -> None:
     assert data["username"] == "GasGxBot"
     assert data["chat_id"] == "-10042"
     assert data["webhook_url"] == "https://api.telegram.org/botSECRET_TOKEN/sendMessage"
+    assert calls == ["getMe", "getUpdates"]
 
 
 def test_dashboard_summary_counts_remaining_material_videos(monkeypatch, tmp_path: Path) -> None:
