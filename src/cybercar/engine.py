@@ -4496,6 +4496,8 @@ def _default_runtime_config() -> dict[str, Any]:
             "max_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
             "min_like_to_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MIN_SECONDS),
             "max_like_to_reply_interval_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
+            "min_action_delay_seconds": int(COMMENT_INTERACTION_WAIT_MIN_SECONDS),
+            "max_action_delay_seconds": int(COMMENT_INTERACTION_WAIT_MAX_SECONDS),
             "auto_like": True,
             "self_author_markers": ["gasgx", "gasgx官方客服", "gasgx | 天然气发电"],
             "prompt_template": DEFAULT_COMMENT_REPLY_PROMPT_TEMPLATE,
@@ -4835,6 +4837,23 @@ def _merge_comment_reply_config(raw: Any) -> dict[str, Any]:
         cfg["max_like_to_reply_interval_seconds"] = max(
             cfg["min_like_to_reply_interval_seconds"],
             int(defaults["max_like_to_reply_interval_seconds"]),
+        )
+    try:
+        cfg["min_action_delay_seconds"] = max(
+            0,
+            int(raw.get("min_action_delay_seconds", defaults["min_action_delay_seconds"])),
+        )
+    except Exception:
+        cfg["min_action_delay_seconds"] = int(defaults["min_action_delay_seconds"])
+    try:
+        cfg["max_action_delay_seconds"] = max(
+            cfg["min_action_delay_seconds"],
+            int(raw.get("max_action_delay_seconds", defaults["max_action_delay_seconds"])),
+        )
+    except Exception:
+        cfg["max_action_delay_seconds"] = max(
+            cfg["min_action_delay_seconds"],
+            int(defaults["max_action_delay_seconds"]),
         )
     cfg["auto_like"] = _to_bool(raw.get("auto_like"), default=bool(defaults["auto_like"]))
     cfg["launch_background"] = _to_bool(raw.get("launch_background"), default=bool(defaults["launch_background"]))
@@ -5386,6 +5405,45 @@ def _apply_comment_reply_like_to_reply_wait(
     return float(wait_seconds)
 
 
+def _comment_reply_action_delay_plan(comment_cfg: dict[str, Any]) -> dict[str, float]:
+    min_delay = max(0.0, float(comment_cfg.get("min_action_delay_seconds") or 0))
+    max_delay = max(min_delay, float(comment_cfg.get("max_action_delay_seconds") or min_delay))
+    if max_delay <= 0:
+        return {
+            "min_delay_seconds": float(min_delay),
+            "max_delay_seconds": float(max_delay),
+            "delay_seconds": 0.0,
+        }
+    delay_seconds = min_delay if max_delay <= min_delay else random.uniform(min_delay, max_delay)
+    return {
+        "min_delay_seconds": float(min_delay),
+        "max_delay_seconds": float(max_delay),
+        "delay_seconds": float(delay_seconds),
+    }
+
+
+def _apply_comment_reply_action_delay(
+    comment_cfg: dict[str, Any],
+    *,
+    debug: bool,
+    reason: str,
+) -> float:
+    plan = _comment_reply_action_delay_plan(comment_cfg)
+    delay_seconds = float(plan.get("delay_seconds") or 0.0)
+    if delay_seconds > 0:
+        _comment_reply_log(
+            debug,
+            (
+                f"Humanized action delay ({str(reason or '').strip() or 'step'}): "
+                f"delay={delay_seconds:.1f}s "
+                f"range={float(plan.get('min_delay_seconds') or 0.0):.1f}-"
+                f"{float(plan.get('max_delay_seconds') or 0.0):.1f}s"
+            ),
+        )
+        time.sleep(delay_seconds)
+    return delay_seconds
+
+
 def _private_message_reply_state_path(workspace: Workspace) -> Path:
     return workspace.root / "runtime" / WECHAT_PRIVATE_MESSAGE_REPLY_STATE_FILE
 
@@ -5590,6 +5648,20 @@ def _private_message_reply_log(debug: bool, message: str) -> None:
         _log(f"[PrivateMessageReply] {message}")
 
 
+def _is_wechat_private_message_transient_error(exc: Exception | str) -> bool:
+    text = str(exc or "").lower()
+    return any(
+        token in text
+        for token in [
+            "页面被刷新",
+            "refresh",
+            "load completion",
+            "等待页面刷新",
+            "加载完成",
+        ]
+    )
+
+
 def _private_message_reply_fingerprint(conversation: dict[str, Any]) -> str:
     source = str(conversation.get("conversation_source") or "").strip().lower()
     raw = "|".join(
@@ -5599,6 +5671,28 @@ def _private_message_reply_fingerprint(conversation: dict[str, Any]) -> str:
             str(conversation.get("conversation_name") or "").strip(),
             str(conversation.get("message_time") or "").strip(),
             str(conversation.get("message_content") or "").strip(),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
+
+
+def _private_message_reply_base_fingerprint(conversation: dict[str, Any]) -> str:
+    raw = "|".join(
+        [
+            str(conversation.get("conversation_id") or conversation.get("conversation_key") or "").strip(),
+            str(conversation.get("conversation_name") or "").strip(),
+            str(conversation.get("message_time") or "").strip(),
+            str(conversation.get("message_content") or "").strip(),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
+
+
+def _private_message_reply_cross_tab_fingerprint(conversation: dict[str, Any]) -> str:
+    raw = "|".join(
+        [
+            str(conversation.get("conversation_id") or conversation.get("conversation_key") or "").strip(),
+            str(conversation.get("conversation_name") or "").strip(),
         ]
     )
     return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
@@ -5615,6 +5709,8 @@ def _remember_private_message_reply(
     replied_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     record = {
         "fingerprint": str(fingerprint or "").strip(),
+        "conversation_base_fingerprint": _private_message_reply_base_fingerprint(conversation),
+        "conversation_cross_tab_fingerprint": _private_message_reply_cross_tab_fingerprint(conversation),
         "conversation_source": str(conversation.get("conversation_source") or "").strip(),
         "conversation_tab_label": str(conversation.get("conversation_tab_label") or "").strip(),
         "conversation_id": str(conversation.get("conversation_id") or conversation.get("conversation_key") or "").strip(),
@@ -9531,10 +9627,10 @@ def run_wechat_comment_reply(
                                 )
                                 continue
                             seen_comment_fingerprints.add(fingerprint)
-                            if fingerprint in items:
+                            if fingerprint in items or bool(comment.get("has_reply")):
                                 _comment_reply_log(
                                     debug_enabled,
-                                    f"Skip comment: already-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                                    f"Skip comment: already-replied-or-has-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
                                 )
                                 continue
                             if bool(comment.get("has_self_reply")):
@@ -9567,6 +9663,7 @@ def run_wechat_comment_reply(
                             )
                             comment_source = str(comment.get("source") or "dom").strip().lower()
                             if bool(comment_cfg.get("auto_like")):
+                                _apply_comment_reply_action_delay(comment_cfg, debug=debug_enabled, reason="before like")
                                 if comment_source == "store":
                                     like_state = _playwright_like_comment_via_store(pw_page, comment, post)
                                     _comment_reply_log(
@@ -9582,6 +9679,7 @@ def run_wechat_comment_reply(
                                         break
                                     _playwright_like_comment_if_needed(pw_frame, int(comment.get("index") or 0))
                                 _apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
+                            _apply_comment_reply_action_delay(comment_cfg, debug=debug_enabled, reason="before submit")
                             if comment_source == "store":
                                 submit_state = _playwright_submit_reply_via_store(pw_page, comment, post, reply_text)
                                 _comment_reply_log(
@@ -9839,10 +9937,10 @@ def run_wechat_comment_reply(
                         )
                         continue
                     seen_comment_fingerprints.add(fingerprint)
-                    if fingerprint in items:
+                    if fingerprint in items or bool(comment.get("has_reply")):
                         _comment_reply_log(
                             debug_enabled,
-                            f"Skip comment: already-replied fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
+                            f"Skip comment: already-replied-or-has-reply fp={fingerprint} preview={_single_line_preview(str(comment.get('content') or comment.get('time_text') or ''), 80)}",
                         )
                         continue
                     if bool(comment.get("has_self_reply")):
@@ -9875,8 +9973,10 @@ def run_wechat_comment_reply(
                         debug=debug_enabled,
                     )
                     if bool(comment_cfg.get("auto_like")):
+                        _apply_comment_reply_action_delay(comment_cfg, debug=debug_enabled, reason="before like")
                         like_comment_if_needed(page, int(comment.get("index") or 0))
                         _apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
+                    _apply_comment_reply_action_delay(comment_cfg, debug=debug_enabled, reason="before submit")
                     if not submit_reply(page, int(comment.get("index") or 0), reply_text):
                         _comment_reply_log(debug_enabled, "Submit reply failed")
                         login_notify_result = _maybe_notify_wechat_comment_login_required(
@@ -10071,12 +10171,29 @@ def _activate_wechat_private_message_tab(page: Any, tab_text: str, debug: bool =
       };
     })(arguments[0]);
     """
-    try:
-        payload = _page_run_js(page, js, {"tab_text": str(tab_text or "")})
-    except Exception as exc:
-        _private_message_reply_log(debug, f"Private message tab activate failed: {exc}")
-        return {"ok": False, "reason": "private_message_tab_activate_failed", "error": str(exc), "tab_text": str(tab_text or "")}
-    return payload if isinstance(payload, dict) else {"ok": False, "reason": "private_message_tab_activate_failed", "tab_text": str(tab_text or "")}
+    target_text = str(tab_text or "").strip()
+    deadline = time.time() + 10.0
+    last_payload: dict[str, Any] | None = None
+    while time.time() < deadline:
+        try:
+            payload = _page_run_js(page, js, {"tab_text": target_text})
+        except Exception as exc:
+            if _is_wechat_private_message_transient_error(exc):
+                time.sleep(0.6)
+                continue
+            _private_message_reply_log(debug, f"Private message tab activate failed: {exc}")
+            return {"ok": False, "reason": "private_message_tab_activate_failed", "error": str(exc), "tab_text": target_text}
+        if isinstance(payload, dict):
+            last_payload = payload
+            if bool(payload.get("ok")):
+                return payload
+            reason = str(payload.get("reason") or "").strip().lower()
+            if "not_found" not in reason and "not loaded" not in reason and "not_ready" not in reason:
+                return payload
+        time.sleep(0.35)
+    if isinstance(last_payload, dict):
+        return last_payload
+    return {"ok": False, "reason": "private_message_tab_activate_failed", "tab_text": target_text}
 
 
 def _activate_wechat_private_message_greeting_tab(page: Any, debug: bool = False) -> dict[str, Any]:
@@ -10232,7 +10349,7 @@ def _collect_wechat_private_message_conversations(page: Any, limit: int, debug: 
     return result
 
 
-def _open_wechat_private_message_conversation(page: Any, conversation_index: int, debug: bool = False) -> dict[str, Any]:
+def _open_wechat_private_message_conversation(page: Any, conversation: int | dict[str, Any], debug: bool = False) -> dict[str, Any]:
     js = """
     return ((args) => {
       function norm(value) {
@@ -10257,6 +10374,9 @@ def _open_wechat_private_message_conversation(page: Any, conversation_index: int
         return false;
       }
       const index = Math.max(0, Number(args && args.conversation_index || 0));
+      const expectedName = norm(args && args.conversation_name || '');
+      const expectedPreview = norm(args && args.conversation_preview || '');
+      const expectedKey = norm(args && args.conversation_key || '');
       const selectorList = [
         '.session-wrap',
         '.session-item',
@@ -10272,7 +10392,30 @@ def _open_wechat_private_message_conversation(page: Any, conversation_index: int
       ];
       const root = getRoot();
       const nodes = Array.from(root.querySelectorAll(selectorList.join(','))).filter(isVisible);
-      const node = nodes[index];
+      let node = null;
+      if (expectedKey) {
+        node = nodes.find((item) => {
+          const value = norm(item.getAttribute('data-conversation-id') || item.dataset?.conversationId || item.dataset?.key || item.getAttribute('data-thread-id') || '');
+          return value === expectedKey || value.includes(expectedKey);
+        }) || null;
+      }
+      if (!node && expectedName) {
+        node = nodes.find((item) => {
+          const text = norm(item.innerText || item.textContent || '');
+          return text === expectedName || text.includes(expectedName);
+        }) || null;
+      }
+      if (!node && expectedPreview) {
+        node = nodes.find((item) => {
+          const text = norm(item.innerText || item.textContent || '');
+          return text === expectedPreview || text.includes(expectedPreview);
+        }) || null;
+      }
+      if (!node) node = nodes[index];
+      if (node) {
+        const wrapper = node.closest('.session-wrap, .session-item, .conversation-item, .chat-item, [data-conversation-id], [data-thread-id], [role="listitem"], li');
+        if (wrapper && wrapper !== node) node = wrapper;
+      }
       if (!node) return { ok: false, reason: 'conversation_not_found', total: nodes.length };
       const clicked = click(node);
       return {
@@ -10284,8 +10427,40 @@ def _open_wechat_private_message_conversation(page: Any, conversation_index: int
     })(arguments[0]);
     """
     try:
-        payload = _page_run_js(page, js, {"conversation_index": int(conversation_index)})
+        if isinstance(conversation, dict):
+            payload = _page_run_js(
+                page,
+                js,
+                {
+                    "conversation_index": int(conversation.get("conversation_index") or 0),
+                    "conversation_name": str(conversation.get("conversation_name") or "").strip(),
+                    "conversation_preview": str(conversation.get("message_content") or "").strip(),
+                    "conversation_key": str(conversation.get("conversation_key") or conversation.get("conversation_id") or "").strip(),
+                },
+            )
+        else:
+            payload = _page_run_js(page, js, {"conversation_index": int(conversation)})
     except Exception as exc:
+        if _is_wechat_private_message_transient_error(exc):
+            time.sleep(0.8)
+            try:
+                if isinstance(conversation, dict):
+                    payload = _page_run_js(
+                        page,
+                        js,
+                        {
+                            "conversation_index": int(conversation.get("conversation_index") or 0),
+                            "conversation_name": str(conversation.get("conversation_name") or "").strip(),
+                            "conversation_preview": str(conversation.get("message_content") or "").strip(),
+                            "conversation_key": str(conversation.get("conversation_key") or conversation.get("conversation_id") or "").strip(),
+                        },
+                    )
+                else:
+                    payload = _page_run_js(page, js, {"conversation_index": int(conversation)})
+            except Exception as retry_exc:
+                _private_message_reply_log(debug, f"Conversation open failed: {retry_exc}")
+                return {"ok": False, "reason": "conversation_open_failed", "error": str(retry_exc)}
+            return payload if isinstance(payload, dict) else {"ok": False, "reason": "conversation_open_failed"}
         _private_message_reply_log(debug, f"Conversation open failed: {exc}")
         return {"ok": False, "reason": "conversation_open_failed", "error": str(exc)}
     return payload if isinstance(payload, dict) else {"ok": False, "reason": "conversation_open_failed"}
@@ -10388,12 +10563,31 @@ def _submit_wechat_private_message_reply(page: Any, reply_text: str, debug: bool
       return { ok: true, reason: 'sent_enter', reply_text: text };
     })(arguments[0]);
     """
-    try:
-        payload = _page_run_js(page, js, {"reply_text": str(reply_text or "")})
-    except Exception as exc:
-        _private_message_reply_log(debug, f"Reply submit failed: {exc}")
-        return {"ok": False, "reason": "reply_submit_failed", "error": str(exc)}
-    return payload if isinstance(payload, dict) else {"ok": False, "reason": "reply_submit_failed"}
+    text = str(reply_text or "").strip()
+    if not text:
+        return {"ok": False, "reason": "empty_reply"}
+    deadline = time.time() + 10.0
+    last_payload: dict[str, Any] | None = None
+    while time.time() < deadline:
+        try:
+            payload = _page_run_js(page, js, {"reply_text": text})
+        except Exception as exc:
+            if _is_wechat_private_message_transient_error(exc):
+                time.sleep(0.6)
+                continue
+            _private_message_reply_log(debug, f"Reply submit failed: {exc}")
+            return {"ok": False, "reason": "reply_submit_failed", "error": str(exc)}
+        if isinstance(payload, dict):
+            last_payload = payload
+            if bool(payload.get("ok")):
+                return payload
+            reason = str(payload.get("reason") or "").strip().lower()
+            if "editor_missing" not in reason and "editor_fill_failed" not in reason:
+                return payload
+        time.sleep(0.35)
+    if isinstance(last_payload, dict):
+        return last_payload
+    return {"ok": False, "reason": "reply_submit_failed"}
 
 
 def run_wechat_private_message_reply(
@@ -10544,6 +10738,20 @@ def run_wechat_private_message_reply(
     scanned_count = 0
     selected_count = 0
     self_markers = [str(item or "").strip().lower() for item in reply_cfg.get("self_author_markers") or [] if str(item or "").strip()]
+    replied_cross_tab_fingerprints = {
+        str(
+            value.get("conversation_cross_tab_fingerprint")
+            or _private_message_reply_cross_tab_fingerprint(
+                {
+                    "conversation_id": value.get("conversation_id") or "",
+                    "conversation_name": value.get("conversation_name") or "",
+                    "message_content": value.get("message_preview") or value.get("message_content") or "",
+                }
+            )
+        ).strip()
+        for value in items.values()
+        if isinstance(value, dict)
+    }
     tab_specs = [
         {"source": "private_message", "label": "私信"},
         {"source": "greeting_message", "label": "打招呼消息"},
@@ -10583,7 +10791,8 @@ def run_wechat_private_message_reply(
                 _private_message_reply_log(debug_enabled, f"Skip conversation[{tab_label}]: self marker matched preview={_single_line_preview(preview, 80)}")
                 continue
             fingerprint = _private_message_reply_fingerprint(conversation)
-            if fingerprint in items:
+            cross_tab_fingerprint = _private_message_reply_cross_tab_fingerprint(conversation)
+            if fingerprint in items or cross_tab_fingerprint in replied_cross_tab_fingerprints:
                 _private_message_reply_log(debug_enabled, f"Skip conversation[{tab_label}]: already replied fp={fingerprint}")
                 continue
             reply_result = generate_private_message_reply_result(
@@ -10599,7 +10808,7 @@ def run_wechat_private_message_reply(
                 _private_message_reply_log(debug_enabled, f"Skip conversation[{tab_label}]: empty reply fp={fingerprint}")
                 continue
             last_reply_at = _apply_private_message_reply_wait(reply_cfg, last_reply_at=last_reply_at, debug=debug_enabled)
-            open_result = _open_wechat_private_message_conversation(page, int(conversation.get("conversation_index") or 0), debug=debug_enabled)
+            open_result = _open_wechat_private_message_conversation(page, conversation, debug=debug_enabled)
             if not bool(open_result.get("ok")):
                 _private_message_reply_log(
                     debug_enabled,
@@ -10631,6 +10840,7 @@ def run_wechat_private_message_reply(
                 reply_text=reply_text,
                 reply_provider=str(reply_result.get("reply_provider") or ""),
             )
+            replied_cross_tab_fingerprints.add(str(record.get("conversation_cross_tab_fingerprint") or "").strip())
             _append_private_message_reply_markdown(_private_message_reply_markdown_path(workspace), "wechat", record)
             reply_records.append(record)
             state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

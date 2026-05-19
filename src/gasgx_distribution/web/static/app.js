@@ -208,7 +208,7 @@ const TONGJI_SNAPSHOT = {
 
 const FEATURE_ENTRIES = [
   { id: "overview", label: "总览", group: "业务工作台" },
-  { id: "tasks", label: "任务中心", group: "业务工作台" },
+  { id: "tasks", label: "执行队列", group: "业务工作台" },
   { id: "ai-robot", label: "运营客服", group: "业务工作台" },
   { id: "accounts", label: "账号管理", group: "矩阵管理" },
   { id: "video-matrix", label: "生成视频", group: "矩阵管理" },
@@ -280,7 +280,7 @@ const VIEW_HEADERS = {
   accounts: ["账号管理", "维护 GasGx 国内外平台账号、独立浏览器配置和登录状态。"],
   "user-center": ["用户中心", "预留操作者资料、角色权限、工作偏好和本地部署身份入口。"],
   settings: ["发布配置", "配置发布素材目录、上传策略、平台参数和矩阵发布作业。"],
-  tasks: ["任务中心", "查看发布、评论、私信、登录检测等任务队列和执行状态。"],
+  tasks: ["执行队列", "查看发布、评论、私信、登录检测等任务队列和执行状态。"],
   "terminal-execution": ["批量发布", "预留本地终端命令执行入口。"],
   stats: ["数据统计", "短视频账号矩阵数字化营销客户端数据看板。"],
   "ai-robot": ["运营客服", "AI客服、企业微信、钉钉、飞书、Telegram 与 WhatsApp 统一接入。"],
@@ -1343,11 +1343,9 @@ function initUserMenu() {
     sidebarToggle.textContent = collapsed ? "›" : "‹";
     sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
     sidebarToggle.setAttribute("aria-label", collapsed ? "显示左侧栏" : "隐藏左侧栏");
-    requestAnimationFrame(() => syncTerminalWechatGridHeight());
   });
   window.addEventListener("resize", () => {
     if (!isMobileNavViewport()) closeMobileNavigation();
-    requestAnimationFrame(() => syncTerminalWechatGridHeight());
   });
   closeMobileNavigation();
 }
@@ -3664,7 +3662,6 @@ function renderTerminalDailyQrView(root) {
   if (!workspace) return;
   workspace.innerHTML = windows.map((window) => terminalWechatWindowMarkup(window, loginStarted)).join("");
   syncTerminalWechatSummary(summary, windows);
-  requestAnimationFrame(() => syncTerminalWechatGridHeight());
 }
 
 function renderTerminalWechatQuickActionBar() {
@@ -3694,25 +3691,6 @@ function renderTerminalWechatQuickActionBar() {
       </label>
     </div>
   `;
-}
-
-function syncTerminalWechatGridHeight() {
-  if (terminalCurrentRoute() !== "wechat") return;
-  const panel = document.querySelector("#terminal-matrix-workspace .terminal-group-panel");
-  const grid = panel?.querySelector(".terminal-workspace.terminal-workspace-wechat");
-  if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) return;
-  const panelRect = panel.getBoundingClientRect();
-  const gridRect = grid.getBoundingClientRect();
-  const viewportBottom = window.innerHeight || document.documentElement.clientHeight || panelRect.bottom;
-  const available = Math.floor(Math.max(panelRect.bottom, viewportBottom) - gridRect.top - 13);
-  if (available <= 0) return;
-  const clamped = Math.max(220, available);
-  const nextValue = `${clamped}px`;
-  if (grid.style.height !== nextValue) {
-    grid.style.height = nextValue;
-    grid.style.minHeight = nextValue;
-    grid.style.maxHeight = nextValue;
-  }
 }
 
 function renderTerminalSessionBoardView() {
@@ -4061,23 +4039,19 @@ function renderTerminalExecution() {
     workspace.innerHTML = `
       <div class="terminal-wechat-page">
         ${loadError ? `<div class="terminal-load-error">${loadError}</div>` : ""}
-        <section class="terminal-group-panel">
-          <div class="panel-head">
-            <div>
-              <h2>视频号终端</h2>
-              <p class="muted">每日登录 / 多窗扫码 / 与素材矩阵的关系在这里闭环。</p>
-            </div>
-          </div>
-          ${renderTerminalWechatQuickActionBar()}
-          <div class="terminal-wechat-summary">
-            <div class="metric"><span>总账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.total || 0)}</strong></div>
-            <div class="metric"><span>已完成账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.success || 0)}</strong></div>
-            <div class="metric"><span>当日素材剩余数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.remaining_material_videos || 0)}</strong></div>
-            <div class="metric"><span>当日总素材数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.today_materials || 0)}</strong></div>
-          </div>
-          ${showWechatLoadingState ? `<p class="system-action-state muted">正在拉取终端执行状态，请稍候…</p>` : ""}
-          <div class="terminal-workspace terminal-workspace-wechat"></div>
-        </section>
+        <div class="terminal-wechat-header">
+          <h2>视频号终端</h2>
+          <p class="muted">每日登录 / 多窗扫码 / 与素材矩阵的关系在这里闭环。</p>
+        </div>
+        ${renderTerminalWechatQuickActionBar()}
+        <div class="terminal-wechat-summary">
+          <div class="metric"><span>总账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.total || 0)}</strong></div>
+          <div class="metric"><span>已完成账号数</span><strong>${showWechatLoadingState ? "加载中" : (summary.success || 0)}</strong></div>
+          <div class="metric"><span>当日素材剩余数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.remaining_material_videos || 0)}</strong></div>
+          <div class="metric"><span>当日总素材数量</span><strong>${showWechatLoadingState ? "加载中" : (summary.today_materials || 0)}</strong></div>
+        </div>
+        ${showWechatLoadingState ? `<p class="system-action-state muted">正在拉取终端执行状态，请稍候…</p>` : ""}
+        <div class="terminal-workspace terminal-workspace-wechat"></div>
       </div>
     `;
     renderTerminalDailyQrView(workspace.querySelector(".terminal-workspace-wechat"));
@@ -5353,6 +5327,8 @@ function renderInteractionManagement() {
               <label>回复最大字数<input type="number" min="8" max="120" data-interaction-comment-max-chars value="${Number(comment.reply_max_chars || 40)}"></label>
               <label>最小回复间隔(秒)<input type="number" min="1" max="60" data-interaction-comment-min-interval value="${Number(comment.min_reply_interval_seconds || 1)}"></label>
               <label>最大回复间隔(秒)<input type="number" min="1" max="60" data-interaction-comment-max-interval value="${Number(comment.max_reply_interval_seconds || 5)}"></label>
+              <label>动作随机延迟最小(秒)<input type="number" min="0" max="30" data-interaction-comment-action-min value="${Number(comment.min_action_delay_seconds ?? 1)}"></label>
+              <label>动作随机延迟最大(秒)<input type="number" min="0" max="30" data-interaction-comment-action-max value="${Number(comment.max_action_delay_seconds ?? 5)}"></label>
               <label class="interaction-toggle"><input type="checkbox" data-interaction-comment-auto-like ${comment.auto_like !== false ? "checked" : ""}>自动点赞后再回复</label>
               <label class="interaction-wide-field">评论提示语<textarea rows="8" data-interaction-comment-prompt>${escapeHtml(joinInteractionLines(comment.prompt_template || ""))}</textarea></label>
               <label class="interaction-wide-field">评论兜底回复（每行一条）<textarea rows="4" data-interaction-comment-fallbacks>${escapeHtml(joinInteractionLines(comment.fallback_replies || []))}</textarea></label>
@@ -5486,6 +5462,8 @@ function collectInteractionManagementConfig() {
       reply_max_chars: readNumber("[data-interaction-comment-max-chars]", existing.comment_reply?.reply_max_chars || 40),
       min_reply_interval_seconds: readNumber("[data-interaction-comment-min-interval]", existing.comment_reply?.min_reply_interval_seconds || 1),
       max_reply_interval_seconds: readNumber("[data-interaction-comment-max-interval]", existing.comment_reply?.max_reply_interval_seconds || 5),
+      min_action_delay_seconds: readNumber("[data-interaction-comment-action-min]", existing.comment_reply?.min_action_delay_seconds || 1),
+      max_action_delay_seconds: readNumber("[data-interaction-comment-action-max]", existing.comment_reply?.max_action_delay_seconds || 5),
       auto_like: readBool("[data-interaction-comment-auto-like]", true),
       prompt_template: commentPrompt,
       fallback_replies: splitInteractionLines(commentFallbacks),
@@ -6391,6 +6369,12 @@ function updateAccountPhoneHint() {
 function activateView(view, updateHash = true) {
   if (view === "terminal-execution" && updateHash) {
     state.terminalRoute = "hub";
+  }
+  if (view !== "terminal-execution") {
+    state.terminalConfigOpen = false;
+    document.querySelector("#terminal-init-modal")?.classList.add("hidden");
+    document.querySelector("#terminal-platform-config-panel")?.classList.add("hidden");
+    document.querySelector("#terminal-full-loading")?.classList.add("hidden");
   }
   const button = document.querySelector(`.nav-btn[data-view="${view}"]`);
   const section = document.querySelector(`#${view}`);
@@ -8028,4 +8012,11 @@ window.addEventListener("load", () => {
     setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 50);
     setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 300);
   }
+});
+
+window.addEventListener("hashchange", () => {
+  const requested = terminalRouteFromHash();
+  if (!requested.view) return;
+  if (requested.view === "terminal-execution") state.terminalRoute = requested.route;
+  activateView(requested.view, false);
 });

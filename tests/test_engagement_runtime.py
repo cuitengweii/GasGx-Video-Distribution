@@ -431,3 +431,79 @@ def test_should_skip_comment_reply_guarded_keeps_other_user_replying_to_self() -
 
     assert should_skip is False
     assert reason == ""
+
+def test_run_platform_comment_reply_skips_comments_with_existing_replies(monkeypatch, tmp_path: Path) -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        def get(self, url: str) -> None:
+            self.urls.append(str(url))
+
+    def _unexpected_call(name: str):
+        def _raise(*_args, **_kwargs):
+            raise AssertionError(f"{name} should not run")
+
+        return _raise
+
+    fake_page = FakePage()
+    fake_adapter = runtime.CommentPlatformAdapter(
+        platform="douyin",
+        open_url="https://example.invalid/comments",
+        collect_posts=lambda _page, _limit, _debug: [
+            {
+                "title": "Video A",
+                "comment_count": 1,
+                "post_key": "post-1",
+                "object_id": "obj-1",
+                "export_id": "exp-1",
+            }
+        ],
+        open_post=lambda *_args, **_kwargs: True,
+        extract_comments=lambda _page: [
+            {
+                "index": 0,
+                "author": "已有回复",
+                "content": "这条评论已经有回复了",
+                "time_text": "刚刚",
+                "has_reply": True,
+                "has_self_reply": False,
+                "liked": False,
+            }
+        ],
+        like_comment_if_needed=_unexpected_call("like_comment_if_needed"),
+        submit_reply=_unexpected_call("submit_reply"),
+        wait_reply_confirm=lambda *_args, **_kwargs: True,
+        scroll_comments=lambda *_args, **_kwargs: None,
+    )
+
+    monkeypatch.setitem(runtime.PLATFORM_ADAPTERS, "douyin", fake_adapter)
+    monkeypatch.setattr(runtime.engine, "_connect_chrome", lambda **_kwargs: fake_page)
+    monkeypatch.setattr(runtime.engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime, "_load_state", lambda *_args, **_kwargs: {"updated_at": "", "items": {}})
+    monkeypatch.setattr(runtime, "_save_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runtime.engine,
+        "generate_comment_reply_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("generate_comment_reply_result should not run")),
+    )
+    monkeypatch.setattr(runtime.engine, "_apply_comment_reply_wait", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime.engine, "_apply_comment_reply_action_delay", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(runtime.engine, "_apply_comment_reply_like_to_reply_wait", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(runtime.engine, "_append_comment_reply_markdown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime.engine, "_remember_comment_reply", lambda items, **_kwargs: items)
+
+    result = runtime.run_platform_comment_reply(
+        platform_name="douyin",
+        workspace=_FakeWorkspace(tmp_path),
+        runtime_config={"comment_reply": {"enabled": True}},
+        debug_port=9334,
+        auto_open_chrome=False,
+        debug=False,
+    )
+
+    assert result["ok"] is True
+    assert result["replies_sent"] == 0
+    assert result["posts_scanned"] == 1
+    assert result["posts_selected"] == 1
+    assert fake_page.urls

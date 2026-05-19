@@ -16,6 +16,8 @@ def test_interaction_management_config_roundtrip(monkeypatch, tmp_path: Path) ->
             "reply_max_chars": 40,
             "min_reply_interval_seconds": 1,
             "max_reply_interval_seconds": 5,
+            "min_action_delay_seconds": 1,
+            "max_action_delay_seconds": 5,
             "prompt_template": "comment prompt",
             "fallback_replies": ["a", "b"],
         },
@@ -38,11 +40,13 @@ def test_interaction_management_config_roundtrip(monkeypatch, tmp_path: Path) ->
 
     saved = settings.save_app_config(payload)
     assert saved["comment_reply"]["max_posts_per_run"] == 9
+    assert saved["comment_reply"]["min_action_delay_seconds"] == 1
     assert saved["private_message_reply"]["enabled"] is False
     assert saved["private_message_reply"]["min_action_delay_seconds"] == 2
 
     loaded = settings.load_app_config()
     assert loaded["comment_reply"]["prompt_template"] == "comment prompt"
+    assert loaded["comment_reply"]["max_action_delay_seconds"] == 5
     assert loaded["private_message_reply"]["fallback_replies"] == ["x"]
     assert loaded["private_message_reply"]["max_action_delay_seconds"] == 6
 

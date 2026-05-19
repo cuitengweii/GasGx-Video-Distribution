@@ -1585,11 +1585,13 @@ def test_merge_comment_reply_config_uses_longer_random_waits() -> None:
 
     assert cfg["reply_min_chars"] == 5
     assert cfg["reply_max_chars"] == 20
-    assert cfg["min_reply_interval_seconds"] == 3
-    assert cfg["max_reply_interval_seconds"] == 10
-    assert cfg["min_like_to_reply_interval_seconds"] == 3
-    assert cfg["max_like_to_reply_interval_seconds"] == 10
-    assert cfg["self_author_markers"] == ["cybercar"]
+    assert cfg["min_reply_interval_seconds"] == 1
+    assert cfg["max_reply_interval_seconds"] == 5
+    assert cfg["min_like_to_reply_interval_seconds"] == 1
+    assert cfg["max_like_to_reply_interval_seconds"] == 5
+    assert cfg["min_action_delay_seconds"] == 1
+    assert cfg["max_action_delay_seconds"] == 5
+    assert cfg["self_author_markers"] == ["gasgx", "gasgx官方客服", "gasgx | 天然气发电"]
 
 
 def test_apply_comment_reply_like_to_reply_wait_uses_random_interval(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1608,6 +1610,25 @@ def test_apply_comment_reply_like_to_reply_wait_uses_random_interval(monkeypatch
 
     assert waited == 6.25
     assert waits == [6.25]
+
+
+def test_apply_comment_reply_action_delay_uses_configured_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    delays: list[float] = []
+
+    monkeypatch.setattr(engine.random, "uniform", lambda start, end: 4.5)
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: delays.append(float(seconds)))
+
+    result = engine._apply_comment_reply_action_delay(
+        {
+            "min_action_delay_seconds": 2,
+            "max_action_delay_seconds": 6,
+        },
+        debug=False,
+        reason="before submit reply",
+    )
+
+    assert result == 4.5
+    assert delays == [4.5]
 
 
 def test_humanized_wechat_comment_pause_prefers_page_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1629,7 +1650,7 @@ def test_humanized_wechat_comment_pause_prefers_page_timeout(monkeypatch: pytest
     waited = engine._humanized_wechat_comment_reaction_pause(FakePage(), "wechat comment submit click")
 
     assert waited == 4.2
-    assert uniform_calls == [(3.0, 10.0)]
+    assert uniform_calls == [(1.0, 5.0)]
     assert timeout_calls == [4200]
     assert sleep_calls == []
 
@@ -2094,17 +2115,29 @@ def test_activate_wechat_private_message_tab_uses_requested_label(monkeypatch: p
 
 def test_open_wechat_private_message_conversation_prefers_session_wrap(monkeypatch: pytest.MonkeyPatch) -> None:
     scripts: list[str] = []
+    args_list: list[dict[str, Any]] = []
 
-    def fake_page_run_js(_page: Any, script: str, *_args: Any) -> dict[str, Any]:
+    def fake_page_run_js(_page: Any, script: str, *args: Any) -> dict[str, Any]:
         scripts.append(script)
+        if args:
+            args_list.append(args[0])
         return {"ok": True, "reason": "opened", "conversation_index": 0}
 
     monkeypatch.setattr(engine, "_page_run_js", fake_page_run_js)
 
-    result = engine._open_wechat_private_message_conversation(object(), 0)
+    result = engine._open_wechat_private_message_conversation(
+        object(),
+        {
+            "conversation_index": 0,
+            "conversation_key": "CyberCar",
+            "conversation_name": "CyberCar",
+            "message_content": "如何联系",
+        },
+    )
 
     assert result["ok"] is True
     assert scripts
+    assert args_list and args_list[0]["conversation_name"] == "CyberCar"
     assert "wujie-app" in scripts[0]
     assert ".session-wrap" in scripts[0]
     assert "[role=\"listitem\"]" in scripts[0]
@@ -2161,9 +2194,15 @@ def test_private_message_reply_fingerprint_distinguishes_source() -> None:
     }
     private_fp = engine._private_message_reply_fingerprint(dict(base))
     greeting_fp = engine._private_message_reply_fingerprint({**base, "conversation_source": "greeting_message"})
+    base_fp = engine._private_message_reply_base_fingerprint(dict(base))
+    greeting_base_fp = engine._private_message_reply_base_fingerprint({**base, "conversation_source": "greeting_message"})
+    cross_tab_fp = engine._private_message_reply_cross_tab_fingerprint(dict(base))
+    cross_tab_greeting_fp = engine._private_message_reply_cross_tab_fingerprint({**base, "conversation_source": "greeting_message"})
 
     assert private_fp != greeting_fp
     assert private_fp == engine._private_message_reply_fingerprint(dict(base))
+    assert base_fp == greeting_base_fp
+    assert cross_tab_fp == cross_tab_greeting_fp
 
 
 def test_build_private_message_reply_payload_includes_conversation_profile(monkeypatch: pytest.MonkeyPatch) -> None:

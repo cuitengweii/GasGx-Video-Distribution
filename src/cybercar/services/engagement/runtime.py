@@ -5164,8 +5164,10 @@ def run_platform_comment_reply(
                     debug=debug_enabled,
                 )
                 if bool(comment_cfg.get("auto_like")):
+                    engine._apply_comment_reply_action_delay(comment_cfg, debug=debug_enabled, reason="before like")
                     adapter.like_comment_if_needed(page, int(comment.get("index") or 0))
                     engine._apply_comment_reply_like_to_reply_wait(comment_cfg, debug=debug_enabled)
+                engine._apply_comment_reply_action_delay(comment_cfg, debug=debug_enabled, reason="before submit")
                 if not adapter.submit_reply(page, int(comment.get("index") or 0), reply_text):
                     engine._comment_reply_log(debug_enabled, f"[{platform}] Submit reply failed")
                     continue
