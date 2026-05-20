@@ -158,6 +158,7 @@ def concat_video(
 ) -> None:
     ffmpeg = resolve_binary("ffmpeg")
     output.parent.mkdir(parents=True, exist_ok=True)
+    filter_complex = _normalize_filter_graph(filter_complex)
     filter_script_path = output.parent / f".{output.stem}.filter_complex.txt"
     filter_script_path.write_text(filter_complex, encoding="utf-8")
     profile = _video_encode_profile(speed_mode)
@@ -187,6 +188,13 @@ def concat_video(
                     return
                 except FFmpegError as exc:
                     failures.append(f"{filter_mode}/bgm={include_bgm}: {exc}")
+                    if command_filter_script_path is not None:
+                        _persist_failed_filter_script(
+                            command_filter_script_path,
+                            output=output,
+                            filter_mode=filter_mode,
+                            include_bgm=include_bgm,
+                        )
                     # Older ffmpeg builds don't understand the new script syntax.
                     if filter_mode == "new" and "Unrecognized option '-/filter_complex'" in str(exc):
                         break
@@ -314,6 +322,7 @@ def _build_audio_mix_filter_script(
     library_bgm_volume: float,
 ) -> Path:
     base_filter = filter_script_path.read_text(encoding="utf-8")
+    base_filter = _normalize_filter_graph(base_filter)
     mining_volume = _clamp_audio_mix_level(mining_bgm_volume)
     library_volume = _clamp_audio_mix_level(library_bgm_volume)
     audio_filter = (
@@ -325,12 +334,47 @@ def _build_audio_mix_filter_script(
         "alimiter=limit=0.95[aout]"
     )
     mixed_script = filter_script_path.with_name(f"{filter_script_path.stem}.mix{filter_script_path.suffix}")
-    mixed_script.write_text(f"{base_filter};{audio_filter}", encoding="utf-8")
+    mixed_script.write_text(_join_filter_sections(base_filter, audio_filter), encoding="utf-8")
     return mixed_script
 
 
 def _clamp_audio_mix_level(value: float) -> float:
     return max(0.0, min(2.0, float(value or 0.0)))
+
+
+def _normalize_filter_graph(filter_graph: str) -> str:
+    graph = str(filter_graph or "")
+    graph = graph.replace("\r\n", "\n").replace("\r", "\n")
+    graph = ";".join(part.strip() for part in graph.split("\n") if part.strip())
+    while True:
+        collapsed = graph.replace(";;", ";").replace(",,", ",").replace(";,", ";").replace(",;", ";")
+        if collapsed == graph:
+            break
+        graph = collapsed
+    return graph.strip(";, \n\t")
+
+
+def _join_filter_sections(*sections: str) -> str:
+    normalized: list[str] = []
+    for section in sections:
+        value = _normalize_filter_graph(section)
+        if value:
+            normalized.append(value)
+    return ";".join(normalized)
+
+
+def _persist_failed_filter_script(
+    script_path: Path,
+    *,
+    output: Path,
+    filter_mode: str,
+    include_bgm: bool,
+) -> None:
+    try:
+        target = output.parent / f".{output.stem}.filter_complex.failed.{filter_mode}.bgm_{int(include_bgm)}.txt"
+        target.write_text(script_path.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        return
 
 
 def append_video_tail(

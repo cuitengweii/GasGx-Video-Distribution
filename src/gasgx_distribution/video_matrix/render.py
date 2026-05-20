@@ -374,8 +374,9 @@ def _build_filter_complex(
             chain_parts.append(chain)
             current_label = f"[seg{idx}bg]"
         if text_filters:
+            text_chain = text_filters[1:] if text_filters.startswith(",") else text_filters
             if current_label is not None:
-                chain = f"{current_label}{text_filters}[seg{idx}text]"
+                chain = f"{current_label}{text_chain}[seg{idx}text]"
             else:
                 chain = f"{chain}{text_filters}[seg{idx}text]"
             chain_parts.append(chain)
@@ -390,9 +391,10 @@ def _build_filter_complex(
                 )
             chain_parts.append(chain)
             current_label = f"[seg{idx}wm]"
+        chain_parts = _compact_filter_items(*chain_parts)
         if current_label is not None:
-            chain_parts.append(f"{current_label},format=yuv420p[v{idx}]")
-            chains.append(";".join(chain_parts))
+            chain_parts.append(f"{current_label}format=yuv420p[v{idx}]")
+            chains.append(";".join(_compact_filter_items(*chain_parts)))
         else:
             chains.append(f"{chain},format=yuv420p[v{idx}]")
         labels.append(f"[v{idx}]")
@@ -424,8 +426,10 @@ def _build_filter_complex(
                 f"crop={settings.target_width}:{settings.target_height},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[ending]"
             )
         labels.append("[ending]")
+    chains = _compact_filter_items(*chains)
+    labels = _compact_filter_items(*labels)
     chains.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vout]")
-    return ";".join(chains), inputs
+    return ";".join(_compact_filter_items(*chains)), inputs
 
 
 def _is_video_ending(path: Path | None) -> bool:
@@ -554,7 +558,12 @@ def _overlay_filters(
         )
     if "watermark_mode" not in explicit_template_keys and template.get("show_sequence_tag", True) and sequence_tag.strip():
         filters.append(_sequence_tag_filter(template, sequence_tag.strip()))
+    filters = _compact_filter_items(*filters)
     return "," + ",".join(filters) if filters else ""
+
+
+def _compact_filter_items(*items: str | None) -> list[str]:
+    return [str(item) for item in items if str(item or "").strip()]
 
 
 def _sequence_tag_filter(template: dict[str, Any], sequence_tag: str) -> str:

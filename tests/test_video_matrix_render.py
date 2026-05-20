@@ -544,6 +544,29 @@ def test_overlay_filters_include_publish_sequence_tag_in_bottom_right() -> None:
     assert ":x=w-text_w-24:y=h-text_h-30" in filters
 
 
+def test_build_filter_complex_avoids_empty_filter_after_overlay_label(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    variant = _variant(source)
+    settings = _settings(tmp_path)
+    bg_overlay = tmp_path / "bg_overlay.png"
+
+    monkeypatch.setattr(render, "_render_background_overlay", lambda *_args, **_kwargs: bg_overlay)
+    monkeypatch.setattr(render, "_render_watermark_overlay", lambda *_args, **_kwargs: None)
+
+    filter_complex, _inputs = render._build_filter_complex(
+        variant,
+        settings,
+        text_dir=tmp_path / "text_layers",
+        sequence_tag="0520-1",
+    )
+
+    assert "[seg0bg],drawtext=" not in filter_complex
+    assert "[seg0bg]drawtext=" in filter_complex
+    assert "[seg0text],format=" not in filter_complex
+    assert "[seg0text]format=" in filter_complex
+
+
 def test_render_variant_uses_publish_sequence_number_for_sequence_tag(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
@@ -590,6 +613,35 @@ def test_overlay_filters_skip_legacy_sequence_tag_when_watermark_mode_is_explici
     )
 
     assert filters == ""
+
+
+def test_overlay_filters_compacts_blank_helper_items(monkeypatch) -> None:
+    template = render.coerce_template(
+        {
+            "show_hud": True,
+            "show_slogan": False,
+            "show_title": False,
+            "watermark_mode": "text",
+        }
+    )
+
+    monkeypatch.setattr(render, "_drawbox_filter", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        render,
+        "_drawtext_lines",
+        lambda *_args, **_kwargs: ["", "drawtext=fontfile=/tmp/font.ttf:text=GasGx", ""],
+    )
+
+    filters = render._overlay_filters(
+        template,
+        hud_text="GasGx",
+        slogan="",
+        title="",
+        explicit_template_keys=set(template),
+    )
+
+    assert filters == ",drawtext=fontfile=/tmp/font.ttf:text=GasGx"
+    assert ",," not in filters
 
 
 def test_build_filter_complex_preserves_watermark_overlay_chain(tmp_path: Path) -> None:

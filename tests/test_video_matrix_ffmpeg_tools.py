@@ -131,6 +131,34 @@ def test_concat_video_builds_audio_mix_when_mining_track_is_available(monkeypatc
     assert "volume=0.300" in str(captured["script_text"])
 
 
+def test_normalize_filter_graph_compacts_empty_tokens() -> None:
+    raw = "[0:v]scale=1080:1920,,format=yuv420p[v0];;[v0]null[vout];"
+
+    normalized = ffmpeg_tools._normalize_filter_graph(raw)
+
+    assert normalized == "[0:v]scale=1080:1920,format=yuv420p[v0];[v0]null[vout]"
+    assert ";;" not in normalized
+    assert ",," not in normalized
+
+
+def test_build_audio_mix_filter_script_avoids_double_semicolon(tmp_path: Path) -> None:
+    base_script = tmp_path / "base.filter_complex.txt"
+    base_script.write_text("[0:v]null[vout];", encoding="utf-8")
+
+    mixed_path = ffmpeg_tools._build_audio_mix_filter_script(
+        base_script,
+        library_audio_index=1,
+        mining_audio_index=2,
+        mining_bgm_volume=1.0,
+        library_bgm_volume=0.5,
+    )
+    mixed_text = mixed_path.read_text(encoding="utf-8")
+
+    assert ";;" not in mixed_text
+    assert mixed_text.startswith("[0:v]null[vout];[1:a]aformat=")
+    assert mixed_text.endswith("alimiter=limit=0.95[aout]")
+
+
 def test_ffmpeg_runtime_health_reports_binary_paths(monkeypatch) -> None:
     monkeypatch.setattr(ffmpeg_tools, "resolve_binary", lambda name: f"/bin/{name}")
 
