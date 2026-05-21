@@ -1664,6 +1664,147 @@ def run_interaction_private_message_reply(*, max_conversations: int = 0, max_rep
     return _interaction_management_run_async("private_message", _runner)
 
 
+def run_terminal_wechat_auto_engagement(
+    *,
+    account_id: int,
+    enable_comment: bool = True,
+    enable_private_message: bool = False,
+    comment_limit: int = 5,
+    private_message_limit: int = 5,
+) -> dict[str, Any]:
+    resolved_account_id = int(account_id or 0)
+    if resolved_account_id <= 0:
+        return {"ok": False, "status": "skipped", "reason": "account_id_required"}
+    comment_enabled = bool(enable_comment)
+    private_enabled = bool(enable_private_message)
+    if (not comment_enabled) and (not private_enabled):
+        return {"ok": False, "status": "skipped", "reason": "engagement_disabled"}
+    resolved_comment_limit = max(1, int(comment_limit or 5))
+    resolved_private_limit = max(1, int(private_message_limit or 5))
+
+    account = get_account(resolved_account_id)
+    if not isinstance(account, dict):
+        return {"ok": False, "status": "skipped", "reason": "account_not_found", "account_id": resolved_account_id}
+    wechat_platform = next(
+        (
+            item
+            for item in account.get("platforms", [])
+            if isinstance(item, dict) and str(item.get("platform") or "").strip().lower() == "wechat"
+        ),
+        None,
+    )
+    if not isinstance(wechat_platform, dict):
+        return {"ok": False, "status": "skipped", "reason": "wechat_platform_missing", "account_id": resolved_account_id}
+    debug_port = int(wechat_platform.get("debug_port") or 0)
+    profile_dir = str(wechat_platform.get("profile_dir") or "").strip()
+    if debug_port <= 0 or not profile_dir:
+        return {
+            "ok": False,
+            "status": "skipped",
+            "reason": "wechat_profile_invalid",
+            "account_id": resolved_account_id,
+            "debug_port": debug_port,
+            "profile_dir": profile_dir,
+        }
+
+    with _INTERACTION_MANAGEMENT_LOCK:
+        if bool(_INTERACTION_MANAGEMENT_STATE.get("running")):
+            return {"ok": False, "status": "already_running", "reason": "interaction_task_running"}
+        _interaction_management_start("auto_engagement", f"auto engagement running for account #{resolved_account_id}")
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": "completed",
+        "reason": "",
+        "account_id": resolved_account_id,
+        "debug_port": debug_port,
+        "profile_dir": profile_dir,
+        "enable_comment": comment_enabled,
+        "enable_private_message": private_enabled,
+        "comment_limit": resolved_comment_limit,
+        "private_message_limit": resolved_private_limit,
+    }
+    try:
+        app_config = load_app_config()
+        notify_cfg = app_config.get("notify") if isinstance(app_config.get("notify"), dict) else {}
+        workspace = engine.init_workspace(str(get_paths().runtime_root))
+        suffix = f"a{resolved_account_id}"
+        state_files = {
+            "comment_state": f"wechat_comment_reply_state_{suffix}.json",
+            "comment_markdown": f"wechat_comment_reply_records_{suffix}.md",
+            "private_state": f"wechat_private_message_reply_state_{suffix}.json",
+            "private_markdown": f"wechat_private_message_reply_records_{suffix}.md",
+        }
+        result["state_files"] = state_files
+        if comment_enabled:
+            comment_result = engine.run_wechat_comment_reply(
+                workspace=workspace,
+                runtime_config=app_config,
+                debug_port=debug_port,
+                chrome_user_data_dir=profile_dir,
+                auto_open_chrome=True,
+                max_posts_override=resolved_comment_limit,
+                max_replies_override=resolved_comment_limit,
+                latest_only=False,
+                debug=False,
+                notify_env_prefix=str(notify_cfg.get("env_prefix") or "CYBERCAR_NOTIFY_"),
+                state_filename=state_files["comment_state"],
+                markdown_filename=state_files["comment_markdown"],
+            )
+            result["comment"] = comment_result
+        if private_enabled:
+            private_result = engine.run_wechat_private_message_reply(
+                workspace=workspace,
+                runtime_config=app_config,
+                debug_port=debug_port,
+                chrome_user_data_dir=profile_dir,
+                auto_open_chrome=True,
+                max_conversations_override=resolved_private_limit,
+                max_replies_override=resolved_private_limit,
+                latest_only=False,
+                debug=False,
+                notify_env_prefix=str(notify_cfg.get("env_prefix") or "CYBERCAR_NOTIFY_"),
+                state_filename=state_files["private_state"],
+                markdown_filename=state_files["private_markdown"],
+            )
+            result["private_message"] = private_result
+        task_results = [item for item in [result.get("comment"), result.get("private_message")] if isinstance(item, dict)]
+        if task_results and any(not bool(item.get("ok")) for item in task_results):
+            result["ok"] = False
+            result["status"] = "failed"
+            result["reason"] = "engagement_task_failed"
+        snapshot = _interaction_management_reset_state(
+            kind="auto_engagement",
+            status="completed" if bool(result.get("ok")) else "failed",
+            message=str(result.get("reason") or "").strip() or "auto_engagement completed",
+            error=str(result.get("error") or "").strip(),
+            last_result=result,
+        )
+        snapshot["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with _INTERACTION_MANAGEMENT_LOCK:
+            _INTERACTION_MANAGEMENT_STATE.update(snapshot)
+        return result
+    except Exception as exc:
+        result = {
+            **result,
+            "ok": False,
+            "status": "failed",
+            "reason": "auto_engagement_exception",
+            "error": str(exc),
+        }
+        snapshot = _interaction_management_reset_state(
+            kind="auto_engagement",
+            status="failed",
+            message="auto_engagement failed",
+            error=str(exc),
+            last_result=result,
+        )
+        snapshot["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with _INTERACTION_MANAGEMENT_LOCK:
+            _INTERACTION_MANAGEMENT_STATE.update(snapshot)
+        return result
+
+
 def list_operator_wechats() -> list[str]:
     settings = load_distribution_settings_db()
     operators = settings.get("common", {}).get("operator_wechats")

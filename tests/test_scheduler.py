@@ -89,3 +89,38 @@ def test_trigger_stats_capture_passes_keep_browser_flag(monkeypatch, tmp_path: P
     assert captured["open_capture_in_new_tab"] is True
     assert captured["capture_tab_foreground"] is True
     assert captured["keep_capture_tab_open"] is True
+
+
+def test_trigger_wechat_engagement_passes_account_and_limits(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_run_terminal_wechat_auto_engagement(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "status": "completed"}
+
+    class InlineThread:
+        def __init__(self, *, target=None, name=None, daemon=None):
+            self._target = target
+
+        def start(self) -> None:
+            if self._target:
+                self._target()
+
+    monkeypatch.setattr(scheduler.service, "run_terminal_wechat_auto_engagement", fake_run_terminal_wechat_auto_engagement)
+    monkeypatch.setattr(scheduler.threading, "Thread", InlineThread)
+
+    result = scheduler.trigger_matrix_wechat_engagement_run_now(
+        account_id=66,
+        enable_comment=True,
+        enable_private_message=True,
+        comment_limit=5,
+        private_message_limit=7,
+    )
+
+    assert result["status"] == "started"
+    assert captured["account_id"] == 66
+    assert captured["enable_comment"] is True
+    assert captured["enable_private_message"] is True
+    assert captured["comment_limit"] == 5
+    assert captured["private_message_limit"] == 7

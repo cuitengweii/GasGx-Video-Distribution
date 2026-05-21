@@ -5197,16 +5197,18 @@ def _resolve_platform_random_schedule_minutes_from_runtime(
     return configured_minutes
 
 
-def _comment_reply_state_path(workspace: Workspace) -> Path:
-    return workspace.root / "runtime" / WECHAT_COMMENT_REPLY_STATE_FILE
+def _comment_reply_state_path(workspace: Workspace, state_filename: str = "") -> Path:
+    filename = str(state_filename or "").strip() or WECHAT_COMMENT_REPLY_STATE_FILE
+    return workspace.root / "runtime" / filename
 
 
-def _comment_reply_markdown_path(workspace: Workspace) -> Path:
-    return workspace.root / "runtime" / WECHAT_COMMENT_REPLY_MARKDOWN_FILE
+def _comment_reply_markdown_path(workspace: Workspace, markdown_filename: str = "") -> Path:
+    filename = str(markdown_filename or "").strip() or WECHAT_COMMENT_REPLY_MARKDOWN_FILE
+    return workspace.root / "runtime" / filename
 
 
-def _load_comment_reply_state(workspace: Workspace) -> dict[str, Any]:
-    path = _comment_reply_state_path(workspace)
+def _load_comment_reply_state(workspace: Workspace, state_filename: str = "") -> dict[str, Any]:
+    path = _comment_reply_state_path(workspace, state_filename=state_filename)
     if not path.exists():
         return {"updated_at": "", "items": {}}
     try:
@@ -5224,8 +5226,8 @@ def _load_comment_reply_state(workspace: Workspace) -> dict[str, Any]:
     }
 
 
-def _save_comment_reply_state(workspace: Workspace, state: dict[str, Any]) -> None:
-    path = _comment_reply_state_path(workspace)
+def _save_comment_reply_state(workspace: Workspace, state: dict[str, Any], state_filename: str = "") -> None:
+    path = _comment_reply_state_path(workspace, state_filename=state_filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -5444,16 +5446,18 @@ def _apply_comment_reply_action_delay(
     return delay_seconds
 
 
-def _private_message_reply_state_path(workspace: Workspace) -> Path:
-    return workspace.root / "runtime" / WECHAT_PRIVATE_MESSAGE_REPLY_STATE_FILE
+def _private_message_reply_state_path(workspace: Workspace, state_filename: str = "") -> Path:
+    filename = str(state_filename or "").strip() or WECHAT_PRIVATE_MESSAGE_REPLY_STATE_FILE
+    return workspace.root / "runtime" / filename
 
 
-def _private_message_reply_markdown_path(workspace: Workspace) -> Path:
-    return workspace.root / "runtime" / WECHAT_PRIVATE_MESSAGE_REPLY_MARKDOWN_FILE
+def _private_message_reply_markdown_path(workspace: Workspace, markdown_filename: str = "") -> Path:
+    filename = str(markdown_filename or "").strip() or WECHAT_PRIVATE_MESSAGE_REPLY_MARKDOWN_FILE
+    return workspace.root / "runtime" / filename
 
 
-def _load_private_message_reply_state(workspace: Workspace) -> dict[str, Any]:
-    path = _private_message_reply_state_path(workspace)
+def _load_private_message_reply_state(workspace: Workspace, state_filename: str = "") -> dict[str, Any]:
+    path = _private_message_reply_state_path(workspace, state_filename=state_filename)
     if not path.exists():
         return {"updated_at": "", "items": {}}
     try:
@@ -5471,8 +5475,8 @@ def _load_private_message_reply_state(workspace: Workspace) -> dict[str, Any]:
     }
 
 
-def _save_private_message_reply_state(workspace: Workspace, state: dict[str, Any]) -> None:
-    path = _private_message_reply_state_path(workspace)
+def _save_private_message_reply_state(workspace: Workspace, state: dict[str, Any], state_filename: str = "") -> None:
+    path = _private_message_reply_state_path(workspace, state_filename=state_filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -6815,12 +6819,13 @@ def _build_wechat_comment_login_failure_result(
     *,
     reason: str,
     login_notify_result: Optional[dict[str, Any]] = None,
+    state_path: str = "",
 ) -> dict[str, Any]:
     payload = dict(login_notify_result) if isinstance(login_notify_result, dict) else {}
     return {
         "ok": False,
         "reason": str(reason or "").strip() or "comment_login_required",
-        "state_path": str(_comment_reply_state_path(workspace)),
+        "state_path": str(state_path or _comment_reply_state_path(workspace)),
         "records": [],
         "posts_scanned": 0,
         "posts_selected": 0,
@@ -9656,13 +9661,17 @@ def run_wechat_comment_reply(
     telegram_timeout_seconds: int = 20,
     telegram_api_base: str = "",
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+    state_filename: str = "",
+    markdown_filename: str = "",
 ) -> dict[str, Any]:
+    state_path = _comment_reply_state_path(workspace, state_filename=state_filename)
+    markdown_path = _comment_reply_markdown_path(workspace, markdown_filename=markdown_filename)
     comment_cfg = _merge_comment_reply_config(runtime_config.get("comment_reply"))
     if not bool(comment_cfg.get("enabled")):
         return {
             "ok": False,
             "reason": "comment_reply_disabled",
-            "state_path": str(_comment_reply_state_path(workspace)),
+            "state_path": str(state_path),
             "records": [],
             "posts_scanned": 0,
             "posts_selected": 0,
@@ -9675,7 +9684,7 @@ def run_wechat_comment_reply(
     reply_max_chars = max(reply_min_chars, int(comment_cfg.get("reply_max_chars") or 20))
     debug_enabled = bool(debug or comment_cfg.get("debug"))
 
-    state = _load_comment_reply_state(workspace)
+    state = _load_comment_reply_state(workspace, state_filename=state_filename)
     items = _prune_comment_reply_state_items(state.get("items") if isinstance(state, dict) else {})
     state["items"] = items
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -9745,7 +9754,7 @@ def run_wechat_comment_reply(
                     "ok": False,
                     "reason": "comment_feature_unavailable",
                     "detail": unavailable_state,
-                    "state_path": str(_comment_reply_state_path(workspace)),
+                    "state_path": str(state_path),
                     "records": reply_records,
                     "posts_scanned": posts_scanned,
                     "posts_selected": len(posts),
@@ -9968,10 +9977,10 @@ def run_wechat_comment_reply(
                                 reply_provider=reply_provider,
                             )
                             reply_records.append(record)
-                            _append_comment_reply_markdown(_comment_reply_markdown_path(workspace), "wechat", record)
+                            _append_comment_reply_markdown(markdown_path, "wechat", record)
                             state["items"] = items
                             state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            _save_comment_reply_state(workspace, state)
+                            _save_comment_reply_state(workspace, state, state_filename=state_filename)
                             last_reply_at = _parse_comment_reply_timestamp(record.get("replied_at")) or datetime.now()
                             sent_in_round = True
                             _humanized_wechat_comment_settle_pause(pw_page, "wechat comment reply post-submit settle")
@@ -10009,7 +10018,7 @@ def run_wechat_comment_reply(
                 "ok": False,
                 "reason": "native_connect_failed",
                 "error": native_connect_error,
-                "state_path": str(_comment_reply_state_path(workspace)),
+                "state_path": str(state_path),
                 "records": reply_records,
                 "posts_scanned": posts_scanned,
                 "posts_selected": len(posts),
@@ -10034,7 +10043,7 @@ def run_wechat_comment_reply(
                 "ok": False,
                 "reason": "comment_feature_unavailable",
                 "detail": unavailable_state,
-                "state_path": str(_comment_reply_state_path(workspace)),
+                "state_path": str(state_path),
                 "records": reply_records,
                 "posts_scanned": posts_scanned,
                 "posts_selected": len(posts),
@@ -10083,6 +10092,7 @@ def run_wechat_comment_reply(
                 workspace,
                 reason="comment_manager_not_ready",
                 login_notify_result=login_notify_result,
+                state_path=str(state_path),
             )
 
         posts = _collect_recent_commented_posts(page, max_posts, debug=debug_enabled)
@@ -10121,6 +10131,7 @@ def run_wechat_comment_reply(
                         workspace,
                         reason="comment_manager_open_failed",
                         login_notify_result=login_notify_result,
+                        state_path=str(state_path),
                     )
                 continue
             _humanized_publish_settle_pause("wechat comment manager detail settle")
@@ -10206,6 +10217,7 @@ def run_wechat_comment_reply(
                                 workspace,
                                 reason="comment_reply_submit_failed",
                                 login_notify_result=login_notify_result,
+                                state_path=str(state_path),
                             )
                         continue
                     confirmed = wait_reply_confirm(page, int(comment.get("index") or 0), reply_text)
@@ -10243,6 +10255,7 @@ def run_wechat_comment_reply(
                                 workspace,
                                 reason="comment_reply_confirm_timeout",
                                 login_notify_result=login_notify_result,
+                                state_path=str(state_path),
                             )
                         continue
 
@@ -10255,10 +10268,10 @@ def run_wechat_comment_reply(
                         reply_provider=reply_provider,
                     )
                     reply_records.append(record)
-                    _append_comment_reply_markdown(_comment_reply_markdown_path(workspace), "wechat", record)
+                    _append_comment_reply_markdown(markdown_path, "wechat", record)
                     state["items"] = items
                     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    _save_comment_reply_state(workspace, state)
+                    _save_comment_reply_state(workspace, state, state_filename=state_filename)
                     last_reply_at = _parse_comment_reply_timestamp(record.get("replied_at")) or datetime.now()
                     _comment_reply_log(
                         debug_enabled,
@@ -10282,7 +10295,7 @@ def run_wechat_comment_reply(
 
     state["items"] = _prune_comment_reply_state_items(items)
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _save_comment_reply_state(workspace, state)
+    _save_comment_reply_state(workspace, state, state_filename=state_filename)
     if not reply_records and store_submit_failures:
         err_codes = {int(item.get("err_code") or 0) for item in store_submit_failures}
         if err_codes == {300800}:
@@ -10296,8 +10309,8 @@ def run_wechat_comment_reply(
                     "count": len(store_submit_failures),
                     "likes_sent": likes_sent,
                 },
-                "state_path": str(_comment_reply_state_path(workspace)),
-                "markdown_path": str(_comment_reply_markdown_path(workspace)),
+                "state_path": str(state_path),
+                "markdown_path": str(markdown_path),
                 "records": reply_records,
                 "posts_scanned": posts_scanned,
                 "posts_selected": len(posts),
@@ -10307,8 +10320,8 @@ def run_wechat_comment_reply(
     return {
         "ok": True,
         "reason": "",
-        "state_path": str(_comment_reply_state_path(workspace)),
-        "markdown_path": str(_comment_reply_markdown_path(workspace)),
+        "state_path": str(state_path),
+        "markdown_path": str(markdown_path),
         "records": reply_records,
         "posts_scanned": posts_scanned,
         "posts_selected": len(posts),
@@ -10322,6 +10335,7 @@ def _build_wechat_private_message_login_failure_result(
     *,
     reason: str,
     login_notify_result: Optional[dict[str, Any]] = None,
+    state_path: str = "",
 ) -> dict[str, Any]:
     payload = dict(login_notify_result) if isinstance(login_notify_result, dict) else {}
     return {
@@ -10825,13 +10839,17 @@ def run_wechat_private_message_reply(
     telegram_timeout_seconds: int = 20,
     telegram_api_base: str = "",
     notify_env_prefix: str = DEFAULT_NOTIFY_ENV_PREFIX,
+    state_filename: str = "",
+    markdown_filename: str = "",
 ) -> dict[str, Any]:
+    state_path = _private_message_reply_state_path(workspace, state_filename=state_filename)
+    markdown_path = _private_message_reply_markdown_path(workspace, markdown_filename=markdown_filename)
     reply_cfg = _merge_private_message_reply_config(runtime_config.get("private_message_reply"))
     if not bool(reply_cfg.get("enabled")):
         return {
             "ok": False,
             "reason": "private_message_reply_disabled",
-            "state_path": str(_private_message_reply_state_path(workspace)),
+            "state_path": str(state_path),
             "records": [],
             "conversations_scanned": 0,
             "conversations_selected": 0,
@@ -10844,7 +10862,7 @@ def run_wechat_private_message_reply(
     reply_max_chars = max(reply_min_chars, int(reply_cfg.get("reply_max_chars") or 120))
     debug_enabled = bool(debug or reply_cfg.get("debug"))
 
-    state = _load_private_message_reply_state(workspace)
+    state = _load_private_message_reply_state(workspace, state_filename=state_filename)
     items = _prune_private_message_reply_state_items(state.get("items") if isinstance(state, dict) else {})
     state["items"] = items
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -10922,7 +10940,7 @@ def run_wechat_private_message_reply(
         return {
             "ok": False,
             "reason": "private_message_connect_failed",
-            "state_path": str(_private_message_reply_state_path(workspace)),
+            "state_path": str(state_path),
             "records": [],
             "conversations_scanned": 0,
             "conversations_selected": 0,
@@ -10948,6 +10966,7 @@ def run_wechat_private_message_reply(
             workspace,
             reason="private_message_login_required",
             login_notify_result=login_gate_result,
+            state_path=str(state_path),
         )
 
     reply_records: list[dict[str, Any]] = []
@@ -11057,11 +11076,11 @@ def run_wechat_private_message_reply(
                 reply_provider=str(reply_result.get("reply_provider") or ""),
             )
             replied_cross_tab_fingerprints.add(str(record.get("conversation_cross_tab_fingerprint") or "").strip())
-            _append_private_message_reply_markdown(_private_message_reply_markdown_path(workspace), "wechat", record)
+            _append_private_message_reply_markdown(markdown_path, "wechat", record)
             reply_records.append(record)
             state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             state["items"] = items
-            _save_private_message_reply_state(workspace, state)
+            _save_private_message_reply_state(workspace, state, state_filename=state_filename)
             last_reply_at = _parse_private_message_reply_timestamp(record.get("replied_at")) or datetime.now()
             _private_message_reply_log(
                 debug_enabled,
@@ -11070,12 +11089,12 @@ def run_wechat_private_message_reply(
 
     state["items"] = _prune_private_message_reply_state_items(items)
     state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _save_private_message_reply_state(workspace, state)
+    _save_private_message_reply_state(workspace, state, state_filename=state_filename)
     return {
         "ok": True,
         "reason": "",
-        "state_path": str(_private_message_reply_state_path(workspace)),
-        "markdown_path": str(_private_message_reply_markdown_path(workspace)),
+        "state_path": str(state_path),
+        "markdown_path": str(markdown_path),
         "records": reply_records,
         "conversations_scanned": scanned_count,
         "conversations_selected": selected_count,

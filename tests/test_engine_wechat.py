@@ -1734,6 +1734,20 @@ def test_append_comment_reply_markdown_writes_json_code_block(tmp_path) -> None:
     assert '"reply_text": "喜欢的就喜欢"' in body
 
 
+def test_comment_and_private_reply_state_paths_support_custom_filenames(tmp_path) -> None:
+    workspace = engine.init_workspace(str(tmp_path))
+
+    comment_path = engine._comment_reply_state_path(workspace, state_filename="wechat_comment_reply_state_a7.json")
+    private_path = engine._private_message_reply_state_path(workspace, state_filename="wechat_private_message_reply_state_a7.json")
+    comment_markdown = engine._comment_reply_markdown_path(workspace, markdown_filename="wechat_comment_reply_records_a7.md")
+    private_markdown = engine._private_message_reply_markdown_path(workspace, markdown_filename="wechat_private_message_reply_records_a7.md")
+
+    assert comment_path.name == "wechat_comment_reply_state_a7.json"
+    assert private_path.name == "wechat_private_message_reply_state_a7.json"
+    assert comment_markdown.name == "wechat_comment_reply_records_a7.md"
+    assert private_markdown.name == "wechat_private_message_reply_records_a7.md"
+
+
 def test_probe_platform_session_ready_keeps_browser_connected_for_wechat_keepalive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

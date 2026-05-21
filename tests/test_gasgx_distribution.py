@@ -1375,6 +1375,79 @@ def test_stats_capture_run_now_api_keeps_legacy_default_flags(monkeypatch, tmp_p
     assert captured["keep_capture_tab_open"] is False
 
 
+def test_wechat_engagement_run_now_api_accepts_payload(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_trigger(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "status": "started"}
+
+    monkeypatch.setattr("gasgx_distribution.web.trigger_matrix_wechat_engagement_run_now", fake_trigger)
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/jobs/matrix-wechat/engagement/run-now",
+        json={
+            "account_id": 91,
+            "enable_comment": True,
+            "enable_private_message": False,
+            "comment_limit": 5,
+            "private_message_limit": 7,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    assert captured["account_id"] == 91
+    assert captured["enable_comment"] is True
+    assert captured["enable_private_message"] is False
+    assert captured["comment_limit"] == 5
+    assert captured["private_message_limit"] == 7
+
+
+def test_run_terminal_wechat_auto_engagement_uses_account_scoped_state_files(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account(
+        {
+            "account_key": "engage-01",
+            "display_name": "Engage 01",
+            "platforms": ["wechat"],
+        }
+    )
+    comment_calls: dict[str, Any] = {}
+    private_calls: dict[str, Any] = {}
+    monkeypatch.setattr(
+        service.engine,
+        "run_wechat_comment_reply",
+        lambda **kwargs: comment_calls.update(kwargs) or {"ok": True, "replies_sent": 2, "reason": ""},
+    )
+    monkeypatch.setattr(
+        service.engine,
+        "run_wechat_private_message_reply",
+        lambda **kwargs: private_calls.update(kwargs) or {"ok": True, "replies_sent": 1, "reason": ""},
+    )
+    monkeypatch.setattr(service, "load_app_config", lambda: {"notify": {"env_prefix": "CYBERCAR_NOTIFY_"}})
+
+    result = service.run_terminal_wechat_auto_engagement(
+        account_id=int(account["id"]),
+        enable_comment=True,
+        enable_private_message=True,
+        comment_limit=5,
+        private_message_limit=5,
+    )
+
+    assert result["status"] == "completed"
+    assert result["ok"] is True
+    assert result["state_files"]["comment_state"] == f"wechat_comment_reply_state_a{account['id']}.json"
+    assert result["state_files"]["private_state"] == f"wechat_private_message_reply_state_a{account['id']}.json"
+    assert comment_calls["max_posts_override"] == 5
+    assert comment_calls["max_replies_override"] == 5
+    assert private_calls["max_conversations_override"] == 5
+    assert private_calls["max_replies_override"] == 5
+    assert comment_calls["state_filename"] == f"wechat_comment_reply_state_a{account['id']}.json"
+    assert private_calls["state_filename"] == f"wechat_private_message_reply_state_a{account['id']}.json"
+
+
 def test_wechat_stats_csv_parsers_extract_rolling_7d_rows(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     follower_csv = tmp_path / "follower.csv"

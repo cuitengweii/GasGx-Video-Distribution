@@ -162,6 +162,10 @@ let terminalWechatStatePollTimer = null;
 let terminalWechatStatePollInFlight = false;
 let terminalWechatSelectedAccountId = "";
 let terminalWechatAutoStatsEnabled = false;
+let terminalWechatAutoCommentEnabled = true;
+let terminalWechatAutoPrivateMessageEnabled = false;
+let terminalWechatAutoCommentLimit = 5;
+let terminalWechatAutoPrivateMessageLimit = 5;
 let terminalWechatAutoStatsHint = "";
 const terminalAutoPublishWindowIds = new Set();
 const terminalAutoPublishStageByWindowId = new Map();
@@ -184,6 +188,10 @@ const SHELL_AUTH_KEY = "gasgx-shell-auth";
 const DATABASE_DICTIONARY_LOCALE_KEY = "gasgx-db-dictionary-locale";
 const SETTINGS_CARD_KEY = "gasgx-settings-card";
 const TERMINAL_WECHAT_AUTO_STATS_KEY = "gasgx-terminal-wechat-auto-stats";
+const TERMINAL_WECHAT_AUTO_COMMENT_KEY = "gasgx-terminal-wechat-auto-comment";
+const TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_KEY = "gasgx-terminal-wechat-auto-private-message";
+const TERMINAL_WECHAT_AUTO_COMMENT_LIMIT_KEY = "gasgx-terminal-wechat-auto-comment-limit";
+const TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_LIMIT_KEY = "gasgx-terminal-wechat-auto-private-message-limit";
 const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
@@ -409,6 +417,12 @@ function displayDatabaseKeyword(value) {
 
 state.databaseDictionaryLocalized = localStorage.getItem(DATABASE_DICTIONARY_LOCALE_KEY) === "zh";
 terminalWechatAutoStatsEnabled = localStorage.getItem(TERMINAL_WECHAT_AUTO_STATS_KEY) === "1";
+terminalWechatAutoCommentEnabled = localStorage.getItem(TERMINAL_WECHAT_AUTO_COMMENT_KEY) !== "0";
+terminalWechatAutoPrivateMessageEnabled = localStorage.getItem(TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_KEY) === "1";
+terminalWechatAutoCommentLimit = Number.parseInt(localStorage.getItem(TERMINAL_WECHAT_AUTO_COMMENT_LIMIT_KEY) || "5", 10);
+if (!Number.isFinite(terminalWechatAutoCommentLimit) || terminalWechatAutoCommentLimit <= 0) terminalWechatAutoCommentLimit = 5;
+terminalWechatAutoPrivateMessageLimit = Number.parseInt(localStorage.getItem(TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_LIMIT_KEY) || "5", 10);
+if (!Number.isFinite(terminalWechatAutoPrivateMessageLimit) || terminalWechatAutoPrivateMessageLimit <= 0) terminalWechatAutoPrivateMessageLimit = 5;
 let currentSettingsCard = localStorage.getItem(SETTINGS_CARD_KEY) === "platform-publish" ? "platform-publish" : "publish-window";
 let currentTerminalInitCard = "window";
 
@@ -2894,9 +2908,12 @@ function terminalWechatSelectedAccountChoice() {
 }
 
 function terminalWechatAutoStatsDefaultHint() {
-  return terminalWechatAutoStatsEnabled
-    ? "已开启：点击发布会异步触发该账号统计，不阻塞发布。"
-    : "未开启：点击发布仅执行发布流程。";
+  const parts = [];
+  if (terminalWechatAutoStatsEnabled) parts.push("统计");
+  if (terminalWechatAutoCommentEnabled) parts.push(`评论(${terminalNormalizeAutoEngagementLimit(terminalWechatAutoCommentLimit)})`);
+  if (terminalWechatAutoPrivateMessageEnabled) parts.push(`私信(${terminalNormalizeAutoEngagementLimit(terminalWechatAutoPrivateMessageLimit)})`);
+  if (!parts.length) return "未开启：点击发布仅执行发布流程。";
+  return `已开启：点击发布会异步触发${parts.join(" + ")}，不阻塞发布。`;
 }
 
 function setTerminalWechatAutoStatsHint(message = "") {
@@ -2906,6 +2923,12 @@ function setTerminalWechatAutoStatsHint(message = "") {
   if (hintNode) {
     hintNode.textContent = text || terminalWechatAutoStatsDefaultHint();
   }
+}
+
+function terminalNormalizeAutoEngagementLimit(value) {
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 5;
+  return Math.min(50, Math.max(1, numeric));
 }
 
 function triggerTerminalWechatAutoStatsCapture(accountId) {
@@ -2933,6 +2956,47 @@ function triggerTerminalWechatAutoStatsCapture(accountId) {
   }).catch((error) => {
     setTerminalWechatAutoStatsHint(`统计触发失败（不影响发布）：${formatFriendlyMessage(error?.message || "未知异常")}`);
   });
+}
+
+function triggerTerminalWechatAutoEngagement(accountId) {
+  const resolvedAccountId = Number(accountId || 0);
+  if (!resolvedAccountId) return;
+  const enableComment = Boolean(terminalWechatAutoCommentEnabled);
+  const enablePrivateMessage = Boolean(terminalWechatAutoPrivateMessageEnabled);
+  if (!enableComment && !enablePrivateMessage) return;
+  const commentLimit = terminalNormalizeAutoEngagementLimit(terminalWechatAutoCommentLimit);
+  const privateMessageLimit = terminalNormalizeAutoEngagementLimit(terminalWechatAutoPrivateMessageLimit);
+  const labels = [];
+  if (enableComment) labels.push(`评论${commentLimit}条`);
+  if (enablePrivateMessage) labels.push(`私信${privateMessageLimit}条`);
+  setTerminalWechatAutoStatsHint(`账号 #${resolvedAccountId} 自动互动已提交（${labels.join("，")}）。`);
+  void api("/api/jobs/matrix-wechat/engagement/run-now", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: resolvedAccountId,
+      enable_comment: enableComment,
+      enable_private_message: enablePrivateMessage,
+      comment_limit: commentLimit,
+      private_message_limit: privateMessageLimit,
+    }),
+  }).then((started) => {
+    if (String(started?.status || "") === "already_running") {
+      setTerminalWechatAutoStatsHint("已有自动互动任务运行中，本次发布不受影响。");
+      return;
+    }
+    if (String(started?.status || "") === "skipped" || started?.ok === false) {
+      setTerminalWechatAutoStatsHint("自动互动本次跳过，不影响发布流程。");
+      return;
+    }
+    setTerminalWechatAutoStatsHint(`账号 #${resolvedAccountId} 自动互动已触发，发布继续进行。`);
+  }).catch((error) => {
+    setTerminalWechatAutoStatsHint(`自动互动触发失败（不影响发布）：${formatFriendlyMessage(error?.message || "未知异常")}`);
+  });
+}
+
+function triggerTerminalWechatAutoSideTasks(accountId) {
+  triggerTerminalWechatAutoStatsCapture(accountId);
+  triggerTerminalWechatAutoEngagement(accountId);
 }
 
 function terminalAutoPublishStageFromStatusText(statusText) {
@@ -3926,6 +3990,10 @@ function renderTerminalWechatQuickActionBar() {
   const publishDisabled = !selected;
   const buttonLoadingAttr = " data-no-global-loading=\"1\"";
   const autoStatsChecked = terminalWechatAutoStatsEnabled ? " checked" : "";
+  const autoCommentChecked = terminalWechatAutoCommentEnabled ? " checked" : "";
+  const autoPrivateChecked = terminalWechatAutoPrivateMessageEnabled ? " checked" : "";
+  const commentLimitValue = terminalNormalizeAutoEngagementLimit(terminalWechatAutoCommentLimit);
+  const privateLimitValue = terminalNormalizeAutoEngagementLimit(terminalWechatAutoPrivateMessageLimit);
   const autoStatsHint = escapeHtml(terminalWechatAutoStatsHint || terminalWechatAutoStatsDefaultHint());
   return `
     <div class="terminal-wechat-quick-action terminal-glass">
@@ -3942,6 +4010,22 @@ function renderTerminalWechatQuickActionBar() {
       <label class="terminal-wechat-auto-stats-toggle">
         <input id="terminal-wechat-auto-stats-toggle" type="checkbox"${autoStatsChecked}>
         <span>发布时自动统计（可选）</span>
+      </label>
+      <label class="terminal-wechat-auto-engagement-toggle">
+        <input id="terminal-wechat-auto-comment-toggle" type="checkbox"${autoCommentChecked}>
+        <span>发布时自动评论（可选）</span>
+      </label>
+      <label class="terminal-wechat-auto-engagement-toggle">
+        <input id="terminal-wechat-auto-private-message-toggle" type="checkbox"${autoPrivateChecked}>
+        <span>发布时自动私信（可选）</span>
+      </label>
+      <label class="terminal-wechat-auto-engagement-limit-field">
+        <span>评论数量</span>
+        <input id="terminal-wechat-auto-comment-limit" type="number" min="1" max="50" step="1" value="${escapeHtml(commentLimitValue)}">
+      </label>
+      <label class="terminal-wechat-auto-engagement-limit-field">
+        <span>私信数量</span>
+        <input id="terminal-wechat-auto-private-message-limit" type="number" min="1" max="50" step="1" value="${escapeHtml(privateLimitValue)}">
       </label>
       <div class="terminal-wechat-auto-stats-hint muted" id="terminal-wechat-auto-stats-hint">${autoStatsHint}</div>
     </div>
@@ -6848,10 +6932,6 @@ async function loadTasks() {
 async function loadViewData(view, { force = false } = {}) {
   if (!force && loadedViews.has(view)) return;
   setViewLoading(view);
-  const showTerminalLoading = view === "terminal-execution" && terminalCurrentRoute() !== "hub";
-  if (showTerminalLoading) {
-    setTerminalFullLoading(true, "终端执行页面加载中，请稍候...");
-  }
   if (view !== "video-matrix") {
     unmountVideoMatrixWorkbench();
   }
@@ -6989,9 +7069,6 @@ async function loadViewData(view, { force = false } = {}) {
     }
     loadedViews.add(view);
   } finally {
-    if (showTerminalLoading) {
-      setTerminalFullLoading(false);
-    }
     setWorkspaceLoading(false);
   }
 }
@@ -8209,7 +8286,7 @@ document.addEventListener("click", async (event) => {
     terminalErrorModalSignature = "";
     hideTerminalErrorModal();
     if (targetAccountId) {
-      triggerTerminalWechatAutoStatsCapture(targetAccountId);
+      triggerTerminalWechatAutoSideTasks(targetAccountId);
     }
     let stage = "manual_publish";
     try {
@@ -8971,7 +9048,7 @@ document.addEventListener("click", async (event) => {
     terminalErrorModalSignature = "";
     hideTerminalErrorModal();
     try {
-      triggerTerminalWechatAutoStatsCapture(selected.accountId);
+      triggerTerminalWechatAutoSideTasks(selected.accountId);
       state.terminalExecution = await api(`/api/accounts/${selected.accountId}/platforms/wechat/emergency-publish`, { method: "POST" });
       renderTerminalExecution();
     } catch (error) {
@@ -9030,6 +9107,36 @@ document.addEventListener("change", (event) => {
   if (autoStatsToggle) {
     terminalWechatAutoStatsEnabled = Boolean(autoStatsToggle.checked);
     localStorage.setItem(TERMINAL_WECHAT_AUTO_STATS_KEY, terminalWechatAutoStatsEnabled ? "1" : "0");
+    setTerminalWechatAutoStatsHint("");
+    return;
+  }
+  const autoCommentToggle = event.target.closest("#terminal-wechat-auto-comment-toggle");
+  if (autoCommentToggle) {
+    terminalWechatAutoCommentEnabled = Boolean(autoCommentToggle.checked);
+    localStorage.setItem(TERMINAL_WECHAT_AUTO_COMMENT_KEY, terminalWechatAutoCommentEnabled ? "1" : "0");
+    setTerminalWechatAutoStatsHint("");
+    return;
+  }
+  const autoPrivateToggle = event.target.closest("#terminal-wechat-auto-private-message-toggle");
+  if (autoPrivateToggle) {
+    terminalWechatAutoPrivateMessageEnabled = Boolean(autoPrivateToggle.checked);
+    localStorage.setItem(TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_KEY, terminalWechatAutoPrivateMessageEnabled ? "1" : "0");
+    setTerminalWechatAutoStatsHint("");
+    return;
+  }
+  const autoCommentLimitInput = event.target.closest("#terminal-wechat-auto-comment-limit");
+  if (autoCommentLimitInput) {
+    terminalWechatAutoCommentLimit = terminalNormalizeAutoEngagementLimit(autoCommentLimitInput.value);
+    autoCommentLimitInput.value = String(terminalWechatAutoCommentLimit);
+    localStorage.setItem(TERMINAL_WECHAT_AUTO_COMMENT_LIMIT_KEY, String(terminalWechatAutoCommentLimit));
+    setTerminalWechatAutoStatsHint("");
+    return;
+  }
+  const autoPrivateLimitInput = event.target.closest("#terminal-wechat-auto-private-message-limit");
+  if (autoPrivateLimitInput) {
+    terminalWechatAutoPrivateMessageLimit = terminalNormalizeAutoEngagementLimit(autoPrivateLimitInput.value);
+    autoPrivateLimitInput.value = String(terminalWechatAutoPrivateMessageLimit);
+    localStorage.setItem(TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_LIMIT_KEY, String(terminalWechatAutoPrivateMessageLimit));
     setTerminalWechatAutoStatsHint("");
     return;
   }

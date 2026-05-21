@@ -5213,6 +5213,39 @@ body.terminal-execution-active #page-description {
   accent-color: #5dd62c;
 }
 
+.terminal-wechat-auto-engagement-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.terminal-wechat-auto-engagement-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #5dd62c;
+}
+
+.terminal-wechat-auto-engagement-limit-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.terminal-wechat-auto-engagement-limit-field > span {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.terminal-wechat-auto-engagement-limit-field input {
+  min-height: 40px;
+}
+
 .terminal-wechat-auto-stats-hint {
   grid-column: 1 / -1;
   margin-top: -4px;

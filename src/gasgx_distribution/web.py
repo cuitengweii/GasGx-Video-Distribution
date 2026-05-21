@@ -20,6 +20,7 @@ from .public_settings import resolve_material_dir
 from .scheduler import (
     scheduler_status,
     start_scheduler,
+    trigger_matrix_wechat_engagement_run_now,
     trigger_matrix_wechat_job,
     trigger_matrix_wechat_login_check,
     trigger_matrix_wechat_stats_capture,
@@ -199,6 +200,14 @@ class WechatStatsCapturePayload(BaseModel):
     open_capture_in_new_tab: bool = False
     capture_tab_foreground: bool = False
     keep_capture_tab_open: bool = False
+
+
+class WechatEngagementRunPayload(BaseModel):
+    account_id: int
+    enable_comment: bool = True
+    enable_private_message: bool = False
+    comment_limit: int = 5
+    private_message_limit: int = 5
 
 
 class OperatorRolePayload(BaseModel):
@@ -762,6 +771,16 @@ def create_app() -> FastAPI:
             open_capture_in_new_tab=payload.open_capture_in_new_tab,
             capture_tab_foreground=payload.capture_tab_foreground,
             keep_capture_tab_open=payload.keep_capture_tab_open,
+        )
+
+    @app.post("/api/jobs/matrix-wechat/engagement/run-now")
+    def matrix_wechat_engagement_run_now(payload: WechatEngagementRunPayload) -> dict[str, Any]:
+        return trigger_matrix_wechat_engagement_run_now(
+            account_id=payload.account_id,
+            enable_comment=payload.enable_comment,
+            enable_private_message=payload.enable_private_message,
+            comment_limit=payload.comment_limit,
+            private_message_limit=payload.private_message_limit,
         )
 
     @app.get("/api/login-qr-batches")

@@ -21,6 +21,7 @@ _STOP = threading.Event()
 _RUNNING = threading.Event()
 _STATS_RUNNING = threading.Event()
 _OPS_SUMMARY_RUNNING = threading.Event()
+_ENGAGEMENT_RUNNING = threading.Event()
 
 
 def scheduler_state_path() -> Path:
@@ -409,6 +410,50 @@ def trigger_matrix_wechat_stats_capture(
         if _STATS_RUNNING.is_set():
             return {"ok": False, "status": "already_running"}
         thread = threading.Thread(target=_runner_with_context, name="gasgx-matrix-wechat-stats-manual", daemon=True)
+        thread.start()
+    return {"ok": True, "status": "started"}
+
+
+def trigger_matrix_wechat_engagement_run_now(
+    *,
+    account_id: int,
+    enable_comment: bool = True,
+    enable_private_message: bool = False,
+    comment_limit: int = 5,
+    private_message_limit: int = 5,
+) -> dict[str, Any]:
+    resolved_account_id = int(account_id or 0)
+    if resolved_account_id <= 0:
+        return {"ok": False, "status": "skipped", "reason": "account_id_required"}
+    if (not bool(enable_comment)) and (not bool(enable_private_message)):
+        return {"ok": False, "status": "skipped", "reason": "engagement_disabled"}
+    resolved_comment_limit = max(1, int(comment_limit or 5))
+    resolved_private_limit = max(1, int(private_message_limit or 5))
+
+    def _runner() -> None:
+        if _ENGAGEMENT_RUNNING.is_set():
+            return
+        _ENGAGEMENT_RUNNING.set()
+        try:
+            service.run_terminal_wechat_auto_engagement(
+                account_id=resolved_account_id,
+                enable_comment=bool(enable_comment),
+                enable_private_message=bool(enable_private_message),
+                comment_limit=resolved_comment_limit,
+                private_message_limit=resolved_private_limit,
+            )
+        finally:
+            _ENGAGEMENT_RUNNING.clear()
+
+    context = copy_context()
+
+    def _runner_with_context() -> None:
+        context.run(_runner)
+
+    with _LOCK:
+        if _ENGAGEMENT_RUNNING.is_set():
+            return {"ok": False, "status": "already_running"}
+        thread = threading.Thread(target=_runner_with_context, name="gasgx-matrix-wechat-engagement-manual", daemon=True)
         thread.start()
     return {"ok": True, "status": "started"}
 

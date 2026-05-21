@@ -13,7 +13,7 @@ def test_web_home_defaults_to_overview_on_empty_hash() -> None:
     assert 'terminal-close-btn' in app_js
     assert 'if (view === "terminal-execution" && updateHash) {' in app_js
     assert 'if (view === "terminal-execution" && terminalCurrentRoute() === "hub") return;' in app_js
-    assert 'const showTerminalLoading = view === "terminal-execution" && terminalCurrentRoute() !== "hub";' in app_js
+    assert 'const showTerminalLoading = view === "terminal-execution" && terminalCurrentRoute() !== "hub";' not in app_js
     assert 'loading: terminalCurrentRoute() !== "hub",' in app_js
     assert 'if (isLoading && !isHubRoute) {' in app_js
     assert "Page entry is passive; browser opening only happens after an explicit operator action." in app_js

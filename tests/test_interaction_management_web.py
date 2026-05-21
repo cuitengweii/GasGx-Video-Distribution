@@ -55,6 +55,7 @@ def test_interaction_management_config_roundtrip(monkeypatch, tmp_path: Path) ->
     assert '"interaction-management"' in service_text
     assert "/api/interaction-management/config" in web_text
     assert "/api/interaction-management/private-msg/run" in web_text
+    assert "/api/jobs/matrix-wechat/engagement/run-now" in web_text
 
 
 def test_publisher_role_includes_interaction_management_permission() -> None:
