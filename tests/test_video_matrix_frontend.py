@@ -1098,6 +1098,12 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "selectCoverTemplate(coverSelect.value)" in app
     assert "selectVideoTemplate(videoSelect.value)" in app
     assert "switchEndingTemplateMode(endingSelect.value)" in app
+    assert '$("videoDurationMin").value = state.video_duration_min ?? settings.video_duration_min ?? 9;' in app
+    assert '$("videoDurationMax").value = state.video_duration_max ?? settings.video_duration_max ?? 15;' in app
+    assert "function syncNumber(id)" in app
+    assert "el.onchange = commit;" in app
+    assert "el.onblur = commit;" in app
+    assert "Number(el.value || 3)" not in app
     assert "video_duration_min" in app
     assert "targetFpsGroup" in html
     assert "video_duration_max" in app
@@ -1354,9 +1360,19 @@ def test_video_matrix_frontend_has_dedupe_report_panel() -> None:
     css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_styles.css").read_text(encoding="utf-8")
 
     assert 'id="narrativeTemplates"' in html
+    assert 'id="sourcePanel"' in html
+    assert 'id="sourcePanelToggle"' in html
+    assert "source-panel is-collapsed" in html
     assert "data-narrative-templates" in html
     assert "narrative-template-list" in html
+    assert 'id="narrativeTemplatePanel"' in html
+    assert 'id="narrativePanelToggle"' in html
     assert "叙事骨架轮换" in html
+    assert "narrative-template-panel is-collapsed" in html
+    assert "function bindNarrativePanelToggle" in app
+    assert "function bindSourcePanelToggle" in app
+    assert "function renderSourcePanelVisibility" in app
+    assert "function renderNarrativePanelVisibility" in app
     assert "function renderNarrativeTemplates" in app
     assert 'document.querySelectorAll("[data-narrative-templates]")' in app
     assert "function narrativeTemplateLabel" in app
@@ -1380,7 +1396,11 @@ def test_video_matrix_frontend_has_dedupe_report_panel() -> None:
     assert "重剪后通过" in app
     assert "通过：未发现明显重复" in app
     assert ".narrative-template-card" in css
+    assert ".source-panel-toggle" in css
+    assert ".source-panel.is-collapsed .source-panel-grid" in css
     assert ".narrative-template-panel" in css
+    assert ".narrative-panel-toggle" in css
+    assert ".narrative-template-panel.is-collapsed .narrative-template-body" in css
     assert "grid-template-columns: minmax(0, 1fr)" in css
     assert ".dedupe-score.risk-mid" in css
     assert ".dedupe-reason.risk-high" in css

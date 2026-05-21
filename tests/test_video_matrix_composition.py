@@ -9,7 +9,7 @@ from gasgx_distribution.video_matrix.composition import plan_variants
 from gasgx_distribution.video_matrix.dedupe import plan_feature_record
 from gasgx_distribution.video_matrix.hud import HudPayload
 from gasgx_distribution.video_matrix.models import ClipMetadata
-from gasgx_distribution.video_matrix.pipeline import _beat_cache_entry_path, _beat_cache_path, _beat_duration_hint, _fit_composition_sequence_to_max_duration
+from gasgx_distribution.video_matrix.pipeline import _beat_cache_entry_path, _beat_cache_key, _beat_cache_path, _beat_duration_hint, _fit_composition_sequence_to_max_duration
 from gasgx_distribution.video_matrix import cover as cover_renderer
 from gasgx_distribution.video_matrix import render as video_renderer
 from gasgx_distribution.video_matrix.render import _build_filter_complex
@@ -140,6 +140,42 @@ def test_plan_variants_cycles_configured_narrative_templates() -> None:
     assert [segment.category for segment in variants[1].segments] == ["category_F", "category_E", "category_D"]
 
 
+def test_plan_variants_can_disable_narrative_structure_override() -> None:
+    clips = [_clip("category_D", "d1"), _clip("category_E", "e1"), _clip("category_F", "f1")]
+    sequence = [
+        {"category_id": "category_D", "duration": 0.5},
+        {"category_id": "category_E", "duration": 1.0},
+        {"category_id": "category_F", "duration": 1.5},
+    ]
+    narrative_templates = [
+        {
+            "id": "faq_explainer",
+            "account_pool_id": "tutorial_faq",
+            "composition_sequence": [
+                {"category_id": "category_F", "duration": 0.5},
+                {"category_id": "category_E", "duration": 1.0},
+                {"category_id": "category_D", "duration": 1.5},
+            ],
+        },
+    ]
+
+    variants = plan_variants(
+        clips,
+        _settings(
+            composition_sequence=sequence,
+            narrative_templates=narrative_templates,
+            dedupe_policy={"single_dimension_retry": False, "borderline_total": 0.99, "reject_total": 1.0},
+        ),
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1, 1.5, 2, 2.5, 3],
+        output_count=1,
+        narrative_structure_enabled=False,
+    )
+
+    assert variants[0].narrative_template_id == ""
+    assert [segment.category for segment in variants[0].segments] == ["category_D", "category_E", "category_F"]
+
+
 def test_plan_variants_reports_missing_configured_category() -> None:
     with pytest.raises(ValueError, match="category_F"):
         plan_variants(
@@ -200,6 +236,23 @@ def test_plan_variants_preflight_cools_down_hook_clips_within_batch() -> None:
     hook_ids = [variant.segments[0].clip.clip_id for variant in variants]
     assert len(set(hook_ids)) == 3
     assert all(variant.visual_plan_key for variant in variants)
+
+
+def test_plan_variants_category_a_hook_avoids_recent_segment_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_A", "a2")]
+    settings = _settings(composition_sequence=[{"category_id": "category_A", "duration": 0.5}], output_count=1)
+    monkeypatch.setattr("gasgx_distribution.video_matrix.composition._pick_start_time", lambda *_args, **_kwargs: 0.0)
+
+    variant = plan_variants(
+        clips,
+        settings,
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1.0, 1.5],
+        output_count=1,
+        recent_segment_keys={"a1:0.0:0.5"},
+    )[0]
+
+    assert f"{variant.segments[0].clip.clip_id}:{variant.segments[0].start_time}:{variant.segments[0].duration}" != "a1:0.0:0.5"
 
 
 def test_plan_variants_preflight_skips_reused_text_signature() -> None:
@@ -340,6 +393,13 @@ def test_beat_duration_hint_keeps_configured_max_when_larger() -> None:
     assert _beat_duration_hint(settings, sequence, cover_intro_seconds=1.0, outro_seconds=1.0) == 8.0
 
 
+def test_beat_duration_hint_includes_outro_seconds() -> None:
+    settings = _settings(video_duration_min=1, video_duration_max=30)
+    sequence = [{"category_id": "category_A", "duration": 2.0}]
+
+    assert _beat_duration_hint(settings, sequence, cover_intro_seconds=1.0, outro_seconds=2.0) == 5.0
+
+
 def test_beat_cache_path_uses_distribution_runtime_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake_paths = type("Paths", (), {"runtime_root": tmp_path / "runtime"})()
     monkeypatch.setattr("gasgx_distribution.video_matrix.pipeline.get_paths", lambda: fake_paths)
@@ -358,6 +418,11 @@ def test_beat_cache_entry_path_hashes_key(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert path.parent == (tmp_path / "runtime" / "video_matrix" / "beat_cache")
     assert path.suffix == ".json"
     assert len(path.stem) == 64
+
+
+def test_beat_cache_key_contains_version_prefix() -> None:
+    key = _beat_cache_key(Path("bgm.mp3"), 8.0, _settings(), "auto")
+    assert key.startswith("beat_grid_v")
 
 
 def test_fit_composition_sequence_caps_material_duration_without_outro() -> None:

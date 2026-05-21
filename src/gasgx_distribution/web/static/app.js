@@ -65,6 +65,7 @@ const state = {
   platforms: [],
   tasks: [],
   stats: [],
+  accountStats: [],
   statsCaptureStatus: {},
   weeklySummary: {},
   statsMode: "capture",
@@ -4522,10 +4523,172 @@ function renderStatsCapturePanel() {
   }
 }
 
+function buildTongjiSnapshotFromState() {
+  const summary = state.weeklySummary || {};
+  const summaryRows = Array.isArray(summary.rows) ? summary.rows : [];
+  const summaryTotals = summary.totals || {};
+  const accountIds = [...new Set(summaryRows.map((row) => Number(row?.account_id || 0)).filter((id) => id > 0))];
+  const accountIdSet = new Set(accountIds);
+  const snapshots = Array.isArray(state.accountStats) ? state.accountStats : [];
+  let windowDays = Array.isArray(summary.window?.days)
+    ? summary.window.days.map((item) => String(item || "").slice(0, 10)).filter(Boolean)
+    : [];
+  if (!windowDays.length) {
+    windowDays = [...new Set(
+      snapshots
+        .map((item) => String(item?.stat_date || "").slice(0, 10))
+        .filter(Boolean),
+    )].sort().slice(-7);
+  }
+  windowDays = [...new Set(windowDays)].sort();
+  if (!windowDays.length) return { ...TONGJI_SNAPSHOT, window: {} };
+  const windowSet = new Set(windowDays);
+  const parseRawJson = (value) => {
+    if (!value) return {};
+    if (typeof value === "object") return value;
+    try {
+      return JSON.parse(String(value));
+    } catch (_error) {
+      return {};
+    }
+  };
+  const bestByAccountDay = new Map();
+  for (const row of snapshots) {
+    const accountId = Number(row?.account_id || 0);
+    if (accountId <= 0) continue;
+    if (accountIdSet.size && !accountIdSet.has(accountId)) continue;
+    const day = String(row?.stat_date || "").slice(0, 10);
+    if (!windowSet.has(day)) continue;
+    const key = `${accountId}|${day}`;
+    const current = bestByAccountDay.get(key);
+    if (!current || Number(row?.captured_at || 0) >= Number(current?.captured_at || 0)) {
+      bestByAccountDay.set(key, row);
+    }
+  }
+  const resolvedAccountIds = accountIds.length
+    ? accountIds
+    : [...new Set([...bestByAccountDay.keys()].map((key) => Number(key.split("|")[0] || 0)).filter((id) => id > 0))];
+  const timeline = windowDays.map((day) => {
+    let followers = 0;
+    let views = 0;
+    let likes = 0;
+    let comments = 0;
+    let shares = 0;
+    let newFollowers = 0;
+    let unfollows = 0;
+    for (const accountId of resolvedAccountIds) {
+      const row = bestByAccountDay.get(`${accountId}|${day}`);
+      if (!row) continue;
+      followers += Number(row.followers || 0);
+      views += Number(row.views || 0);
+      likes += Number(row.likes || 0);
+      comments += Number(row.comments || 0);
+      shares += Number(row.shares || 0);
+      const raw = parseRawJson(row.raw_json);
+      const followerSource = raw?.sources?.follower && typeof raw.sources.follower === "object"
+        ? raw.sources.follower
+        : null;
+      if (followerSource) {
+        newFollowers += Number(followerSource.new_followers || 0);
+        unfollows += Number(followerSource.unfollows || 0);
+      } else {
+        const delta = Number(row.follower_delta || 0);
+        if (delta >= 0) newFollowers += delta;
+        else unfollows += Math.abs(delta);
+      }
+    }
+    return {
+      day,
+      followers,
+      views,
+      likes,
+      comments,
+      shares,
+      newFollowers,
+      unfollows,
+      interactions: likes + comments + shares,
+    };
+  });
+  const formatNumber = (value) => Number(value || 0).toLocaleString("zh-Hans-CN");
+  const totalsFromTimeline = timeline.reduce((acc, item) => {
+    acc.views_7d += item.views;
+    acc.likes_7d += item.likes;
+    acc.comments_7d += item.comments;
+    acc.shares_7d += item.shares;
+    acc.interactions_7d += item.interactions;
+    acc.new_followers_7d += item.newFollowers;
+    acc.unfollows_7d += item.unfollows;
+    acc.follower_delta_7d += item.newFollowers - item.unfollows;
+    return acc;
+  }, {
+    views_7d: 0,
+    likes_7d: 0,
+    comments_7d: 0,
+    shares_7d: 0,
+    interactions_7d: 0,
+    new_followers_7d: 0,
+    unfollows_7d: 0,
+    follower_delta_7d: 0,
+  });
+  const totals = Object.keys(summaryTotals).length ? summaryTotals : totalsFromTimeline;
+  const latestFollowersTotal = timeline.length ? Number(timeline[timeline.length - 1]?.followers || 0) : 0;
+  const followersTotal = summaryRows.length
+    ? summaryRows.reduce((sum, row) => sum + Number(row?.followers_current || 0), 0)
+    : latestFollowersTotal;
+  const signedNewFollowers = Number(totals.new_followers_7d || 0) >= 0
+    ? `+${formatNumber(totals.new_followers_7d || 0)}`
+    : formatNumber(totals.new_followers_7d || 0);
+  const matrixRows = [...timeline]
+    .sort((a, b) => String(b.day).localeCompare(String(a.day)))
+    .map((item) => {
+      const traffic = Math.max(0, item.newFollowers - item.unfollows);
+      return [
+        String(item.day || "").replace(/-/g, "/"),
+        String(item.followers || 0),
+        item.newFollowers ? `+${item.newFollowers}` : "0",
+        item.unfollows ? `-${item.unfollows}` : "0",
+        String(item.views || 0),
+        String(item.likes || 0),
+        String(item.comments || 0),
+        String(item.shares || 0),
+        String(item.comments || 0),
+        String(traffic || 0),
+      ];
+    });
+  return {
+    overview: [
+      { en: "TOTAL FOLLOWERS", cn: "总关注者资产", value: formatNumber(followersTotal), unit: "", accent: "accent-green" },
+      { en: "7-DAY PLAYS", cn: "7日累计播放量", value: formatNumber(totals.views_7d || 0), unit: "次", accent: "accent-info" },
+      { en: "7-DAY NEW FOLLOWS", cn: "7日新增关注转化", value: signedNewFollowers, unit: "人", accent: "accent-warning" },
+      { en: "TOTAL INTERACTIONS", cn: "7日综合互动(赞/评/转)", value: formatNumber(totals.interactions_7d || 0), unit: "次", accent: "accent-violet" },
+    ],
+    dates: windowDays.map((day) => String(day || "").slice(5, 10).replace("-", "/")),
+    totalFollowers: timeline.map((item) => item.followers),
+    newFollowers: timeline.map((item) => item.newFollowers),
+    unfollowers: timeline.map((item) => -item.unfollows),
+    videoPlays: timeline.map((item) => item.views),
+    videoInteractions: timeline.map((item) => item.interactions),
+    matrixRows,
+    window: {
+      start: windowDays[0] || "",
+      end: windowDays[windowDays.length - 1] || "",
+    },
+  };
+}
+
 function renderTongjiSection() {
+  const tongji = buildTongjiSnapshotFromState();
+  const titleDescNode = document.querySelector("#stats .stats-tongji-title p");
+  if (titleDescNode) {
+    const start = tongji.window?.start || "";
+    const end = tongji.window?.end || "";
+    titleDescNode.textContent = start && end
+      ? `聚合数据来源：视频详情数据 + 关注者增长数据 (统计周期: ${start.replace(/-/g, "/")} - ${end.replace(/-/g, "/")})`
+      : "聚合数据来源：视频详情数据 + 关注者增长数据";
+  }
   const overviewNode = document.querySelector("#tongji-overview");
   if (overviewNode) {
-    overviewNode.innerHTML = TONGJI_SNAPSHOT.overview.map((card) => `
+    overviewNode.innerHTML = tongji.overview.map((card) => `
       <article class="tongji-card ${card.accent}">
         <small class="tongji-card-en">${card.en}</small>
         <span class="tongji-card-cn">${card.cn}</span>
@@ -4539,7 +4702,7 @@ function renderTongjiSection() {
 
   const matrixNode = document.querySelector("#tongji-data-matrix");
   if (matrixNode) {
-    matrixNode.innerHTML = TONGJI_SNAPSHOT.matrixRows.map((row) => {
+    matrixNode.innerHTML = tongji.matrixRows.map((row) => {
       const [date, followers, deltaUp, deltaDown, plays, likes, recommend, shares, comments, traffic] = row;
       const signedPositive = deltaUp === "0" ? `<span class="muted-cell">0</span>` : `<span class="${deltaUp.startsWith("-") ? "negative" : "positive"}">${deltaUp}</span>`;
       const signedNegative = deltaDown === "0" ? `<span class="muted-cell">0</span>` : `<span class="${deltaDown.startsWith("-") ? "negative" : "positive"}">${deltaDown}</span>`;
@@ -4572,15 +4735,25 @@ function renderTongjiSection() {
 
   const followerDom = document.getElementById("followerChart");
   if (followerDom) {
+    const followerValues = tongji.totalFollowers.filter((value) => Number.isFinite(Number(value)));
+    const followerMin = followerValues.length ? Math.min(...followerValues) : 0;
+    const followerMax = followerValues.length ? Math.max(...followerValues) : 0;
+    const followerPadding = Math.max(1, Math.round((followerMax - followerMin) * 0.12));
     tongjiFollowerChart = window.echarts.getInstanceByDom(followerDom) || window.echarts.init(followerDom, "dark");
     tongjiFollowerChart.setOption({
       backgroundColor: "transparent",
       tooltip: { trigger: "axis", ...tooltipStyle },
       grid: { left: "3%", right: "3%", bottom: "5%", top: "15%", containLabel: true },
-      xAxis: { type: "category", data: TONGJI_SNAPSHOT.dates, axisLine: { lineStyle: { color: "#333" } }, axisTick: { show: false } },
+      xAxis: { type: "category", data: tongji.dates, axisLine: { lineStyle: { color: "#333" } }, axisTick: { show: false } },
       yAxis: [
         { type: "value", splitLine: { lineStyle: { color: "#333", type: "dashed" } }, axisLabel: { color: "#c7c7c7" } },
-        { type: "value", min: 1540, splitLine: { show: false }, axisLabel: { color: "#c7c7c7" } },
+        {
+          type: "value",
+          min: Math.max(0, followerMin - followerPadding),
+          max: followerMax + followerPadding,
+          splitLine: { show: false },
+          axisLabel: { color: "#c7c7c7" },
+        },
       ],
       series: [
         {
@@ -4597,21 +4770,21 @@ function renderTongjiSection() {
               { offset: 1, color: "rgba(93, 214, 44, 0)" },
             ]),
           },
-          data: TONGJI_SNAPSHOT.totalFollowers,
+          data: tongji.totalFollowers,
         },
         {
           name: "新增关注",
           type: "bar",
           barWidth: "30%",
           itemStyle: { color: "#FF9900", borderRadius: [2, 2, 0, 0] },
-          data: TONGJI_SNAPSHOT.newFollowers,
+          data: tongji.newFollowers,
         },
         {
           name: "取关关注",
           type: "bar",
           barWidth: "30%",
           itemStyle: { color: "#FF3366", borderRadius: [0, 0, 2, 2] },
-          data: TONGJI_SNAPSHOT.unfollowers,
+          data: tongji.unfollowers,
         },
       ],
     }, true);
@@ -4624,7 +4797,7 @@ function renderTongjiSection() {
       backgroundColor: "transparent",
       tooltip: { trigger: "axis", ...tooltipStyle },
       grid: { left: "3%", right: "3%", bottom: "5%", top: "15%", containLabel: true },
-      xAxis: { type: "category", data: TONGJI_SNAPSHOT.dates, axisLine: { lineStyle: { color: "#333" } }, axisTick: { show: false } },
+      xAxis: { type: "category", data: tongji.dates, axisLine: { lineStyle: { color: "#333" } }, axisTick: { show: false } },
       yAxis: [
         { type: "value", name: "播放量", splitLine: { lineStyle: { color: "#333", type: "dashed" } }, axisLabel: { color: "#c7c7c7" } },
         { type: "value", name: "总互动", splitLine: { show: false }, axisLabel: { color: "#c7c7c7" } },
@@ -4635,7 +4808,7 @@ function renderTongjiSection() {
           type: "bar",
           barWidth: "40%",
           itemStyle: { color: "#00A3FF", borderRadius: [2, 2, 0, 0] },
-          data: TONGJI_SNAPSHOT.videoPlays,
+          data: tongji.videoPlays,
         },
         {
           name: "综合互动量",
@@ -4645,7 +4818,7 @@ function renderTongjiSection() {
           symbolSize: 7,
           itemStyle: { color: "#9C27B0" },
           lineStyle: { width: 3, shadowColor: "rgba(156, 39, 176, 0.5)", shadowBlur: 10 },
-          data: TONGJI_SNAPSHOT.videoInteractions,
+          data: tongji.videoInteractions,
         },
       ],
     }, true);
@@ -7023,6 +7196,7 @@ async function loadViewData(view, { force = false } = {}) {
       await loadAccounts();
       state.summary = await api("/api/summary");
       state.stats = await api("/api/stats");
+      state.accountStats = await api("/api/stats/accounts");
       state.analytics = await api("/api/stats/analytics");
       state.weeklySummary = await api("/api/stats/weekly-summary?platform=wechat");
       state.notificationSla = await api("/api/stats/notification-sla");
@@ -7961,9 +8135,13 @@ setInterval(() => {
 
 setInterval(() => {
   if (!loadedViews.has("stats")) return;
-  api("/api/stats/weekly-summary?platform=wechat")
-    .then((weeklySummary) => {
+  Promise.all([
+    api("/api/stats/weekly-summary?platform=wechat"),
+    api("/api/stats/accounts"),
+  ])
+    .then(([weeklySummary, accountStats]) => {
       state.weeklySummary = weeklySummary;
+      state.accountStats = Array.isArray(accountStats) ? accountStats : [];
       if (currentView === "stats" && state.statsMode === "dashboard") renderStats();
     })
     .catch(() => {});
@@ -7983,7 +8161,12 @@ async function refreshStatsCaptureStatus({ refreshWeekly = true } = {}) {
   state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
   if (refreshWeekly) {
     try {
-      state.weeklySummary = await api("/api/stats/weekly-summary?platform=wechat");
+      const [weeklySummary, accountStats] = await Promise.all([
+        api("/api/stats/weekly-summary?platform=wechat"),
+        api("/api/stats/accounts"),
+      ]);
+      state.weeklySummary = weeklySummary;
+      state.accountStats = Array.isArray(accountStats) ? accountStats : [];
     } catch (error) {
       void error;
     }

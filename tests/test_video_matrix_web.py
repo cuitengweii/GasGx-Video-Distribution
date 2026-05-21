@@ -452,6 +452,7 @@ def test_video_matrix_generate_falls_back_to_active_categories(monkeypatch, tmp_
         {"category_id": "category_D", "duration": 2.0},
         {"category_id": "category_E", "duration": 2.0},
     ]
+    assert captured["narrative_structure_enabled"] is False
 
 
 def test_video_matrix_generation_history_is_loaded_from_structured_tables(monkeypatch) -> None:

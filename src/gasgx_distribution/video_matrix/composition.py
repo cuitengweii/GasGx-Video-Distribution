@@ -36,6 +36,7 @@ def plan_variants(
     bgm_duration: float = 0.0,
     ai_prompt_hint: str = "",
     avoid_texts: list[str] | set[str] | None = None,
+    narrative_structure_enabled: bool = True,
 ) -> list[VideoVariant]:
     count = output_count or settings.output_count
     sequence = _resolve_sequence(composition_sequence or settings.composition_sequence)
@@ -80,11 +81,23 @@ def plan_variants(
         best_score: float | None = None
         while attempts < attempts_limit:
             attempts += 1
-            narrative = narrative_templates[(sequence_number - 1) % len(narrative_templates)] if narrative_templates else None
+            narrative = (
+                narrative_templates[(sequence_number - 1) % len(narrative_templates)]
+                if narrative_structure_enabled and narrative_templates
+                else None
+            )
             structure_variant_id = _structure_variant_id(narrative, attempts)
             active_sequence = _structure_sequence_variant(_sequence_for_narrative(narrative, sequence, set(buckets)), attempts if preflight_enabled else 1)
             excluded_clip_ids = historical_clip_ids | batch_hook_clip_ids if hook_cooldown else historical_clip_ids
-            segments = _pick_segments(buckets, beat_grid, rng, active_sequence, excluded_clip_ids, float(settings.video_duration_max))
+            segments = _pick_segments(
+                buckets,
+                beat_grid,
+                rng,
+                active_sequence,
+                excluded_clip_ids,
+                float(settings.video_duration_max),
+                recent_segment_keys=historical_segment_keys,
+            )
             text_variant = _text_variant_for(text_variants, sequence_number, attempts, attempts_limit)
             title = str(text_variant.get("title") or "").strip() or _choice_or(settings.titles, rng, settings.default_title_prefix or "GasGx")
             slogan = str(text_variant.get("slogan") or "").strip() or _choice_or(settings.slogans, rng, settings.project_name or "GasGx")
@@ -228,10 +241,12 @@ def _pick_segments(
     sequence: list[tuple[str, float]],
     recent_clip_ids: set[str],
     max_total_duration: float,
+    recent_segment_keys: set[str] | None = None,
 ) -> list[SegmentPlan]:
     beat_pairs = list(zip(beat_grid, beat_grid[1:]))
     if not beat_pairs:
         raise ValueError("Beat grid is empty")
+    hook_recent_keys = set(recent_segment_keys or set())
     selected: list[SegmentPlan] = []
     beat_index = 0
     for index, (category, target_window) in enumerate(sequence):
@@ -239,6 +254,21 @@ def _pick_segments(
         remaining_duration = max(0.0, max_total_duration - used_duration)
         if remaining_duration <= 0.0:
             break
+        if index == 0 and category == "category_A":
+            hook_segment = _pick_category_a_hook_segment(
+                clips=buckets[category],
+                beat_pairs=beat_pairs,
+                beat_index=beat_index,
+                rng=rng,
+                recent_clip_ids=recent_clip_ids,
+                recent_segment_keys=hook_recent_keys,
+                target_window=target_window,
+                remaining_duration=remaining_duration,
+            )
+            if hook_segment is not None:
+                beat_index = min(len(beat_pairs) - 1, beat_index + max(1, int(hook_segment.duration / 0.45)))
+                selected.append(hook_segment)
+                continue
         clip = _pick_clip(buckets[category], rng, recent_clip_ids)
         target_duration = min(target_window, remaining_duration)
         usable_start, usable_end = _usable_window(clip)
@@ -257,6 +287,52 @@ def _pick_segments(
             )
         )
     return selected
+
+
+def _pick_category_a_hook_segment(
+    clips: list[ClipMetadata],
+    beat_pairs: list[tuple[float, float]],
+    beat_index: int,
+    rng: random.Random,
+    recent_clip_ids: set[str],
+    recent_segment_keys: set[str],
+    target_window: float,
+    remaining_duration: float,
+) -> SegmentPlan | None:
+    fresh = [clip for clip in clips if clip.clip_id not in recent_clip_ids]
+    pool = list(fresh or clips)
+    rng.shuffle(pool)
+    fallback_segment: SegmentPlan | None = None
+    for clip in pool:
+        usable_start, usable_end = _usable_window(clip)
+        available_duration = max(0.0, usable_end - usable_start)
+        effective_target = min(target_window, remaining_duration, available_duration or target_window)
+        duration = min(_align_duration(effective_target, beat_pairs, beat_index), remaining_duration)
+        if duration <= 0:
+            continue
+        # Blend hero-frame preference with random window sampling to diversify the first 3s hook.
+        for attempt in range(6):
+            prefer_hero = attempt < 2
+            start_time = _pick_start_time(
+                clip,
+                rng,
+                usable_start,
+                usable_end,
+                duration,
+                prefer_hero=prefer_hero,
+            )
+            candidate = SegmentPlan(
+                category=clip.category,
+                clip=clip,
+                start_time=start_time,
+                duration=duration,
+                index=0,
+            )
+            if fallback_segment is None:
+                fallback_segment = candidate
+            if _segment_key(candidate) not in recent_segment_keys:
+                return candidate
+    return fallback_segment
 
 
 def _accept_variant(

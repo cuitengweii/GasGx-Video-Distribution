@@ -20,6 +20,9 @@ let jobProgressTimer = null;
 let lastJobSnapshot = null;
 let visualDropdownCloseBound = false;
 let videoTemplateThumbScaleBound = false;
+let narrativePanelCollapsed = true;
+let sourcePanelCollapsed = true;
+let firstScreenPanelCollapsed = true;
 const AI_PROMPT_HINT_MAX_CHARS = 240;
 const AI_PROMPT_HINT_MAX_LINES = 4;
 const AI_PROMPT_HINT_URL_RE = /(https?:\/\/\S+|www\.\S+)/gi;
@@ -497,6 +500,9 @@ function setInitialLoading() {
 
 async function init() {
   bindMobileSidebarToggle();
+  bindNarrativePanelToggle();
+  bindSourcePanelToggle();
+  bindFirstScreenPanelToggle();
   setInitialLoading();
   const data = await api("/api/video-matrix/state");
   state = data.ui_state; templates = data.templates; coverTemplates = data.cover_templates; settings = data.settings;
@@ -533,12 +539,69 @@ async function init() {
   }
 }
 
+function bindNarrativePanelToggle() {
+  const toggle = $("narrativePanelToggle");
+  if (!toggle) return;
+  toggle.onclick = () => {
+    narrativePanelCollapsed = !narrativePanelCollapsed;
+    renderNarrativePanelVisibility();
+  };
+  renderNarrativePanelVisibility();
+}
+
+function renderNarrativePanelVisibility() {
+  const panel = $("narrativeTemplatePanel");
+  const toggle = $("narrativePanelToggle");
+  if (!panel || !toggle) return;
+  panel.classList.toggle("is-collapsed", narrativePanelCollapsed);
+  toggle.textContent = narrativePanelCollapsed ? "展开" : "收起";
+  toggle.setAttribute("aria-expanded", narrativePanelCollapsed ? "false" : "true");
+}
+
+function bindSourcePanelToggle() {
+  const toggle = $("sourcePanelToggle");
+  if (!toggle) return;
+  toggle.onclick = () => {
+    sourcePanelCollapsed = !sourcePanelCollapsed;
+    renderSourcePanelVisibility();
+  };
+  renderSourcePanelVisibility();
+}
+
+function renderSourcePanelVisibility() {
+  const panel = $("sourcePanel");
+  const toggle = $("sourcePanelToggle");
+  if (!panel || !toggle) return;
+  panel.classList.toggle("is-collapsed", sourcePanelCollapsed);
+  toggle.textContent = sourcePanelCollapsed ? "展开" : "收起";
+  toggle.setAttribute("aria-expanded", sourcePanelCollapsed ? "false" : "true");
+}
+
+function bindFirstScreenPanelToggle() {
+  const toggle = $("firstScreenPanelToggle");
+  if (!toggle) return;
+  toggle.onclick = () => {
+    firstScreenPanelCollapsed = !firstScreenPanelCollapsed;
+    renderFirstScreenPanelVisibility();
+  };
+  renderFirstScreenPanelVisibility();
+}
+
+function renderFirstScreenPanelVisibility() {
+  const panel = $("firstScreenPanel");
+  const toggle = $("firstScreenPanelToggle");
+  if (!panel || !toggle) return;
+  panel.classList.toggle("is-collapsed", firstScreenPanelCollapsed);
+  toggle.textContent = firstScreenPanelCollapsed ? "展开" : "收起";
+  toggle.setAttribute("aria-expanded", firstScreenPanelCollapsed ? "false" : "true");
+}
+
 function renderSidebar(data) {
   $("outputCount").value = state.output_count || 3;
   $("maxWorkers").value = state.max_workers || 3;
   $("maxWorkersValue").textContent = `${$("maxWorkers").value}`;
-  $("videoDurationMin").value = state.video_duration_min || settings.video_duration_min || 9;
-  $("videoDurationMax").value = state.video_duration_max || settings.video_duration_max || 15;
+  $("videoDurationMin").value = state.video_duration_min ?? settings.video_duration_min ?? 9;
+  $("videoDurationMax").value = state.video_duration_max ?? settings.video_duration_max ?? 15;
   $("miningBgmVolume").value = state.mining_bgm_volume ?? settings.mining_bgm_volume ?? 1;
   $("miningBgmVolumeValue").textContent = Number($("miningBgmVolume").value).toFixed(2);
   $("libraryBgmVolume").value = state.library_bgm_volume ?? settings.library_bgm_volume ?? 0.35;
@@ -3170,6 +3233,7 @@ function collectState() {
     ending_cover_templates: state.ending_cover_templates,
     ending_cover_template: endingCoverTemplate,
     bgm_source: "Local library", bgm_library_id: selectedBgmLibraryId(),
+    narrative_structure_enabled: Boolean(state.narrative_structure_enabled),
     composition_sequence: state.composition_sequence,
     composition_customized: Boolean(state.composition_customized),
     active_category_ids: selectedActiveCategoryIds(categories),
@@ -3400,7 +3464,26 @@ function renderRadio(containerId, name, options, selected, onchange) {
 }
 function radioValue(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value || ""; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
-function syncNumber(id) { const el = $(id); if (!el) return; el.oninput = () => { let value = Number(el.value || 3); value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value)); if (String(value) !== el.value) el.value = value; if (id === "outputCount") $("metricCount").textContent = el.value; scheduleStateSave(); }; }
+function syncNumber(id) {
+  const el = $(id);
+  if (!el) return;
+  const commit = () => {
+    const raw = String(el.value ?? "").trim();
+    if (!raw) return;
+    let value = Number(raw);
+    if (!Number.isFinite(value)) return;
+    value = Math.max(Number(el.min || 1), Math.min(Number(el.max || 100), value));
+    const next = String(value);
+    if (next !== el.value) el.value = next;
+    if (id === "outputCount") $("metricCount").textContent = next;
+    scheduleStateSave();
+  };
+  el.oninput = () => {
+    if (id === "outputCount") $("metricCount").textContent = el.value || $("metricCount").textContent;
+  };
+  el.onchange = commit;
+  el.onblur = commit;
+}
 function syncRange(id) { bindRangeControl(id, () => { if (id === "outputCount") $("metricCount").textContent = $(id).value; if (id === "maxWorkers") { $("metricWorkers").textContent = $(id).value; $("maxWorkersValue").textContent = $(id).value; } if (id === "miningBgmVolume") $("miningBgmVolumeValue").textContent = Number($(id).value).toFixed(2); if (id === "libraryBgmVolume") $("libraryBgmVolumeValue").textContent = Number($(id).value).toFixed(2); scheduleStateSave(); }); }
 function rangeControlHtml({ id = "", key = "", label, min, max, step = 1, value, className = "" }) {
   const attr = key ? `data-key="${escapeHtml(key)}"` : "";

@@ -37,6 +37,7 @@ ProgressCallback = Callable[[str, float, str], None]
 AssetCallback = Callable[[RenderedAsset, int, int], None]
 VIDEO_ENDING_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 DAILY_SEQUENCE_STATE_FILE = "daily_publish_sequence.json"
+BEAT_CACHE_VERSION = "2"
 _DAILY_SEQUENCE_LOCK = Lock()
 
 
@@ -71,6 +72,7 @@ def run_pipeline(
     mining_bgm_path: Path | None = None,
     mining_bgm_volume: float | None = None,
     library_bgm_volume: float | None = None,
+    narrative_structure_enabled: bool = True,
 ) -> list[RenderedAsset]:
     ai_prompt_hint = str((text_overrides or {}).get("ai_prompt_hint") or "").strip()
     daily_texts = [str(item).strip() for item in (text_overrides or {}).get("daily_texts") or [] if str(item).strip()]
@@ -169,6 +171,7 @@ def run_pipeline(
                 bgm_duration=bgm_duration,
                 ai_prompt_hint=ai_prompt_hint,
                 avoid_texts=daily_texts,
+                narrative_structure_enabled=narrative_structure_enabled,
             )
         telemetry.event("planning", "variants_ready", {"variant_count": len(variants), **planning_payload})
     else:
@@ -188,6 +191,7 @@ def run_pipeline(
             bgm_duration=bgm_duration,
             ai_prompt_hint=ai_prompt_hint,
             avoid_texts=daily_texts,
+            narrative_structure_enabled=narrative_structure_enabled,
         )
     _apply_text_overrides(
         variants,
@@ -342,7 +346,7 @@ def _beat_duration_hint(
             segment_total += float(item.get("duration", 0))
         except (AttributeError, TypeError, ValueError):
             continue
-    composition_total = segment_total + max(0.0, cover_intro_seconds)
+    composition_total = segment_total + max(0.0, cover_intro_seconds) + max(0.0, outro_seconds)
     return min(float(settings.video_duration_max), max(float(settings.video_duration_min), composition_total))
 
 
@@ -572,6 +576,7 @@ def _load_daily_publish_sequence_state(path: Path) -> dict[str, Any]:
 def _beat_cache_key(settings_bgm_path: Path, duration_hint: float, settings: ProjectSettings, mode: str) -> str:
     return "|".join(
         [
+            f"beat_grid_v{BEAT_CACHE_VERSION}",
             str(settings_bgm_path.resolve()),
             f"{duration_hint:.3f}",
             str(int(settings.beat_detection.get("target_bpm_min", 120))),

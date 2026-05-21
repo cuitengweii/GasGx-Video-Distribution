@@ -1153,6 +1153,7 @@ def _run_generate_job(
         with trace.span("pipeline", "run_pipeline"):
             output_types = set(request.get("output_options") or ["mp4"])
             output_types.add("txt")
+            narrative_structure_enabled = bool(request.get("narrative_structure_enabled", False))
             assets = run_pipeline(
                 settings=settings,
                 bgm_path=bgm_path,
@@ -1181,6 +1182,7 @@ def _run_generate_job(
                 mining_bgm_path=mining_bgm_path,
                 mining_bgm_volume=mining_bgm_volume,
                 library_bgm_volume=library_bgm_volume,
+                narrative_structure_enabled=narrative_structure_enabled,
                 text_overrides={
                     "headline": str(request.get("headline") or ""),
                     "subhead": str(request.get("subhead") or ""),
@@ -1942,6 +1944,7 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "bgm_library_id",
         "mining_bgm_volume",
         "library_bgm_volume",
+        "narrative_structure_enabled",
         "composition_sequence",
         "composition_customized",
     }

@@ -279,17 +279,25 @@
           <p id="jobMessage">点击生成后，这里会显示每一步进度。</p>
           <div id="dedupeReport" class="dedupe-report hidden"></div>
         </div>
-        <div class="narrative-template-panel">
-          <div class="subsection-title"><span>NARRATIVE</span><b>叙事骨架轮换</b></div>
-          <div class="narrative-template-note">本批视频会按以下 5 类结构轮换生成。</div>
-          <div data-narrative-templates class="narrative-template-list compact"></div>
+        <div class="narrative-template-panel is-collapsed" id="narrativeTemplatePanel">
+          <div class="subsection-title narrative-template-toggle-row">
+            <div class="narrative-template-toggle-title"><span>NARRATIVE</span><b>叙事骨架轮换</b></div>
+            <button id="narrativePanelToggle" class="narrative-panel-toggle" type="button" aria-expanded="false" aria-controls="narrativePanelBody">展开</button>
+          </div>
+          <div class="narrative-template-body" id="narrativePanelBody">
+            <div class="narrative-template-note">本批视频会按以下 5 类结构轮换生成。</div>
+            <div data-narrative-templates class="narrative-template-list compact"></div>
+          </div>
         </div>
       </section>
 
-      <section class="source-panel">
-        <div class="source-panel-grid">
+      <section class="source-panel is-collapsed" id="sourcePanel">
+        <div class="section-title source-panel-toggle-row">
+          <div class="source-panel-toggle-title"><span>SOURCE LIBRARY</span><b>视频碎片素材目录</b></div>
+          <button id="sourcePanelToggle" class="source-panel-toggle" type="button" aria-expanded="false" aria-controls="sourcePanelBody">展开</button>
+        </div>
+        <div class="source-panel-grid" id="sourcePanelBody">
           <div class="source-library-column">
-            <div class="section-title"><span>SOURCE LIBRARY</span><b>视频碎片素材目录</b></div>
             <div class="add-category-row">
               <input id="newCategoryLabel" placeholder="输入新目录名称">
               <button id="addCategory" type="button">添加目录</button>
@@ -336,9 +344,12 @@
           <div id="videoTemplateBackgrounds" class="template-background-strip"></div>
         </section>
 
-        <section class="cover-workbench">
-          <div class="section-title"><span>FIRST SCREEN</span><b>第一屏封面模板</b></div>
-          <div class="cover-editor">
+        <section class="cover-workbench is-collapsed" id="firstScreenPanel">
+          <div class="section-title cover-panel-toggle-row">
+            <div class="cover-panel-toggle-title"><span>FIRST SCREEN</span><b>第一屏封面模板</b></div>
+            <button id="firstScreenPanelToggle" class="cover-panel-toggle" type="button" aria-expanded="false" aria-controls="firstScreenPanelBody">展开</button>
+          </div>
+          <div class="cover-editor" id="firstScreenPanelBody">
             <div class="preview-stage">
               <iframe id="coverPreview" class="phone-preview-frame" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bwidth%3A100%25%3Bheight%3A100%25%3Boverflow%3Ahidden%3Bbackground%3A%23050505%3Bcolor-scheme%3Adark%3B%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E" title="cover preview" scrolling="no"></iframe>
               <div class="preview-caption-row">
