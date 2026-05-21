@@ -252,6 +252,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".embed-mode .sidebar" in css
     assert "overflow: hidden" in css
     assert "font-size: 12px" in css
+    assert ".number-field::-webkit-inner-spin-button" in css
     assert ".embed-mode .sidebar-radio-field .radio-row" in css
     assert ".embed-mode .library-action" in css
     assert "min-height: clamp(28px, 3.5vh, 34px)" in css
@@ -770,7 +771,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "preflight-config" in app
     assert "function shortText" in app
     assert "点击继续进入最终确认" in app
-    assert "优化建议：把最大节拍分析时长调到不低于" in app
+    assert "优化建议：把单段最长截取时长调到不低于" in app
     assert "提交完整性" in app
     assert "生成文案" in app
     assert "预检通过" in app
@@ -1091,8 +1092,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".preflight-step.warn small" in css
     assert ".preflight-actions" in css
     assert "composition-panel" in css
-    assert "videoDurationMin" in html
-    assert "videoDurationMax" in html
+    assert "单段最短截取时长" in html
+    assert "单段最长截取时长" in html
     assert 'id="sidebarTemplateGroup"' in html
     assert "sidebar-collapsible" in html
     assert "sidebar-group-summary" in html

@@ -4,7 +4,6 @@ import json
 import threading
 import time
 import traceback
-from collections import deque
 from contextvars import copy_context
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,8 +22,9 @@ _RUNNING = threading.Event()
 _STATS_RUNNING = threading.Event()
 _OPS_SUMMARY_RUNNING = threading.Event()
 _ENGAGEMENT_RUNNING = threading.Event()
-_STATS_PENDING_REQUESTS: deque[dict[str, Any]] = deque()
 _STATS_ACTIVE_REQUEST: dict[str, Any] | None = None
+_STATS_RUNNING_ACCOUNT_IDS: set[int] = set()
+_STATS_ACTIVE_REQUESTS_BY_ACCOUNT: dict[int, dict[str, Any]] = {}
 
 
 def scheduler_state_path() -> Path:
@@ -155,6 +155,29 @@ def scheduler_status() -> dict[str, Any]:
     return status
 
 
+def _stats_worker_start(*, account_id: int, request: dict[str, Any]) -> None:
+    global _STATS_ACTIVE_REQUEST
+    with _LOCK:
+        if account_id > 0:
+            _STATS_RUNNING_ACCOUNT_IDS.add(int(account_id))
+            _STATS_ACTIVE_REQUESTS_BY_ACCOUNT[int(account_id)] = dict(request)
+        else:
+            _STATS_ACTIVE_REQUEST = dict(request)
+        _STATS_RUNNING.set()
+
+
+def _stats_worker_finish(*, account_id: int) -> None:
+    global _STATS_ACTIVE_REQUEST
+    with _LOCK:
+        if account_id > 0:
+            _STATS_RUNNING_ACCOUNT_IDS.discard(int(account_id))
+            _STATS_ACTIVE_REQUESTS_BY_ACCOUNT.pop(int(account_id), None)
+        else:
+            _STATS_ACTIVE_REQUEST = None
+        if (not _STATS_RUNNING_ACCOUNT_IDS) and (_STATS_ACTIVE_REQUEST is None):
+            _STATS_RUNNING.clear()
+
+
 def _run_once(reason: str = "scheduled") -> dict[str, Any]:
     if _RUNNING.is_set():
         return {"ok": False, "skipped": True, "reason": "already_running"}
@@ -227,8 +250,15 @@ def _run_stats_capture_once(reason: str = "scheduled") -> dict[str, Any]:
         return {"ok": False, "skipped": True, "reason": "publish_running"}
     if _STATS_RUNNING.is_set():
         return {"ok": False, "skipped": True, "reason": "stats_capture_running"}
-    _STATS_RUNNING.set()
     settings = _stats_job_settings()
+    request = {
+        "batch_size": max(1, int(settings.get("batch_size") or 5)),
+        "limit": max(0, int(settings.get("limit") or 0)),
+        "dry_run": False,
+        "notify": True,
+        "account_id": None,
+    }
+    _stats_worker_start(account_id=0, request=request)
     state = _read_state()
     state.update(
         {
@@ -241,12 +271,7 @@ def _run_stats_capture_once(reason: str = "scheduled") -> dict[str, Any]:
     )
     _write_state(state)
     try:
-        result = run_wechat_stats_capture(
-            batch_size=max(1, int(settings.get("batch_size") or 5)),
-            limit=max(0, int(settings.get("limit") or 0)),
-            dry_run=False,
-            notify=True,
-        )
+        result = run_wechat_stats_capture(**request)
         ok = bool(result.get("ok"))
         state.update(
             {
@@ -271,7 +296,7 @@ def _run_stats_capture_once(reason: str = "scheduled") -> dict[str, Any]:
     finally:
         state["stats_next_run_at"] = _next_run_at(_stats_job_settings())
         _write_state(state)
-        _STATS_RUNNING.clear()
+        _stats_worker_finish(account_id=0)
 
 
 def _run_ops_summary_once(reason: str = "scheduled") -> dict[str, Any]:
@@ -384,12 +409,13 @@ def trigger_matrix_wechat_stats_capture(
     capture_tab_foreground: bool = False,
     keep_capture_tab_open: bool = False,
 ) -> dict[str, Any]:
+    resolved_account_id = int(account_id or 0)
     request = {
         "target_date": target_date,
         "limit": int(limit or 0),
         "dry_run": bool(dry_run),
         "notify": True,
-        "account_id": account_id,
+        "account_id": resolved_account_id if resolved_account_id > 0 else None,
         "keep_browser_open_on_login_required": bool(keep_browser_open_on_login_required),
         "auto_open_browser": bool(auto_open_browser),
         "open_capture_in_new_tab": bool(open_capture_in_new_tab),
@@ -397,41 +423,43 @@ def trigger_matrix_wechat_stats_capture(
         "keep_capture_tab_open": bool(keep_capture_tab_open),
     }
 
-    def _runner(initial_request: dict[str, Any]) -> None:
-        _run_stats_capture_request_queue(initial_request)
+    def _runner_account(initial_request: dict[str, Any], account_id_value: int) -> None:
+        _stats_worker_start(account_id=account_id_value, request=initial_request)
+        try:
+            run_wechat_stats_capture(**initial_request)
+        finally:
+            _stats_worker_finish(account_id=account_id_value)
+
+    def _runner_global(initial_request: dict[str, Any]) -> None:
+        _stats_worker_start(account_id=0, request=initial_request)
+        try:
+            run_wechat_stats_capture(**initial_request)
+        finally:
+            _stats_worker_finish(account_id=0)
 
     context = copy_context()
 
     def _runner_with_context() -> None:
-        context.run(_runner, request)
+        if resolved_account_id > 0:
+            context.run(_runner_account, request, resolved_account_id)
+        else:
+            context.run(_runner_global, request)
 
     with _LOCK:
-        if _STATS_RUNNING.is_set():
-            _STATS_PENDING_REQUESTS.append(dict(request))
-            return {"ok": True, "status": "queued", "queue_size": len(_STATS_PENDING_REQUESTS)}
+        # Full capture (account_id omitted) still keeps global single-run semantics.
+        if resolved_account_id <= 0:
+            if (_STATS_ACTIVE_REQUEST is not None) or _STATS_RUNNING_ACCOUNT_IDS:
+                return {"ok": False, "status": "already_running"}
+        else:
+            # Account-level capture runs in parallel across different accounts,
+            # but keeps per-account mutual exclusion.
+            if _STATS_ACTIVE_REQUEST is not None:
+                return {"ok": False, "status": "already_running"}
+            if resolved_account_id in _STATS_RUNNING_ACCOUNT_IDS:
+                return {"ok": False, "status": "already_running"}
         thread = threading.Thread(target=_runner_with_context, name="gasgx-matrix-wechat-stats-manual", daemon=True)
-        thread.start()
+    thread.start()
     return {"ok": True, "status": "started"}
-
-
-def _run_stats_capture_request_queue(initial_request: dict[str, Any]) -> None:
-    global _STATS_ACTIVE_REQUEST
-    _STATS_RUNNING.set()
-    current_request: dict[str, Any] | None = dict(initial_request)
-    try:
-        while isinstance(current_request, dict):
-            with _LOCK:
-                _STATS_ACTIVE_REQUEST = dict(current_request)
-            try:
-                run_wechat_stats_capture(**current_request)
-            except Exception:
-                pass
-            with _LOCK:
-                current_request = _STATS_PENDING_REQUESTS.popleft() if _STATS_PENDING_REQUESTS else None
-    finally:
-        with _LOCK:
-            _STATS_ACTIVE_REQUEST = None
-        _STATS_RUNNING.clear()
 
 
 def is_matrix_wechat_stats_capture_busy_for_account(account_id: int) -> bool:
@@ -439,12 +467,13 @@ def is_matrix_wechat_stats_capture_busy_for_account(account_id: int) -> bool:
     if resolved <= 0:
         return False
     with _LOCK:
+        if resolved in _STATS_RUNNING_ACCOUNT_IDS:
+            return True
         active = dict(_STATS_ACTIVE_REQUEST or {})
+        if active and int(active.get("account_id") or 0) <= 0:
+            return True
         if int(active.get("account_id") or 0) == resolved:
             return True
-        for item in list(_STATS_PENDING_REQUESTS):
-            if int((item or {}).get("account_id") or 0) == resolved:
-                return True
     return False
 
 
@@ -488,7 +517,7 @@ def trigger_matrix_wechat_engagement_run_now(
         if _ENGAGEMENT_RUNNING.is_set():
             return {"ok": False, "status": "already_running"}
         thread = threading.Thread(target=_runner_with_context, name="gasgx-matrix-wechat-engagement-manual", daemon=True)
-        thread.start()
+    thread.start()
     return {"ok": True, "status": "started"}
 
 

@@ -2970,7 +2970,7 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
         if (!formats.length) return { status: "fail", detail: "至少需要选择一种输出格式。" };
         await animatePreflightProgress(index, 75, "检查输出目录和节拍时长...");
         if (!String(statePayload.output_root || "").trim()) return { status: "fail", detail: "最终视频生成目录不能为空。" };
-        if (Number(statePayload.video_duration_min) > Number(statePayload.video_duration_max)) return { status: "fail", detail: "最小节拍分析时长不能大于最大节拍分析时长。" };
+        if (Number(statePayload.video_duration_min) > Number(statePayload.video_duration_max)) return { status: "fail", detail: "单段最短截取时长不能大于单段最长截取时长。" };
         await animatePreflightProgress(index, 100, "输出参数检查完成。");
         return { status: "pass", detail: `${statePayload.output_count} 条 / ${statePayload.max_workers} 线程 / ${statePayload.target_fps}fps / ${formats.join(", ")}` };
       },
@@ -3059,7 +3059,7 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
         const maxDuration = Number(statePayload.video_duration_max || 0);
         const status = seconds > maxDuration ? "warn" : "pass";
         const detail = status === "warn"
-          ? `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒，超过最大节拍分析 ${maxDuration.toFixed(1)} 秒。优化建议：把最大节拍分析时长调到不低于 ${Math.ceil(seconds)} 秒，或减少生成结构片段秒数；不调整也能继续，系统会按结构总时长兜底。`
+          ? `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒，超过单段最长截取 ${maxDuration.toFixed(1)} 秒。优化建议：把单段最长截取时长调到不低于 ${Math.ceil(seconds)} 秒，或减少生成结构片段秒数；不调整也能继续，系统会按结构总时长兜底。`
           : `结构 ${composition.length} 段，合计约 ${seconds.toFixed(1)} 秒。`;
         return { status, detail };
       },

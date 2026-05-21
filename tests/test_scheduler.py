@@ -126,9 +126,10 @@ def test_trigger_wechat_engagement_passes_account_and_limits(monkeypatch, tmp_pa
     assert captured["private_message_limit"] == 7
 
 
-def test_trigger_stats_capture_returns_queued_when_running(monkeypatch, tmp_path: Path) -> None:
+def test_trigger_stats_capture_same_account_returns_already_running(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     scheduler._STATS_RUNNING.set()
+    scheduler._STATS_RUNNING_ACCOUNT_IDS.add(73)
     try:
         result = scheduler.trigger_matrix_wechat_stats_capture(
             account_id=73,
@@ -138,46 +139,54 @@ def test_trigger_stats_capture_returns_queued_when_running(monkeypatch, tmp_path
         )
     finally:
         scheduler._STATS_RUNNING.clear()
-        scheduler._STATS_PENDING_REQUESTS.clear()
-    assert result["ok"] is True
-    assert result["status"] == "queued"
+        scheduler._STATS_RUNNING_ACCOUNT_IDS.clear()
+        scheduler._STATS_ACTIVE_REQUESTS_BY_ACCOUNT.clear()
+    assert result["ok"] is False
+    assert result["status"] == "already_running"
 
 
-def test_stats_capture_queue_executes_pending_requests(monkeypatch, tmp_path: Path) -> None:
+def test_trigger_stats_capture_different_accounts_can_run_in_parallel(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
-    called_account_ids: list[int] = []
-    monkeypatch.setattr(
-        scheduler,
-        "run_wechat_stats_capture",
-        lambda **kwargs: called_account_ids.append(int(kwargs.get("account_id") or 0)) or {"ok": True},
+    captured: dict[str, Any] = {}
+
+    class NoopThread:
+        def __init__(self, *, target=None, name=None, daemon=None):
+            self._target = target
+
+        def start(self) -> None:
+            # Keep async semantics: do not execute target inline.
+            return None
+
+    monkeypatch.setattr(scheduler.threading, "Thread", NoopThread)
+
+    first = scheduler.trigger_matrix_wechat_stats_capture(
+        account_id=1,
+        open_capture_in_new_tab=True,
+        capture_tab_foreground=True,
+        keep_capture_tab_open=True,
     )
-    scheduler._STATS_PENDING_REQUESTS.clear()
-    scheduler._STATS_PENDING_REQUESTS.append(
-        {
-            "target_date": "",
-            "limit": 0,
-            "dry_run": False,
-            "notify": True,
-            "account_id": 2,
-            "keep_browser_open_on_login_required": True,
-            "auto_open_browser": False,
-            "open_capture_in_new_tab": True,
-            "capture_tab_foreground": True,
-            "keep_capture_tab_open": True,
-        }
+    # Simulate first account capture is running.
+    scheduler._STATS_RUNNING.set()
+    scheduler._STATS_RUNNING_ACCOUNT_IDS.add(1)
+    second = scheduler.trigger_matrix_wechat_stats_capture(
+        account_id=2,
+        open_capture_in_new_tab=True,
+        capture_tab_foreground=True,
+        keep_capture_tab_open=True,
     )
-    scheduler._run_stats_capture_request_queue(
-        {
-            "target_date": "",
-            "limit": 0,
-            "dry_run": False,
-            "notify": True,
-            "account_id": 1,
-            "keep_browser_open_on_login_required": True,
-            "auto_open_browser": False,
-            "open_capture_in_new_tab": True,
-            "capture_tab_foreground": True,
-            "keep_capture_tab_open": True,
-        }
+    # Same account should be blocked.
+    third = scheduler.trigger_matrix_wechat_stats_capture(
+        account_id=1,
+        open_capture_in_new_tab=True,
+        capture_tab_foreground=True,
+        keep_capture_tab_open=True,
     )
-    assert called_account_ids == [1, 2]
+    scheduler._STATS_RUNNING.clear()
+    scheduler._STATS_RUNNING_ACCOUNT_IDS.clear()
+    scheduler._STATS_ACTIVE_REQUESTS_BY_ACCOUNT.clear()
+    captured["first"] = first
+    captured["second"] = second
+    captured["third"] = third
+    assert captured["first"]["status"] == "started"
+    assert captured["second"]["status"] == "started"
+    assert captured["third"]["status"] == "already_running"

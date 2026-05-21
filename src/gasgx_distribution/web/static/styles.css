@@ -2287,6 +2287,12 @@ select option {
   background: rgba(93, 214, 44, 0.12);
 }
 
+.danger-chip {
+  color: #ff4d5f;
+  border-color: rgba(255, 77, 95, 0.42);
+  background: rgba(255, 77, 95, 0.12);
+}
+
 .account-status-toggle {
   display: inline-flex;
   align-items: center;

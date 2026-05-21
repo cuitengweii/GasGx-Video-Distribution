@@ -5151,13 +5151,6 @@ function renderStatsWeeklySummary() {
       : "近7天汇总未加载";
   }
 
-  const formatCaptureTime = (row) => {
-    const ts = statsRowLastCaptureTs(row);
-    if (ts <= 0) return "从未采集";
-    const text = String(row?.latest_capture_time || "").trim();
-    if (text) return text;
-    return new Date(ts * 1000).toLocaleString("zh-Hans-CN", { hour12: false });
-  };
   const accountFilter = document.querySelector("#stats-account-filter")?.value || "";
   const keyword = document.querySelector("#account-stats-search")?.value.trim().toLowerCase() || "";
   const tableRows = rows
@@ -5177,7 +5170,8 @@ function renderStatsWeeklySummary() {
     const shares = Number(row.shares_7d || 0);
     const comments = Number(row.comments_7d || 0);
     const traffic = Math.max(0, newFollowers);
-    const captureText = formatCaptureTime(row);
+    const captureText = statsCaptureTimeLabel(row);
+    const captureTone = statsCaptureAgeTone(row);
     const cells = [
       `${row.display_name || row.account_key || `账号 ${row.account_id}`}`,
       "视频号",
@@ -5187,9 +5181,9 @@ function renderStatsWeeklySummary() {
       `${formatNumber(likes)} / ${formatNumber(comments)}`,
       `${formatNumber(shares)} / ${formatNumber(comments)}`,
       formatNumber(traffic),
-      captureText,
+      `<span class="chip ${captureTone === "success" ? "success-chip" : "danger-chip"}">${captureText}</span>`,
     ];
-    return `<tr>${cells.map((cell, index) => `<td>${index >= 8 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`;
+    return `<tr>${cells.map((cell, index) => `<td>${index >= 8 && cell ? cell : cell || "-"}</td>`).join("")}</tr>`;
   }).join("")}</tbody></table><div class="table-pager">第 1 / 1 页 · ${tableRows.length} 条账号</div>`;
 
   const alerts = Array.isArray(summary.alerts) ? summary.alerts : [];
@@ -5212,6 +5206,21 @@ function statsRowLastCaptureTs(row) {
   const parsed = Date.parse(text.replace(" ", "T"));
   if (!Number.isFinite(parsed) || parsed <= 0) return 0;
   return Math.floor(parsed / 1000);
+}
+
+function statsCaptureAgeTone(row) {
+  const capturedAt = statsRowLastCaptureTs(row);
+  if (capturedAt <= 0) return "danger";
+  const ageSeconds = Math.floor(Date.now() / 1000) - capturedAt;
+  return ageSeconds > STATS_CAPTURE_OVERDUE_SECONDS ? "danger" : "success";
+}
+
+function statsCaptureTimeLabel(row) {
+  const capturedAt = statsRowLastCaptureTs(row);
+  if (capturedAt <= 0) return "从未采集";
+  const text = String(row?.latest_capture_time || "").trim();
+  if (text) return text;
+  return new Date(capturedAt * 1000).toLocaleString("zh-Hans-CN", { hour12: false });
 }
 
 function hasStatsOverdueAccounts() {
@@ -5239,8 +5248,12 @@ function renderAnalyticsFromDatabase() {
   if (accounts.length && !hasWeeklyRows) {
     const headers = ["账号名称", "平台", "关注者总数", "新增/取关", "播放总量", "喜欢/推荐", "分享/评论", "视频引流关注", "上次采集时间"];
     document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${accounts.map((row) => {
-      const cells = [row[0], row[1], row[5], row[6], row[3], row[7], row[8], row[9], row[10]];
-      return `<tr>${cells.map((cell, index) => `<td>${index >= 8 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`;
+      const captureRow = {
+        latest_captured_at: row[11] || 0,
+        latest_capture_time: row[10] || "",
+      };
+      const cells = [row[0], row[1], row[5], row[6], row[3], row[7], row[8], row[9], `<span class="chip ${statsCaptureAgeTone(captureRow) === "success" ? "success-chip" : "danger-chip"}">${row[10] || "从未采集"}</span>`];
+      return `<tr>${cells.map((cell, index) => `<td>${index >= 8 && cell ? cell : cell || "-"}</td>`).join("")}</tr>`;
     }).join("")}</tbody></table><div class="table-pager">1 / 1 · ${accounts.length} 条账号</div>`;
   }
   const works = analytics.content_top || [];

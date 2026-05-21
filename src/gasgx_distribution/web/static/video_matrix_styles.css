@@ -1583,6 +1583,15 @@ label > input, label > select, label > textarea { margin-top:8px; }
   font-size: 18px;
   font-weight: 900;
 }
+.number-field::-webkit-outer-spin-button,
+.number-field::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+.number-field[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
 .range-with-value {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px;
