@@ -423,6 +423,9 @@ terminalWechatAutoCommentLimit = Number.parseInt(localStorage.getItem(TERMINAL_W
 if (!Number.isFinite(terminalWechatAutoCommentLimit) || terminalWechatAutoCommentLimit <= 0) terminalWechatAutoCommentLimit = 5;
 terminalWechatAutoPrivateMessageLimit = Number.parseInt(localStorage.getItem(TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_LIMIT_KEY) || "5", 10);
 if (!Number.isFinite(terminalWechatAutoPrivateMessageLimit) || terminalWechatAutoPrivateMessageLimit <= 0) terminalWechatAutoPrivateMessageLimit = 5;
+// Private-message auto reply is temporarily disabled during debugging.
+terminalWechatAutoPrivateMessageEnabled = false;
+localStorage.setItem(TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_KEY, "0");
 let currentSettingsCard = localStorage.getItem(SETTINGS_CARD_KEY) === "platform-publish" ? "platform-publish" : "publish-window";
 let currentTerminalInitCard = "window";
 
@@ -3997,37 +4000,43 @@ function renderTerminalWechatQuickActionBar() {
   const autoStatsHint = escapeHtml(terminalWechatAutoStatsHint || terminalWechatAutoStatsDefaultHint());
   return `
     <div class="terminal-wechat-quick-action terminal-glass">
-      <div class="terminal-wechat-quick-action-buttons">
-        <button class="btn secondary" type="button" data-terminal-wechat-login-selected${buttonLoadingAttr} ${loginDisabled ? "disabled" : ""}>登录</button>
-        <button class="btn primary" type="button" data-terminal-wechat-publish-selected${buttonLoadingAttr} ${publishDisabled ? "disabled" : ""}>发布</button>
+      <div class="terminal-wechat-auto-compact-row">
+        <label class="terminal-wechat-auto-stats-toggle">
+          <input id="terminal-wechat-auto-stats-toggle" type="checkbox"${autoStatsChecked}>
+          <span>发布时自动统计（可选）</span>
+        </label>
+        <label class="terminal-wechat-auto-engagement-toggle">
+          <input id="terminal-wechat-auto-comment-toggle" type="checkbox"${autoCommentChecked}>
+          <span>发布时自动评论（可选）</span>
+        </label>
+        <label class="terminal-wechat-auto-engagement-limit-field terminal-wechat-auto-engagement-limit-field-inline">
+          <span>评论数量</span>
+          <input id="terminal-wechat-auto-comment-limit" type="number" min="1" max="50" step="1" value="${escapeHtml(commentLimitValue)}">
+        </label>
+        <div class="terminal-wechat-private-message-disabled" data-terminal-private-message-disabled title="私信功能调试中，暂不可用">
+          <label class="terminal-wechat-auto-engagement-toggle is-disabled">
+            <input id="terminal-wechat-auto-private-message-toggle" type="checkbox"${autoPrivateChecked} disabled>
+            <span>发布时自动私信（调试中）</span>
+          </label>
+          <label class="terminal-wechat-auto-engagement-limit-field terminal-wechat-auto-engagement-limit-field-inline is-disabled">
+            <span>私信数量</span>
+            <input id="terminal-wechat-auto-private-message-limit" type="number" min="1" max="50" step="1" value="${escapeHtml(privateLimitValue)}" disabled>
+          </label>
+        </div>
+        <div class="terminal-wechat-auto-stats-hint muted" id="terminal-wechat-auto-stats-hint">${autoStatsHint}</div>
       </div>
-      <label class="terminal-wechat-account-select-field">
-        <span>指定账号</span>
-        <select id="terminal-wechat-account-select">
-          ${optionsMarkup}
-        </select>
-      </label>
-      <label class="terminal-wechat-auto-stats-toggle">
-        <input id="terminal-wechat-auto-stats-toggle" type="checkbox"${autoStatsChecked}>
-        <span>发布时自动统计（可选）</span>
-      </label>
-      <label class="terminal-wechat-auto-engagement-toggle">
-        <input id="terminal-wechat-auto-comment-toggle" type="checkbox"${autoCommentChecked}>
-        <span>发布时自动评论（可选）</span>
-      </label>
-      <label class="terminal-wechat-auto-engagement-toggle">
-        <input id="terminal-wechat-auto-private-message-toggle" type="checkbox"${autoPrivateChecked}>
-        <span>发布时自动私信（可选）</span>
-      </label>
-      <label class="terminal-wechat-auto-engagement-limit-field">
-        <span>评论数量</span>
-        <input id="terminal-wechat-auto-comment-limit" type="number" min="1" max="50" step="1" value="${escapeHtml(commentLimitValue)}">
-      </label>
-      <label class="terminal-wechat-auto-engagement-limit-field">
-        <span>私信数量</span>
-        <input id="terminal-wechat-auto-private-message-limit" type="number" min="1" max="50" step="1" value="${escapeHtml(privateLimitValue)}">
-      </label>
-      <div class="terminal-wechat-auto-stats-hint muted" id="terminal-wechat-auto-stats-hint">${autoStatsHint}</div>
+      <div class="terminal-wechat-quick-action-main-row">
+        <div class="terminal-wechat-quick-action-buttons">
+          <button class="btn secondary" type="button" data-terminal-wechat-login-selected${buttonLoadingAttr} ${loginDisabled ? "disabled" : ""}>登录</button>
+          <button class="btn primary" type="button" data-terminal-wechat-publish-selected${buttonLoadingAttr} ${publishDisabled ? "disabled" : ""}>发布</button>
+        </div>
+        <label class="terminal-wechat-account-select-field">
+          <span>指定账号</span>
+          <select id="terminal-wechat-account-select">
+            ${optionsMarkup}
+          </select>
+        </label>
+      </div>
     </div>
   `;
 }
@@ -9144,6 +9153,14 @@ document.addEventListener("change", (event) => {
   if (!select) return;
   terminalWechatSelectedAccountId = String(select.value || "").trim();
   renderTerminalExecution();
+}, true);
+
+document.addEventListener("click", (event) => {
+  const privateDisabledRegion = event.target.closest("[data-terminal-private-message-disabled]");
+  if (!privateDisabledRegion) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  setTerminalWechatAutoStatsHint("私信区域调试中，暂不可操作（不影响发布）。");
 }, true);
 
 window.addEventListener("load", () => {

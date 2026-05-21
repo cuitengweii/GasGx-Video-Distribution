@@ -5162,19 +5162,36 @@ body.terminal-execution-active #page-description {
 
 .terminal-wechat-quick-action {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px 14px;
-  align-items: end;
-  padding: 14px 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
   border: 1px solid rgba(93, 214, 44, 0.16);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(22, 26, 22, 0.95), rgba(15, 19, 16, 0.95));
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.015);
 }
 
+.terminal-wechat-auto-compact-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.terminal-wechat-quick-action-main-row {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr);
+  gap: 10px 12px;
+  align-items: end;
+}
+
 .terminal-wechat-quick-action-buttons {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   align-items: center;
 }
@@ -5192,23 +5209,23 @@ body.terminal-execution-active #page-description {
 }
 
 .terminal-wechat-account-select-field select {
-  min-height: 42px;
+  min-height: 38px;
 }
 
 .terminal-wechat-auto-stats-toggle {
-  grid-column: 1 / -1;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: rgba(255, 255, 255, 0.72);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .terminal-wechat-auto-stats-toggle input {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   margin: 0;
   accent-color: #5dd62c;
 }
@@ -5216,41 +5233,75 @@ body.terminal-execution-active #page-description {
 .terminal-wechat-auto-engagement-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: rgba(255, 255, 255, 0.72);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .terminal-wechat-auto-engagement-toggle input {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   margin: 0;
   accent-color: #5dd62c;
 }
 
+.terminal-wechat-private-message-disabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0.55;
+  filter: saturate(0.35);
+  cursor: not-allowed;
+  border: 1px dashed rgba(255, 174, 0, 0.28);
+  border-radius: 8px;
+  padding: 2px 8px;
+}
+
+.terminal-wechat-auto-engagement-toggle.is-disabled,
+.terminal-wechat-auto-engagement-limit-field.is-disabled {
+  pointer-events: none;
+}
+
+.terminal-wechat-auto-engagement-toggle.is-disabled span::after {
+  content: "（调试中）";
+  margin-left: 4px;
+  color: rgba(255, 184, 77, 0.9);
+  font-weight: 700;
+}
+
 .terminal-wechat-auto-engagement-limit-field {
-  display: grid;
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
   min-width: 0;
+  white-space: nowrap;
 }
 
 .terminal-wechat-auto-engagement-limit-field > span {
   color: rgba(255, 255, 255, 0.66);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 .terminal-wechat-auto-engagement-limit-field input {
-  min-height: 40px;
+  width: 58px;
+  min-height: 30px;
+  padding: 4px 8px;
 }
 
 .terminal-wechat-auto-stats-hint {
-  grid-column: 1 / -1;
-  margin-top: -4px;
+  margin-top: 0;
+  margin-left: 8px;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 240px;
 }
 
 .terminal-wechat-account-note {
