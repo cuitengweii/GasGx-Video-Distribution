@@ -154,6 +154,18 @@ CREATE INDEX IF NOT EXISTS idx_operation_notices_category ON operation_notices(c
 CREATE INDEX IF NOT EXISTS idx_operation_notices_status ON operation_notices(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_operation_notices_merge ON operation_notices(merge_key, delivery_status, delivered_at);
 
+CREATE TABLE IF NOT EXISTS operation_notice_category_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL UNIQUE,
+    category_label TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_operation_notice_category_settings_enabled ON operation_notice_category_settings(enabled, sort_order);
+
 CREATE TABLE IF NOT EXISTS login_qr_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     batch_id TEXT NOT NULL UNIQUE,

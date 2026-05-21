@@ -247,6 +247,7 @@ OPERATION_NOTICE_CATEGORY_ORDER = [
     "帮助文档",
     "运营客服",
 ]
+OPERATION_NOTICE_CATEGORY_DEFAULTS = tuple((category, index) for index, category in enumerate(OPERATION_NOTICE_CATEGORY_ORDER))
 OPERATION_NOTICE_VIEW_META = {
     "overview": {"category": "菜单导航", "label": "总览"},
     "ai-robot": {"category": "运营客服", "label": "运营客服"},
@@ -591,6 +592,7 @@ SYNC_TABLE_CONFLICT_KEYS = {
     "notification_incidents": "event_type,dedupe_key",
     "notification_actions": "id",
     "operation_notices": "id",
+    "operation_notice_category_settings": "category",
     "automation_tasks": "id",
     "video_stats_snapshots": "id",
     "wechat_stats_account_snapshots": "account_id,platform,stat_date",
@@ -604,6 +606,7 @@ SYNC_INTEGER_FIELDS_BY_TABLE = {
     "notification_routes": {"enabled"},
     "notification_policies": {"enabled", "escalation_enabled"},
     "operation_notices": {"merged_count"},
+    "operation_notice_category_settings": {"enabled", "sort_order"},
     "ai_robot_configs": {"enabled"},
 }
 SYNC_BACKUP_TABLES = (
@@ -616,6 +619,7 @@ SYNC_BACKUP_TABLES = (
     "notification_incidents",
     "notification_actions",
     "operation_notices",
+    "operation_notice_category_settings",
     "automation_tasks",
     "video_stats_snapshots",
     "wechat_stats_account_snapshots",
@@ -2742,7 +2746,7 @@ def _operation_notice_value_text(value: Any, *, depth: int = 0) -> str:
     if isinstance(value, dict):
         parts: list[str] = []
         for key, item in list(value.items())[:12]:
-            if item in {None, "", [], {}}:
+            if item is None or item == "" or item == [] or item == {}:
                 continue
             parts.append(f"{key}={_operation_notice_value_text(item, depth=depth + 1)}")
         return "{" + "；".join(parts) + "}" if parts else "{}"
@@ -2765,12 +2769,208 @@ def _normalize_operation_notice(row: dict[str, Any]) -> dict[str, Any]:
         **row,
         "params": params if isinstance(params, dict) else {},
         "delivery_targets": delivery_targets if isinstance(delivery_targets, list) else [],
-        "delivery_result": delivery_result if isinstance(delivery_result, dict) else {},
+        "delivery_result": delivery_result if isinstance(delivery_result, (dict, list)) else {},
         "merged_count": int(row.get("merged_count") or 1),
         "category_label": str(row.get("category_label") or row.get("category") or "菜单导航"),
         "view_label": str(row.get("view_label") or row.get("view") or ""),
         "action_label": str(row.get("action_label") or row.get("action_code") or "操作"),
     }
+
+
+def _normalize_operation_notice_category(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **row,
+        "category": str(row.get("category") or "").strip(),
+        "category_label": str(row.get("category_label") or row.get("category") or "").strip(),
+        "enabled": bool(int(row.get("enabled") or 0)),
+        "sort_order": int(row.get("sort_order") or 0),
+    }
+
+
+def _operation_notice_category_default_rows(*, created_at: int | None = None) -> list[dict[str, Any]]:
+    ts = int(created_at or now_ts())
+    return [
+        {
+            "category": category,
+            "category_label": category,
+            "enabled": 1,
+            "sort_order": int(sort_order),
+            "created_at": ts,
+            "updated_at": ts,
+        }
+        for category, sort_order in OPERATION_NOTICE_CATEGORY_DEFAULTS
+    ]
+
+
+def _operation_notice_category_sort_order(category: str) -> int:
+    token = str(category or "").strip()
+    for category_name, sort_order in OPERATION_NOTICE_CATEGORY_DEFAULTS:
+        if category_name == token:
+            return int(sort_order)
+    return len(OPERATION_NOTICE_CATEGORY_DEFAULTS)
+
+
+def _operation_notice_category_row(category: str, *, enabled: bool = True, created_at: int | None = None) -> dict[str, Any]:
+    token = str(category or "").strip() or "菜单导航"
+    ts = int(created_at or now_ts())
+    return {
+        "category": token,
+        "category_label": token,
+        "enabled": 1 if enabled else 0,
+        "sort_order": _operation_notice_category_sort_order(token),
+        "created_at": ts,
+        "updated_at": ts,
+    }
+
+
+def _operation_notice_category_row_exists(conn, category: str) -> bool:
+    row = conn.execute("SELECT 1 FROM operation_notice_category_settings WHERE category = ?", (str(category or "").strip(),)).fetchone()
+    return row is not None
+
+
+def _operation_notice_ensure_category(conn, category: str, *, enabled: bool = True) -> None:
+    token = str(category or "").strip() or "菜单导航"
+    ts = now_ts()
+    row = conn.execute("SELECT * FROM operation_notice_category_settings WHERE category = ?", (token,)).fetchone()
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO operation_notice_category_settings(category, category_label, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (token, token, 1 if enabled else 0, _operation_notice_category_sort_order(token), ts, ts),
+        )
+        return
+    if str(row["category_label"] or "") != token or int(row["sort_order"] or 0) != _operation_notice_category_sort_order(token):
+        conn.execute(
+            """
+            UPDATE operation_notice_category_settings
+            SET category_label = ?, sort_order = ?, updated_at = ?
+            WHERE category = ?
+            """,
+            (token, _operation_notice_category_sort_order(token), ts, token),
+        )
+
+
+def _operation_notice_category_enabled(category: str) -> bool:
+    token = str(category or "").strip() or "菜单导航"
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        row = client.select_one("operation_notice_category_settings", filters={"category": token})
+        if row is None:
+            try:
+                client.upsert("operation_notice_category_settings", _operation_notice_category_row(token), on_conflict="category")
+                _invalidate_supabase_read_cache("operation_notice_category_settings")
+            except SupabaseError:
+                return True
+            return True
+        if str(row.get("category_label") or "") != token or int(row.get("sort_order") or 0) != _operation_notice_category_sort_order(token):
+            try:
+                client.upsert(
+                    "operation_notice_category_settings",
+                    {
+                        "category": token,
+                        "category_label": token,
+                        "enabled": 1 if bool(row.get("enabled")) else 0,
+                        "sort_order": _operation_notice_category_sort_order(token),
+                        "created_at": int(row.get("created_at") or now_ts()),
+                        "updated_at": now_ts(),
+                    },
+                    on_conflict="category",
+                )
+                _invalidate_supabase_read_cache("operation_notice_category_settings")
+            except SupabaseError:
+                pass
+        return bool(row.get("enabled"))
+    ensure_database()
+    with connect() as conn:
+        _operation_notice_ensure_category(conn, token)
+        row = conn.execute("SELECT enabled FROM operation_notice_category_settings WHERE category = ?", (token,)).fetchone()
+        return bool(int(row["enabled"] or 0)) if row is not None else True
+
+
+def list_operation_notice_category_settings() -> list[dict[str, Any]]:
+    if brand_database_backend() == "supabase":
+        try:
+            rows = _brand_supabase().select("operation_notice_category_settings", order="sort_order.asc,category.asc")
+        except SupabaseError:
+            rows = []
+        if not rows:
+            defaults = _operation_notice_category_default_rows()
+            for row in defaults:
+                try:
+                    _brand_supabase().upsert("operation_notice_category_settings", row, on_conflict="category")
+                except SupabaseError:
+                    continue
+            try:
+                rows = _brand_supabase().select("operation_notice_category_settings", order="sort_order.asc,category.asc")
+            except SupabaseError:
+                rows = defaults
+        normalized = [_normalize_operation_notice_category(row) for row in rows]
+        normalized.sort(key=lambda item: (int(item.get("sort_order") or 0), str(item.get("category") or "")))
+        return normalized
+    ensure_database()
+    with connect() as conn:
+        defaults = _operation_notice_category_default_rows()
+        for row in defaults:
+            conn.execute(
+                """
+                INSERT INTO operation_notice_category_settings(category, category_label, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(category) DO NOTHING
+                """,
+                (row["category"], row["category_label"], row["enabled"], row["sort_order"], row["created_at"], row["updated_at"]),
+            )
+        rows = conn.execute("SELECT * FROM operation_notice_category_settings ORDER BY sort_order ASC, category ASC").fetchall()
+        return [_normalize_operation_notice_category(dict_from_row(row)) for row in rows]
+
+
+def save_operation_notice_category_settings(payload: Any) -> list[dict[str, Any]]:
+    items = payload if isinstance(payload, list) else payload.get("items") if isinstance(payload, dict) else []
+    if not isinstance(items, list):
+        raise ValueError("items must be a list")
+    normalized_items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or item.get("category_label") or "").strip()
+        if not category or category in seen:
+            continue
+        seen.add(category)
+        normalized_items.append(
+            {
+                "category": category,
+                "category_label": str(item.get("category_label") or category).strip() or category,
+                "enabled": 1 if bool(item.get("enabled")) else 0,
+                "sort_order": int(item.get("sort_order") if item.get("sort_order") is not None else index),
+                "created_at": int(item.get("created_at") or now_ts()),
+                "updated_at": now_ts(),
+            }
+        )
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        for row in normalized_items:
+            client.upsert("operation_notice_category_settings", row, on_conflict="category")
+        _invalidate_supabase_read_cache("operation_notice_category_settings")
+        return list_operation_notice_category_settings()
+    ensure_database()
+    with connect() as conn:
+        for row in normalized_items:
+            conn.execute(
+                """
+                INSERT INTO operation_notice_category_settings(category, category_label, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(category) DO UPDATE SET
+                    category_label = excluded.category_label,
+                    enabled = excluded.enabled,
+                    sort_order = excluded.sort_order,
+                    updated_at = excluded.updated_at
+                """,
+                (row["category"], row["category_label"], row["enabled"], row["sort_order"], row["created_at"], row["updated_at"]),
+            )
+        conn.commit()
+    return list_operation_notice_category_settings()
 
 
 def _operation_notice_merge_key(payload: dict[str, Any]) -> str:
@@ -2895,7 +3095,19 @@ def _render_operation_notice_delivery_results(platforms: list[str], results: lis
     return delivered
 
 
-def _deliver_operation_notice(notice: dict[str, Any], *, platforms: list[str] | None = None) -> dict[str, Any]:
+def _deliver_operation_notice(notice: dict[str, Any], *, platforms: list[str] | None = None, category_enabled: bool = True) -> dict[str, Any]:
+    if not category_enabled:
+        return {
+            "delivery_status": "suppressed",
+            "delivery_targets": [],
+            "delivery_result": [
+                {
+                    "reason": "category_disabled",
+                    "category": notice.get("category"),
+                    "category_label": notice.get("category_label"),
+                }
+            ],
+        }
     platforms = list(platforms or _operation_notice_delivery_platforms())
     payload = _operation_notice_delivery_payload(notice)
     results: list[dict[str, Any]] = []
@@ -2989,7 +3201,9 @@ def _operation_notice_storage_payload(payload: dict[str, Any]) -> dict[str, Any]
 def record_operation_notice(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     data = _operation_notice_storage_payload(dict(payload or {}))
     cleanup_operation_notices()
-    delivery_platforms = _operation_notice_delivery_platforms()
+    category_enabled = _operation_notice_category_enabled(data["category"])
+    delivery_platforms = _operation_notice_delivery_platforms() if category_enabled else []
+    suppression_reason = "category_disabled" if not category_enabled else "throttled"
     if brand_database_backend() == "supabase":
         client = _brand_supabase()
         notice = client.insert("operation_notices", data)
@@ -3015,7 +3229,14 @@ def record_operation_notice(payload: dict[str, Any] | None = None) -> dict[str, 
                     {
                         "delivery_status": "suppressed",
                         "delivery_targets_json": [],
-                        "delivery_result_json": {"reason": "throttled", "merged_into_notice_id": int(recent["id"])},
+                        "delivery_result_json": [
+                            {
+                                "reason": suppression_reason,
+                                "merged_into_notice_id": int(recent["id"]),
+                                "category": data["category"],
+                                "category_label": data["category_label"],
+                            }
+                        ],
                         "updated_at": data["updated_at"],
                     },
                     filters={"id": notice["id"]},
@@ -3023,7 +3244,7 @@ def record_operation_notice(payload: dict[str, Any] | None = None) -> dict[str, 
             )
             return {"notice": notice, "delivery": {"delivery_status": "suppressed", "delivery_targets": [], "delivery_result": []}}
         try:
-            delivery = _deliver_operation_notice(notice, platforms=delivery_platforms)
+            delivery = _deliver_operation_notice(notice, platforms=delivery_platforms, category_enabled=category_enabled)
         except Exception as exc:
             delivery = {
                 "delivery_status": "failed",
@@ -3094,7 +3315,21 @@ def record_operation_notice(payload: dict[str, Any] | None = None) -> dict[str, 
                     SET delivery_status = 'suppressed', delivery_targets_json = '[]', delivery_result_json = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (json.dumps({"reason": "throttled", "merged_into_notice_id": int(recent["id"])}, ensure_ascii=False), data["updated_at"], int(row["id"])),
+                    (
+                        json.dumps(
+                            [
+                                {
+                                    "reason": suppression_reason,
+                                    "merged_into_notice_id": int(recent["id"]),
+                                    "category": data["category"],
+                                    "category_label": data["category_label"],
+                                }
+                            ],
+                            ensure_ascii=False,
+                        ),
+                        data["updated_at"],
+                        int(row["id"]),
+                    ),
                 )
                 row = conn.execute("SELECT * FROM operation_notices WHERE id = ?", (int(row["id"]),)).fetchone()
             _enqueue_sync_row(conn, "operation_notices", "id = ?", (int(recent["id"]),))
@@ -3104,7 +3339,7 @@ def record_operation_notice(payload: dict[str, Any] | None = None) -> dict[str, 
                 "delivery": {"delivery_status": "suppressed", "delivery_targets": [], "delivery_result": []},
             }
         try:
-            delivery = _deliver_operation_notice(data, platforms=delivery_platforms)
+            delivery = _deliver_operation_notice(data, platforms=delivery_platforms, category_enabled=category_enabled)
         except Exception as exc:
             delivery = {
                 "delivery_status": "failed",
@@ -3166,6 +3401,64 @@ def list_operation_notices(*, limit: int = 100, category: str = "", status: str 
     with connect() as conn:
         rows = conn.execute(sql, tuple(values)).fetchall()
         return [_normalize_operation_notice(dict_from_row(row)) for row in rows]
+
+
+def delete_operation_notice(notice_id: int) -> dict[str, Any]:
+    target_id = int(notice_id or 0)
+    if target_id <= 0:
+        raise ValueError("notice_id must be positive")
+
+    def _collect_delivery_message_ids(delivery_result: Any) -> list[int]:
+        raw_results = delivery_result if isinstance(delivery_result, list) else []
+        message_ids: list[int] = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            try:
+                message_id = int(item.get("id") or 0)
+            except Exception:
+                message_id = 0
+            if message_id > 0:
+                message_ids.append(message_id)
+        return list(dict.fromkeys(message_ids))
+
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        notice = client.select_one("operation_notices", filters={"id": target_id})
+        if notice is None:
+            return {"deleted": False, "notice_id": target_id, "message_ids": []}
+        message_ids = _collect_delivery_message_ids(_json_payload(notice.get("delivery_result_json"), []))
+        deleted_message_ids: list[int] = []
+        for message_id in message_ids:
+            try:
+                if client.delete("ai_robot_messages", filters={"id": message_id}):
+                    deleted_message_ids.append(message_id)
+            except SupabaseError:
+                continue
+        deleted = bool(client.delete("operation_notices", filters={"id": target_id}))
+        if deleted:
+            _invalidate_supabase_read_cache("operation_notices")
+            _invalidate_supabase_read_cache("ai_robot_messages")
+        return {"deleted": deleted, "notice_id": target_id, "message_ids": deleted_message_ids}
+
+    ensure_database()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM operation_notices WHERE id = ?", (target_id,)).fetchone()
+        if row is None:
+            return {"deleted": False, "notice_id": target_id, "message_ids": []}
+        message_ids = _collect_delivery_message_ids(_json_payload(row["delivery_result_json"], []))
+        deleted_message_ids: list[int] = []
+        for message_id in message_ids:
+            message_row = conn.execute("SELECT id FROM ai_robot_messages WHERE id = ?", (message_id,)).fetchone()
+            if message_row is None:
+                continue
+            conn.execute("DELETE FROM ai_robot_messages WHERE id = ?", (message_id,))
+            _enqueue_sync_delete(conn, "ai_robot_messages", {"id": message_id}, entity_id=str(message_id))
+            deleted_message_ids.append(message_id)
+        conn.execute("DELETE FROM operation_notices WHERE id = ?", (target_id,))
+        _enqueue_sync_delete(conn, "operation_notices", {"id": target_id}, entity_id=str(target_id))
+        conn.commit()
+        return {"deleted": True, "notice_id": target_id, "message_ids": deleted_message_ids}
 
 
 def _incident_payload_for_storage(event_type: str, message: dict[str, Any], policy: dict[str, Any], ts: int) -> dict[str, Any]:
@@ -4209,7 +4502,7 @@ def _reset_terminal_window_for_new_business_date(window: dict[str, Any]) -> bool
                 continue
             _clear_terminal_account_error(account)
             expected_status = "pending"
-            expected_text = "待点登录" if index == 0 else "未登录"
+            expected_text = "等待打开登录浏览器" if index == 0 else "未登录"
             if str(account.get("status") or "") != expected_status:
                 account["status"] = expected_status
                 changed = True
@@ -5423,7 +5716,7 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
     _clear_terminal_qr_cache(int(window.get("id") or 0))
     _set_terminal_window_qr(window, "")
     try:
-        open_result = open_account_browser(account_id, "wechat", apply_marker=False)
+        open_result = _open_account_browser_for_terminal(account_id, "wechat")
         _apply_account_browser_window_color(open_result, str(window.get("color") or ""))
         _inject_terminal_account_browser_marker(
             account_id,
@@ -5439,7 +5732,7 @@ def _open_terminal_window_current_account(window: dict[str, Any]) -> bool:
         # once browser is opened for current account, treat login step as entered.
         _terminal_set_manual_flags(current, login_clicked=True, publish_clicked=False, next_clicked=False)
         current["status"] = "waiting_qr"
-        current["status_text"] = "待发布"
+        current["status_text"] = TERMINAL_LOGIN_CONFIRM_TEXT
     except Exception as exc:
         _set_terminal_account_error(
             current,
@@ -5455,6 +5748,28 @@ def _terminal_publish_runs_root() -> Path:
     path = get_paths().runtime_root / "terminal_publish_runs"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _open_account_browser_for_terminal(account_id: int, platform: str) -> dict[str, Any]:
+    try:
+        return open_account_browser(account_id, platform, apply_marker=False)
+    except TypeError:
+        # Backward-compatible path for tests/monkeypatches that still provide
+        # open_account_browser(account_id, platform) only.
+        return open_account_browser(account_id, platform)  # type: ignore[misc]
+
+
+def _start_terminal_wechat_publish_compat(
+    window: dict[str, Any],
+    current: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        return _start_terminal_wechat_publish(window, current, state)
+    except TypeError:
+        # Backward-compatible path for tests/patches that still expect the
+        # legacy 2-argument signature.
+        return _start_terminal_wechat_publish(window, current)  # type: ignore[misc]
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -5684,7 +5999,10 @@ def _advance_terminal_window_to_existing_account(window: dict[str, Any]) -> tupl
     while 0 <= current_index < len(accounts):
         current = accounts[current_index]
         account_id = int(current.get("id") or 0) if isinstance(current, dict) else 0
-        if account_id > 0 and get_account(account_id) is not None:
+        # Keep terminal runtime tolerant to stale/in-flight account snapshots:
+        # do not force DB existence checks here, otherwise cached windows can be
+        # incorrectly advanced to "completed" and lose QR/runtime state.
+        if account_id > 0:
             if int(window.get("current_index") or 0) != current_index:
                 window["current_index"] = current_index
                 changed = True
@@ -6328,7 +6646,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
             # If browser was closed, reopen and raise it so operator sees immediate effect.
             try:
                 if publish_runtime.get("browser_open") is False:
-                    open_result = open_account_browser(int(current.get("id") or 0), "wechat", apply_marker=False)
+                    open_result = _open_account_browser_for_terminal(int(current.get("id") or 0), "wechat")
                     _apply_account_browser_window_color(open_result, str(target.get("color") or ""))
                     _inject_terminal_account_browser_marker(
                         int(current.get("id") or 0),
@@ -6353,7 +6671,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
         try:
             _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
             try:
-                run = _start_terminal_wechat_publish(target, current, state)
+                run = _start_terminal_wechat_publish_compat(target, current, state)
             except Exception as first_exc:
                 # Self-heal once for common Windows profile/port drift:
                 # close the conflicting browser bound to this account's debug port,
@@ -6363,7 +6681,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
                 _close_wechat_browser_for_account(int(current.get("id") or 0))
                 time.sleep(0.35)
                 _dedupe_terminal_browser_tabs(publish_debug_port, int(target.get("id") or 0), "发布")
-                run = _start_terminal_wechat_publish(target, current, state)
+                run = _start_terminal_wechat_publish_compat(target, current, state)
             target["publish_run"] = run
             current["task_id"] = None
             current["status"] = "running"
@@ -6509,12 +6827,12 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
     try:
         runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
         if runtime.get("browser_open") is not True:
-            open_account_browser(account_id, "wechat", apply_marker=False)
+            _open_account_browser_for_terminal(account_id, "wechat")
     except Exception:
         # Emergency supplemental publish must keep going even if the login browser
         # is already open or the debug-port/profile state is slightly stale.
         pass
-    run = _start_terminal_wechat_publish({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
+    run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
     run["kind"] = "emergency"
     run["display_name"] = str(account.get("display_name") or account.get("account_key") or account_id)
     run["account_key"] = str(account.get("account_key") or "")
@@ -6566,6 +6884,17 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
         raise KeyError("window not found")
     if not bool(state.get("login_started")):
         return terminal_execution_state()
+    original_current = _terminal_current_account(target)
+    original_run = target.get("publish_run")
+    if (
+        isinstance(original_run, dict)
+        and original_run
+        and isinstance(original_current, dict)
+        and not _terminal_run_matches_current(original_run, original_current)
+    ):
+        _clear_terminal_publish_run(target)
+        _save_terminal_state(state)
+        return terminal_execution_state()
     normalized = _normalize_terminal_window_runtime(target)
     if _terminal_window_is_completed(target):
         if normalized:
@@ -6577,6 +6906,10 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
         return terminal_execution_state()
     current = accounts[current_index]
     run = target.get("publish_run")
+    if isinstance(run, dict) and run and not _terminal_run_matches_current(run, current):
+        _clear_terminal_publish_run(target)
+        _save_terminal_state(state)
+        return terminal_execution_state()
     if str(current.get("status") or "") != "success":
         _clear_terminal_account_error(current)
         current["status"] = "success"
@@ -7784,7 +8117,9 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
     return f"""
 (() => {{
   const marker = {marker};
+  const brandPrefix = 'GasGx-';
   const markerId = '__gasgx-account-marker';
+  const markerSelector = '#gasgx-account-marker';
   const markerStyleId = '__gasgx-account-marker-style';
   const cleanupOldOverlay = () => {{
     try {{
@@ -7797,6 +8132,7 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
       if (observer && typeof observer.disconnect === 'function') observer.disconnect();
       window.__gasgxAccountMarkerObserver = null;
     }} catch (_error) {{}}
+    try {{ document.querySelector(markerSelector)?.remove(); }} catch (_error) {{}}
     try {{ document.getElementById(markerId)?.remove(); }} catch (_error) {{}}
     try {{ document.getElementById(markerStyleId)?.remove(); }} catch (_error) {{}}
   }};
@@ -7858,15 +8194,16 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
 
 def _chrome_cdp_page_targets(debug_port: int) -> list[dict[str, Any]]:
     try:
-        if not bool(engine._is_chrome_debug_port_ready(int(debug_port), timeout=0.12)):  # type: ignore[attr-defined]
-            return []
+        ready = bool(engine._is_chrome_debug_port_ready(int(debug_port), timeout=0.12))  # type: ignore[attr-defined]
     except Exception:
-        return []
+        ready = True
+    # Keep a best-effort fetch path even when readiness probe reports false,
+    # so marker injection can still work in flaky startup windows.
+    if not ready:
+        pass
     for endpoint in (f"http://127.0.0.1:{debug_port}/json/list", f"http://127.0.0.1:{debug_port}/json"):
         try:
-            with requests.Session() as session:
-                session.trust_env = False
-                response = session.get(endpoint, timeout=0.9)
+            response = requests.get(endpoint, timeout=0.9)
             response.raise_for_status()
             payload = response.json()
         except Exception:
@@ -7948,7 +8285,7 @@ def _inject_account_browser_marker(
     except Exception:
         expected_window_id = 0
     expected_window = f"窗{expected_window_id:02d}" if expected_window_id > 0 else str(payload.get("window_label") or "终端执行窗口")
-    deadline = time.monotonic() + 0.9
+    deadline = time.monotonic() + 2.4
     idle_rounds = 0
     while time.monotonic() < deadline:
         targets = _chrome_cdp_page_targets(debug_port)

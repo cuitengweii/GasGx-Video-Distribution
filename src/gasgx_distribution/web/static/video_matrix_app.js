@@ -269,7 +269,7 @@ function videoMatrixNoticeSnapshot(statePayload, sourceFiles = []) {
         标题AI: Boolean(statePayload.headline_ai_enabled),
         描述AI: Boolean(statePayload.description_ai_enabled),
         关注AI: Boolean(statePayload.follow_text_ai_enabled),
-        HUD AI: Boolean(statePayload.hud_ai_enabled),
+        HUD开关: Boolean(statePayload.hud_ai_enabled),
       },
       BGM: {
         来源: String(statePayload.bgm_source || ""),

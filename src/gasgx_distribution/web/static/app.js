@@ -78,6 +78,7 @@ const state = {
   notificationEvents: [],
   notificationPolicies: [],
   notificationIncidents: [],
+  operationNoticeCategories: [],
   operationNotices: [],
   notificationSla: {},
   loginQrBatches: [],
@@ -392,6 +393,7 @@ const OPERATION_NOTICE_PATH_HINTS = [
   { test: (path, method) => /^\/api\/terminal-execution\/windows\/\d+\/confirm-publish-success$/.test(path) && method === "POST", category: "批量发布", actionCode: "ack", actionLabel: "确认发布成功" },
   { test: (path, method) => path === "/api/notification-policies" && method === "PUT", category: "通知中心", actionCode: "save", actionLabel: "保存通知策略" },
   { test: (path, method) => /^\/api\/notification-routes\/.+\/.+$/.test(path) && method === "POST", category: "通知中心", actionCode: "save", actionLabel: "保存通知路由" },
+  { test: (path, method) => path === "/api/operation-notice-categories" && method === "PUT", category: "通知中心", actionCode: "save", actionLabel: "保存大类通知开关" },
   { test: (path, method) => /^\/api\/notification-incidents\/\d+\/.+$/.test(path) && method === "POST", category: "通知中心", actionCode: "update", actionLabel: "处理通知事件" },
   { test: (path, method) => path === "/api/auth/login" && method === "POST", category: "用户中心", actionCode: "login", actionLabel: "登录" },
   { test: (path, method) => path === "/api/auth/users" && method === "POST", category: "用户中心", actionCode: "create", actionLabel: "创建用户" },
@@ -419,6 +421,7 @@ const DATABASE_DICTIONARY_TABLE_LABELS = {
   notification_incidents: "通知事件",
   notification_actions: "通知处理动作",
   operation_notices: "操作通知",
+  operation_notice_category_settings: "操作通知类目开关",
   login_qr_batches: "登录二维码批次",
   login_qr_items: "登录二维码明细",
   automation_tasks: "自动化任务",
@@ -5275,6 +5278,37 @@ function operationNoticeDeliveryLabel(status) {
   return OPERATION_NOTICE_DELIVERY_LABELS[token] || token || "待发送";
 }
 
+function operationNoticeCategorySettingMap() {
+  return Object.fromEntries((state.operationNoticeCategories || []).map((item) => [String(item.category || "").trim(), item]));
+}
+
+function operationNoticeCategoryEnabled(category) {
+  const token = String(category || "").trim();
+  if (!token) return true;
+  const setting = operationNoticeCategorySettingMap()[token];
+  return setting ? Boolean(setting.enabled) : true;
+}
+
+function operationNoticeDeliveryReason(item) {
+  const result = item?.delivery_result;
+  if (Array.isArray(result)) {
+    return String(result[0]?.reason || "").trim();
+  }
+  if (result && typeof result === "object") {
+    return String(result.reason || "").trim();
+  }
+  return "";
+}
+
+function operationNoticeDeliveryLabelForItem(item) {
+  const status = String(item?.delivery_status || "pending").trim().toLowerCase();
+  if (status !== "suppressed") return operationNoticeDeliveryLabel(status);
+  const reason = operationNoticeDeliveryReason(item);
+  if (reason === "category_disabled") return "已关闭";
+  if (reason === "throttled") return "已合并";
+  return "已抑制";
+}
+
 function operationNoticeSourceLabel(source) {
   const token = String(source || "").trim().toLowerCase();
   return OPERATION_NOTICE_SOURCE_LABELS[token] || token || "页面操作";
@@ -5341,6 +5375,8 @@ function operationNoticeDetailJson(item) {
     结果: operationNoticeStatusLabel(item.status),
     操作者: item.actor_name || item.actor_id || "-",
     来源: operationNoticeSourceLabel(item.source),
+    交付状态: operationNoticeDeliveryLabelForItem(item),
+    交付原因: operationNoticeDeliveryReason(item) || "无",
     合并次数: Number(item.merged_count || 1),
     首次时间: formatTime(item.first_seen_at),
     最近时间: formatTime(item.last_seen_at),
@@ -5579,6 +5615,8 @@ function notificationHistoryContent(item, payload, eventType, platform) {
 }
 
 function renderOperationNotifications() {
+  const categoryNode = document.querySelector("#operation-notice-category-settings");
+  const categoryCountNode = document.querySelector("#operation-notice-category-count");
   const routeNode = document.querySelector("#operation-notice-routes");
   const policyNode = document.querySelector("#notification-policy-list");
   const incidentNode = document.querySelector("#notification-incident-list");
@@ -5596,6 +5634,46 @@ function renderOperationNotifications() {
   const unreadCount = pendingMessages + openIncidents.length + (state.loginQrBatches || []).length;
   if (unreadNode) unreadNode.textContent = `${unreadCount} 条待处理`;
   if (noticeCountNode) noticeCountNode.textContent = `${notices.length} 条`;
+  if (categoryNode) {
+    const categories = Array.isArray(state.operationNoticeCategories) ? [...state.operationNoticeCategories] : [];
+    categories.sort((a, b) => (Number(a.sort_order || 0) - Number(b.sort_order || 0)) || String(a.category || "").localeCompare(String(b.category || ""), "zh-Hans-CN"));
+    const enabledCount = categories.filter((item) => Boolean(item.enabled)).length;
+    if (categoryCountNode) categoryCountNode.textContent = `${enabledCount} / ${categories.length || 0} 开启`;
+    categoryNode.innerHTML = categories.length ? `
+      <div class="operation-notice-category-toolbar">
+        <button class="btn btn-sm primary" type="button" data-operation-notice-category-bulk="enable-all">全部开启</button>
+        <button class="btn btn-sm ghost" type="button" data-operation-notice-category-bulk="disable-all">全部关闭</button>
+      </div>
+      ${categories.map((item) => {
+        const enabled = Boolean(item.enabled);
+        const label = String(item.category_label || item.category || "").trim() || "未命名类目";
+        const desc = enabled
+          ? "当前类目会继续外发到机器人。"
+          : "当前类目已关闭外发，仍保留操作记录，不再推送到机器人。";
+        const statusLabel = enabled ? "已开启" : "已关闭";
+        return `
+          <article class="notification-card ${enabled ? "success" : "warning"} operation-notice-category-card">
+            <span class="notification-dot"></span>
+            <div>
+              <strong>${escapeHtml(label)}</strong>
+              <p>${escapeHtml(desc)}</p>
+              <div class="inline-actions">
+                <button class="btn btn-sm ${enabled ? "ghost" : "primary"}" type="button" data-operation-notice-category-toggle="${escapeHtml(String(item.category || ""))}" data-operation-notice-enabled="${enabled ? "0" : "1"}">${enabled ? "关闭外发" : "开启外发"}</button>
+                <span class="system-status ${enabled ? "success" : "warning"}">${statusLabel}</span>
+              </div>
+            </div>
+            <time>${formatTime(item.updated_at || item.created_at)}</time>
+          </article>
+        `;
+      }).join("")}
+    ` : `
+      <article class="notification-card info">
+        <span class="notification-dot"></span>
+        <div><strong>暂无类目开关</strong><p>系统会在首次记录操作通知时自动生成默认类目。</p></div>
+        <time>实时</time>
+      </article>
+    `;
+  }
   if (routeNode) {
     const routes = state.notificationRoutes || [];
     const eventTypes = Array.from(new Set(routes.map((item) => item.event_type)));
@@ -5777,12 +5855,12 @@ function renderOperationNotifications() {
           <div class="notification-list">
             ${rows.map((item) => {
               const status = String(item.status || "success").toLowerCase();
-              const deliveryStatus = String(item.delivery_status || "pending").toLowerCase();
+              const deliveryStatus = operationNoticeDeliveryLabelForItem(item);
               const mergedCount = Number(item.merged_count || 1);
               const summary = String(item.summary || "").trim() || operationNoticeParamsPreview(item.params || {});
               const metaLine = [
                 `结果：${operationNoticeStatusLabel(status)}`,
-                `交付：${operationNoticeDeliveryLabel(deliveryStatus)}`,
+                `交付：${deliveryStatus}`,
                 `操作者：${item.actor_name || item.actor_id || "系统"}`,
                 `来源：${operationNoticeSourceLabel(item.source)}`,
                 `合并：${mergedCount} 次`,
@@ -6875,6 +6953,7 @@ async function loadViewData(view, { force = false } = {}) {
         api("/api/notification-routes"),
         api("/api/notification-policies"),
         api("/api/notification-incidents"),
+        api("/api/operation-notice-categories"),
         api("/api/operation-notices?limit=120"),
         api("/api/stats/notification-sla"),
         api("/api/login-qr-batches"),
@@ -6885,6 +6964,7 @@ async function loadViewData(view, { force = false } = {}) {
         notificationRoutes,
         notificationPolicies,
         notificationIncidents,
+        operationNoticeCategories,
         operationNotices,
         notificationSla,
         loginQrBatches,
@@ -6894,6 +6974,7 @@ async function loadViewData(view, { force = false } = {}) {
       if (notificationRoutes.status === "fulfilled") state.notificationRoutes = notificationRoutes.value;
       if (notificationPolicies.status === "fulfilled") state.notificationPolicies = notificationPolicies.value;
       if (notificationIncidents.status === "fulfilled") state.notificationIncidents = notificationIncidents.value;
+      if (operationNoticeCategories.status === "fulfilled") state.operationNoticeCategories = operationNoticeCategories.value;
       if (operationNotices.status === "fulfilled") state.operationNotices = operationNotices.value;
       if (notificationSla.status === "fulfilled") state.notificationSla = notificationSla.value;
       if (loginQrBatches.status === "fulfilled") state.loginQrBatches = loginQrBatches.value;
@@ -7926,6 +8007,48 @@ document.querySelector("#stats-temp-capture-refresh-status")?.addEventListener("
 });
 
 document.addEventListener("click", async (event) => {
+  const categoryToggle = event.target.closest("[data-operation-notice-category-toggle]");
+  if (categoryToggle) {
+    const category = String(categoryToggle.dataset.operationNoticeCategoryToggle || "").trim();
+    const enabled = categoryToggle.dataset.operationNoticeEnabled === "1";
+    const restoreButton = setButtonLoading(categoryToggle, enabled ? "开启中" : "关闭中");
+    try {
+      const nextCategories = (state.operationNoticeCategories || []).map((item) => (
+        String(item.category || "").trim() === category
+          ? { ...item, enabled }
+          : item
+      ));
+      const result = await api("/api/operation-notice-categories", {
+        method: "PUT",
+        body: JSON.stringify({ items: nextCategories }),
+      });
+      if (Array.isArray(result)) state.operationNoticeCategories = result;
+      renderOperationNotifications();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
+  const categoryBulk = event.target.closest("[data-operation-notice-category-bulk]");
+  if (categoryBulk) {
+    const mode = String(categoryBulk.dataset.operationNoticeCategoryBulk || "").trim();
+    const enabled = mode === "enable-all";
+    const restoreButton = setButtonLoading(categoryBulk, enabled ? "全部开启中" : "全部关闭中");
+    try {
+      const nextCategories = (state.operationNoticeCategories || []).map((item) => ({ ...item, enabled }));
+      const result = await api("/api/operation-notice-categories", {
+        method: "PUT",
+        body: JSON.stringify({ items: nextCategories }),
+      });
+      if (Array.isArray(result)) state.operationNoticeCategories = result;
+      renderOperationNotifications();
+    } finally {
+      restoreButton();
+    }
+    return;
+  }
+
   const routeButton = event.target.closest("[data-notice-route]");
   if (routeButton) {
     const eventType = routeButton.dataset.noticeRoute;

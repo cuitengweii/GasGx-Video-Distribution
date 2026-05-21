@@ -875,6 +875,17 @@ def create_app() -> FastAPI:
     def notification_incidents(status: str = "", limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
         return service.list_notification_incidents(status=status, limit=limit)
 
+    @app.get("/api/operation-notice-categories")
+    def operation_notice_categories() -> list[dict[str, Any]]:
+        return service.list_operation_notice_category_settings()
+
+    @app.put("/api/operation-notice-categories")
+    def save_operation_notice_categories(payload: Any = Body(default_factory=dict)) -> list[dict[str, Any]]:
+        try:
+            return service.save_operation_notice_category_settings(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/operation-notices")
     def operation_notices(category: str = "", status: str = "", limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
         return service.list_operation_notices(category=category, status=status, limit=limit)
@@ -882,6 +893,13 @@ def create_app() -> FastAPI:
     @app.post("/api/operation-notices")
     def create_operation_notice(payload: OperationNoticePayload = Body(default_factory=OperationNoticePayload)) -> dict[str, Any]:
         return service.record_operation_notice(_model_payload(payload))
+
+    @app.delete("/api/operation-notices/{notice_id}")
+    def delete_operation_notice(notice_id: int) -> dict[str, Any]:
+        try:
+            return service.delete_operation_notice(notice_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/notification-incidents/{incident_id}/{action}")
     def notification_incident_action(incident_id: int, action: str, payload: NotificationActionPayload = Body(default_factory=NotificationActionPayload)) -> dict[str, Any]:
