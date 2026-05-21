@@ -376,6 +376,9 @@ def trigger_matrix_wechat_stats_capture(
     account_id: int | None = None,
     keep_browser_open_on_login_required: bool = False,
     auto_open_browser: bool = True,
+    open_capture_in_new_tab: bool = False,
+    capture_tab_foreground: bool = False,
+    keep_capture_tab_open: bool = False,
 ) -> dict[str, Any]:
     def _runner() -> None:
         if _STATS_RUNNING.is_set():
@@ -390,6 +393,9 @@ def trigger_matrix_wechat_stats_capture(
                 account_id=account_id,
                 keep_browser_open_on_login_required=keep_browser_open_on_login_required,
                 auto_open_browser=auto_open_browser,
+                open_capture_in_new_tab=open_capture_in_new_tab,
+                capture_tab_foreground=capture_tab_foreground,
+                keep_capture_tab_open=keep_capture_tab_open,
             )
         finally:
             _STATS_RUNNING.clear()

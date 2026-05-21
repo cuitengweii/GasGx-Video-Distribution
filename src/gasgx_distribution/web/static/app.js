@@ -78,6 +78,7 @@ const state = {
   notificationEvents: [],
   notificationPolicies: [],
   notificationIncidents: [],
+  operationNotices: [],
   notificationSla: {},
   loginQrBatches: [],
   terminalExecution: { colors: [], operators: [], windows: [], summary: {}, platform_capabilities: {}, profile_by_platform: {}, active_platform: "wechat", loading: false },
@@ -159,6 +160,8 @@ let terminalCountdownTimer = null;
 let terminalWechatStatePollTimer = null;
 let terminalWechatStatePollInFlight = false;
 let terminalWechatSelectedAccountId = "";
+let terminalWechatAutoStatsEnabled = false;
+let terminalWechatAutoStatsHint = "";
 const terminalAutoPublishWindowIds = new Set();
 const terminalAutoPublishStageByWindowId = new Map();
 const terminalResetWindowIds = new Set();
@@ -179,6 +182,7 @@ const SHELL_BRAND_KEY = "gasgx-shell-brand";
 const SHELL_AUTH_KEY = "gasgx-shell-auth";
 const DATABASE_DICTIONARY_LOCALE_KEY = "gasgx-db-dictionary-locale";
 const SETTINGS_CARD_KEY = "gasgx-settings-card";
+const TERMINAL_WECHAT_AUTO_STATS_KEY = "gasgx-terminal-wechat-auto-stats";
 const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
@@ -291,11 +295,118 @@ const VIEW_HEADERS = {
   "help-center": ["帮助文档", "预留操作手册、部署说明、视频生成流程和常见问题。"],
 };
 
+const OPERATION_NOTICE_VIEW_META = {
+  overview: { category: "菜单导航", label: "总览" },
+  "ai-robot": { category: "运营客服", label: "运营客服" },
+  accounts: { category: "账号管理", label: "账号管理" },
+  "video-matrix": { category: "生成视频", label: "生成视频" },
+  settings: { category: "发布配置", label: "发布配置" },
+  "terminal-execution": { category: "批量发布", label: "批量发布" },
+  "interaction-management": { category: "粉丝互动", label: "粉丝互动" },
+  stats: { category: "数据统计", label: "数据统计" },
+  "user-center": { category: "用户中心", label: "用户中心" },
+  notifications: { category: "通知中心", label: "通知中心" },
+  "system-settings": { category: "系统设置", label: "系统设置" },
+  "help-center": { category: "帮助文档", label: "帮助文档" },
+  tasks: { category: "批量发布", label: "执行队列" },
+};
+
+const OPERATION_NOTICE_CATEGORY_ORDER = ["菜单导航", "账号管理", "生成视频", "发布配置", "批量发布", "粉丝互动", "数据统计", "通知中心", "用户中心", "系统设置", "帮助文档", "运营客服"];
+const OPERATION_NOTICE_STATUS_LABELS = {
+  success: "成功",
+  failed: "失败",
+  warning: "警告",
+  info: "信息",
+};
+const OPERATION_NOTICE_DELIVERY_LABELS = {
+  pending: "待发送",
+  sent: "已发送",
+  suppressed: "已合并",
+  failed: "发送失败",
+};
+const OPERATION_NOTICE_SOURCE_LABELS = {
+  sidebar: "侧栏点击",
+  quick: "快捷入口",
+  hash: "链接跳转",
+  initial: "初次加载",
+  page: "页面操作",
+  api: "接口操作",
+  internal: "页面内部跳转",
+};
+const OPERATION_NOTICE_ACTION_LABELS = {
+  view_enter: "进入页面",
+  create: "新建",
+  update: "保存",
+  delete: "删除",
+  run: "执行",
+  run_now: "立即执行",
+  refresh: "刷新",
+  open: "打开",
+  save: "保存",
+  test: "测试",
+  submit: "提交",
+  toggle: "切换",
+  import: "导入",
+  export: "导出",
+  login: "登录",
+  logout: "退出登录",
+  repair: "修复",
+  ack: "确认",
+  ignore: "忽略",
+};
+const OPERATION_NOTICE_PATH_HINTS = [
+  { test: (path, method) => path === "/api/accounts" && method === "POST", category: "账号管理", actionCode: "create", actionLabel: "新建账号" },
+  { test: (path, method) => path === "/api/accounts/repair-config" && method === "POST", category: "账号管理", actionCode: "repair", actionLabel: "修复账号配置" },
+  { test: (path, method) => /^\/api\/accounts\/\d+$/.test(path) && method === "PATCH", category: "账号管理", actionCode: "update", actionLabel: "更新账号" },
+  { test: (path, method) => /^\/api\/accounts\/\d+$/.test(path) && method === "DELETE", category: "账号管理", actionCode: "delete", actionLabel: "删除账号" },
+  { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/[^/]+\/open-browser$/.test(path) && method === "POST", category: "账号管理", actionCode: "open", actionLabel: "打开平台浏览器" },
+  { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/[^/]+\/login-status$/.test(path) && method === "POST", category: "账号管理", actionCode: "refresh", actionLabel: "检查登录状态" },
+  { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/[^/]+\/emergency-publish$/.test(path) && method === "POST", category: "账号管理", actionCode: "run_now", actionLabel: "紧急发布" },
+  { test: (path, method) => path === "/api/tasks" && method === "POST", category: "批量发布", actionCode: "create", actionLabel: "新增队列任务" },
+  { test: (path, method) => path === "/api/tasks/bulk-status" && method === "POST", category: "批量发布", actionCode: "update", actionLabel: "批量调整任务状态" },
+  { test: (path, method) => path === "/api/tasks/bulk-delete" && method === "POST", category: "批量发布", actionCode: "delete", actionLabel: "批量删除任务" },
+  { test: (path, method) => path === "/api/settings/distribution" && method === "PUT", category: "发布配置", actionCode: "save", actionLabel: "保存发布配置" },
+  { test: (path, method) => path === "/api/settings/material-dir/open" && method === "POST", category: "发布配置", actionCode: "open", actionLabel: "打开素材目录" },
+  { test: (path, method) => /^\/api\/ai-robots\/[^/]+\/config$/.test(path) && method === "PUT", category: "运营客服", actionCode: "save", actionLabel: "保存机器人配置" },
+  { test: (path, method) => /^\/api\/ai-robots\/[^/]+\/config$/.test(path) && method === "DELETE", category: "运营客服", actionCode: "delete", actionLabel: "删除机器人配置" },
+  { test: (path, method) => /^\/api\/ai-robots\/[^/]+\/test-message$/.test(path) && method === "POST", category: "运营客服", actionCode: "test", actionLabel: "发送机器人测试消息" },
+  { test: (path, method) => path === "/api/jobs/matrix-wechat/run-now" && method === "POST", category: "批量发布", actionCode: "run_now", actionLabel: "立即运行发布作业" },
+  { test: (path, method) => path === "/api/jobs/matrix-wechat/stats-capture/run-now" && method === "POST", category: "数据统计", actionCode: "run_now", actionLabel: "立即运行统计采集" },
+  { test: (path, method) => path === "/api/interaction-management/config" && method === "PUT", category: "粉丝互动", actionCode: "save", actionLabel: "保存互动配置" },
+  { test: (path, method) => path === "/api/interaction-management/comment/run" && method === "POST", category: "粉丝互动", actionCode: "run", actionLabel: "执行评论回复" },
+  { test: (path, method) => path === "/api/interaction-management/private-msg/run" && method === "POST", category: "粉丝互动", actionCode: "run", actionLabel: "执行私信回复" },
+  { test: (path, method) => path === "/api/system/initialize" && method === "POST", category: "系统设置", actionCode: "submit", actionLabel: "系统初始化" },
+  { test: (path, method) => path === "/api/system/cache/clear" && method === "POST", category: "系统设置", actionCode: "refresh", actionLabel: "清理应用缓存" },
+  { test: (path, method) => /^\/api\/system\/open-directory\/.+$/.test(path) && method === "POST", category: "系统设置", actionCode: "open", actionLabel: "打开系统目录" },
+  { test: (path, method) => path === "/api/brand" && method === "PATCH", category: "系统设置", actionCode: "save", actionLabel: "保存品牌设置" },
+  { test: (path, method) => path === "/api/operator-wechats" && method === "POST", category: "用户中心", actionCode: "create", actionLabel: "新增运营微信" },
+  { test: (path, method) => path === "/api/sync/supabase/pull" && method === "POST", category: "系统设置", actionCode: "import", actionLabel: "从云端导入" },
+  { test: (path, method) => path === "/api/sync/supabase/push" && method === "POST", category: "系统设置", actionCode: "export", actionLabel: "推送到云端" },
+  { test: (path, method) => path === "/api/sync/retry" && method === "POST", category: "系统设置", actionCode: "run", actionLabel: "重试同步队列" },
+  { test: (path, method) => path === "/api/terminal-execution/start" && method === "POST", category: "批量发布", actionCode: "open", actionLabel: "打开登录浏览器" },
+  { test: (path, method) => path === "/api/terminal-execution/start-login" && method === "POST", category: "批量发布", actionCode: "open", actionLabel: "打开登录浏览器" },
+  { test: (path, method) => /^\/api\/terminal-execution\/windows\/\d+\/accounts\/\d+\/qr$/.test(path) && method === "POST", category: "批量发布", actionCode: "refresh", actionLabel: "刷新二维码" },
+  { test: (path, method) => path === "/api/terminal-execution/poll" && method === "POST", category: "批量发布", actionCode: "refresh", actionLabel: "轮询终端状态" },
+  { test: (path, method) => /^\/api\/terminal-execution\/windows\/\d+\/manual-publish$/.test(path) && method === "POST", category: "批量发布", actionCode: "run", actionLabel: "执行手动发布" },
+  { test: (path, method) => /^\/api\/terminal-execution\/windows\/\d+\/accounts\/\d+\/reset-manual-flow$/.test(path) && method === "POST", category: "批量发布", actionCode: "repair", actionLabel: "重置手动流程" },
+  { test: (path, method) => /^\/api\/terminal-execution\/windows\/\d+\/confirm-publish-success$/.test(path) && method === "POST", category: "批量发布", actionCode: "ack", actionLabel: "确认发布成功" },
+  { test: (path, method) => path === "/api/notification-policies" && method === "PUT", category: "通知中心", actionCode: "save", actionLabel: "保存通知策略" },
+  { test: (path, method) => /^\/api\/notification-routes\/.+\/.+$/.test(path) && method === "POST", category: "通知中心", actionCode: "save", actionLabel: "保存通知路由" },
+  { test: (path, method) => /^\/api\/notification-incidents\/\d+\/.+$/.test(path) && method === "POST", category: "通知中心", actionCode: "update", actionLabel: "处理通知事件" },
+  { test: (path, method) => path === "/api/auth/login" && method === "POST", category: "用户中心", actionCode: "login", actionLabel: "登录" },
+  { test: (path, method) => path === "/api/auth/users" && method === "POST", category: "用户中心", actionCode: "create", actionLabel: "创建用户" },
+  { test: (path, method) => /^\/api\/auth\/users\/.+\/role$/.test(path) && method === "PATCH", category: "用户中心", actionCode: "update", actionLabel: "修改角色" },
+  { test: (path, method) => /^\/api\/auth\/users\/.+\/password$/.test(path) && method === "PATCH", category: "用户中心", actionCode: "update", actionLabel: "修改密码" },
+  { test: (path, method) => path === "/api/auth/roles" && method === "POST", category: "用户中心", actionCode: "create", actionLabel: "创建角色" },
+  { test: (path, method) => /^\/api\/auth\/roles\/.+\/permissions$/.test(path) && method === "PATCH", category: "用户中心", actionCode: "save", actionLabel: "保存权限" },
+];
+
 function displayDatabaseKeyword(value) {
   return String(value ?? "").replace(/supabase/gi, "☁️云端数据库");
 }
 
 state.databaseDictionaryLocalized = localStorage.getItem(DATABASE_DICTIONARY_LOCALE_KEY) === "zh";
+terminalWechatAutoStatsEnabled = localStorage.getItem(TERMINAL_WECHAT_AUTO_STATS_KEY) === "1";
 let currentSettingsCard = localStorage.getItem(SETTINGS_CARD_KEY) === "platform-publish" ? "platform-publish" : "publish-window";
 let currentTerminalInitCard = "window";
 
@@ -307,6 +418,7 @@ const DATABASE_DICTIONARY_TABLE_LABELS = {
   notification_policies: "通知策略",
   notification_incidents: "通知事件",
   notification_actions: "通知处理动作",
+  operation_notices: "操作通知",
   login_qr_batches: "登录二维码批次",
   login_qr_items: "登录二维码明细",
   automation_tasks: "自动化任务",
@@ -360,6 +472,23 @@ const DATABASE_DICTIONARY_COLUMN_LABELS = {
   event_type: "事件类型",
   batch_id: "批次编号",
   payload_json: "载荷数据",
+  category: "类目",
+  category_label: "类目名称",
+  view: "页面",
+  view_label: "页面名称",
+  action_code: "动作编码",
+  action_label: "动作名称",
+  source: "来源",
+  actor_id: "操作者编号",
+  actor_name: "操作者名称",
+  merge_key: "合并键",
+  merged_count: "合并次数",
+  first_seen_at: "首次时间",
+  last_seen_at: "最近时间",
+  delivery_status: "交付状态",
+  delivery_targets_json: "交付目标",
+  delivery_result_json: "交付结果",
+  delivered_at: "交付时间",
   notified_at: "通知时间",
   reason: "原因",
   url: "链接",
@@ -1224,7 +1353,7 @@ function initAuthCenter() {
       saveAuthSession({ currentUserId: authState.currentUserId, editingRoleId: authState.editingRoleId, loggedOut: false });
       document.querySelector("#login-password").value = "";
       renderAuthCenter();
-      activateView("overview");
+      activateView("overview", true, "sidebar");
     } catch (error) {
       if (errorNode) errorNode.textContent = error.message || "登录失败";
     } finally {
@@ -1329,7 +1458,7 @@ function initUserMenu() {
   });
   document.querySelectorAll("[data-quick-view]").forEach((button) => {
     button.addEventListener("click", () => {
-      activateView(button.dataset.quickView);
+      activateView(button.dataset.quickView, true, "quick");
       menu?.classList.add("hidden");
       toggle?.setAttribute("aria-expanded", "false");
       topMenu?.classList.remove("open");
@@ -1411,8 +1540,19 @@ function formatFriendlyMessage(message) {
 }
 
 async function api(path, options = {}) {
-  const { timeoutMs = 0, ...fetchOptions } = options || {};
+  const { timeoutMs = 0, skipOperationNotice = false, ...fetchOptions } = options || {};
   const timeout = Number(timeoutMs || 0);
+  const requestMethod = String(fetchOptions.method || "GET").trim().toUpperCase();
+  const requestBody = (() => {
+    const rawBody = fetchOptions.body;
+    if (typeof rawBody !== "string") return {};
+    try {
+      const parsed = JSON.parse(rawBody || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_error) {
+      return {};
+    }
+  })();
   const controller = timeout > 0 ? new AbortController() : null;
   const timer = controller
     ? window.setTimeout(() => controller.abort(), timeout)
@@ -1425,6 +1565,15 @@ async function api(path, options = {}) {
       signal: controller ? controller.signal : fetchOptions.signal,
     });
   } catch (error) {
+    if (requestMethod !== "GET" && !String(path || "").startsWith("/api/operation-notices") && !skipOperationNotice) {
+      void emitOperationNotice({
+        ...operationNoticeApiMeta(path, requestMethod, requestBody),
+        status: "failed",
+        summary: error?.name === "AbortError" ? "请求超时，请稍后刷新状态" : String(error?.message || "网络请求失败"),
+        params: { ...requestBody },
+        source: "api",
+      });
+    }
     if (error?.name === "AbortError") {
       throw new Error("请求超时，请稍后刷新状态");
     }
@@ -1451,9 +1600,28 @@ async function api(path, options = {}) {
     } catch (_error) {
       body = {};
     }
+    if (requestMethod !== "GET" && !String(path || "").startsWith("/api/operation-notices") && !skipOperationNotice) {
+      void emitOperationNotice({
+        ...operationNoticeApiMeta(path, requestMethod, requestBody),
+        status: "failed",
+        summary: body.detail || response.statusText || "操作失败",
+        params: { ...requestBody, http_status: response.status },
+        source: "api",
+      });
+    }
     throw new Error(body.detail || response.statusText);
   }
-  return JSON.parse(text);
+  const data = JSON.parse(text);
+  if (requestMethod !== "GET" && !String(path || "").startsWith("/api/operation-notices") && !skipOperationNotice) {
+    void emitOperationNotice({
+      ...operationNoticeApiMeta(path, requestMethod, requestBody),
+      status: "success",
+      summary: String(data?.summary || data?.message || data?.detail || "操作已完成").trim(),
+      params: { ...requestBody },
+      source: "api",
+    });
+  }
+  return data;
 }
 
 function setButtonLoading(button, loadingText = "处理中") {
@@ -2150,8 +2318,26 @@ async function saveAccountInlineEdit(button) {
   }
   const restoreButton = setButtonLoading(button, "保存中");
   try {
-    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+    const before = accountNoticeSnapshot(account);
+    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify(payload), skipOperationNotice: true });
     replaceAccountInState(updated);
+    const after = accountNoticeSnapshot(updated);
+    void emitOperationNotice({
+      category: "账号管理",
+      view: "accounts",
+      view_label: "账号管理",
+      action_code: "update",
+      action_label: "修改账号",
+      status: "success",
+      summary: `已更新账号「${updated.display_name || account.display_name || account.account_key || account.id}」`,
+      params: {
+        修改字段: field === "name" ? "账号名称" : field === "operator" ? "运营微信" : "账号手机号",
+        提交参数: payload,
+        变更前: before,
+        变更后: after,
+      },
+      source: "page",
+    });
     renderAccounts();
     updateAccountPhoneHint();
   } catch (error) {
@@ -2167,8 +2353,25 @@ async function toggleAccountStatus(button) {
   const nextStatus = accountStatusEnabled(account) ? "paused" : "active";
   const restoreButton = setButtonLoading(button, nextStatus === "active" ? "启用中" : "暂停中");
   try {
-    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }) });
+    const before = accountNoticeSnapshot(account);
+    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }), skipOperationNotice: true });
     replaceAccountInState(updated);
+    void emitOperationNotice({
+      category: "账号管理",
+      view: "accounts",
+      view_label: "账号管理",
+      action_code: "update",
+      action_label: nextStatus === "active" ? "启用账号" : "暂停账号",
+      status: "success",
+      summary: `账号「${updated.display_name || account.display_name || account.account_key || account.id}」已${nextStatus === "active" ? "启用" : "暂停"}`,
+      params: {
+        修改字段: "账号状态",
+        提交参数: { status: nextStatus },
+        变更前: before,
+        变更后: accountNoticeSnapshot(updated),
+      },
+      source: "page",
+    });
     renderAccounts();
   } catch (error) {
     showAccountCreateErrorToast(formatFriendlyMessage(error.message));
@@ -2685,6 +2888,48 @@ function terminalWechatSelectedAccountChoice() {
     || choices[0];
   terminalWechatSelectedAccountId = selected.accountId;
   return selected;
+}
+
+function terminalWechatAutoStatsDefaultHint() {
+  return terminalWechatAutoStatsEnabled
+    ? "已开启：点击发布会异步触发该账号统计，不阻塞发布。"
+    : "未开启：点击发布仅执行发布流程。";
+}
+
+function setTerminalWechatAutoStatsHint(message = "") {
+  const text = String(message || "").trim();
+  terminalWechatAutoStatsHint = text;
+  const hintNode = document.querySelector("#terminal-wechat-auto-stats-hint");
+  if (hintNode) {
+    hintNode.textContent = text || terminalWechatAutoStatsDefaultHint();
+  }
+}
+
+function triggerTerminalWechatAutoStatsCapture(accountId) {
+  const resolvedAccountId = Number(accountId || 0);
+  if (!terminalWechatAutoStatsEnabled || !resolvedAccountId) return;
+  setTerminalWechatAutoStatsHint(`账号 #${resolvedAccountId} 统计已提交，正在新标签页采集。`);
+  void api("/api/jobs/matrix-wechat/stats-capture/run-now", {
+    method: "POST",
+    body: JSON.stringify({
+      target_date: "",
+      dry_run: false,
+      account_id: resolvedAccountId,
+      keep_browser_open_on_login_required: true,
+      auto_open_browser: false,
+      open_capture_in_new_tab: true,
+      capture_tab_foreground: true,
+      keep_capture_tab_open: true,
+    }),
+  }).then((started) => {
+    if (String(started?.status || "") === "already_running" || started?.ok === false) {
+      setTerminalWechatAutoStatsHint("已有统计采集中，本次发布不受影响。");
+      return;
+    }
+    setTerminalWechatAutoStatsHint(`账号 #${resolvedAccountId} 统计已触发，发布继续进行。`);
+  }).catch((error) => {
+    setTerminalWechatAutoStatsHint(`统计触发失败（不影响发布）：${formatFriendlyMessage(error?.message || "未知异常")}`);
+  });
 }
 
 function terminalAutoPublishStageFromStatusText(statusText) {
@@ -3677,6 +3922,8 @@ function renderTerminalWechatQuickActionBar() {
   const loginDisabled = !selected;
   const publishDisabled = !selected;
   const buttonLoadingAttr = " data-no-global-loading=\"1\"";
+  const autoStatsChecked = terminalWechatAutoStatsEnabled ? " checked" : "";
+  const autoStatsHint = escapeHtml(terminalWechatAutoStatsHint || terminalWechatAutoStatsDefaultHint());
   return `
     <div class="terminal-wechat-quick-action terminal-glass">
       <div class="terminal-wechat-quick-action-buttons">
@@ -3689,6 +3936,11 @@ function renderTerminalWechatQuickActionBar() {
           ${optionsMarkup}
         </select>
       </label>
+      <label class="terminal-wechat-auto-stats-toggle">
+        <input id="terminal-wechat-auto-stats-toggle" type="checkbox"${autoStatsChecked}>
+        <span>发布时自动统计（可选）</span>
+      </label>
+      <div class="terminal-wechat-auto-stats-hint muted" id="terminal-wechat-auto-stats-hint">${autoStatsHint}</div>
     </div>
   `;
 }
@@ -4996,6 +5248,314 @@ function notificationDuration(seconds) {
   return `${Math.round(value)} 秒`;
 }
 
+function operationNoticeViewMeta(view) {
+  return OPERATION_NOTICE_VIEW_META[String(view || "").trim()] || { category: "菜单导航", label: String(view || "").trim() || "未知页面" };
+}
+
+function operationNoticeCategoryLabel(category, view) {
+  const token = String(category || "").trim();
+  if (token) return token;
+  return operationNoticeViewMeta(view).category || "菜单导航";
+}
+
+function operationNoticeActionLabel(actionCode, actionLabel = "") {
+  const token = String(actionLabel || "").trim();
+  if (token) return token;
+  const action = String(actionCode || "").trim().toLowerCase();
+  return OPERATION_NOTICE_ACTION_LABELS[action] || action || "操作";
+}
+
+function operationNoticeStatusLabel(status) {
+  const token = String(status || "").trim().toLowerCase();
+  return OPERATION_NOTICE_STATUS_LABELS[token] || token || "成功";
+}
+
+function operationNoticeDeliveryLabel(status) {
+  const token = String(status || "").trim().toLowerCase();
+  return OPERATION_NOTICE_DELIVERY_LABELS[token] || token || "待发送";
+}
+
+function operationNoticeSourceLabel(source) {
+  const token = String(source || "").trim().toLowerCase();
+  return OPERATION_NOTICE_SOURCE_LABELS[token] || token || "页面操作";
+}
+
+function operationNoticeActor() {
+  const user = (authState.users || []).find((item) => item.id === authState.currentUserId);
+  return {
+    actor_id: authState.currentUserId || user?.id || "allen",
+    actor_name: user?.name || authState.currentUserId || "Allen",
+  };
+}
+
+function operationNoticeParamsPreview(params) {
+  if (!params || typeof params !== "object") return "无参数";
+  const entries = Object.entries(params).filter(([, value]) => value !== null && value !== undefined && value !== "");
+  if (!entries.length) return "无参数";
+  const list = entries.slice(0, 5).map(([key, value]) => {
+    if (value === null || value === undefined || value === "") return `${key}: 空`;
+    if (Array.isArray(value)) return `${key}: [${value.length} 项]`;
+    if (typeof value === "object") return `${key}: ${operationNoticeValuePreview(value)}`;
+    return `${key}: ${String(value)}`;
+  });
+  return list.join("，");
+}
+
+function operationNoticeSummary(payload) {
+  const category = operationNoticeCategoryLabel(payload.category, payload.view);
+  const viewLabel = String(payload.view_label || operationNoticeViewMeta(payload.view).label || payload.view || category).trim() || category;
+  const actionLabel = operationNoticeActionLabel(payload.action_code, payload.action_label);
+  const statusLabel = operationNoticeStatusLabel(payload.status);
+  const actor = String(payload.actor_name || "").trim() || operationNoticeActor().actor_name;
+  const source = operationNoticeSourceLabel(payload.source);
+  const count = Number(payload.merged_count || 1);
+  const lines = [
+    `【${statusLabel}】${category} · ${viewLabel}`,
+    `动作：${actionLabel}`,
+    `操作者：${actor}`,
+    `来源：${source}`,
+  ];
+  if (count > 1) lines.push(`合并：同类操作 ${count} 次`);
+  if (payload.summary) lines.push(`摘要：${String(payload.summary).trim()}`);
+  if (payload.params) lines.push(`参数：${operationNoticeParamsPreview(payload.params)}`);
+  return lines.join("｜");
+}
+
+function operationNoticeGroupLabel(item) {
+  return operationNoticeCategoryLabel(item.category_label || item.category, item.view);
+}
+
+function operationNoticeChipTone(status) {
+  const token = String(status || "").trim().toLowerCase();
+  if (token === "failed") return "danger";
+  if (token === "warning") return "warning";
+  if (token === "suppressed") return "info";
+  return "success";
+}
+
+function operationNoticeDetailJson(item) {
+  const data = {
+    类目: operationNoticeGroupLabel(item),
+    页面: item.view_label || item.view || "-",
+    动作: operationNoticeActionLabel(item.action_code, item.action_label),
+    结果: operationNoticeStatusLabel(item.status),
+    操作者: item.actor_name || item.actor_id || "-",
+    来源: operationNoticeSourceLabel(item.source),
+    合并次数: Number(item.merged_count || 1),
+    首次时间: formatTime(item.first_seen_at),
+    最近时间: formatTime(item.last_seen_at),
+    参数: item.params || {},
+  };
+  return JSON.stringify(data, null, 2);
+}
+
+function operationNoticeValuePreview(value, depth = 0) {
+  if (depth >= 2) return "...";
+  if (Array.isArray(value)) {
+    if (!value.length) return "[]";
+    const preview = value.slice(0, 6).map((item) => operationNoticeValuePreview(item, depth + 1));
+    return `[${preview.join("，")}${value.length > 6 ? `，...共${value.length}项` : ""}]`;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== "");
+    if (!entries.length) return "{}";
+    return `{${entries.slice(0, 8).map(([key, item]) => `${key}: ${operationNoticeValuePreview(item, depth + 1)}`).join("，")}${entries.length > 8 ? "，..." : ""}}`;
+  }
+  if (value === true) return "是";
+  if (value === false) return "否";
+  if (value === null || value === undefined || value === "") return "空";
+  return String(value);
+}
+
+function accountNoticeSnapshot(account = {}) {
+  const platforms = Array.isArray(account.platforms) ? account.platforms : [];
+  return {
+    账号ID: Number(account.id || 0) || "",
+    账号标识: account.account_key || "",
+    账号名称: account.display_name || "",
+    状态: account.status || "",
+    运营微信: accountOperatorWechat(account),
+    手机号: accountPhone(account),
+    备注: account.notes || "",
+    发布成功数: Number(account.publish_success_count || 0),
+    平台明细: platforms.map((item) => ({
+      平台: platformLabel(item.platform || ""),
+      账号: item.handle || "",
+      登录状态: item.login_status || item.status_text || item.capability_status || "",
+      配置状态: item.capability_status || "",
+    })),
+  };
+}
+
+function accountNoticeChangeSnapshot(account, patch = {}) {
+  const next = { ...account };
+  if (patch.display_name !== undefined) next.display_name = patch.display_name;
+  if (patch.status !== undefined) next.status = patch.status;
+  if (patch.notes !== undefined) next.notes = patch.notes;
+  return {
+    变更前: accountNoticeSnapshot(account),
+    变更后: accountNoticeSnapshot(next),
+  };
+}
+
+function terminalPublishNoticeSnapshot(windowId) {
+  const terminal = state.terminalExecution || {};
+  const windows = Array.isArray(terminal.windows) ? terminal.windows : [];
+  const window = windows.find((item) => String(item.id) === String(windowId)) || {};
+  const currentIndex = Number(window.current_index || 0);
+  const accounts = Array.isArray(window.accounts) ? window.accounts : [];
+  const current = accounts[currentIndex] || null;
+  const next = accounts[currentIndex + 1] || null;
+  const run = window.publish_run || {};
+  const precheck = window.publish_precheck || {};
+  return {
+    窗口ID: String(windowId || ""),
+    窗口名称: terminalWindowLabel(windowId),
+    当前索引: currentIndex,
+    账号总数: accounts.length,
+    当前账号: current ? accountNoticeSnapshot(current) : {},
+    下一账号: next ? accountNoticeSnapshot(next) : {},
+    发布预检: {
+      阶段: precheck.stage || "",
+      状态: precheck.status || "",
+      提示: precheck.message || "",
+      关键问题: precheck.primary_issue || "",
+      细节: precheck.details || [],
+    },
+    发布运行: {
+      阶段: run.stage || "",
+      状态: run.status || "",
+      进度: run.progress || 0,
+      发布日期: run.publish_date || "",
+      进程号: run.pid || "",
+      运行目录: run.workspace || "",
+      日志文件: run.log_path || "",
+      错误阶段: run.error_stage || "",
+      错误信息: run.error || "",
+    },
+  };
+}
+
+function matrixWechatPublishNoticeSnapshot() {
+  const settings = state.distributionSettings || {};
+  const common = settings.common || {};
+  const platform = settings.platforms?.wechat || {};
+  const job = settings.jobs?.matrix_wechat_publish || {};
+  return {
+    任务配置: {
+      批次大小: Number(job.batch_size || 0),
+      启用: Boolean(job.enabled),
+      调度模式: job.schedule_mode || "",
+      每日时间: job.daily_time || "",
+      运行间隔分钟: Number(job.run_interval_minutes || 0),
+      批次间隔分钟: [Number(job.batch_interval_min_minutes ?? 0), Number(job.batch_interval_max_minutes ?? 0)],
+      轮转起始组: Boolean(job.rotate_start_group),
+      批内随机: Boolean(job.shuffle_within_batch),
+      重试上次失败: Boolean(job.retry_failed_last),
+    },
+    发布配置: {
+      全局模式: common.publish_mode || "",
+      微信平台模式: platform.publish_mode || "",
+      素材目录: common.material_dir || "",
+      输出目录: common.output_root || "",
+    },
+    当前状态: {
+      最近运行时间: state.matrixJobStatus?.updated_at || "",
+      运行状态: state.matrixJobStatus?.status || "",
+      运行阶段: state.matrixJobStatus?.stage || "",
+    },
+  };
+}
+
+function operationNoticeApiMeta(path, method, body) {
+  const normalizedPath = String(path || "").split("?")[0];
+  const normalizedMethod = String(method || "GET").trim().toUpperCase();
+  const currentMeta = operationNoticeViewMeta(currentView);
+  const payload = body && typeof body === "object" ? body : {};
+  const pathMatch = OPERATION_NOTICE_PATH_HINTS.find((item) => item.test(normalizedPath, normalizedMethod));
+  let category = pathMatch?.category || currentMeta.category || "菜单导航";
+  let actionCode = pathMatch?.actionCode || (normalizedMethod === "POST" ? "submit" : normalizedMethod === "PATCH" ? "update" : normalizedMethod === "DELETE" ? "delete" : normalizedMethod === "PUT" ? "save" : "view_enter");
+  let actionLabel = pathMatch?.actionLabel || operationNoticeActionLabel(actionCode);
+  const routeNoticeMatch = normalizedPath.match(/^\/api\/notification-routes\/([^/]+)\/([^/]+)$/);
+  if (routeNoticeMatch) {
+    const enabled = Boolean(payload.enabled);
+    category = "通知中心";
+    actionCode = enabled ? "open" : "toggle";
+    actionLabel = enabled ? "开启通知路由" : "关闭通知路由";
+  }
+  const incidentActionMatch = normalizedPath.match(/^\/api\/notification-incidents\/\d+\/([^/]+)$/);
+  if (incidentActionMatch) {
+    const action = incidentActionMatch[1];
+    const incidentLabelMap = {
+      ack: ["ack", "确认通知"],
+      assign: ["update", "指派给我"],
+      resolve: ["update", "关闭通知"],
+      ignore: ["ignore", "忽略通知"],
+      resend: ["run", "重发通知"],
+    };
+    const tuple = incidentLabelMap[action];
+    if (tuple) {
+      actionCode = tuple[0];
+      actionLabel = tuple[1];
+    }
+  }
+  return {
+    category,
+    view: currentView || payload.view || "",
+    view_label: currentMeta.label || currentView || category,
+    action_code: actionCode,
+    action_label: actionLabel,
+    source: "api",
+    params: payload,
+  };
+}
+
+async function emitOperationNotice(payload = {}, options = {}) {
+  const base = {
+    category: operationNoticeCategoryLabel(payload.category, payload.view),
+    view: String(payload.view || currentView || "").trim(),
+    view_label: String(payload.view_label || operationNoticeViewMeta(payload.view || currentView).label || payload.view || currentView || "").trim(),
+    action_code: String(payload.action_code || "submit").trim(),
+    action_label: String(payload.action_label || "").trim(),
+    status: String(payload.status || "success").trim().toLowerCase(),
+    summary: String(payload.summary || "").trim(),
+    params: payload.params && typeof payload.params === "object" ? payload.params : {},
+    source: String(payload.source || "page").trim(),
+    merge_key: String(payload.merge_key || "").trim(),
+    occurred_at: Number(payload.occurred_at || Date.now()),
+  };
+  const actor = operationNoticeActor();
+  const requestPayload = {
+    ...base,
+    actor_id: String(payload.actor_id || actor.actor_id || "allen").trim(),
+    actor_name: String(payload.actor_name || actor.actor_name || "Allen").trim(),
+  };
+  if (options?.skipSend) return requestPayload;
+  try {
+    const response = await fetch("/api/operation-notices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestPayload),
+    });
+    let result = null;
+    try {
+      result = await response.json();
+    } catch (_error) {}
+    const notice = result?.notice || result || null;
+    if (currentView === "notifications" && notice && typeof notice === "object") {
+      state.operationNotices = [notice, ...state.operationNotices.filter((item) => item.id !== notice.id)];
+      renderOperationNotifications();
+    }
+    if (currentView === "notifications") {
+      try {
+        state.operationNotices = await api("/api/operation-notices?limit=120");
+        renderOperationNotifications();
+      } catch (_error) {}
+    }
+  } catch (_error) {}
+  return requestPayload;
+}
+
 function notificationHistoryContent(item, payload, eventType, platform) {
   const rawText = String(payload.text || payload.summary || item.summary || "").trim();
   if (/^GasGx AI robot test message$/.test(rawText)) {
@@ -5024,14 +5584,18 @@ function renderOperationNotifications() {
   const incidentNode = document.querySelector("#notification-incident-list");
   const batchNode = document.querySelector("#login-qr-batches");
   const historyNode = document.querySelector("#notification-history");
+  const noticeNode = document.querySelector("#operation-notice-list");
+  const noticeCountNode = document.querySelector("#operation-notice-count");
   const unreadNode = document.querySelector("#notification-unread-count");
   const messageQueue = state.aiRobotMessages || [];
   const incidents = state.notificationIncidents || [];
+  const notices = state.operationNotices || [];
   const pendingStatuses = new Set(["pending", "retry", "failed", "sending"]);
   const pendingMessages = messageQueue.filter((item) => pendingStatuses.has(String(item.status || "").toLowerCase())).length;
   const openIncidents = incidents.filter((item) => ["open", "acknowledged", "assigned"].includes(String(item.status || "").toLowerCase()));
   const unreadCount = pendingMessages + openIncidents.length + (state.loginQrBatches || []).length;
   if (unreadNode) unreadNode.textContent = `${unreadCount} 条待处理`;
+  if (noticeCountNode) noticeCountNode.textContent = `${notices.length} 条`;
   if (routeNode) {
     const routes = state.notificationRoutes || [];
     const eventTypes = Array.from(new Set(routes.map((item) => item.event_type)));
@@ -5187,6 +5751,66 @@ function renderOperationNotifications() {
       <article class="notification-card info">
         <span class="notification-dot"></span>
         <div><strong>暂无外发记录</strong><p>先配置机器人并触发一次测试或业务事件。</p></div>
+        <time>实时</time>
+      </article>
+    `;
+  }
+  if (noticeNode) {
+    const grouped = notices.reduce((acc, item) => {
+      const category = operationNoticeGroupLabel(item);
+      if (!acc[category]) acc[category] = [];
+      acc[category].push(item);
+      return acc;
+    }, {});
+    const orderedCategories = [
+      ...OPERATION_NOTICE_CATEGORY_ORDER.filter((category) => grouped[category]?.length),
+      ...Object.keys(grouped).filter((category) => !OPERATION_NOTICE_CATEGORY_ORDER.includes(category)),
+    ];
+    noticeNode.innerHTML = notices.length ? orderedCategories.map((category) => {
+      const rows = grouped[category] || [];
+      return `
+        <section class="operation-notice-group">
+          <div class="operation-notice-group-head">
+            <strong>${escapeHtml(category)}</strong>
+            <span>${rows.length} 条</span>
+          </div>
+          <div class="notification-list">
+            ${rows.map((item) => {
+              const status = String(item.status || "success").toLowerCase();
+              const deliveryStatus = String(item.delivery_status || "pending").toLowerCase();
+              const mergedCount = Number(item.merged_count || 1);
+              const summary = String(item.summary || "").trim() || operationNoticeParamsPreview(item.params || {});
+              const metaLine = [
+                `结果：${operationNoticeStatusLabel(status)}`,
+                `交付：${operationNoticeDeliveryLabel(deliveryStatus)}`,
+                `操作者：${item.actor_name || item.actor_id || "系统"}`,
+                `来源：${operationNoticeSourceLabel(item.source)}`,
+                `合并：${mergedCount} 次`,
+              ].join(" · ");
+              const title = `${operationNoticeActionLabel(item.action_code, item.action_label)} · ${item.view_label || item.view || category}`;
+              return `
+                <article class="notification-card ${operationNoticeChipTone(status)} operation-notice-card">
+                  <span class="notification-dot"></span>
+                  <div>
+                    <strong>${escapeHtml(title)}</strong>
+                    <p>${escapeHtml(summary)}</p>
+                    <p>${escapeHtml(metaLine)}</p>
+                    <details class="operation-notice-details">
+                      <summary>查看完整参数</summary>
+                      <pre>${escapeHtml(operationNoticeDetailJson(item))}</pre>
+                    </details>
+                  </div>
+                  <time>${formatTime(item.updated_at || item.last_seen_at || item.created_at)}</time>
+                </article>
+              `;
+            }).join("")}
+          </div>
+        </section>
+      `;
+    }).join("") : `
+      <article class="notification-card info">
+        <span class="notification-dot"></span>
+        <div><strong>暂无操作通知</strong><p>左侧菜单进入和核心操作会在这里按类目展示，保留 7 天。</p></div>
         <time>实时</time>
       </article>
     `;
@@ -5528,7 +6152,7 @@ function renderInteractionManagement() {
     button.addEventListener("click", () => {
       setInteractionTab(button.dataset.interactionTab);
       if (currentView !== "interaction-management") {
-        activateView("interaction-management");
+        activateView("interaction-management", true, "page");
       } else {
         renderInteractionManagement();
       }
@@ -6117,9 +6741,14 @@ async function refresh() {
 }
 
 async function loadShellData() {
-  const brand = await api("/api/brand");
-  state.brand = brand;
-  applyServerBrand(brand);
+  try {
+    const brand = await api("/api/brand");
+    state.brand = brand;
+    applyServerBrand(brand);
+  } catch (_error) {
+    // Keep the current shell theme if brand loading fails; other views should still render.
+    applyServerBrand(state.brand || { settings: {} });
+  }
 }
 
 async function loadPlatforms() {
@@ -6241,13 +6870,34 @@ async function loadViewData(view, { force = false } = {}) {
       state.interactionManagement.status = await api("/api/interaction-management/status");
       renderInteractionManagement();
     } else if (view === "notifications") {
-      state.notificationEvents = await api("/api/notification-events");
-      state.notificationRoutes = await api("/api/notification-routes");
-      state.notificationPolicies = await api("/api/notification-policies");
-      state.notificationIncidents = await api("/api/notification-incidents");
-      state.notificationSla = await api("/api/stats/notification-sla");
-      state.loginQrBatches = await api("/api/login-qr-batches");
-      state.aiRobotMessages = await api("/api/ai-robots/messages");
+      const results = await Promise.allSettled([
+        api("/api/notification-events"),
+        api("/api/notification-routes"),
+        api("/api/notification-policies"),
+        api("/api/notification-incidents"),
+        api("/api/operation-notices?limit=120"),
+        api("/api/stats/notification-sla"),
+        api("/api/login-qr-batches"),
+        api("/api/ai-robots/messages"),
+      ]);
+      const [
+        notificationEvents,
+        notificationRoutes,
+        notificationPolicies,
+        notificationIncidents,
+        operationNotices,
+        notificationSla,
+        loginQrBatches,
+        aiRobotMessages,
+      ] = results;
+      if (notificationEvents.status === "fulfilled") state.notificationEvents = notificationEvents.value;
+      if (notificationRoutes.status === "fulfilled") state.notificationRoutes = notificationRoutes.value;
+      if (notificationPolicies.status === "fulfilled") state.notificationPolicies = notificationPolicies.value;
+      if (notificationIncidents.status === "fulfilled") state.notificationIncidents = notificationIncidents.value;
+      if (operationNotices.status === "fulfilled") state.operationNotices = operationNotices.value;
+      if (notificationSla.status === "fulfilled") state.notificationSla = notificationSla.value;
+      if (loginQrBatches.status === "fulfilled") state.loginQrBatches = loginQrBatches.value;
+      if (aiRobotMessages.status === "fulfilled") state.aiRobotMessages = aiRobotMessages.value;
       renderOperationNotifications();
     } else if (view === "system-settings") {
       await loadSyncStatus();
@@ -6504,7 +7154,7 @@ function updateAccountPhoneHint() {
   hint.classList.add("warning");
 }
 
-function activateView(view, updateHash = true) {
+function activateView(view, updateHash = true, source = "sidebar") {
   if (view === "terminal-execution" && updateHash) {
     state.terminalRoute = "hub";
   }
@@ -6550,6 +7200,19 @@ function activateView(view, updateHash = true) {
     const pathPrefix = window.location.pathname.startsWith("/help-center/") && view !== "help-center" ? "/" : window.location.pathname;
     window.history.replaceState(null, "", `${pathPrefix}${hash}`);
   }
+  const meta = operationNoticeViewMeta(view);
+  void emitOperationNotice({
+    category: meta.category,
+    view,
+    view_label: meta.label,
+    action_code: "view_enter",
+    action_label: "进入页面",
+    status: "success",
+    summary: `从${operationNoticeSourceLabel(source)}打开${meta.label || view || "页面"}`,
+    params: { view, view_label: meta.label || view || "", source },
+    source,
+    merge_key: `view:${view}:${source}`,
+  });
   window.scrollTo({ top: 0, left: 0 });
 }
 
@@ -6561,7 +7224,7 @@ document.querySelectorAll(".nav-btn").forEach((button) => {
       document.querySelector("#mobile-nav-toggle")?.setAttribute("aria-expanded", "false");
       return;
     }
-    activateView(button.dataset.view);
+    activateView(button.dataset.view, true, "sidebar");
   });
 });
 
@@ -6569,7 +7232,7 @@ document.querySelectorAll("[data-interaction-tab]").forEach((button) => {
   button.addEventListener("click", () => {
     setInteractionTab(button.dataset.interactionTab);
     if (currentView !== "interaction-management") {
-      activateView("interaction-management");
+      activateView("interaction-management", true, "page");
     } else {
       renderInteractionManagement();
     }
@@ -6639,7 +7302,30 @@ document.querySelector("#account-form").addEventListener("submit", async (event)
     delete data.operator_wechat;
     delete data.phone;
     data.platforms = PLATFORM_ORDER;
-    const created = await api("/api/accounts", { method: "POST", body: JSON.stringify(data) });
+    const created = await api("/api/accounts", { method: "POST", body: JSON.stringify(data), skipOperationNotice: true });
+    void emitOperationNotice({
+      category: "账号管理",
+      view: "accounts",
+      view_label: "账号管理",
+      action_code: "create",
+      action_label: "新建账号",
+      status: "success",
+      summary: `新增账号「${created.display_name || data.display_name || "未命名"}」`,
+      params: {
+        提交参数: {
+          账号名称: data.display_name,
+          账号标识: data.account_key,
+          账号昵称前缀: brandPrefix,
+          账号名称输入: accountName,
+          运营微信: operatorWechat,
+          账号手机号: phone,
+          平台列表: data.platforms,
+          备注: data.notes,
+        },
+        创建结果: accountNoticeSnapshot(created),
+      },
+      source: "page",
+    });
     event.target.reset();
     setOperatorWechatValue("aamecc");
     showAccountCreatedToast(created);
@@ -7055,8 +7741,32 @@ document.querySelector("#matrix-run-now").addEventListener("click", async (event
   if (!confirmed) return;
   const restoreButton = setButtonLoading(button, "启动中");
   try {
-    await api("/api/jobs/matrix-wechat/run-now", { method: "POST" });
+    await api("/api/jobs/matrix-wechat/run-now", { method: "POST", skipOperationNotice: true });
+    void emitOperationNotice({
+      category: "批量发布",
+      view: "settings",
+      view_label: "发布配置",
+      action_code: "run_now",
+      action_label: "立即运行发布作业",
+      status: "success",
+      summary: "批量发布作业已启动",
+      params: matrixWechatPublishNoticeSnapshot(),
+      source: "page",
+    });
     await refresh();
+  } catch (error) {
+    void emitOperationNotice({
+      category: "批量发布",
+      view: "settings",
+      view_label: "发布配置",
+      action_code: "run_now",
+      action_label: "立即运行发布作业",
+      status: "failed",
+      summary: formatFriendlyMessage(error?.message || "批量发布作业启动失败"),
+      params: matrixWechatPublishNoticeSnapshot(),
+      source: "page",
+    });
+    throw error;
   } finally {
     restoreButton();
   }
@@ -7359,6 +8069,7 @@ document.addEventListener("click", async (event) => {
   if (terminalAutoPublishButton) {
     const windowId = String(terminalAutoPublishButton.dataset.terminalAutoPublish || "").trim();
     if (!windowId) return;
+    const noticeSnapshot = terminalPublishNoticeSnapshot(windowId);
     const targetWindow = (state.terminalExecution.windows || []).find((item) => String(item.id) === windowId);
     const targetIndex = Number(targetWindow?.current_index || 0);
     const targetAccountId = terminalResolveWindowAccountId(targetWindow, targetIndex);
@@ -7374,15 +8085,40 @@ document.addEventListener("click", async (event) => {
     terminalAutoPublishStageByWindowId.set(windowId, "publishing");
     terminalErrorModalSignature = "";
     hideTerminalErrorModal();
+    if (targetAccountId) {
+      triggerTerminalWechatAutoStatsCapture(targetAccountId);
+    }
     let stage = "manual_publish";
     try {
-      const nextState = await api(`/api/terminal-execution/windows/${windowId}/manual-publish`, { method: "POST" });
+      const nextState = await api(`/api/terminal-execution/windows/${windowId}/manual-publish`, { method: "POST", skipOperationNotice: true });
       mergeTerminalWindowState(nextState, windowId);
+      void emitOperationNotice({
+        category: "批量发布",
+        view: "terminal-execution",
+        view_label: "批量发布",
+        action_code: "run",
+        action_label: "执行手动发布",
+        status: "success",
+        summary: `窗口 ${windowId} 已启动手动发布`,
+        params: noticeSnapshot,
+        source: "page",
+      });
       terminalReapplyInFlightWindowActions();
       terminalAutoPublishStageByWindowId.delete(windowId);
       renderTerminalExecution();
     } catch (error) {
       terminalAutoPublishStageByWindowId.delete(windowId);
+      void emitOperationNotice({
+        category: "批量发布",
+        view: "terminal-execution",
+        view_label: "批量发布",
+        action_code: "run",
+        action_label: "执行手动发布",
+        status: "failed",
+        summary: error?.message || "执行手动发布失败",
+        params: noticeSnapshot,
+        source: "page",
+      });
       console.warn("[terminal:auto-publish] failed", { windowId, stage, error: error?.message || error });
       showTerminalErrorModal({
         stage: "publish_start",
@@ -7498,12 +8234,24 @@ document.addEventListener("click", async (event) => {
   if (terminalConfirmButton) {
     const windowId = terminalConfirmButton.dataset.terminalConfirmSuccess;
     if (!windowId) return;
+    const noticeSnapshot = terminalPublishNoticeSnapshot(windowId);
     const currentAccountId = terminalCurrentWindowAccountId(windowId);
     if (currentAccountId) setTerminalButtonCooldown(windowId, currentAccountId, "next", 15);
     if (currentAccountId) markTerminalManualAction(windowId, currentAccountId, "next");
     const restoreButton = setButtonLoading(terminalConfirmButton, "打开浏览器中");
     try {
-      state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/confirm-publish-success`, { method: "POST" });
+      state.terminalExecution = await api(`/api/terminal-execution/windows/${windowId}/confirm-publish-success`, { method: "POST", skipOperationNotice: true });
+      void emitOperationNotice({
+        category: "批量发布",
+        view: "terminal-execution",
+        view_label: "批量发布",
+        action_code: "ack",
+        action_label: "确认发布成功",
+        status: "success",
+        summary: `窗口 ${windowId} 已确认发布成功并推进下一账号`,
+        params: noticeSnapshot,
+        source: "page",
+      });
       terminalReapplyInFlightWindowActions();
       terminalErrorModalSignature = "";
       hideTerminalErrorModal();
@@ -7517,6 +8265,17 @@ document.addEventListener("click", async (event) => {
       renderTerminalExecution();
     } catch (error) {
       const ok = terminalAdvanceWindowLocally(windowId);
+      void emitOperationNotice({
+        category: "批量发布",
+        view: "terminal-execution",
+        view_label: "批量发布",
+        action_code: "ack",
+        action_label: "确认发布成功",
+        status: ok ? "warning" : "failed",
+        summary: ok ? `窗口 ${windowId} 后端确认失败，已本地推进下一账号` : (error?.message || "确认发布成功失败"),
+        params: noticeSnapshot,
+        source: "page",
+      });
       if (ok) {
         const nextAccountId = terminalCurrentWindowAccountId(windowId);
         if (nextAccountId) {
@@ -7572,10 +8331,24 @@ document.addEventListener("click", async (event) => {
   if (deleteAccountButton) {
     const accountId = deleteAccountButton.dataset.deleteAccount;
     const accountName = deleteAccountButton.dataset.accountName || `#${accountId}`;
+    const account = accountById(accountId);
     if (!window.confirm(`确认删除矩阵账号「${accountName}」？相关平台、浏览器配置和任务记录会一并删除。`)) return;
     const restoreButton = setButtonLoading(deleteAccountButton, "删除中...");
     try {
-      await api(`/api/accounts/${accountId}`, { method: "DELETE" });
+      await api(`/api/accounts/${accountId}`, { method: "DELETE", skipOperationNotice: true });
+      void emitOperationNotice({
+        category: "账号管理",
+        view: "accounts",
+        view_label: "账号管理",
+        action_code: "delete",
+        action_label: "删除账号",
+        status: "success",
+        summary: `删除账号「${accountName}」`,
+        params: {
+          删除对象: accountNoticeSnapshot(account || { id: accountId, display_name: accountName }),
+        },
+        source: "page",
+      });
       await refresh();
     } finally {
       restoreButton();
@@ -8075,6 +8848,7 @@ document.addEventListener("click", async (event) => {
     terminalErrorModalSignature = "";
     hideTerminalErrorModal();
     try {
+      triggerTerminalWechatAutoStatsCapture(selected.accountId);
       state.terminalExecution = await api(`/api/accounts/${selected.accountId}/platforms/wechat/emergency-publish`, { method: "POST" });
       renderTerminalExecution();
     } catch (error) {
@@ -8129,6 +8903,13 @@ document.addEventListener("click", async (event) => {
 }, true);
 
 document.addEventListener("change", (event) => {
+  const autoStatsToggle = event.target.closest("#terminal-wechat-auto-stats-toggle");
+  if (autoStatsToggle) {
+    terminalWechatAutoStatsEnabled = Boolean(autoStatsToggle.checked);
+    localStorage.setItem(TERMINAL_WECHAT_AUTO_STATS_KEY, terminalWechatAutoStatsEnabled ? "1" : "0");
+    setTerminalWechatAutoStatsHint("");
+    return;
+  }
   const select = event.target.closest("#terminal-wechat-account-select");
   if (!select) return;
   terminalWechatSelectedAccountId = String(select.value || "").trim();
@@ -8139,7 +8920,7 @@ window.addEventListener("load", () => {
   const helpDocFromPath = helpCenterDocPathFromLocation();
   if (helpDocFromPath) {
     setHelpCenterStandaloneMode(true);
-    activateView("help-center", false);
+    activateView("help-center", false, "hash");
     openHelpDocument(helpDocFromPath, { syncUrl: false });
     setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 50);
     setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 300);
@@ -8149,7 +8930,7 @@ window.addEventListener("load", () => {
   const requested = terminalRouteFromHash();
   if (requested.view) {
     if (requested.view === "terminal-execution") state.terminalRoute = requested.route;
-    activateView(requested.view, false);
+    activateView(requested.view, false, "hash");
     setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 50);
     setTimeout(() => window.scrollTo({ top: 0, left: 0 }), 300);
   }
@@ -8159,5 +8940,5 @@ window.addEventListener("hashchange", () => {
   const requested = terminalRouteFromHash();
   if (!requested.view) return;
   if (requested.view === "terminal-execution") state.terminalRoute = requested.route;
-  activateView(requested.view, false);
+  activateView(requested.view, false, "initial");
 });

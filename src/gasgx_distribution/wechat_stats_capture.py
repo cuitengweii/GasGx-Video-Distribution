@@ -882,6 +882,32 @@ def _assert_wechat_account_identity(page: Any, account: dict[str, Any]) -> dict[
     return {"checked": True, "expected_tokens": expected_tokens, **identity}
 
 
+def _open_capture_work_page(
+    page: Any,
+    *,
+    open_capture_in_new_tab: bool = False,
+    capture_tab_foreground: bool = False,
+) -> tuple[Any, bool]:
+    if not bool(open_capture_in_new_tab):
+        return page, False
+    try:
+        tab = page.new_tab(background=not bool(capture_tab_foreground))
+    except Exception:
+        tab = None
+    if tab is None:
+        return page, False
+    return tab, True
+
+
+def _close_capture_tab_quietly(page: Any) -> None:
+    close = getattr(page, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
 def _capture_account_legacy(
     account: dict[str, Any],
     *,
@@ -889,6 +915,9 @@ def _capture_account_legacy(
     run_id: str,
     keep_browser_open_on_login_required: bool = False,
     auto_open_browser: bool = True,
+    open_capture_in_new_tab: bool = False,
+    capture_tab_foreground: bool = False,
+    keep_capture_tab_open: bool = False,
 ) -> dict[str, Any]:
     account_id = int(account.get("id") or 0)
     profile_dir = str(account.get("wechat_profile_dir") or "")
@@ -897,6 +926,8 @@ def _capture_account_legacy(
     apply_runtime_environment = apply_cybercar_environment
     apply_runtime_environment()
     page = None
+    capture_page = None
+    capture_page_is_new_tab = False
     hold_browser_for_login = False
     try:
         with service._chrome_fingerprint_env(fingerprint):  # type: ignore[attr-defined]
@@ -906,17 +937,22 @@ def _capture_account_legacy(
                 chrome_user_data_dir=profile_dir,
                 startup_url=_stats_urls()[0],
             )
+        capture_page, capture_page_is_new_tab = _open_capture_work_page(
+            page,
+            open_capture_in_new_tab=open_capture_in_new_tab,
+            capture_tab_foreground=capture_tab_foreground,
+        )
         for url in _stats_urls():
             try:
-                page.get(url)
+                capture_page.get(url)
                 time.sleep(1.2)
-                login_state = engine.inspect_platform_login_gate(page, "wechat")
+                login_state = engine.inspect_platform_login_gate(capture_page, "wechat")
                 if bool(login_state.get("needs_login")):
                     hold_browser_for_login = keep_browser_open_on_login_required
                     raise StatsLoginRequired(str(login_state.get("reason") or "login_required"))
-                _assert_wechat_account_identity(page, account)
-                _apply_date_filter(page, target_date)
-                raw = _extract_page_payload(page)
+                _assert_wechat_account_identity(capture_page, account)
+                _apply_date_filter(capture_page, target_date)
+                raw = _extract_page_payload(capture_page)
                 parsed = parse_wechat_stats_payload(raw, account_id=account_id, target_date=target_date)
                 parsed["raw"] = raw
                 return parsed
@@ -925,10 +961,17 @@ def _capture_account_legacy(
                 raise
             except Exception:
                 continue
-        screenshot = _capture_screenshot(page, run_id, account_id) if page else ""
+        screenshot = _capture_screenshot(capture_page, run_id, account_id) if capture_page else ""
         raise StatsParseError(f"no supported wechat stats page parsed; screenshot={screenshot}")
     finally:
-        if page is not None and not hold_browser_for_login:
+        if hold_browser_for_login:
+            pass
+        elif capture_page_is_new_tab and capture_page is not None:
+            if not keep_capture_tab_open:
+                _close_capture_tab_quietly(capture_page)
+            if page is not None and capture_page is not page:
+                _close_capture_tab_quietly(page)
+        elif page is not None:
             try:
                 engine._disconnect_chrome_page_quietly(page)  # type: ignore[attr-defined]
             except Exception:
@@ -942,6 +985,9 @@ def _capture_account(
     run_id: str,
     keep_browser_open_on_login_required: bool = False,
     auto_open_browser: bool = True,
+    open_capture_in_new_tab: bool = False,
+    capture_tab_foreground: bool = False,
+    keep_capture_tab_open: bool = False,
 ) -> dict[str, Any]:
     account_id = int(account.get("id") or 0)
     profile_dir = str(account.get("wechat_profile_dir") or "")
@@ -949,6 +995,8 @@ def _capture_account(
     fingerprint = account.get("wechat_fingerprint") or {}
     apply_cybercar_environment()
     page = None
+    capture_page = None
+    capture_page_is_new_tab = False
     hold_browser_for_login = False
     source_rows: list[dict[str, Any]] = []
     source_results: dict[str, Any] = {}
@@ -961,16 +1009,21 @@ def _capture_account(
                 chrome_user_data_dir=profile_dir,
                 startup_url=str(STATS_DOWNLOAD_SOURCES["follower"]["url"]),
             )
-        page.get(str(STATS_DOWNLOAD_SOURCES["follower"]["url"]))
+        capture_page, capture_page_is_new_tab = _open_capture_work_page(
+            page,
+            open_capture_in_new_tab=open_capture_in_new_tab,
+            capture_tab_foreground=capture_tab_foreground,
+        )
+        capture_page.get(str(STATS_DOWNLOAD_SOURCES["follower"]["url"]))
         time.sleep(1.1)
-        login_state = engine.inspect_platform_login_gate(page, "wechat")
+        login_state = engine.inspect_platform_login_gate(capture_page, "wechat")
         if bool(login_state.get("needs_login")):
             hold_browser_for_login = keep_browser_open_on_login_required
             raise StatsLoginRequired(str(login_state.get("reason") or "login_required"))
-        _assert_wechat_account_identity(page, account)
+        _assert_wechat_account_identity(capture_page, account)
         for source_key in ("follower", "post"):
             try:
-                download = _capture_stats_source(page, source_key=source_key, account_id=account_id, profile_dir=profile_dir, run_id=run_id)
+                download = _capture_stats_source(capture_page, source_key=source_key, account_id=account_id, profile_dir=profile_dir, run_id=run_id)
                 meta = {
                     "data_source": "dom_table",
                     "download_file": download.get("path", ""),
@@ -1023,7 +1076,14 @@ def _capture_account(
                 "no_data": True,
             }
     finally:
-        if page is not None and not hold_browser_for_login:
+        if hold_browser_for_login:
+            pass
+        elif capture_page_is_new_tab and capture_page is not None:
+            if not keep_capture_tab_open:
+                _close_capture_tab_quietly(capture_page)
+            if page is not None and capture_page is not page:
+                _close_capture_tab_quietly(page)
+        elif page is not None:
             try:
                 engine._disconnect_chrome_page_quietly(page)  # type: ignore[attr-defined]
             except Exception:
@@ -1034,6 +1094,9 @@ def _capture_account(
         run_id=run_id,
         keep_browser_open_on_login_required=keep_browser_open_on_login_required,
         auto_open_browser=auto_open_browser,
+        open_capture_in_new_tab=open_capture_in_new_tab,
+        capture_tab_foreground=capture_tab_foreground,
+        keep_capture_tab_open=keep_capture_tab_open,
     )
     legacy["source_results"] = source_results
     legacy["missing_sources"] = missing_sources or ["follower", "post"]
@@ -1061,6 +1124,9 @@ def run_wechat_stats_capture(
     account_id: int | None = None,
     keep_browser_open_on_login_required: bool = False,
     auto_open_browser: bool = True,
+    open_capture_in_new_tab: bool = False,
+    capture_tab_foreground: bool = False,
+    keep_capture_tab_open: bool = False,
 ) -> dict[str, Any]:
     capture_date = normalize_target_date(target_date)
     run_id = f"wechat-stats-{capture_date}-{time.strftime('%H%M%S')}"
@@ -1144,6 +1210,9 @@ def run_wechat_stats_capture(
                     run_id=run_id,
                     keep_browser_open_on_login_required=keep_browser_open_on_login_required,
                     auto_open_browser=auto_open_browser,
+                    open_capture_in_new_tab=open_capture_in_new_tab,
+                    capture_tab_foreground=capture_tab_foreground,
+                    keep_capture_tab_open=keep_capture_tab_open,
                 )
                 account_snapshots = parsed.get("account_snapshots")
                 if not isinstance(account_snapshots, list):

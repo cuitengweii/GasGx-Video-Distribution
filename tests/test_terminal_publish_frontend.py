@@ -30,7 +30,16 @@ def test_terminal_wechat_top_account_module_is_rendered() -> None:
     assert "data-terminal-wechat-login-selected" in app_js
     assert "data-terminal-wechat-publish-selected" in app_js
     assert "/api/accounts/${selected.accountId}/platforms/wechat/emergency-publish" in app_js
+    assert "TERMINAL_WECHAT_AUTO_STATS_KEY" in app_js
+    assert "terminal-wechat-auto-stats-toggle" in app_js
+    assert "triggerTerminalWechatAutoStatsCapture(targetAccountId);" in app_js
+    assert "triggerTerminalWechatAutoStatsCapture(selected.accountId);" in app_js
+    assert "open_capture_in_new_tab: true" in app_js
+    assert "capture_tab_foreground: true" in app_js
+    assert "keep_capture_tab_open: true" in app_js
     assert "terminalWechatHasActiveSupplementalRuns" in app_js
     assert "label: accountName" in app_js
     assert "#terminal-execution[data-terminal-route=\"wechat\"] .terminal-wechat-page" in app_css
+    assert ".terminal-wechat-auto-stats-toggle" in app_css
+    assert ".terminal-wechat-auto-stats-hint" in app_css
     assert "width: 100%;" in app_css

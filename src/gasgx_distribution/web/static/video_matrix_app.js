@@ -222,6 +222,81 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+async function emitOperationNotice(payload = {}) {
+  try {
+    await fetch("/api/operation-notices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: "生成视频",
+        view: "video-matrix",
+        view_label: "生成视频",
+        action_code: "generate",
+        action_label: "视频生成",
+        status: "success",
+        source: "page",
+        actor_id: "allen",
+        actor_name: "Allen",
+        ...payload,
+      }),
+    });
+  } catch (_error) {}
+}
+
+function videoMatrixNoticeSnapshot(statePayload, sourceFiles = []) {
+  const fileList = sourceFiles.map((file) => ({
+    文件名: file.name || "",
+    大小: file.size || 0,
+    类型: file.type || "",
+  }));
+  return {
+    提交参数: {
+      生成数量: Number(statePayload.output_count || 0),
+      并行线程: Number(statePayload.max_workers || 0),
+      视频时长: `${Number(statePayload.video_duration_min || 0)} ~ ${Number(statePayload.video_duration_max || 0)} 秒`,
+      目标帧率: Number(statePayload.target_fps || 0),
+      渲染速度: String(statePayload.render_speed_mode || ""),
+      输出目录: String(statePayload.output_root || ""),
+      输出格式: Array.isArray(statePayload.output_options) ? statePayload.output_options : [],
+      正文模板: {
+        模板ID: String(statePayload.template_id || ""),
+        封面ID: String(statePayload.cover_template_id || ""),
+        片尾模式: String(statePayload.ending_template_mode || ""),
+        片尾模板: String(statePayload.ending_template_id || ""),
+        片尾目录: String(statePayload.ending_template_dir || ""),
+      },
+      文案开关: {
+        标题AI: Boolean(statePayload.headline_ai_enabled),
+        描述AI: Boolean(statePayload.description_ai_enabled),
+        关注AI: Boolean(statePayload.follow_text_ai_enabled),
+        HUD AI: Boolean(statePayload.hud_ai_enabled),
+      },
+      BGM: {
+        来源: String(statePayload.bgm_source || ""),
+        曲库: String(statePayload.bgm_library_id || ""),
+        挖掘音量: Number(statePayload.mining_bgm_volume || 0),
+        曲库音量: Number(statePayload.library_bgm_volume || 0),
+      },
+      分类: {
+        启用分类: Array.isArray(statePayload.active_category_ids) ? statePayload.active_category_ids : [],
+        最近条数: statePayload.recent_limits || {},
+        组合结构条数: Array.isArray(statePayload.composition_sequence) ? statePayload.composition_sequence.length : 0,
+        结构自定义: Boolean(statePayload.composition_customized),
+      },
+      AI提示词: {
+        标题: String(statePayload.ai_prompt_hint || ""),
+        描述: String(statePayload.description_ai_prompt_hint || ""),
+        关注: String(statePayload.follow_text_ai_prompt_hint || ""),
+        HUD: String(statePayload.hud_ai_prompt_hint || ""),
+      },
+      上传素材文件: {
+        数量: fileList.length,
+        文件列表: fileList,
+      },
+    },
+  };
+}
+
 function sanitizeAiPromptHint(value) {
   const text = String(value || "").replace(/\r\n/g, "\n").replace(AI_PROMPT_HINT_URL_RE, "").trim();
   if (!text) return "";
@@ -2527,6 +2602,7 @@ async function generate() {
   button.dataset.mode = "generate";
   try {
     const statePayload = collectState();
+    const sourceFiles = [...($("sourceFiles")?.files || [])];
     displayedJobPercent = 0;
     showGenerationWaitOverlay(true, { progress: 0, message: "正在提交生成任务..." });
     button.disabled = true;
@@ -2537,12 +2613,33 @@ async function generate() {
     }
     const form = new FormData();
     form.append("payload", JSON.stringify(statePayload));
-    [...($("sourceFiles")?.files || [])].forEach((file) => form.append("source_files", file));
+    sourceFiles.forEach((file) => form.append("source_files", file));
     const {job_id} = await api("/api/video-matrix/generate", {method:"POST", body: form});
+    void emitOperationNotice({
+      action_code: "submit",
+      action_label: "提交生成任务",
+      status: "success",
+      summary: `视频生成任务已提交，准备生成 ${statePayload.output_count || 0} 条视频`,
+      params: videoMatrixNoticeSnapshot(statePayload, sourceFiles),
+    });
     updateJobStatus({ status: "queued", stage: "queued", progress: 0.02, message: `任务已提交：${job_id}` });
     startJobProgressTicker();
     pollJob(job_id);
   } catch (error) {
+    void emitOperationNotice({
+      action_code: "submit",
+      action_label: "提交生成任务",
+      status: "failed",
+      summary: error?.message || "视频生成任务提交失败",
+      params: (() => {
+        try {
+          const statePayload = collectState();
+          return videoMatrixNoticeSnapshot(statePayload, [...($("sourceFiles")?.files || [])]);
+        } catch (_error) {
+          return {};
+        }
+      })(),
+    });
     updateJobStatus({ status: "error", stage: "error", progress: 0, message: error.message, error: error.message });
     stopJobProgressTicker();
     showGenerationWaitOverlay(false);

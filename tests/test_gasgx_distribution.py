@@ -6,6 +6,7 @@ import hmac
 import hashlib
 import sqlite3
 import time
+import contextlib
 from datetime import date, timezone
 from pathlib import Path
 from typing import Any
@@ -1167,6 +1168,153 @@ def test_wechat_stats_capture_no_data_rows_marked_skipped(monkeypatch, tmp_path:
     assert result["results"][0]["reason"] == "no_data"
 
 
+def test_wechat_stats_capture_new_tab_keep_open_does_not_close_capture_tab(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    class FakeTab:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.visited: list[str] = []
+
+        def get(self, url: str) -> None:
+            self.visited.append(str(url))
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    class FakeOwnerPage(FakeTab):
+        def __init__(self) -> None:
+            super().__init__()
+            self.capture_tab = FakeTab()
+            self.new_tab_calls: list[bool] = []
+
+        def new_tab(self, background: bool = False) -> FakeTab:
+            self.new_tab_calls.append(bool(background))
+            return self.capture_tab
+
+    owner_page = FakeOwnerPage()
+    disconnect_calls: list[Any] = []
+
+    def fake_capture_source(_page, *, source_key: str, **_kwargs):
+        if source_key == "follower":
+            return {
+                "table_rows": [["2026/05/17", "1", "2", "1", "101"]],
+                "path": "",
+                "source_hash": "",
+                "original_path": "",
+            }
+        return {
+            "table_rows": [["2026/05/17", "220", "16", "11", "9", "5", "3"]],
+            "path": "",
+            "source_hash": "",
+            "original_path": "",
+        }
+
+    monkeypatch.setattr(wechat_stats_capture, "apply_cybercar_environment", lambda: None)
+    monkeypatch.setattr(wechat_stats_capture.service, "_chrome_fingerprint_env", lambda *_args, **_kwargs: contextlib.nullcontext())
+    monkeypatch.setattr(wechat_stats_capture.engine, "_connect_chrome", lambda **_kwargs: owner_page)
+    monkeypatch.setattr(wechat_stats_capture.engine, "inspect_platform_login_gate", lambda *_args, **_kwargs: {"needs_login": False})
+    monkeypatch.setattr(wechat_stats_capture, "_assert_wechat_account_identity", lambda *_args, **_kwargs: {"checked": True})
+    monkeypatch.setattr(wechat_stats_capture, "_capture_stats_source", fake_capture_source)
+    monkeypatch.setattr(wechat_stats_capture.engine, "_disconnect_chrome_page_quietly", lambda page: disconnect_calls.append(page))
+
+    parsed = wechat_stats_capture._capture_account(
+        {
+            "id": 88,
+            "account_key": "gasgx-tab-test",
+            "display_name": "GasGx Tab Test",
+            "wechat_profile_dir": str(tmp_path / "profile"),
+            "wechat_debug_port": 18088,
+            "wechat_fingerprint": {},
+        },
+        target_date="2026-05-17",
+        run_id="wechat-stats-test",
+        open_capture_in_new_tab=True,
+        capture_tab_foreground=True,
+        keep_capture_tab_open=True,
+        auto_open_browser=False,
+    )
+
+    assert owner_page.new_tab_calls == [False]
+    assert owner_page.capture_tab.close_calls == 0
+    assert disconnect_calls == []
+    assert parsed["account_snapshots"]
+
+
+def test_wechat_stats_capture_new_tab_closes_capture_tab_when_keep_open_disabled(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    class FakeTab:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.visited: list[str] = []
+
+        def get(self, url: str) -> None:
+            self.visited.append(str(url))
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    class FakeOwnerPage(FakeTab):
+        def __init__(self) -> None:
+            super().__init__()
+            self.capture_tab = FakeTab()
+            self.new_tab_calls: list[bool] = []
+
+        def new_tab(self, background: bool = False) -> FakeTab:
+            self.new_tab_calls.append(bool(background))
+            return self.capture_tab
+
+    owner_page = FakeOwnerPage()
+    disconnect_calls: list[Any] = []
+
+    def fake_capture_source(_page, *, source_key: str, **_kwargs):
+        if source_key == "follower":
+            return {
+                "table_rows": [["2026/05/17", "1", "2", "1", "101"]],
+                "path": "",
+                "source_hash": "",
+                "original_path": "",
+            }
+        return {
+            "table_rows": [["2026/05/17", "220", "16", "11", "9", "5", "3"]],
+            "path": "",
+            "source_hash": "",
+            "original_path": "",
+        }
+
+    monkeypatch.setattr(wechat_stats_capture, "apply_cybercar_environment", lambda: None)
+    monkeypatch.setattr(wechat_stats_capture.service, "_chrome_fingerprint_env", lambda *_args, **_kwargs: contextlib.nullcontext())
+    monkeypatch.setattr(wechat_stats_capture.engine, "_connect_chrome", lambda **_kwargs: owner_page)
+    monkeypatch.setattr(wechat_stats_capture.engine, "inspect_platform_login_gate", lambda *_args, **_kwargs: {"needs_login": False})
+    monkeypatch.setattr(wechat_stats_capture, "_assert_wechat_account_identity", lambda *_args, **_kwargs: {"checked": True})
+    monkeypatch.setattr(wechat_stats_capture, "_capture_stats_source", fake_capture_source)
+    monkeypatch.setattr(wechat_stats_capture.engine, "_disconnect_chrome_page_quietly", lambda page: disconnect_calls.append(page))
+
+    parsed = wechat_stats_capture._capture_account(
+        {
+            "id": 89,
+            "account_key": "gasgx-tab-test-2",
+            "display_name": "GasGx Tab Test 2",
+            "wechat_profile_dir": str(tmp_path / "profile2"),
+            "wechat_debug_port": 18089,
+            "wechat_fingerprint": {},
+        },
+        target_date="2026-05-17",
+        run_id="wechat-stats-test-2",
+        open_capture_in_new_tab=True,
+        capture_tab_foreground=True,
+        keep_capture_tab_open=False,
+        auto_open_browser=False,
+    )
+
+    assert owner_page.new_tab_calls == [False]
+    assert owner_page.capture_tab.close_calls == 1
+    assert owner_page.close_calls == 1
+    assert disconnect_calls == []
+    assert parsed["account_snapshots"]
+
+
 def test_stats_capture_run_now_api_accepts_account_id(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     captured: dict[str, Any] = {}
@@ -1184,6 +1332,9 @@ def test_stats_capture_run_now_api_accepts_account_id(monkeypatch, tmp_path: Pat
             "dry_run": False,
             "account_id": 77,
             "keep_browser_open_on_login_required": True,
+            "open_capture_in_new_tab": True,
+            "capture_tab_foreground": True,
+            "keep_capture_tab_open": True,
         },
     )
 
@@ -1193,6 +1344,35 @@ def test_stats_capture_run_now_api_accepts_account_id(monkeypatch, tmp_path: Pat
     assert captured["dry_run"] is False
     assert int(captured["account_id"]) == 77
     assert captured["keep_browser_open_on_login_required"] is True
+    assert captured["open_capture_in_new_tab"] is True
+    assert captured["capture_tab_foreground"] is True
+    assert captured["keep_capture_tab_open"] is True
+
+
+def test_stats_capture_run_now_api_keeps_legacy_default_flags(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_trigger(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "status": "started"}
+
+    monkeypatch.setattr("gasgx_distribution.web.trigger_matrix_wechat_stats_capture", fake_trigger)
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/jobs/matrix-wechat/stats-capture/run-now",
+        json={
+            "target_date": "2026-05-04",
+            "dry_run": False,
+            "account_id": 78,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    assert captured["open_capture_in_new_tab"] is False
+    assert captured["capture_tab_foreground"] is False
+    assert captured["keep_capture_tab_open"] is False
 
 
 def test_wechat_stats_csv_parsers_extract_rolling_7d_rows(monkeypatch, tmp_path: Path) -> None:

@@ -124,6 +124,36 @@ CREATE INDEX IF NOT EXISTS idx_notification_incidents_status ON notification_inc
 CREATE INDEX IF NOT EXISTS idx_notification_incidents_escalation ON notification_incidents(next_escalate_at, status);
 CREATE INDEX IF NOT EXISTS idx_notification_actions_incident ON notification_actions(incident_id, created_at);
 
+CREATE TABLE IF NOT EXISTS operation_notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL,
+    category_label TEXT NOT NULL DEFAULT '',
+    view TEXT NOT NULL DEFAULT '',
+    view_label TEXT NOT NULL DEFAULT '',
+    action_code TEXT NOT NULL,
+    action_label TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'success',
+    summary TEXT NOT NULL DEFAULT '',
+    params_json TEXT NOT NULL DEFAULT '{}',
+    actor_id TEXT NOT NULL DEFAULT '',
+    actor_name TEXT NOT NULL DEFAULT '',
+    merge_key TEXT NOT NULL DEFAULT '',
+    merged_count INTEGER NOT NULL DEFAULT 1,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    delivery_status TEXT NOT NULL DEFAULT 'pending',
+    delivery_targets_json TEXT NOT NULL DEFAULT '[]',
+    delivery_result_json TEXT NOT NULL DEFAULT '{}',
+    delivered_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_operation_notices_category ON operation_notices(category, created_at);
+CREATE INDEX IF NOT EXISTS idx_operation_notices_status ON operation_notices(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_operation_notices_merge ON operation_notices(merge_key, delivery_status, delivered_at);
+
 CREATE TABLE IF NOT EXISTS login_qr_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     batch_id TEXT NOT NULL UNIQUE,

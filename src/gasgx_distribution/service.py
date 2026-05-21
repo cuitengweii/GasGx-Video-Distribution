@@ -210,6 +210,102 @@ NOTIFICATION_GENERIC_SUBTYPE_LABELS = {
     "route_probe": "联调",
 }
 LOGIN_QR_NOTIFY_COOLDOWN_SECONDS = 1800
+OPERATION_NOTICE_RETENTION_SECONDS = 7 * 24 * 60 * 60
+OPERATION_NOTICE_MERGE_WINDOW_SECONDS = 30
+OPERATION_NOTICE_STATUS_LABELS = {
+    "success": "成功",
+    "failed": "失败",
+    "warning": "警告",
+    "info": "信息",
+}
+OPERATION_NOTICE_DELIVERY_STATUS_LABELS = {
+    "pending": "待发送",
+    "sent": "已发送",
+    "suppressed": "已合并",
+    "failed": "发送失败",
+}
+OPERATION_NOTICE_SOURCE_LABELS = {
+    "sidebar": "侧栏点击",
+    "quick": "快捷入口",
+    "hash": "链接跳转",
+    "initial": "初次加载",
+    "page": "页面操作",
+    "api": "接口操作",
+    "internal": "页面内部跳转",
+}
+OPERATION_NOTICE_CATEGORY_ORDER = [
+    "菜单导航",
+    "账号管理",
+    "生成视频",
+    "发布配置",
+    "批量发布",
+    "粉丝互动",
+    "数据统计",
+    "通知中心",
+    "用户中心",
+    "系统设置",
+    "帮助文档",
+    "运营客服",
+]
+OPERATION_NOTICE_VIEW_META = {
+    "overview": {"category": "菜单导航", "label": "总览"},
+    "ai-robot": {"category": "运营客服", "label": "运营客服"},
+    "accounts": {"category": "账号管理", "label": "账号管理"},
+    "video-matrix": {"category": "生成视频", "label": "生成视频"},
+    "settings": {"category": "发布配置", "label": "发布配置"},
+    "terminal-execution": {"category": "批量发布", "label": "批量发布"},
+    "interaction-management": {"category": "粉丝互动", "label": "粉丝互动"},
+    "stats": {"category": "数据统计", "label": "数据统计"},
+    "user-center": {"category": "用户中心", "label": "用户中心"},
+    "notifications": {"category": "通知中心", "label": "通知中心"},
+    "system-settings": {"category": "系统设置", "label": "系统设置"},
+    "help-center": {"category": "帮助文档", "label": "帮助文档"},
+    "tasks": {"category": "批量发布", "label": "执行队列"},
+}
+OPERATION_NOTICE_ACTION_LABELS = {
+    "view_enter": "进入页面",
+    "create": "新建",
+    "update": "保存",
+    "delete": "删除",
+    "run": "执行",
+    "run_now": "立即执行",
+    "refresh": "刷新",
+    "open": "打开",
+    "save": "保存",
+    "test": "测试",
+    "submit": "提交",
+    "toggle": "切换",
+    "import": "导入",
+    "export": "导出",
+    "login": "登录",
+    "logout": "退出登录",
+    "repair": "修复",
+    "ack": "确认",
+    "ignore": "忽略",
+}
+OPERATION_NOTICE_ACTION_HINTS = {
+    "/api/accounts": {"POST": ("账号管理", "create", "新建账号")},
+    "/api/accounts/repair-config": {"POST": ("账号管理", "repair", "修复账号配置")},
+    "/api/settings/distribution": {"PUT": ("发布配置", "save", "保存发布配置")},
+    "/api/settings/material-dir/open": {"POST": ("发布配置", "open", "打开素材目录")},
+    "/api/jobs/matrix-wechat/run-now": {"POST": ("批量发布", "run_now", "立即运行发布作业")},
+    "/api/jobs/matrix-wechat/stats-capture/run-now": {"POST": ("数据统计", "run_now", "立即运行统计采集")},
+    "/api/interaction-management/config": {"PUT": ("粉丝互动", "save", "保存互动配置")},
+    "/api/interaction-management/comment/run": {"POST": ("粉丝互动", "run", "执行评论回复")},
+    "/api/interaction-management/private-msg/run": {"POST": ("粉丝互动", "run", "执行私信回复")},
+    "/api/system/initialize": {"POST": ("系统设置", "submit", "系统初始化")},
+    "/api/system/cache/clear": {"POST": ("系统设置", "refresh", "清理应用缓存")},
+    "/api/sync/supabase/pull": {"POST": ("系统设置", "import", "从云端导入")},
+    "/api/sync/supabase/push": {"POST": ("系统设置", "export", "推送到云端")},
+    "/api/sync/retry": {"POST": ("系统设置", "run", "重试同步队列")},
+    "/api/terminal-execution/start": {"POST": ("批量发布", "open", "打开登录浏览器")},
+    "/api/terminal-execution/start-login": {"POST": ("批量发布", "open", "打开登录浏览器")},
+    "/api/notification-policies": {"PUT": ("通知中心", "save", "保存通知策略")},
+    "/api/notification-incidents": {"POST": ("通知中心", "update", "处理通知事件")},
+    "/api/auth/login": {"POST": ("用户中心", "login", "登录")},
+    "/api/auth/users": {"POST": ("用户中心", "create", "创建用户")},
+    "/api/auth/roles": {"POST": ("用户中心", "create", "创建角色")},
+}
 BRAND_INLINE_ASSET_MAX_CHARS = int(os.getenv("GASGX_BRAND_INLINE_ASSET_MAX_CHARS", "200000") or 200000)
 BRAND_PUBLIC_SETTING_COLUMNS = "id,name,slogan,primary_color,theme_id,default_account_prefix,created_at,updated_at"
 TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS = int(os.getenv("GASGX_TERMINAL_LOGIN_PROBE_INTERVAL_SECONDS", "5") or 5)
@@ -494,6 +590,7 @@ SYNC_TABLE_CONFLICT_KEYS = {
     "notification_policies": "event_type,severity,platform,account_scope",
     "notification_incidents": "event_type,dedupe_key",
     "notification_actions": "id",
+    "operation_notices": "id",
     "automation_tasks": "id",
     "video_stats_snapshots": "id",
     "wechat_stats_account_snapshots": "account_id,platform,stat_date",
@@ -501,11 +598,12 @@ SYNC_TABLE_CONFLICT_KEYS = {
     "ai_robot_messages": "id",
     "app_settings": "setting_key",
 }
-SYNC_JSON_FIELDS = {"payload_json", "fingerprint_json", "raw_json", "target_platforms_json", "escalation_platforms_json"}
+SYNC_JSON_FIELDS = {"payload_json", "fingerprint_json", "raw_json", "target_platforms_json", "escalation_platforms_json", "delivery_targets_json", "delivery_result_json"}
 SYNC_INTEGER_FIELDS_BY_TABLE = {
     "account_platforms": {"enabled"},
     "notification_routes": {"enabled"},
     "notification_policies": {"enabled", "escalation_enabled"},
+    "operation_notices": {"merged_count"},
     "ai_robot_configs": {"enabled"},
 }
 SYNC_BACKUP_TABLES = (
@@ -517,6 +615,7 @@ SYNC_BACKUP_TABLES = (
     "notification_policies",
     "notification_incidents",
     "notification_actions",
+    "operation_notices",
     "automation_tasks",
     "video_stats_snapshots",
     "wechat_stats_account_snapshots",
@@ -2088,7 +2187,7 @@ def enqueue_ai_robot_message(platform: str, payload: dict[str, Any], *, test: bo
     config = get_ai_robot_config(token)
     supported = bool(config and config.get("enabled") and config.get("webhook_url"))
     status = "pending" if supported else "unsupported"
-    summary = "已进入机器人发送队列" if supported else f"{NOTIFICATION_PLATFORM_LABELS.get(token, token)} 机器人未启用或缺少 Webhook 地址"
+    summary = "已进入机器人发送队列" if supported else f"{NOTIFICATION_PLATFORM_LABELS.get(token, token)} 机器人未启用或缺少 Webhook 地址 (not enabled)"
     message = dict(payload or {})
     if test:
         message.setdefault("text", "机器人测试通知")
@@ -2617,6 +2716,456 @@ def _normalize_notification_incident(row: dict[str, Any]) -> dict[str, Any]:
         "occurrence_count": int(row.get("occurrence_count") or 0),
         "escalation_count": int(row.get("escalation_count") or 0),
     }
+
+
+def _operation_notice_view_meta(view: str) -> dict[str, str]:
+    token = str(view or "").strip()
+    return dict(OPERATION_NOTICE_VIEW_META.get(token) or {"category": "菜单导航", "label": token or "未知页面"})
+
+
+def _operation_notice_category_label(category: str) -> str:
+    token = str(category or "").strip()
+    return token or "菜单导航"
+
+
+def _operation_notice_action_label(action_code: str, action_label: str = "") -> str:
+    label = str(action_label or "").strip()
+    if label:
+        return label
+    token = str(action_code or "").strip().lower()
+    return OPERATION_NOTICE_ACTION_LABELS.get(token, token or "操作")
+
+
+def _operation_notice_value_text(value: Any, *, depth: int = 0) -> str:
+    if depth >= 2:
+        return "..."
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in list(value.items())[:12]:
+            if item in {None, "", [], {}}:
+                continue
+            parts.append(f"{key}={_operation_notice_value_text(item, depth=depth + 1)}")
+        return "{" + "；".join(parts) + "}" if parts else "{}"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        preview = [_operation_notice_value_text(item, depth=depth + 1) for item in value[:8]]
+        suffix = f"；...共{len(value)}项" if len(value) > 8 else ""
+        return "[" + "；".join(preview) + suffix + "]"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    return str(value)
+
+
+def _normalize_operation_notice(row: dict[str, Any]) -> dict[str, Any]:
+    params = _json_payload(row.get("params_json"), {})
+    delivery_targets = _json_payload(row.get("delivery_targets_json"), [])
+    delivery_result = _json_payload(row.get("delivery_result_json"), {})
+    return {
+        **row,
+        "params": params if isinstance(params, dict) else {},
+        "delivery_targets": delivery_targets if isinstance(delivery_targets, list) else [],
+        "delivery_result": delivery_result if isinstance(delivery_result, dict) else {},
+        "merged_count": int(row.get("merged_count") or 1),
+        "category_label": str(row.get("category_label") or row.get("category") or "菜单导航"),
+        "view_label": str(row.get("view_label") or row.get("view") or ""),
+        "action_label": str(row.get("action_label") or row.get("action_code") or "操作"),
+    }
+
+
+def _operation_notice_merge_key(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("merge_key") or "").strip()
+    if explicit:
+        return explicit[:240]
+    parts = [
+        str(payload.get("category") or ""),
+        str(payload.get("view") or ""),
+        str(payload.get("action_code") or ""),
+        str(payload.get("status") or ""),
+        str(payload.get("source") or ""),
+    ]
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:24]
+    return f"operation:{digest}"
+
+
+def _operation_notice_text(data: dict[str, Any], *, merged_count: int = 1) -> str:
+    category = _operation_notice_category_label(str(data.get("category") or "菜单导航"))
+    view_label = str(data.get("view_label") or data.get("view") or "").strip() or category
+    action_label = _operation_notice_action_label(str(data.get("action_code") or ""), str(data.get("action_label") or ""))
+    status = str(data.get("status") or "success").strip().lower()
+    status_label = OPERATION_NOTICE_STATUS_LABELS.get(status, status or "成功")
+    summary = str(data.get("summary") or "").strip()
+    actor_name = str(data.get("actor_name") or "").strip() or "系统"
+    source = OPERATION_NOTICE_SOURCE_LABELS.get(str(data.get("source") or "").strip(), str(data.get("source") or "").strip() or "页面操作")
+    lines = [
+        f"【操作通知】{category}",
+        f"页面：{view_label}",
+        f"动作：{action_label}",
+        f"结果：{status_label}",
+        f"操作者：{actor_name}",
+        f"来源：{source}",
+    ]
+    if merged_count > 1:
+        lines.append(f"合并：同类操作 {merged_count} 次")
+    if summary:
+        lines.append(f"摘要：{summary}")
+    params = data.get("params") if isinstance(data.get("params"), dict) else data.get("params_json")
+    if isinstance(params, dict) and params:
+        lines.append(f"参数：{_operation_notice_value_text(params)}")
+    return "\n".join(lines)
+
+
+def _operation_notice_delivery_platforms() -> list[str]:
+    platforms: list[str] = []
+    try:
+        for config in list_ai_robot_configs():
+            platform = str(config.get("platform") or "").strip()
+            if platform and bool(config.get("enabled")) and str(config.get("webhook_url") or "").strip():
+                platforms.append(platform)
+    except Exception:
+        return []
+    return platforms
+
+
+def _operation_notice_delivery_payload(notice: dict[str, Any]) -> dict[str, Any]:
+    params = notice.get("params") if isinstance(notice.get("params"), dict) else notice.get("params_json")
+    if not isinstance(params, dict):
+        params = {}
+    return {
+        "message_type": "operation_notice",
+        "category": notice.get("category"),
+        "category_label": notice.get("category_label"),
+        "view": notice.get("view"),
+        "view_label": notice.get("view_label"),
+        "action_code": notice.get("action_code"),
+        "action_label": notice.get("action_label"),
+        "status": notice.get("status"),
+        "summary": notice.get("summary"),
+        "actor_id": notice.get("actor_id"),
+        "actor_name": notice.get("actor_name"),
+        "source": notice.get("source"),
+        "notice_id": notice.get("id"),
+        "merged_count": notice.get("merged_count", 1),
+        "params": params,
+        "text": _operation_notice_text(notice, merged_count=int(notice.get("merged_count") or 1)),
+    }
+
+
+def _operation_notice_recent_sent_same_key(conn, merge_key: str, ts: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT * FROM operation_notices
+        WHERE merge_key = ? AND delivery_status = 'sent' AND delivered_at IS NOT NULL AND delivered_at >= ?
+        ORDER BY delivered_at DESC, id DESC
+        LIMIT 1
+        """,
+        (merge_key, ts - OPERATION_NOTICE_MERGE_WINDOW_SECONDS),
+    ).fetchone()
+    return dict_from_row(row) if row is not None else None
+
+
+def _record_operation_notice_delivery(conn, notice_id: int, delivery_status: str, targets: list[str], results: list[dict[str, Any]], delivered_at: int | None = None) -> dict[str, Any]:
+    ts = now_ts()
+    payload = {
+        "delivery_status": delivery_status,
+        "delivery_targets_json": targets,
+        "delivery_result_json": results,
+        "delivered_at": delivered_at,
+        "updated_at": ts,
+    }
+    if brand_database_backend() == "supabase":
+        row = _brand_supabase().update("operation_notices", payload, filters={"id": notice_id})
+        _invalidate_supabase_read_cache("operation_notices")
+        return _normalize_operation_notice(row)
+    with connect() as conn:
+        assignments = ", ".join(f"{key} = ?" for key in payload)
+        conn.execute(f"UPDATE operation_notices SET {assignments} WHERE id = ?", (*payload.values(), notice_id))
+        _enqueue_sync_row(conn, "operation_notices", "id = ?", (notice_id,))
+        row = conn.execute("SELECT * FROM operation_notices WHERE id = ?", (notice_id,)).fetchone()
+        return _normalize_operation_notice(dict_from_row(row)) if row is not None else {}
+
+
+def _render_operation_notice_delivery_results(platforms: list[str], results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    delivered: list[dict[str, Any]] = []
+    for platform, result in zip(platforms, results, strict=False):
+        item = {"platform": platform}
+        if isinstance(result, dict):
+            item.update(result)
+        delivered.append(item)
+    return delivered
+
+
+def _deliver_operation_notice(notice: dict[str, Any], *, platforms: list[str] | None = None) -> dict[str, Any]:
+    platforms = list(platforms or _operation_notice_delivery_platforms())
+    payload = _operation_notice_delivery_payload(notice)
+    results: list[dict[str, Any]] = []
+    for platform in platforms:
+        try:
+            queued = enqueue_ai_robot_message(platform, payload, test=False)
+            results.append(send_ai_robot_message_now(queued) if str(queued.get("status") or "") != "unsupported" else queued)
+        except Exception as exc:
+            results.append({"platform": platform, "ok": False, "error": str(exc)})
+    return {
+        "delivery_status": "sent" if results else "pending",
+        "delivery_targets": platforms,
+        "delivery_result": _render_operation_notice_delivery_results(platforms, results),
+    }
+
+
+def cleanup_operation_notices(*, retention_seconds: int = OPERATION_NOTICE_RETENTION_SECONDS) -> int:
+    cutoff = now_ts() - max(0, int(retention_seconds or 0))
+    if cutoff <= 0:
+        return 0
+    if brand_database_backend() == "supabase":
+        try:
+            rows = _brand_supabase().select_where("operation_notices", params={"created_at": f"lt.{cutoff}"}, columns="id")
+            deleted = 0
+            for row in rows:
+                if _brand_supabase().delete("operation_notices", filters={"id": row["id"]}):
+                    deleted += 1
+            if deleted:
+                _invalidate_supabase_read_cache("operation_notices")
+            return deleted
+        except SupabaseError:
+            return 0
+    ensure_database()
+    with connect() as conn:
+        expired = [
+            int(row["id"])
+            for row in conn.execute("SELECT id FROM operation_notices WHERE created_at < ?", (cutoff,)).fetchall()
+        ]
+        for notice_id in expired:
+            conn.execute("DELETE FROM operation_notices WHERE id = ?", (notice_id,))
+            _enqueue_sync_delete(conn, "operation_notices", {"id": notice_id}, entity_id=str(notice_id))
+        return len(expired)
+
+
+def _operation_notice_storage_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    view_meta = _operation_notice_view_meta(str(payload.get("view") or ""))
+    category = str(payload.get("category") or view_meta.get("category") or "菜单导航").strip() or "菜单导航"
+    view = str(payload.get("view") or "").strip()
+    status = str(payload.get("status") or "success").strip().lower() or "success"
+    action_code = str(payload.get("action_code") or "").strip() or "view_enter"
+    action_label = _operation_notice_action_label(action_code, str(payload.get("action_label") or ""))
+    summary = str(payload.get("summary") or "").strip()
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    ts = int(payload.get("occurred_at") or now_ts())
+    actor_id = str(payload.get("actor_id") or "").strip()
+    actor_name = str(payload.get("actor_name") or "").strip()
+    source = str(payload.get("source") or "").strip() or "page"
+    merge_key = _operation_notice_merge_key({
+        "category": category,
+        "view": view,
+        "action_code": action_code,
+        "status": status,
+        "source": source,
+    })
+    return {
+        "category": category,
+        "category_label": _operation_notice_category_label(category),
+        "view": view,
+        "view_label": str(payload.get("view_label") or view_meta.get("label") or view or category).strip() or category,
+        "action_code": action_code,
+        "action_label": action_label,
+        "source": source,
+        "status": status,
+        "summary": summary,
+        "params_json": params,
+        "actor_id": actor_id,
+        "actor_name": actor_name,
+        "merge_key": merge_key,
+        "merged_count": 1,
+        "first_seen_at": ts,
+        "last_seen_at": ts,
+        "delivery_status": "pending",
+        "delivery_targets_json": [],
+        "delivery_result_json": {},
+        "delivered_at": None,
+        "created_at": ts,
+        "updated_at": ts,
+    }
+
+
+def record_operation_notice(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = _operation_notice_storage_payload(dict(payload or {}))
+    cleanup_operation_notices()
+    delivery_platforms = _operation_notice_delivery_platforms()
+    if brand_database_backend() == "supabase":
+        client = _brand_supabase()
+        notice = client.insert("operation_notices", data)
+        notice = _normalize_operation_notice(notice or data)
+        recent_rows = client.select_where(
+            "operation_notices",
+            params={"merge_key": f"eq.{data['merge_key']}", "delivery_status": "eq.sent"},
+            order="delivered_at.desc,id.desc",
+        )
+        recent = recent_rows[0] if recent_rows else None
+        recent_ts = int((recent or {}).get("delivered_at") or 0)
+        should_suppress = recent is not None and recent_ts >= data["first_seen_at"] - OPERATION_NOTICE_MERGE_WINDOW_SECONDS
+        if should_suppress:
+            merged_count = int((recent or {}).get("merged_count") or 1) + 1
+            client.update(
+                "operation_notices",
+                {"merged_count": merged_count, "last_seen_at": data["last_seen_at"], "updated_at": data["updated_at"]},
+                filters={"id": recent["id"]},
+            )
+            notice = _normalize_operation_notice(
+                client.update(
+                    "operation_notices",
+                    {
+                        "delivery_status": "suppressed",
+                        "delivery_targets_json": [],
+                        "delivery_result_json": {"reason": "throttled", "merged_into_notice_id": int(recent["id"])},
+                        "updated_at": data["updated_at"],
+                    },
+                    filters={"id": notice["id"]},
+                )
+            )
+            return {"notice": notice, "delivery": {"delivery_status": "suppressed", "delivery_targets": [], "delivery_result": []}}
+        try:
+            delivery = _deliver_operation_notice(notice, platforms=delivery_platforms)
+        except Exception as exc:
+            delivery = {
+                "delivery_status": "failed",
+                "delivery_targets": delivery_platforms,
+                "delivery_result": [{"platform": platform, "ok": False, "error": str(exc)} for platform in delivery_platforms] or [{"platform": "", "ok": False, "error": str(exc)}],
+            }
+        updated = client.update(
+            "operation_notices",
+            {
+                "delivery_status": delivery["delivery_status"],
+                "delivery_targets_json": delivery["delivery_targets"],
+                "delivery_result_json": delivery["delivery_result"],
+                "delivered_at": data["last_seen_at"],
+                "updated_at": data["updated_at"],
+            },
+            filters={"id": notice["id"]},
+        )
+        return {"notice": _normalize_operation_notice(updated), "delivery": delivery}
+    ensure_database()
+    with connect() as conn:
+        recent = _operation_notice_recent_sent_same_key(conn, data["merge_key"], data["first_seen_at"])
+        conn.execute(
+            """
+            INSERT INTO operation_notices(
+                category, category_label, view, view_label, action_code, action_label, source, status,
+                summary, params_json, actor_id, actor_name, merge_key, merged_count, first_seen_at,
+                last_seen_at, delivery_status, delivery_targets_json, delivery_result_json, delivered_at,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data["category"],
+                data["category_label"],
+                data["view"],
+                data["view_label"],
+                data["action_code"],
+                data["action_label"],
+                data["source"],
+                data["status"],
+                data["summary"],
+                json.dumps(data["params_json"], ensure_ascii=False, default=str),
+                data["actor_id"],
+                data["actor_name"],
+                data["merge_key"],
+                data["merged_count"],
+                data["first_seen_at"],
+                data["last_seen_at"],
+                data["delivery_status"],
+                json.dumps(data["delivery_targets_json"], ensure_ascii=False, default=str),
+                json.dumps(data["delivery_result_json"], ensure_ascii=False, default=str),
+                data["delivered_at"],
+                data["created_at"],
+                data["updated_at"],
+            ),
+        )
+        row = conn.execute("SELECT * FROM operation_notices WHERE rowid = last_insert_rowid()").fetchone()
+        conn.commit()
+        if recent is not None and int(recent.get("delivered_at") or 0) >= data["first_seen_at"] - OPERATION_NOTICE_MERGE_WINDOW_SECONDS:
+            conn.execute(
+                "UPDATE operation_notices SET merged_count = merged_count + 1, last_seen_at = ?, updated_at = ? WHERE id = ?",
+                (data["last_seen_at"], data["updated_at"], int(recent["id"])),
+            )
+            if row is not None:
+                conn.execute(
+                    """
+                    UPDATE operation_notices
+                    SET delivery_status = 'suppressed', delivery_targets_json = '[]', delivery_result_json = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps({"reason": "throttled", "merged_into_notice_id": int(recent["id"])}, ensure_ascii=False), data["updated_at"], int(row["id"])),
+                )
+                row = conn.execute("SELECT * FROM operation_notices WHERE id = ?", (int(row["id"]),)).fetchone()
+            _enqueue_sync_row(conn, "operation_notices", "id = ?", (int(recent["id"]),))
+            _enqueue_sync_row(conn, "operation_notices", "id = ?", (int(row["id"]) if row is not None else 0,))
+            return {
+                "notice": _normalize_operation_notice(dict_from_row(row)) if row is not None else data,
+                "delivery": {"delivery_status": "suppressed", "delivery_targets": [], "delivery_result": []},
+            }
+        try:
+            delivery = _deliver_operation_notice(data, platforms=delivery_platforms)
+        except Exception as exc:
+            delivery = {
+                "delivery_status": "failed",
+                "delivery_targets": delivery_platforms,
+                "delivery_result": [{"platform": platform, "ok": False, "error": str(exc)} for platform in delivery_platforms] or [{"platform": "", "ok": False, "error": str(exc)}],
+            }
+        conn.execute(
+            """
+            UPDATE operation_notices
+            SET delivery_status = ?, delivery_targets_json = ?, delivery_result_json = ?, delivered_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                delivery["delivery_status"],
+                json.dumps(delivery["delivery_targets"], ensure_ascii=False, default=str),
+                json.dumps(delivery["delivery_result"], ensure_ascii=False, default=str),
+                data["last_seen_at"],
+                data["updated_at"],
+                int(row["id"]),
+            ),
+        )
+        row = conn.execute("SELECT * FROM operation_notices WHERE id = ?", (int(row["id"]),)).fetchone()
+        conn.commit()
+        if row is not None:
+            _enqueue_sync_row(conn, "operation_notices", "id = ?", (int(row["id"]),))
+        return {"notice": _normalize_operation_notice(dict_from_row(row)) if row is not None else data, "delivery": delivery}
+
+
+def list_operation_notices(*, limit: int = 100, category: str = "", status: str = "") -> list[dict[str, Any]]:
+    cleanup_operation_notices()
+    limit = max(1, min(int(limit or 100), 500))
+    category_token = str(category or "").strip()
+    status_token = str(status or "").strip().lower()
+    if brand_database_backend() == "supabase":
+        try:
+            filters = {}
+            if category_token:
+                filters["category"] = category_token
+            if status_token:
+                filters["status"] = status_token
+            rows = _brand_supabase().select("operation_notices", filters=filters or None, order="created_at.desc,id.desc")[:limit]
+        except SupabaseError:
+            return []
+        return [_normalize_operation_notice(row) for row in rows]
+    ensure_database()
+    clauses = []
+    values: list[Any] = []
+    if category_token:
+        clauses.append("category = ?")
+        values.append(category_token)
+    if status_token:
+        clauses.append("status = ?")
+        values.append(status_token)
+    sql = "SELECT * FROM operation_notices"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+    values.append(limit)
+    with connect() as conn:
+        rows = conn.execute(sql, tuple(values)).fetchall()
+        return [_normalize_operation_notice(dict_from_row(row)) for row in rows]
 
 
 def _incident_payload_for_storage(event_type: str, message: dict[str, Any], policy: dict[str, Any], ts: int) -> dict[str, Any]:
@@ -6524,11 +7073,53 @@ def _video_key(path: Path) -> str:
 
 
 def _remaining_material_video_count() -> int:
+    count = 0
     try:
         from . import matrix_publish as mp
-        return mp.count_remaining_today_candidate_videos()
+        count = int(mp.count_remaining_today_candidate_videos())
+        if count > 0:
+            return count
     except Exception:
-        return 0
+        count = 0
+    # Backward-compatible fallback for legacy tests/state where today's
+    # candidate filter is not initialized: count remaining files by used_videos.
+    try:
+        from . import matrix_publish as mp
+        material_dir = mp.resolve_material_dir()
+        state_path = get_paths().runtime_root / "matrix_publish_state.json"
+        if state_path.exists():
+            try:
+                raw_state = json.loads(state_path.read_text(encoding="utf-8-sig"))
+            except Exception:
+                raw_state = {}
+        else:
+            raw_state = {}
+        used = set(str(item or "").strip() for item in raw_state.get("used_videos") or [])
+        # Compat: modern state stores consumed entries instead of used_videos.
+        for item in raw_state.get("consumed") or []:
+            if not isinstance(item, dict):
+                continue
+            asset_key = str(item.get("asset_key") or "").strip()
+            if asset_key:
+                used.add(asset_key)
+        remaining = 0
+        for path in material_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}:
+                continue
+            key = _video_key(path)
+            relative_key = ""
+            try:
+                relative_key = str(path.resolve().relative_to(material_dir.resolve()))
+            except Exception:
+                relative_key = ""
+            if key in used or relative_key in used or path.name in used:
+                continue
+            remaining += 1
+        return remaining
+    except Exception:
+        return count
 
 
 def open_material_directory(raw_path: str) -> dict[str, Any]:

@@ -76,6 +76,9 @@ def test_trigger_stats_capture_passes_keep_browser_flag(monkeypatch, tmp_path: P
         dry_run=False,
         account_id=58,
         keep_browser_open_on_login_required=True,
+        open_capture_in_new_tab=True,
+        capture_tab_foreground=True,
+        keep_capture_tab_open=True,
     )
 
     assert result["status"] == "started"
@@ -83,3 +86,6 @@ def test_trigger_stats_capture_passes_keep_browser_flag(monkeypatch, tmp_path: P
     assert captured["dry_run"] is False
     assert captured["account_id"] == 58
     assert captured["keep_browser_open_on_login_required"] is True
+    assert captured["open_capture_in_new_tab"] is True
+    assert captured["capture_tab_foreground"] is True
+    assert captured["keep_capture_tab_open"] is True

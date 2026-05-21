@@ -127,6 +127,22 @@ class NotificationActionPayload(BaseModel):
     assigned_to: str = ""
 
 
+class OperationNoticePayload(BaseModel):
+    category: str = ""
+    view: str = ""
+    view_label: str = ""
+    action_code: str = ""
+    action_label: str = ""
+    status: str = "success"
+    summary: str = ""
+    params: dict[str, Any] = Field(default_factory=dict)
+    source: str = "page"
+    actor_id: str = ""
+    actor_name: str = ""
+    occurred_at: int = 0
+    merge_key: str = ""
+
+
 class BrandInstancePayload(BaseModel):
     id: str = ""
     name: str
@@ -180,6 +196,9 @@ class WechatStatsCapturePayload(BaseModel):
     account_id: int | None = None
     keep_browser_open_on_login_required: bool = False
     auto_open_browser: bool = True
+    open_capture_in_new_tab: bool = False
+    capture_tab_foreground: bool = False
+    keep_capture_tab_open: bool = False
 
 
 class OperatorRolePayload(BaseModel):
@@ -740,6 +759,9 @@ def create_app() -> FastAPI:
             account_id=payload.account_id,
             keep_browser_open_on_login_required=payload.keep_browser_open_on_login_required,
             auto_open_browser=payload.auto_open_browser,
+            open_capture_in_new_tab=payload.open_capture_in_new_tab,
+            capture_tab_foreground=payload.capture_tab_foreground,
+            keep_capture_tab_open=payload.keep_capture_tab_open,
         )
 
     @app.get("/api/login-qr-batches")
@@ -852,6 +874,14 @@ def create_app() -> FastAPI:
     @app.get("/api/notification-incidents")
     def notification_incidents(status: str = "", limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
         return service.list_notification_incidents(status=status, limit=limit)
+
+    @app.get("/api/operation-notices")
+    def operation_notices(category: str = "", status: str = "", limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
+        return service.list_operation_notices(category=category, status=status, limit=limit)
+
+    @app.post("/api/operation-notices")
+    def create_operation_notice(payload: OperationNoticePayload = Body(default_factory=OperationNoticePayload)) -> dict[str, Any]:
+        return service.record_operation_notice(_model_payload(payload))
 
     @app.post("/api/notification-incidents/{incident_id}/{action}")
     def notification_incident_action(incident_id: int, action: str, payload: NotificationActionPayload = Body(default_factory=NotificationActionPayload)) -> dict[str, Any]:

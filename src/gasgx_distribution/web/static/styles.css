@@ -4262,6 +4262,81 @@ select option {
   background: rgba(93, 214, 44, 0.1);
 }
 
+.notification-subsection-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 6px;
+}
+
+.notification-subsection-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.notification-subsection-head p {
+  margin: 6px 0 0;
+}
+
+.operation-notice-group {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(93, 214, 44, 0.12);
+  border-radius: 8px;
+  background: rgba(93, 214, 44, 0.025);
+}
+
+.operation-notice-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+}
+
+.operation-notice-group-head strong {
+  color: var(--accent-aurora);
+  font-size: 15px;
+}
+
+.operation-notice-group-head span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.operation-notice-card {
+  align-items: start;
+}
+
+.operation-notice-details {
+  margin-top: 10px;
+}
+
+.operation-notice-details summary {
+  cursor: pointer;
+  color: var(--accent-aurora);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.operation-notice-details pre {
+  margin: 8px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 260px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .notification-policy-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5110,6 +5185,31 @@ body.terminal-execution-active #page-description {
 
 .terminal-wechat-account-select-field select {
   min-height: 42px;
+}
+
+.terminal-wechat-auto-stats-toggle {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.terminal-wechat-auto-stats-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #5dd62c;
+}
+
+.terminal-wechat-auto-stats-hint {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .terminal-wechat-account-note {
