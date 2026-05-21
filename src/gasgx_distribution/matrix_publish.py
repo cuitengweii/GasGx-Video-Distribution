@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 from typing import Any
@@ -135,7 +135,10 @@ def _load_timezone() -> ZoneInfo:
             return ZoneInfo(raw)
         except ZoneInfoNotFoundError:
             pass
-    return datetime.now().astimezone().tzinfo or timezone.utc
+    try:
+        return ZoneInfo("Asia/Shanghai")
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=8))
 
 
 def _today_date(tz: ZoneInfo) -> date:

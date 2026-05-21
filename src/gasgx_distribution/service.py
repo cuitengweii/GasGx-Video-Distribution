@@ -4424,6 +4424,13 @@ def _terminal_state_path() -> Path:
     return get_paths().runtime_root / "terminal_execution_state.json"
 
 
+def _beijing_timezone():
+    try:
+        return ZoneInfo("Asia/Shanghai")
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=8))
+
+
 def _terminal_business_date() -> str:
     timezone_name = str(load_distribution_settings_db().get("common", {}).get("timezone") or "").strip()
     if timezone_name:
@@ -4431,8 +4438,7 @@ def _terminal_business_date() -> str:
             return datetime.now(ZoneInfo(timezone_name)).date().isoformat()
         except ZoneInfoNotFoundError:
             pass
-    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
-    return datetime.now(local_tz).date().isoformat()
+    return datetime.now(_beijing_timezone()).date().isoformat()
 
 
 def _terminal_state_day_from_timestamp(timestamp_value: Any) -> str:
@@ -4448,8 +4454,7 @@ def _terminal_state_day_from_timestamp(timestamp_value: Any) -> str:
             return datetime.fromtimestamp(ts, ZoneInfo(timezone_name)).date().isoformat()
         except ZoneInfoNotFoundError:
             pass
-    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
-    return datetime.fromtimestamp(ts, local_tz).date().isoformat()
+    return datetime.fromtimestamp(ts, _beijing_timezone()).date().isoformat()
 
 
 def _normalize_terminal_color_hex(color: Any, *, slot_index: int = 0) -> str:
@@ -6226,7 +6231,7 @@ def _terminal_publish_precheck(window: dict[str, Any], *, login_started: bool, r
     selected_video = ""
     try:
         from . import matrix_publish as mp
-        publish_date = datetime.now().astimezone().date().isoformat()
+        publish_date = _terminal_business_date()
         candidates = mp.list_candidate_videos()
         used = mp._consumed_index(today=publish_date)
         for path in candidates:
@@ -6350,7 +6355,7 @@ def _build_terminal_publish_plan_item(account: dict[str, Any], platform_row: dic
         batch_index=0,
         batch_position=0,
         platform="wechat",
-        publish_date=datetime.now().astimezone().date().isoformat(),
+        publish_date=_terminal_business_date(),
     )
 
 
@@ -6365,7 +6370,7 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
     if not platform_row:
         raise RuntimeError("wechat platform config missing")
     candidates = mp.list_candidate_videos()
-    publish_date = datetime.now().astimezone().date().isoformat()
+    publish_date = _terminal_business_date()
     used = mp._consumed_index(today=publish_date)
     state_payload = state if isinstance(state, dict) else _load_terminal_state_with_rollover()
     assigned = _terminal_reserved_asset_keys(state_payload, publish_date)
@@ -6831,7 +6836,7 @@ def manual_terminal_publish(window_id: int) -> dict[str, Any]:
                 current,
                 asset_key=str(run.get("asset_key") or ""),
                 video=str(run.get("video") or ""),
-                publish_date=str(run.get("publish_date") or datetime.now().astimezone().date().isoformat()),
+                publish_date=str(run.get("publish_date") or _terminal_business_date()),
             )
             _refresh_terminal_window_marker(target, force=True)
             _schedule_terminal_window_marker_refresh(target, delays=(1.8, 4.8))
@@ -7063,7 +7068,7 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
             state_payload = mp._load_state()
             consumed = list(state_payload.get("consumed", [])) if isinstance(state_payload.get("consumed"), list) else []
             fallback_asset_key = str(current.get("material_asset_key") or "")
-            fallback_publish_date = str(current.get("material_publish_date") or datetime.now().astimezone().date().isoformat())
+            fallback_publish_date = str(current.get("material_publish_date") or _terminal_business_date())
             consumed.append(
                 {
                     "asset_key": str(run.get("asset_key") or fallback_asset_key),
@@ -7090,7 +7095,7 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
                         "asset_key": asset_key,
                         "account_id": int(current.get("id") or 0),
                         "platform": "wechat",
-                        "publish_date": str(current.get("material_publish_date") or datetime.now().astimezone().date().isoformat()),
+                        "publish_date": str(current.get("material_publish_date") or _terminal_business_date()),
                         "success": True,
                         "finished_at": int(time.time()),
                     }
@@ -7547,16 +7552,15 @@ def _video_key(path: Path) -> str:
 
 
 def _remaining_material_video_count() -> int:
-    count = 0
     try:
         from . import matrix_publish as mp
-        count = int(mp.count_remaining_today_candidate_videos())
-        if count > 0:
-            return count
+        # UI labels this as "当日素材剩余数量"; keep this metric strictly
+        # aligned with today's candidate pool (including a valid zero).
+        return int(mp.count_remaining_today_candidate_videos())
     except Exception:
-        count = 0
-    # Backward-compatible fallback for legacy tests/state where today's
-    # candidate filter is not initialized: count remaining files by used_videos.
+        pass
+    # Backward-compatible fallback when today's candidate counter is unavailable:
+    # count remaining files by legacy used_videos / consumed state.
     try:
         from . import matrix_publish as mp
         material_dir = mp.resolve_material_dir()
@@ -7593,7 +7597,7 @@ def _remaining_material_video_count() -> int:
             remaining += 1
         return remaining
     except Exception:
-        return count
+        return 0
 
 
 def open_material_directory(raw_path: str) -> dict[str, Any]:

@@ -7,7 +7,7 @@ import hashlib
 import sqlite3
 import time
 import contextlib
-from datetime import date, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -2478,26 +2478,58 @@ def test_dashboard_summary_counts_remaining_material_videos(monkeypatch, tmp_pat
     material_dir.mkdir(parents=True)
     used = material_dir / "used.mp4"
     remaining = material_dir / "remaining.mp4"
-    nested_dir = material_dir / "20260506_155020_958c5ba5"
-    nested_dir.mkdir(parents=True)
-    nested_remaining = nested_dir / "nested.mp4"
     ignored = material_dir / "ignored.txt"
     used.write_bytes(b"used")
     remaining.write_bytes(b"remaining")
-    nested_remaining.write_bytes(b"nested")
     ignored.write_text("ignored", encoding="utf-8")
-    os.utime(used, (1000, 1000))
-    os.utime(remaining, (2000, 2000))
-    os.utime(nested_remaining, (3000, 3000))
-    used_key = f"{used.name}|{used.stat().st_size}|{int(used.stat().st_mtime)}"
+    material_ts = datetime(2026, 5, 18, 9, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(used, (material_ts, material_ts))
+    os.utime(remaining, (material_ts, material_ts))
+    monkeypatch.setattr(matrix_publish, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(matrix_publish, "_today_date", lambda _tz: date(2026, 5, 18))
+    monkeypatch.setattr(matrix_publish, "get_paths", lambda: type("P", (), {"runtime_root": tmp_path / "runtime"})())
+    monkeypatch.setattr(matrix_publish, "resolve_material_dir", lambda material_dir_override=None: tmp_path / "runtime" / "materials" / "videos")
+    consumed_today = matrix_publish._relative_asset_key(used)
     (tmp_path / "runtime" / "matrix_publish_state.json").write_text(
-        json.dumps({"used_videos": [used_key], "runs": []}),
+        json.dumps(
+            {
+                "consumed": [
+                    {"asset_key": consumed_today, "account_id": 1, "platform": "wechat", "publish_date": "2026-05-18"},
+                ],
+                "runs": [],
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
 
     summary = service.dashboard_summary()
 
-    assert summary["remaining_material_videos"] == 2
+    assert summary["remaining_material_videos"] == 1
+
+
+def test_terminal_summary_keeps_today_remaining_zero_when_only_history_materials_exist(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    material_dir = tmp_path / "runtime" / "materials" / "videos" / "20260520_batch"
+    material_dir.mkdir(parents=True)
+    history_video = material_dir / "history.mp4"
+    history_video.write_bytes(b"history")
+    history_ts = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(history_video, (history_ts, history_ts))
+
+    monkeypatch.setattr(matrix_publish, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(matrix_publish, "_today_date", lambda _tz: date(2026, 5, 21))
+    monkeypatch.setattr(matrix_publish, "get_paths", lambda: type("P", (), {"runtime_root": tmp_path / "runtime"})())
+    monkeypatch.setattr(matrix_publish, "resolve_material_dir", lambda material_dir_override=None: tmp_path / "runtime" / "materials" / "videos")
+    (tmp_path / "runtime" / "matrix_publish_state.json").write_text(
+        json.dumps({"consumed": [], "runs": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    summary = service._terminal_summary([], [])
+
+    assert summary["today_materials"] == 0
+    assert summary["remaining_material_videos"] == 0
 
 
 def test_terminal_summary_counts_today_remaining_materials(monkeypatch, tmp_path: Path) -> None:
