@@ -1181,6 +1181,27 @@
       </div>
     </div>
   </div>
+  <div id="statsOverdueModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="statsOverdueTitle">
+    <div class="confirm-panel terminal-error-panel">
+      <div class="confirm-head">
+        <div>
+          <span>采集提醒</span>
+          <strong id="statsOverdueTitle">您有超过5天未采集的账号，请及时采集</strong>
+        </div>
+        <button id="statsOverdueClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="confirm-body terminal-error-body">
+        <div class="confirm-message terminal-error-summary">
+          <strong id="statsOverdueStage">采集状态已过期</strong>
+          <p id="statsOverdueMessage">部分账号的上次采集时间已经超过 5 天，或者从未采集。请尽快执行采集，避免数据展示不完整。</p>
+          <p class="terminal-error-context" id="statsOverdueContext">提示仅在进入数据统计页面时弹出。</p>
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button id="statsOverdueDismiss" class="btn primary" type="button">知道了</button>
+      </div>
+    </div>
+  </div>
   <script>
     (function () {
       var node = document.getElementById("runtime-address");

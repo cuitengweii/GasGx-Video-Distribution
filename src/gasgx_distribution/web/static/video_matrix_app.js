@@ -23,6 +23,9 @@ let videoTemplateThumbScaleBound = false;
 let narrativePanelCollapsed = true;
 let sourcePanelCollapsed = true;
 let firstScreenPanelCollapsed = true;
+let modelMaterialPanelCollapsed = true;
+let videoTemplatePanelCollapsed = true;
+let endingPanelCollapsed = true;
 const AI_PROMPT_HINT_MAX_CHARS = 240;
 const AI_PROMPT_HINT_MAX_LINES = 4;
 const AI_PROMPT_HINT_URL_RE = /(https?:\/\/\S+|www\.\S+)/gi;
@@ -432,6 +435,17 @@ function bindMobileSidebarToggle() {
   sync();
 }
 
+function bindSidebarTemplateGroupToggle() {
+  const group = $("sidebarTemplateGroup");
+  const indicator = group?.querySelector(".sidebar-collapse-indicator");
+  if (!group || !indicator) return;
+  const sync = () => {
+    indicator.textContent = group.open ? "收起" : "展开";
+  };
+  sync();
+  group.addEventListener("toggle", sync);
+}
+
 function loadingInline(label = "加载中...") {
   return `<div class="loading-inline"><span class="loading-spinner" aria-hidden="true"></span><span>${label}</span></div>`;
 }
@@ -500,9 +514,13 @@ function setInitialLoading() {
 
 async function init() {
   bindMobileSidebarToggle();
+  bindSidebarTemplateGroupToggle();
   bindNarrativePanelToggle();
   bindSourcePanelToggle();
+  bindModelMaterialPanelToggle();
   bindFirstScreenPanelToggle();
+  bindVideoTemplatePanelToggle();
+  bindEndingPanelToggle();
   setInitialLoading();
   const data = await api("/api/video-matrix/state");
   state = data.ui_state; templates = data.templates; coverTemplates = data.cover_templates; settings = data.settings;
@@ -594,6 +612,63 @@ function renderFirstScreenPanelVisibility() {
   panel.classList.toggle("is-collapsed", firstScreenPanelCollapsed);
   toggle.textContent = firstScreenPanelCollapsed ? "展开" : "收起";
   toggle.setAttribute("aria-expanded", firstScreenPanelCollapsed ? "false" : "true");
+}
+
+function bindModelMaterialPanelToggle() {
+  const toggle = $("modelMaterialPanelToggle");
+  if (!toggle) return;
+  toggle.onclick = () => {
+    modelMaterialPanelCollapsed = !modelMaterialPanelCollapsed;
+    renderModelMaterialPanelVisibility();
+  };
+  renderModelMaterialPanelVisibility();
+}
+
+function renderModelMaterialPanelVisibility() {
+  const panel = $("modelMaterialPanel");
+  const toggle = $("modelMaterialPanelToggle");
+  if (!panel || !toggle) return;
+  panel.classList.toggle("is-collapsed", modelMaterialPanelCollapsed);
+  toggle.textContent = modelMaterialPanelCollapsed ? "展开" : "收起";
+  toggle.setAttribute("aria-expanded", modelMaterialPanelCollapsed ? "false" : "true");
+}
+
+function bindVideoTemplatePanelToggle() {
+  const toggle = $("videoTemplatePanelToggle");
+  if (!toggle) return;
+  toggle.onclick = () => {
+    videoTemplatePanelCollapsed = !videoTemplatePanelCollapsed;
+    renderVideoTemplatePanelVisibility();
+  };
+  renderVideoTemplatePanelVisibility();
+}
+
+function renderVideoTemplatePanelVisibility() {
+  const panel = $("videoTemplatePanel");
+  const toggle = $("videoTemplatePanelToggle");
+  if (!panel || !toggle) return;
+  panel.classList.toggle("is-collapsed", videoTemplatePanelCollapsed);
+  toggle.textContent = videoTemplatePanelCollapsed ? "展开" : "收起";
+  toggle.setAttribute("aria-expanded", videoTemplatePanelCollapsed ? "false" : "true");
+}
+
+function bindEndingPanelToggle() {
+  const toggle = $("endingPanelToggle");
+  if (!toggle) return;
+  toggle.onclick = () => {
+    endingPanelCollapsed = !endingPanelCollapsed;
+    renderEndingPanelVisibility();
+  };
+  renderEndingPanelVisibility();
+}
+
+function renderEndingPanelVisibility() {
+  const panel = $("endingPanel");
+  const toggle = $("endingPanelToggle");
+  if (!panel || !toggle) return;
+  panel.classList.toggle("is-collapsed", endingPanelCollapsed);
+  toggle.textContent = endingPanelCollapsed ? "展开" : "收起";
+  toggle.setAttribute("aria-expanded", endingPanelCollapsed ? "false" : "true");
 }
 
 function renderSidebar(data) {
@@ -2208,7 +2283,7 @@ async function loadModelImages() {
 }
 
 function renderVideoTemplateBackgrounds() {
-  const node = $("videoTemplateBackgrounds");
+  const node = $("modelMaterialPanelBody");
   if (!node) return;
   if (!modelImages.length) {
     node.innerHTML = `<span class="muted">modelimg 目录暂无可预览图片</span>`;

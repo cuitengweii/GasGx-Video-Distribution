@@ -138,8 +138,8 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "function bindSidebarPromptHintField(inputId, metaId, stateKey)" in app
     assert "input.onkeydown = (event) => {" in app
     assert "input.onpaste = (event) => {" in app
-    assert html.index('class="side-editor generation-panel"') < html.index('class="cover-workbench"') < html.index('class="video-template-workbench"')
-    assert html.index('class="side-editor generation-panel"') < html.index('class="video-template-workbench"') < html.index('class="ending-workbench cover-workbench"')
+    assert html.index('class="side-editor generation-panel"') < html.index('class="cover-workbench is-collapsed"') < html.index('class="video-template-workbench is-collapsed"')
+    assert html.index('class="side-editor generation-panel"') < html.index('class="video-template-workbench is-collapsed"') < html.index('class="ending-workbench cover-workbench is-collapsed"')
     assert "transcriptFile" not in html
     assert "transcriptText" not in html
     assert "generationWaitOverlay" in html
@@ -170,7 +170,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "模板切换" in html
     assert "openBgmDir" in html
     assert "bgmLibraryPopover" in html
-    assert '<label>输出文件<select id="outputOptions"><option value="mp4">mp4</option></select></label>' in html
+    assert '<select id="outputOptions" hidden><option value="mp4">mp4</option></select>' in html
     assert '<option value="png">png</option>' not in html
     assert '<option value="txt">txt</option>' not in html
     assert '<option value="json">json</option>' not in html
@@ -258,7 +258,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "body.video-matrix-active" in shell_css
     assert "body.video-matrix-active .sidebar" in shell_css
     assert "body.video-matrix-active #video-matrix" in shell_css
-    assert "margin: 0 -28px -44px" in shell_css
+    assert "margin: 0 -28px -36px" in shell_css
     assert "position: fixed" in shell_css
     assert "margin-left: 0" in shell_css
     assert "height: 100vh" in shell_css
@@ -828,12 +828,16 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".vm-template-watermark-text" in preview
     assert "cursor:pointer" in css
     assert "model-image-workbench" in html
+    assert 'id="modelMaterialPanel"' in html
+    assert 'id="modelMaterialPanelToggle"' in html
+    assert "model-image-workbench is-collapsed" in html
     assert "模拟素材选择" in html
     assert "preview-caption-actions" in html
     assert "button-icon" in html
     assert "模板切换" in html
     assert "独立视频封面" in html
     assert ".model-image-workbench" in css
+    assert ".model-image-workbench.is-collapsed .template-background-strip" in css
     assert ".preview-caption-actions" in css
     assert ".button-icon" in css
     assert "grid-template-columns: minmax(88px, .9fr) minmax(100px, 1fr) minmax(116px, 148px) minmax(56px, 70px) minmax(54px, 58px)" in css
@@ -844,7 +848,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "videoTemplateCaption" not in app
     assert "wechat-defaults-fieldset" in html
     assert "common.wechat_short_title" in html
-    assert html.index('id="videoTemplateBackgrounds"') < html.index('class="cover-workbench"') < html.index('class="video-template-workbench"')
+    assert html.index('id="modelMaterialPanel"') < html.index('class="cover-workbench is-collapsed"') < html.index('class="video-template-workbench is-collapsed"')
     assert html.index('class="template-preview-editor"') < html.index('class="video-template-picker"') < html.index('id="videoTemplateGallery"')
     assert 'id="videoTemplateSelector"' not in html
     assert "video-template-name-button" in app
@@ -1089,12 +1093,19 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "composition-panel" in css
     assert "videoDurationMin" in html
     assert "videoDurationMax" in html
+    assert 'id="sidebarTemplateGroup"' in html
+    assert "sidebar-collapsible" in html
+    assert "sidebar-group-summary" in html
+    assert "sidebar-collapse-indicator" in html
     assert "sidebarCoverTemplate" in html
     assert "sidebarVideoTemplate" in html
     assert "sidebarEndingTemplateMode" in html
+    assert 'id="outputRoot" type="hidden"' in html
     assert '<option value="dynamic">文字片尾</option>' in html
     assert '<option value="random">视频片尾</option>' in html
     assert "renderSidebarTemplateSelectors" in app
+    assert "function bindSidebarTemplateGroupToggle" in app
+    assert 'group.addEventListener("toggle", sync);' in app
     assert "selectCoverTemplate(coverSelect.value)" in app
     assert "selectVideoTemplate(videoSelect.value)" in app
     assert "switchEndingTemplateMode(endingSelect.value)" in app
@@ -1363,6 +1374,17 @@ def test_video_matrix_frontend_has_dedupe_report_panel() -> None:
     assert 'id="sourcePanel"' in html
     assert 'id="sourcePanelToggle"' in html
     assert "source-panel is-collapsed" in html
+    assert "function bindModelMaterialPanelToggle" in app
+    assert "function renderModelMaterialPanelVisibility" in app
+    assert 'id="firstScreenPanel"' in html
+    assert 'id="firstScreenPanelToggle"' in html
+    assert "cover-workbench is-collapsed" in html
+    assert 'id="videoTemplatePanel"' in html
+    assert 'id="videoTemplatePanelToggle"' in html
+    assert "video-template-workbench is-collapsed" in html
+    assert 'id="endingPanel"' in html
+    assert 'id="endingPanelToggle"' in html
+    assert "ending-workbench cover-workbench is-collapsed" in html
     assert "data-narrative-templates" in html
     assert "narrative-template-list" in html
     assert 'id="narrativeTemplatePanel"' in html
@@ -1372,6 +1394,12 @@ def test_video_matrix_frontend_has_dedupe_report_panel() -> None:
     assert "function bindNarrativePanelToggle" in app
     assert "function bindSourcePanelToggle" in app
     assert "function renderSourcePanelVisibility" in app
+    assert "function bindFirstScreenPanelToggle" in app
+    assert "function renderFirstScreenPanelVisibility" in app
+    assert "function bindVideoTemplatePanelToggle" in app
+    assert "function renderVideoTemplatePanelVisibility" in app
+    assert "function bindEndingPanelToggle" in app
+    assert "function renderEndingPanelVisibility" in app
     assert "function renderNarrativePanelVisibility" in app
     assert "function renderNarrativeTemplates" in app
     assert 'document.querySelectorAll("[data-narrative-templates]")' in app
@@ -1398,6 +1426,13 @@ def test_video_matrix_frontend_has_dedupe_report_panel() -> None:
     assert ".narrative-template-card" in css
     assert ".source-panel-toggle" in css
     assert ".source-panel.is-collapsed .source-panel-grid" in css
+    assert ".sidebar-collapsible" in css
+    assert ".sidebar-group-summary" in css
+    assert ".sidebar-collapse-indicator" in css
+    assert ".cover-panel-toggle" in css
+    assert ".cover-workbench.is-collapsed .cover-editor" in css
+    assert ".video-template-workbench.is-collapsed .template-preview-editor" in css
+    assert ".ending-workbench.is-collapsed .ending-editor" in css
     assert ".narrative-template-panel" in css
     assert ".narrative-panel-toggle" in css
     assert ".narrative-template-panel.is-collapsed .narrative-template-body" in css

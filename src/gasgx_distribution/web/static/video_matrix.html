@@ -51,7 +51,7 @@
         <label>背景音乐音量<div class="range-with-value"><input id="libraryBgmVolume" type="range" min="0" max="2" step="0.05" /><output id="libraryBgmVolumeValue"></output></div></label>
         <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
         <div class="sidebar-radio-field"><span>生成速度</span><div class="radio-row" id="renderSpeedModeGroup"></div></div>
-        <label>输出文件<select id="outputOptions"><option value="mp4">mp4</option></select></label>
+        <select id="outputOptions" hidden><option value="mp4">mp4</option></select>
         <details class="copy-card">
           <summary class="copy-card-head">
             <div>
@@ -221,24 +221,29 @@
         </details>
       </section>
 
-      <section class="sidebar-group">
-        <h2>模板选择</h2>
-        <label>第一屏封面模板<select id="sidebarCoverTemplate"></select></label>
-        <label>视频叠层模板<select id="sidebarVideoTemplate"></select></label>
-        <label>片尾封面模板<select id="sidebarEndingTemplateMode"><option value="dynamic">文字片尾</option><option value="random">视频片尾</option></select></label>
-        <fieldset class="wechat-defaults-fieldset platform-settings-card hidden">
-          <legend>视频号默认发布参数</legend>
-          <div class="wechat-defaults-grid">
-            <label>短标题<input name="common.wechat_short_title" type="text" /></label>
-            <label>位置<input name="common.wechat_location" type="text" /></label>
-          </div>
-          <p class="field-hint">用于视频生成后衔接视频号发布参数。</p>
-        </fieldset>
-      </section>
+      <details class="sidebar-group sidebar-collapsible" id="sidebarTemplateGroup">
+        <summary class="sidebar-group-summary">
+          <h2>模板选择</h2>
+          <span class="sidebar-collapse-indicator">展开</span>
+        </summary>
+        <div class="sidebar-group-body">
+          <label>第一屏封面模板<select id="sidebarCoverTemplate"></select></label>
+          <label>视频叠层模板<select id="sidebarVideoTemplate"></select></label>
+          <label>片尾封面模板<select id="sidebarEndingTemplateMode"><option value="dynamic">文字片尾</option><option value="random">视频片尾</option></select></label>
+          <fieldset class="wechat-defaults-fieldset platform-settings-card hidden">
+            <legend>视频号默认发布参数</legend>
+            <div class="wechat-defaults-grid">
+              <label>短标题<input name="common.wechat_short_title" type="text" /></label>
+              <label>位置<input name="common.wechat_location" type="text" /></label>
+            </div>
+            <p class="field-hint">用于视频生成后衔接视频号发布参数。</p>
+          </fieldset>
+        </div>
+      </details>
 
       <section class="sidebar-group sidebar-actions-group">
         <h2>输出与素材</h2>
-        <label>最终视频生成目录<input id="outputRoot" /></label>
+        <input id="outputRoot" type="hidden" />
         <button id="openOutput" type="button">打开输出目录</button>
         <div class="library-action">
           <div id="bgmLibraryPopover" class="bgm-library-popover hidden"></div>
@@ -339,9 +344,12 @@
       </section>
 
       <section class="editor-grid">
-        <section class="model-image-workbench">
-          <div class="section-title"><span>MODEL MATERIAL</span><b>模拟素材选择</b></div>
-          <div id="videoTemplateBackgrounds" class="template-background-strip"></div>
+        <section class="model-image-workbench is-collapsed" id="modelMaterialPanel">
+          <div class="section-title cover-panel-toggle-row">
+            <div class="cover-panel-toggle-title"><span>MODEL MATERIAL</span><b>模拟素材选择</b></div>
+            <button id="modelMaterialPanelToggle" class="cover-panel-toggle" type="button" aria-expanded="false" aria-controls="modelMaterialPanelBody">展开</button>
+          </div>
+          <div id="modelMaterialPanelBody" class="template-background-strip"></div>
         </section>
 
         <section class="cover-workbench is-collapsed" id="firstScreenPanel">
@@ -367,22 +375,28 @@
           </div>
         </section>
 
-        <section class="video-template-workbench">
-          <div class="section-title"><span>VIDEO TEMPLATE</span><b>9:16 正文叠层模板</b></div>
-          <div class="template-preview-editor">
+        <section class="video-template-workbench is-collapsed" id="videoTemplatePanel">
+          <div class="section-title cover-panel-toggle-row">
+            <div class="cover-panel-toggle-title"><span>VIDEO TEMPLATE</span><b>9:16 正文叠层模板</b></div>
+            <button id="videoTemplatePanelToggle" class="cover-panel-toggle" type="button" aria-expanded="false" aria-controls="videoTemplatePanelBody">展开</button>
+          </div>
+          <div class="template-preview-editor" id="videoTemplatePanelBody">
             <div class="preview-stage compact-preview">
               <iframe id="videoTemplatePreview" class="phone-preview-frame" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bwidth%3A100%25%3Bheight%3A100%25%3Boverflow%3Ahidden%3Bbackground%3A%23050505%3Bcolor-scheme%3Adark%3B%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E" title="video template preview" scrolling="no"></iframe>
             </div>
             <form id="videoTemplateForm" class="control-panel"></form>
           </div>
-          <div class="video-template-picker">
+          <div class="video-template-picker" id="videoTemplatePanelPicker">
             <div id="videoTemplateGallery" class="cover-gallery"></div>
           </div>
         </section>
 
-        <section class="ending-workbench cover-workbench">
-          <div class="section-title"><span>ENDING</span><b>片尾封面模板</b></div>
-          <div class="ending-editor">
+        <section class="ending-workbench cover-workbench is-collapsed" id="endingPanel">
+          <div class="section-title cover-panel-toggle-row">
+            <div class="cover-panel-toggle-title"><span>ENDING</span><b>片尾封面模板</b></div>
+            <button id="endingPanelToggle" class="cover-panel-toggle" type="button" aria-expanded="false" aria-controls="endingPanelBody">展开</button>
+          </div>
+          <div class="ending-editor" id="endingPanelBody">
             <div class="preview-stage ending-preview-stage">
               <iframe id="endingTemplatePreview" class="phone-preview-frame" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bwidth%3A100%25%3Bheight%3A100%25%3Boverflow%3Ahidden%3Bbackground%3A%23050505%3Bcolor-scheme%3Adark%3B%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E" title="ending template preview" scrolling="no"></iframe>
               <div id="endingAssetPreview" class="ending-asset-preview hidden"></div>

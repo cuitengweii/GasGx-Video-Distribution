@@ -124,3 +124,60 @@ def test_trigger_wechat_engagement_passes_account_and_limits(monkeypatch, tmp_pa
     assert captured["enable_private_message"] is True
     assert captured["comment_limit"] == 5
     assert captured["private_message_limit"] == 7
+
+
+def test_trigger_stats_capture_returns_queued_when_running(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    scheduler._STATS_RUNNING.set()
+    try:
+        result = scheduler.trigger_matrix_wechat_stats_capture(
+            account_id=73,
+            open_capture_in_new_tab=True,
+            capture_tab_foreground=True,
+            keep_capture_tab_open=True,
+        )
+    finally:
+        scheduler._STATS_RUNNING.clear()
+        scheduler._STATS_PENDING_REQUESTS.clear()
+    assert result["ok"] is True
+    assert result["status"] == "queued"
+
+
+def test_stats_capture_queue_executes_pending_requests(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    called_account_ids: list[int] = []
+    monkeypatch.setattr(
+        scheduler,
+        "run_wechat_stats_capture",
+        lambda **kwargs: called_account_ids.append(int(kwargs.get("account_id") or 0)) or {"ok": True},
+    )
+    scheduler._STATS_PENDING_REQUESTS.clear()
+    scheduler._STATS_PENDING_REQUESTS.append(
+        {
+            "target_date": "",
+            "limit": 0,
+            "dry_run": False,
+            "notify": True,
+            "account_id": 2,
+            "keep_browser_open_on_login_required": True,
+            "auto_open_browser": False,
+            "open_capture_in_new_tab": True,
+            "capture_tab_foreground": True,
+            "keep_capture_tab_open": True,
+        }
+    )
+    scheduler._run_stats_capture_request_queue(
+        {
+            "target_date": "",
+            "limit": 0,
+            "dry_run": False,
+            "notify": True,
+            "account_id": 1,
+            "keep_browser_open_on_login_required": True,
+            "auto_open_browser": False,
+            "open_capture_in_new_tab": True,
+            "capture_tab_foreground": True,
+            "keep_capture_tab_open": True,
+        }
+    )
+    assert called_account_ids == [1, 2]

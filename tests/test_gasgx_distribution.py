@@ -4917,6 +4917,54 @@ def test_terminal_confirm_last_account_enters_completed_state(monkeypatch, tmp_p
     assert window["accounts"][0]["status"] == "success"
 
 
+def test_terminal_confirm_keeps_browser_open_when_stats_busy(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "terminal_execution_state.json").write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "id": 1,
+                        "enabled": True,
+                        "operator_wechat": "op1",
+                        "color": "#3B82F6",
+                        "current_index": 0,
+                        "manual_available_at": 0,
+                        "qr_path": "",
+                        "qr_url": "",
+                        "accounts": [
+                            {"id": 1, "status": "running", "status_text": "waiting confirm", "task_id": None, "publish_success_count": 0},
+                        ],
+                        "publish_run": {
+                            "status": "success",
+                            "account_id": 1,
+                            "asset_key": "videos/one.mp4",
+                            "publish_date": "2026-05-06",
+                        },
+                    }
+                ],
+                "config": [],
+                "initialized": True,
+                "login_started": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    closed: list[int] = []
+    monkeypatch.setattr(service, "_close_wechat_browser_for_account", lambda account_id: closed.append(account_id))
+    monkeypatch.setattr("gasgx_distribution.scheduler.is_matrix_wechat_stats_capture_busy_for_account", lambda account_id: True)
+
+    result = service.confirm_terminal_publish_success(1)
+
+    window = result["windows"][0]
+    assert closed == []
+    assert window["completed"] is True
+    assert window["accounts"][0]["status"] == "success"
+
+
 def test_terminal_confirm_success_keeps_previous_success_when_next_browser_fails(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     runtime_dir = tmp_path / "runtime"

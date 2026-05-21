@@ -7106,7 +7106,16 @@ def confirm_terminal_publish_success(window_id: int) -> dict[str, Any]:
                 pass
     _terminate_terminal_publish_run_process(run if isinstance(run, dict) else None)
     _clear_terminal_publish_run(target)
-    _close_wechat_browser_for_account(int(current.get("id") or 0))
+    keep_browser_open_for_stats = False
+    try:
+        from . import scheduler as _scheduler
+        keep_browser_open_for_stats = bool(
+            _scheduler.is_matrix_wechat_stats_capture_busy_for_account(int(current.get("id") or 0))
+        )
+    except Exception:
+        keep_browser_open_for_stats = False
+    if not keep_browser_open_for_stats:
+        _close_wechat_browser_for_account(int(current.get("id") or 0))
     _clear_terminal_qr_cache(int(target.get("id") or 0))
     target["qr_path"] = ""
     target["qr_url"] = ""

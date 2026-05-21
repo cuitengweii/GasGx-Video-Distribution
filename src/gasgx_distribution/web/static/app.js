@@ -68,7 +68,7 @@ const state = {
   accountStats: [],
   statsCaptureStatus: {},
   weeklySummary: {},
-  statsMode: "capture",
+  statsMode: "dashboard",
   summary: {},
   distributionSettings: { common: {}, platforms: {} },
   matrixJobStatus: {},
@@ -177,6 +177,7 @@ const terminalManualCycleAccountByWindow = new Map();
 const terminalButtonCooldownByKey = new Map();
 let terminalButtonCooldownTimer = null;
 let terminalErrorModalSignature = "";
+let statsOverdueModalSignature = "";
 let terminalFullLoadingCount = 0;
 let tongjiFollowerChart = null;
 let tongjiVideoChart = null;
@@ -1130,6 +1131,45 @@ function syncTerminalErrorModal() {
   if (payload.signature === terminalErrorModalSignature) return;
   terminalErrorModalSignature = payload.signature;
   showTerminalErrorModal(payload);
+}
+
+function showStatsOverdueModal(payload) {
+  const modal = document.querySelector("#statsOverdueModal");
+  if (!modal) return;
+  const titleNode = modal.querySelector("#statsOverdueTitle");
+  const stageNode = modal.querySelector("#statsOverdueStage");
+  const messageNode = modal.querySelector("#statsOverdueMessage");
+  const contextNode = modal.querySelector("#statsOverdueContext");
+  if (titleNode) titleNode.textContent = payload.title || "您有超过5天未采集的账号，请及时采集";
+  if (stageNode) stageNode.textContent = payload.stage || "采集状态已过期";
+  if (messageNode) messageNode.textContent = payload.message || "部分账号的上次采集时间已经超过 5 天，或者从未采集。请尽快执行采集，避免数据展示不完整。";
+  if (contextNode) contextNode.textContent = payload.context || "提示仅在进入数据统计页面时弹出。";
+  modal.classList.remove("hidden");
+}
+
+function hideStatsOverdueModal() {
+  document.querySelector("#statsOverdueModal")?.classList.add("hidden");
+}
+
+function syncStatsOverdueModal() {
+  if (currentView !== "stats" || !hasStatsOverdueAccounts()) {
+    statsOverdueModalSignature = "";
+    hideStatsOverdueModal();
+    return;
+  }
+  const signature = JSON.stringify(
+    (Array.isArray(state.weeklySummary?.rows) ? state.weeklySummary.rows : [])
+      .map((row) => [row?.account_id || 0, statsRowLastCaptureTs(row)])
+      .sort((a, b) => Number(a[0]) - Number(b[0])),
+  );
+  if (signature === statsOverdueModalSignature) return;
+  statsOverdueModalSignature = signature;
+  showStatsOverdueModal({
+    title: "您有超过5天未采集的账号，请及时采集",
+    stage: "采集状态已过期",
+    message: "部分账号的上次采集时间已经超过 5 天，或者从未采集。请尽快执行采集，避免数据展示不完整。",
+    context: "提示仅在进入数据统计页面时弹出。",
+  });
 }
 
 function applyPermissionLimitedState() {
@@ -2952,6 +2992,10 @@ function triggerTerminalWechatAutoStatsCapture(accountId) {
       keep_capture_tab_open: true,
     }),
   }).then((started) => {
+    if (String(started?.status || "") === "queued") {
+      setTerminalWechatAutoStatsHint("统计任务已排队，当前发布不受影响。");
+      return;
+    }
     if (String(started?.status || "") === "already_running" || started?.ok === false) {
       setTerminalWechatAutoStatsHint("已有统计采集中，本次发布不受影响。");
       return;
@@ -4834,7 +4878,7 @@ function renderTongjiSection() {
 }
 
 function renderStats() {
-  setStatsMode(state.statsMode || "capture");
+  setStatsMode(state.statsMode || "dashboard");
   renderTongjiSection();
   renderStatsCapturePanel();
 
@@ -4868,7 +4912,7 @@ function renderStats() {
     ["发电机组案例", "小红书", "低流量", "18,400", "3,420", "3,180", "+92", "28.4%", "4.1%", 5, "潜力账号", "低流量"],
     ["燃气发动机现场", "快手", "休眠", "9,860", "1,160", "1,204", "-36", "22.6%", "2.8%", 1, "低效账号", "长期断更"],
   ];
-  const accountHeaders = ["账号名称", "平台", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "采集状态"];
+  const accountHeaders = ["账号名称", "平台", "总播放", "周期播放", "粉丝", "增粉", "完播率", "互动率", "更新", "上次采集时间"];
   let sortIndex = 0;
   let sortDir = 1;
   const renderAccountTable = () => {
@@ -5107,16 +5151,23 @@ function renderStatsWeeklySummary() {
       : "近7天汇总未加载";
   }
 
+  const formatCaptureTime = (row) => {
+    const ts = statsRowLastCaptureTs(row);
+    if (ts <= 0) return "从未采集";
+    const text = String(row?.latest_capture_time || "").trim();
+    if (text) return text;
+    return new Date(ts * 1000).toLocaleString("zh-Hans-CN", { hour12: false });
+  };
   const accountFilter = document.querySelector("#stats-account-filter")?.value || "";
   const keyword = document.querySelector("#account-stats-search")?.value.trim().toLowerCase() || "";
   const tableRows = rows
     .filter((row) => !accountFilter || String(row.account_id || "") === String(accountFilter))
     .filter((row) => {
-      const token = [row.display_name, row.account_key, row.capture_status, ...(row.missing_sources || [])].join(" ").toLowerCase();
+      const token = [row.display_name, row.account_key, row.capture_status, row.latest_capture_time, ...(row.missing_sources || [])].join(" ").toLowerCase();
       return token.includes(keyword);
     })
     .sort((a, b) => Number(b.views_7d || 0) - Number(a.views_7d || 0));
-  const headers = ["账号名称", "平台", "关注者总数", "新增/取关", "播放总量", "喜欢/推荐", "分享/评论", "视频引流关注", "采集状态"];
+  const headers = ["账号名称", "平台", "关注者总数", "新增/取关", "播放总量", "喜欢/推荐", "分享/评论", "视频引流关注", "上次采集时间"];
   document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${tableRows.map((row) => {
     const views = Number(row.views_7d || 0);
     const followers = Number(row.followers_current || 0);
@@ -5126,7 +5177,7 @@ function renderStatsWeeklySummary() {
     const shares = Number(row.shares_7d || 0);
     const comments = Number(row.comments_7d || 0);
     const traffic = Math.max(0, newFollowers);
-    const captureText = row.capture_status || "未知";
+    const captureText = formatCaptureTime(row);
     const cells = [
       `${row.display_name || row.account_key || `账号 ${row.account_id}`}`,
       "视频号",
@@ -5151,13 +5202,42 @@ function renderStatsWeeklySummary() {
   }
 }
 
+const STATS_CAPTURE_OVERDUE_SECONDS = 5 * 24 * 60 * 60;
+
+function statsRowLastCaptureTs(row) {
+  const direct = Number(row?.latest_captured_at || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const text = String(row?.latest_capture_time || "").trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text.replace(" ", "T"));
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed / 1000);
+}
+
+function hasStatsOverdueAccounts() {
+  const rows = Array.isArray(state.weeklySummary?.rows) ? state.weeklySummary.rows : [];
+  if (!rows.length) return false;
+  const nowSec = Math.floor(Date.now() / 1000);
+  return rows.some((row) => {
+    const capturedAt = statsRowLastCaptureTs(row);
+    if (capturedAt <= 0) return true;
+    return nowSec - capturedAt > STATS_CAPTURE_OVERDUE_SECONDS;
+  });
+}
+
+function showStatsOverdueReminderIfNeeded() {
+  if (currentView !== "stats") return;
+  if (!hasStatsOverdueAccounts()) return;
+  syncStatsOverdueModal();
+}
+
 function renderAnalyticsFromDatabase() {
   const analytics = state.analytics || {};
   if (!Object.keys(analytics).length) return;
   const accounts = (analytics.account_rank || []).map((item) => item.row).filter(Boolean);
   const hasWeeklyRows = Array.isArray(state.weeklySummary?.rows) && state.weeklySummary.rows.length > 0;
   if (accounts.length && !hasWeeklyRows) {
-    const headers = ["账号名称", "平台", "关注者总数", "新增/取关", "播放总量", "喜欢/推荐", "分享/评论", "视频引流关注", "采集状态"];
+    const headers = ["账号名称", "平台", "关注者总数", "新增/取关", "播放总量", "喜欢/推荐", "分享/评论", "视频引流关注", "上次采集时间"];
     document.querySelector("#account-stats-table").innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${accounts.map((row) => {
       const cells = [row[0], row[1], row[5], row[6], row[3], row[7], row[8], row[9], row[10]];
       return `<tr>${cells.map((cell, index) => `<td>${index >= 8 && cell ? `<span class="chip">${cell}</span>` : cell || "-"}</td>`).join("")}</tr>`;
@@ -7202,6 +7282,7 @@ async function loadViewData(view, { force = false } = {}) {
       state.notificationSla = await api("/api/stats/notification-sla");
       state.statsCaptureStatus = await api("/api/jobs/matrix-wechat/stats-capture/status");
       renderStats();
+      showStatsOverdueReminderIfNeeded();
     } else if (view === "ai-robot") {
       state.aiRobotConfigs = await api("/api/ai-robots/configs");
       state.aiRobotMessages = await api("/api/ai-robots/messages");
@@ -7499,6 +7580,10 @@ function activateView(view, updateHash = true, source = "sidebar") {
   if (view === "terminal-execution" && updateHash) {
     state.terminalRoute = "hub";
   }
+  if (view !== "stats") {
+    statsOverdueModalSignature = "";
+    hideStatsOverdueModal();
+  }
   if (view !== "terminal-execution") {
     state.terminalConfigOpen = false;
     document.querySelector("#terminal-init-modal")?.classList.add("hidden");
@@ -7529,6 +7614,11 @@ function activateView(view, updateHash = true, source = "sidebar") {
   } else {
     if (view === "terminal-execution" && terminalCurrentRoute() === "hub" && !loadedViews.has(view)) {
       setWorkspaceLoading(true, workspaceLoadingTitle(view), "正在同步右侧面板数据。");
+    }
+    if (view === "stats" && loadedViews.has(view)) {
+      setTimeout(() => {
+        if (currentView === "stats") showStatsOverdueReminderIfNeeded();
+      }, 0);
     }
     const forceReload = view === "settings";
     loadViewData(view, { force: forceReload }).catch((error) => {
@@ -8074,6 +8164,11 @@ document.querySelector("#terminalErrorClose")?.addEventListener("click", hideTer
 document.querySelector("#terminalErrorDismiss")?.addEventListener("click", hideTerminalErrorModal);
 document.querySelector("#terminalErrorModal")?.addEventListener("click", (event) => {
   if (event.target === event.currentTarget) hideTerminalErrorModal();
+});
+document.querySelector("#statsOverdueClose")?.addEventListener("click", hideStatsOverdueModal);
+document.querySelector("#statsOverdueDismiss")?.addEventListener("click", hideStatsOverdueModal);
+document.querySelector("#statsOverdueModal")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) hideStatsOverdueModal();
 });
 
 document.querySelector("#matrix-run-now").addEventListener("click", async (event) => {
