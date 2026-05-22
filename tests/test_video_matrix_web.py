@@ -100,14 +100,14 @@ def test_video_matrix_api_state_and_preview() -> None:
     assert payload["local_bgm_dir"].endswith("runtime\\video_matrix\\bgm") or payload["local_bgm_dir"].endswith("runtime/video_matrix/bgm")
     labels = [item["label"] for item in payload["settings"]["material_categories"]]
     for expected in [
-        "鐭挎満閮ㄥ垎",
-        "闆嗚绠遍儴鍒?,
-        "鍙戠數鏈洪儴鍒?,
-        "鍚勬樉绀哄櫒閮ㄥ垎",
-        "浼犳劅鍣ㄩ儴鍒?,
-        "鏂藉伐杩囩▼",
-        "娴嬭瘯鍔ㄧ嚎",
-        "宸ュ巶鍏ㄨ矊",
+        "矿机部分",
+        "集装箱部分",
+        "发电机部分",
+        "各显示器部分",
+        "传感器部分",
+        "施工过程",
+        "测试动线",
+        "工厂全貌",
     ]:
         assert expected in labels
     assert "category_H" in payload["source_dirs"]
@@ -138,6 +138,18 @@ def test_video_matrix_api_state_and_preview() -> None:
     )
     assert preview.status_code == 200
     assert preview.json()["data_url"].startswith("data:image/png;base64,")
+
+
+def test_video_matrix_state_post_preserves_full_hud_text() -> None:
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/video-matrix/state",
+        json={"hud_text": "电价低至0.01美元/度\n发电+矿箱一体化"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ui_state"]["hud_text"] == "电价低至0.01美元/度\n发电+矿箱一体化"
 
 
 def test_video_matrix_state_falls_back_when_supabase_settings_are_unavailable(monkeypatch) -> None:
@@ -613,7 +625,7 @@ def test_video_matrix_full_clone_page_exists() -> None:
 
     assert response.status_code == 200
     html = response.text
-    assert "GasGx 鐭棰戠煩闃垫壒閲忕敓鎴愬伐鍏? in html
+    assert "GasGx 视频矩阵批量生成工具" in html
     assert "/static/video_matrix_app.js" in html
     assert "/static/video_matrix_styles.css" in html
 

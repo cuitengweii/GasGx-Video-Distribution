@@ -209,6 +209,24 @@ def test_apply_text_overrides_keeps_fixed_headline_when_ai_disabled(tmp_path: Pa
     assert [item.hud_lines for item in variants] == [["Line A", "Line B"], ["Line A", "Line B"]]
 
 
+def test_apply_text_overrides_preserves_manual_hud_lines_without_char_truncation(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    variants = [_variant(tmp_path / "source.mp4", 1)]
+
+    pipeline._apply_text_overrides(
+        variants,
+        {
+            "headline": "Fixed headline",
+            "headline_ai_enabled": False,
+            "hud_text": "Electricity at $0.01/kWh\nGen + Mining all-in-one",
+        },
+        settings,
+        language="zh",
+    )
+
+    assert variants[0].hud_lines == ["Electricity at $0.01/kWh", "Gen + Mining all-in-one"]
+
+
 def test_apply_text_overrides_assigns_distinct_headline_variants_when_ai_enabled(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     variants = [_variant(tmp_path / "source.mp4", 1), _variant(tmp_path / "source.mp4", 2)]

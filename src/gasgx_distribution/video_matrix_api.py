@@ -1927,8 +1927,7 @@ def _truncate_non_space_chars(text: str, max_chars: int) -> str:
 def _normalize_hud_text(raw: Any) -> str:
     text = str(raw or "").replace("\r\n", "\n")
     lines = [line.strip() for line in text.split("\n") if line.strip()]
-    normalized = [_truncate_non_space_chars(line, HUD_TEXT_MAX_CHARS_PER_LINE) for line in lines]
-    normalized = [line for line in normalized if line][:HUD_TEXT_MAX_LINES]
+    normalized = lines[:HUD_TEXT_MAX_LINES]
     return "\n".join(normalized)
 
 

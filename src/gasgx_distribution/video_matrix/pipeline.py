@@ -426,7 +426,8 @@ def _apply_text_overrides(
     description_ai_prompt_hint = str(text_overrides.get("description_ai_prompt_hint") or "").strip()
     follow_text_ai_prompt_hint = str(text_overrides.get("follow_text_ai_prompt_hint") or "").strip()
     hud_ai_prompt_hint = str(text_overrides.get("hud_ai_prompt_hint") or "").strip()
-    hud_lines = normalize_hud_lines(hud_text.splitlines())
+    # Keep user-entered HUD lines intact; renderer handles visual wrapping.
+    hud_lines = normalize_hud_lines(hud_text.splitlines(), max_chars_per_line=None)
 
     headline_variants: list[str] = []
     if headline_ai_enabled and variants:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ import uvicorn
 from . import control_plane
 from .matrix_publish import check_wechat_matrix_login_status, run_matrix_publish, run_wechat_publish
 from .service import ensure_database, run_ai_robot_sender_worker
+from .web import app as web_app
 from .wechat_stats_capture import run_wechat_stats_capture
 
 FIXED_WEB_PORT = 8790
@@ -111,7 +113,13 @@ def main() -> int:
             )
             return 2
         effective_port = requested_port if allow_non_fixed_port else FIXED_WEB_PORT
-        uvicorn.run("gasgx_distribution.web:app", host=str(args.host), port=effective_port, reload=False)
+        # Keep uvicorn child processes on the same interpreter (venv) on Windows.
+        try:
+            multiprocessing.set_executable(sys.executable)
+        except Exception:
+            pass
+        # Pass the ASGI app object directly so uvicorn stays on the current Python interpreter.
+        uvicorn.run(web_app, host=str(args.host), port=effective_port, reload=False)
         return 0
     parser.error(f"unsupported command: {args.command}")
     return 2

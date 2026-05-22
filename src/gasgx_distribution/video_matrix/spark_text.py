@@ -245,7 +245,12 @@ def build_follow_text_variants(
     return normalized
 
 
-def normalize_hud_lines(lines: Iterable[str], *, max_lines: int = HUD_MAX_LINES, max_chars_per_line: int = HUD_MAX_CHARS_PER_LINE) -> list[str]:
+def normalize_hud_lines(
+    lines: Iterable[str],
+    *,
+    max_lines: int = HUD_MAX_LINES,
+    max_chars_per_line: int | None = HUD_MAX_CHARS_PER_LINE,
+) -> list[str]:
     normalized: list[str] = []
     for raw in lines:
         text = _normalize_hud_line(raw, max_chars=max_chars_per_line)
@@ -610,11 +615,19 @@ def _normalize_bilingual_description_variants(raw_items: list[str], count: int, 
     return variants
 
 
-def _normalize_hud_line(text: str, *, max_chars: int = HUD_MAX_CHARS_PER_LINE) -> str:
+def _normalize_hud_line(text: str, *, max_chars: int | None = HUD_MAX_CHARS_PER_LINE) -> str:
     clean = clean_generated_text(str(text or ""))
     if not clean:
         return ""
-    if _content_length(clean) <= max_chars:
+    if max_chars is None:
+        return clean
+    try:
+        max_chars_value = int(max_chars)
+    except (TypeError, ValueError):
+        max_chars_value = HUD_MAX_CHARS_PER_LINE
+    if max_chars_value <= 0:
+        return clean
+    if _content_length(clean) <= max_chars_value:
         return clean
     out: list[str] = []
     count = 0
@@ -623,7 +636,7 @@ def _normalize_hud_line(text: str, *, max_chars: int = HUD_MAX_CHARS_PER_LINE) -
             if out and out[-1] != " ":
                 out.append(" ")
             continue
-        if count >= max_chars:
+        if count >= max_chars_value:
             break
         out.append(char)
         count += 1
