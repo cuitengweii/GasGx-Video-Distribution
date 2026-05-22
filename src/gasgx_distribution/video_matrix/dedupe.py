@@ -56,6 +56,7 @@ def plan_feature_record(
 ) -> dict[str, Any]:
     prepare_variant_dedupe_fields(variant)
     first_segment = variant.segments[0] if variant.segments else None
+    resolved_bgm_name = str(variant.bgm_name or bgm_name or "").strip()
     return {
         "signature": variant.signature,
         "text_signature": variant.text_signature,
@@ -71,7 +72,7 @@ def plan_feature_record(
         "first_clip_id": first_segment.clip.clip_id if first_segment else "",
         "first_category": first_segment.category if first_segment else "",
         "segment_keys": [segment_key(segment) for segment in variant.segments],
-        "bgm_name": bgm_name,
+        "bgm_name": resolved_bgm_name,
         "bgm_fingerprint": bgm_fingerprint,
         "content_fingerprint": content_fingerprint,
         "first_frame_hash": first_frame_hash,
@@ -215,6 +216,7 @@ def enrich_rendered_asset_dedupe(asset: RenderedAsset, bgm_path: Path | None = N
         variant.cover_frame_hash = cover_hash or variant.cover_frame_hash
         variant.first_frame_hash = variant.first_frame_hash or cover_hash
     if bgm_path is not None:
+        variant.bgm_name = variant.bgm_name or bgm_path.name
         variant.bgm_fingerprint = compute_file_fingerprint(bgm_path)
     if variant.dedupe_result is None:
         variant.dedupe_result = DedupeResult(status="pass", action="pass", report=SimilarityReport())
@@ -237,6 +239,7 @@ def dedupe_payload_for_variant(variant: VideoVariant) -> dict[str, Any]:
         "visual_plan_key": variant.visual_plan_key,
         "text_variant_id": variant.text_variant_id,
         "structure_variant_id": variant.structure_variant_id,
+        "bgm_name": str(variant.bgm_name or "").strip(),
         "bgm_start_offset": round(float(variant.bgm_start_offset or 0.0), 3),
         "bgm_offset_bucket": variant.bgm_offset_bucket,
     }
@@ -439,7 +442,7 @@ def _write_manifest_dedupe_fields(asset: RenderedAsset, bgm_path: Path | None) -
     payload["narrative_template_id"] = asset.variant.narrative_template_id
     payload["account_pool_id"] = asset.variant.account_pool_id
     payload["cover_frame_offset"] = asset.variant.cover_frame_offset
-    payload["bgm_name"] = bgm_path.name if bgm_path is not None else ""
+    payload["bgm_name"] = str(asset.variant.bgm_name or (bgm_path.name if bgm_path is not None else ""))
     payload["bgm_start_offset"] = round(float(asset.variant.bgm_start_offset or 0.0), 3)
     payload["bgm_offset_bucket"] = asset.variant.bgm_offset_bucket
     payload["dedupe"] = dedupe_payload_for_variant(asset.variant)

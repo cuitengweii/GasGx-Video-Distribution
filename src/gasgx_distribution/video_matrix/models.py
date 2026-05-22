@@ -91,6 +91,8 @@ class VideoVariant:
     structure_variant_id: str = ""
     bgm_start_offset: float = 0.0
     bgm_offset_bucket: str = ""
+    bgm_name: str = ""
+    bgm_path: Path | None = None
     text_signature: str = ""
     structure_signature: str = ""
     first_frame_hash: str = ""

@@ -31,6 +31,7 @@ from .video_matrix.cover import render_cover_preview_image
 from .video_matrix.cover_templates import DEFAULT_COVER_TEMPLATE_ID, load_cover_templates, require_cover_template
 from .video_matrix.config_store import default_config_path, runtime_config_path
 from .video_matrix.dedupe import dedupe_payload_for_variant, plan_feature_record
+from .video_matrix.ffmpeg_tools import probe_media
 from .video_matrix.ingestion import VIDEO_EXTENSIONS, ensure_category_dirs
 from .video_matrix.pipeline import rendered_asset_payload, run_pipeline
 from .video_matrix.settings import ProjectSettings
@@ -93,6 +94,7 @@ HUD_TEXT_MAX_CHARS_PER_LINE = 10
 MINING_BGM_PATH = ROOT / "runtime" / "video_matrix" / "mining" / "mining.mp3"
 DEFAULT_MINING_BGM_VOLUME = 1.0
 DEFAULT_LIBRARY_BGM_VOLUME = 0.35
+MIN_BGM_DURATION_SECONDS = 1.0
 
 if load_dotenv is not None:
     load_dotenv(ROOT / ".env")
@@ -1134,6 +1136,7 @@ def _run_generate_job(
         mining_bgm_path = MINING_BGM_PATH.resolve() if MINING_BGM_PATH.exists() else None
         mining_bgm_volume = _audio_mix_level(request.get("mining_bgm_volume"), default=DEFAULT_MINING_BGM_VOLUME)
         library_bgm_volume = _audio_mix_level(request.get("library_bgm_volume"), default=DEFAULT_LIBRARY_BGM_VOLUME)
+        bgm_candidates = _resolve_bgm_candidates(request, bgm_path)
 
         def progress(stage: str, value: float, message: str) -> None:
             _jobs[job_id].update({"status": "running", "stage": stage, "progress": value, "message": message})
@@ -1157,6 +1160,7 @@ def _run_generate_job(
             assets = run_pipeline(
                 settings=settings,
                 bgm_path=bgm_path,
+                bgm_candidates=bgm_candidates,
                 output_count=int(request.get("output_count") or settings.output_count),
                 source_root=source_root,
                 output_root=Path(request["output_root"]).expanduser().resolve() if request.get("output_root") else None,
@@ -1237,9 +1241,9 @@ def _run_generate_job(
 async def _resolve_bgm_path(request: dict[str, Any], temp_root: Path, bgm_file: UploadFile | None) -> Path:
     if request.get("bgm_source") == "Local library":
         filename = Path(str(request.get("bgm_library_id") or "")).name
-        local_files = _list_local_bgm_files(BGM_DIR)
+        local_files = _list_usable_local_bgm_files(BGM_DIR)
         candidate = BGM_DIR / filename if filename else None
-        if candidate is not None and candidate.exists():
+        if candidate is not None and _is_usable_bgm_file(candidate):
             return candidate.resolve()
         if local_files:
             recent_bgm = _recent_bgm_names()
@@ -1250,7 +1254,28 @@ async def _resolve_bgm_path(request: dict[str, Any], temp_root: Path, bgm_file: 
     target = temp_root / "bgm" / Path(bgm_file.filename or "bgm.mp3").name
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(await bgm_file.read())
+    if not _is_usable_bgm_file(target):
+        raise HTTPException(status_code=400, detail="Uploaded BGM file is invalid or too short")
     return target
+
+
+def _resolve_bgm_candidates(request: dict[str, Any], bgm_path: Path) -> list[Path] | None:
+    if request.get("bgm_source") != "Local library":
+        return None
+    local_files = [path.resolve() for path in _list_usable_local_bgm_files(BGM_DIR) if path.exists()]
+    if not local_files:
+        return [bgm_path.resolve()] if _is_usable_bgm_file(bgm_path) else None
+    selected = Path(str(request.get("bgm_library_id") or "")).name
+    selected_path = bgm_path.resolve()
+    recent_bgm = _recent_bgm_names()
+    if selected:
+        local_files = [selected_path, *[path for path in local_files if path != selected_path and _is_usable_bgm_file(path)]]
+    fresh = [path for path in local_files if path.name not in recent_bgm]
+    stale = [path for path in local_files if path.name in recent_bgm]
+    ordered = fresh + stale
+    if ordered:
+        return ordered
+    return [bgm_path.resolve()] if _is_usable_bgm_file(bgm_path) else None
 
 
 async def _resolve_source_root(request: dict[str, Any], temp_root: Path, source_files: list[UploadFile]) -> Path | None:
@@ -1598,7 +1623,7 @@ def _save_generation_history(
                         "dedupe": dedupe_payload_for_variant(asset.variant),
                         "dedupe_features": plan_feature_record(
                             asset.variant,
-                            bgm_name=bgm_path.name,
+                            bgm_name=str(asset.variant.bgm_name or bgm_path.name),
                             content_fingerprint=asset.variant.content_fingerprint,
                             first_frame_hash=asset.variant.first_frame_hash,
                             cover_frame_hash=asset.variant.cover_frame_hash,
@@ -1692,7 +1717,7 @@ def _local_generation_asset_payload(
         "dedupe": dedupe_payload_for_variant(asset.variant),
         "dedupe_features": plan_feature_record(
             asset.variant,
-            bgm_name=bgm_path.name,
+            bgm_name=str(asset.variant.bgm_name or bgm_path.name),
             content_fingerprint=asset.variant.content_fingerprint,
             first_frame_hash=asset.variant.first_frame_hash,
             cover_frame_hash=asset.variant.cover_frame_hash,
@@ -1805,6 +1830,21 @@ def _list_local_bgm_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
     return sorted(path for path in folder.iterdir() if path.suffix.lower() in {".mp3", ".wav", ".m4a"})
+
+
+def _list_usable_local_bgm_files(folder: Path) -> list[Path]:
+    return [path for path in _list_local_bgm_files(folder) if _is_usable_bgm_file(path)]
+
+
+def _is_usable_bgm_file(path: Path) -> bool:
+    if not path.exists() or path.suffix.lower() not in {".mp3", ".wav", ".m4a"}:
+        return False
+    try:
+        payload = probe_media(path)
+        duration = float((payload.get("format") or {}).get("duration") or 0.0)
+    except Exception:
+        return False
+    return duration >= MIN_BGM_DURATION_SECONDS
 
 
 def _safe_bgm_filename(value: str) -> str:

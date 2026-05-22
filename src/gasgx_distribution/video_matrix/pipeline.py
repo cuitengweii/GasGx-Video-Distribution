@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import uuid
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
@@ -44,6 +45,7 @@ _DAILY_SEQUENCE_LOCK = Lock()
 def run_pipeline(
     settings: ProjectSettings,
     bgm_path: Path,
+    bgm_candidates: list[Path] | None = None,
     output_count: int | None = None,
     source_root: Path | None = None,
     output_root: Path | None = None,
@@ -193,6 +195,12 @@ def run_pipeline(
             avoid_texts=daily_texts,
             narrative_structure_enabled=narrative_structure_enabled,
         )
+    _assign_variant_bgm_tracks(
+        variants,
+        settings=settings,
+        default_bgm_path=bgm_path,
+        bgm_candidates=bgm_candidates,
+    )
     _apply_text_overrides(
         variants,
         text_overrides,
@@ -240,15 +248,17 @@ def run_pipeline(
         executor = ThreadPoolExecutor(max_workers=worker_count)
         try:
             default_follow_text = str((text_overrides or {}).get("follow_text") or "")
-            futures = {
-                executor.submit(
+            futures: dict[Any, tuple[int, Path]] = {}
+            for variant in variants:
+                variant_bgm_path = _variant_bgm_path(variant, bgm_path)
+                future = executor.submit(
                     render_variant,
                     variant,
                     settings,
                     template_copy,
                     batch_dir,
                     filename_prefix,
-                    bgm_path,
+                    variant_bgm_path,
                     output_types or {"mp4"},
                     copy_language,
                     template_config,
@@ -269,17 +279,16 @@ def run_pipeline(
                     library_bgm_volume=library_bgm_volume,
                     publish_day_code=publish_day_code,
                     publish_sequence_number=publish_sequence_start + variant.sequence_number - 1,
-                ): variant.sequence_number
-                for variant in variants
-            }
+                )
+                futures[future] = (variant.sequence_number, variant_bgm_path)
             completed = 0
             failed = 0
             first_error = ""
             for future in as_completed(futures):
-                sequence_number = futures[future]
+                sequence_number, variant_bgm_path = futures[future]
                 try:
                     asset = future.result()
-                    enrich_rendered_asset_dedupe(asset, bgm_path)
+                    enrich_rendered_asset_dedupe(asset, variant_bgm_path)
                 except Exception as exc:  # noqa: BLE001
                     failed += 1
                     if not first_error:
@@ -500,10 +509,73 @@ def rendered_asset_payload(asset: RenderedAsset) -> dict[str, Any]:
         "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
         "narrative_template_id": asset.variant.narrative_template_id,
         "account_pool_id": asset.variant.account_pool_id,
+        "bgm_name": str(asset.variant.bgm_name or ""),
         "bgm_start_offset": asset.variant.bgm_start_offset,
         "bgm_offset_bucket": asset.variant.bgm_offset_bucket,
         "dedupe": dedupe_payload_for_variant(asset.variant),
     }
+
+
+def _variant_bgm_path(variant: Any, default_bgm_path: Path) -> Path:
+    path = getattr(variant, "bgm_path", None)
+    if isinstance(path, Path):
+        return path
+    return default_bgm_path
+
+
+def _assign_variant_bgm_tracks(
+    variants: list[Any],
+    *,
+    settings: ProjectSettings,
+    default_bgm_path: Path,
+    bgm_candidates: list[Path] | None,
+) -> None:
+    if not variants:
+        return
+    tracks = [Path(path).resolve() for path in (bgm_candidates or []) if Path(path).exists()]
+    if not tracks:
+        tracks = [default_bgm_path.resolve()]
+    rng = random.Random(uuid.uuid4().int)
+    shuffled = list(dict.fromkeys(tracks))
+    rng.shuffle(shuffled)
+    pool_size = max(1, len(shuffled))
+    duration_cache: dict[Path, float] = {}
+    for index, variant in enumerate(variants):
+        track = shuffled[index % pool_size]
+        variant.bgm_path = track
+        variant.bgm_name = track.name
+        segment_duration = sum(max(0.0, float(segment.duration or 0.0)) for segment in getattr(variant, "segments", []) or [])
+        target_duration = max(float(settings.video_duration_min), segment_duration)
+        bgm_duration = duration_cache.get(track)
+        if bgm_duration is None:
+            bgm_duration = _audio_duration_seconds(track)
+            duration_cache[track] = bgm_duration
+        offset = _random_bgm_start_offset(settings, rng, bgm_duration, target_duration)
+        variant.bgm_start_offset = offset
+        variant.bgm_offset_bucket = _bgm_offset_bucket(settings, offset)
+
+
+def _random_bgm_start_offset(settings: ProjectSettings, rng: random.Random, bgm_duration: float, target_duration: float) -> float:
+    try:
+        enabled = bool(settings.dedupe_policy.get("bgm_random_offset_enabled", True))
+    except AttributeError:
+        enabled = True
+    if not enabled:
+        return 0.0
+    safe_duration = max(0.0, float(bgm_duration or 0.0))
+    safe_target = max(1.0, float(target_duration or 0.0))
+    max_offset = max(0.0, safe_duration - safe_target)
+    if max_offset < 2.0:
+        return 0.0
+    return round(rng.uniform(0.0, max_offset), 3)
+
+
+def _bgm_offset_bucket(settings: ProjectSettings, offset: float) -> str:
+    try:
+        seconds = max(1, int(settings.dedupe_policy.get("bgm_offset_bucket_seconds", 8) or 8))
+    except AttributeError:
+        seconds = 8
+    return f"b{int(max(0.0, float(offset or 0.0)) // seconds)}"
 
 
 def _audio_duration_seconds(path: Path) -> float:
