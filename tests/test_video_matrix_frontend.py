@@ -552,7 +552,15 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "defaultCompositionSequence" in app
     assert "scheduleStateSave" in app
     assert "scheduleVideoTemplateSave" in app
+    assert "pendingVideoTemplateSaveTimers" in app
+    assert "flushVideoTemplateSave" in app
+    assert "cancelVideoTemplateSave(selectedVideoTemplate)" in app
+    assert "videoTemplateActiveTarget" in app
+    assert "gasgx-video-template-active-target" in app
     assert "scheduleCoverTemplateSave" in app
+    assert "pendingCoverTemplateSaveTimers" in app
+    assert "flushCoverTemplateSave" in app
+    assert "cancelCoverTemplateSave(selectedCover)" in app
     assert "saveTemplateSelection" in app
     assert "renderEndingTemplatePanel" in app
     assert "endingTemplateModeOptions" in app
@@ -631,6 +639,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "cover_template_${serial}" in app
     assert "第一屏封面模板 ${serial}" in app
     assert "selectVideoTemplate" in app
+    assert "await flushVideoTemplateSave(selectedVideoTemplate);" in app
     assert "title_bg_height" in preview
     assert "title_bg_opacity" in preview
     assert 'id="cloneVideoTemplate"' in app
@@ -646,6 +655,7 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert ".ending-template-dir-row" in css
     assert "切换正文模板..." in app
     assert "selectCoverTemplate" in app
+    assert "await flushCoverTemplateSave(selectedCover);" in app
     assert "renderCoverTemplateMenu" in app
     assert "coverTemplateDisplayName" in app
     assert "videoTemplateDisplayName" in app

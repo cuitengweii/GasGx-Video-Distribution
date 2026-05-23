@@ -420,7 +420,7 @@ def _draw_panel(draw: ImageDraw.ImageDraw, width: int, y: int, hud_lines: list[s
     y1 = y + 150
     panel = _hex_to_rgba(str(template["panel_color"]), float(template["panel_opacity"]))
     draw.rounded_rectangle((x0, y, x1, y1), radius=20, fill=panel)
-    hud_text = "  |  ".join(hud_lines[:3])
+    hud_text = "\n".join(hud_lines[:3])
     wrapped = _wrap_text(draw, hud_text, font, x1 - x0 - 56)
     text_y = y + 38
     align = str(template.get("align", "left")).lower()

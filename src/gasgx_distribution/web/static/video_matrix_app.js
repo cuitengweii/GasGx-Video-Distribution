@@ -18,6 +18,7 @@ let endingModeLoading = "";
 let displayedJobPercent = 0;
 let jobProgressTimer = null;
 let lastJobSnapshot = null;
+let videoTemplateActiveTarget = "title";
 let visualDropdownCloseBound = false;
 let videoTemplateThumbScaleBound = false;
 let narrativePanelCollapsed = true;
@@ -1105,9 +1106,25 @@ function endingTemplateDisplayName(id, item, index = Object.keys(endingCoverTemp
   return numberedTemplateName("片尾封面模板", id, item, index, /(?:片尾封面模板|片尾模板)\s*(\d+)/);
 }
 
+function normalizeVideoTemplateTarget(target) {
+  return ["slogan", "title", "hud"].includes(target) ? target : "title";
+}
+
+function updateVideoTemplateActiveTarget(target, options = {}) {
+  const nextTarget = normalizeVideoTemplateTarget(target);
+  const shouldRender = options.render !== false;
+  if (videoTemplateActiveTarget === nextTarget) {
+    if (shouldRender && options.forceRender) renderVideoTemplateEditor();
+    return;
+  }
+  videoTemplateActiveTarget = nextTarget;
+  if (shouldRender) renderVideoTemplateEditor();
+}
+
 async function selectVideoTemplate(templateId, options = {}) {
   if (!templateId || !templates[templateId]) return;
   const refreshTemplateGallery = options.refreshTemplateGallery !== false;
+  await flushVideoTemplateSave(selectedVideoTemplate);
   selectedVideoTemplate = templateId;
   setImageLoading("videoTemplatePreview", "切换正文模板...");
   if (refreshTemplateGallery) setPanelLoading("videoTemplateGallery", "切换正文模板...");
@@ -1760,11 +1777,12 @@ async function refreshAllPreviews() {
 function renderVideoTemplateEditor() {
   const template = templates[selectedVideoTemplate];
   if (!template) return;
+  videoTemplateActiveTarget = normalizeVideoTemplateTarget(videoTemplateActiveTarget);
   const visibilityChecks = [];
   const html = [
     `<h3>模板调整区</h3>`,
     `<label>模板名称<input data-key="name" type="text" value="${escapeHtml(template.name || "")}"></label>`,
-    visualTemplateToolbarHtml(template),
+    visualTemplateToolbarHtml(template, videoTemplateActiveTarget),
   ];
   for (const [key, label, type, min, max] of videoTemplateFields) {
     if (key === "name") continue;
@@ -1809,10 +1827,12 @@ function renderVideoTemplateEditor() {
   $("cloneVideoTemplate").onclick = cloneVideoTemplate;
 }
 
-function visualTemplateToolbarHtml(template) {
-  const fontValue = template.title_font_family || videoTextFontOptions[0][0];
-  const effectValue = template.title_text_effect || "none";
-  const styleValue = template.title_text_style || "none";
+function visualTemplateToolbarHtml(template, activeTarget = "title") {
+  const target = normalizeVideoTemplateTarget(activeTarget);
+  const fontValue = template[`${target}_font_family`] || template.title_font_family || videoTextFontOptions[0][0];
+  const effectValue = template[`${target}_text_effect`] || "none";
+  const styleValue = template[`${target}_text_style`] || "none";
+  const colorValue = template[`${target}_color`] || template.primary_color || "#ffffff";
   const hudOpacity = Number(template.hud_bar_opacity ?? 0.68);
   const hudRadius = Number(template.hud_bar_radius ?? 10);
   const hudColor = template.hud_bar_color || "#0E1A10";
@@ -1830,9 +1850,9 @@ function visualTemplateToolbarHtml(template) {
   return `
     <div class="visual-toolbar-panel" aria-label="文字可视化工具">
       <div class="visual-target-tabs" aria-label="叠层选择">
-        <button type="button" data-visual-command="select-target" data-value="slogan" title="选择上标题">上标题</button>
-        <button type="button" data-visual-command="select-target" data-value="title" title="选择中标题">中标题</button>
-        <button type="button" data-visual-command="select-target" data-value="hud" title="选择下标题">下标题</button>
+        <button type="button" class="${target === "slogan" ? "active" : ""}" data-visual-command="select-target" data-value="slogan" title="选择上标题">上标题</button>
+        <button type="button" class="${target === "title" ? "active" : ""}" data-visual-command="select-target" data-value="title" title="选择中标题">中标题</button>
+        <button type="button" class="${target === "hud" ? "active" : ""}" data-visual-command="select-target" data-value="hud" title="选择下标题">下标题</button>
       </div>
       <div class="visual-control-section visual-text-controls" aria-label="文字调整区">
         <div class="visual-section-title">文字调整区</div>
@@ -1846,8 +1866,8 @@ function visualTemplateToolbarHtml(template) {
         <button type="button" data-visual-command="edit" title="编辑文字">编辑</button>
         <label class="color-swatch-button" title="文字颜色">
           ${colorPickerIconSvg()}
-          <span class="color-current-dot" style="background:${escapeHtml(template.primary_color || "#ffffff")}"></span>
-          <input data-visual-command="color" type="color" value="${escapeHtml(template.primary_color || "#ffffff")}" aria-label="文字颜色">
+          <span class="color-current-dot" style="background:${escapeHtml(colorValue)}"></span>
+          <input data-visual-command="color" type="color" value="${escapeHtml(colorValue)}" aria-label="文字颜色">
         </label>
         <div class="font-sample-picker" role="listbox" aria-label="字体样张选择">
           ${fontSamples}
@@ -1982,6 +2002,9 @@ function bindVisualTemplateToolbar() {
       if (button.dataset.visualCommand === "font-family") {
         toolbar.querySelectorAll(".font-sample-option.active").forEach((node) => node.classList.remove("active"));
         button.classList.add("active");
+      }
+      if (button.dataset.visualCommand === "select-target") {
+        updateVideoTemplateActiveTarget(button.dataset.value || "title", { render: true, forceRender: true });
       }
       postVisualTemplateCommand(button.dataset.visualCommand, button.dataset.value || "", visualCommandScope(button));
     };
@@ -2423,6 +2446,7 @@ async function saveVideoTemplate() {
     button.textContent = "保存中...";
   }
   try {
+    cancelVideoTemplateSave(selectedVideoTemplate);
     await api(`/api/video-matrix/templates/${selectedVideoTemplate}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[selectedVideoTemplate])});
     await saveState();
     pendingTemplateSave = "";
@@ -2542,6 +2566,7 @@ async function refreshMainPreview() {
 
 async function selectCoverTemplate(templateId) {
   if (!templateId || !coverTemplates[templateId]) return;
+  await flushCoverTemplateSave(selectedCover);
   selectedCover = templateId;
   setImageLoading("coverPreview", "切换第一屏模板...");
   if ($("sidebarCoverTemplate")) $("sidebarCoverTemplate").value = templateId;
@@ -2580,6 +2605,7 @@ async function saveCoverAsNewTemplate() {
   state.cover_template_id = selectedCover;
   state.cover_templates = coverTemplates;
   try {
+    cancelCoverTemplateSave(previousCover);
     await api("/api/video-matrix/cover-templates", {method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify({templates: coverTemplates, selected_cover: selectedCover})});
     await saveTemplateSelection();
     pendingTemplateSave = "";
@@ -2613,6 +2639,7 @@ async function saveCurrentCoverTemplate() {
     button.innerHTML = buttonLoadingInline("保存中...");
   }
   try {
+    cancelCoverTemplateSave(selectedCover);
     applyIndependentCoverDefaults(template);
     await api(`/api/video-matrix/cover-templates/${selectedCover}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(template)});
     await saveTemplateSelection();
@@ -2661,9 +2688,43 @@ function buildCoverTemplateVariants(sourceTemplate) {
   }));
 }
 
-const scheduleVideoTemplateSave = debounce(async () => {
-  if (!selectedVideoTemplate || !templates[selectedVideoTemplate]) return;
-  const templateId = selectedVideoTemplate;
+const pendingVideoTemplateSaveTimers = new Map();
+const pendingCoverTemplateSaveTimers = new Map();
+
+function cancelVideoTemplateSave(templateId) {
+  if (!templateId) return;
+  const timer = pendingVideoTemplateSaveTimers.get(templateId);
+  if (timer) {
+    clearTimeout(timer);
+    pendingVideoTemplateSaveTimers.delete(templateId);
+  }
+  if (pendingTemplateSave === `video:${templateId}`) pendingTemplateSave = "";
+}
+
+async function flushVideoTemplateSave(templateId = selectedVideoTemplate) {
+  if (!templateId || !templates[templateId]) return;
+  cancelVideoTemplateSave(templateId);
+  await persistVideoTemplate(templateId);
+}
+
+function cancelCoverTemplateSave(templateId) {
+  if (!templateId) return;
+  const timer = pendingCoverTemplateSaveTimers.get(templateId);
+  if (timer) {
+    clearTimeout(timer);
+    pendingCoverTemplateSaveTimers.delete(templateId);
+  }
+  if (pendingTemplateSave === `cover:${templateId}`) pendingTemplateSave = "";
+}
+
+async function flushCoverTemplateSave(templateId = selectedCover) {
+  if (!templateId || !coverTemplates[templateId]) return;
+  cancelCoverTemplateSave(templateId);
+  await persistCoverTemplate(templateId);
+}
+
+async function persistVideoTemplate(templateId) {
+  if (!templateId || !templates[templateId]) return;
   pendingTemplateSave = `video:${templateId}`;
   try {
     await api(`/api/video-matrix/templates/${templateId}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(templates[templateId])});
@@ -2672,11 +2733,10 @@ const scheduleVideoTemplateSave = debounce(async () => {
   } catch (error) {
     log(`正文模板自动保存失败：${error.message}`);
   }
-}, 700);
+}
 
-const scheduleCoverTemplateSave = debounce(async () => {
-  if (!selectedCover || !coverTemplates[selectedCover]) return;
-  const templateId = selectedCover;
+async function persistCoverTemplate(templateId) {
+  if (!templateId || !coverTemplates[templateId]) return;
   pendingTemplateSave = `cover:${templateId}`;
   try {
     await api(`/api/video-matrix/cover-templates/${templateId}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(coverTemplates[templateId])});
@@ -2685,7 +2745,29 @@ const scheduleCoverTemplateSave = debounce(async () => {
   } catch (error) {
     log(`第一屏模板自动保存失败：${error.message}`);
   }
-}, 700);
+}
+
+function scheduleVideoTemplateSave(templateId = selectedVideoTemplate) {
+  if (!templateId || !templates[templateId]) return;
+  cancelVideoTemplateSave(templateId);
+  pendingTemplateSave = `video:${templateId}`;
+  const timer = window.setTimeout(() => {
+    pendingVideoTemplateSaveTimers.delete(templateId);
+    void persistVideoTemplate(templateId);
+  }, 700);
+  pendingVideoTemplateSaveTimers.set(templateId, timer);
+}
+
+function scheduleCoverTemplateSave(templateId = selectedCover) {
+  if (!templateId || !coverTemplates[templateId]) return;
+  cancelCoverTemplateSave(templateId);
+  pendingTemplateSave = `cover:${templateId}`;
+  const timer = window.setTimeout(() => {
+    pendingCoverTemplateSaveTimers.delete(templateId);
+    void persistCoverTemplate(templateId);
+  }, 700);
+  pendingCoverTemplateSaveTimers.set(templateId, timer);
+}
 
 async function saveTemplateSelection() {
   state = collectState();
@@ -3906,6 +3988,10 @@ function bindGenerateButtonFallback() {
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-update") return;
   applyVisualTemplateUpdates(event.data.updates);
+});
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-active-target") return;
+  updateVideoTemplateActiveTarget(event.data.target || "title", { render: true, forceRender: true });
 });
 window.addEventListener("message", (event) => {
   if (event.origin !== window.location.origin || event.data?.type !== "gasgx-video-template-text-update") return;

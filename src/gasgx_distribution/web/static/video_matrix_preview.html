@@ -2505,6 +2505,7 @@
 
       function selectTarget(target) {
         activeTarget = target;
+        window.parent.postMessage({ type: "gasgx-video-template-active-target", target }, window.location.origin);
         const frameTarget = selectionFrameTarget(target);
         document.querySelectorAll(".vm-template-editable").forEach((node) => node.classList.toggle("active", node.dataset.templateTarget === frameTarget));
         document.getElementById("visualToolbar").classList.add("active");

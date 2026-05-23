@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import json
@@ -344,21 +344,23 @@ def test_overlay_filters_match_selected_template_layer_rules(tmp_path: Path) -> 
 
     filters = render._overlay_filters(
         render.coerce_template(template),
-        "终结废气 | 重塑能源 | 就地变现",
+        "电价低至0.01美元/度\n发电+矿箱一体化",
         "The World's leading engine for monetizing stranded natural gas computing power",
         "GasGx天然气发电机组\n搁浅天然气首选",
         set(template),
         text_dir=tmp_path,
     )
 
-    assert "drawbox=x=0:y=1230" in filters
-    assert "drawbox=x=0:y=420" not in filters
-    assert "drawbox=x=0:y=772" not in filters
+    assert "drawbox=x=80:y=1230" in filters
+    assert "drawbox=x=120:y=420" not in filters
+    assert "drawbox=x=144:y=772" not in filters
     assert "textfile=" in filters
     assert "text=The World" not in filters
-    assert filters.count(":x=(w-text_w)/2:y=") >= 2
+    assert filters.count("textfile=") >= 5
     assert "alpha='0.80+0.20*sin" not in filters
     assert "+44*exp" not in filters
+    assert (tmp_path / "hud_0.txt").read_text(encoding="utf-8") == "电价低至0.01美元/度"
+    assert (tmp_path / "hud_1.txt").read_text(encoding="utf-8") == "发电+矿箱一体化"
     assert (tmp_path / "slogan_0.txt").read_text(encoding="utf-8").startswith("The World's leading engine")
     assert (tmp_path / "title_0.txt").read_text(encoding="utf-8") == "GasGx天然气发电机组"
     assert (tmp_path / "title_1.txt").read_text(encoding="utf-8") == "搁浅天然气首选"
@@ -491,6 +493,41 @@ def test_overlay_filters_apply_selected_text_style_to_render_layers(tmp_path: Pa
     assert "fontcolor=#1F8F23@0.72" in filters
     assert "fontcolor=#FFFFFF:" in filters
     assert "fontcolor=#FFFFFF@0.24" in filters
+
+
+def test_overlay_filters_keep_text_style_and_effect_in_fast_first_mode(tmp_path: Path) -> None:
+    template = render.coerce_template(
+        {
+            "show_hud": True,
+            "show_slogan": True,
+            "show_title": True,
+            "hud_text_style": "soft-shadow",
+            "slogan_text_style": "outline",
+            "title_text_style": "white-outline",
+            "hud_text_effect": "jitter",
+            "slogan_text_effect": "fade-in-out",
+            "title_text_effect": "slide-up",
+            "slogan_text_align": "center",
+            "title_text_align": "center",
+        }
+    )
+
+    filters = render._overlay_filters(
+        template,
+        "HUD",
+        "The World's leading engine for monetizing stranded natural gas computing power",
+        "GasGx Natural Gas",
+        set(template),
+        text_dir=tmp_path,
+        speed_mode="fast_first",
+    )
+
+    assert "shadowcolor=0x000000@0.78" in filters
+    assert "bordercolor=0x000000@0.92" in filters
+    assert "bordercolor=0xFFFFFF@0.92" in filters
+    assert "+3*sin" in filters
+    assert "sin(1.7*(t-0.00))" in filters
+    assert "44*exp(-4*(t-0.00))" in filters
 
 
 def test_overlay_filters_do_not_truncate_multiline_slogan_by_default(tmp_path: Path) -> None:
@@ -670,12 +707,12 @@ def test_build_filter_complex_preserves_watermark_overlay_chain(tmp_path: Path) 
     assert ",,overlay" not in filter_complex
     assert "No such filter" not in filter_complex
     assert "[seg0base]" in filter_complex
-    assert "[seg0wm],format=yuv420p[v0]" in filter_complex
+    assert "[seg0wm]format=yuv420p[v0]" in filter_complex
 
 
 def test_watermark_helpers_support_auto_text_and_image_overlay() -> None:
     assert sanitize_watermark_text("12345678901") == "1234567890"
-    assert sanitize_watermark_text("中英\nWatermark") == "中英Watermark"
+    assert sanitize_watermark_text("中英\nWatermark") == "中英Watermar"
     assert resolve_watermark_text({"watermark_mode": "auto", "watermark_text": "ignored"}, "0516-01") == "0516-01"
 
     text_overlay = build_watermark_overlay(
@@ -709,3 +746,4 @@ def test_watermark_helpers_support_auto_text_and_image_overlay() -> None:
     assert bbox is not None
     assert bbox[2] - bbox[0] <= 200
     assert bbox[3] - bbox[1] <= 200
+

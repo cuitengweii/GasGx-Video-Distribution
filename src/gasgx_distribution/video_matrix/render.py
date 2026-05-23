@@ -325,7 +325,8 @@ def _build_filter_complex(
     template = coerce_template(template_config)
     explicit_template_keys = set((template_config or {}).keys())
     watermark_overlay_path = _render_watermark_overlay(template, text_dir.parent / "template_watermark_overlay.png" if text_dir else None, settings.target_width, settings.target_height, sequence_tag)
-    hud_text = " | ".join(variant.hud_lines)
+    # Preserve HUD lines as separate lines in the rendered video.
+    hud_text = "\n".join(variant.hud_lines)
     slogan = sanitize_headline_text(variant.slogan)
     title = sanitize_headline_text(variant.title)
     variant.slogan = slogan
@@ -706,9 +707,6 @@ def _drawtext_lines(
     )
     effect = str(template.get(f"{text_key}_text_effect") or "none").strip().lower()
     style = str(template.get(f"{text_key}_text_style") or "none").strip().lower()
-    if str(speed_mode).strip().lower() == "fast_first":
-        effect = "none"
-        style = "none"
     color = _template_text_color(template, text_key, color_key, explicit_template_keys or set())
     font_arg = _resolve_drawtext_font_arg(font_family, sample_text=text)
     filters: list[str] = []
