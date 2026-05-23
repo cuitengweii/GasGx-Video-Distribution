@@ -59,7 +59,10 @@ def runtime_root() -> Path:
     return path
 
 
-def stats_lock_path() -> Path:
+def stats_lock_path(account_id: int | None = None) -> Path:
+    resolved = int(account_id or 0)
+    if resolved > 0:
+        return runtime_root() / f"matrix_stats_capture_a{resolved}.lock"
     return runtime_root() / "matrix_stats_capture.lock"
 
 
@@ -135,8 +138,8 @@ def _append_event(run_id: str, payload: dict[str, Any]) -> None:
         file.write(json.dumps({"ts": int(time.time()), **payload}, ensure_ascii=False) + "\n")
 
 
-def _acquire_lock() -> tuple[bool, dict[str, Any]]:
-    path = stats_lock_path()
+def _acquire_lock(account_id: int | None = None) -> tuple[bool, dict[str, Any]]:
+    path = stats_lock_path(account_id)
     existing = _read_json(path)
     if existing and _pid_is_running(int(existing.get("pid") or 0)):
         return False, existing
@@ -155,9 +158,9 @@ def _acquire_lock() -> tuple[bool, dict[str, Any]]:
     return True, payload
 
 
-def _release_lock() -> None:
+def _release_lock(account_id: int | None = None) -> None:
     try:
-        stats_lock_path().unlink()
+        stats_lock_path(account_id).unlink()
     except FileNotFoundError:
         pass
 
@@ -169,10 +172,23 @@ def _publish_lock_active() -> dict[str, Any]:
     return {}
 
 
+def _active_lock_payloads() -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    paths = [stats_lock_path()]
+    paths.extend(sorted(runtime_root().glob("matrix_stats_capture_a*.lock")))
+    for path in paths:
+        payload = _read_json(path)
+        if payload and _pid_is_running(int(payload.get("pid") or 0)):
+            payloads.append(payload)
+    return payloads
+
+
 def capture_status() -> dict[str, Any]:
+    active_locks = _active_lock_payloads()
     return {
         "status": _read_json(status_path()),
-        "lock": _read_json(stats_lock_path()),
+        "lock": active_locks[0] if active_locks else _read_json(stats_lock_path()),
+        "locks": active_locks,
         "latest_run": service.latest_wechat_stats_capture_run(),
     }
 
@@ -969,8 +985,6 @@ def _capture_account_legacy(
         elif capture_page_is_new_tab and capture_page is not None:
             if not keep_capture_tab_open:
                 _close_capture_tab_quietly(capture_page)
-            if page is not None and capture_page is not page:
-                _close_capture_tab_quietly(page)
         elif page is not None:
             try:
                 engine._disconnect_chrome_page_quietly(page)  # type: ignore[attr-defined]
@@ -1081,8 +1095,6 @@ def _capture_account(
         elif capture_page_is_new_tab and capture_page is not None:
             if not keep_capture_tab_open:
                 _close_capture_tab_quietly(capture_page)
-            if page is not None and capture_page is not page:
-                _close_capture_tab_quietly(page)
         elif page is not None:
             try:
                 engine._disconnect_chrome_page_quietly(page)  # type: ignore[attr-defined]
@@ -1189,7 +1201,7 @@ def run_wechat_stats_capture(
         _write_json(status_path(), {**result, "status": "skipped", "finished_at": int(time.time())})
         return result
 
-    locked, lock_payload = _acquire_lock()
+    locked, lock_payload = _acquire_lock(selected_account_id if selected_account_id > 0 else None)
     if not locked:
         result.update({"ok": False, "skipped": True, "reason": "stats_capture_running", "lock": lock_payload})
         service.upsert_wechat_stats_capture_run(
@@ -1299,4 +1311,4 @@ def run_wechat_stats_capture(
         _write_json(status_path(), {**result, "status": final_status, "finished_at": int(time.time())})
         return result
     finally:
-        _release_lock()
+        _release_lock(selected_account_id if selected_account_id > 0 else None)

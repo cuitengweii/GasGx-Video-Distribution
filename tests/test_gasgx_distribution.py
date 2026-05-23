@@ -1310,7 +1310,7 @@ def test_wechat_stats_capture_new_tab_closes_capture_tab_when_keep_open_disabled
 
     assert owner_page.new_tab_calls == [False]
     assert owner_page.capture_tab.close_calls == 1
-    assert owner_page.close_calls == 1
+    assert owner_page.close_calls == 0
     assert disconnect_calls == []
     assert parsed["account_snapshots"]
 

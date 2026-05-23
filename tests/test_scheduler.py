@@ -91,6 +91,38 @@ def test_trigger_stats_capture_passes_keep_browser_flag(monkeypatch, tmp_path: P
     assert captured["keep_capture_tab_open"] is True
 
 
+def test_trigger_stats_capture_marks_account_running_immediately(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    class NoopThread:
+        def __init__(self, *, target=None, name=None, daemon=None):
+            self._target = target
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(scheduler.threading, "Thread", NoopThread)
+
+    result = scheduler.trigger_matrix_wechat_stats_capture(
+        target_date="2026-05-17",
+        dry_run=False,
+        account_id=58,
+        keep_browser_open_on_login_required=True,
+        open_capture_in_new_tab=True,
+        capture_tab_foreground=True,
+        keep_capture_tab_open=True,
+    )
+
+    try:
+        assert result["status"] == "started"
+        assert 58 in scheduler._STATS_RUNNING_ACCOUNT_IDS
+        assert scheduler._STATS_RUNNING.is_set()
+    finally:
+        scheduler._STATS_RUNNING.clear()
+        scheduler._STATS_RUNNING_ACCOUNT_IDS.clear()
+        scheduler._STATS_ACTIVE_REQUESTS_BY_ACCOUNT.clear()
+
+
 def test_trigger_wechat_engagement_passes_account_and_limits(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     captured: dict[str, Any] = {}

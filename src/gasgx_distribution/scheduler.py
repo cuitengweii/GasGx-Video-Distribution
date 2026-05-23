@@ -409,6 +409,7 @@ def trigger_matrix_wechat_stats_capture(
     capture_tab_foreground: bool = False,
     keep_capture_tab_open: bool = False,
 ) -> dict[str, Any]:
+    global _STATS_ACTIVE_REQUEST
     resolved_account_id = int(account_id or 0)
     request = {
         "target_date": target_date,
@@ -457,8 +458,18 @@ def trigger_matrix_wechat_stats_capture(
                 return {"ok": False, "status": "already_running"}
             if resolved_account_id in _STATS_RUNNING_ACCOUNT_IDS:
                 return {"ok": False, "status": "already_running"}
+        if resolved_account_id > 0:
+            _STATS_RUNNING_ACCOUNT_IDS.add(resolved_account_id)
+            _STATS_ACTIVE_REQUESTS_BY_ACCOUNT[resolved_account_id] = dict(request)
+        else:
+            _STATS_ACTIVE_REQUEST = dict(request)
+        _STATS_RUNNING.set()
         thread = threading.Thread(target=_runner_with_context, name="gasgx-matrix-wechat-stats-manual", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _stats_worker_finish(account_id=resolved_account_id)
+        raise
     return {"ok": True, "status": "started"}
 
 
