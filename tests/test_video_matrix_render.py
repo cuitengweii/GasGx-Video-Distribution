@@ -645,7 +645,7 @@ def test_build_filter_complex_avoids_empty_filter_after_overlay_label(monkeypatc
     assert "[seg0bg],drawtext=" not in filter_complex
     assert "[seg0bg]drawtext=" in filter_complex
     assert "[seg0text],format=" not in filter_complex
-    assert "[seg0text]format=" in filter_complex
+    assert "[seg0text]setsar=1,format=" in filter_complex
 
 
 def test_render_variant_uses_publish_sequence_number_for_sequence_tag(monkeypatch, tmp_path: Path) -> None:
@@ -751,7 +751,7 @@ def test_build_filter_complex_preserves_watermark_overlay_chain(tmp_path: Path) 
     assert ",,overlay" not in filter_complex
     assert "No such filter" not in filter_complex
     assert "[seg0base]" in filter_complex
-    assert "[seg0wm]format=yuv420p[v0]" in filter_complex
+    assert "[seg0wm]setsar=1,format=yuv420p[v0]" in filter_complex
 
 
 def test_watermark_helpers_support_auto_text_and_image_overlay() -> None:
@@ -790,4 +790,58 @@ def test_watermark_helpers_support_auto_text_and_image_overlay() -> None:
     assert bbox is not None
     assert bbox[2] - bbox[0] <= 200
     assert bbox[3] - bbox[1] <= 200
+
+
+def test_render_variant_builds_split_screen_filter_graph(monkeypatch, tmp_path: Path) -> None:
+    source_a = tmp_path / "source-a.mp4"
+    source_b = tmp_path / "source-b.mp4"
+    source_a.write_bytes(b"video-a")
+    source_b.write_bytes(b"video-b")
+    variant = _variant(source_a)
+    clip_b = ClipMetadata(
+        clip_id="clip-2",
+        source_path=source_b,
+        normalized_path=source_b,
+        category="category_A",
+        duration=2,
+        width=1080,
+        height=1920,
+        fps=30,
+        brightness_score=1,
+        contrast_score=1,
+        tags=["category_A"],
+    )
+    variant.segments = [
+        SegmentPlan(category="category_A", clip=variant.segments[0].clip, start_time=0, duration=1.4, index=0),
+        SegmentPlan(category="category_A", clip=clip_b, start_time=0.2, duration=1.2, index=1),
+    ]
+    variant.split_screen_enabled = True
+    variant.split_screen_mode = "fixed"
+    variant.split_screen_layout = "heroDetailText"
+    variant.split_screen_gap = 10
+    captured = {}
+
+    def fake_concat(filter_complex, inputs, output, bgm_path=None, speed_mode=None, threads=None, **kwargs) -> None:
+        captured["filter_complex"] = filter_complex
+        captured["inputs"] = inputs
+        output.write_bytes(b"mp4")
+
+    monkeypatch.setattr(render, "concat_video", fake_concat)
+
+    asset = render.render_variant(
+        variant,
+        _settings(tmp_path),
+        template_copy="",
+        batch_dir=tmp_path,
+        cover_intro_seconds=0,
+        outro_seconds=0,
+    )
+
+    assert asset.video_path.exists()
+    assert "color=c=black" in captured["filter_complex"]
+    assert "overlay=x=0:y=0:format=auto" in captured["filter_complex"]
+    assert "drawtext=" in captured["filter_complex"]
+    assert "drawbox=" in captured["filter_complex"]
+    assert "format=yuv420p[vout]" in captured["filter_complex"]
+    assert [path.name for path in captured["inputs"]] == ["source-a.mp4", "source-b.mp4"]
 

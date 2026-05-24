@@ -125,20 +125,47 @@ def render_variant(
 
         video_ending_path = ending_template_path if _is_video_ending(ending_template_path) else None
         inline_ending_path = None if video_ending_path is not None else ending_template_path
-        with _span(telemetry, "render", "filter_build", _overlay_complexity(template_config, variant)):
-            filter_complex, inputs = _build_filter_complex(
-                variant,
-                settings,
-                template_config=template_config,
-                intro_cover_path=intro_cover_path,
-                cover_intro_seconds=cover_intro_seconds,
-                outro_cover_path=outro_cover_path,
-                outro_seconds=outro_seconds,
-                ending_template_path=inline_ending_path,
-                text_dir=scratch_dir / "text_layers",
-                speed_mode=speed_mode,
-                sequence_tag=sequence_tag,
-            )
+        split_screen_enabled = bool(getattr(variant, "split_screen_enabled", False))
+        split_screen_mode = str(getattr(variant, "split_screen_mode", "") or "fixed")
+        split_screen_layout = str(getattr(variant, "split_screen_layout", "") or "")
+        split_screen_gap_raw = getattr(variant, "split_screen_gap", 8)
+        try:
+            split_screen_gap = int(split_screen_gap_raw if split_screen_gap_raw is not None else 8)
+        except (TypeError, ValueError):
+            split_screen_gap = 8
+        filter_payload = _overlay_complexity(template_config, variant)
+        filter_payload.update(
+            {
+                "split_screen_enabled": split_screen_enabled,
+                "split_screen_mode": split_screen_mode,
+                "split_screen_layout": split_screen_layout,
+                "split_screen_gap": split_screen_gap,
+            }
+        )
+        with _span(telemetry, "render", "filter_build", filter_payload):
+            if split_screen_enabled:
+                filter_complex, inputs = _build_split_screen_filter_complex(
+                    variant,
+                    settings,
+                    layout=split_screen_layout,
+                    mode=split_screen_mode,
+                    gap=split_screen_gap,
+                    text_dir=scratch_dir / "split_text_layers",
+                )
+            else:
+                filter_complex, inputs = _build_filter_complex(
+                    variant,
+                    settings,
+                    template_config=template_config,
+                    intro_cover_path=intro_cover_path,
+                    cover_intro_seconds=cover_intro_seconds,
+                    outro_cover_path=outro_cover_path,
+                    outro_seconds=outro_seconds,
+                    ending_template_path=inline_ending_path,
+                    text_dir=scratch_dir / "text_layers",
+                    speed_mode=speed_mode,
+                    sequence_tag=sequence_tag,
+                )
         if telemetry is not None:
             telemetry.event(
                 "render",
@@ -147,7 +174,7 @@ def render_variant(
                     "input_count": len(inputs),
                     "filter_hash": hashlib.sha1(filter_complex.encode("utf-8", errors="replace")).hexdigest()[:16],
                     "filter_preview": filter_complex[:800],
-                    **_overlay_complexity(template_config, variant),
+                    **filter_payload,
                 },
             )
         with _span(
@@ -247,6 +274,10 @@ def render_variant(
                             "random_variation_family": variant.random_variation_family,
                             "random_variation_signature": variant.random_variation_signature,
                             "random_variation_profile": variant.random_variation_profile,
+                            "split_screen_enabled": bool(getattr(variant, "split_screen_enabled", False)),
+                            "split_screen_mode": str(getattr(variant, "split_screen_mode", "") or ""),
+                            "split_screen_layout": str(getattr(variant, "split_screen_layout", "") or ""),
+                            "split_screen_gap": int(getattr(variant, "split_screen_gap", 0) or 0),
                             "video_path": str(video_path),
                             "cover_path": str(cover_path) if cover_path else None,
                             "cover_template_id": cover_template_id,
@@ -319,6 +350,171 @@ def _random_variation_filter_suffix(variant: VideoVariant) -> str:
     if not filters:
         return ""
     return "," + ",".join(filters)
+
+
+def _build_split_screen_filter_complex(
+    variant: VideoVariant,
+    settings: ProjectSettings,
+    *,
+    layout: str,
+    mode: str = "fixed",
+    gap: int = 8,
+    text_dir: Path | None = None,
+) -> tuple[str, list[Path]]:
+    layout = _normalize_split_screen_layout(layout, mode)
+    required_inputs = _split_screen_required_inputs(layout)
+    selected_segments = _split_screen_segments(variant.segments, required_inputs)
+    if not selected_segments:
+        raise ValueError("Split-screen mode requires at least one source segment")
+    panel_duration = max(0.1, min(float(segment.duration) for segment in selected_segments))
+    inputs = [segment.clip.normalized_path for segment in selected_segments]
+    chains: list[str] = [
+        f"color=c=black:s={settings.target_width}x{settings.target_height}:d={panel_duration:.3f},format=rgba[base]"
+    ]
+    for index, segment in enumerate(selected_segments):
+        panel = _split_screen_panel_specs(layout, settings.target_width, settings.target_height, gap)[index]
+        chains.append(
+            f"[{index}:v]"
+            f"trim=start={segment.start_time}:duration={panel_duration:.3f},setpts=PTS-STARTPTS,"
+            f"scale={panel['w']}:{panel['h']}:force_original_aspect_ratio=increase,"
+            f"crop={panel['w']}:{panel['h']},setsar=1,format=rgba[v{index}]"
+        )
+    current_label = "[base]"
+    for index, panel in enumerate(_split_screen_panel_specs(layout, settings.target_width, settings.target_height, gap)):
+        next_label = f"[split{index}]"
+        chains.append(
+            f"{current_label}[v{index}]overlay=x={panel['x']}:y={panel['y']}:format=auto{next_label}"
+        )
+        current_label = next_label
+    separator_filters = _split_screen_separator_filters(layout, settings.target_width, settings.target_height, gap)
+    hero_input_label = current_label
+    if separator_filters:
+        separator_chain = ",".join(filter(None, (item.lstrip(",") for item in separator_filters)))
+        hero_input_label = "[sep]"
+        chains.append(f"{current_label}{separator_chain}{hero_input_label}")
+    if layout == "heroDetailText":
+        chains.append(_split_screen_hero_text_chain(input_label=hero_input_label, text_dir=text_dir))
+    else:
+        chains.append(f"{hero_input_label}format=yuv420p[vout]")
+    return ";".join(chains), inputs
+
+
+def _normalize_split_screen_layout(layout: str, mode: str = "fixed") -> str:
+    if str(mode or "fixed") == "random":
+        return str(layout or "heroDetailText") if str(layout or "heroDetailText") in {"leftRight", "topBottom", "grid4", "heroDetailText"} else "heroDetailText"
+    candidate = str(layout or "heroDetailText")
+    return candidate if candidate in {"leftRight", "topBottom", "grid4", "heroDetailText"} else "heroDetailText"
+
+
+def _split_screen_required_inputs(layout: str) -> int:
+    return 4 if layout == "grid4" else 2
+
+
+def _split_screen_segments(segments: list[Any], required_count: int) -> list[Any]:
+    if not segments:
+        return []
+    selected = list(segments[:required_count])
+    while len(selected) < required_count:
+        selected.append(selected[-1])
+    return selected
+
+
+def _split_screen_panel_specs(layout: str, width: int, height: int, gap: int) -> list[dict[str, int]]:
+    gap = max(0, int(gap or 0))
+    if layout == "grid4":
+        half_width = width // 2
+        half_height = height // 2
+        return [
+            {"x": 0, "y": 0, "w": half_width, "h": half_height},
+            {"x": half_width, "y": 0, "w": half_width, "h": half_height},
+            {"x": 0, "y": half_height, "w": half_width, "h": half_height},
+            {"x": half_width, "y": half_height, "w": half_width, "h": half_height},
+        ]
+    if layout == "topBottom":
+        half_height = height // 2
+        return [
+            {"x": 0, "y": 0, "w": width, "h": half_height},
+            {"x": 0, "y": half_height, "w": width, "h": half_height},
+        ]
+    if layout == "heroDetailText":
+        hero_height = int(round(height * 0.70))
+        detail_height = height - hero_height
+        half_width = width // 2
+        return [
+            {"x": 0, "y": 0, "w": width, "h": hero_height},
+            {"x": 0, "y": hero_height, "w": half_width, "h": detail_height},
+        ]
+    half_width = width // 2
+    return [
+        {"x": 0, "y": 0, "w": half_width, "h": height},
+        {"x": half_width, "y": 0, "w": half_width, "h": height},
+    ]
+
+
+def _split_screen_separator_filters(layout: str, width: int, height: int, gap: int) -> list[str]:
+    gap = max(0, int(gap or 0))
+    if gap <= 0:
+        return []
+    half_gap = max(1, gap // 2)
+    filters: list[str] = []
+    if layout == "leftRight":
+        x = max(0, (width // 2) - half_gap)
+        filters.append(f",drawbox=x={x}:y=0:w={gap}:h={height}:color=black@1.0:t=fill")
+    elif layout == "topBottom":
+        y = max(0, (height // 2) - half_gap)
+        filters.append(f",drawbox=x=0:y={y}:w={width}:h={gap}:color=black@1.0:t=fill")
+    elif layout == "grid4":
+        x = max(0, (width // 2) - half_gap)
+        y = max(0, (height // 2) - half_gap)
+        filters.append(f",drawbox=x={x}:y=0:w={gap}:h={height}:color=black@1.0:t=fill")
+        filters.append(f",drawbox=x=0:y={y}:w={width}:h={gap}:color=black@1.0:t=fill")
+    elif layout == "heroDetailText":
+        hero_height = int(round(height * 0.70))
+        x = max(0, (width // 2) - half_gap)
+        y = max(0, hero_height - half_gap)
+        filters.append(f",drawbox=x=0:y={y}:w={width}:h={gap}:color=black@1.0:t=fill")
+        filters.append(f",drawbox=x={x}:y={hero_height}:w={gap}:h={height - hero_height}:color=black@1.0:t=fill")
+    return filters
+
+
+def _split_screen_hero_text_filters() -> str:
+    font_arg = _resolve_drawtext_font_arg(sample_text="废气变现")
+    lines = [
+        ("废气 →", 72, "#FFFFFF", 48, 1452),
+        ("电力 →", 72, "#FFFFFF", 48, 1548),
+        ("变现", 78, "#5DD62C", 48, 1650),
+        ("70% 主画面 + 30% 细节/文案", 32, "#D6E6D0", 48, 1742),
+    ]
+    filters: list[str] = []
+    for index, (text, size, color, x, y) in enumerate(lines):
+        filters.append(
+            f",drawtext={font_arg}fontcolor={color}:fontsize={size}:"
+            f"text={_escape_drawtext_text(text)}:x={x}:y={y}"
+        )
+    return "".join(filters)
+
+
+def _split_screen_hero_text_chain(*, input_label: str = "[sep]", text_dir: Path | None = None) -> str:
+    font_arg = _resolve_drawtext_font_arg(sample_text="废气变现")
+    lines = [
+        ("废气 →", 72, "#FFFFFF", 48, 1452),
+        ("电力 →", 72, "#FFFFFF", 48, 1548),
+        ("变现", 78, "#5DD62C", 48, 1650),
+        ("70% 主画面 + 30% 细节/文案", 32, "#D6E6D0", 48, 1742),
+    ]
+    chains: list[str] = []
+    current_label = input_label
+    for index, (text, size, color, x, y) in enumerate(lines):
+        next_label = "" if index == len(lines) - 1 else f"[hero_text_{index}]"
+        output_suffix = ",format=yuv420p[vout]" if index == len(lines) - 1 else next_label
+        text_source = _drawtext_text_source(text, f"split_screen_hero_{size}_{x}_{y}", 0, text_dir)
+        chains.append(
+            f"{current_label}drawtext={font_arg}fontcolor={color}:fontsize={size}:"
+            f"{text_source}:x={x}:y={y}{output_suffix}"
+        )
+        if next_label:
+            current_label = next_label
+    return ";".join(chains)
 
 
 def _build_filter_complex(
@@ -421,10 +617,10 @@ def _build_filter_complex(
             current_label = f"[seg{idx}wm]"
         chain_parts = _compact_filter_items(*chain_parts)
         if current_label is not None:
-            chain_parts.append(f"{current_label}format=yuv420p[v{idx}]")
+            chain_parts.append(f"{current_label}setsar=1,format=yuv420p[v{idx}]")
             chains.append(";".join(_compact_filter_items(*chain_parts)))
         else:
-            chains.append(f"{chain},format=yuv420p[v{idx}]")
+            chains.append(f"{chain},setsar=1,format=yuv420p[v{idx}]")
         labels.append(f"[v{idx}]")
     if outro_cover_path is not None and outro_seconds > 0:
         inputs = [*inputs, outro_cover_path]

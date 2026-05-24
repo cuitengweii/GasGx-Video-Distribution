@@ -8,34 +8,28 @@ const { spawnSync } = require('child_process');
 const CANVAS_WIDTH = 1080;
 const CANVAS_HEIGHT = 1920;
 const DEFAULT_GAP = 6;
+const DEFAULT_STACK_FPS = 30;
 const DEFAULT_RANDOM_START_MAX = 3;
-const DEFAULT_VIDEO_BITRATE_PRESET = 'medium';
+const DEFAULT_VIDEO_PRESET = 'medium';
 const DEFAULT_VIDEO_CRF = '20';
 const DEFAULT_AUDIO_BITRATE = '192k';
-const DEFAULT_STACK_FPS = 30;
 const DEFAULT_FONT_CANDIDATES = [
   'C:/Windows/Fonts/msyh.ttc',
   'C:/Windows/Fonts/msyhbd.ttc',
   'C:/Windows/Fonts/simhei.ttf',
   'C:/Windows/Fonts/simsun.ttc',
-  'C:/Windows/Fonts/simsun.ttc',
   'C:/Windows/Fonts/NotoSansCJK-Regular.ttc',
 ];
 
-const LAYOUT_SPECS = {
+const LAYOUTS = {
   leftRight: {
     requiredInputs: 2,
     preprocess: [
       { label: 'v0', width: 540, height: 1920 },
       { label: 'v1', width: 540, height: 1920 },
     ],
-    stack: {
-      inputs: ['v0', 'v1'],
-      layout: '0_0|540_0',
-    },
-    gap: {
-      vertical: { x: 540, y: 0, w: 6, h: 1920 },
-    },
+    stackInputs: ['v0', 'v1'],
+    stackLayout: '0_0|540_0',
   },
   topBottom: {
     requiredInputs: 2,
@@ -43,13 +37,8 @@ const LAYOUT_SPECS = {
       { label: 'v0', width: 1080, height: 960 },
       { label: 'v1', width: 1080, height: 960 },
     ],
-    stack: {
-      inputs: ['v0', 'v1'],
-      layout: '0_0|0_960',
-    },
-    gap: {
-      horizontal: { x: 0, y: 960, w: 1080, h: 6 },
-    },
+    stackInputs: ['v0', 'v1'],
+    stackLayout: '0_0|0_960',
   },
   grid4: {
     requiredInputs: 4,
@@ -59,14 +48,8 @@ const LAYOUT_SPECS = {
       { label: 'v2', width: 540, height: 960 },
       { label: 'v3', width: 540, height: 960 },
     ],
-    stack: {
-      inputs: ['v0', 'v1', 'v2', 'v3'],
-      layout: '0_0|540_0|0_960|540_960',
-    },
-    gap: {
-      vertical: { x: 540, y: 0, w: 6, h: 1920 },
-      horizontal: { x: 0, y: 960, w: 1080, h: 6 },
-    },
+    stackInputs: ['v0', 'v1', 'v2', 'v3'],
+    stackLayout: '0_0|540_0|0_960|540_960',
   },
   heroDetailText: {
     requiredInputs: 2,
@@ -74,14 +57,8 @@ const LAYOUT_SPECS = {
       { label: 'hero', width: 1080, height: 1344 },
       { label: 'detail', width: 540, height: 576 },
     ],
-    stack: {
-      inputs: ['hero', 'detail', 'card'],
-      layout: '0_0|0_1344|540_1344',
-    },
-    gap: {
-      horizontal: { x: 0, y: 1344, w: 1080, h: 6 },
-      lowerVertical: { x: 540, y: 1344, w: 6, h: 576 },
-    },
+    stackInputs: ['hero', 'detail', 'card'],
+    stackLayout: '0_0|0_1344|540_1344',
   },
 };
 
@@ -98,9 +75,35 @@ function fitVideo(inputIndex, width, height, label) {
 
 function buildSplitScreenFilterComplex(options) {
   const layout = normalizeLayout(options.layout);
-  const spec = LAYOUT_SPECS[layout];
+  const spec = LAYOUTS[layout];
   if (!spec) {
-    throw new Error(`Unsupported layout "${options.layout}". Allowed layouts: ${Object.keys(LAYOUT_SPECS).join(', ')}`);
+    throw new Error(`Unsupported layout "${options.layout}". Allowed layouts: ${Object.keys(LAYOUTS).join(', ')}`);
+  }
+
+  const parts = [];
+  spec.preprocess.forEach((entry, index) => {
+    parts.push(fitVideo(index, entry.width, entry.height, entry.label));
+  });
+
+  if (layout === 'heroDetailText') {
+    parts.push(buildHeroDetailCardChain(options.fontFile));
+  }
+
+  parts.push(
+    `[${spec.stackInputs.join('][')}]` +
+      `xstack=inputs=${spec.stackInputs.length}:layout=${spec.stackLayout}:shortest=1[stacked_base]`
+  );
+  parts.push(buildGapChain(layout, resolveGap(options.gap)));
+  parts.push('[stacked_out]format=yuv420p[vout]');
+
+  return compactFilterGraph(parts);
+}
+
+function buildSplitScreenCommand(options) {
+  const layout = normalizeLayout(options.layout);
+  const spec = LAYOUTS[layout];
+  if (!spec) {
+    throw new Error(`Unsupported layout "${options.layout}". Allowed layouts: ${Object.keys(LAYOUTS).join(', ')}`);
   }
 
   const inputs = Array.isArray(options.inputs) ? options.inputs.slice() : [];
@@ -109,54 +112,15 @@ function buildSplitScreenFilterComplex(options) {
   }
 
   const selectedInputs = inputs.slice(0, spec.requiredInputs);
-  const gaps = resolveGap(options.gap);
-  const resolvedFontFile = resolveFontFile(options.fontFile);
-  const parts = [];
-
-  const preprocess = spec.preprocess.map((item, index) => {
-    return fitVideo(index, item.width, item.height, item.label);
-  });
-  parts.push(...preprocess);
-
-  if (layout === 'heroDetailText') {
-    parts.push(buildHeroTextCardChain(resolvedFontFile));
-  }
-
-  parts.push(buildStackChain(layout, spec, gaps));
-  parts.push(buildGapChain(layout, gaps));
-  parts.push('[stacked_out]format=yuv420p[vout]');
-
-  return {
-    filterComplex: compactFilterGraph(parts),
-    layout,
-    selectedInputs,
-    fontFile: resolvedFontFile,
-    gap: gaps,
-  };
-}
-
-function buildSplitScreenCommand(options) {
-  const layout = normalizeLayout(options.layout);
-  const spec = LAYOUT_SPECS[layout];
-  if (!spec) {
-    throw new Error(`Unsupported layout "${options.layout}". Allowed layouts: ${Object.keys(LAYOUT_SPECS).join(', ')}`);
-  }
-
-  const inputPaths = Array.isArray(options.inputs) ? options.inputs.slice() : [];
-  if (inputPaths.length < spec.requiredInputs) {
-    throw new Error(`Layout "${layout}" requires at least ${spec.requiredInputs} input video(s), but got ${inputPaths.length}.`);
-  }
-
-  const selectedInputs = inputPaths.slice(0, spec.requiredInputs);
-  const warnings = inputPaths.length > spec.requiredInputs
-    ? [`Layout "${layout}" only uses the first ${spec.requiredInputs} input(s); ignoring ${inputPaths.length - spec.requiredInputs} extra file(s).`]
+  const warnings = inputs.length > spec.requiredInputs
+    ? [`Layout "${layout}" only uses the first ${spec.requiredInputs} input(s); ignoring ${inputs.length - spec.requiredInputs} extra file(s).`]
     : [];
 
-  selectedInputs.forEach((inputPath) => {
+  for (const inputPath of selectedInputs) {
     if (!fs.existsSync(inputPath)) {
       throw new Error(`Input file does not exist: ${inputPath}`);
     }
-  });
+  }
 
   const probes = selectedInputs.map((inputPath) => probeMedia(inputPath));
   const randomStart = Boolean(options.randomStart);
@@ -170,38 +134,37 @@ function buildSplitScreenCommand(options) {
   const outputPath = resolveOutputPath(options.output, layout);
   ensureParentDirectory(outputPath);
 
-  const filterResult = buildSplitScreenFilterComplex({
-    inputs: selectedInputs,
+  const filterComplex = buildSplitScreenFilterComplex({
     layout,
     fontFile: options.fontFile,
     gap: options.gap,
   });
 
-  const ffmpegArgs = ['-y'];
+  const args = ['-y'];
   selectedInputs.forEach((inputPath, index) => {
     const seek = seekOffsets[index];
     if (seek > 0) {
-      ffmpegArgs.push('-ss', formatSeconds(seek));
+      args.push('-ss', formatSeconds(seek));
     }
-    ffmpegArgs.push('-i', inputPath);
+    args.push('-i', inputPath);
   });
 
-  ffmpegArgs.push('-filter_complex', filterResult.filterComplex);
-  ffmpegArgs.push('-map', '[vout]');
+  args.push('-filter_complex', filterComplex);
+  args.push('-map', '[vout]');
 
   if (probes[0].hasAudio) {
-    ffmpegArgs.push('-map', '0:a:0?');
-    ffmpegArgs.push('-c:a', 'aac');
-    ffmpegArgs.push('-b:a', DEFAULT_AUDIO_BITRATE);
+    args.push('-map', '0:a:0?');
+    args.push('-c:a', 'aac');
+    args.push('-b:a', DEFAULT_AUDIO_BITRATE);
   } else {
-    ffmpegArgs.push('-an');
+    args.push('-an');
   }
 
-  ffmpegArgs.push(
+  args.push(
     '-c:v',
     'libx264',
     '-preset',
-    options.preset || DEFAULT_VIDEO_BITRATE_PRESET,
+    options.preset || DEFAULT_VIDEO_PRESET,
     '-crf',
     String(options.crf || DEFAULT_VIDEO_CRF),
     '-pix_fmt',
@@ -212,8 +175,7 @@ function buildSplitScreenCommand(options) {
     outputPath
   );
 
-  const command = ['ffmpeg', ...ffmpegArgs];
-
+  const command = ['ffmpeg', ...args];
   return {
     layout,
     outputPath,
@@ -221,10 +183,8 @@ function buildSplitScreenCommand(options) {
     warnings,
     probes,
     seekOffsets,
-    fontFile: filterResult.fontFile,
-    gap: filterResult.gap,
-    filterComplex: filterResult.filterComplex,
-    args: ffmpegArgs,
+    filterComplex,
+    args,
     command,
     commandString: renderCommand(command),
   };
@@ -232,7 +192,8 @@ function buildSplitScreenCommand(options) {
 
 function createSplitScreenVideo(options) {
   const job = buildSplitScreenCommand(options);
-  printCommand(job);
+  printJob(job);
+
   if (options.dryRun) {
     return { ...job, status: 0, dryRun: true };
   }
@@ -253,132 +214,63 @@ function createSplitScreenVideo(options) {
   return { ...job, status: 0, dryRun: false };
 }
 
-function buildHeroTextCardChain(fontFile) {
-  const fontArg = fontFile ? `fontfile=${escapeFilterPath(fontFile)}:` : '';
-  const lines = [];
+function buildHeroDetailCardChain(fontFile) {
+  const fontArg = fontFile ? `fontfile='${escapeFilterPath(fontFile)}':` : '';
+  const textFilters = [
+    drawTextFilter(fontArg, '废气', { fontcolor: '#FFFFFF', fontsize: 58, x: 42, y: 72 }),
+    drawTextFilter(fontArg, '→', { fontcolor: '#5DD62C', fontsize: 58, x: 188, y: 72 }),
+    drawTextFilter(fontArg, '电力', { fontcolor: '#FFFFFF', fontsize: 58, x: 42, y: 166 }),
+    drawTextFilter(fontArg, '→', { fontcolor: '#5DD62C', fontsize: 58, x: 188, y: 166 }),
+    drawTextFilter(fontArg, '变现', { fontcolor: '#5DD62C', fontsize: 72, x: 42, y: 266 }),
+    drawTextFilter(fontArg, '70%', { fontcolor: '#5DD62C', fontsize: 30, x: 42, y: 408 }),
+    drawTextFilter(fontArg, ' 主画面 + ', { fontcolor: '#FFFFFF', fontsize: 30, x: 118, y: 408 }),
+    drawTextFilter(fontArg, '30%', { fontcolor: '#5DD62C', fontsize: 30, x: 284, y: 408 }),
+    drawTextFilter(fontArg, ' 细节/文案', { fontcolor: '#FFFFFF', fontsize: 30, x: 360, y: 408 }),
+  ];
 
-  lines.push(
-    `color=c=black:s=540x576:r=${DEFAULT_STACK_FPS}:d=86400[card_base]`
-  );
-  lines.push(
-    `[card_base]` +
-      drawText(fontArg, '废气', {
-        fontcolor: '#FFFFFF',
-        fontsize: 58,
-        x: 42,
-        y: 72,
-      }) +
-      drawText(fontArg, '→', {
-        fontcolor: '#5DD62C',
-        fontsize: 58,
-        x: 188,
-        y: 72,
-      }) +
-      drawText(fontArg, '电力', {
-        fontcolor: '#FFFFFF',
-        fontsize: 58,
-        x: 42,
-        y: 166,
-      }) +
-      drawText(fontArg, '→', {
-        fontcolor: '#5DD62C',
-        fontsize: 58,
-        x: 188,
-        y: 166,
-      }) +
-      drawText(fontArg, '变现', {
-        fontcolor: '#5DD62C',
-        fontsize: 72,
-        x: 42,
-        y: 266,
-      }) +
-      drawText(fontArg, '70\\%', {
-        fontcolor: '#5DD62C',
-        fontsize: 30,
-        x: 42,
-        y: 408,
-      }) +
-      drawText(fontArg, ' 主画面 + ', {
-        fontcolor: '#FFFFFF',
-        fontsize: 30,
-        x: 118,
-        y: 408,
-      }) +
-      drawText(fontArg, '30\\%', {
-        fontcolor: '#5DD62C',
-        fontsize: 30,
-        x: 284,
-        y: 408,
-      }) +
-      drawText(fontArg, ' 细节/文案', {
-        fontcolor: '#FFFFFF',
-        fontsize: 30,
-        x: 360,
-        y: 408,
-      }) +
-      '[card]'
-  );
-
-  return compactFilterGraph(lines);
-}
-
-function buildStackChain(layout, spec, gap) {
-  const labels = layout === 'heroDetailText'
-    ? ['hero', 'detail', 'card']
-    : spec.stack.inputs;
-  return `[${labels.join('][')}]xstack=inputs=${labels.length}:layout=${spec.stack.layout}:shortest=1[stacked_base]`;
+  return compactFilterGraph([
+    `color=c=black:s=540x576:r=${DEFAULT_STACK_FPS}:d=86400[card_src]`,
+    `[card_src]${textFilters.join(',')}[card]`,
+  ]);
 }
 
 function buildGapChain(layout, gap) {
   if (gap <= 0) {
-    return '[stacked_base]copy[stacked_out]';
+    return '[stacked_base]null[stacked_out]';
   }
 
-  const blocks = [];
-  const line = Math.max(1, Math.floor(gap));
-  const half = Math.floor(line / 2);
+  const thickness = Math.max(1, Math.round(gap));
+  const half = Math.floor(thickness / 2);
 
   if (layout === 'leftRight') {
-    blocks.push(
-      `[stacked_base]drawbox=x=${Math.max(0, 540 - half)}:y=0:w=${line}:h=${CANVAS_HEIGHT}:color=black@1.0:t=fill[stacked_out]`
-    );
-    return compactFilterGraph(blocks);
+    return `[stacked_base]drawbox=x=${Math.max(0, 540 - half)}:y=0:w=${thickness}:h=${CANVAS_HEIGHT}:color=black@1.0:t=fill[stacked_out]`;
   }
 
   if (layout === 'topBottom') {
-    blocks.push(
-      `[stacked_base]drawbox=x=0:y=${Math.max(0, 960 - half)}:w=${CANVAS_WIDTH}:h=${line}:color=black@1.0:t=fill[stacked_out]`
-    );
-    return compactFilterGraph(blocks);
+    return `[stacked_base]drawbox=x=0:y=${Math.max(0, 960 - half)}:w=${CANVAS_WIDTH}:h=${thickness}:color=black@1.0:t=fill[stacked_out]`;
   }
 
   if (layout === 'grid4') {
-    blocks.push(
-      `[stacked_base]drawbox=x=${Math.max(0, 540 - half)}:y=0:w=${line}:h=${CANVAS_HEIGHT}:color=black@1.0:t=fill[mid_v]`
-    );
-    blocks.push(
-      `[mid_v]drawbox=x=0:y=${Math.max(0, 960 - half)}:w=${CANVAS_WIDTH}:h=${line}:color=black@1.0:t=fill[stacked_out]`
-    );
-    return compactFilterGraph(blocks);
+    return compactFilterGraph([
+      `[stacked_base]drawbox=x=${Math.max(0, 540 - half)}:y=0:w=${thickness}:h=${CANVAS_HEIGHT}:color=black@1.0:t=fill[mid_v]`,
+      `[mid_v]drawbox=x=0:y=${Math.max(0, 960 - half)}:w=${CANVAS_WIDTH}:h=${thickness}:color=black@1.0:t=fill[stacked_out]`,
+    ]);
   }
 
   if (layout === 'heroDetailText') {
-    blocks.push(
-      `[stacked_base]drawbox=x=0:y=${Math.max(0, 1344 - half)}:w=${CANVAS_WIDTH}:h=${line}:color=black@1.0:t=fill[mid_h]`
-    );
-    blocks.push(
-      `[mid_h]drawbox=x=${Math.max(0, 540 - half)}:y=1344:w=${line}:h=576:color=black@1.0:t=fill[stacked_out]`
-    );
-    return compactFilterGraph(blocks);
+    return compactFilterGraph([
+      `[stacked_base]drawbox=x=0:y=${Math.max(0, 1344 - half)}:w=${CANVAS_WIDTH}:h=${thickness}:color=black@1.0:t=fill[mid_h]`,
+      `[mid_h]drawbox=x=${Math.max(0, 540 - half)}:y=1344:w=${thickness}:h=576:color=black@1.0:t=fill[stacked_out]`,
+    ]);
   }
 
-  return '[stacked_base]copy[stacked_out]';
+  return '[stacked_base]null[stacked_out]';
 }
 
-function drawText(fontArg, text, options) {
+function drawTextFilter(fontArg, text, options) {
   const color = options.fontcolor || '#FFFFFF';
   return (
-    `,drawtext=${fontArg}` +
+    `drawtext=${fontArg}` +
     `text='${escapeDrawtextText(text)}':` +
     `fontcolor=${color}:` +
     `fontsize=${options.fontsize}:` +
@@ -390,10 +282,8 @@ function drawText(fontArg, text, options) {
 
 function probeMedia(inputPath) {
   const result = spawnSync('ffprobe', [
-    '-v',
-    'error',
-    '-print_format',
-    'json',
+    '-v', 'error',
+    '-print_format', 'json',
     '-show_format',
     '-show_streams',
     inputPath,
@@ -418,13 +308,13 @@ function probeMedia(inputPath) {
     throw new Error(`Unable to parse ffprobe output for ${inputPath}: ${error.message}`);
   }
 
-  const formatDuration = safeNumber(payload?.format?.duration, 0);
+  const durationSeconds = safeNumber(payload?.format?.duration, 0);
   const streams = Array.isArray(payload?.streams) ? payload.streams : [];
   const hasAudio = streams.some((stream) => String(stream?.codec_type || '') === 'audio');
 
   return {
     path: inputPath,
-    durationSeconds: formatDuration,
+    durationSeconds,
     hasAudio,
   };
 }
@@ -466,17 +356,15 @@ function resolveOutputPath(outputPath, layout) {
     return path.resolve(String(outputPath));
   }
 
-  const stamp = formatTimestamp(new Date());
-  return path.resolve(process.cwd(), `output_${layout}_${stamp}.mp4`);
+  return path.resolve(process.cwd(), `output_${layout}_${formatTimestamp(new Date())}.mp4`);
 }
 
 function normalizeLayout(layout) {
   return String(layout || '').trim();
 }
 
-function resolveGap(rawGap) {
-  const gap = safeInteger(rawGap, DEFAULT_GAP);
-  return Math.max(0, gap);
+function resolveGap(value) {
+  return Math.max(0, safeInteger(value, DEFAULT_GAP));
 }
 
 function ensureParentDirectory(filePath) {
@@ -484,13 +372,11 @@ function ensureParentDirectory(filePath) {
 }
 
 function compactFilterGraph(parts) {
-  const normalized = parts
+  return parts
     .flatMap((part) => String(part || '').split('\n'))
-    .map((item) => item.trim())
+    .map((line) => line.trim())
     .filter(Boolean)
-    .join(';');
-
-  return normalized
+    .join(';')
     .replace(/;;+/g, ';')
     .replace(/,+,/g, ',')
     .replace(/;,+/g, ';')
@@ -513,13 +399,11 @@ function formatTimestamp(date) {
 }
 
 function renderCommand(commandParts) {
-  return commandParts
-    .map((part) => quoteShellArg(String(part)))
-    .join(' ');
+  return commandParts.map((part) => quoteShellArg(String(part))).join(' ');
 }
 
-function printCommand(job) {
-  if (job.warnings && job.warnings.length > 0) {
+function printJob(job) {
+  if (job.warnings.length > 0) {
     job.warnings.forEach((warning) => console.warn(`[split-screen] ${warning}`));
   }
   console.log('[split-screen] filter_complex:');
@@ -539,7 +423,7 @@ function quoteShellArg(value) {
 }
 
 function escapeFilterPath(filePath) {
-  return String(path.resolve(filePath))
+  return path.resolve(filePath)
     .replace(/\\/g, '/')
     .replace(/:/g, '\\:')
     .replace(/'/g, "\\'");
@@ -568,7 +452,7 @@ function safeInteger(value, fallback) {
 }
 
 function roundTo(value, digits) {
-  const factor = Math.pow(10, digits);
+  const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
 }
 
@@ -592,6 +476,14 @@ function parseBoolean(value, defaultValue = false) {
   return defaultValue;
 }
 
+function isBooleanLiteral(value) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return ['1', '0', 'true', 'false', 'yes', 'no', 'y', 'n', 'on', 'off'].includes(normalized);
+}
+
 function parseCliArgs(argv) {
   const args = Array.isArray(argv) ? argv.slice() : [];
   const result = {
@@ -602,21 +494,25 @@ function parseCliArgs(argv) {
     randomStart: false,
     gap: DEFAULT_GAP,
     dryRun: false,
-    preset: DEFAULT_VIDEO_BITRATE_PRESET,
+    preset: DEFAULT_VIDEO_PRESET,
     crf: DEFAULT_VIDEO_CRF,
+    help: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
+
     if (token === '--help' || token === '-h') {
       result.help = true;
       continue;
     }
 
     if (token.startsWith('--')) {
-      const [flagName, inlineValue] = token.split(/=(.*)/s, 2);
-      const value = inlineValue !== undefined ? inlineValue : args[index + 1];
-      switch (flagName) {
+      const eqIndex = token.indexOf('=');
+      const flag = eqIndex >= 0 ? token.slice(0, eqIndex) : token;
+      const inlineValue = eqIndex >= 0 ? token.slice(eqIndex + 1) : undefined;
+
+      switch (flag) {
         case '--output':
           result.output = inlineValue !== undefined ? inlineValue : (args[++index] || '');
           break;
@@ -629,20 +525,26 @@ function parseCliArgs(argv) {
           break;
         case '--randomStart':
         case '--random-start':
-          result.randomStart = parseBoolean(inlineValue !== undefined ? inlineValue : args[index + 1], true);
-          if (inlineValue === undefined && typeof args[index + 1] === 'string' && !args[index + 1].startsWith('--')) {
-            index += 1;
+          if (inlineValue !== undefined) {
+            result.randomStart = parseBoolean(inlineValue, true);
+          } else if (isBooleanLiteral(args[index + 1])) {
+            result.randomStart = parseBoolean(args[++index], true);
+          } else {
+            result.randomStart = true;
           }
           break;
         case '--dry-run':
         case '--dryRun':
-          result.dryRun = inlineValue !== undefined ? parseBoolean(inlineValue, true) : true;
-          if (inlineValue === undefined && typeof args[index + 1] === 'string' && !args[index + 1].startsWith('--')) {
-            index += 1;
+          if (inlineValue !== undefined) {
+            result.dryRun = parseBoolean(inlineValue, true);
+          } else if (isBooleanLiteral(args[index + 1])) {
+            result.dryRun = parseBoolean(args[++index], true);
+          } else {
+            result.dryRun = true;
           }
           break;
         case '--preset':
-          result.preset = inlineValue !== undefined ? inlineValue : (args[++index] || DEFAULT_VIDEO_BITRATE_PRESET);
+          result.preset = inlineValue !== undefined ? inlineValue : (args[++index] || DEFAULT_VIDEO_PRESET);
           break;
         case '--crf':
           result.crf = inlineValue !== undefined ? inlineValue : (args[++index] || DEFAULT_VIDEO_CRF);
@@ -651,7 +553,7 @@ function parseCliArgs(argv) {
           result.layout = inlineValue !== undefined ? inlineValue : (args[++index] || '');
           break;
         default:
-          throw new Error(`Unknown option: ${flagName}`);
+          throw new Error(`Unknown option: ${flag}`);
       }
       continue;
     }
@@ -718,7 +620,7 @@ function main() {
       crf: parsed.crf,
     });
 
-    printCommand(job);
+    printJob(job);
     if (parsed.dryRun) {
       return;
     }
@@ -745,7 +647,7 @@ module.exports = {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
   DEFAULT_GAP,
-  LAYOUT_SPECS,
+  LAYOUTS,
   buildSplitScreenCommand,
   buildSplitScreenFilterComplex,
   createSplitScreenVideo,

@@ -1071,6 +1071,10 @@ def _request_telemetry_summary(request: dict[str, Any], bgm_path: Path, source_r
         "bgm_source": request.get("bgm_source") or "Local library",
         "bgm_filename": bgm_path.name,
         "bgm_path": bgm_path,
+        "split_screen_enabled": bool(request.get("split_screen_enabled", False)),
+        "split_screen_mode": request.get("split_screen_mode") or "fixed",
+        "split_screen_layout": request.get("split_screen_layout") or "heroDetailText",
+        "split_screen_gap": _coerce_int_or_default(request.get("split_screen_gap"), 8),
         "mining_bgm_path": str(MINING_BGM_PATH) if MINING_BGM_PATH.exists() else "",
         "mining_bgm_volume": _audio_mix_level(request.get("mining_bgm_volume"), default=DEFAULT_MINING_BGM_VOLUME),
         "library_bgm_volume": _audio_mix_level(request.get("library_bgm_volume"), default=DEFAULT_LIBRARY_BGM_VOLUME),
@@ -1195,6 +1199,10 @@ def _run_generate_job(
                 library_bgm_volume=library_bgm_volume,
                 narrative_structure_enabled=narrative_structure_enabled,
                 random_variation_enabled=bool(request.get("random_variation_enabled", False)),
+                split_screen_enabled=bool(request.get("split_screen_enabled", False)),
+                split_screen_mode=str(request.get("split_screen_mode") or "fixed"),
+                split_screen_layout=str(request.get("split_screen_layout") or "heroDetailText"),
+                split_screen_gap=_coerce_int_or_default(request.get("split_screen_gap"), 8),
                 text_overrides={
                     "headline": str(request.get("headline") or ""),
                     "subhead": str(request.get("subhead") or ""),
@@ -1999,7 +2007,11 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "mining_bgm_volume",
         "library_bgm_volume",
         "narrative_structure_enabled",
-                "random_variation_enabled",
+        "random_variation_enabled",
+        "split_screen_enabled",
+        "split_screen_mode",
+        "split_screen_layout",
+        "split_screen_gap",
         "template_random_enabled",
         "composition_sequence",
         "composition_customized",
@@ -2013,6 +2025,15 @@ def _audio_mix_level(raw: Any, *, default: float) -> float:
     except (TypeError, ValueError):
         value = float(default)
     return max(0.0, min(2.0, value))
+
+
+def _coerce_int_or_default(raw: Any, default: int) -> int:
+    if raw is None or raw == "":
+        return int(default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _request_composition_sequence(request: dict[str, Any], settings: ProjectSettings) -> list[dict[str, Any]]:

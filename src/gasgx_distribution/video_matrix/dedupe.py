@@ -84,6 +84,10 @@ def plan_feature_record(
         "random_variation_family": str(getattr(variant, "random_variation_family", "") or ""),
         "random_variation_signature": str(getattr(variant, "random_variation_signature", "") or ""),
         "random_variation_profile": dict(getattr(variant, "random_variation_profile", {}) or {}),
+        "split_screen_enabled": bool(getattr(variant, "split_screen_enabled", False)),
+        "split_screen_mode": str(getattr(variant, "split_screen_mode", "") or ""),
+        "split_screen_layout": str(getattr(variant, "split_screen_layout", "") or ""),
+        "split_screen_gap": int(getattr(variant, "split_screen_gap", 0) or 0),
     }
 
 
@@ -249,6 +253,10 @@ def dedupe_payload_for_variant(variant: VideoVariant) -> dict[str, Any]:
         "bgm_name": str(variant.bgm_name or "").strip(),
         "bgm_start_offset": round(float(variant.bgm_start_offset or 0.0), 3),
         "bgm_offset_bucket": variant.bgm_offset_bucket,
+        "split_screen_enabled": bool(getattr(variant, "split_screen_enabled", False)),
+        "split_screen_mode": str(getattr(variant, "split_screen_mode", "") or ""),
+        "split_screen_layout": str(getattr(variant, "split_screen_layout", "") or ""),
+        "split_screen_gap": int(getattr(variant, "split_screen_gap", 0) or 0),
     }
 
 

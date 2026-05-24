@@ -52,6 +52,11 @@
         <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
         <div class="sidebar-radio-field"><span>生成速度</span><div class="radio-row" id="renderSpeedModeGroup"></div></div>
         <div class="sidebar-checkbox-field"><input id="randomVariationEnabled" type="checkbox" /><label for="randomVariationEnabled">启用随机差异化</label></div>
+        <div class="sidebar-checkbox-field"><input id="splitScreenEnabled" type="checkbox" /><label for="splitScreenEnabled">启用分屏叠加</label></div>
+        <label>分屏模式<select id="splitScreenMode"><option value="fixed">固定模板</option><option value="random">随机模板</option></select></label>
+        <label>分屏布局<select id="splitScreenLayout"><option value="leftRight">左右分屏</option><option value="topBottom">上下分屏</option><option value="grid4">四宫格</option><option value="heroDetailText">主画面 + 细节文案</option></select></label>
+        <label>分割线宽度<div class="input-with-unit"><input id="splitScreenGap" class="number-field" type="number" min="0" max="48" step="1" value="8" /><span>px</span></div></label>
+        <p class="sidebar-field-hint">开启后会额外启用分屏画面；随机模式会在支持的模板中自动选一种。</p>
         <select id="outputOptions" hidden><option value="mp4">mp4</option></select>
         <details class="copy-card">
           <summary class="copy-card-head">
@@ -424,6 +429,6 @@
         <b id="generationWaitPercent">0%</b>
       </div>
     </div>
-    <script src="/static/video_matrix_app.js?v=watermark-ui-20260520a"></script>
+    <script src="/static/video_matrix_app.js?v=split-screen-ui-20260524a"></script>
   </body>
 </html>

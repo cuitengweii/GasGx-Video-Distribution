@@ -96,6 +96,10 @@ def test_video_matrix_api_state_and_preview() -> None:
     payload = state.json()
     assert "headline_ai_enabled" in payload["ui_state"]
     assert "random_variation_enabled" in payload["ui_state"]
+    assert "split_screen_enabled" in payload["ui_state"]
+    assert "split_screen_mode" in payload["ui_state"]
+    assert "split_screen_layout" in payload["ui_state"]
+    assert "split_screen_gap" in payload["ui_state"]
     assert payload["cover_templates"]
     assert "industrial_engine_hook" in payload["cover_templates"]
     assert payload["local_bgm_dir"].endswith("runtime\\video_matrix\\bgm") or payload["local_bgm_dir"].endswith("runtime/video_matrix/bgm")
@@ -151,6 +155,26 @@ def test_video_matrix_state_post_preserves_full_hud_text() -> None:
 
     assert response.status_code == 200
     assert response.json()["ui_state"]["hud_text"] == "电价低至0.01美元/度\n发电+矿箱一体化"
+
+
+def test_video_matrix_state_post_persists_split_screen_settings() -> None:
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/video-matrix/state",
+        json={
+            "split_screen_enabled": True,
+            "split_screen_mode": "random",
+            "split_screen_layout": "grid4",
+            "split_screen_gap": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ui_state"]["split_screen_enabled"] is True
+    assert response.json()["ui_state"]["split_screen_mode"] == "random"
+    assert response.json()["ui_state"]["split_screen_layout"] == "grid4"
+    assert response.json()["ui_state"]["split_screen_gap"] == 0
 
 
 def test_video_matrix_state_falls_back_when_supabase_settings_are_unavailable(monkeypatch) -> None:

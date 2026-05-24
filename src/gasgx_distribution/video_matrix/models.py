@@ -83,6 +83,10 @@ class VideoVariant:
     y_offset: int
     segments: list[SegmentPlan]
     signature: str
+    split_screen_enabled: bool = False
+    split_screen_mode: str = "fixed"
+    split_screen_layout: str = "heroDetailText"
+    split_screen_gap: int = 8
     narrative_template_id: str = ""
     account_pool_id: str = ""
     cover_frame_offset: float = 0.0

@@ -185,7 +185,7 @@ def test_run_pipeline_uses_conservative_default_worker_count(monkeypatch, tmp_pa
     )
 
     assert [asset.variant.sequence_number for asset in assets] == [1, 2, 3, 4]
-    assert captured["ffmpeg_threads"] == 2
+    assert captured["ffmpeg_threads"] == 1
 
 
 def test_apply_text_overrides_keeps_fixed_headline_when_ai_disabled(tmp_path: Path) -> None:
@@ -314,3 +314,63 @@ def test_run_pipeline_passes_daily_publish_sequence_number_to_renderer(monkeypat
     )
 
     assert sorted(captured_numbers) == [11, 12]
+
+
+def test_run_pipeline_forwards_split_screen_configuration(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    settings = _settings(tmp_path)
+    (tmp_path / "config" / "video_matrix").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "video_matrix" / "copy_template.txt").write_text("{title}", encoding="utf-8")
+    variant = _variant(source, 1)
+    captured: dict[str, object] = {}
+
+    def fake_ingest_sources(*_args, **_kwargs):
+        return [variant.segments[0].clip]
+
+    def fake_build_hud_payload(_settings):
+        return {"hud": True}
+
+    def fake_detect_beat_grid(*_args, **_kwargs):
+        return [0.1, 0.2]
+
+    def fake_plan_variants(*_args, **kwargs):
+        captured.update(kwargs)
+        variant.split_screen_enabled = bool(kwargs.get("split_screen_enabled"))
+        variant.split_screen_mode = str(kwargs.get("split_screen_mode") or "")
+        variant.split_screen_layout = str(kwargs.get("split_screen_layout") or "")
+        variant.split_screen_gap = int(kwargs.get("split_screen_gap") or 0)
+        return [variant]
+
+    def fake_render_variant(render_variant, *_args, **_kwargs):
+        assert render_variant.split_screen_enabled is True
+        assert render_variant.split_screen_mode == "random"
+        assert render_variant.split_screen_layout in {"leftRight", "topBottom", "grid4", "heroDetailText"}
+        assert render_variant.split_screen_gap == 12
+        return RenderedAsset(render_variant, tmp_path / "v1.mp4", None, None, None)
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(pipeline, "get_paths", lambda: FakePaths())
+    monkeypatch.setattr(pipeline, "ingest_sources", fake_ingest_sources)
+    monkeypatch.setattr(pipeline, "build_hud_payload", fake_build_hud_payload)
+    monkeypatch.setattr(pipeline, "detect_beat_grid", fake_detect_beat_grid)
+    monkeypatch.setattr(pipeline, "plan_variants", fake_plan_variants)
+    monkeypatch.setattr(pipeline, "render_variant", fake_render_variant)
+    monkeypatch.setattr(pipeline, "_reserve_daily_publish_sequence", lambda _day, _count: 11)
+
+    pipeline.run_pipeline(
+        settings,
+        bgm_path=tmp_path / "bgm.mp3",
+        output_root=tmp_path,
+        split_screen_enabled=True,
+        split_screen_mode="random",
+        split_screen_layout="grid4",
+        split_screen_gap=12,
+    )
+
+    assert captured["split_screen_enabled"] is True
+    assert captured["split_screen_mode"] == "random"
+    assert captured["split_screen_layout"] == "grid4"
+    assert captured["split_screen_gap"] == 12

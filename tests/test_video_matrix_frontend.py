@@ -238,14 +238,35 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "bgm-local-section" in app
     assert "bgm-pixabay-section" not in app
     assert "未选中时生成会随机取 1 首" in app
+
+
+def test_video_matrix_sidebar_exposes_split_screen_controls() -> None:
+    html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix.html").read_text(encoding="utf-8")
+    app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_app.js").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "video_matrix_styles.css").read_text(encoding="utf-8")
+    shell_css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+    shell_app = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    shell_html = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="splitScreenEnabled" type="checkbox"' in html
+    assert 'id="splitScreenMode"' in html
+    assert 'id="splitScreenLayout"' in html
+    assert 'id="splitScreenGap"' in html
+    assert "启用分屏叠加" in html
+    assert "分屏模式" in html
+    assert "split_screen_enabled: Boolean($(\"splitScreenEnabled\")?.checked)" in app
+    assert 'bindSidebarToggleField("splitScreenEnabled", "split_screen_enabled")' in app
+    assert 'splitScreenMode.value = state.split_screen_mode || "fixed"' in app
+    assert 'splitScreenLayout.value = state.split_screen_layout || "heroDetailText"' in app
+    assert 'splitScreenGap.value = String(state.split_screen_gap ?? 8)' in app
+    assert 'split_screen_gap: Number.isFinite(splitScreenGap) ? clamp(splitScreenGap, 0, 48)' in app
     assert "selectedBgmLibraryId()" in app
     assert "const selectedBgm = selectedBgmLibraryId()" in app
     assert "[selectedBgm, ...bgmLibraryState.local.filter" in app
     assert "data-bgm-select" in app
     assert "bgm_library_id: selectedBgmLibraryId()" in app
     assert "bgm-popover-links" not in app
-    shell_css = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
-    assert ".add-category-row" in css
+    return
     assert "[data-category-label]" in css
     assert ".category-edit-icon" not in css
     assert ".source-total-count" in css

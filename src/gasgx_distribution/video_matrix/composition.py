@@ -18,6 +18,7 @@ from .models import ClipMetadata, DedupeResult, SegmentPlan, VideoVariant
 from .settings import DEFAULT_COMPOSITION_SEQUENCE, ProjectSettings
 from .spark_text import build_text_variants
 
+SPLIT_SCREEN_LAYOUTS = ("leftRight", "topBottom", "grid4", "heroDetailText")
 
 def plan_variants(
     clips: list[ClipMetadata],
@@ -37,6 +38,10 @@ def plan_variants(
     ai_prompt_hint: str = "",
     avoid_texts: list[str] | set[str] | None = None,
     narrative_structure_enabled: bool = True,
+    split_screen_enabled: bool = False,
+    split_screen_mode: str = "fixed",
+    split_screen_layout: str = "heroDetailText",
+    split_screen_gap: int = 8,
 ) -> list[VideoVariant]:
     count = output_count or settings.output_count
     sequence = _resolve_sequence(composition_sequence or settings.composition_sequence)
@@ -112,6 +117,12 @@ def plan_variants(
             cover_frame_offset = round(rng.uniform(0.0, 0.35), 3)
             narrative_template_id = str((narrative or {}).get("id") or "")
             account_pool_id = str((narrative or {}).get("account_pool_id") or narrative_template_id)
+            selected_split_screen_layout = _resolve_split_screen_layout(
+                rng,
+                split_screen_enabled=split_screen_enabled,
+                split_screen_mode=split_screen_mode,
+                split_screen_layout=split_screen_layout,
+            )
             bgm_start_offset = _bgm_start_offset(settings, rng, bgm_duration, float(settings.video_duration_max))
             bgm_offset_bucket = _bgm_offset_bucket(settings, bgm_start_offset)
             signature = _signature_for(
@@ -128,6 +139,10 @@ def plan_variants(
                 cover_frame_offset,
                 structure_variant_id,
                 bgm_offset_bucket,
+                split_screen_enabled=split_screen_enabled,
+                split_screen_mode=split_screen_mode,
+                split_screen_layout=selected_split_screen_layout,
+                split_screen_gap=split_screen_gap,
             )
             if signature in seen_signatures:
                 continue
@@ -143,6 +158,10 @@ def plan_variants(
                 y_offset=y_offset,
                 segments=segments,
                 signature=signature,
+                split_screen_enabled=split_screen_enabled,
+                split_screen_mode=str(split_screen_mode or "fixed"),
+                split_screen_layout=selected_split_screen_layout,
+                split_screen_gap=int(split_screen_gap or 0),
                 narrative_template_id=narrative_template_id,
                 account_pool_id=account_pool_id,
                 cover_frame_offset=cover_frame_offset,
@@ -191,6 +210,10 @@ def plan_variants(
                     candidate.cover_frame_offset,
                     candidate.structure_variant_id,
                     candidate.bgm_offset_bucket,
+                    split_screen_enabled=split_screen_enabled,
+                    split_screen_mode=split_screen_mode,
+                    split_screen_layout=candidate.split_screen_layout,
+                    split_screen_gap=split_screen_gap,
                 )
                 if candidate.signature in seen_signatures:
                     result = DedupeResult(status="retry", action="retry", report=result.report)
@@ -749,6 +772,11 @@ def _signature_for(
     cover_frame_offset: float = 0.0,
     structure_variant_id: str = "",
     bgm_offset_bucket: str = "",
+    *,
+    split_screen_enabled: bool = False,
+    split_screen_mode: str = "fixed",
+    split_screen_layout: str = "heroDetailText",
+    split_screen_gap: int = 8,
 ) -> str:
     payload = "|".join(
         [
@@ -764,7 +792,29 @@ def _signature_for(
             f"{float(cover_frame_offset):.3f}",
             str(structure_variant_id),
             str(bgm_offset_bucket),
+            str(bool(split_screen_enabled)),
+            str(split_screen_mode or "fixed"),
+            str(split_screen_layout or "heroDetailText"),
+            str(int(split_screen_gap or 0)),
             *hud_lines,
         ]
     )
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _resolve_split_screen_layout(
+    rng: random.Random,
+    *,
+    split_screen_enabled: bool,
+    split_screen_mode: str,
+    split_screen_layout: str,
+) -> str:
+    if not split_screen_enabled:
+        return ""
+    layout = str(split_screen_layout or "heroDetailText")
+    if str(split_screen_mode or "fixed") != "random":
+        return layout if layout in SPLIT_SCREEN_LAYOUTS else "heroDetailText"
+    choices = [item for item in SPLIT_SCREEN_LAYOUTS if item]
+    if not choices:
+        return "heroDetailText"
+    return rng.choice(choices)

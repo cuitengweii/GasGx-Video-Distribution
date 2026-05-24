@@ -282,6 +282,12 @@ function videoMatrixNoticeSnapshot(statePayload, sourceFiles = []) {
       变体开关: {
         随机差异化: Boolean(statePayload.random_variation_enabled),
       },
+      分屏开关: {
+        启用分屏: Boolean(statePayload.split_screen_enabled),
+        模式: String(statePayload.split_screen_mode || ""),
+        布局: String(statePayload.split_screen_layout || ""),
+        间距: Number(statePayload.split_screen_gap || 0),
+      },
       BGM: {
         来源: String(statePayload.bgm_source || ""),
         曲库: String(statePayload.bgm_library_id || ""),
@@ -704,10 +710,43 @@ function renderSidebar(data) {
   renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "快速首出"], ["quality", "标准质量"]], String(state.render_speed_mode || "quality"), scheduleStateSave);
   bindSidebarToggleField("randomVariationEnabled", "random_variation_enabled");
   bindSidebarToggleField("templateRandomEnabled", "template_random_enabled");
+  bindSidebarToggleField("splitScreenEnabled", "split_screen_enabled");
   bindSidebarToggleField("headlineAiEnabled", "headline_ai_enabled");
   bindSidebarToggleField("descriptionAiEnabled", "description_ai_enabled");
   bindSidebarToggleField("followTextAiEnabled", "follow_text_ai_enabled");
   bindSidebarToggleField("hudAiEnabled", "hud_ai_enabled");
+  const splitScreenMode = $("splitScreenMode");
+  if (splitScreenMode) {
+    splitScreenMode.value = state.split_screen_mode || "fixed";
+    const syncSplitScreenLayoutLock = () => {
+      const layout = $("splitScreenLayout");
+      if (layout) {
+        layout.disabled = splitScreenMode.value === "random";
+      }
+    };
+    splitScreenMode.onchange = () => {
+      state.split_screen_mode = splitScreenMode.value;
+      syncSplitScreenLayoutLock();
+      scheduleStateSave();
+    };
+    syncSplitScreenLayoutLock();
+  }
+  const splitScreenLayout = $("splitScreenLayout");
+  if (splitScreenLayout) {
+    splitScreenLayout.value = state.split_screen_layout || "heroDetailText";
+    splitScreenLayout.onchange = () => {
+      state.split_screen_layout = splitScreenLayout.value;
+      scheduleStateSave();
+    };
+  }
+  const splitScreenGap = $("splitScreenGap");
+  if (splitScreenGap) {
+    splitScreenGap.value = String(state.split_screen_gap ?? 8);
+    splitScreenGap.oninput = () => {
+      state.split_screen_gap = clamp(Number(splitScreenGap.value || 0), 0, 48);
+      scheduleStateSave();
+    };
+  }
   bindSidebarPromptHintField("aiPromptHint", "aiPromptHintMeta", "ai_prompt_hint");
   bindSidebarPromptHintField("descriptionAiPromptHint", "descriptionAiPromptHintMeta", "description_ai_prompt_hint");
   bindSidebarPromptHintField("followTextAiPromptHint", "followTextAiPromptHintMeta", "follow_text_ai_prompt_hint");
@@ -3366,6 +3405,7 @@ function collectState() {
   const aiPromptHint = sanitizeAiPromptHint($("aiPromptHint")?.value || state.ai_prompt_hint || "");
   const miningBgmVolume = Number($("miningBgmVolume")?.value);
   const libraryBgmVolume = Number($("libraryBgmVolume")?.value);
+  const splitScreenGap = Number($("splitScreenGap")?.value);
   state.ai_prompt_hint = aiPromptHint;
   return {
     output_count: Number($("outputCount").value), max_workers: Number($("maxWorkers").value),
@@ -3381,6 +3421,10 @@ function collectState() {
     template_config: activeVideoTemplateSnapshot(),
     cover_template_config: activeCoverTemplateSnapshot(),
     source_mode: "Category folders",
+    split_screen_enabled: Boolean($("splitScreenEnabled")?.checked),
+    split_screen_mode: String($("splitScreenMode")?.value || state.split_screen_mode || "fixed"),
+    split_screen_layout: String($("splitScreenLayout")?.value || state.split_screen_layout || "heroDetailText"),
+    split_screen_gap: Number.isFinite(splitScreenGap) ? clamp(splitScreenGap, 0, 48) : (state.split_screen_gap ?? 8),
     headline_ai_enabled: Boolean($("headlineAiEnabled")?.checked),
     ai_prompt_hint: aiPromptHint,
     headline: $("headline")?.value || "",

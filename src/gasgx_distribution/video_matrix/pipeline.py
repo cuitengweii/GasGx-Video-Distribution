@@ -81,6 +81,10 @@ def run_pipeline(
     library_bgm_volume: float | None = None,
     narrative_structure_enabled: bool = True,
     random_variation_enabled: bool = False,
+    split_screen_enabled: bool = False,
+    split_screen_mode: str = "fixed",
+    split_screen_layout: str = "heroDetailText",
+    split_screen_gap: int = 8,
 ) -> list[RenderedAsset]:
     ai_prompt_hint = str((text_overrides or {}).get("ai_prompt_hint") or "").strip()
     daily_texts = [str(item).strip() for item in (text_overrides or {}).get("daily_texts") or [] if str(item).strip()]
@@ -180,6 +184,10 @@ def run_pipeline(
                 ai_prompt_hint=ai_prompt_hint,
                 avoid_texts=daily_texts,
                 narrative_structure_enabled=narrative_structure_enabled,
+                split_screen_enabled=split_screen_enabled,
+                split_screen_mode=split_screen_mode,
+                split_screen_layout=split_screen_layout,
+                split_screen_gap=split_screen_gap,
             )
         telemetry.event("planning", "variants_ready", {"variant_count": len(variants), **planning_payload})
     else:
@@ -200,6 +208,10 @@ def run_pipeline(
             ai_prompt_hint=ai_prompt_hint,
             avoid_texts=daily_texts,
             narrative_structure_enabled=narrative_structure_enabled,
+            split_screen_enabled=split_screen_enabled,
+            split_screen_mode=split_screen_mode,
+            split_screen_layout=split_screen_layout,
+            split_screen_gap=split_screen_gap,
         )
     _assign_variant_bgm_tracks(
         variants,
@@ -542,6 +554,10 @@ def rendered_asset_payload(asset: RenderedAsset) -> dict[str, Any]:
         "bgm_name": str(asset.variant.bgm_name or ""),
         "bgm_start_offset": asset.variant.bgm_start_offset,
         "bgm_offset_bucket": asset.variant.bgm_offset_bucket,
+        "split_screen_enabled": bool(getattr(asset.variant, "split_screen_enabled", False)),
+        "split_screen_mode": str(getattr(asset.variant, "split_screen_mode", "") or ""),
+        "split_screen_layout": str(getattr(asset.variant, "split_screen_layout", "") or ""),
+        "split_screen_gap": int(getattr(asset.variant, "split_screen_gap", 0) or 0),
         "dedupe": dedupe_payload_for_variant(asset.variant),
     }
 
