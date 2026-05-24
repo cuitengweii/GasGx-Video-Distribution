@@ -95,6 +95,7 @@ def test_video_matrix_api_state_and_preview() -> None:
     assert state.status_code == 200
     payload = state.json()
     assert "headline_ai_enabled" in payload["ui_state"]
+    assert "random_variation_enabled" in payload["ui_state"]
     assert payload["cover_templates"]
     assert "industrial_engine_hook" in payload["cover_templates"]
     assert payload["local_bgm_dir"].endswith("runtime\\video_matrix\\bgm") or payload["local_bgm_dir"].endswith("runtime/video_matrix/bgm")
@@ -413,6 +414,7 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
         "copy_language": "zh",
         "source_mode": "Category folders",
         "headline_ai_enabled": True,
+        "random_variation_enabled": True,
         "recent_limits": {"category_A": 12},
         "active_category_ids": ["category_A"],
         "video_duration_min": 7,
@@ -432,6 +434,7 @@ def test_video_matrix_generate_persists_full_ui_state(monkeypatch, tmp_path) -> 
     assert state["video_duration_max"] == 18
     assert state["target_fps"] == 30
     assert state["headline_ai_enabled"] is True
+    assert state["random_variation_enabled"] is True
     assert state["bgm_library_id"] == "selected.mp3"
     assert state["mining_bgm_volume"] == 1.25
     assert state["library_bgm_volume"] == 0.22

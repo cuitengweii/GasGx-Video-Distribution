@@ -20,8 +20,10 @@ from .cover_templates import DEFAULT_COVER_TEMPLATE_ID, default_cover_templates,
 from .hud import build_hud_payload
 from .ingestion import ingest_sources
 from .models import RenderedAsset
+from .random_variation import apply_random_variation_profiles
 from .render import render_variant
 from .settings import ProjectSettings
+from .templates import DEFAULT_TEMPLATE_ID
 from .spark_text import (
     build_description_variants,
     build_follow_text_variants,
@@ -46,6 +48,9 @@ def run_pipeline(
     settings: ProjectSettings,
     bgm_path: Path,
     bgm_candidates: list[Path] | None = None,
+    template_id: str = "",
+    video_template_pool: dict[str, dict] | None = None,
+    video_template_random_enabled: bool = False,
     output_count: int | None = None,
     source_root: Path | None = None,
     output_root: Path | None = None,
@@ -75,6 +80,7 @@ def run_pipeline(
     mining_bgm_volume: float | None = None,
     library_bgm_volume: float | None = None,
     narrative_structure_enabled: bool = True,
+    random_variation_enabled: bool = False,
 ) -> list[RenderedAsset]:
     ai_prompt_hint = str((text_overrides or {}).get("ai_prompt_hint") or "").strip()
     daily_texts = [str(item).strip() for item in (text_overrides or {}).get("daily_texts") or [] if str(item).strip()]
@@ -210,6 +216,25 @@ def run_pipeline(
         avoid_headlines=daily_headlines,
         avoid_texts=daily_texts,
     )
+    template_config_pool = dict(video_template_pool or {})
+    if template_id and template_config:
+        template_config_pool.setdefault(template_id, template_config)
+    if not template_config_pool:
+        template_config_pool[template_id or DEFAULT_TEMPLATE_ID] = template_config or {}
+    _assign_variant_video_templates(
+        variants,
+        selected_template_id=template_id,
+        selected_template_config=template_config,
+        template_pool=template_config_pool,
+        randomize=video_template_random_enabled,
+    )
+    if random_variation_enabled:
+        apply_random_variation_profiles(
+            variants,
+            settings,
+            history_features=history_features,
+            enabled=True,
+        )
     template_copy = _copy_template_path().read_text(encoding="utf-8")
     active_cover_template = _resolve_cover_template_config(cover_template_id, cover_template_config)
     active_ending_cover_template = ending_cover_template_config or active_cover_template
@@ -251,6 +276,7 @@ def run_pipeline(
             futures: dict[Any, tuple[int, Path]] = {}
             for variant in variants:
                 variant_bgm_path = _variant_bgm_path(variant, bgm_path)
+                variant_template_config = _variant_video_template_config(variant, template_config_pool, template_config)
                 future = executor.submit(
                     render_variant,
                     variant,
@@ -261,7 +287,7 @@ def run_pipeline(
                     variant_bgm_path,
                     output_types or {"mp4"},
                     copy_language,
-                    template_config,
+                    variant_template_config,
                     cover_template_id,
                     active_cover_template,
                     active_ending_cover_template,
@@ -508,6 +534,9 @@ def rendered_asset_payload(asset: RenderedAsset) -> dict[str, Any]:
         "cover_path": str(asset.cover_path) if asset.cover_path else "",
         "copy_path": str(asset.copy_path) if asset.copy_path else "",
         "manifest_path": str(asset.manifest_path) if asset.manifest_path else "",
+        "video_template_id": str(asset.variant.video_template_id or ""),
+        "video_template_name": str(asset.variant.video_template_name or ""),
+        "video_template_randomized": bool(asset.variant.video_template_randomized),
         "narrative_template_id": asset.variant.narrative_template_id,
         "account_pool_id": asset.variant.account_pool_id,
         "bgm_name": str(asset.variant.bgm_name or ""),
@@ -522,6 +551,45 @@ def _variant_bgm_path(variant: Any, default_bgm_path: Path) -> Path:
     if isinstance(path, Path):
         return path
     return default_bgm_path
+
+
+def _variant_video_template_config(variant: Any, template_pool: dict[str, dict], fallback_template: dict | None) -> dict | None:
+    template_id = str(getattr(variant, "video_template_id", "") or "").strip()
+    if template_id and template_id in template_pool:
+        return template_pool[template_id]
+    return fallback_template
+
+
+def _assign_variant_video_templates(
+    variants: list[Any],
+    *,
+    selected_template_id: str,
+    selected_template_config: dict | None,
+    template_pool: dict[str, dict],
+    randomize: bool,
+) -> None:
+    if not variants:
+        return
+    pool_items = [(str(template_id), template_config) for template_id, template_config in template_pool.items() if isinstance(template_config, dict)]
+    if not pool_items and selected_template_config is not None:
+        pool_items = [(selected_template_id or DEFAULT_TEMPLATE_ID, selected_template_config)]
+    if not pool_items:
+        pool_items = [(selected_template_id or DEFAULT_TEMPLATE_ID, {})]
+    rng = random.Random(uuid.uuid4().int)
+    if randomize and len(pool_items) > 1:
+        rng.shuffle(pool_items)
+    else:
+        pool_items = [next((item for item in pool_items if item[0] == selected_template_id), pool_items[0])]
+    pool_size = max(1, len(pool_items))
+    for index, variant in enumerate(variants):
+        template_id, template_config = pool_items[index % pool_size] if randomize and len(pool_items) > 1 else pool_items[0]
+        variant.video_template_id = template_id
+        variant.video_template_name = str((template_config or {}).get("name") or template_id)
+        variant.video_template_randomized = bool(randomize and len(pool_items) > 1)
+        if not randomize or len(pool_items) <= 1:
+            variant.video_template_id = selected_template_id or template_id
+            variant.video_template_name = str((selected_template_config or template_config or {}).get("name") or variant.video_template_id)
+            variant.video_template_randomized = False
 
 
 def _assign_variant_bgm_tracks(

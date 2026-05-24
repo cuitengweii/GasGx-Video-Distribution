@@ -51,6 +51,7 @@
         <label>背景音乐音量<div class="range-with-value"><input id="libraryBgmVolume" type="range" min="0" max="2" step="0.05" /><output id="libraryBgmVolumeValue"></output></div></label>
         <div class="sidebar-radio-field"><span>目标帧率</span><div class="radio-row" id="targetFpsGroup"></div></div>
         <div class="sidebar-radio-field"><span>生成速度</span><div class="radio-row" id="renderSpeedModeGroup"></div></div>
+        <div class="sidebar-checkbox-field"><input id="randomVariationEnabled" type="checkbox" /><label for="randomVariationEnabled">启用随机差异化</label></div>
         <select id="outputOptions" hidden><option value="mp4">mp4</option></select>
         <details class="copy-card">
           <summary class="copy-card-head">
@@ -229,6 +230,7 @@
         <div class="sidebar-group-body">
           <label>第一屏封面模板<select id="sidebarCoverTemplate"></select></label>
           <label>视频叠层模板<select id="sidebarVideoTemplate"></select></label>
+          <div class="sidebar-checkbox-field"><input id="templateRandomEnabled" type="checkbox" /><label for="templateRandomEnabled">正文叠层随机</label></div>
           <label>片尾封面模板<select id="sidebarEndingTemplateMode"><option value="dynamic">文字片尾</option><option value="random">视频片尾</option></select></label>
           <fieldset class="wechat-defaults-fieldset platform-settings-card hidden">
             <legend>视频号默认发布参数</legend>

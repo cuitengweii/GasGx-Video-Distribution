@@ -211,6 +211,50 @@ def test_render_variant_passes_bgm_offset_and_writes_manifest(monkeypatch, tmp_p
     assert manifest["bgm_offset_bucket"] == "b1"
 
 
+def test_render_variant_appends_random_variation_suffix_only_when_enabled(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    captured: dict[str, str] = {}
+
+    def fake_concat(filter_complex, inputs, output, bgm_path=None, speed_mode=None, threads=None) -> None:
+        captured["filter_complex"] = filter_complex
+        output.write_bytes(b"mp4")
+
+    monkeypatch.setattr(render, "concat_video", fake_concat)
+
+    base_variant = _variant(source)
+    render.render_variant(
+        base_variant,
+        _settings(tmp_path),
+        template_copy="",
+        batch_dir=tmp_path,
+        cover_intro_seconds=0,
+        outro_seconds=0,
+    )
+    assert "noise=alls=3:allf=t+u" not in captured["filter_complex"]
+
+    enabled_variant = _variant(source)
+    enabled_variant.random_variation_enabled = True
+    enabled_variant.random_variation_family = "grain_light"
+    enabled_variant.random_variation_signature = "sig-variation"
+    enabled_variant.random_variation_profile = {
+        "enabled": True,
+        "family": "grain_light",
+        "signature": "sig-variation",
+        "filter_suffix": ",noise=alls=3:allf=t+u",
+        "filters": ["noise=alls=3:allf=t+u"],
+    }
+    render.render_variant(
+        enabled_variant,
+        _settings(tmp_path),
+        template_copy="",
+        batch_dir=tmp_path,
+        cover_intro_seconds=0,
+        outro_seconds=0,
+    )
+    assert "noise=alls=3:allf=t+u" in captured["filter_complex"]
+
+
 def test_render_variant_uses_independent_ending_cover_template(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")

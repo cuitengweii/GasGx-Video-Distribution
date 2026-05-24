@@ -96,6 +96,12 @@ def render_variant(
                     + max(0.0, cover_intro_seconds)
                     + (max(0.0, outro_seconds) if not _is_video_ending(ending_template_path) else 0.0),
                     "output_types": sorted(output_types),
+                    "video_template_id": str(getattr(variant, "video_template_id", "") or ""),
+                    "video_template_name": str(getattr(variant, "video_template_name", "") or ""),
+                    "video_template_randomized": bool(getattr(variant, "video_template_randomized", False)),
+                    "random_variation_enabled": bool(variant.random_variation_enabled),
+                    "random_variation_family": str(variant.random_variation_family or ""),
+                    "random_variation_signature": str(variant.random_variation_signature or ""),
                 },
             )
         intro_cover_path = None
@@ -229,11 +235,18 @@ def render_variant(
                             "title": variant.title,
                             "slogan": variant.slogan,
                             "signature": variant.signature,
+                            "video_template_id": str(getattr(variant, "video_template_id", "") or ""),
+                            "video_template_name": str(getattr(variant, "video_template_name", "") or ""),
+                            "video_template_randomized": bool(getattr(variant, "video_template_randomized", False)),
                             "narrative_template_id": variant.narrative_template_id,
                             "account_pool_id": variant.account_pool_id,
                             "cover_frame_offset": variant.cover_frame_offset,
                             "bgm_start_offset": variant.bgm_start_offset,
                             "bgm_offset_bucket": variant.bgm_offset_bucket,
+                            "random_variation_enabled": bool(variant.random_variation_enabled),
+                            "random_variation_family": variant.random_variation_family,
+                            "random_variation_signature": variant.random_variation_signature,
+                            "random_variation_profile": variant.random_variation_profile,
                             "video_path": str(video_path),
                             "cover_path": str(cover_path) if cover_path else None,
                             "cover_template_id": cover_template_id,
@@ -295,6 +308,19 @@ def _segment_cover_timestamp(segment: Any, offset: float) -> float:
     return round(float(segment.start_time) + safe_offset, 3)
 
 
+def _random_variation_filter_suffix(variant: VideoVariant) -> str:
+    if not getattr(variant, "random_variation_enabled", False):
+        return ""
+    profile = variant.random_variation_profile if isinstance(variant.random_variation_profile, dict) else {}
+    suffix = str(profile.get("filter_suffix") or "").strip()
+    if suffix:
+        return suffix if suffix.startswith(",") else f",{suffix}"
+    filters = [str(item).strip() for item in profile.get("filters") or [] if str(item).strip()]
+    if not filters:
+        return ""
+    return "," + ",".join(filters)
+
+
 def _build_filter_complex(
     variant: VideoVariant,
     settings: ProjectSettings,
@@ -343,6 +369,7 @@ def _build_filter_complex(
     for idx, segment in enumerate(variant.segments):
         crop_x = max(0, (settings.target_width * variant.zoom - settings.target_width) / 2 + variant.x_offset)
         crop_y = max(0, (settings.target_height * variant.zoom - settings.target_height) / 2 + variant.y_offset)
+        variation_suffix = _random_variation_filter_suffix(variant)
         base_chain = (
             f"[{idx + input_offset}:v]"
             f"trim=start={segment.start_time}:duration={segment.duration},setpts=PTS-STARTPTS,"
@@ -351,7 +378,7 @@ def _build_filter_complex(
             f"{'hflip,' if variant.mirror and idx % 2 == 0 else ''}"
             f"colorbalance=rs=-0.05:gs=0.10:bs=-0.04:rh=0.02:gh=0.01:bh=0.03,"
             f"eq=contrast={round(1.18 * variant.lut_strength, 3)}:brightness=-0.02:saturation=1.12,"
-            f"setsar=1"
+            f"setsar=1{variation_suffix}"
         )
         text_filters = _overlay_filters(
             template,

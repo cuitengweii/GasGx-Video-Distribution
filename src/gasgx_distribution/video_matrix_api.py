@@ -1064,6 +1064,7 @@ def _request_telemetry_summary(request: dict[str, Any], bgm_path: Path, source_r
         "output_options": list(request.get("output_options") or ["mp4"]),
         "output_root": request.get("output_root") or "",
         "template_id": request.get("template_id") or DEFAULT_TEMPLATE_ID,
+        "template_random_enabled": bool(request.get("template_random_enabled", True)),
         "cover_template_id": request.get("cover_template_id") or DEFAULT_COVER_TEMPLATE_ID,
         "ending_template_mode": request.get("ending_template_mode") or "dynamic",
         "render_speed_mode": request.get("render_speed_mode") or "quality",
@@ -1121,6 +1122,9 @@ def _run_generate_job(
         request_template_config = request.get("template_config") if isinstance(request.get("template_config"), dict) else None
         request_cover_template_config = request.get("cover_template_config") if isinstance(request.get("cover_template_config"), dict) else None
         template_config = request_template_config or templates.get(template_id) or next(iter(templates.values()))
+        video_template_pool = dict(templates)
+        if request_template_config is not None:
+            video_template_pool[template_id] = request_template_config
         cover_template_config = (
             require_cover_template({cover_template_id: request_cover_template_config}, cover_template_id)
             if request_cover_template_config is not None
@@ -1171,6 +1175,9 @@ def _run_generate_job(
                 recent_limits=recent_limits,
                 active_category_ids=active_category_ids,
                 template_config=template_config,
+                template_id=template_id,
+                video_template_pool=video_template_pool,
+                video_template_random_enabled=bool(request.get("template_random_enabled", True)),
                 cover_template_id=cover_template_id,
                 cover_template_config=cover_template_config,
                 ending_cover_template_config=ending_cover_template_config,
@@ -1187,6 +1194,7 @@ def _run_generate_job(
                 mining_bgm_volume=mining_bgm_volume,
                 library_bgm_volume=library_bgm_volume,
                 narrative_structure_enabled=narrative_structure_enabled,
+                random_variation_enabled=bool(request.get("random_variation_enabled", False)),
                 text_overrides={
                     "headline": str(request.get("headline") or ""),
                     "subhead": str(request.get("subhead") or ""),
@@ -1562,6 +1570,9 @@ def _history_feature_from_asset_row(row: dict[str, Any]) -> dict[str, Any]:
         "text_variant_id": str(feature.get("text_variant_id") or dedupe.get("text_variant_id") or "").strip(),
         "visual_plan_key": str(feature.get("visual_plan_key") or dedupe.get("visual_plan_key") or "").strip(),
         "structure_variant_id": str(feature.get("structure_variant_id") or dedupe.get("structure_variant_id") or "").strip(),
+        "video_template_id": str(feature.get("video_template_id") or dedupe.get("video_template_id") or "").strip(),
+        "video_template_name": str(feature.get("video_template_name") or dedupe.get("video_template_name") or "").strip(),
+        "video_template_randomized": bool(feature.get("video_template_randomized") or dedupe.get("video_template_randomized")),
         "bgm_start_offset": feature.get("bgm_start_offset") if feature.get("bgm_start_offset") is not None else dedupe.get("bgm_start_offset"),
         "bgm_offset_bucket": str(feature.get("bgm_offset_bucket") or dedupe.get("bgm_offset_bucket") or "").strip(),
         "first_clip_id": str(feature.get("first_clip_id") or "").strip(),
@@ -1570,6 +1581,10 @@ def _history_feature_from_asset_row(row: dict[str, Any]) -> dict[str, Any]:
         "content_fingerprint": str(feature.get("content_fingerprint") or dedupe.get("content_fingerprint") or "").strip(),
         "bgm_name": str(feature.get("bgm_name") or "").strip(),
         "bgm_fingerprint": str(feature.get("bgm_fingerprint") or dedupe.get("bgm_fingerprint") or "").strip(),
+        "random_variation_enabled": bool(feature.get("random_variation_enabled") or dedupe.get("random_variation_enabled")),
+        "random_variation_family": str(feature.get("random_variation_family") or dedupe.get("random_variation_family") or "").strip(),
+        "random_variation_signature": str(feature.get("random_variation_signature") or dedupe.get("random_variation_signature") or "").strip(),
+        "random_variation_profile": feature.get("random_variation_profile") if isinstance(feature.get("random_variation_profile"), dict) else {},
     }
 
 
@@ -1984,6 +1999,8 @@ def _ui_state_from_request(request: dict[str, Any]) -> dict[str, Any]:
         "mining_bgm_volume",
         "library_bgm_volume",
         "narrative_structure_enabled",
+                "random_variation_enabled",
+        "template_random_enabled",
         "composition_sequence",
         "composition_customized",
     }

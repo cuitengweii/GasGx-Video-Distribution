@@ -10,6 +10,7 @@ DEFAULT_UI_STATE: dict[str, Any] = {
     "max_workers": 3,
     "output_options": ["mp4"],
     "template_id": "impact_hud",
+    "template_random_enabled": True,
     "cover_template_id": "industrial_engine_hook",
     "copy_language": "zh",
     "source_mode": "Category folders",
@@ -34,6 +35,7 @@ DEFAULT_UI_STATE: dict[str, Any] = {
     "mining_bgm_volume": 1.0,
     "library_bgm_volume": 0.35,
     "narrative_structure_enabled": False,
+    "random_variation_enabled": False,
     "composition_customized": False,
     "composition_sequence": [
         {"category_id": "category_A", "duration": 1.5},

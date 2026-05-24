@@ -267,6 +267,7 @@ function videoMatrixNoticeSnapshot(statePayload, sourceFiles = []) {
       输出格式: Array.isArray(statePayload.output_options) ? statePayload.output_options : [],
       正文模板: {
         模板ID: String(statePayload.template_id || ""),
+        正文随机: Boolean(statePayload.template_random_enabled),
         封面ID: String(statePayload.cover_template_id || ""),
         片尾模式: String(statePayload.ending_template_mode || ""),
         片尾模板: String(statePayload.ending_template_id || ""),
@@ -277,6 +278,9 @@ function videoMatrixNoticeSnapshot(statePayload, sourceFiles = []) {
         描述AI: Boolean(statePayload.description_ai_enabled),
         关注AI: Boolean(statePayload.follow_text_ai_enabled),
         HUD开关: Boolean(statePayload.hud_ai_enabled),
+      },
+      变体开关: {
+        随机差异化: Boolean(statePayload.random_variation_enabled),
       },
       BGM: {
         来源: String(statePayload.bgm_source || ""),
@@ -698,6 +702,8 @@ function renderSidebar(data) {
   $("openOutput").onclick = () => openFolder(outputRootPath());
   renderRadio("targetFpsGroup", "target_fps", [["30", "30 fps"], ["60", "60 fps"]], String(state.target_fps || settings.target_fps || 30), scheduleStateSave);
   renderRadio("renderSpeedModeGroup", "render_speed_mode", [["fast_first", "快速首出"], ["quality", "标准质量"]], String(state.render_speed_mode || "quality"), scheduleStateSave);
+  bindSidebarToggleField("randomVariationEnabled", "random_variation_enabled");
+  bindSidebarToggleField("templateRandomEnabled", "template_random_enabled");
   bindSidebarToggleField("headlineAiEnabled", "headline_ai_enabled");
   bindSidebarToggleField("descriptionAiEnabled", "description_ai_enabled");
   bindSidebarToggleField("followTextAiEnabled", "follow_text_ai_enabled");
@@ -3061,17 +3067,21 @@ function buildPreflightChecks(statePayload, getLiveData, setLiveData) {
       title: "模板可用性",
       pendingText: "检查第一屏封面模板和正文叠层模板是否存在。",
       readyText: "模板配置可用。",
-      configText: `正文叠层 ${statePayload.template_id || "未选择"} / 第一屏封面 ${statePayload.cover_template_id || "未选择"}`,
+      configText: `正文叠层 ${statePayload.template_id || "未选择"}${statePayload.template_random_enabled ? "（随机）" : ""} / 第一屏封面 ${statePayload.cover_template_id || "未选择"}`,
       run: async (index) => {
         await animatePreflightProgress(index, 20, "检查正文叠层模板...");
         const live = getLiveData() || {};
         const liveVideoTemplates = live.templates || templates || {};
         const liveCoverTemplates = live.cover_templates || coverTemplates || {};
         if (!liveVideoTemplates[statePayload.template_id]) return { status: "fail", detail: `正文叠层模板不存在：${statePayload.template_id || "未选择"}` };
+        if (statePayload.template_random_enabled) {
+          const templateCount = Object.keys(liveVideoTemplates).length;
+          if (templateCount < 2) return { status: "warn", detail: "正文叠层随机已开启，但模板池只有 1 个模板，无法真正随机。" };
+        }
         await animatePreflightProgress(index, 55, "检查第一屏封面模板...");
         if (!liveCoverTemplates[statePayload.cover_template_id]) return { status: "fail", detail: `第一屏封面模板不存在：${statePayload.cover_template_id || "未选择"}` };
         await animatePreflightProgress(index, 100, "模板检查完成。");
-        return { status: "pass", detail: `正文 ${statePayload.template_id} / 封面 ${statePayload.cover_template_id}` };
+        return { status: "pass", detail: `正文 ${statePayload.template_id}${statePayload.template_random_enabled ? "（随机池）" : ""} / 封面 ${statePayload.cover_template_id}` };
       },
     },
     {
@@ -3323,6 +3333,7 @@ function generationConfirmHtml(statePayload) {
       <div><span>最大节拍分析</span><strong>${statePayload.video_duration_max} 秒</strong></div>
       <div><span>目标帧率</span><strong>${statePayload.target_fps} fps</strong></div>
       <div><span>生成速度</span><strong>${escapeHtml(statePayload.render_speed_mode || "quality")}</strong></div>
+      <div><span>正文随机</span><strong>${statePayload.template_random_enabled ? "开启" : "关闭"}</strong></div>
       <div><span>输出格式</span><strong>${escapeHtml((statePayload.output_options || []).join(", "))}</strong></div>
     </div>
     <section>
@@ -3366,6 +3377,7 @@ function collectState() {
     render_speed_mode: String(radioValue("render_speed_mode") || state.render_speed_mode || "quality"),
     output_options: [$("outputOptions").value], output_root: outputRootPath(),
     template_id: selectedVideoTemplate, cover_template_id: selectedCover, copy_language: state.copy_language || settings.copy_language || "zh",
+    template_random_enabled: Boolean($("templateRandomEnabled")?.checked),
     template_config: activeVideoTemplateSnapshot(),
     cover_template_config: activeCoverTemplateSnapshot(),
     source_mode: "Category folders",
@@ -3382,6 +3394,7 @@ function collectState() {
     hud_text: $("hudText")?.value || "",
     hud_ai_enabled: Boolean($("hudAiEnabled")?.checked),
     hud_ai_prompt_hint: sanitizeAiPromptHint($("hudAiPromptHint")?.value || state.hud_ai_prompt_hint || ""),
+    random_variation_enabled: Boolean($("randomVariationEnabled")?.checked),
     ending_template_mode: endingTemplateMode(),
     ending_template_id: endingTemplateSelectedName(),
     ending_template_ids: selectedEndingTemplateNames(),

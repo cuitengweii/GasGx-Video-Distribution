@@ -129,9 +129,13 @@ def test_video_matrix_bgm_uses_local_library_with_visible_directory_hint() -> No
     assert "文案参考资料" not in html
     assert 'id="headline"' in html
     assert 'id="headlineAiEnabled" type="checkbox"' in html
+    assert 'id="randomVariationEnabled" type="checkbox"' in html
     assert 'id="aiPromptHint"' in html
     assert "上标题 AI 参考提示语" in html
     assert "headline_ai_enabled: Boolean($(\"headlineAiEnabled\")?.checked)" in app
+    assert 'bindSidebarToggleField("randomVariationEnabled", "random_variation_enabled")' in app
+    assert "random_variation_enabled: Boolean($(\"randomVariationEnabled\")?.checked)" in app
+    assert "启用随机差异化" in html
     assert "ai_prompt_hint: aiPromptHint" in app
     assert "function sanitizeAiPromptHint(value)" in app
     assert "function aiPromptHintLineCount(value)" in app

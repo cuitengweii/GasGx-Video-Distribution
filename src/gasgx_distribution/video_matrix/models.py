@@ -89,6 +89,9 @@ class VideoVariant:
     text_variant_id: str = ""
     visual_plan_key: str = ""
     structure_variant_id: str = ""
+    video_template_id: str = ""
+    video_template_name: str = ""
+    video_template_randomized: bool = False
     bgm_start_offset: float = 0.0
     bgm_offset_bucket: str = ""
     bgm_name: str = ""
@@ -99,6 +102,10 @@ class VideoVariant:
     cover_frame_hash: str = ""
     content_fingerprint: str = ""
     bgm_fingerprint: str = ""
+    random_variation_enabled: bool = False
+    random_variation_family: str = ""
+    random_variation_signature: str = ""
+    random_variation_profile: dict[str, Any] = field(default_factory=dict)
     ending_follow_text: str = ""
     publish_description: str = ""
     dedupe_result: "DedupeResult | None" = None

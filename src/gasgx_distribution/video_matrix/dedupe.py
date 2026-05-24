@@ -67,6 +67,9 @@ def plan_feature_record(
         "text_variant_id": variant.text_variant_id,
         "visual_plan_key": variant.visual_plan_key,
         "structure_variant_id": variant.structure_variant_id,
+        "video_template_id": str(getattr(variant, "video_template_id", "") or ""),
+        "video_template_name": str(getattr(variant, "video_template_name", "") or ""),
+        "video_template_randomized": bool(getattr(variant, "video_template_randomized", False)),
         "bgm_start_offset": round(float(variant.bgm_start_offset or 0.0), 3),
         "bgm_offset_bucket": variant.bgm_offset_bucket,
         "first_clip_id": first_segment.clip.clip_id if first_segment else "",
@@ -77,6 +80,10 @@ def plan_feature_record(
         "content_fingerprint": content_fingerprint,
         "first_frame_hash": first_frame_hash,
         "cover_frame_hash": cover_frame_hash,
+        "random_variation_enabled": bool(getattr(variant, "random_variation_enabled", False)),
+        "random_variation_family": str(getattr(variant, "random_variation_family", "") or ""),
+        "random_variation_signature": str(getattr(variant, "random_variation_signature", "") or ""),
+        "random_variation_profile": dict(getattr(variant, "random_variation_profile", {}) or {}),
     }
 
 
