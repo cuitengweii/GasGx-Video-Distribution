@@ -123,6 +123,20 @@ def plan_variants(
                 split_screen_mode=split_screen_mode,
                 split_screen_layout=split_screen_layout,
             )
+            split_screen_panels = []
+            if split_screen_enabled:
+                split_screen_panels = _plan_split_screen_panels(
+                    main_segments=segments,
+                    buckets=buckets,
+                    beat_grid=beat_grid,
+                    seed=seed,
+                    sequence_number=sequence_number,
+                    attempt_number=attempts,
+                    sequence=active_sequence,
+                    recent_clip_ids=excluded_clip_ids,
+                    recent_segment_keys=historical_segment_keys,
+                    split_screen_layout=selected_split_screen_layout,
+                )
             bgm_start_offset = _bgm_start_offset(settings, rng, bgm_duration, float(settings.video_duration_max))
             bgm_offset_bucket = _bgm_offset_bucket(settings, bgm_start_offset)
             signature = _signature_for(
@@ -139,6 +153,7 @@ def plan_variants(
                 cover_frame_offset,
                 structure_variant_id,
                 bgm_offset_bucket,
+                split_screen_panel_signature=_split_screen_panel_signature(split_screen_panels),
                 split_screen_enabled=split_screen_enabled,
                 split_screen_mode=split_screen_mode,
                 split_screen_layout=selected_split_screen_layout,
@@ -157,6 +172,7 @@ def plan_variants(
                 x_offset=x_offset,
                 y_offset=y_offset,
                 segments=segments,
+                split_screen_panels=split_screen_panels,
                 signature=signature,
                 split_screen_enabled=split_screen_enabled,
                 split_screen_mode=str(split_screen_mode or "fixed"),
@@ -195,6 +211,19 @@ def plan_variants(
                 retry_count += 1
                 mutation = _mutate_candidate(candidate, buckets, rng, retry_count, historical_clip_ids, float(settings.video_duration_max))
                 mutation_history.append(mutation)
+                if split_screen_enabled:
+                    candidate.split_screen_panels = _plan_split_screen_panels(
+                        main_segments=candidate.segments,
+                        buckets=buckets,
+                        beat_grid=beat_grid,
+                        seed=seed,
+                        sequence_number=sequence_number,
+                        attempt_number=attempts + retry_count,
+                        sequence=active_sequence,
+                        recent_clip_ids=excluded_clip_ids,
+                        recent_segment_keys=historical_segment_keys,
+                        split_screen_layout=candidate.split_screen_layout,
+                    )
                 candidate.visual_plan_key = _visual_plan_key(candidate)
                 candidate.signature = _signature_for(
                     candidate.segments,
@@ -210,6 +239,7 @@ def plan_variants(
                     candidate.cover_frame_offset,
                     candidate.structure_variant_id,
                     candidate.bgm_offset_bucket,
+                    split_screen_panel_signature=_split_screen_panel_signature(candidate.split_screen_panels),
                     split_screen_enabled=split_screen_enabled,
                     split_screen_mode=split_screen_mode,
                     split_screen_layout=candidate.split_screen_layout,
@@ -777,6 +807,7 @@ def _signature_for(
     split_screen_mode: str = "fixed",
     split_screen_layout: str = "heroDetailText",
     split_screen_gap: int = 8,
+    split_screen_panel_signature: str = "",
 ) -> str:
     payload = "|".join(
         [
@@ -796,6 +827,7 @@ def _signature_for(
             str(split_screen_mode or "fixed"),
             str(split_screen_layout or "heroDetailText"),
             str(int(split_screen_gap or 0)),
+            str(split_screen_panel_signature or ""),
             *hud_lines,
         ]
     )
@@ -818,3 +850,63 @@ def _resolve_split_screen_layout(
     if not choices:
         return "heroDetailText"
     return rng.choice(choices)
+
+
+def _split_screen_panel_count(layout: str) -> int:
+    return 4 if layout == "grid4" else 2
+
+
+def _split_screen_panel_signature(panels: list[list[SegmentPlan]] | None) -> str:
+    if not panels:
+        return ""
+    tokens: list[str] = []
+    for panel_index, panel in enumerate(panels):
+        tokens.append(f"panel:{panel_index}")
+        tokens.extend(_segment_key(segment) for segment in panel)
+    payload = "|".join(tokens)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _panel_seed(seed: int, sequence_number: int, attempt_number: int, panel_index: int, layout: str) -> str:
+    return f"{seed}:{sequence_number}:{attempt_number}:{panel_index}:{layout}"
+
+
+def _plan_split_screen_panels(
+    *,
+    main_segments: list[SegmentPlan],
+    buckets: dict[str, list[ClipMetadata]],
+    beat_grid: list[float],
+    seed: int,
+    sequence_number: int,
+    attempt_number: int,
+    sequence: list[tuple[str, float]],
+    recent_clip_ids: set[str],
+    recent_segment_keys: set[str],
+    split_screen_layout: str,
+) -> list[list[SegmentPlan]]:
+    panel_count = _split_screen_panel_count(split_screen_layout)
+    panels: list[list[SegmentPlan]] = [list(main_segments)]
+    if panel_count <= 1:
+        return panels
+    target_duration = max(0.1, sum(max(0.0, float(segment.duration or 0.0)) for segment in main_segments))
+    used_clip_ids = set(recent_clip_ids)
+    used_segment_keys = set(recent_segment_keys)
+    used_clip_ids.update(segment.clip.clip_id for segment in main_segments)
+    used_segment_keys.update(_segment_key(segment) for segment in main_segments)
+    for panel_index in range(1, panel_count):
+        panel_rng = random.Random(_panel_seed(seed, sequence_number, attempt_number, panel_index, split_screen_layout))
+        panel_segments = _pick_segments(
+            buckets,
+            beat_grid,
+            panel_rng,
+            sequence,
+            used_clip_ids,
+            target_duration,
+            recent_segment_keys=used_segment_keys,
+        )
+        if not panel_segments:
+            panel_segments = list(main_segments)
+        panels.append(panel_segments)
+        used_clip_ids.update(segment.clip.clip_id for segment in panel_segments)
+        used_segment_keys.update(_segment_key(segment) for segment in panel_segments)
+    return panels

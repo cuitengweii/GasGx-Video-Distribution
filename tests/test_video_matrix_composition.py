@@ -275,6 +275,33 @@ def test_plan_variants_preflight_skips_reused_text_signature() -> None:
     assert "text_preflight_avoided" not in variant.dedupe_result.report.reasons
 
 
+def test_plan_variants_builds_independent_split_screen_panels() -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_B", "b1"), _clip("category_C", "c1"), _clip("category_D", "d1")]
+    settings = _settings(
+        composition_sequence=[
+            {"category_id": "category_A", "duration": 0.5},
+            {"category_id": "category_B", "duration": 0.5},
+            {"category_id": "category_C", "duration": 0.5},
+            {"category_id": "category_D", "duration": 0.5},
+        ],
+        dedupe_policy={"single_dimension_retry": False, "borderline_total": 0.99, "reject_total": 1.0},
+    )
+
+    variant = plan_variants(
+        clips,
+        settings,
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1.0, 1.5, 2.0],
+        output_count=1,
+        split_screen_enabled=True,
+        split_screen_mode="fixed",
+        split_screen_layout="grid4",
+    )[0]
+
+    assert len(variant.split_screen_panels) == 4
+    assert [segment.clip.clip_id for segment in variant.split_screen_panels[0]] == [segment.clip.clip_id for segment in variant.segments]
+
+
 def test_plan_variants_preflight_rotates_structure_variant() -> None:
     clips = [_clip("category_A", "a1"), _clip("category_B", "b1"), _clip("category_C", "c1")]
     settings = _settings(

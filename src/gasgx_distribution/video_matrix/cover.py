@@ -10,6 +10,9 @@ from .models import VideoVariant
 from .settings import ProjectSettings
 from .spark_text import sanitize_headline_text
 
+FONT_CANDIDATES = build_font_candidates()
+BOLD_FONT_CANDIDATES = build_font_candidates()
+
 
 def render_intro_cover(
     source_frame_path: Path,

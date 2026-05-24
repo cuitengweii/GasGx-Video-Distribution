@@ -815,6 +815,10 @@ def test_render_variant_builds_split_screen_filter_graph(monkeypatch, tmp_path: 
         SegmentPlan(category="category_A", clip=variant.segments[0].clip, start_time=0, duration=1.4, index=0),
         SegmentPlan(category="category_A", clip=clip_b, start_time=0.2, duration=1.2, index=1),
     ]
+    variant.split_screen_panels = [
+        list(variant.segments),
+        [variant.segments[1]],
+    ]
     variant.split_screen_enabled = True
     variant.split_screen_mode = "fixed"
     variant.split_screen_layout = "heroDetailText"
@@ -838,10 +842,12 @@ def test_render_variant_builds_split_screen_filter_graph(monkeypatch, tmp_path: 
     )
 
     assert asset.video_path.exists()
-    assert "color=c=black" in captured["filter_complex"]
+    assert "color=c=black:s=1080x1920:d=2.600,format=rgba[base]" in captured["filter_complex"]
+    assert "concat=n=2:v=1:a=0" in captured["filter_complex"]
     assert "overlay=x=0:y=0:format=auto" in captured["filter_complex"]
     assert "drawtext=" in captured["filter_complex"]
     assert "drawbox=" in captured["filter_complex"]
+    assert "tpad=stop_mode=clone" in captured["filter_complex"]
     assert "format=yuv420p[vout]" in captured["filter_complex"]
-    assert [path.name for path in captured["inputs"]] == ["source-a.mp4", "source-b.mp4"]
+    assert [path.name for path in captured["inputs"]] == ["source-a.mp4", "source-b.mp4", "source-b.mp4"]
 

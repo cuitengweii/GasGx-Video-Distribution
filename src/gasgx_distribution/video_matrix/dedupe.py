@@ -37,6 +37,15 @@ def structure_tokens_for_variant(variant: VideoVariant) -> list[str]:
     for segment in variant.segments:
         duration_bucket = max(1, int(round(float(segment.duration) * 2)))
         tokens.append(f"{segment.index}:{segment.category}:{segment.clip.clip_id}:{duration_bucket}")
+    split_panels = list(getattr(variant, "split_screen_panels", []) or [])
+    if split_panels:
+        tokens.append(f"split_panels:{len(split_panels)}")
+        for panel_index, panel in enumerate(split_panels):
+            panel_prefix = f"panel:{panel_index}"
+            tokens.append(panel_prefix)
+            for segment in panel:
+                duration_bucket = max(1, int(round(float(segment.duration) * 2)))
+                tokens.append(f"{panel_prefix}:{segment.index}:{segment.category}:{segment.clip.clip_id}:{duration_bucket}")
     return tokens
 
 

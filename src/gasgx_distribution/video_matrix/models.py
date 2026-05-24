@@ -96,6 +96,7 @@ class VideoVariant:
     video_template_id: str = ""
     video_template_name: str = ""
     video_template_randomized: bool = False
+    split_screen_panels: list[list[SegmentPlan]] = field(default_factory=list)
     bgm_start_offset: float = 0.0
     bgm_offset_bucket: str = ""
     bgm_name: str = ""

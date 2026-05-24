@@ -13,9 +13,9 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from .ffmpeg_tools import FFmpegError, append_video_tail, concat_video, extract_frame
-from .font_config import build_font_candidates_for_family
+from .font_config import build_font_candidates, build_font_candidates_for_family
 from .cover import render_intro_cover, render_outro_cover
-from .models import RenderedAsset, VideoVariant
+from .models import RenderedAsset, SegmentPlan, VideoVariant
 from .settings import ProjectSettings
 from .watermark import build_watermark_overlay
 from .spark_text import build_marketing_copy, clean_generated_text, sanitize_headline_text
@@ -24,6 +24,8 @@ ENDING_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 CJK_FONT_FAMILY = "'Microsoft YaHei Bold', 'Microsoft YaHei', SimHei, SimSun, 'Noto Sans SC', 'Source Han Sans SC Heavy', 'HarmonyOS Sans SC Bold', sans-serif"
 CJK_CHAR_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+FONT_CANDIDATES = build_font_candidates()
+BOLD_FONT_CANDIDATES = build_font_candidates()
 
 
 class VideoMatrixRenderError(RuntimeError):
@@ -363,24 +365,48 @@ def _build_split_screen_filter_complex(
 ) -> tuple[str, list[Path]]:
     layout = _normalize_split_screen_layout(layout, mode)
     required_inputs = _split_screen_required_inputs(layout)
-    selected_segments = _split_screen_segments(variant.segments, required_inputs)
-    if not selected_segments:
+    panel_sequences = _split_screen_panel_sequences(variant, required_inputs)
+    if not panel_sequences:
         raise ValueError("Split-screen mode requires at least one source segment")
-    panel_duration = max(0.1, min(float(segment.duration) for segment in selected_segments))
-    inputs = [segment.clip.normalized_path for segment in selected_segments]
+    body_duration = _split_screen_body_duration(panel_sequences[0])
+    panel_specs = _split_screen_panel_specs(layout, settings.target_width, settings.target_height, gap)
+    inputs = [segment.clip.normalized_path for sequence in panel_sequences for segment in sequence]
     chains: list[str] = [
-        f"color=c=black:s={settings.target_width}x{settings.target_height}:d={panel_duration:.3f},format=rgba[base]"
+        f"color=c=black:s={settings.target_width}x{settings.target_height}:d={body_duration:.3f},format=rgba[base]"
     ]
-    for index, segment in enumerate(selected_segments):
-        panel = _split_screen_panel_specs(layout, settings.target_width, settings.target_height, gap)[index]
-        chains.append(
-            f"[{index}:v]"
-            f"trim=start={segment.start_time}:duration={panel_duration:.3f},setpts=PTS-STARTPTS,"
-            f"scale={panel['w']}:{panel['h']}:force_original_aspect_ratio=increase,"
-            f"crop={panel['w']}:{panel['h']},setsar=1,format=rgba[v{index}]"
-        )
+    input_index = 0
+    for index, sequence in enumerate(panel_sequences):
+        panel = panel_specs[index]
+        segment_labels: list[str] = []
+        for segment_index, segment in enumerate(sequence):
+            segment_label = f"[panel{index}_seg{segment_index}]"
+            segment_duration = max(0.1, float(segment.duration))
+            chains.append(
+                f"[{input_index}:v]"
+                f"trim=start={segment.start_time}:duration={segment_duration:.3f},setpts=PTS-STARTPTS,"
+                f"scale={panel['w']}:{panel['h']}:force_original_aspect_ratio=increase,"
+                f"crop={panel['w']}:{panel['h']},setsar=1,format=rgba{segment_label}"
+            )
+            segment_labels.append(segment_label)
+            input_index += 1
+        panel_source_label = segment_labels[0]
+        if len(segment_labels) > 1:
+            panel_source_label = f"[panel{index}_concat]"
+            chains.append(f"{''.join(segment_labels)}concat=n={len(segment_labels)}:v=1:a=0{panel_source_label}")
+        panel_total = _split_screen_body_duration(sequence)
+        pad_duration = max(0.0, body_duration - panel_total)
+        panel_final_label = f"[v{index}]"
+        if pad_duration > 0:
+            chains.append(
+                f"{panel_source_label}tpad=stop_mode=clone:stop_duration={pad_duration:.3f},"
+                f"trim=duration={body_duration:.3f},setpts=PTS-STARTPTS,setsar=1,format=rgba{panel_final_label}"
+            )
+        else:
+            chains.append(
+                f"{panel_source_label}trim=duration={body_duration:.3f},setpts=PTS-STARTPTS,setsar=1,format=rgba{panel_final_label}"
+            )
     current_label = "[base]"
-    for index, panel in enumerate(_split_screen_panel_specs(layout, settings.target_width, settings.target_height, gap)):
+    for index, panel in enumerate(panel_specs):
         next_label = f"[split{index}]"
         chains.append(
             f"{current_label}[v{index}]overlay=x={panel['x']}:y={panel['y']}:format=auto{next_label}"
@@ -410,13 +436,30 @@ def _split_screen_required_inputs(layout: str) -> int:
     return 4 if layout == "grid4" else 2
 
 
-def _split_screen_segments(segments: list[Any], required_count: int) -> list[Any]:
-    if not segments:
+def _split_screen_panel_sequences(variant: VideoVariant, required_count: int) -> list[list[SegmentPlan]]:
+    if required_count <= 0:
         return []
-    selected = list(segments[:required_count])
-    while len(selected) < required_count:
-        selected.append(selected[-1])
-    return selected
+    split_panels = list(getattr(variant, "split_screen_panels", []) or [])
+    if split_panels:
+        selected = [list(panel) for panel in split_panels if panel]
+        if not selected:
+            selected = [list(variant.segments)]
+        while len(selected) < required_count:
+            selected.append(list(selected[-1]))
+        return selected[:required_count]
+    selected_segments = list(variant.segments[:required_count])
+    if not selected_segments:
+        return []
+    while len(selected_segments) < required_count:
+        selected_segments.append(selected_segments[-1])
+    return [[segment] for segment in selected_segments]
+
+
+def _split_screen_body_duration(segments: list[Any]) -> float:
+    if not segments:
+        return 0.1
+    total = sum(max(0.0, float(getattr(segment, "duration", 0.0) or 0.0)) for segment in segments)
+    return max(0.1, total)
 
 
 def _split_screen_panel_specs(layout: str, width: int, height: int, gap: int) -> list[dict[str, int]]:
