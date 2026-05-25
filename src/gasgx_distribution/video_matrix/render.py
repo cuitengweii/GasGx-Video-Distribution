@@ -149,10 +149,13 @@ def render_variant(
                 filter_complex, inputs = _build_split_screen_filter_complex(
                     variant,
                     settings,
+                    template_config=template_config,
                     layout=split_screen_layout,
                     mode=split_screen_mode,
                     gap=split_screen_gap,
                     text_dir=scratch_dir / "split_text_layers",
+                    speed_mode=speed_mode,
+                    sequence_tag=sequence_tag,
                 )
             else:
                 filter_complex, inputs = _build_filter_complex(
@@ -358,17 +361,27 @@ def _build_split_screen_filter_complex(
     variant: VideoVariant,
     settings: ProjectSettings,
     *,
+    template_config: dict | None = None,
     layout: str,
     mode: str = "fixed",
     gap: int = 8,
     text_dir: Path | None = None,
+    speed_mode: str = "quality",
+    sequence_tag: str = "",
 ) -> tuple[str, list[Path]]:
     layout = _normalize_split_screen_layout(layout, mode)
+    template = coerce_template(template_config)
+    explicit_template_keys = set((template_config or {}).keys())
+    hud_text = "\n".join(variant.hud_lines)
+    slogan = sanitize_headline_text(variant.slogan)
+    title = sanitize_headline_text(variant.title)
+    variant.slogan = slogan
+    variant.title = title
     required_inputs = _split_screen_required_inputs(layout)
     panel_sequences = _split_screen_panel_sequences(variant, required_inputs)
     if not panel_sequences:
         raise ValueError("Split-screen mode requires at least one source segment")
-    body_duration = _split_screen_body_duration(panel_sequences[0])
+    body_duration = max(_split_screen_body_duration(sequence) for sequence in panel_sequences)
     panel_specs = _split_screen_panel_specs(layout, settings.target_width, settings.target_height, gap)
     inputs = [segment.clip.normalized_path for sequence in panel_sequences for segment in sequence]
     chains: list[str] = [
@@ -418,6 +431,23 @@ def _build_split_screen_filter_complex(
         separator_chain = ",".join(filter(None, (item.lstrip(",") for item in separator_filters)))
         hero_input_label = "[sep]"
         chains.append(f"{current_label}{separator_chain}{hero_input_label}")
+    if template:
+        text_filters = _overlay_filters(
+            template,
+            hud_text,
+            slogan,
+            title,
+            explicit_template_keys,
+            text_dir=text_dir,
+            include_boxes=True,
+            speed_mode=speed_mode,
+            sequence_tag=sequence_tag,
+        )
+        if text_filters:
+            next_label = "[templated]"
+            text_chain = text_filters[1:] if text_filters.startswith(",") else text_filters
+            chains.append(f"{hero_input_label}{text_chain}{next_label}")
+            hero_input_label = next_label
     if layout == "heroDetailText":
         chains.append(_split_screen_hero_text_chain(input_label=hero_input_label, text_dir=text_dir))
     else:
@@ -1233,7 +1263,9 @@ def _text_effect_options(effect: str, x_expr: str, y_expr: str, *, line_index: i
     if effect == "zoom-in":
         return f":x={x_expr}:y={y_expr}:fontsize='{font_size}*(1-0.16*exp(-5*(t-{delay:.2f})))'"
     if effect == "shadow-pop":
-        return f":x={x_expr}:y={y_expr}:alpha='0.70+0.30*exp(-5*(t-{delay:.2f}))*sin(20*(t-{delay:.2f}))':shadowcolor=0x000000@0.80:shadowx='6*exp(-4*(t-{delay:.2f}))':shadowy='6*exp(-4*(t-{delay:.2f}))'"
+        # FFmpeg drawtext does not accept expressions for shadowx/shadowy.
+        # Keep the "pop" motion in alpha only and use a fixed shadow offset.
+        return f":x={x_expr}:y={y_expr}:alpha='0.70+0.30*exp(-5*(t-{delay:.2f}))*sin(20*(t-{delay:.2f}))':shadowcolor=0x000000@0.80:shadowx=6:shadowy=6"
     return f":x={x_expr}:y={y_expr}"
 
 

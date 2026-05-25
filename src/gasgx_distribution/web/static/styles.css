@@ -2078,12 +2078,21 @@ select option {
 }
 
 .account-title-line {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.account-title-main {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .account-badges {
@@ -2092,15 +2101,84 @@ select option {
   align-items: center;
   justify-content: flex-end;
   justify-items: end;
-  gap: 8px;
+  gap: 6px;
   min-width: 168px;
+}
+
+.account-side-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  align-content: start;
+  min-width: 0;
+}
+
+.account-expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid rgba(93, 214, 44, 0.28);
+  border-radius: 999px;
+  color: var(--accent-aurora);
+  background: rgba(93, 214, 44, 0.09);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.account-expand-toggle:hover {
+  border-color: rgba(93, 214, 44, 0.46);
+  background: rgba(93, 214, 44, 0.14);
+}
+
+.account-platform-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(93, 214, 44, 0.12);
+}
+
+.account-platform-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-platform-summary {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.account-platform-summary strong {
+  font-size: 13px;
+  font-weight: 800;
+  color: #f1f7ee;
+}
+
+.account-platform-summary .muted {
+  font-size: 11px;
+}
+
+.account-platform-body {
+  display: grid;
+  gap: 12px;
+}
+
+.account-platform-section.is-collapsed .account-platform-body {
+  display: none;
 }
 
 .account-title {
   display: inline-flex;
   align-items: center;
   width: auto;
-  max-width: min(100%, 360px);
+  max-width: min(100%, 260px);
   min-width: 0;
   min-height: 32px;
   padding: 5px 11px;
@@ -2134,6 +2212,63 @@ select option {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 2px;
+}
+
+.account-preferences-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+  width: auto;
+  flex: 1 1 auto;
+}
+
+.account-inline-preferences {
+  margin-left: 0;
+  max-width: 100%;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.account-inline-preference {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.account-inline-preference-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.account-inline-preference select {
+  width: 160px;
+  min-height: 32px;
+  min-width: 0;
+}
+
+.account-preference-country {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid rgba(93, 214, 44, 0.18);
+  border-radius: 6px;
+  color: var(--accent-aurora);
+  background: rgba(93, 214, 44, 0.08);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  align-self: end;
+  justify-self: start;
 }
 
 .account-phone-line,
@@ -2253,11 +2388,11 @@ select option {
 
 .account-row > .row-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
   align-items: start;
-  gap: 16px;
-  margin-bottom: 14px;
-  padding-bottom: 12px;
+  gap: 12px 14px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
@@ -2348,7 +2483,7 @@ select option {
 .account-platform-group {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   margin-top: 12px;
-  padding-top: 2px;
+  padding-top: 12px;
 }
 
 .browser-actions {
@@ -2356,6 +2491,12 @@ select option {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+}
+
+.account-platform-empty {
+  padding: 6px 2px 2px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .platform-open-btn {
@@ -2776,6 +2917,40 @@ select option {
   align-items: start;
 }
 
+.settings-vpn {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-vpn-actions {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.settings-vpn-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-vpn-summary {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 14px;
+  border: 1px solid rgba(93, 214, 44, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.vpn-country-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .settings-common .panel-head,
 .settings-job .panel-head {
   grid-column: 1 / -1;
@@ -3025,6 +3200,54 @@ select option {
 
   .settings-common-main {
     grid-template-columns: 1fr;
+  }
+
+  .settings-vpn-grid,
+  .account-preferences-row {
+    width: 100%;
+  }
+
+  .account-preference-country {
+    width: fit-content;
+  }
+
+  .account-inline-preferences {
+    margin-left: 0;
+    max-width: 100%;
+  }
+
+  .account-row > .row-head {
+    grid-template-columns: 1fr;
+  }
+
+  .account-side-stack {
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .account-badges {
+    justify-content: start;
+    justify-items: start;
+  }
+
+  .account-preferences-row {
+    grid-template-columns: 1fr;
+  }
+
+  .account-preference-row {
+    grid-template-columns: 1fr;
+  }
+
+  .account-preference-country {
+    width: fit-content;
+  }
+
+  .account-preference-row {
+    grid-template-columns: 1fr;
+  }
+
+  .account-preference-country {
+    width: fit-content;
   }
 
   .settings-common,

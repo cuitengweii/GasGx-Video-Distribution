@@ -19,7 +19,7 @@ from .composition import plan_variants
 from .cover_templates import DEFAULT_COVER_TEMPLATE_ID, default_cover_templates, require_cover_template
 from .hud import build_hud_payload
 from .ingestion import ingest_sources
-from .models import RenderedAsset
+from .models import ClipMetadata, RenderedAsset
 from .random_variation import apply_random_variation_profiles
 from .render import render_variant
 from .settings import ProjectSettings
@@ -110,6 +110,18 @@ def run_pipeline(
         )
     if not clips:
         raise ValueError("No source videos were found for ingestion")
+    clips, excluded_ending_count = _exclude_public_ending_clips(clips, ending_template_path)
+    if excluded_ending_count and telemetry is not None:
+        telemetry.event(
+            "ingestion",
+            "public_ending_excluded",
+            {
+                "ending_template_path": ending_template_path,
+                "excluded_count": excluded_ending_count,
+            },
+        )
+    if not clips:
+        raise ValueError("No usable source videos were found after excluding the public ending video")
     _notify(progress_callback, "hud", 0.20, "Preparing GasGx data HUD")
     if telemetry is not None:
         with telemetry.span("hud", "build_hud_payload"):
@@ -379,6 +391,31 @@ def _resolve_worker_count(max_workers: int | None, total: int) -> int:
 
 def _is_video_ending(path: Path | None) -> bool:
     return path is not None and path.suffix.lower() in VIDEO_ENDING_EXTENSIONS
+
+
+def _exclude_public_ending_clips(clips: list[ClipMetadata], ending_template_path: Path | None) -> tuple[list[ClipMetadata], int]:
+    if ending_template_path is None:
+        return clips, 0
+    try:
+        ending_resolved = ending_template_path.resolve()
+    except OSError:
+        ending_resolved = ending_template_path
+    filtered: list[ClipMetadata] = []
+    excluded = 0
+    for clip in clips:
+        try:
+            source_resolved = clip.source_path.resolve()
+        except OSError:
+            source_resolved = clip.source_path
+        try:
+            normalized_resolved = clip.normalized_path.resolve()
+        except OSError:
+            normalized_resolved = clip.normalized_path
+        if source_resolved == ending_resolved or normalized_resolved == ending_resolved:
+            excluded += 1
+            continue
+        filtered.append(clip)
+    return filtered, excluded
 
 
 def _beat_duration_hint(

@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS browser_profiles (
     profile_dir TEXT NOT NULL,
     debug_port INTEGER NOT NULL UNIQUE,
     fingerprint_json TEXT NOT NULL DEFAULT '{}',
+    vpn_node_key TEXT NOT NULL DEFAULT '',
+    account_publish_mode TEXT NOT NULL DEFAULT 'inherit',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE CASCADE
@@ -441,12 +443,14 @@ def init_db(path: Path | None = None) -> None:
                     profile_dir TEXT NOT NULL,
                     debug_port INTEGER NOT NULL UNIQUE,
                     fingerprint_json TEXT NOT NULL DEFAULT '{}',
+                    vpn_node_key TEXT NOT NULL DEFAULT '',
+                    account_publish_mode TEXT NOT NULL DEFAULT 'inherit',
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL,
                     FOREIGN KEY(account_id) REFERENCES matrix_accounts(id) ON DELETE CASCADE
                 );
-                INSERT OR IGNORE INTO browser_profiles_next(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
-                SELECT ap.account_id, bp.profile_dir, bp.debug_port, COALESCE(bp.fingerprint_json, '{}'), bp.created_at, bp.updated_at
+                INSERT OR IGNORE INTO browser_profiles_next(account_id, profile_dir, debug_port, fingerprint_json, vpn_node_key, account_publish_mode, created_at, updated_at)
+                SELECT ap.account_id, bp.profile_dir, bp.debug_port, COALESCE(bp.fingerprint_json, '{}'), COALESCE(bp.vpn_node_key, ''), COALESCE(bp.account_publish_mode, 'inherit'), bp.created_at, bp.updated_at
                 FROM browser_profiles bp
                 JOIN account_platforms ap ON ap.id = bp.account_platform_id
                 ORDER BY bp.id;
@@ -457,6 +461,10 @@ def init_db(path: Path | None = None) -> None:
             profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(browser_profiles)")}
         if "fingerprint_json" not in profile_columns:
             conn.execute("ALTER TABLE browser_profiles ADD COLUMN fingerprint_json TEXT NOT NULL DEFAULT '{}'")
+        if "vpn_node_key" not in profile_columns:
+            conn.execute("ALTER TABLE browser_profiles ADD COLUMN vpn_node_key TEXT NOT NULL DEFAULT ''")
+        if "account_publish_mode" not in profile_columns:
+            conn.execute("ALTER TABLE browser_profiles ADD COLUMN account_publish_mode TEXT NOT NULL DEFAULT 'inherit'")
         stats_columns = {row["name"] for row in conn.execute("PRAGMA table_info(video_stats_snapshots)")}
         for name, ddl in {
             "stat_date": "ALTER TABLE video_stats_snapshots ADD COLUMN stat_date TEXT NOT NULL DEFAULT ''",

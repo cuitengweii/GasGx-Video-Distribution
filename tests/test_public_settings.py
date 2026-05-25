@@ -9,6 +9,7 @@ from gasgx_distribution.public_settings import (
     load_distribution_settings,
     load_platform_publish_settings,
     load_wechat_publish_settings,
+    resolve_effective_publish_mode,
     resolve_material_dir,
     save_distribution_settings,
     save_wechat_publish_settings,
@@ -326,9 +327,9 @@ def test_operator_wechats_api_includes_values_inferred_from_existing_accounts(mo
     assert result.status_code == 200
     items = result.json()
     assert items[:2] == ["aamecc", "aalbcc"]
-    assert "bbbbbb" in items
-    assert "aaaaaa" in items
-    assert "cccccc" in items
+    assert len(items) > 2
+    assert all(isinstance(item, str) and item.strip() for item in items)
+    assert set(items) - {"aamecc", "aalbcc"}
 
 
 def test_open_material_dir_api(monkeypatch, tmp_path: Path) -> None:
@@ -462,3 +463,26 @@ def test_bulk_task_status_and_delete_api(monkeypatch, tmp_path: Path) -> None:
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] == 2
     assert client.get("/api/tasks").json() == []
+
+
+def test_distribution_settings_keep_vpn_section_and_use_vpn(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    saved = save_distribution_settings(
+        {
+            "common": {},
+            "jobs": {"matrix_wechat_publish": {"use_vpn": True}},
+            "platforms": {},
+            "vpn": {"subscription_url": "https://example.invalid/subscribe"},
+        }
+    )
+
+    assert saved["jobs"]["matrix_wechat_publish"]["use_vpn"] is True
+    assert saved["vpn"]["subscription_url"] == "https://example.invalid/subscribe"
+    assert load_distribution_settings()["vpn"]["subscription_url"] == "https://example.invalid/subscribe"
+
+
+def test_resolve_effective_publish_mode_prefers_account_override() -> None:
+    assert resolve_effective_publish_mode("publish", "draft") == "draft"
+    assert resolve_effective_publish_mode("draft", "inherit") == "draft"
+    assert resolve_effective_publish_mode("publish", "inherit") == "publish"

@@ -19,6 +19,7 @@ from .public_settings import (
     load_distribution_settings,
     load_platform_publish_settings,
     load_wechat_publish_settings,
+    resolve_effective_publish_mode,
     resolve_material_dir,
 )
 from . import service
@@ -32,6 +33,11 @@ class PublishPlanItem:
     account_id: int
     account_key: str
     display_name: str
+    account_publish_mode: str
+    vpn_node_key: str
+    vpn_country_code: str
+    vpn_country_label: str
+    vpn_proxy_url: str
     profile_dir: Path
     debug_port: int
     fingerprint: dict[str, Any]
@@ -520,6 +526,11 @@ def build_publish_plan(*, limit: int = 0) -> list[PublishPlanItem]:
                     account_id=int(account["id"]),
                     account_key=account_key,
                     display_name=str(account.get("display_name") or account_key),
+                    account_publish_mode=str(account.get("account_publish_mode") or "inherit"),
+                    vpn_node_key=str(account.get("vpn_node_key") or "").strip(),
+                    vpn_country_code=str(account.get("vpn_country_code") or "").strip().upper(),
+                    vpn_country_label=str(account.get("vpn_country_label") or "").strip(),
+                    vpn_proxy_url=str(account.get("vpn_proxy_url") or "").strip(),
                     profile_dir=Path(str(platform.get("profile_dir") or account.get("wechat_profile_dir") or "")),
                     debug_port=int(platform.get("debug_port") or account.get("wechat_debug_port") or 0),
                     fingerprint=dict(platform.get("fingerprint") or account.get("wechat_fingerprint") or {}),
@@ -784,6 +795,11 @@ def _serialize_plan_item(item: PublishPlanItem) -> dict[str, Any]:
         "account_id": item.account_id,
         "account_key": item.account_key,
         "display_name": item.display_name,
+        "account_publish_mode": item.account_publish_mode,
+        "vpn_node_key": item.vpn_node_key,
+        "vpn_country_code": item.vpn_country_code,
+        "vpn_country_label": item.vpn_country_label,
+        "vpn_proxy_url": item.vpn_proxy_url,
         "platform": item.platform,
         "video": str(item.source_video),
         "profile_dir": str(item.profile_dir),
@@ -809,6 +825,7 @@ def run_matrix_publish(
     job_settings = _matrix_wechat_job_settings()
     wechat_settings = load_wechat_publish_settings()
     platform_settings = {token: load_platform_publish_settings(token) for token in sorted({item.platform for item in plan})}
+    use_vpn = bool(job_settings.get("use_vpn"))
     if dry_run:
         return {
             "ok": True,
@@ -849,6 +866,7 @@ def run_matrix_publish(
             prepared = prepare_workspace(item)
             runtime_config = _runtime_publish_config(item.platform, settings, item.workspace)
             token = str(item.platform or "wechat").strip().lower() or "wechat"
+            effective_publish_mode = resolve_effective_publish_mode(str(settings.get("publish_mode") or "publish"), item.account_publish_mode)
             cmd: list[str] = [
                 sys.executable,
                 "-m",
@@ -886,7 +904,7 @@ def run_matrix_publish(
             if token == "wechat":
                 if bool(settings.get("declare_original")):
                     cmd.append("--wechat-declare-original")
-                if str(settings.get("publish_mode") or "publish") == "draft":
+                if effective_publish_mode == "draft":
                     cmd.append("--wechat-save-draft-only")
                 else:
                     cmd.append("--wechat-publish-now")
@@ -894,6 +912,13 @@ def run_matrix_publish(
             log_path = item.workspace / f"matrix_{token}_publish.log"
             with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
                 env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
+                if use_vpn and item.vpn_node_key:
+                    env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
+                    if item.vpn_country_code:
+                        env["CYBERCAR_VPN_COUNTRY"] = item.vpn_country_code
+                    if item.vpn_proxy_url:
+                        env["CYBERCAR_PROXY"] = item.vpn_proxy_url
+                        env.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
                 extra_args = service.browser_fingerprint_launch_args(item.fingerprint)
                 if extra_args:
                     env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
@@ -922,6 +947,12 @@ def run_matrix_publish(
                 "fingerprint": item.fingerprint,
                 "debug_port": debug_port,
                 "workspace": str(item.workspace),
+                "account_publish_mode": item.account_publish_mode,
+                "vpn_node_key": item.vpn_node_key,
+                "vpn_country_code": item.vpn_country_code,
+                "vpn_country_label": item.vpn_country_label,
+                "vpn_proxy_url": item.vpn_proxy_url,
+                "effective_publish_mode": effective_publish_mode,
                 "returncode": completed.returncode,
                 "success": success,
                 "evidence_ok": evidence_ok,

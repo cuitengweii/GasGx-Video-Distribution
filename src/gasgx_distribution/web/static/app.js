@@ -70,7 +70,9 @@ const state = {
   weeklySummary: {},
   statsMode: "dashboard",
   summary: {},
-  distributionSettings: { common: {}, platforms: {} },
+  distributionSettings: { common: {}, platforms: {}, jobs: {}, vpn: {} },
+  vpnNodes: [],
+  vpnNodeCache: { subscription_url: "", refreshed_at: 0, fetched_at: 0, node_count: 0, countries: {}, nodes: [] },
   matrixJobStatus: {},
   aiRobotConfigs: [],
   aiRobotMessages: [],
@@ -96,6 +98,7 @@ const state = {
   databaseDictionaryLocalized: false,
   analytics: {},
   operatorWechats: ["aamecc", "aalbcc"],
+  accountCardExpanded: {},
 };
 
 const TERMINAL_ERROR_GUIDE_ORDER = ["login_browser", "login_probe", "publish_start", "publish_run", "confirm", "unknown"];
@@ -377,6 +380,7 @@ const OPERATION_NOTICE_PATH_HINTS = [
   { test: (path, method) => path === "/api/tasks/bulk-status" && method === "POST", category: "批量发布", actionCode: "update", actionLabel: "批量调整任务状态" },
   { test: (path, method) => path === "/api/tasks/bulk-delete" && method === "POST", category: "批量发布", actionCode: "delete", actionLabel: "批量删除任务" },
   { test: (path, method) => path === "/api/settings/distribution" && method === "PUT", category: "发布配置", actionCode: "save", actionLabel: "保存发布配置" },
+  { test: (path, method) => path === "/api/vpn/nodes/refresh" && method === "POST", category: "发布配置", actionCode: "refresh", actionLabel: "刷新 VPN 节点" },
   { test: (path, method) => path === "/api/settings/material-dir/open" && method === "POST", category: "发布配置", actionCode: "open", actionLabel: "打开素材目录" },
   { test: (path, method) => /^\/api\/ai-robots\/[^/]+\/config$/.test(path) && method === "PUT", category: "运营客服", actionCode: "save", actionLabel: "保存机器人配置" },
   { test: (path, method) => /^\/api\/ai-robots\/[^/]+\/config$/.test(path) && method === "DELETE", category: "运营客服", actionCode: "delete", actionLabel: "删除机器人配置" },
@@ -2142,7 +2146,7 @@ function renderPlatformStatusGroup(platforms, region) {
   return `<div class="account-platform-group">
     <div class="region-title compact">${REGION_LABELS[region]}</div>
     <div class="browser-actions">
-      ${items.map((p) => `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`).join("")}
+      ${items.length ? items.map((p) => `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`).join("") : `<div class="account-platform-empty muted">暂无${REGION_LABELS[region]}</div>`}
     </div>
   </div>`;
 }
@@ -2200,13 +2204,26 @@ function accountSearchText(account) {
     accountOperatorWechat(account),
     accountPhone(account),
     account?.notes,
+    accountPublishMode(account),
+    accountVpnNodeLabel(account),
+    accountVpnCountryLabel(account),
   ].map((value) => String(value || "").toLowerCase()).join(" ");
+}
+
+function accountPlatformCount(account) {
+  return Array.isArray(account?.platforms) ? account.platforms.length : 0;
 }
 
 function filteredAccounts() {
   const keyword = String(document.querySelector("#account-search-input")?.value || "").trim().toLowerCase();
-  if (!keyword) return state.accounts || [];
-  return (state.accounts || []).filter((account) => accountSearchText(account).includes(keyword));
+  const accounts = keyword
+    ? (state.accounts || []).filter((account) => accountSearchText(account).includes(keyword))
+    : [...(state.accounts || [])];
+  return accounts.sort((a, b) => {
+    const platformDelta = accountPlatformCount(b) - accountPlatformCount(a);
+    if (platformDelta) return platformDelta;
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
 }
 
 function accountEditIcon() {
@@ -2240,6 +2257,83 @@ function accountNotesWith(account, updates = {}) {
   return [...fields, ...extras].join("；");
 }
 
+function vpnNodeByKey(nodeKey) {
+  return (state.vpnNodes || []).find((node) => String(node.node_key || "") === String(nodeKey || ""));
+}
+
+function vpnNodeCountryLabel(node) {
+  return String(node?.country_label || "").trim() || "未知";
+}
+
+function vpnNodeDisplayLabel(node) {
+  if (!node) return "未绑定";
+  const country = vpnNodeCountryLabel(node);
+  const title = String(node.display_name || node.name || node.server || node.node_key || "").trim() || "未命名节点";
+  const endpoint = [node.server, node.port].filter(Boolean).join(":");
+  return `${country} · ${title}${endpoint ? ` (${endpoint})` : ""}`;
+}
+
+function accountVpnNodeKey(account) {
+  return String(account?.vpn_node_key || "").trim();
+}
+
+function accountPublishMode(account) {
+  const mode = String(account?.account_publish_mode || "inherit").trim().toLowerCase();
+  return ["inherit", "publish", "draft"].includes(mode) ? mode : "inherit";
+}
+
+function accountVpnNodeLabel(account) {
+  const node = vpnNodeByKey(accountVpnNodeKey(account));
+  return vpnNodeDisplayLabel(node);
+}
+
+function accountVpnCountryLabel(account) {
+  const node = vpnNodeByKey(accountVpnNodeKey(account));
+  if (!node) return "未绑定";
+  return vpnNodeCountryLabel(node);
+}
+
+function accountVpnNodeOptionsMarkup(currentKey = "") {
+  const nodes = [...(state.vpnNodes || [])].sort((a, b) => {
+    const aKey = `${vpnNodeCountryLabel(a)} ${String(a.display_name || a.name || "")}`.toLowerCase();
+    const bKey = `${vpnNodeCountryLabel(b)} ${String(b.display_name || b.name || "")}`.toLowerCase();
+    return aKey.localeCompare(bKey, "zh-Hans-CN");
+  });
+  const options = [`<option value="">未绑定 VPN</option>`];
+  let matchedCurrent = false;
+  nodes.forEach((node) => {
+    const key = String(node.node_key || "");
+    const selected = key === String(currentKey || "");
+    if (selected) matchedCurrent = true;
+    const label = `${vpnNodeCountryLabel(node)} · ${String(node.display_name || node.name || node.server || key || "节点").trim()}`;
+    const endpoint = [node.server, node.port].filter(Boolean).join(":");
+    options.push(`<option value="${escapeHtml(key)}" ${selected ? "selected" : ""}>${escapeHtml(endpoint ? `${label} (${endpoint})` : label)}</option>`);
+  });
+  if (currentKey && !matchedCurrent) {
+    options.push(`<option value="${escapeHtml(currentKey)}" selected>已绑定节点（缓存中未找到）</option>`);
+  }
+  return options.join("");
+}
+
+function accountPublishModeOptionsMarkup(currentMode = "inherit") {
+  const mode = accountPublishMode({ account_publish_mode: currentMode });
+  return `
+    <option value="inherit" ${mode === "inherit" ? "selected" : ""}>继承公共配置</option>
+    <option value="publish" ${mode === "publish" ? "selected" : ""}>直接发表</option>
+    <option value="draft" ${mode === "draft" ? "selected" : ""}>保存草稿</option>
+  `;
+}
+
+function accountCardExpanded(accountId) {
+  return Boolean(state.accountCardExpanded?.[String(accountId)]);
+}
+
+function toggleAccountCardExpanded(accountId) {
+  const key = String(accountId || "");
+  if (!key) return;
+  state.accountCardExpanded = { ...(state.accountCardExpanded || {}), [key]: !accountCardExpanded(key) };
+}
+
 function renderAccounts() {
   const accounts = filteredAccounts();
   const keyword = String(document.querySelector("#account-search-input")?.value || "").trim();
@@ -2249,12 +2343,30 @@ function renderAccounts() {
     const phone = accountPhone(account);
     const displayName = cleanAccountDisplayName(account);
     const title = `#${account.id} ${displayName}`;
-    return `<article class="account-row" data-account-id="${account.id}">
+    const platformsExpanded = accountCardExpanded(account.id);
+    return `<article class="account-row ${platformsExpanded ? "is-expanded" : "is-collapsed"}" data-account-id="${account.id}">
       <div class="row-head">
         <div class="account-title-wrap">
           <div class="account-title-line">
-            <strong class="account-title">${escapeHtml(title)}</strong>
-            <button class="account-edit-btn" type="button" title="修改账号名称" aria-label="修改账号名称" data-no-global-loading="1" data-account-edit="name">${accountEditIcon()}</button>
+            <div class="account-title-main">
+              <strong class="account-title">${escapeHtml(title)}</strong>
+              <button class="account-edit-btn" type="button" title="修改账号名称" aria-label="修改账号名称" data-no-global-loading="1" data-account-edit="name">${accountEditIcon()}</button>
+            </div>
+            <div class="account-preferences-row account-inline-preferences">
+              <div class="account-inline-preference">
+                <span class="account-inline-preference-label">VPN 节点</span>
+                <select data-account-vpn-node="${account.id}">
+                  ${accountVpnNodeOptionsMarkup(accountVpnNodeKey(account))}
+                </select>
+              </div>
+              <span class="account-preference-country" data-account-vpn-country="${account.id}">国家：${escapeHtml(accountVpnCountryLabel(account))}</span>
+              <div class="account-inline-preference">
+                <span class="account-inline-preference-label">发布方式</span>
+                <select data-account-publish-mode="${account.id}">
+                  ${accountPublishModeOptionsMarkup(accountPublishMode(account))}
+                </select>
+              </div>
+            </div>
           </div>
           <div class="account-subtitle">${escapeHtml(accountSubtitle(account))}</div>
           <div class="account-meta-row">
@@ -2262,17 +2374,31 @@ function renderAccounts() {
             <div class="account-phone-line"><span>手机号</span><strong>${escapeHtml(phone || "-")}</strong><button class="account-edit-btn compact" type="button" title="修改账号手机号" aria-label="修改账号手机号" data-no-global-loading="1" data-account-edit="phone">${accountEditIcon()}</button></div>
           </div>
         </div>
-        <div class="account-badges">
-          <button class="account-status-toggle ${accountStatusEnabled(account) ? "enabled" : "paused"}" type="button" data-no-global-loading="1" data-account-status-toggle="${account.id}" aria-pressed="${accountStatusEnabled(account)}" title="${accountStatusEnabled(account) ? "点击暂停账号" : "点击启用账号"}">
-            <span class="account-status-toggle-knob" aria-hidden="true"></span>
-            <span>${escapeHtml(accountStatusLabel(account.status))}</span>
-          </button>
-          <span class="chip success-chip" title="基于真实发布成功记录去重统计">已发布成功 ${account.publish_success_count || 0}</span>
-          <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${escapeHtml(displayName)}">${accountDeleteIcon()}<span>删除账号</span></button>
+        <div class="account-side-stack">
+          <div class="account-badges">
+            <button class="account-expand-toggle" type="button" data-no-global-loading="1" data-account-toggle="${account.id}" aria-expanded="${platformsExpanded}" aria-label="${platformsExpanded ? "折叠平台信息" : "展开平台信息"}">${platformsExpanded ? "折叠" : "展开"}</button>
+            <button class="account-status-toggle ${accountStatusEnabled(account) ? "enabled" : "paused"}" type="button" data-no-global-loading="1" data-account-status-toggle="${account.id}" aria-pressed="${accountStatusEnabled(account)}" title="${accountStatusEnabled(account) ? "点击暂停账号" : "点击启用账号"}">
+              <span class="account-status-toggle-knob" aria-hidden="true"></span>
+              <span>${escapeHtml(accountStatusLabel(account.status))}</span>
+            </button>
+            <span class="chip success-chip" title="基于真实发布成功记录去重统计">已发布成功 ${account.publish_success_count || 0}</span>
+            <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${escapeHtml(displayName)}">${accountDeleteIcon()}<span>删除账号</span></button>
+          </div>
         </div>
       </div>
-      ${renderPlatformStatusGroup(platforms, "cn")}
-      ${renderPlatformStatusGroup(platforms, "global")}
+      <div class="account-platform-section ${platformsExpanded ? "is-expanded" : "is-collapsed"}">
+        <div class="account-platform-head">
+          <div class="account-platform-summary">
+            <strong>平台信息</strong>
+            <span class="muted">国内平台 / 国外平台</span>
+          </div>
+          <button class="account-expand-toggle" type="button" data-no-global-loading="1" data-account-toggle="${account.id}" aria-expanded="${platformsExpanded}" aria-label="${platformsExpanded ? "折叠平台信息" : "展开平台信息"}">${platformsExpanded ? "折叠" : "展开"}</button>
+        </div>
+        <div class="account-platform-body" ${platformsExpanded ? "" : 'hidden aria-hidden="true"'}>
+          ${renderPlatformStatusGroup(platforms, "cn")}
+          ${renderPlatformStatusGroup(platforms, "global")}
+        </div>
+      </div>
     </article>`;
   }).join("") || `<div class="muted">${keyword ? "没有匹配的账号" : "暂无账号"}</div>`;
 }
@@ -2438,6 +2564,50 @@ async function toggleAccountStatus(button) {
     showAccountCreateErrorToast(formatFriendlyMessage(error.message));
   } finally {
     restoreButton();
+  }
+}
+
+async function updateAccountPreference(select) {
+  const row = select?.closest("[data-account-id]");
+  const account = accountById(row?.dataset.accountId);
+  if (!row || !account) return;
+  const isVpn = select.matches("[data-account-vpn-node]");
+  const isPublishMode = select.matches("[data-account-publish-mode]");
+  if (!isVpn && !isPublishMode) return;
+  const payload = {};
+  if (isVpn) payload.vpn_node_key = String(select.value || "");
+  if (isPublishMode) payload.account_publish_mode = String(select.value || "inherit");
+  const previousDisabled = select.disabled;
+  select.disabled = true;
+  try {
+    const before = accountNoticeSnapshot(account);
+    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify(payload), skipOperationNotice: true });
+    replaceAccountInState(updated);
+    const countryNode = vpnNodeByKey(accountVpnNodeKey(updated));
+    const countryNodeLabel = countryNode ? vpnNodeCountryLabel(countryNode) : "未绑定";
+    const countryNodeLabelNode = row.querySelector(`[data-account-vpn-country="${account.id}"]`);
+    if (countryNodeLabelNode) countryNodeLabelNode.textContent = `国家：${countryNodeLabel}`;
+    void emitOperationNotice({
+      category: "账号管理",
+      view: "accounts",
+      view_label: "账号管理",
+      action_code: "update",
+      action_label: isVpn ? "绑定VPN节点" : "修改账号发布方式",
+      status: "success",
+      summary: `已更新账号「${updated.display_name || account.display_name || account.account_key || account.id}」`,
+      params: {
+        修改字段: isVpn ? "VPN 节点" : "账号发布方式",
+        提交参数: payload,
+        变更前: before,
+        变更后: accountNoticeSnapshot(updated),
+      },
+      source: "page",
+    });
+  } catch (error) {
+    showAccountCreateErrorToast(formatFriendlyMessage(error.message));
+    renderAccounts();
+  } finally {
+    select.disabled = previousDisabled;
   }
 }
 
@@ -2686,6 +2856,30 @@ function renderSettingsCardMode() {
   publishWindowContent?.classList.remove("hidden");
 }
 
+function renderVpnNodeSummary() {
+  const statusNode = document.querySelector("#vpn-cache-status");
+  const summaryNode = document.querySelector("#vpn-cache-summary");
+  const countryNode = document.querySelector("#vpn-country-summary");
+  const cache = state.vpnNodeCache || {};
+  const countries = cache.countries || {};
+  const nodeCount = Number(cache.node_count || (state.vpnNodes || []).length || 0);
+  if (statusNode) {
+    const refreshedAt = Number(cache.refreshed_at || 0);
+    statusNode.textContent = refreshedAt ? `已刷新 · ${formatTime(refreshedAt)}` : "未刷新";
+  }
+  if (summaryNode) {
+    const source = String(cache.subscription_url || "").trim();
+    summaryNode.textContent = source ? `当前订阅：${source}` : "当前未配置订阅地址，节点列表来自本地缓存。";
+  }
+  if (countryNode) {
+    const entries = Object.entries(countries);
+    countryNode.innerHTML = `
+      <span class="chip success-chip">节点总数 ${nodeCount}</span>
+      ${entries.length ? entries.map(([country, count]) => `<span class="chip">${escapeHtml(country)} ${Number(count || 0)}</span>`).join("") : `<span class="chip">暂无节点</span>`}
+    `;
+  }
+}
+
 function renderTerminalInitCardMode() {
   const windowContent = document.querySelector("#terminal-init-window-content");
   const platformContent = document.querySelector("#terminal-init-platform-content");
@@ -2921,12 +3115,40 @@ function terminalWindowIsCompleted(window) {
   return Boolean(window?.completed) || (accounts.length > 0 && currentIndex >= accounts.length) || allSucceeded;
 }
 
+function terminalWechatSelectableAccounts() {
+  const windows = Array.isArray(state.terminalExecution?.windows) ? state.terminalExecution.windows : [];
+  const accountsById = new Map((state.accounts || []).map((account) => [String(account.id || ""), account]));
+  const seenIds = new Set();
+  const selectable = [];
+  for (const window of windows) {
+    for (const account of Array.isArray(window?.accounts) ? window.accounts : []) {
+      const accountId = terminalResolveAccountId(account);
+      if (!accountId || seenIds.has(String(accountId))) continue;
+      seenIds.add(String(accountId));
+      const liveAccount = accountsById.get(String(accountId)) || {};
+      const mergedPlatforms = Array.isArray(liveAccount.platforms) && liveAccount.platforms.length
+        ? liveAccount.platforms
+        : (Array.isArray(account.platforms) ? account.platforms : []);
+      selectable.push({
+        ...account,
+        ...liveAccount,
+        id: Number(liveAccount.id || account.id || accountId),
+        platforms: mergedPlatforms,
+      });
+    }
+  }
+  if (selectable.length) return selectable;
+  return (state.accounts || [])
+    .filter((account) => Array.isArray(account.platforms) && account.platforms.some((item) => String(item.platform || "") === "wechat"))
+    .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+}
+
 function terminalWechatAccountChoices() {
-  return statsWechatActiveAccounts().map((account) => {
+  return terminalWechatSelectableAccounts().map((account) => {
     const platforms = Array.isArray(account.platforms) ? account.platforms : [];
     const wechat = platforms.find((item) => String(item.platform || "") === "wechat") || {};
     const accountId = terminalResolveAccountId(account);
-    const accountName = account.display_name || account.account_key || `账号 ${account.id}`;
+    const accountName = cleanAccountDisplayName(account);
     const profileDir = String(wechat.profile_dir || "").trim();
     const debugPort = Number(wechat.debug_port || 0);
     return {
@@ -5771,6 +5993,9 @@ function accountNoticeSnapshot(account = {}) {
     状态: account.status || "",
     运营微信: accountOperatorWechat(account),
     手机号: accountPhone(account),
+    VPN节点: accountVpnNodeLabel(account),
+    VPN国家: accountVpnCountryLabel(account),
+    账号发布方式: accountPublishMode(account),
     备注: account.notes || "",
     发布成功数: Number(account.publish_success_count || 0),
     平台明细: platforms.map((item) => ({
@@ -5787,6 +6012,8 @@ function accountNoticeChangeSnapshot(account, patch = {}) {
   if (patch.display_name !== undefined) next.display_name = patch.display_name;
   if (patch.status !== undefined) next.status = patch.status;
   if (patch.notes !== undefined) next.notes = patch.notes;
+  if (patch.vpn_node_key !== undefined) next.vpn_node_key = patch.vpn_node_key;
+  if (patch.account_publish_mode !== undefined) next.account_publish_mode = patch.account_publish_mode;
   return {
     变更前: accountNoticeSnapshot(account),
     变更后: accountNoticeSnapshot(next),
@@ -5840,6 +6067,7 @@ function matrixWechatPublishNoticeSnapshot() {
     任务配置: {
       批次大小: Number(job.batch_size || 0),
       启用: Boolean(job.enabled),
+      启用VPN: Boolean(job.use_vpn),
       调度模式: job.schedule_mode || "",
       每日时间: job.daily_time || "",
       运行间隔分钟: Number(job.run_interval_minutes || 0),
@@ -7196,6 +7424,58 @@ async function loadAccounts() {
   state.accounts = await api("/api/accounts");
 }
 
+async function loadVpnNodes() {
+  const payload = await api("/api/vpn/nodes");
+  state.vpnNodeCache = {
+    subscription_url: payload?.subscription_url || "",
+    refreshed_at: Number(payload?.refreshed_at || 0),
+    fetched_at: Number(payload?.fetched_at || 0),
+    node_count: Number(payload?.node_count || 0),
+    countries: payload?.countries || {},
+    nodes: Array.isArray(payload?.nodes) ? payload.nodes : [],
+  };
+  state.vpnNodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+}
+
+async function refreshVpnNodes(button = null) {
+  const restoreButton = setButtonLoading(button, "刷新中");
+  try {
+    const form = document.querySelector("#distribution-settings-form");
+    const subscriptionInput = form?.elements["vpn.subscription_url"];
+    const subscriptionUrl = String(subscriptionInput?.value || state.distributionSettings?.vpn?.subscription_url || "").trim();
+    const requestOptions = { method: "POST" };
+    if (subscriptionInput) {
+      requestOptions.body = JSON.stringify({ subscription_url: subscriptionUrl });
+    }
+    const payload = await api("/api/vpn/nodes/refresh", requestOptions);
+    state.vpnNodeCache = {
+      subscription_url: payload?.subscription_url || "",
+      refreshed_at: Number(payload?.refreshed_at || 0),
+      fetched_at: Number(payload?.fetched_at || 0),
+      node_count: Number(payload?.node_count || 0),
+      countries: payload?.countries || {},
+      nodes: Array.isArray(payload?.nodes) ? payload.nodes : [],
+    };
+    state.vpnNodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+    state.distributionSettings = {
+      ...(state.distributionSettings || {}),
+      vpn: {
+        ...((state.distributionSettings || {}).vpn || {}),
+        subscription_url: payload?.subscription_url || subscriptionUrl,
+      },
+    };
+    if (subscriptionInput) {
+      subscriptionInput.value = payload?.subscription_url || subscriptionUrl;
+    }
+    renderVpnNodeSummary();
+    if (currentView === "accounts") renderAccounts();
+  } catch (error) {
+    window.alert(`刷新 VPN 节点失败：${formatFriendlyMessage(error?.message || "未知异常")}`);
+  } finally {
+    restoreButton();
+  }
+}
+
 async function loadOperatorWechats() {
   state.operatorWechats = await api("/api/operator-wechats");
 }
@@ -7237,12 +7517,14 @@ async function loadViewData(view, { force = false } = {}) {
     } else if (view === "accounts") {
       await loadPlatforms();
       await loadOperatorWechats();
+      await loadVpnNodes();
       await loadAccounts();
       renderOperatorWechatPicker();
       updateAccountPhoneHint();
       renderAccounts();
     } else if (view === "settings") {
       await loadPlatforms();
+      await loadVpnNodes();
       state.distributionSettings = await api("/api/settings/distribution");
       state.matrixJobStatus = await api("/api/jobs/matrix-wechat/status");
       try {
@@ -7389,8 +7671,10 @@ function renderDistributionSettings() {
   form.elements["common.wechat_short_title"].value = common.wechat_short_title || "GasGx燃气发电挖矿";
   form.elements["common.wechat_location"].value = common.wechat_location || "";
   form.elements["common.wechat_caption"].value = common.wechat_caption || "";
+  form.elements["vpn.subscription_url"].value = state.distributionSettings?.vpn?.subscription_url || "";
   form.elements["jobs.matrix_wechat_publish.batch_size"].value = String(matrixJob.batch_size || 5);
   form.elements["jobs.matrix_wechat_publish.enabled"].value = String(matrixJob.enabled === true);
+  form.elements["jobs.matrix_wechat_publish.use_vpn"].value = String(matrixJob.use_vpn === true);
   form.elements["jobs.matrix_wechat_publish.schedule_mode"].value = matrixJob.schedule_mode || "interval";
   form.elements["jobs.matrix_wechat_publish.daily_time"].value = matrixJob.daily_time || "09:00";
   form.elements["jobs.matrix_wechat_publish.run_interval_minutes"].value = String(matrixJob.run_interval_minutes || 1440);
@@ -7400,6 +7684,7 @@ function renderDistributionSettings() {
   form.elements["jobs.matrix_wechat_publish.shuffle_within_batch"].value = String(matrixJob.shuffle_within_batch !== false);
   form.elements["jobs.matrix_wechat_publish.retry_failed_last"].value = String(matrixJob.retry_failed_last !== false);
   syncWechatInheritModeInputs(form);
+  renderVpnNodeSummary();
 }
 
 function renderPlatformSettingsCard(platform) {
@@ -7538,10 +7823,14 @@ function collectDistributionSettings(form) {
     wechat_location: data.get("common.wechat_location") || "",
     wechat_caption: data.get("common.wechat_caption") || "",
   };
+  const vpn = {
+    subscription_url: data.get("vpn.subscription_url") || "",
+  };
   const jobs = {
     matrix_wechat_publish: {
       batch_size: Number(data.get("jobs.matrix_wechat_publish.batch_size") || 5),
       enabled: data.get("jobs.matrix_wechat_publish.enabled") === "true",
+      use_vpn: data.get("jobs.matrix_wechat_publish.use_vpn") === "true",
       schedule_mode: data.get("jobs.matrix_wechat_publish.schedule_mode") || "interval",
       daily_time: data.get("jobs.matrix_wechat_publish.daily_time") || "09:00",
       run_interval_minutes: Number(data.get("jobs.matrix_wechat_publish.run_interval_minutes") || 1440),
@@ -7556,7 +7845,7 @@ function collectDistributionSettings(form) {
   const platforms = Object.fromEntries(
     Object.entries(existingPlatforms).map(([platform, value]) => [platform, { ...(value || {}) }])
   );
-  return { common, jobs, platforms };
+  return { common, jobs, platforms, vpn };
 }
 
 function makeAccountKey(displayName, suffix) {
@@ -7812,6 +8101,20 @@ document.querySelector("#account-search-input")?.addEventListener("input", rende
 document.querySelector("#accounts-repair-config")?.addEventListener("click", (event) => {
   repairAccountConfigs(event.currentTarget);
 });
+document.querySelector("#accounts-list")?.addEventListener("change", async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  if (!target.matches("[data-account-vpn-node], [data-account-publish-mode]")) return;
+  await updateAccountPreference(target);
+});
+document.querySelector("#accounts-list")?.addEventListener("click", (event) => {
+  const toggle = event.target.closest?.("[data-account-toggle]");
+  if (!toggle) return;
+  const row = toggle.closest("[data-account-id]");
+  if (!row) return;
+  toggleAccountCardExpanded(row.dataset.accountId);
+  renderAccounts();
+});
 document.addEventListener("click", (event) => {
   const picker = document.querySelector("#operator-wechat-select");
   if (!picker || picker.contains(event.target)) return;
@@ -7960,6 +8263,10 @@ distributionSettingsForm?.querySelectorAll('button[type="submit"]').forEach((but
     event.preventDefault();
     await saveDistributionSettingsForm(distributionSettingsForm, button);
   });
+});
+
+document.querySelector("#vpn-refresh-nodes")?.addEventListener("click", async (event) => {
+  await refreshVpnNodes(event.currentTarget);
 });
 
 document.querySelector("#ai-platform-select").addEventListener("change", () => {

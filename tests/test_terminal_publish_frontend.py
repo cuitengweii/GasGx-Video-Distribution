@@ -54,3 +54,19 @@ def test_terminal_wechat_top_account_module_is_rendered() -> None:
     assert ".terminal-wechat-auto-engagement-limit-field" in app_css
     assert ".terminal-wechat-auto-stats-hint" in app_css
     assert "width: 100%;" in app_css
+
+
+def test_terminal_wechat_selected_account_list_uses_all_wechat_accounts() -> None:
+    app_js = (ROOT / "src" / "gasgx_distribution" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "function terminalWechatSelectableAccounts()" in app_js
+    assert "const windows = Array.isArray(state.terminalExecution?.windows) ? state.terminalExecution.windows : [];" in app_js
+    assert "const accountsById = new Map((state.accounts || []).map((account) => [String(account.id || \"\"), account]));" in app_js
+    assert "const seenIds = new Set();" in app_js
+    assert "for (const window of windows)" in app_js
+    assert "const liveAccount = accountsById.get(String(accountId)) || {};" in app_js
+    assert "if (selectable.length) return selectable;" in app_js
+    assert "return terminalWechatSelectableAccounts().map((account) => {" in app_js
+    assert "const accountName = cleanAccountDisplayName(account);" in app_js
+    assert "const statusLabel = accountStatusLabel(account.status);" not in app_js
+    assert "label: accountName" in app_js

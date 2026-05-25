@@ -29,12 +29,16 @@ create table if not exists browser_profiles (
     profile_dir text not null,
     debug_port integer not null unique,
     fingerprint_json jsonb not null default '{}'::jsonb,
+    vpn_node_key text not null default '',
+    account_publish_mode text not null default 'inherit',
     created_at bigint not null,
     updated_at bigint not null
 );
 
 alter table browser_profiles add column if not exists account_id bigint;
 alter table browser_profiles add column if not exists fingerprint_json jsonb not null default '{}'::jsonb;
+alter table browser_profiles add column if not exists vpn_node_key text not null default '';
+alter table browser_profiles add column if not exists account_publish_mode text not null default 'inherit';
 
 do $$
 begin

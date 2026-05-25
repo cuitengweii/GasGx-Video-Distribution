@@ -302,6 +302,29 @@ def test_plan_variants_builds_independent_split_screen_panels() -> None:
     assert [segment.clip.clip_id for segment in variant.split_screen_panels[0]] == [segment.clip.clip_id for segment in variant.segments]
 
 
+def test_split_screen_panels_prefer_distinct_clips_when_available() -> None:
+    clips = [_clip("category_A", "a1"), _clip("category_A", "a2"), _clip("category_A", "a3"), _clip("category_A", "a4")]
+    settings = _settings(
+        composition_sequence=[{"category_id": "category_A", "duration": 0.5}],
+        dedupe_policy={"single_dimension_retry": False, "borderline_total": 0.99, "reject_total": 1.0},
+    )
+
+    variant = plan_variants(
+        clips,
+        settings,
+        HudPayload(["HUD"], False),
+        [0, 0.5, 1.0, 1.5],
+        output_count=1,
+        split_screen_enabled=True,
+        split_screen_mode="fixed",
+        split_screen_layout="grid4",
+    )[0]
+
+    clip_ids = [panel[0].clip.clip_id for panel in variant.split_screen_panels]
+    assert len(clip_ids) == 4
+    assert len(set(clip_ids)) == 4
+
+
 def test_plan_variants_preflight_rotates_structure_variant() -> None:
     clips = [_clip("category_A", "a1"), _clip("category_B", "b1"), _clip("category_C", "c1")]
     settings = _settings(

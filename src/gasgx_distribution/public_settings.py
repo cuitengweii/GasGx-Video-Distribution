@@ -37,6 +37,11 @@ DEFAULT_MATRIX_WECHAT_JOB_SETTINGS: dict[str, Any] = {
     "rotate_start_group": True,
     "shuffle_within_batch": True,
     "retry_failed_last": True,
+    "use_vpn": False,
+}
+
+DEFAULT_VPN_SETTINGS: dict[str, Any] = {
+    "subscription_url": "",
 }
 
 DEFAULT_MATRIX_WECHAT_STATS_CAPTURE_SETTINGS: dict[str, Any] = {
@@ -208,6 +213,14 @@ def _normalize_matrix_wechat_job(payload: dict[str, Any]) -> dict[str, Any]:
     merged["rotate_start_group"] = _normalize_bool(merged.get("rotate_start_group"))
     merged["shuffle_within_batch"] = _normalize_bool(merged.get("shuffle_within_batch"))
     merged["retry_failed_last"] = _normalize_bool(merged.get("retry_failed_last"))
+    merged["use_vpn"] = _normalize_bool(merged.get("use_vpn"))
+    return merged
+
+
+def _normalize_vpn(payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(DEFAULT_VPN_SETTINGS)
+    merged.update({key: value for key, value in payload.items() if key in merged})
+    merged["subscription_url"] = str(merged.get("subscription_url") or "").strip()
     return merged
 
 
@@ -348,6 +361,7 @@ def _normalize_distribution_settings(payload: dict[str, Any]) -> dict[str, Any]:
         payload = _legacy_wechat_payload()
     common = _normalize_common(payload.get("common") if isinstance(payload.get("common"), dict) else {})
     jobs = _normalize_jobs(payload.get("jobs") if isinstance(payload.get("jobs"), dict) else {})
+    vpn = _normalize_vpn(payload.get("vpn") if isinstance(payload.get("vpn"), dict) else {})
     raw_platforms = payload.get("platforms") if isinstance(payload.get("platforms"), dict) else {}
     platforms = {
         platform: _normalize_platform(
@@ -356,7 +370,7 @@ def _normalize_distribution_settings(payload: dict[str, Any]) -> dict[str, Any]:
         )
         for platform in SUPPORTED_PLATFORM_KEYS
     }
-    return {"common": common, "jobs": jobs, "platforms": platforms}
+    return {"common": common, "jobs": jobs, "platforms": platforms, "vpn": vpn}
 
 
 def load_distribution_settings() -> dict[str, Any]:
@@ -402,6 +416,16 @@ def load_platform_publish_settings(platform: str) -> dict[str, Any]:
         "topics": common["topics"],
         "upload_timeout": upload_timeout,
     }
+
+
+def resolve_effective_publish_mode(base_mode: str, override_mode: Any = "inherit") -> str:
+    base = str(base_mode or "publish").strip().lower()
+    if base not in {"publish", "draft"}:
+        base = "publish"
+    override = str(override_mode or "inherit").strip().lower()
+    if override in {"publish", "draft"}:
+        return override
+    return base
 
 
 def load_wechat_publish_settings() -> dict[str, Any]:

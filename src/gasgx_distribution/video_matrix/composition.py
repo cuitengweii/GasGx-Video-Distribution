@@ -295,11 +295,15 @@ def _pick_segments(
     recent_clip_ids: set[str],
     max_total_duration: float,
     recent_segment_keys: set[str] | None = None,
+    *,
+    strict_unique_clips: bool = False,
+    panel_role: str = "",
 ) -> list[SegmentPlan]:
     beat_pairs = list(zip(beat_grid, beat_grid[1:]))
     if not beat_pairs:
         raise ValueError("Beat grid is empty")
-    hook_recent_keys = set(recent_segment_keys or set())
+    active_clip_ids = set(recent_clip_ids)
+    active_segment_keys = set(recent_segment_keys or set())
     selected: list[SegmentPlan] = []
     beat_index = 0
     for index, (category, target_window) in enumerate(sequence):
@@ -313,16 +317,26 @@ def _pick_segments(
                 beat_pairs=beat_pairs,
                 beat_index=beat_index,
                 rng=rng,
-                recent_clip_ids=recent_clip_ids,
-                recent_segment_keys=hook_recent_keys,
+                recent_clip_ids=active_clip_ids,
+                recent_segment_keys=active_segment_keys,
                 target_window=target_window,
                 remaining_duration=remaining_duration,
             )
             if hook_segment is not None:
                 beat_index = min(len(beat_pairs) - 1, beat_index + max(1, int(hook_segment.duration / 0.45)))
                 selected.append(hook_segment)
+                active_clip_ids.add(hook_segment.clip.clip_id)
+                active_segment_keys.add(_segment_key(hook_segment))
                 continue
-        clip = _pick_clip(buckets[category], rng, recent_clip_ids)
+        clip = _pick_clip(
+            buckets[category],
+            rng,
+            active_clip_ids,
+            allow_reuse_when_exhausted=not strict_unique_clips,
+            role=panel_role,
+        )
+        if clip is None:
+            clip = _pick_clip(buckets[category], rng, active_clip_ids, allow_reuse_when_exhausted=True, role=panel_role)
         target_duration = min(target_window, remaining_duration)
         usable_start, usable_end = _usable_window(clip)
         available_duration = max(0.0, usable_end - usable_start)
@@ -339,6 +353,8 @@ def _pick_segments(
                 index=index,
             )
         )
+        active_clip_ids.add(clip.clip_id)
+        active_segment_keys.add(_segment_key(selected[-1]))
     return selected
 
 
@@ -679,9 +695,69 @@ def _mutate_segment_order(candidate: VideoVariant, rng: random.Random) -> None:
         segment.index = index
 
 
-def _pick_clip(clips: list[ClipMetadata], rng: random.Random, recent_clip_ids: set[str]) -> ClipMetadata:
+def _pick_clip(
+    clips: list[ClipMetadata],
+    rng: random.Random,
+    recent_clip_ids: set[str],
+    *,
+    allow_reuse_when_exhausted: bool = True,
+    role: str = "",
+) -> ClipMetadata | None:
     fresh = [clip for clip in clips if clip.clip_id not in recent_clip_ids]
-    return rng.choice(fresh or clips)
+    pool = fresh or (clips if allow_reuse_when_exhausted else [])
+    if not pool:
+        return None
+    if not role:
+        return rng.choice(pool)
+    scored = [( _clip_role_score(clip, role), clip) for clip in pool]
+    best_score = max(score for score, _clip in scored)
+    if best_score <= 0:
+        return rng.choice(pool)
+    best_pool = [clip for score, clip in scored if score == best_score]
+    return rng.choice(best_pool)
+
+
+def _clip_role_score(clip: ClipMetadata, role: str) -> int:
+    role = str(role or "").strip().lower()
+    if not role:
+        return 0
+    text = " ".join(
+        [
+            clip.scene_tag,
+            " ".join(clip.subject_tag),
+            " ".join(clip.action_tag),
+            " ".join(clip.account_fit_tags),
+            " ".join(clip.tags),
+            clip.shot_size,
+            clip.camera_angle,
+            clip.camera_move,
+        ]
+    ).lower()
+    shot = clip.shot_size.strip().lower()
+    score = 0
+    if role == "overview":
+        if any(token in shot for token in ("wide", "long", "master", "establish")):
+            score += 4
+        if any(token in text for token in ("设备", "equipment", "plant", "现场", "site", "field", "工厂", "factory", "装置")):
+            score += 2
+    elif role == "detail":
+        if any(token in shot for token in ("close", "medium", "detail", "tight")):
+            score += 4
+        if any(token in text for token in ("engine", "motor", "cabinet", "control", "panel", "valve", "pipe", "管", "柜", "阀", "细节")):
+            score += 2
+    elif role == "environment":
+        if any(token in shot for token in ("wide", "long", "master", "establish")):
+            score += 4
+        if any(token in text for token in ("environment", "site", "field", "scene", "flare", "gas", "torch", "现场", "环境", "火炬", "气")):
+            score += 2
+    elif role == "instrument":
+        if any(token in text for token in ("screen", "monitor", "display", "gauge", "meter", "instrument", "control", "hmi", "dashboard", "仪表", "控制", "屏", "表", "显示")):
+            score += 5
+        if any(token in shot for token in ("close", "medium", "detail", "tight")):
+            score += 2
+        if any(token in shot for token in ("wide", "long", "master")):
+            score -= 2
+    return score
 
 
 def _usable_window(clip: ClipMetadata) -> tuple[float, float]:
@@ -871,6 +947,40 @@ def _panel_seed(seed: int, sequence_number: int, attempt_number: int, panel_inde
     return f"{seed}:{sequence_number}:{attempt_number}:{panel_index}:{layout}"
 
 
+def _rotate_sequence(sequence: list[tuple[str, float]], shift: int) -> list[tuple[str, float]]:
+    if not sequence:
+        return sequence
+    shift = shift % len(sequence)
+    if shift <= 0:
+        return list(sequence)
+    return list(sequence[shift:]) + list(sequence[:shift])
+
+
+def _split_screen_panel_role(layout: str, panel_index: int) -> str:
+    if layout == "grid4":
+        roles = {1: "detail", 2: "environment", 3: "instrument"}
+        return roles.get(panel_index, "overview")
+    if layout in {"leftRight", "topBottom"}:
+        return "detail" if panel_index else "overview"
+    if layout == "heroDetailText":
+        return "detail" if panel_index else "overview"
+    return ""
+
+
+def _split_screen_sequence_for_panel(
+    sequence: list[tuple[str, float]],
+    panel_index: int,
+    split_screen_layout: str,
+) -> list[tuple[str, float]]:
+    if not sequence:
+        return sequence
+    if split_screen_layout == "grid4":
+        return _rotate_sequence(sequence, panel_index)
+    if split_screen_layout in {"leftRight", "topBottom", "heroDetailText"}:
+        return _rotate_sequence(sequence, min(panel_index, len(sequence) - 1))
+    return list(sequence)
+
+
 def _plan_split_screen_panels(
     *,
     main_segments: list[SegmentPlan],
@@ -895,14 +1005,17 @@ def _plan_split_screen_panels(
     used_segment_keys.update(_segment_key(segment) for segment in main_segments)
     for panel_index in range(1, panel_count):
         panel_rng = random.Random(_panel_seed(seed, sequence_number, attempt_number, panel_index, split_screen_layout))
+        panel_sequence = _split_screen_sequence_for_panel(sequence, panel_index, split_screen_layout)
         panel_segments = _pick_segments(
             buckets,
             beat_grid,
             panel_rng,
-            sequence,
+            panel_sequence,
             used_clip_ids,
             target_duration,
             recent_segment_keys=used_segment_keys,
+            strict_unique_clips=True,
+            panel_role=_split_screen_panel_role(split_screen_layout, panel_index),
         )
         if not panel_segments:
             panel_segments = list(main_segments)

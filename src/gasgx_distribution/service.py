@@ -34,9 +34,10 @@ from cybercar.settings import load_app_config, save_app_config
 from .db import connect, database_path, dict_from_row, init_db, now_ts, use_database
 from .paths import get_paths
 from .platforms import DEBUG_PORT_END, DEBUG_PORT_START, SUPPORTED_PLATFORMS, get_platform, normalize_platform, stable_debug_port
-from .public_settings import load_distribution_settings, load_platform_publish_settings, resolve_material_dir
+from .public_settings import load_distribution_settings, load_platform_publish_settings, resolve_effective_publish_mode, resolve_material_dir
 from .public_settings import save_distribution_settings as save_local_distribution_settings
 from .supabase_backend import SupabaseError, SupabaseRestClient
+from .vpn_nodes import load_vpn_node_cache, refresh_vpn_node_cache, resolve_vpn_node, vpn_node_options, vpn_nodes_summary
 from .video_matrix.config_store import active_config_path, default_config_path, runtime_config_path
 from .video_matrix.cover_templates import load_cover_templates
 from .video_matrix.output_root import resolve_video_matrix_output_root
@@ -407,11 +408,50 @@ def _normalize_account_niche(account: dict[str, Any]) -> str:
     return raw
 
 
+def _normalize_account_publish_mode(value: Any) -> str:
+    mode = str(value or "inherit").strip().lower()
+    return mode if mode in {"inherit", "publish", "draft"} else "inherit"
+
+
 def _normalize_account_runtime(account: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(account)
     normalized["display_name"] = _normalize_account_display_name(normalized)
     normalized["niche"] = _normalize_account_niche(normalized)
     return normalized
+
+
+def _normalize_account_profile_runtime(profile: dict[str, Any] | None) -> dict[str, Any]:
+    data = dict(profile or {})
+    node_key = str(data.get("vpn_node_key") or "").strip()
+    publish_mode = _normalize_account_publish_mode(data.get("account_publish_mode"))
+    node = resolve_vpn_node(node_key) if node_key else None
+    node = dict(node or {})
+    data.update(
+        {
+            "vpn_node_key": node_key,
+            "account_publish_mode": publish_mode,
+            "vpn_node": node,
+            "vpn_country_code": str(node.get("country_code") or "").strip().upper(),
+            "vpn_country_label": str(node.get("country_label") or "").strip() or ("未知" if node_key else ""),
+            "vpn_node_label": str(node.get("display_name") or node.get("name") or node.get("server") or "").strip(),
+            "vpn_proxy_url": str(node.get("proxy_url") or "").strip(),
+        }
+    )
+    return data
+
+
+def resolve_account_publish_mode(account: dict[str, Any], base_mode: str) -> str:
+    return resolve_effective_publish_mode(base_mode, account.get("account_publish_mode"))
+
+
+def resolve_account_vpn_proxy(account: dict[str, Any]) -> str:
+    node_key = str(account.get("vpn_node_key") or "").strip()
+    if not node_key:
+        return ""
+    node = resolve_vpn_node(node_key)
+    if not node:
+        return ""
+    return str(node.get("proxy_url") or "").strip()
 
 
 def _stable_int(seed: str, modulo: int) -> int:
@@ -482,9 +522,47 @@ def _chrome_fingerprint_env(fingerprint: dict[str, Any] | str | None) -> Iterato
             os.environ["CYBERCAR_CHROME_EXTRA_ARGS"] = previous
 
 
+@contextmanager
+def _account_network_env(account: dict[str, Any] | None) -> Iterator[None]:
+    previous_proxy = os.environ.get("CYBERCAR_PROXY")
+    previous_use_system_proxy = os.environ.get("CYBERCAR_USE_SYSTEM_PROXY")
+    previous_vpn_node_key = os.environ.get("CYBERCAR_VPN_NODE_KEY")
+    previous_vpn_country = os.environ.get("CYBERCAR_VPN_COUNTRY")
+    proxy = resolve_account_vpn_proxy(account or {})
+    node_key = str((account or {}).get("vpn_node_key") or "").strip()
+    country = str((account or {}).get("vpn_country_code") or "").strip().upper()
+    try:
+        if node_key:
+            os.environ["CYBERCAR_VPN_NODE_KEY"] = node_key
+            if country:
+                os.environ["CYBERCAR_VPN_COUNTRY"] = country
+        if proxy:
+            os.environ["CYBERCAR_PROXY"] = proxy
+            os.environ.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
+        yield
+    finally:
+        if previous_proxy is None:
+            os.environ.pop("CYBERCAR_PROXY", None)
+        else:
+            os.environ["CYBERCAR_PROXY"] = previous_proxy
+        if previous_use_system_proxy is None:
+            os.environ.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
+        else:
+            os.environ["CYBERCAR_USE_SYSTEM_PROXY"] = previous_use_system_proxy
+        if previous_vpn_node_key is None:
+            os.environ.pop("CYBERCAR_VPN_NODE_KEY", None)
+        else:
+            os.environ["CYBERCAR_VPN_NODE_KEY"] = previous_vpn_node_key
+        if previous_vpn_country is None:
+            os.environ.pop("CYBERCAR_VPN_COUNTRY", None)
+        else:
+            os.environ["CYBERCAR_VPN_COUNTRY"] = previous_vpn_country
+
+
 def ensure_database() -> None:
     init_db()
     ensure_operator_auth_seed()
+    load_vpn_node_cache()
 
 
 def use_brand_database(path: Path):
@@ -1521,6 +1599,33 @@ def save_distribution_settings_db(payload: dict[str, Any]) -> dict[str, Any]:
     settings = save_local_distribution_settings(payload)
     _save_app_setting("distribution_settings", settings)
     return settings
+
+
+def load_vpn_nodes() -> dict[str, Any]:
+    cache = load_vpn_node_cache()
+    summary = vpn_nodes_summary(cache)
+    summary["subscription_url"] = str(load_distribution_settings_db().get("vpn", {}).get("subscription_url") or summary.get("subscription_url") or "")
+    return summary
+
+
+def refresh_vpn_nodes(subscription_url: str | None = None) -> dict[str, Any]:
+    settings = load_distribution_settings_db()
+    if subscription_url is not None:
+        resolved_url = str(subscription_url or "").strip()
+        if not resolved_url:
+            raise ValueError("请先填写订阅地址")
+    else:
+        resolved_url = str(settings.get("vpn", {}).get("subscription_url") or "").strip()
+    if not resolved_url:
+        raise ValueError("请先填写订阅地址")
+    cache = refresh_vpn_node_cache(resolved_url)
+    if subscription_url is not None:
+        next_settings = copy.deepcopy(settings)
+        vpn_settings = dict(next_settings.get("vpn") or {})
+        vpn_settings["subscription_url"] = resolved_url
+        next_settings["vpn"] = vpn_settings
+        save_distribution_settings_db(next_settings)
+    return vpn_nodes_summary(cache)
 
 
 def load_interaction_management_config() -> dict[str, Any]:
@@ -7719,6 +7824,7 @@ def list_accounts() -> list[dict[str, Any]]:
                 profiles_by_platform[platform_id] = profile
         for account in accounts:
             account_id = int(account["id"])
+            account.update(_normalize_account_profile_runtime(profiles_by_account.get(account_id)))
             platforms = [dict(item) for item in platforms_by_account.get(account_id, [])]
             profile = profiles_by_account.get(account_id)
             for platform in platforms:
@@ -7736,8 +7842,14 @@ def list_accounts() -> list[dict[str, Any]]:
     publish_success_counts = _matrix_publish_success_counts()
     with connect() as conn:
         accounts = [dict_from_row(row) for row in conn.execute("SELECT * FROM matrix_accounts ORDER BY id DESC")]
+        profiles_by_account = {
+            int(dict_from_row(row)["account_id"]): dict_from_row(row)
+            for row in conn.execute("SELECT * FROM browser_profiles")
+            if int(row["account_id"] or 0) > 0
+        }
         for account in accounts:
             account.update(_normalize_account_runtime(account))
+            account.update(_normalize_account_profile_runtime(profiles_by_account.get(int(account["id"]))))
             platforms = conn.execute(
                 """
                 SELECT ap.*, bp.profile_dir, bp.debug_port, bp.fingerprint_json
@@ -7759,6 +7871,9 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         account = client.select_one("matrix_accounts", filters={"id": account_id})
         if account is None:
             return None
+        account.update(_normalize_account_profile_runtime(
+            _profile_for_account_from_rows(int(account_id), client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc"), client.select("browser_profiles"))
+        ))
         platforms = client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc")
         profile = _profile_for_account_from_rows(int(account_id), platforms, client.select("browser_profiles"))
         for platform in platforms:
@@ -7778,6 +7893,8 @@ def get_account(account_id: int) -> dict[str, Any] | None:
             return None
         account = dict_from_row(row)
         account.update(_normalize_account_runtime(account))
+        profile_row = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
+        account.update(_normalize_account_profile_runtime(dict_from_row(profile_row) if profile_row else None))
         account["publish_success_count"] = _matrix_publish_success_counts().get(int(account_id), 0)
         account["platforms"] = [
             _decode_platform_profile(dict_from_row(item))
@@ -7861,6 +7978,8 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             "profile_dir": str(profile_dir),
             "debug_port": _profile_debug_port_supabase(account_key),
             "fingerprint_json": build_browser_fingerprint(account_key, "account"),
+            "vpn_node_key": str(payload.get("vpn_node_key") or "").strip(),
+            "account_publish_mode": _normalize_account_publish_mode(payload.get("account_publish_mode")),
             "created_at": ts,
             "updated_at": ts,
         }
@@ -7876,6 +7995,8 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
                     "profile_dir": profile_payload["profile_dir"],
                     "debug_port": profile_payload["debug_port"],
                     "fingerprint_json": profile_payload["fingerprint_json"],
+                    "vpn_node_key": profile_payload["vpn_node_key"],
+                    "account_publish_mode": profile_payload["account_publish_mode"],
                     "created_at": ts,
                     "updated_at": ts,
                 },
@@ -7892,6 +8013,8 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             "updated_at": account.get("updated_at", ts),
             "platforms": [],
             "publish_success_count": 0,
+            "vpn_node_key": profile_payload["vpn_node_key"],
+            "account_publish_mode": profile_payload["account_publish_mode"],
         }
     ensure_database()
     ts = now_ts()
@@ -7925,6 +8048,19 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             account_id = int(existing["id"])
         for platform in platforms:
             ensure_account_platform(conn, account_id, str(platform))
+        conn.execute(
+            """
+            UPDATE browser_profiles
+            SET vpn_node_key = ?, account_publish_mode = ?, updated_at = ?
+            WHERE account_id = ?
+            """,
+            (
+                str(payload.get("vpn_node_key") or "").strip(),
+                _normalize_account_publish_mode(payload.get("account_publish_mode")),
+                ts,
+                account_id,
+            ),
+        )
         _enqueue_sync_row(conn, "matrix_accounts", "id = ?", (account_id,))
     return get_account(account_id) or {}
 
@@ -8046,6 +8182,15 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
         if update:
             update["updated_at"] = now_ts()
             _brand_supabase().update("matrix_accounts", update, filters={"id": account_id})
+        profile_update: dict[str, Any] = {}
+        if "vpn_node_key" in payload:
+            profile_update["vpn_node_key"] = str(payload.get("vpn_node_key") or "").strip()
+        if "account_publish_mode" in payload:
+            profile_update["account_publish_mode"] = _normalize_account_publish_mode(payload.get("account_publish_mode"))
+        if profile_update:
+            profile_update["updated_at"] = now_ts()
+            _brand_supabase().update("browser_profiles", profile_update, filters={"account_id": account_id})
+        if update or profile_update:
             _invalidate_supabase_read_cache("accounts")
         return get_account(account_id)
     ensure_database()
@@ -8056,13 +8201,44 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
         if key in payload:
             assignments.append(f"{key} = ?")
             values.append(str(payload.get(key) or "").strip())
-    if assignments:
-        assignments.append("updated_at = ?")
-        values.append(now_ts())
-        values.append(account_id)
-        with connect() as conn:
+    profile_update: dict[str, Any] = {}
+    if "vpn_node_key" in payload:
+        profile_update["vpn_node_key"] = str(payload.get("vpn_node_key") or "").strip()
+    if "account_publish_mode" in payload:
+        profile_update["account_publish_mode"] = _normalize_account_publish_mode(payload.get("account_publish_mode"))
+    if not assignments and not profile_update:
+        return get_account(account_id)
+    with connect() as conn:
+        if assignments:
+            assignments.append("updated_at = ?")
+            values.append(now_ts())
+            values.append(account_id)
             conn.execute(f"UPDATE matrix_accounts SET {', '.join(assignments)} WHERE id = ?", values)
             _enqueue_sync_row(conn, "matrix_accounts", "id = ?", (account_id,))
+        if profile_update:
+            profile_update["updated_at"] = now_ts()
+            profile_row = conn.execute("SELECT id FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
+            if profile_row is None:
+                first_platform = conn.execute(
+                    "SELECT platform FROM account_platforms WHERE account_id = ? ORDER BY platform ASC LIMIT 1",
+                    (account_id,),
+                ).fetchone()
+                if first_platform is not None:
+                    ensure_account_platform(conn, account_id, str(first_platform["platform"]))
+            conn.execute(
+                """
+                UPDATE browser_profiles
+                SET vpn_node_key = ?, account_publish_mode = ?, updated_at = ?
+                WHERE account_id = ?
+                """,
+                (
+                    profile_update.get("vpn_node_key", ""),
+                    profile_update.get("account_publish_mode", "inherit"),
+                    profile_update["updated_at"],
+                    account_id,
+                ),
+            )
+            _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
     return get_account(account_id)
 
 
@@ -8147,6 +8323,8 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
                 "profile_dir": str(profile_dir),
                 "debug_port": _profile_debug_port_supabase(str(account["account_key"])),
                 "fingerprint_json": fingerprint,
+                "vpn_node_key": "",
+                "account_publish_mode": "inherit",
                 "created_at": ts,
                 "updated_at": ts,
             }
@@ -8160,6 +8338,8 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
                         "profile_dir": payload["profile_dir"],
                         "debug_port": payload["debug_port"],
                         "fingerprint_json": payload["fingerprint_json"],
+                        "vpn_node_key": payload["vpn_node_key"],
+                        "account_publish_mode": payload["account_publish_mode"],
                         "created_at": ts,
                         "updated_at": ts,
                     },
@@ -8208,6 +8388,14 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
             ts,
             ts,
         ),
+    )
+    conn.execute(
+        """
+        UPDATE browser_profiles
+        SET vpn_node_key = COALESCE(vpn_node_key, ''), account_publish_mode = COALESCE(account_publish_mode, 'inherit')
+        WHERE account_id = ?
+        """,
+        (account_id,),
     )
     conn.execute(
         "UPDATE browser_profiles SET fingerprint_json = ? WHERE account_id = ? AND (fingerprint_json IS NULL OR fingerprint_json = '' OR fingerprint_json = '{}')",
@@ -8504,7 +8692,7 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
     profile_dir = Path(str(ap["profile_dir"]))
     profile_dir.mkdir(parents=True, exist_ok=True)
     debug_port = int(ap["debug_port"])
-    with _chrome_fingerprint_env(ap.get("fingerprint")):
+    with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
         try:
             engine._ensure_chrome_debug_port(
                 debug_port=debug_port,
@@ -8553,7 +8741,7 @@ def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
         raise RuntimeError("account platform missing")
     profile_dir = Path(str(ap["profile_dir"]))
     apply_cybercar_environment()
-    with _chrome_fingerprint_env(ap.get("fingerprint")):
+    with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
         result = engine.probe_platform_session_via_debug_port(
             platform_name=token,
             open_url=capability.open_url,

@@ -46,6 +46,8 @@ class AccountPayload(BaseModel):
     status: str = Field(default="active")
     notes: str = Field(default="")
     platforms: list[str] = Field(default_factory=list)
+    vpn_node_key: str = Field(default="")
+    account_publish_mode: str = Field(default="inherit")
 
 
 class TaskPayload(BaseModel):
@@ -96,6 +98,11 @@ class DistributionSettingsPayload(BaseModel):
     common: dict[str, Any] = Field(default_factory=dict)
     jobs: dict[str, dict[str, Any]] = Field(default_factory=dict)
     platforms: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    vpn: dict[str, Any] = Field(default_factory=dict)
+
+
+class VpnRefreshPayload(BaseModel):
+    subscription_url: str = ""
 
 
 class OpenMaterialDirPayload(BaseModel):
@@ -614,6 +621,18 @@ def create_app() -> FastAPI:
     def update_distribution_settings(payload: DistributionSettingsPayload) -> dict[str, Any]:
         data = service.save_distribution_settings_db(_model_payload(payload))
         return {**data, "resolved_material_dir": str(resolve_material_dir())}
+
+    @app.get("/api/vpn/nodes")
+    def vpn_nodes() -> dict[str, Any]:
+        return service.load_vpn_nodes()
+
+    @app.post("/api/vpn/nodes/refresh")
+    def refresh_vpn_nodes(payload: VpnRefreshPayload | None = Body(default=None)) -> dict[str, Any]:
+        try:
+            subscription_url = None if payload is None else payload.subscription_url
+            return service.refresh_vpn_nodes(subscription_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/operator-wechats")
     def operator_wechats() -> list[str]:

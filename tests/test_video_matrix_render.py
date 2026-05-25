@@ -421,11 +421,12 @@ def test_text_effect_options_cover_template_dropdown_values() -> None:
         "wave": "+10*sin",
         "jitter": "+3*sin",
         "zoom-in": "fontsize='48*(1-0.16*exp",
-        "shadow-pop": "shadowcolor=0x000000@0.80",
+        "shadow-pop": "shadowcolor=0x000000@0.80:shadowx=6:shadowy=6",
     }
 
     for effect, fragment in expected_fragments.items():
         assert fragment in render._text_effect_options(effect, "100", "200", line_index=0, font_size=48)
+        assert "shadowx='" not in render._text_effect_options(effect, "100", "200", line_index=0, font_size=48)
 
 
 def test_text_style_options_generate_drawtext_fragments() -> None:
@@ -837,6 +838,28 @@ def test_render_variant_builds_split_screen_filter_graph(monkeypatch, tmp_path: 
         _settings(tmp_path),
         template_copy="",
         batch_dir=tmp_path,
+        template_config={
+            "show_hud": True,
+            "show_slogan": True,
+            "show_title": True,
+            "hud_bar_y": 1714,
+            "hud_bar_height": 162,
+            "hud_bar_x": 110,
+            "hud_x": 70,
+            "hud_y": 1762,
+            "hud_font_size": 30,
+            "slogan_x": 92,
+            "slogan_y": 820,
+            "slogan_font_size": 64,
+            "title_x": 116,
+            "title_y": 627,
+            "title_font_size": 30,
+            "hud_bar_color": "#75b37b",
+            "hud_bar_opacity": 0.44,
+            "primary_color": "#5DD62C",
+            "secondary_color": "#FFFFFF",
+            "align": "center",
+        },
         cover_intro_seconds=0,
         outro_seconds=0,
     )
@@ -850,4 +873,6 @@ def test_render_variant_builds_split_screen_filter_graph(monkeypatch, tmp_path: 
     assert "tpad=stop_mode=clone" in captured["filter_complex"]
     assert "format=yuv420p[vout]" in captured["filter_complex"]
     assert [path.name for path in captured["inputs"]] == ["source-a.mp4", "source-b.mp4", "source-b.mp4"]
+    assert "hud_0.txt" in captured["filter_complex"]
+    assert "title_0.txt" in captured["filter_complex"]
 

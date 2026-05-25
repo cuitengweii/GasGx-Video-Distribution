@@ -374,3 +374,54 @@ def test_run_pipeline_forwards_split_screen_configuration(monkeypatch, tmp_path:
     assert captured["split_screen_mode"] == "random"
     assert captured["split_screen_layout"] == "grid4"
     assert captured["split_screen_gap"] == 12
+
+
+def test_run_pipeline_excludes_public_ending_from_source_candidates(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    ending = tmp_path / "ending_template" / "2.mp4"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    ending.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"video")
+    ending.write_bytes(b"ending")
+    settings = _settings(tmp_path)
+    (tmp_path / "config" / "video_matrix").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "video_matrix" / "copy_template.txt").write_text("{title}", encoding="utf-8")
+    ending_clip = _variant(ending, 99).segments[0].clip
+    regular_clip = _variant(source, 1).segments[0].clip
+    captured: dict[str, object] = {}
+
+    def fake_ingest_sources(*_args, **_kwargs):
+        return [ending_clip, regular_clip]
+
+    def fake_build_hud_payload(_settings):
+        return {"hud": True}
+
+    def fake_detect_beat_grid(*_args, **_kwargs):
+        return [0.1, 0.2]
+
+    def fake_plan_variants(clips, *_args, **_kwargs):
+        captured["clip_ids"] = [clip.clip_id for clip in clips]
+        return [_variant(source, 1)]
+
+    def fake_render_variant(variant, *_args, **_kwargs):
+        return RenderedAsset(variant, tmp_path / "v1.mp4", None, None, None)
+
+    class FakePaths:
+        runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(pipeline, "get_paths", lambda: FakePaths())
+    monkeypatch.setattr(pipeline, "ingest_sources", fake_ingest_sources)
+    monkeypatch.setattr(pipeline, "build_hud_payload", fake_build_hud_payload)
+    monkeypatch.setattr(pipeline, "detect_beat_grid", fake_detect_beat_grid)
+    monkeypatch.setattr(pipeline, "plan_variants", fake_plan_variants)
+    monkeypatch.setattr(pipeline, "render_variant", fake_render_variant)
+
+    pipeline.run_pipeline(
+        settings,
+        bgm_path=tmp_path / "bgm.mp3",
+        output_root=tmp_path,
+        max_workers=1,
+        ending_template_path=ending,
+    )
+
+    assert captured["clip_ids"] == [regular_clip.clip_id]
