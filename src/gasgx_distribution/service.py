@@ -4071,6 +4071,7 @@ def resolve_login_notification_incidents(account_id: int, platform: str = "wecha
         return 0
     ts = now_ts()
     resolved = 0
+    resolved_ids: list[int] = []
     if brand_database_backend() == "supabase":
         try:
             rows = _brand_supabase().select("notification_incidents", filters={"account_id": account_id}, order="id.desc")
@@ -4904,7 +4905,7 @@ def _write_terminal_qr_cache(
         account = get_account(account_id) or {}
     except (SupabaseError, requests.RequestException, OSError, TimeoutError):
         return ""
-    platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
+    platform = _resolve_account_platform_runtime(account, "wechat")
     if not platform:
         return ""
     wechat_platform = get_platform("wechat")
@@ -5141,7 +5142,7 @@ def _terminal_profile_by_platform() -> dict[str, dict[str, Any]]:
 
 
 def _close_wechat_browser_for_account(account_id: int) -> None:
-    account = get_account(account_id) or {}
+    account = _resolve_account_any_id(account_id) or {}
     platform = next((item for item in account.get("platforms", []) if item.get("platform") == "wechat"), None)
     if not platform:
         return
@@ -6452,8 +6453,13 @@ def _build_terminal_publish_plan_item(account: dict[str, Any], platform_row: dic
         account_id=int(account.get("id") or 0),
         account_key=str(account.get("account_key") or ""),
         display_name=str(account.get("display_name") or account.get("account_key") or ""),
+        account_publish_mode=str(account.get("account_publish_mode") or "inherit"),
         profile_dir=Path(str(platform_row.get("profile_dir") or "")),
         debug_port=int(platform_row.get("debug_port") or 0),
+        vpn_node_key=str(account.get("vpn_node_key") or ""),
+        vpn_country_code=str(account.get("vpn_country_code") or ""),
+        vpn_country_label=str(account.get("vpn_country_label") or ""),
+        vpn_proxy_url=str(account.get("vpn_proxy_url") or ""),
         fingerprint=platform_row.get("fingerprint") or {},
         source_video=source_video,
         workspace=workspace,
@@ -6471,7 +6477,7 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
     account = get_account(account_id)
     if not account:
         raise RuntimeError("account not found")
-    platform_row = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == "wechat"), None)
+    platform_row = _resolve_account_platform_runtime(account, "wechat")
     if not platform_row:
         raise RuntimeError("wechat platform config missing")
     candidates = mp.list_candidate_videos()
@@ -7069,10 +7075,10 @@ def confirm_terminal_login_ready(window_id: int) -> dict[str, Any]:
 
 def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
     state = _load_terminal_state_with_rollover()
-    account = get_account(account_id)
+    account = _resolve_account_any_id(account_id)
     if account is None:
         raise KeyError("account not found")
-    platform_row = next((item for item in account.get("platforms", []) if str(item.get("platform") or "") == "wechat"), None)
+    platform_row = _resolve_account_platform_runtime(account, "wechat")
     if not platform_row:
         raise RuntimeError("wechat platform config missing")
     try:
@@ -7083,7 +7089,15 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
         # Emergency supplemental publish must keep going even if the login browser
         # is already open or the debug-port/profile state is slightly stale.
         pass
-    run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
+    try:
+        run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
+    except Exception as exc:
+        if not _is_debug_port_profile_conflict(str(exc)):
+            raise
+        _close_chrome_browser_by_debug_port(int(platform_row.get("debug_port") or 0))
+        time.sleep(0.35)
+        open_account_browser(account_id, "wechat", apply_marker=False)
+        run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
     run["kind"] = "emergency"
     run["display_name"] = str(account.get("display_name") or account.get("account_key") or account_id)
     run["account_key"] = str(account.get("account_key") or "")
@@ -7640,6 +7654,58 @@ def _profile_for_account_from_rows(account_id: int, platforms: list[dict[str, An
     for profile in profiles:
         if profile.get("account_platform_id") in platform_ids:
             return profile
+    return None
+
+
+def _resolve_account_platform_runtime(account: dict[str, Any], platform: str) -> dict[str, Any] | None:
+    token = normalize_platform(platform)
+    platforms = [dict(item) for item in (account.get("platforms") or []) if isinstance(item, dict)]
+    platform_row = next((item for item in platforms if str(item.get("platform") or "") == token), None)
+    if isinstance(platform_row, dict):
+        return platform_row
+    profile_dir = str(account.get("profile_dir") or "").strip()
+    debug_port = int(account.get("debug_port") or 0)
+    fingerprint = account.get("fingerprint_json") or account.get("fingerprint") or {}
+    if not profile_dir or debug_port <= 0:
+        return None
+    account_id = int(account.get("id") or account.get("account_id") or 0)
+    account_key = str(account.get("account_key") or "").strip()
+    if not account_key:
+        return None
+    profile = {
+        "id": 0,
+        "account_id": account_id,
+        "account_key": account_key,
+        "platform": token,
+        "handle": "",
+        "enabled": 1,
+        "capability_status": "registered",
+        "login_status": str(account.get("login_status") or "unknown").strip() or "unknown",
+        "last_checked_at": account.get("last_checked_at"),
+        "profile_dir": profile_dir,
+        "debug_port": debug_port,
+        "fingerprint_json": fingerprint,
+        "fingerprint": _json_payload(fingerprint, {}) if isinstance(fingerprint, str) else dict(fingerprint or {}),
+    }
+    profile.update(_decode_platform_profile(profile))
+    return profile
+
+
+def _resolve_account_any_id(account_id: int) -> dict[str, Any] | None:
+    resolved_id = int(account_id or 0)
+    if resolved_id <= 0:
+        return None
+    account = get_account(resolved_id)
+    if account is not None:
+        return account
+    try:
+        for item in list_accounts():
+            item_id = int(item.get("id") or 0)
+            api_id = int(item.get("account_id") or 0)
+            if resolved_id in {item_id, api_id}:
+                return item
+    except Exception:
+        pass
     return None
 
 
@@ -8676,7 +8742,7 @@ def _inject_account_browser_marker(
 
 
 def open_account_browser(account_id: int, platform: str, *, apply_marker: bool = True) -> dict[str, Any]:
-    account = get_account(account_id)
+    account = _resolve_account_any_id(account_id)
     if account is None:
         raise KeyError("account not found")
     token = normalize_platform(platform)
@@ -8686,7 +8752,7 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
     with connect() as conn:
         ensure_account_platform(conn, account_id, token)
     refreshed = get_account(account_id) or {}
-    ap = next((item for item in refreshed.get("platforms", []) if item["platform"] == token), None)
+    ap = _resolve_account_platform_runtime(refreshed, token)
     if ap is None:
         raise RuntimeError("account platform missing")
     profile_dir = Path(str(ap["profile_dir"]))
@@ -8703,16 +8769,23 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
         except Exception as exc:
             # Windows profile-path encoding can cause false mismatch detection on debug port ownership.
             # Recover by forcing the port owner to exit, then retry once.
-            if not _is_debug_port_profile_conflict(str(exc)):
+            exc_text = str(exc)
+            if "Invalid argument" in exc_text and engine._is_chrome_debug_port_ready(debug_port):
+                _log(
+                    f"[Uploader] Chrome debug port {debug_port} is already ready after Invalid argument; "
+                    "continue with existing browser session."
+                )
+            elif not _is_debug_port_profile_conflict(exc_text):
                 raise
-            _close_chrome_browser_by_debug_port(debug_port)
-            time.sleep(0.35)
-            engine._ensure_chrome_debug_port(
-                debug_port=debug_port,
-                auto_open_chrome=True,
-                chrome_user_data_dir=str(profile_dir),
-                startup_url=capability.open_url,
-            )
+            else:
+                _close_chrome_browser_by_debug_port(debug_port)
+                time.sleep(0.35)
+                engine._ensure_chrome_debug_port(
+                    debug_port=debug_port,
+                    auto_open_chrome=True,
+                    chrome_user_data_dir=str(profile_dir),
+                    startup_url=capability.open_url,
+                )
     marker_applied = _inject_account_browser_marker(refreshed, ap, capability) if apply_marker else False
     return {
         "ok": True,
@@ -8726,7 +8799,7 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
 
 
 def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
-    account = get_account(account_id)
+    account = _resolve_account_any_id(account_id)
     if account is None:
         raise KeyError("account not found")
     token = normalize_platform(platform)
@@ -8736,24 +8809,42 @@ def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
     with connect() as conn:
         ensure_account_platform(conn, account_id, token)
     refreshed = get_account(account_id) or {}
-    ap = next((item for item in refreshed.get("platforms", []) if item["platform"] == token), None)
+    ap = _resolve_account_platform_runtime(refreshed, token)
     if ap is None:
         raise RuntimeError("account platform missing")
     profile_dir = Path(str(ap["profile_dir"]))
     apply_cybercar_environment()
-    with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
-        result = engine.probe_platform_session_via_debug_port(
-            platform_name=token,
-            open_url=capability.open_url,
-            debug_port=int(ap["debug_port"]),
-            chrome_user_data_dir=str(profile_dir),
-            disconnect_after_probe=(token != "wechat"),
-            enable_wechat_keepalive=(token == "wechat"),
-        )
+    debug_port = int(ap["debug_port"])
+    probe_kwargs = dict(
+        platform_name=token,
+        open_url=capability.open_url,
+        debug_port=debug_port,
+        chrome_user_data_dir=str(profile_dir),
+        disconnect_after_probe=(token != "wechat"),
+        enable_wechat_keepalive=(token == "wechat"),
+    )
+    try:
+        with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
+            result = engine.probe_platform_session_via_debug_port(**probe_kwargs)
+    except Exception as exc:
+        if not _is_debug_port_profile_conflict(str(exc)):
+            raise
+        _close_chrome_browser_by_debug_port(debug_port)
+        time.sleep(0.35)
+        open_account_browser(account_id, token, apply_marker=False)
+        refreshed = get_account(account_id) or {}
+        ap = _resolve_account_platform_runtime(refreshed, token)
+        if ap is None:
+            raise RuntimeError("account platform missing")
+        profile_dir = Path(str(ap["profile_dir"]))
+        debug_port = int(ap["debug_port"])
+        probe_kwargs.update({"debug_port": debug_port, "chrome_user_data_dir": str(profile_dir)})
+        with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
+            result = engine.probe_platform_session_via_debug_port(**probe_kwargs)
     result.setdefault("account_id", account_id)
     result.setdefault("account_key", account.get("account_key"))
     result.setdefault("display_name", account.get("display_name"))
-    result.setdefault("debug_port", int(ap["debug_port"]))
+    result.setdefault("debug_port", debug_port)
     result.setdefault("profile_dir", str(profile_dir))
     result.setdefault("fingerprint", ap.get("fingerprint") or {})
     status = str(result.get("status") or ("ready" if result.get("ok") else "unknown"))

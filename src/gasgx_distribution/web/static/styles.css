@@ -2079,11 +2079,11 @@ select option {
 
 .account-title-line {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: nowrap;
 }
 
@@ -2093,6 +2093,37 @@ select option {
   gap: 6px;
   min-width: 0;
   flex: 0 1 auto;
+  flex-wrap: wrap;
+}
+
+.account-delete-inline {
+  padding-inline: 10px;
+  color: #e71313;
+  border-color: rgba(231, 19, 19, 0.42);
+  background: rgba(231, 19, 19, 0.08);
+}
+
+.account-delete-inline:hover {
+  color: #ff4a4a;
+  border-color: rgba(231, 19, 19, 0.6);
+  background: rgba(231, 19, 19, 0.14);
+}
+
+.account-subtitle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.account-success-chip-inline {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.account-success-chip-after-delete {
+  color: #b2e69e;
 }
 
 .account-badges {
@@ -2113,33 +2144,16 @@ select option {
   min-width: 0;
 }
 
-.account-expand-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 56px;
-  min-height: 28px;
-  padding: 4px 10px;
-  border: 1px solid rgba(93, 214, 44, 0.28);
-  border-radius: 999px;
-  color: var(--accent-aurora);
-  background: rgba(93, 214, 44, 0.09);
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.account-expand-toggle:hover {
-  border-color: rgba(93, 214, 44, 0.46);
-  background: rgba(93, 214, 44, 0.14);
-}
-
 .account-platform-section {
   display: grid;
   gap: 10px;
   margin-top: 6px;
   padding-top: 10px;
   border-top: 1px solid rgba(93, 214, 44, 0.12);
+}
+
+.account-platform-section.is-collapsed .account-platform-body {
+  display: none;
 }
 
 .account-platform-head {
@@ -2153,6 +2167,13 @@ select option {
   min-width: 0;
   display: grid;
   gap: 3px;
+}
+
+.account-platform-summary-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .account-platform-summary strong {
@@ -2170,15 +2191,25 @@ select option {
   gap: 12px;
 }
 
-.account-platform-section.is-collapsed .account-platform-body {
-  display: none;
+.account-platform-toggle {
+  width: fit-content;
+  padding-inline: 10px;
+  color: var(--accent-aurora);
+  border-color: rgba(93, 214, 44, 0.34);
+  background: rgba(93, 214, 44, 0.08);
+}
+
+.account-platform-toggle:hover {
+  color: #86e85a;
+  border-color: rgba(93, 214, 44, 0.55);
+  background: rgba(93, 214, 44, 0.12);
 }
 
 .account-title {
   display: inline-flex;
   align-items: center;
   width: auto;
-  max-width: min(100%, 260px);
+  max-width: min(100%, 320px);
   min-width: 0;
   min-height: 32px;
   padding: 5px 11px;
@@ -2214,51 +2245,79 @@ select option {
   margin-top: 2px;
 }
 
-.account-preferences-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
+.account-settings-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
   gap: 8px;
+  align-items: start;
   min-width: 0;
-  width: auto;
-  flex: 1 1 auto;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(93, 214, 44, 0.12);
+  border-radius: 10px;
+  background: rgba(93, 214, 44, 0.04);
 }
 
-.account-inline-preferences {
-  margin-left: 0;
-  max-width: 100%;
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-
-.account-inline-preference {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.account-setting {
+  display: grid;
+  gap: 4px;
   min-width: 0;
-  flex: 0 0 auto;
-  white-space: nowrap;
 }
 
-.account-inline-preference-label {
+.account-setting-label {
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
 }
 
-.account-inline-preference select {
-  width: 160px;
-  min-height: 32px;
+.account-setting select {
+  width: 100%;
+  min-height: 34px;
+  padding-right: 34px;
+  border: 1px solid rgba(93, 214, 44, 0.16);
+  border-radius: 6px;
+  background-color: #0f0f0f;
+  background-image: linear-gradient(45deg, transparent 50%, rgba(177, 230, 158, 0.95) 50%), linear-gradient(135deg, rgba(177, 230, 158, 0.95) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% - 2px), calc(100% - 12px) calc(50% - 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+
+.account-setting select:hover {
+  border-color: rgba(93, 214, 44, 0.34);
+}
+
+.account-setting select:focus {
+  border-color: var(--accent-aurora);
+  box-shadow: 0 0 0 2px rgba(93, 214, 44, 0.12), inset 0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
+.account-setting-vpn .account-preference-country {
+  min-height: 28px;
+  margin-top: 4px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 8px;
+}
+
+.account-setting-publish {
   min-width: 0;
 }
 
+.account-setting-publish select {
+  width: 100%;
+}
+
 .account-preference-country {
-  min-height: 32px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 9px;
   border: 1px solid rgba(93, 214, 44, 0.18);
   border-radius: 6px;
   color: var(--accent-aurora);
@@ -2266,9 +2325,9 @@ select option {
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
-  flex: 0 0 auto;
-  align-self: end;
-  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .account-phone-line,
@@ -2388,9 +2447,9 @@ select option {
 
 .account-row > .row-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
   align-items: start;
-  gap: 12px 14px;
+  gap: 12px 12px;
   margin-bottom: 10px;
   padding-bottom: 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -3207,13 +3266,9 @@ select option {
     width: 100%;
   }
 
-  .account-preference-country {
-    width: fit-content;
-  }
-
-  .account-inline-preferences {
-    margin-left: 0;
-    max-width: 100%;
+  .account-settings-panel {
+    grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .account-row > .row-head {
@@ -3228,22 +3283,6 @@ select option {
   .account-badges {
     justify-content: start;
     justify-items: start;
-  }
-
-  .account-preferences-row {
-    grid-template-columns: 1fr;
-  }
-
-  .account-preference-row {
-    grid-template-columns: 1fr;
-  }
-
-  .account-preference-country {
-    width: fit-content;
-  }
-
-  .account-preference-row {
-    grid-template-columns: 1fr;
   }
 
   .account-preference-country {

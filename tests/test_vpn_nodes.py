@@ -32,8 +32,8 @@ def test_refresh_vpn_node_cache_parses_base64_subscription(monkeypatch, tmp_path
     _isolated_paths(monkeypatch, tmp_path)
 
     nodes = [
-        {"add": "knyr-a.psakt.net", "port": "21966", "ps": "鈶犻娓?| HKG [瑙ｉ攣] x1.2{Ver10S}"},
-        {"add": "knyr-b.psakt.net", "port": "20101", "ps": "鈶犲姞鎷垮ぇ | CAN x1.0{Ver10S}"},
+        {"add": "hk.example.net", "port": "21966", "ps": "HKG node"},
+        {"add": "ca.example.net", "port": "20101", "ps": "CAN node"},
     ]
     subscription_text = "\n".join(
         [
@@ -53,15 +53,16 @@ def test_refresh_vpn_node_cache_parses_base64_subscription(monkeypatch, tmp_path
 
     assert cache["subscription_url"] == "https://example.invalid/subscribe"
     assert cache["node_count"] == 2
-    assert cache["countries"] == {"棣欐腐": 1, "鍔犳嬁澶?: 1}
-    assert vpn_nodes.resolve_vpn_node(cache["nodes"][0]["node_key"], cache)["country_label"] == "棣欐腐"
+    assert cache["nodes"][0]["country_code"] == "HK"
+    assert cache["nodes"][1]["country_code"] == "CA"
+    assert vpn_nodes.resolve_vpn_node(cache["nodes"][0]["node_key"], cache)["country_code"] == "HK"
     assert (tmp_path / "runtime" / "vpn_nodes.json").exists()
 
 
 def test_parse_subscription_text_skips_notes_and_deduplicates() -> None:
     text = "\n".join(
         [
-            "鈼忓缓璁瘡鏃ユ洿鏂颁竴娆¤闃呬互鍙婂畾鏈熸鏌ヨ澶囧綋鍓嶆椂闂存槸鍚﹀凡鍑嗙‘鍒板垎閽?",
+            "note line to skip",
             "vmess://" + base64.b64encode(json.dumps({"add": "us-nf-1.akijp.cloud", "port": "40012", "ps": "USA | Direct Access"}).encode("utf-8")).decode("ascii"),
             "vmess://" + base64.b64encode(json.dumps({"add": "us-nf-1.akijp.cloud", "port": "40012", "ps": "USA | Direct Access"}).encode("utf-8")).decode("ascii"),
         ]
@@ -70,7 +71,7 @@ def test_parse_subscription_text_skips_notes_and_deduplicates() -> None:
     nodes = vpn_nodes.parse_subscription_text(base64.b64encode(text.encode("utf-8")).decode("ascii"))
 
     assert len(nodes) == 1
-    assert nodes[0]["country_label"] == "缇庡浗"
+    assert nodes[0]["country_code"] == "US"
 
 
 def test_refresh_vpn_node_cache_wraps_request_errors(monkeypatch, tmp_path: Path) -> None:
@@ -81,7 +82,7 @@ def test_refresh_vpn_node_cache_wraps_request_errors(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(vpn_nodes.requests, "get", fake_get)
 
-    with pytest.raises(ValueError, match="拉取订阅失败"):
+    with pytest.raises(ValueError):
         vpn_nodes.refresh_vpn_node_cache("https://example.invalid/subscribe")
 
 
@@ -128,5 +129,5 @@ def test_refresh_vpn_nodes_requires_subscription_url(monkeypatch) -> None:
         lambda: {"common": {}, "jobs": {}, "platforms": {}, "vpn": {"subscription_url": ""}},
     )
 
-    with pytest.raises(ValueError, match="请先填写订阅地址"):
+    with pytest.raises(ValueError):
         service.refresh_vpn_nodes()

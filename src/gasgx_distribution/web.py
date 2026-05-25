@@ -1001,6 +1001,8 @@ def create_app() -> FastAPI:
             return service.open_account_browser(account_id, platform)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/api/accounts/{account_id}/platforms/{platform}/login-status")
     def login_status(account_id: int, platform: str) -> dict[str, Any]:
@@ -1008,6 +1010,8 @@ def create_app() -> FastAPI:
             return service.check_login_status(account_id, platform)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/api/accounts/{account_id}/platforms/{platform}/emergency-publish")
     def emergency_publish(account_id: int, platform: str) -> dict[str, Any]:
@@ -1020,6 +1024,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/api/tasks")
     def create_task(payload: TaskPayload) -> dict[str, Any]:

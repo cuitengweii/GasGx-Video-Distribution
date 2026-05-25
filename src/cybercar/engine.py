@@ -16274,7 +16274,7 @@ def _build_debug_port_profile_conflict_message(
     return (
         f"Chrome debug port {debug_port} is already used by another browser profile "
         f"({actual}); expected profile: {expected_user_data_dir}. "
-        "Close the mismatched Chrome window or free this port, then retry."
+        "The port is reachable, but profile matching failed."
     )
 
 
@@ -16393,13 +16393,12 @@ def _ensure_chrome_debug_port(
     if _is_chrome_debug_port_ready(debug_port):
         if not _has_debug_chrome_process(debug_port, chrome_user_data_dir):
             running_dir = _find_debug_chrome_profile_by_port(debug_port)
-            raise RuntimeError(
-                _build_debug_port_profile_conflict_message(
-                    debug_port,
-                    chrome_user_data_dir,
-                    running_dir,
-                )
+            _log(
+                "[Uploader] Debug port "
+                f"{debug_port} is already ready with profile {running_dir or 'unknown'}; "
+                "continue without enforcing profile string match."
             )
+            return
         if _debug_chrome_has_remote_allow_origins(debug_port, chrome_user_data_dir):
             return
         _log(

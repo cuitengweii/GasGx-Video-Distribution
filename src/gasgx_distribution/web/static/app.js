@@ -89,6 +89,7 @@ const state = {
   terminalRoute: "hub",
   terminalQrVisible: false,
   terminalConfigOpen: false,
+  accountPlatformExpanded: {},
   aiRobotEditingPlatform: "",
   aiRobotMessagesCollapsed: true,
   brand: { settings: {} },
@@ -98,7 +99,6 @@ const state = {
   databaseDictionaryLocalized: false,
   analytics: {},
   operatorWechats: ["aamecc", "aalbcc"],
-  accountCardExpanded: {},
 };
 
 const TERMINAL_ERROR_GUIDE_ORDER = ["login_browser", "login_probe", "publish_start", "publish_run", "confirm", "unknown"];
@@ -2324,16 +2324,6 @@ function accountPublishModeOptionsMarkup(currentMode = "inherit") {
   `;
 }
 
-function accountCardExpanded(accountId) {
-  return Boolean(state.accountCardExpanded?.[String(accountId)]);
-}
-
-function toggleAccountCardExpanded(accountId) {
-  const key = String(accountId || "");
-  if (!key) return;
-  state.accountCardExpanded = { ...(state.accountCardExpanded || {}), [key]: !accountCardExpanded(key) };
-}
-
 function renderAccounts() {
   const accounts = filteredAccounts();
   const keyword = String(document.querySelector("#account-search-input")?.value || "").trim();
@@ -2343,58 +2333,59 @@ function renderAccounts() {
     const phone = accountPhone(account);
     const displayName = cleanAccountDisplayName(account);
     const title = `#${account.id} ${displayName}`;
-    const platformsExpanded = accountCardExpanded(account.id);
-    return `<article class="account-row ${platformsExpanded ? "is-expanded" : "is-collapsed"}" data-account-id="${account.id}">
+    const platformExpanded = !!state.accountPlatformExpanded[account.id];
+    return `<article class="account-row" data-account-id="${account.id}">
       <div class="row-head">
         <div class="account-title-wrap">
           <div class="account-title-line">
             <div class="account-title-main">
               <strong class="account-title">${escapeHtml(title)}</strong>
               <button class="account-edit-btn" type="button" title="修改账号名称" aria-label="修改账号名称" data-no-global-loading="1" data-account-edit="name">${accountEditIcon()}</button>
-            </div>
-            <div class="account-preferences-row account-inline-preferences">
-              <div class="account-inline-preference">
-                <span class="account-inline-preference-label">VPN 节点</span>
-                <select data-account-vpn-node="${account.id}">
-                  ${accountVpnNodeOptionsMarkup(accountVpnNodeKey(account))}
-                </select>
-              </div>
-              <span class="account-preference-country" data-account-vpn-country="${account.id}">国家：${escapeHtml(accountVpnCountryLabel(account))}</span>
-              <div class="account-inline-preference">
-                <span class="account-inline-preference-label">发布方式</span>
-                <select data-account-publish-mode="${account.id}">
-                  ${accountPublishModeOptionsMarkup(accountPublishMode(account))}
-                </select>
-              </div>
+              <button class="account-status-toggle ${accountStatusEnabled(account) ? "enabled" : "paused"}" type="button" data-no-global-loading="1" data-account-status-toggle="${account.id}" aria-pressed="${accountStatusEnabled(account)}" title="${accountStatusEnabled(account) ? "点击暂停账号" : "点击启用账号"}">
+                <span class="account-status-toggle-knob" aria-hidden="true"></span>
+                <span>${escapeHtml(accountStatusLabel(account.status))}</span>
+              </button>
+              <button class="btn ghost btn-sm danger-action account-delete-inline" type="button" data-delete-account="${account.id}" data-account-name="${escapeHtml(displayName)}" title="删除账号" aria-label="删除账号">${accountDeleteIcon()}</button>
+              <span class="chip success-chip account-success-chip-inline account-success-chip-after-delete" title="基于真实发布成功记录去重统计">已发布成功 ${account.publish_success_count || 0}</span>
             </div>
           </div>
-          <div class="account-subtitle">${escapeHtml(accountSubtitle(account))}</div>
+          <div class="account-subtitle-row">
+            <div class="account-subtitle">${escapeHtml(accountSubtitle(account))}</div>
+          </div>
           <div class="account-meta-row">
             <div class="account-operator-wechat"><span>运营微信</span><strong>${escapeHtml(operatorWechat || "-")}</strong><button class="account-edit-btn compact" type="button" title="修改绑定运营微信" aria-label="修改绑定运营微信" data-no-global-loading="1" data-account-edit="operator">${accountEditIcon()}</button></div>
             <div class="account-phone-line"><span>手机号</span><strong>${escapeHtml(phone || "-")}</strong><button class="account-edit-btn compact" type="button" title="修改账号手机号" aria-label="修改账号手机号" data-no-global-loading="1" data-account-edit="phone">${accountEditIcon()}</button></div>
           </div>
         </div>
         <div class="account-side-stack">
-          <div class="account-badges">
-            <button class="account-expand-toggle" type="button" data-no-global-loading="1" data-account-toggle="${account.id}" aria-expanded="${platformsExpanded}" aria-label="${platformsExpanded ? "折叠平台信息" : "展开平台信息"}">${platformsExpanded ? "折叠" : "展开"}</button>
-            <button class="account-status-toggle ${accountStatusEnabled(account) ? "enabled" : "paused"}" type="button" data-no-global-loading="1" data-account-status-toggle="${account.id}" aria-pressed="${accountStatusEnabled(account)}" title="${accountStatusEnabled(account) ? "点击暂停账号" : "点击启用账号"}">
-              <span class="account-status-toggle-knob" aria-hidden="true"></span>
-              <span>${escapeHtml(accountStatusLabel(account.status))}</span>
-            </button>
-            <span class="chip success-chip" title="基于真实发布成功记录去重统计">已发布成功 ${account.publish_success_count || 0}</span>
-            <button class="btn ghost btn-sm danger-action" type="button" data-delete-account="${account.id}" data-account-name="${escapeHtml(displayName)}">${accountDeleteIcon()}<span>删除账号</span></button>
+          <div class="account-settings-panel">
+            <label class="account-setting account-setting-vpn">
+              <span class="account-setting-label">VPN 节点</span>
+              <select data-account-vpn-node="${account.id}">
+                ${accountVpnNodeOptionsMarkup(accountVpnNodeKey(account))}
+              </select>
+              <span class="account-preference-country" data-account-vpn-country="${account.id}">国家：${escapeHtml(accountVpnCountryLabel(account))}</span>
+            </label>
+            <label class="account-setting account-setting-publish">
+              <span class="account-setting-label">发布方式</span>
+              <select data-account-publish-mode="${account.id}">
+                ${accountPublishModeOptionsMarkup(accountPublishMode(account))}
+              </select>
+            </label>
           </div>
         </div>
       </div>
-      <div class="account-platform-section ${platformsExpanded ? "is-expanded" : "is-collapsed"}">
+      <div class="account-platform-section ${platformExpanded ? "" : "is-collapsed"}">
         <div class="account-platform-head">
           <div class="account-platform-summary">
-            <strong>平台信息</strong>
+            <div class="account-platform-summary-line">
+              <strong>平台信息</strong>
+              <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}">${platformExpanded ? "折叠平台信息" : "展开平台信息"}</button>
+            </div>
             <span class="muted">国内平台 / 国外平台</span>
           </div>
-          <button class="account-expand-toggle" type="button" data-no-global-loading="1" data-account-toggle="${account.id}" aria-expanded="${platformsExpanded}" aria-label="${platformsExpanded ? "折叠平台信息" : "展开平台信息"}">${platformsExpanded ? "折叠" : "展开"}</button>
         </div>
-        <div class="account-platform-body" ${platformsExpanded ? "" : 'hidden aria-hidden="true"'}>
+        <div class="account-platform-body" id="account-platform-body-${account.id}">
           ${renderPlatformStatusGroup(platforms, "cn")}
           ${renderPlatformStatusGroup(platforms, "global")}
         </div>
@@ -2407,9 +2398,20 @@ function accountById(accountId) {
   return (state.accounts || []).find((account) => Number(account.id) === Number(accountId));
 }
 
+function accountApiId(account) {
+  const apiId = Number(account?.account_id || account?.id || 0);
+  return apiId > 0 ? apiId : Number(account?.id || 0);
+}
+
 function replaceAccountInState(updated) {
   const index = (state.accounts || []).findIndex((account) => Number(account.id) === Number(updated?.id));
   if (index >= 0) state.accounts[index] = updated;
+}
+
+function toggleAccountPlatformExpanded(accountId) {
+  const current = !!state.accountPlatformExpanded[accountId];
+  state.accountPlatformExpanded = { ...state.accountPlatformExpanded, [accountId]: !current };
+  renderAccounts();
 }
 
 async function repairAccountConfigs(button) {
@@ -2506,7 +2508,7 @@ async function saveAccountInlineEdit(button) {
   const restoreButton = setButtonLoading(button, "保存中");
   try {
     const before = accountNoticeSnapshot(account);
-    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify(payload), skipOperationNotice: true });
+    const updated = await api(`/api/accounts/${accountApiId(account)}`, { method: "PATCH", body: JSON.stringify(payload), skipOperationNotice: true });
     replaceAccountInState(updated);
     const after = accountNoticeSnapshot(updated);
     void emitOperationNotice({
@@ -2541,7 +2543,7 @@ async function toggleAccountStatus(button) {
   const restoreButton = setButtonLoading(button, nextStatus === "active" ? "启用中" : "暂停中");
   try {
     const before = accountNoticeSnapshot(account);
-    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }), skipOperationNotice: true });
+    const updated = await api(`/api/accounts/${accountApiId(account)}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }), skipOperationNotice: true });
     replaceAccountInState(updated);
     void emitOperationNotice({
       category: "账号管理",
@@ -2581,7 +2583,7 @@ async function updateAccountPreference(select) {
   select.disabled = true;
   try {
     const before = accountNoticeSnapshot(account);
-    const updated = await api(`/api/accounts/${account.id}`, { method: "PATCH", body: JSON.stringify(payload), skipOperationNotice: true });
+    const updated = await api(`/api/accounts/${accountApiId(account)}`, { method: "PATCH", body: JSON.stringify(payload), skipOperationNotice: true });
     replaceAccountInState(updated);
     const countryNode = vpnNodeByKey(accountVpnNodeKey(updated));
     const countryNodeLabel = countryNode ? vpnNodeCountryLabel(countryNode) : "未绑定";
@@ -8107,14 +8109,6 @@ document.querySelector("#accounts-list")?.addEventListener("change", async (even
   if (!target.matches("[data-account-vpn-node], [data-account-publish-mode]")) return;
   await updateAccountPreference(target);
 });
-document.querySelector("#accounts-list")?.addEventListener("click", (event) => {
-  const toggle = event.target.closest?.("[data-account-toggle]");
-  if (!toggle) return;
-  const row = toggle.closest("[data-account-id]");
-  if (!row) return;
-  toggleAccountCardExpanded(row.dataset.accountId);
-  renderAccounts();
-});
 document.addEventListener("click", (event) => {
   const picker = document.querySelector("#operator-wechat-select");
   if (!picker || picker.contains(event.target)) return;
@@ -9112,6 +9106,12 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const accountPlatformButton = event.target.closest("[data-account-platform-toggle]");
+  if (accountPlatformButton) {
+    toggleAccountPlatformExpanded(Number(accountPlatformButton.dataset.accountPlatformToggle));
+    return;
+  }
+
   const saveAccountButton = event.target.closest("[data-account-save]");
   if (saveAccountButton) {
     await saveAccountInlineEdit(saveAccountButton);
@@ -9142,7 +9142,7 @@ document.addEventListener("click", async (event) => {
     if (!window.confirm(`确认删除矩阵账号「${accountName}」？相关平台、浏览器配置和任务记录会一并删除。`)) return;
     const restoreButton = setButtonLoading(deleteAccountButton, "删除中...");
     try {
-      await api(`/api/accounts/${accountId}`, { method: "DELETE", skipOperationNotice: true });
+      await api(`/api/accounts/${accountApiId(account)}`, { method: "DELETE", skipOperationNotice: true });
       void emitOperationNotice({
         category: "账号管理",
         view: "accounts",
@@ -9166,13 +9166,14 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-open]");
   if (!target) return;
   const [accountId, platform] = target.dataset.open.split(":");
+  const account = accountById(accountId);
   const originalText = target.textContent;
   const successText = `${platformLabel(platform)}已打开`;
   target.disabled = true;
   target.classList.add("loading");
   target.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span><span>打开中</span>`;
   try {
-    await api(`/api/accounts/${accountId}/platforms/${platform}/open-browser`, { method: "POST" });
+    await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/open-browser`, { method: "POST" });
     target.classList.add("opened");
     target.textContent = successText;
     setTimeout(() => {
@@ -9557,7 +9558,7 @@ document.addEventListener("click", async (event) => {
     }
     const account = terminalLongSessionAccounts(route)[0];
     if (account?.id) {
-      await api(`/api/accounts/${account.id}/platforms/${route}/login-status`, { method: "POST" });
+      await api(`/api/accounts/${accountApiId(account)}/platforms/${route}/login-status`, { method: "POST" });
       state.accounts = await api("/api/accounts");
       renderTerminalExecution();
     }
@@ -9596,7 +9597,7 @@ document.addEventListener("click", async (event) => {
     const platform = longDetect.dataset.terminalLongDetect || "";
     const account = terminalLongSessionAccounts(platform)[0];
     if (account?.id) {
-      await api(`/api/accounts/${account.id}/platforms/${platform}/login-status`, { method: "POST" });
+      await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/login-status`, { method: "POST" });
       state.accounts = await api("/api/accounts");
       renderTerminalExecution();
     }
@@ -9687,7 +9688,7 @@ document.addEventListener("click", async (event) => {
     }
     const account = terminalLongSessionAccounts(route)[0];
     if (account?.id) {
-      await api(`/api/accounts/${account.id}/platforms/${route}/login-status`, { method: "POST" });
+      await api(`/api/accounts/${accountApiId(account)}/platforms/${route}/login-status`, { method: "POST" });
       state.accounts = await api("/api/accounts");
       renderTerminalExecution();
     }

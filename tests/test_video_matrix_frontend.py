@@ -55,37 +55,46 @@ def test_account_rows_support_inline_editing_name_operator_and_phone() -> None:
     assert "function startAccountOperatorEdit(row, account)" in app
     assert "function startAccountPhoneEdit(row, account)" in app
     assert "function saveAccountInlineEdit(button)" in app
-    assert 'api(`/api/accounts/${account.id}`, { method: "PATCH"' in app
+    assert "function accountApiId(account)" in app
+    assert 'api(`/api/accounts/${accountApiId(account)}`, { method: "PATCH"' in app
     assert "accountOperatorWechatOptions(current)" in app
     assert "accountNotesWith(account, { operatorWechat: value })" in app
     assert "accountNotesWith(account, { phone: value })" in app
     assert "账号手机号需为 11 位数字" in app
-    assert "已发布成功" in app
-    assert 'data-account-toggle="${account.id}"' in app
-    assert "accountCardExpanded(account.id)" in app
-    assert 'aria-label="${platformsExpanded ? "折叠平台信息" : "展开平台信息"}"' in app
+    assert "account-success-chip-after-delete" in app
     assert "account-platform-section" in app
     assert "account-platform-body" in app
+    assert "account-platform-toggle" in app
+    assert "account-platform-summary-line" in app
+    assert "toggleAccountPlatformExpanded" in app
     assert 'class="account-title-main"' in app
     assert 'class="account-side-stack"' in app
-    assert 'class="account-preferences-row account-inline-preferences"' in app
-    assert 'class="account-preference-row account-preference-row-vpn"' in app
-    assert 'account-preference-field-wide' in app
+    assert 'class="account-settings-panel"' in app
+    assert 'class="account-setting account-setting-vpn"' in app
+    assert 'class="account-setting account-setting-publish"' in app
+    assert 'class="account-setting-label"' in app
     assert 'data-account-vpn-node="${account.id}"' in app
     assert 'data-account-publish-mode="${account.id}"' in app
     assert "function accountDeleteIcon()" in app
-    assert "${accountDeleteIcon()}<span>删除账号</span>" in app
+    assert 'class="btn ghost btn-sm danger-action account-delete-inline"' in app
+    assert "${accountDeleteIcon()}" in app
+    assert 'title="删除账号"' in app
     assert "基于真实发布成功记录去重统计" in app
     assert ".account-title-line" in css
     assert ".account-title-main" in css
     assert ".account-side-stack" in css
     assert ".account-edit-btn" in css
-    assert ".account-expand-toggle" in css
     assert ".account-platform-section" in css
     assert ".account-platform-head" in css
-    assert ".account-inline-preferences" in css
-    assert ".account-preference-row" in css
-    assert ".account-preference-field-wide" in css
+    assert ".account-platform-summary-line" in css
+    assert ".account-settings-panel" in css
+    assert ".account-platform-section.is-collapsed .account-platform-body" in css
+    assert ".account-setting" in css
+    assert ".account-setting-label" in css
+    assert ".account-setting-vpn" in css
+    assert ".account-setting-publish" in css
+    assert ".account-delete-inline" in css
+    assert "color: #e71313" in css
     assert ".account-phone-line" in css
     assert ".account-inline-edit" in css
 
@@ -106,8 +115,6 @@ def test_account_list_has_keyword_search_filter() -> None:
     assert 'api("/api/accounts/repair-config", { method: "POST" })' in app
     assert "document.querySelector(\"#account-search-input\")?.addEventListener(\"input\", renderAccounts)" in app
     assert "document.querySelector(\"#accounts-repair-config\")?.addEventListener(\"click\"" in app
-    assert 'document.querySelector("#accounts-list")?.addEventListener("click"' in app
-    assert "[data-account-toggle]" in app
     assert "没有匹配的账号" in app
     assert ".account-list-tools" in css
     assert ".account-search-field" in css
