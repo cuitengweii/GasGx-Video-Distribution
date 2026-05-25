@@ -440,11 +440,23 @@ def _normalize_account_profile_runtime(profile: dict[str, Any] | None) -> dict[s
     return data
 
 
+def _merge_account_profile_runtime(account: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, Any]:
+    profile_data = _normalize_account_profile_runtime(profile)
+    browser_profile_id = profile_data.pop("id", None)
+    if browser_profile_id is not None:
+        account["browser_profile_id"] = browser_profile_id
+    account.update(profile_data)
+    return account
+
+
 def resolve_account_publish_mode(account: dict[str, Any], base_mode: str) -> str:
     return resolve_effective_publish_mode(base_mode, account.get("account_publish_mode"))
 
 
 def resolve_account_vpn_proxy(account: dict[str, Any]) -> str:
+    proxy = str(account.get("vpn_proxy_url") or "").strip()
+    if proxy:
+        return proxy
     node_key = str(account.get("vpn_node_key") or "").strip()
     if not node_key:
         return ""
@@ -6011,6 +6023,18 @@ def _open_account_browser_for_terminal(account_id: int, platform: str) -> dict[s
         return open_account_browser(account_id, platform)  # type: ignore[misc]
 
 
+def _restart_account_browser_for_terminal(account_id: int, platform: str) -> dict[str, Any]:
+    runtime = _terminal_browser_runtime_for_account(account_id, platform)
+    try:
+        debug_port = int(runtime.get("debug_port") or 0)
+    except Exception:
+        debug_port = 0
+    if runtime.get("browser_open") is True and debug_port > 0:
+        _close_chrome_browser_by_debug_port(debug_port)
+        time.sleep(0.35)
+    return _open_account_browser_for_terminal(account_id, platform)
+
+
 def _start_terminal_wechat_publish_compat(
     window: dict[str, Any],
     current: dict[str, Any],
@@ -6532,30 +6556,32 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
         cmd.extend(["--caption", caption])
     if bool(settings.get("declare_original")):
         cmd.append("--wechat-declare-original")
-    if str(settings.get("publish_mode") or "publish") == "draft":
+    effective_publish_mode = resolve_effective_publish_mode(str(settings.get("publish_mode") or "publish"), item.account_publish_mode)
+    if effective_publish_mode == "draft":
         cmd.append("--wechat-save-draft-only")
     else:
         cmd.append("--wechat-publish-now")
-    env = {
-        **os.environ,
-        "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1",
-    }
-    extra_args = browser_fingerprint_launch_args(item.fingerprint)
-    if extra_args:
-        env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
     log_path = Path(item.workspace) / "terminal_wechat_publish.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stream = log_path.open("w", encoding="utf-8", errors="replace")
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    process = subprocess.Popen(
-        cmd,
-        cwd=str(get_paths().repo_root),
-        env=env,
-        stdout=stream,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-        creationflags=creationflags,
-    )
+    with _account_network_env(account):
+        env = {
+            **os.environ,
+            "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1",
+        }
+        extra_args = browser_fingerprint_launch_args(item.fingerprint)
+        if extra_args:
+            env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(get_paths().repo_root),
+            env=env,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
     stream.close()
     run_id = uuid.uuid4().hex
     return {
@@ -6572,6 +6598,8 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
         "publish_date": publish_date,
         "log_path": str(log_path),
         "manual_publish": True,
+        "account_publish_mode": item.account_publish_mode,
+        "effective_publish_mode": effective_publish_mode,
     }
 
 
@@ -7082,9 +7110,7 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
     if not platform_row:
         raise RuntimeError("wechat platform config missing")
     try:
-        runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
-        if runtime.get("browser_open") is not True:
-            _open_account_browser_for_terminal(account_id, "wechat")
+        _restart_account_browser_for_terminal(account_id, "wechat")
     except Exception:
         # Emergency supplemental publish must keep going even if the login browser
         # is already open or the debug-port/profile state is slightly stale.
@@ -7096,7 +7122,7 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
             raise
         _close_chrome_browser_by_debug_port(int(platform_row.get("debug_port") or 0))
         time.sleep(0.35)
-        open_account_browser(account_id, "wechat", apply_marker=False)
+        _restart_account_browser_for_terminal(account_id, "wechat")
         run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
     run["kind"] = "emergency"
     run["display_name"] = str(account.get("display_name") or account.get("account_key") or account_id)
@@ -7890,7 +7916,7 @@ def list_accounts() -> list[dict[str, Any]]:
                 profiles_by_platform[platform_id] = profile
         for account in accounts:
             account_id = int(account["id"])
-            account.update(_normalize_account_profile_runtime(profiles_by_account.get(account_id)))
+            _merge_account_profile_runtime(account, profiles_by_account.get(account_id))
             platforms = [dict(item) for item in platforms_by_account.get(account_id, [])]
             profile = profiles_by_account.get(account_id)
             for platform in platforms:
@@ -7915,7 +7941,7 @@ def list_accounts() -> list[dict[str, Any]]:
         }
         for account in accounts:
             account.update(_normalize_account_runtime(account))
-            account.update(_normalize_account_profile_runtime(profiles_by_account.get(int(account["id"]))))
+            _merge_account_profile_runtime(account, profiles_by_account.get(int(account["id"])))
             platforms = conn.execute(
                 """
                 SELECT ap.*, bp.profile_dir, bp.debug_port, bp.fingerprint_json
@@ -7937,9 +7963,10 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         account = client.select_one("matrix_accounts", filters={"id": account_id})
         if account is None:
             return None
-        account.update(_normalize_account_profile_runtime(
-            _profile_for_account_from_rows(int(account_id), client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc"), client.select("browser_profiles"))
-        ))
+        _merge_account_profile_runtime(
+            account,
+            _profile_for_account_from_rows(int(account_id), client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc"), client.select("browser_profiles")),
+        )
         platforms = client.select("account_platforms", filters={"account_id": account_id}, order="platform.asc")
         profile = _profile_for_account_from_rows(int(account_id), platforms, client.select("browser_profiles"))
         for platform in platforms:
@@ -7960,7 +7987,7 @@ def get_account(account_id: int) -> dict[str, Any] | None:
         account = dict_from_row(row)
         account.update(_normalize_account_runtime(account))
         profile_row = conn.execute("SELECT * FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
-        account.update(_normalize_account_profile_runtime(dict_from_row(profile_row) if profile_row else None))
+        _merge_account_profile_runtime(account, dict_from_row(profile_row) if profile_row else None)
         account["publish_success_count"] = _matrix_publish_success_counts().get(int(account_id), 0)
         account["platforms"] = [
             _decode_platform_profile(dict_from_row(item))
@@ -8291,18 +8318,20 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                 ).fetchone()
                 if first_platform is not None:
                     ensure_account_platform(conn, account_id, str(first_platform["platform"]))
+            profile_assignments: list[str] = []
+            profile_values: list[Any] = []
+            if "vpn_node_key" in profile_update:
+                profile_assignments.append("vpn_node_key = ?")
+                profile_values.append(profile_update["vpn_node_key"])
+            if "account_publish_mode" in profile_update:
+                profile_assignments.append("account_publish_mode = ?")
+                profile_values.append(profile_update["account_publish_mode"])
+            profile_assignments.append("updated_at = ?")
+            profile_values.append(profile_update["updated_at"])
+            profile_values.append(account_id)
             conn.execute(
-                """
-                UPDATE browser_profiles
-                SET vpn_node_key = ?, account_publish_mode = ?, updated_at = ?
-                WHERE account_id = ?
-                """,
-                (
-                    profile_update.get("vpn_node_key", ""),
-                    profile_update.get("account_publish_mode", "inherit"),
-                    profile_update["updated_at"],
-                    account_id,
-                ),
+                f"UPDATE browser_profiles SET {', '.join(profile_assignments)} WHERE account_id = ?",
+                profile_values,
             )
             _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
     return get_account(account_id)

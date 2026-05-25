@@ -913,6 +913,10 @@ def run_matrix_publish(
             with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
                 env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
                 if use_vpn and item.vpn_node_key:
+                    # Close any already-open browser for this account first so the
+                    # next publish run launches a fresh session under the VPN env.
+                    service._close_chrome_browser_by_debug_port(debug_port)
+                    time.sleep(0.35)
                     env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
                     if item.vpn_country_code:
                         env["CYBERCAR_VPN_COUNTRY"] = item.vpn_country_code

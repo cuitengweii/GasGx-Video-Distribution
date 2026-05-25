@@ -840,13 +840,36 @@ h2 {
   margin-bottom: 14px;
 }
 
-.account-list-tools {
-  display: flex;
-  align-items: end;
-  justify-content: flex-end;
-  gap: 10px;
-  min-width: 0;
-  margin-left: auto;
+.account-list-header {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.account-list-head {
+  margin-bottom: 0;
+}
+
+.account-list-head h2 {
+  margin: 0;
+}
+
+.account-list-head .muted {
+  margin-top: 4px;
+}
+
+.account-search-field-prominent {
+  width: min(100%, 420px);
+  justify-self: end;
+  padding: 12px 14px;
+  border: 1px solid rgba(93, 214, 44, 0.16);
+  border-radius: 12px;
+  background: rgba(93, 214, 44, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.account-list-head .btn {
+  flex: 0 0 auto;
 }
 
 .account-search-field {
@@ -871,6 +894,17 @@ h2 {
   border-color: rgba(93, 214, 44, 0.55);
   outline: none;
   box-shadow: 0 0 0 2px rgba(93, 214, 44, 0.12);
+}
+
+@media (max-width: 900px) {
+  .account-list-head {
+    align-items: flex-start;
+  }
+
+  .account-search-field-prominent {
+    justify-self: stretch;
+    width: 100%;
+  }
 }
 
 .split {

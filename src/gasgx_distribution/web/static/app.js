@@ -2283,11 +2283,18 @@ function accountPublishMode(account) {
 }
 
 function accountVpnNodeLabel(account) {
+  const backendLabel = String(account?.vpn_node_label || "").trim();
+  if (backendLabel) {
+    const country = accountVpnCountryLabel(account);
+    return country ? `${country} · ${backendLabel}` : backendLabel;
+  }
   const node = vpnNodeByKey(accountVpnNodeKey(account));
   return vpnNodeDisplayLabel(node);
 }
 
 function accountVpnCountryLabel(account) {
+  const backendLabel = String(account?.vpn_country_label || "").trim();
+  if (backendLabel) return backendLabel;
   const node = vpnNodeByKey(accountVpnNodeKey(account));
   if (!node) return "未绑定";
   return vpnNodeCountryLabel(node);

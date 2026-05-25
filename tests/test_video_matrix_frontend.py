@@ -25,6 +25,8 @@ def test_account_status_chip_uses_chinese_label() -> None:
     assert 'active: "启用"' in app
     assert 'warmup: "养号"' in app
     assert 'paused: "暂停"' in app
+    assert 'const backendLabel = String(account?.vpn_node_label || "").trim()' in app
+    assert 'const backendLabel = String(account?.vpn_country_label || "").trim()' in app
     assert '<span class="chip">${account.status}</span>' not in app
     assert "function accountStatusEnabled(account)" in app
     assert "data-account-status-toggle" in app
@@ -116,8 +118,10 @@ def test_account_list_has_keyword_search_filter() -> None:
     assert "document.querySelector(\"#account-search-input\")?.addEventListener(\"input\", renderAccounts)" in app
     assert "document.querySelector(\"#accounts-repair-config\")?.addEventListener(\"click\"" in app
     assert "没有匹配的账号" in app
-    assert ".account-list-tools" in css
     assert ".account-search-field" in css
+    assert ".account-list-header" in css
+    assert ".account-list-head" in css
+    assert ".account-search-field-prominent" in css
 
 
 def test_terminal_login_failure_copy_mentions_login_confirmation() -> None:

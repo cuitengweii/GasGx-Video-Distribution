@@ -196,15 +196,18 @@
           <button class="btn primary" type="submit">创建账号</button>
         </form>
         <div class="panel">
-          <div class="panel-head">
-            <h2>账号列表</h2>
-            <div class="account-list-tools">
+          <div class="account-list-header">
+            <div class="panel-head account-list-head">
+              <div>
+                <h2>账号列表</h2>
+                <p class="muted">按名称、微信或手机号快速筛选账号。</p>
+              </div>
               <button id="accounts-repair-config" class="btn secondary btn-sm" type="button" data-no-global-loading="1">一键修复</button>
-              <label class="account-search-field" for="account-search-input">
-                <span>关键词搜索</span>
-                <input id="account-search-input" type="search" placeholder="名称 / 微信 / 手机号" autocomplete="off">
-              </label>
             </div>
+            <label class="account-search-field account-search-field-prominent" for="account-search-input">
+              <span>关键词搜索</span>
+              <input id="account-search-input" type="search" placeholder="名称 / 微信 / 手机号" autocomplete="off">
+            </label>
           </div>
           <div id="accounts-list" class="account-list"></div>
         </div>
