@@ -420,12 +420,45 @@ def _normalize_account_runtime(account: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_proxy_candidate(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    if token.startswith("${") and token.endswith("}"):
+        return ""
+    return token
+
+
+def _resolve_account_launch_proxy(account: dict[str, Any]) -> str:
+    proxy = resolve_account_vpn_proxy(account)
+    if proxy:
+        return proxy
+    if not str(account.get("vpn_node_key") or "").strip():
+        return ""
+    configured = _normalize_proxy_candidate(engine._default_network_proxy())  # type: ignore[attr-defined]
+    if configured:
+        return configured
+    try:
+        from cybercar.common.telegram_api import _detect_windows_manual_proxy
+    except Exception:
+        _detect_windows_manual_proxy = None  # type: ignore[assignment]
+    if callable(_detect_windows_manual_proxy):
+        system_proxy = _normalize_proxy_candidate(_detect_windows_manual_proxy())
+        if system_proxy:
+            return system_proxy
+    return ""
+
+
 def _normalize_account_profile_runtime(profile: dict[str, Any] | None) -> dict[str, Any]:
     data = dict(profile or {})
     node_key = str(data.get("vpn_node_key") or "").strip()
     publish_mode = _normalize_account_publish_mode(data.get("account_publish_mode"))
     node = resolve_vpn_node(node_key) if node_key else None
     node = dict(node or {})
+    proxy = _resolve_account_launch_proxy(data)
+    fingerprint = _json_payload(data.get("fingerprint_json"), {}) or _json_payload(data.get("fingerprint"), {})
+    if proxy and not str(fingerprint.get("proxy_slot") or "").strip():
+        fingerprint["proxy_slot"] = proxy
     data.update(
         {
             "vpn_node_key": node_key,
@@ -434,7 +467,9 @@ def _normalize_account_profile_runtime(profile: dict[str, Any] | None) -> dict[s
             "vpn_country_code": str(node.get("country_code") or "").strip().upper(),
             "vpn_country_label": str(node.get("country_label") or "").strip() or ("未知" if node_key else ""),
             "vpn_node_label": str(node.get("display_name") or node.get("name") or node.get("server") or "").strip(),
-            "vpn_proxy_url": str(node.get("proxy_url") or "").strip(),
+            "vpn_proxy_url": proxy or str(node.get("proxy_url") or "").strip(),
+            "fingerprint_json": fingerprint,
+            "fingerprint": fingerprint,
         }
     )
     return data
@@ -464,6 +499,83 @@ def resolve_account_vpn_proxy(account: dict[str, Any]) -> str:
     if not node:
         return ""
     return str(node.get("proxy_url") or "").strip()
+
+
+def _clash_controller_base_url() -> str:
+    explicit = _normalize_proxy_candidate(
+        os.environ.get("CYBERCAR_CLASH_CONTROLLER_URL")
+        or os.environ.get("CLASH_CONTROLLER_URL")
+        or ""
+    )
+    if explicit:
+        if "://" in explicit:
+            return explicit.rstrip("/")
+        if ":" in explicit:
+            return f"http://127.0.0.1:{explicit.rsplit(':', 1)[-1].strip()}"
+    appdata = str(os.environ.get("APPDATA") or "").strip()
+    if appdata:
+        config_path = Path(appdata) / "tidalab" / "config.yaml"
+        if config_path.exists():
+            try:
+                text = config_path.read_text(encoding="utf-8-sig", errors="replace")
+            except Exception:
+                text = ""
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("external-controller:"):
+                    continue
+                _, _, raw = stripped.partition(":")
+                host_port = raw.strip().strip("'\"")
+                if not host_port:
+                    break
+                if "://" in host_port:
+                    return host_port.rstrip("/")
+                if ":" in host_port:
+                    return f"http://127.0.0.1:{host_port.rsplit(':', 1)[-1].strip()}"
+                break
+    return "http://127.0.0.1:33212"
+
+
+def _clash_controller_request(method: str, path: str, *, json_body: dict[str, Any] | None = None) -> requests.Response | None:
+    base_url = _clash_controller_base_url()
+    if not base_url:
+        return None
+    session = requests.Session()
+    session.trust_env = False
+    url = f"{base_url.rstrip('/')}/{str(path or '').lstrip('/')}"
+    try:
+        return session.request(method.upper(), url, json=json_body, timeout=5)
+    except Exception:
+        return None
+
+
+def _configure_account_clash_pure_vpn(account: dict[str, Any]) -> bool:
+    node_key = str(account.get("vpn_node_key") or "").strip()
+    if not node_key:
+        return False
+    node = resolve_vpn_node(node_key)
+    if not node:
+        return False
+    proxy_name = str(node.get("display_name") or node.get("name") or node.get("server") or "").strip()
+    if not proxy_name:
+        return False
+    select_response = _clash_controller_request("get", "/proxies/SELECT")
+    if select_response is not None and select_response.ok:
+        try:
+            available = {
+                str(item or "").strip()
+                for item in (select_response.json().get("all") or [])
+                if str(item or "").strip()
+            }
+        except Exception:
+            available = set()
+        if available and proxy_name not in available:
+            _log(f"[Uploader] Clash SELECT group does not contain proxy: {proxy_name}")
+            return False
+    _clash_controller_request("put", "/proxies/SELECT", json_body={"name": proxy_name})
+    _clash_controller_request("put", "/proxies/GLOBAL", json_body={"name": "SELECT"})
+    _clash_controller_request("patch", "/configs", json_body={"mode": "global"})
+    return True
 
 
 def _stable_int(seed: str, modulo: int) -> int:
@@ -540,7 +652,7 @@ def _account_network_env(account: dict[str, Any] | None) -> Iterator[None]:
     previous_use_system_proxy = os.environ.get("CYBERCAR_USE_SYSTEM_PROXY")
     previous_vpn_node_key = os.environ.get("CYBERCAR_VPN_NODE_KEY")
     previous_vpn_country = os.environ.get("CYBERCAR_VPN_COUNTRY")
-    proxy = resolve_account_vpn_proxy(account or {})
+    proxy = _resolve_account_launch_proxy(account or {})
     node_key = str((account or {}).get("vpn_node_key") or "").strip()
     country = str((account or {}).get("vpn_country_code") or "").strip().upper()
     try:
@@ -7110,11 +7222,17 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
     if not platform_row:
         raise RuntimeError("wechat platform config missing")
     try:
-        _restart_account_browser_for_terminal(account_id, "wechat")
+        _configure_account_clash_pure_vpn(account)
     except Exception:
-        # Emergency supplemental publish must keep going even if the login browser
-        # is already open or the debug-port/profile state is slightly stale.
+        # Emergency supplemental publish must keep going even if the VPN controller
+        # is temporarily unavailable or the account does not have a VPN node.
         pass
+    runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
+    if runtime.get("browser_open") is True:
+        try:
+            _raise_account_browser_window(account_id, "wechat")
+        except Exception:
+            pass
     try:
         run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
     except Exception as exc:
@@ -7688,6 +7806,12 @@ def _resolve_account_platform_runtime(account: dict[str, Any], platform: str) ->
     platforms = [dict(item) for item in (account.get("platforms") or []) if isinstance(item, dict)]
     platform_row = next((item for item in platforms if str(item.get("platform") or "") == token), None)
     if isinstance(platform_row, dict):
+        proxy = _resolve_account_launch_proxy(account)
+        fingerprint = _json_payload(platform_row.get("fingerprint_json"), {}) or _json_payload(platform_row.get("fingerprint"), {})
+        if proxy and not str(fingerprint.get("proxy_slot") or "").strip():
+            fingerprint["proxy_slot"] = proxy
+        platform_row["fingerprint_json"] = fingerprint
+        platform_row["fingerprint"] = fingerprint
         return platform_row
     profile_dir = str(account.get("profile_dir") or "").strip()
     debug_port = int(account.get("debug_port") or 0)
@@ -7713,6 +7837,10 @@ def _resolve_account_platform_runtime(account: dict[str, Any], platform: str) ->
         "fingerprint_json": fingerprint,
         "fingerprint": _json_payload(fingerprint, {}) if isinstance(fingerprint, str) else dict(fingerprint or {}),
     }
+    proxy = _resolve_account_launch_proxy(account)
+    if proxy and not str(profile["fingerprint"].get("proxy_slot") or "").strip():
+        profile["fingerprint"]["proxy_slot"] = proxy
+        profile["fingerprint_json"] = profile["fingerprint"]
     profile.update(_decode_platform_profile(profile))
     return profile
 
@@ -8787,6 +8915,12 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
     profile_dir = Path(str(ap["profile_dir"]))
     profile_dir.mkdir(parents=True, exist_ok=True)
     debug_port = int(ap["debug_port"])
+    _configure_account_clash_pure_vpn(refreshed)
+    time.sleep(0.35)
+    launch_proxy = _resolve_account_launch_proxy(refreshed)
+    if launch_proxy and bool(engine._is_chrome_debug_port_ready(debug_port, timeout=0.2)):  # type: ignore[attr-defined]
+        _close_chrome_browser_by_debug_port(debug_port)
+        time.sleep(0.35)
     with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
         try:
             engine._ensure_chrome_debug_port(

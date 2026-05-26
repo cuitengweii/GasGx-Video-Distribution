@@ -164,7 +164,7 @@ let currentInteractionTab = localStorage.getItem("gasgx-interaction-tab") || "co
 let terminalCountdownTimer = null;
 let terminalWechatStatePollTimer = null;
 let terminalWechatStatePollInFlight = false;
-let terminalWechatSelectedAccountId = "";
+let terminalWechatSelectedAccountId = localStorage.getItem("gasgx-terminal-wechat-selected-account") || "";
 let terminalWechatAutoStatsEnabled = false;
 let terminalWechatAutoCommentEnabled = true;
 let terminalWechatAutoPrivateMessageEnabled = false;
@@ -197,6 +197,7 @@ const TERMINAL_WECHAT_AUTO_COMMENT_KEY = "gasgx-terminal-wechat-auto-comment";
 const TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_KEY = "gasgx-terminal-wechat-auto-private-message";
 const TERMINAL_WECHAT_AUTO_COMMENT_LIMIT_KEY = "gasgx-terminal-wechat-auto-comment-limit";
 const TERMINAL_WECHAT_AUTO_PRIVATE_MESSAGE_LIMIT_KEY = "gasgx-terminal-wechat-auto-private-message-limit";
+const TERMINAL_WECHAT_SELECTED_ACCOUNT_KEY = "gasgx-terminal-wechat-selected-account";
 const PERMISSION_DENIED_MESSAGE = "您权限不足";
 const PERMISSION_INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role=\"button\"], [tabindex]";
 
@@ -3174,11 +3175,18 @@ function terminalWechatSelectedAccountChoice() {
   const choices = terminalWechatAccountChoices();
   if (!choices.length) {
     terminalWechatSelectedAccountId = "";
+    localStorage.removeItem(TERMINAL_WECHAT_SELECTED_ACCOUNT_KEY);
     return null;
   }
+  const persistedSelectedAccountId = String(localStorage.getItem(TERMINAL_WECHAT_SELECTED_ACCOUNT_KEY) || "").trim();
+  if (!terminalWechatSelectedAccountId && persistedSelectedAccountId) {
+    terminalWechatSelectedAccountId = persistedSelectedAccountId;
+  }
   const selected = choices.find((item) => String(item.accountId) === String(terminalWechatSelectedAccountId || "").trim())
+    || choices.find((item) => String(item.accountId) === persistedSelectedAccountId)
     || choices[0];
   terminalWechatSelectedAccountId = selected.accountId;
+  localStorage.setItem(TERMINAL_WECHAT_SELECTED_ACCOUNT_KEY, String(selected.accountId));
   return selected;
 }
 
@@ -9663,7 +9671,6 @@ document.addEventListener("click", async (event) => {
     terminalErrorModalSignature = "";
     hideTerminalErrorModal();
     try {
-      triggerTerminalWechatAutoSideTasks(selected.accountId);
       state.terminalExecution = await api(`/api/accounts/${selected.accountId}/platforms/wechat/emergency-publish`, { method: "POST" });
       renderTerminalExecution();
     } catch (error) {
@@ -9758,6 +9765,11 @@ document.addEventListener("change", (event) => {
   const select = event.target.closest("#terminal-wechat-account-select");
   if (!select) return;
   terminalWechatSelectedAccountId = String(select.value || "").trim();
+  if (terminalWechatSelectedAccountId) {
+    localStorage.setItem(TERMINAL_WECHAT_SELECTED_ACCOUNT_KEY, terminalWechatSelectedAccountId);
+  } else {
+    localStorage.removeItem(TERMINAL_WECHAT_SELECTED_ACCOUNT_KEY);
+  }
   renderTerminalExecution();
 }, true);
 

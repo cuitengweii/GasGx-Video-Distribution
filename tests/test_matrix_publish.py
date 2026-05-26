@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from gasgx_distribution import db as dist_db
 from gasgx_distribution import service
@@ -409,6 +410,59 @@ def test_wechat_publish_uses_pipeline_draft_mode(monkeypatch, tmp_path: Path) ->
     assert wechat_profile_arg.endswith("profiles/matrix/a-01")
     assert cmd[cmd.index("--debug-port") + 1].isdigit()
     assert cmd[cmd.index("--wechat-debug-port") + 1] == cmd[cmd.index("--debug-port") + 1]
+
+
+def test_wechat_publish_uses_account_vpn_even_when_job_vpn_disabled(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    vpn_key = "vmess-ca-knyr-b-psakt-net-20101-加拿大-can-x1-0-ver10s"
+    service.create_account(
+        {
+            "account_key": "a-01",
+            "display_name": "A",
+            "platforms": ["wechat"],
+            "account_publish_mode": "publish",
+            "vpn_node_key": vpn_key,
+        }
+    )
+    _write_video(tmp_path / "runtime" / "materials" / "videos" / "one.mp4", int(time.time()))
+    save_distribution_settings(
+        {
+            "common": {"publish_mode": "draft"},
+            "jobs": {"matrix_wechat_publish": {"use_vpn": False}},
+        }
+    )
+    clash_calls: list[dict[str, Any]] = []
+    envs: list[dict[str, str]] = []
+    calls: list[list[str]] = []
+
+    def fake_configure_account_clash(account: dict[str, Any]) -> bool:
+        clash_calls.append(dict(account))
+        return True
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        env = dict(kwargs.get("env") or {})
+        envs.append(env)
+        workspaces = list((tmp_path / "runtime" / "matrix_publish_runs").glob("*"))
+        if workspaces:
+            (workspaces[0] / "uploaded_records_wechat.jsonl").write_text('{"ok":true}\n', encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", fake_configure_account_clash)
+    monkeypatch.setattr("gasgx_distribution.matrix_publish.subprocess.run", fake_run)
+
+    result = run_wechat_publish()
+
+    assert result["ok"] is True
+    assert clash_calls and clash_calls[0]["vpn_node_key"] == vpn_key
+    assert envs
+    vpn_env = next(env for env in envs if "CYBERCAR_VPN_NODE_KEY" in env)
+    assert vpn_env["CYBERCAR_VPN_NODE_KEY"] == vpn_key
+    assert vpn_env["CYBERCAR_DISABLE_REQUIRED_HASHTAGS"] == "1"
+    assert calls
+    cmd = _pipeline_cmd(calls)
+    assert "--wechat-publish-now" in cmd
+    assert "--wechat-save-draft-only" not in cmd
 
 
 def test_wechat_publish_disables_cybercar_required_hashtags(monkeypatch, tmp_path: Path) -> None:

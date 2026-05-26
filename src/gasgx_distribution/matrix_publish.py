@@ -629,6 +629,12 @@ def _runtime_publish_config(platform: str, settings: dict[str, Any], workspace: 
     return _runtime_config_for_non_wechat_platform(platform, settings, workspace)
 
 
+def _publish_item_uses_vpn(job_use_vpn: bool, item: PublishPlanItem) -> bool:
+    # Keep the current global switch, but let an account-level VPN config opt in
+    # even when the batch job itself is not globally VPN-enabled.
+    return bool(job_use_vpn) or bool(str(item.vpn_node_key or "").strip()) or bool(str(item.vpn_proxy_url or "").strip())
+
+
 def _caption_with_topics(settings: dict[str, Any]) -> str:
     caption = str(settings.get("caption") or "").strip()
     topics = str(settings.get("topics") or "").strip()
@@ -866,7 +872,11 @@ def run_matrix_publish(
             prepared = prepare_workspace(item)
             runtime_config = _runtime_publish_config(item.platform, settings, item.workspace)
             token = str(item.platform or "wechat").strip().lower() or "wechat"
-            effective_publish_mode = resolve_effective_publish_mode(str(settings.get("publish_mode") or "publish"), item.account_publish_mode)
+            effective_publish_mode = resolve_effective_publish_mode(
+                str(settings.get("publish_mode") or "publish"),
+                item.account_publish_mode,
+            )
+            use_vpn_for_item = _publish_item_uses_vpn(use_vpn, item)
             cmd: list[str] = [
                 sys.executable,
                 "-m",
@@ -912,9 +922,17 @@ def run_matrix_publish(
             log_path = item.workspace / f"matrix_{token}_publish.log"
             with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
                 env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
-                if use_vpn and item.vpn_node_key:
+                if use_vpn_for_item and item.vpn_node_key:
                     # Close any already-open browser for this account first so the
                     # next publish run launches a fresh session under the VPN env.
+                    service._configure_account_clash_pure_vpn(
+                        {
+                            "vpn_node_key": item.vpn_node_key,
+                            "vpn_country_code": item.vpn_country_code,
+                            "vpn_country_label": item.vpn_country_label,
+                        }
+                    )
+                    time.sleep(0.35)
                     service._close_chrome_browser_by_debug_port(debug_port)
                     time.sleep(0.35)
                     env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
@@ -956,6 +974,7 @@ def run_matrix_publish(
                 "vpn_country_code": item.vpn_country_code,
                 "vpn_country_label": item.vpn_country_label,
                 "vpn_proxy_url": item.vpn_proxy_url,
+                "vpn_enabled": use_vpn_for_item,
                 "effective_publish_mode": effective_publish_mode,
                 "returncode": completed.returncode,
                 "success": success,

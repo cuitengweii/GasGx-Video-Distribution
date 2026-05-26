@@ -41,7 +41,6 @@ def test_terminal_wechat_top_account_module_is_rendered() -> None:
     assert "terminal-wechat-auto-comment-limit" in app_js
     assert "terminal-wechat-auto-private-message-limit" in app_js
     assert "triggerTerminalWechatAutoSideTasks(targetAccountId);" in app_js
-    assert "triggerTerminalWechatAutoSideTasks(selected.accountId);" in app_js
     assert "open_capture_in_new_tab: true" in app_js
     assert "capture_tab_foreground: true" in app_js
     assert "keep_capture_tab_open: true" in app_js

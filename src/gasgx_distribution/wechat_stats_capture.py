@@ -941,12 +941,16 @@ def _capture_account_legacy(
     fingerprint = account.get("wechat_fingerprint") or {}
     apply_runtime_environment = apply_cybercar_environment
     apply_runtime_environment()
+    try:
+        service._configure_account_clash_pure_vpn(account)  # type: ignore[attr-defined]
+    except Exception:
+        pass
     page = None
     capture_page = None
     capture_page_is_new_tab = False
     hold_browser_for_login = False
     try:
-        with service._chrome_fingerprint_env(fingerprint):  # type: ignore[attr-defined]
+        with service._account_network_env(account), service._chrome_fingerprint_env(fingerprint):  # type: ignore[attr-defined]
             page = engine._connect_chrome(  # type: ignore[attr-defined]
                 debug_port=debug_port,
                 auto_open_chrome=bool(auto_open_browser),
@@ -1008,6 +1012,10 @@ def _capture_account(
     debug_port = int(account.get("wechat_debug_port") or 0)
     fingerprint = account.get("wechat_fingerprint") or {}
     apply_cybercar_environment()
+    try:
+        service._configure_account_clash_pure_vpn(account)  # type: ignore[attr-defined]
+    except Exception:
+        pass
     page = None
     capture_page = None
     capture_page_is_new_tab = False
@@ -1016,7 +1024,7 @@ def _capture_account(
     source_results: dict[str, Any] = {}
     missing_sources: list[str] = []
     try:
-        with service._chrome_fingerprint_env(fingerprint):  # type: ignore[attr-defined]
+        with service._account_network_env(account), service._chrome_fingerprint_env(fingerprint):  # type: ignore[attr-defined]
             page = engine._connect_chrome(  # type: ignore[attr-defined]
                 debug_port=debug_port,
                 auto_open_chrome=bool(auto_open_browser),
