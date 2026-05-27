@@ -159,6 +159,40 @@ def test_account_update_preserves_vpn_when_changing_publish_mode(monkeypatch, tm
     assert row["account_publish_mode"] == "draft"
 
 
+def test_account_update_clearing_vpn_closes_browser_and_clears_proxy_slot(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx CN 05",
+            "display_name": "GasGx CN 05",
+            "platforms": ["wechat"],
+        }
+    )
+
+    vpn_key = "vmess-ca-knyr-b-psakt-net-20101-鍔犳嬁澶?can-x1-0-ver10s"
+    updated = service.update_account(int(account["id"]), {"vpn_node_key": vpn_key})
+    assert updated is not None
+
+    close_calls: list[int] = []
+    monkeypatch.setattr(service, "_close_wechat_browser_for_account", lambda account_id: close_calls.append(int(account_id)))
+
+    cleared = service.update_account(int(account["id"]), {"vpn_node_key": ""})
+    assert cleared is not None
+    assert cleared["vpn_node_key"] == ""
+    assert close_calls == [int(account["id"])]
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT vpn_node_key, fingerprint_json FROM browser_profiles WHERE account_id = ?",
+            (int(account["id"]),),
+        ).fetchone()
+    assert row is not None
+    assert row["vpn_node_key"] == ""
+    fingerprint = json.loads(row["fingerprint_json"])
+    assert fingerprint["proxy_slot"] == ""
+
+
 def test_account_platform_unknown_login_status_renders_as_ready(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
 
@@ -4440,7 +4474,7 @@ def test_terminal_emergency_publish_keeps_browser_open_for_vpn(monkeypatch, tmp_
     assert publish_calls
 
 
-def test_terminal_emergency_publish_does_not_reopen_browser_when_runtime_is_missing(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_emergency_publish_opens_browser_when_runtime_is_missing(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
 
     runtime_state = {"windows": [], "emergency_publish_runs": []}
@@ -4501,7 +4535,7 @@ def test_terminal_emergency_publish_does_not_reopen_browser_when_runtime_is_miss
     result = service.start_terminal_emergency_wechat_publish(58)
 
     assert result == {"ok": True}
-    assert open_calls == []
+    assert open_calls == [(58, "wechat")]
     assert raise_calls == []
     assert publish_calls
 

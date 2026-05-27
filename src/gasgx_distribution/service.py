@@ -457,8 +457,11 @@ def _normalize_account_profile_runtime(profile: dict[str, Any] | None) -> dict[s
     node = dict(node or {})
     proxy = _resolve_account_launch_proxy(data)
     fingerprint = _json_payload(data.get("fingerprint_json"), {}) or _json_payload(data.get("fingerprint"), {})
-    if proxy and not str(fingerprint.get("proxy_slot") or "").strip():
-        fingerprint["proxy_slot"] = proxy
+    if proxy:
+        if not str(fingerprint.get("proxy_slot") or "").strip():
+            fingerprint["proxy_slot"] = proxy
+    elif "proxy_slot" in fingerprint:
+        fingerprint["proxy_slot"] = ""
     data.update(
         {
             "vpn_node_key": node_key,
@@ -489,12 +492,12 @@ def resolve_account_publish_mode(account: dict[str, Any], base_mode: str) -> str
 
 
 def resolve_account_vpn_proxy(account: dict[str, Any]) -> str:
-    proxy = str(account.get("vpn_proxy_url") or "").strip()
-    if proxy:
-        return proxy
     node_key = str(account.get("vpn_node_key") or "").strip()
     if not node_key:
         return ""
+    proxy = str(account.get("vpn_proxy_url") or "").strip()
+    if proxy:
+        return proxy
     node = resolve_vpn_node(node_key)
     if not node:
         return ""
@@ -7228,7 +7231,14 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
         # is temporarily unavailable or the account does not have a VPN node.
         pass
     runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
-    if runtime.get("browser_open") is True:
+    if runtime.get("browser_open") is False:
+        try:
+            _open_account_browser_for_terminal(account_id, "wechat")
+        except Exception:
+            # Keep going if the browser is already in a transient state; publish
+            # startup can still proceed and surface a clearer error if needed.
+            pass
+    else:
         try:
             _raise_account_browser_window(account_id, "wechat")
         except Exception:
@@ -7808,8 +7818,11 @@ def _resolve_account_platform_runtime(account: dict[str, Any], platform: str) ->
     if isinstance(platform_row, dict):
         proxy = _resolve_account_launch_proxy(account)
         fingerprint = _json_payload(platform_row.get("fingerprint_json"), {}) or _json_payload(platform_row.get("fingerprint"), {})
-        if proxy and not str(fingerprint.get("proxy_slot") or "").strip():
-            fingerprint["proxy_slot"] = proxy
+        if proxy:
+            if not str(fingerprint.get("proxy_slot") or "").strip():
+                fingerprint["proxy_slot"] = proxy
+        elif "proxy_slot" in fingerprint:
+            fingerprint["proxy_slot"] = ""
         platform_row["fingerprint_json"] = fingerprint
         platform_row["fingerprint"] = fingerprint
         return platform_row
@@ -7840,6 +7853,9 @@ def _resolve_account_platform_runtime(account: dict[str, Any], platform: str) ->
     proxy = _resolve_account_launch_proxy(account)
     if proxy and not str(profile["fingerprint"].get("proxy_slot") or "").strip():
         profile["fingerprint"]["proxy_slot"] = proxy
+        profile["fingerprint_json"] = profile["fingerprint"]
+    elif "proxy_slot" in profile["fingerprint"]:
+        profile["fingerprint"]["proxy_slot"] = ""
         profile["fingerprint_json"] = profile["fingerprint"]
     profile.update(_decode_platform_profile(profile))
     return profile
@@ -8397,6 +8413,14 @@ def repair_account_configs() -> dict[str, Any]:
 
 
 def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] | None:
+    current_account = get_account(account_id) or {}
+    vpn_node_key_changed = "vpn_node_key" in payload
+    current_vpn_node_key = str(current_account.get("vpn_node_key") or "").strip()
+    next_vpn_node_key = str(payload.get("vpn_node_key") or "").strip() if vpn_node_key_changed else current_vpn_node_key
+    vpn_node_key_will_change = vpn_node_key_changed and next_vpn_node_key != current_vpn_node_key
+    projected_account = dict(current_account)
+    if vpn_node_key_changed:
+        projected_account["vpn_node_key"] = next_vpn_node_key
     if brand_database_backend() == "supabase":
         allowed = {"display_name", "niche", "status", "notes"}
         update = {key: str(payload.get(key) or "").strip() for key in allowed if key in payload}
@@ -8411,9 +8435,27 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
         if profile_update:
             profile_update["updated_at"] = now_ts()
             _brand_supabase().update("browser_profiles", profile_update, filters={"account_id": account_id})
+        if vpn_node_key_will_change:
+            proxy = _resolve_account_launch_proxy(projected_account)
+            profile_row = _brand_supabase().select_one("browser_profiles", filters={"account_id": account_id})
+            if isinstance(profile_row, dict):
+                fingerprint = _json_payload(profile_row.get("fingerprint_json"), {})
+                if isinstance(fingerprint, dict):
+                    fingerprint["proxy_slot"] = proxy
+                    _brand_supabase().update(
+                        "browser_profiles",
+                        {"fingerprint_json": fingerprint, "updated_at": now_ts()},
+                        filters={"account_id": account_id},
+                    )
         if update or profile_update:
             _invalidate_supabase_read_cache("accounts")
-        return get_account(account_id)
+        updated = get_account(account_id)
+        if vpn_node_key_will_change:
+            try:
+                _close_wechat_browser_for_account(account_id)
+            except Exception:
+                pass
+        return updated
     ensure_database()
     allowed = {"display_name", "niche", "status", "notes"}
     assignments: list[str] = []
@@ -8461,8 +8503,29 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                 f"UPDATE browser_profiles SET {', '.join(profile_assignments)} WHERE account_id = ?",
                 profile_values,
             )
+            if vpn_node_key_will_change:
+                proxy = _resolve_account_launch_proxy(projected_account)
+                fingerprint_row = conn.execute(
+                    "SELECT fingerprint_json FROM browser_profiles WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()
+                if fingerprint_row is not None:
+                    fingerprint = _json_payload(fingerprint_row["fingerprint_json"], {})
+                    if isinstance(fingerprint, dict):
+                        fingerprint["proxy_slot"] = proxy
+                        conn.execute(
+                            "UPDATE browser_profiles SET fingerprint_json = ?, updated_at = ? WHERE account_id = ?",
+                            (json.dumps(fingerprint, ensure_ascii=False), now_ts(), account_id),
+                        )
+                        _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
             _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
-    return get_account(account_id)
+    updated = get_account(account_id)
+    if vpn_node_key_will_change:
+        try:
+            _close_wechat_browser_for_account(account_id)
+        except Exception:
+            pass
+    return updated
 
 
 def delete_account(account_id: int) -> bool:
