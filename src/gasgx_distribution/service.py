@@ -5616,7 +5616,7 @@ def _terminal_marker_page_url(
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>标识 {short_label}</title>
+  <title>【{display_name}】</title>
   <style>
     html, body {{ margin: 0; width: 100%; height: 100%; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #080b0d; color: #fff; }}
     body {{ display: grid; place-items: stretch; }}
@@ -6131,7 +6131,7 @@ def _terminal_publish_runs_root() -> Path:
 
 def _open_account_browser_for_terminal(account_id: int, platform: str) -> dict[str, Any]:
     try:
-        return open_account_browser(account_id, platform, apply_marker=False)
+        return open_account_browser(account_id, platform, apply_marker=False, preserve_blank_root=False)
     except TypeError:
         # Backward-compatible path for tests/monkeypatches that still provide
         # open_account_browser(account_id, platform) only.
@@ -6619,11 +6619,17 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
     platform_row = _resolve_account_platform_runtime(account, "wechat")
     if not platform_row:
         raise RuntimeError("wechat platform config missing")
-    candidates = mp.list_candidate_videos()
     publish_date = _terminal_business_date()
     used = mp._consumed_index(today=publish_date)
     state_payload = state if isinstance(state, dict) else _load_terminal_state_with_rollover()
     assigned = _terminal_reserved_asset_keys(state_payload, publish_date)
+    candidates = mp.list_candidate_videos()
+    if not candidates and bool(window.get("allow_any_day_material")):
+        candidates = sorted(
+            mp._scan_material_candidates(mp.materials_video_dir()),
+            key=lambda item: (item.stat().st_mtime, item.name),
+            reverse=True,
+        )
     source_video: Path | None = None
     for path in candidates:
         asset_key = mp._relative_asset_key(path)
@@ -7244,14 +7250,14 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
         except Exception:
             pass
     try:
-        run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
+        run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6", "allow_any_day_material": True}, {"id": account_id}, state)
     except Exception as exc:
         if not _is_debug_port_profile_conflict(str(exc)):
             raise
         _close_chrome_browser_by_debug_port(int(platform_row.get("debug_port") or 0))
         time.sleep(0.35)
         _restart_account_browser_for_terminal(account_id, "wechat")
-        run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6"}, {"id": account_id}, state)
+        run = _start_terminal_wechat_publish_compat({"id": 0, "color": "#3B82F6", "allow_any_day_material": True}, {"id": account_id}, state)
     run["kind"] = "emergency"
     run["display_name"] = str(account.get("display_name") or account.get("account_key") or account_id)
     run["account_key"] = str(account.get("account_key") or "")
@@ -8719,7 +8725,6 @@ def _account_browser_marker_payload(
     platform_label = str(getattr(capability, "label", "") or getattr(capability, "key", "") or "").strip()
     operator_wechat = _account_operator_wechat(account)
     window_id = int(terminal_window_id or 0)
-    window_label = f"终端执行窗口 {window_id:02d}" if window_id > 0 else ""
     palette = ["#EF4444", "#EAB308", "#22C55E", "#3B82F6", "#F97316"]
     seed = account_id or sum(ord(ch) for ch in account_key or display_name)
     accent = str(accent_override or "").strip()
@@ -8734,7 +8739,8 @@ def _account_browser_marker_payload(
         "meta": "",
         "accent": accent,
         "title_badge": str(title_badge or "").strip(),
-        "window_label": window_label,
+        "window_id": window_id,
+        "window_label": display_name,
         "phase_tag": str(phase_tag or "").strip() or "登录",
         "color_label": str(color_label or "").strip(),
     }
@@ -8749,11 +8755,17 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const markerId = '__gasgx-account-marker';
   const markerSelector = '#gasgx-account-marker';
   const markerStyleId = '__gasgx-account-marker-style';
+  const titleTimerKey = '__gasgxAccountMarkerTitleTimer';
   const cleanupOldOverlay = () => {{
     try {{
       const oldTimer = window.__gasgxAccountMarkerTimer;
       if (oldTimer) window.clearInterval(oldTimer);
       window.__gasgxAccountMarkerTimer = null;
+    }} catch (_error) {{}}
+    try {{
+      const oldTitleTimer = window[titleTimerKey];
+      if (oldTitleTimer) window.clearInterval(oldTitleTimer);
+      window[titleTimerKey] = null;
     }} catch (_error) {{}}
     try {{
       const observer = window.__gasgxAccountMarkerObserver;
@@ -8767,9 +8779,17 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
   const install = () => {{
     if (!document.documentElement) return false;
     cleanupOldOverlay();
-    const windowText = String(marker.window_label || '终端执行窗口');
-    const titleText = String(marker.title || '');
-    const operatorText = String(marker.operator_wechat || '');
+    const accountText = String(marker.title || marker.window_label || '');
+    const windowIdText = String(marker.window_id || '');
+    const titleText = accountText.length > 12 ? accountText.slice(0, 12) : accountText;
+    const desiredTitle = `【${{titleText || '-'}}】`;
+    const applyTitle = () => {{
+      try {{
+        if (!document.title || document.title !== desiredTitle) {{
+          document.title = desiredTitle;
+        }}
+      }} catch (_error) {{}}
+    }};
     try {{
       const canvas = document.createElement('canvas');
       canvas.width = 64;
@@ -8788,7 +8808,7 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
         ctx.font = 'bold 24px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const windowDigits = String(windowText).replace(/\\D/g, '').slice(-2) || '0';
+        const windowDigits = String(windowIdText).replace(/\\D/g, '').slice(-2) || '0';
         ctx.fillText(windowDigits, 32, 33);
         const iconHref = canvas.toDataURL('image/png');
         let icon = document.querySelector('link[rel=\"icon\"][data-gasgx-marker=\"1\"]');
@@ -8802,13 +8822,17 @@ def _account_browser_marker_script(payload: dict[str, Any]) -> str:
         icon.setAttribute('href', iconHref);
       }}
     }} catch (_error) {{}}
-    const titleShort = titleText.length > 8 ? titleText.slice(0, 8) : titleText;
-    const operatorShort = operatorText.length > 8 ? operatorText.slice(0, 8) : operatorText;
-    const windowShort = windowText.replace('终端执行窗口 ', '窗');
-    const prefix = `【${{windowShort}}】 ${{titleShort || '-'}} ${{operatorShort || '-'}}`;
-    if (!document.title || !document.title.startsWith(prefix)) {{
-      document.title = prefix;
-    }}
+    applyTitle();
+    try {{
+      const existingTitleTimer = window[titleTimerKey];
+      if (existingTitleTimer) window.clearInterval(existingTitleTimer);
+      window[titleTimerKey] = window.setInterval(applyTitle, 1200);
+    }} catch (_error) {{}}
+    try {{
+      document.addEventListener('visibilitychange', applyTitle, {{ passive: true }});
+      window.addEventListener('focus', applyTitle, {{ passive: true }});
+      window.addEventListener('pageshow', applyTitle, {{ passive: true }});
+    }} catch (_error) {{}}
     return true;
   }};
   const boot = () => {{
@@ -8829,9 +8853,11 @@ def _chrome_cdp_page_targets(debug_port: int) -> list[dict[str, Any]]:
     # so marker injection can still work in flaky startup windows.
     if not ready:
         pass
+    session = requests.Session()
+    session.trust_env = False
     for endpoint in (f"http://127.0.0.1:{debug_port}/json/list", f"http://127.0.0.1:{debug_port}/json"):
         try:
-            response = requests.get(endpoint, timeout=0.9)
+            response = session.get(endpoint, timeout=0.9)
             response.raise_for_status()
             payload = response.json()
         except Exception:
@@ -8888,6 +8914,7 @@ def _inject_account_browser_marker(
     terminal_window_id: int = 0,
     phase_tag: str = "",
     color_label: str = "",
+    blank_root_only: bool = False,
 ) -> bool:
     try:
         debug_port = int(platform_profile.get("debug_port") or 0)
@@ -8928,6 +8955,10 @@ def _inject_account_browser_marker(
             ws_url = str(target.get("webSocketDebuggerUrl") or "")
             if not ws_url or ws_url in seen_targets:
                 continue
+            if blank_root_only:
+                target_url = str(target.get("url") or "").strip().lower()
+                if target_url not in {"", "about:blank"} and not target_url.startswith("chrome://newtab"):
+                    continue
             title = str(target.get("title") or "").strip()
             if title.startswith(f"【{expected_window}】 "):
                 applied = True
@@ -8961,7 +8992,105 @@ def _inject_account_browser_marker(
     return applied
 
 
-def open_account_browser(account_id: int, platform: str, *, apply_marker: bool = True) -> dict[str, Any]:
+def _account_browser_tabs(page: Any) -> list[Any]:
+    getter = getattr(engine, "_browser_tabs", None)
+    if callable(getter):
+        try:
+            tabs = list(getter(page))
+        except Exception:
+            tabs = []
+        if tabs:
+            return tabs
+    return [page] if page else []
+
+
+def _account_browser_tab_url(tab: Any) -> str:
+    try:
+        return str(getattr(tab, "url", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _activate_account_browser_tab(page: Any, tab: Any) -> None:
+    if not page or not tab or tab is page:
+        return
+    try:
+        page.activate_tab(tab)
+        return
+    except Exception:
+        pass
+    try:
+        page.activate_tab(getattr(tab, "tab_id", tab))
+    except Exception:
+        pass
+
+
+def _ensure_account_browser_blank_root(page: Any) -> tuple[Any, bool]:
+    for tab in _account_browser_tabs(page):
+        if not tab:
+            continue
+        url = _account_browser_tab_url(tab).lower()
+        if not url or url == "about:blank" or url.startswith("chrome://newtab"):
+            _activate_account_browser_tab(page, tab)
+            return tab, False
+    try:
+        tab = page.new_tab(background=False)
+    except Exception:
+        return page, False
+    try:
+        tab.set.auto_handle_alert(on_off=True, accept=True)
+    except Exception:
+        pass
+    try:
+        current_url = _account_browser_tab_url(tab).lower()
+    except Exception:
+        current_url = ""
+    if current_url not in {"", "about:blank"}:
+        try:
+            tab.get("about:blank")
+        except Exception:
+            pass
+    return tab, True
+
+
+def _acquire_account_browser_tab(
+    page: Any,
+    platform: str,
+    open_url: str,
+    *,
+    prefer_primary_tab_for_wechat: bool = False,
+) -> tuple[Any, bool]:
+    token = normalize_platform(platform)
+    if token == "wechat" and prefer_primary_tab_for_wechat:
+        return page, False
+    for tab in _account_browser_tabs(page):
+        if not tab:
+            continue
+        url = _account_browser_tab_url(tab)
+        try:
+            if engine._is_platform_session_monitor_relevant_url(token, url, open_url):  # type: ignore[attr-defined]
+                _activate_account_browser_tab(page, tab)
+                return tab, False
+        except Exception:
+            continue
+    try:
+        tab = page.new_tab(background=False)
+    except Exception:
+        return page, False
+    try:
+        tab.set.auto_handle_alert(on_off=True, accept=True)
+    except Exception:
+        pass
+    return tab, True
+
+
+def open_account_browser(
+    account_id: int,
+    platform: str,
+    *,
+    apply_marker: bool = True,
+    preserve_blank_root: bool = True,
+) -> dict[str, Any]:
     account = _resolve_account_any_id(account_id)
     if account is None:
         raise KeyError("account not found")
@@ -8980,18 +9109,32 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
     debug_port = int(ap["debug_port"])
     _configure_account_clash_pure_vpn(refreshed)
     time.sleep(0.35)
-    launch_proxy = _resolve_account_launch_proxy(refreshed)
-    if launch_proxy and bool(engine._is_chrome_debug_port_ready(debug_port, timeout=0.2)):  # type: ignore[attr-defined]
-        _close_chrome_browser_by_debug_port(debug_port)
-        time.sleep(0.35)
+    root_startup_url = "about:blank"
     with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
         try:
-            engine._ensure_chrome_debug_port(
+            page = engine._connect_chrome(
                 debug_port=debug_port,
                 auto_open_chrome=True,
                 chrome_user_data_dir=str(profile_dir),
-                startup_url=capability.open_url,
+                startup_url=root_startup_url,
             )
+            _ensure_account_browser_blank_root(page)
+            marker_applied = _inject_account_browser_marker(refreshed, ap, capability, blank_root_only=True) if apply_marker else False
+            browser_page, _ = _acquire_account_browser_tab(
+                page,
+                token,
+                capability.open_url,
+                prefer_primary_tab_for_wechat=not bool(preserve_blank_root),
+            )
+            try:
+                current_url = str(getattr(browser_page, "url", "") or "").strip()
+            except Exception:
+                current_url = ""
+            if capability.open_url and capability.open_url not in current_url:
+                try:
+                    browser_page.get(capability.open_url)
+                except Exception:
+                    pass
         except Exception as exc:
             # Windows profile-path encoding can cause false mismatch detection on debug port ownership.
             # Recover by forcing the port owner to exit, then retry once.
@@ -9006,13 +9149,29 @@ def open_account_browser(account_id: int, platform: str, *, apply_marker: bool =
             else:
                 _close_chrome_browser_by_debug_port(debug_port)
                 time.sleep(0.35)
-                engine._ensure_chrome_debug_port(
+                page = engine._connect_chrome(
                     debug_port=debug_port,
                     auto_open_chrome=True,
                     chrome_user_data_dir=str(profile_dir),
-                    startup_url=capability.open_url,
+                    startup_url=root_startup_url,
                 )
-    marker_applied = _inject_account_browser_marker(refreshed, ap, capability) if apply_marker else False
+                _ensure_account_browser_blank_root(page)
+                marker_applied = _inject_account_browser_marker(refreshed, ap, capability, blank_root_only=True) if apply_marker else False
+                browser_page, _ = _acquire_account_browser_tab(
+                    page,
+                    token,
+                    capability.open_url,
+                    prefer_primary_tab_for_wechat=not bool(preserve_blank_root),
+                )
+                try:
+                    current_url = str(getattr(browser_page, "url", "") or "").strip()
+                except Exception:
+                    current_url = ""
+                if capability.open_url and capability.open_url not in current_url:
+                    try:
+                        browser_page.get(capability.open_url)
+                    except Exception:
+                        pass
     return {
         "ok": True,
         "platform": token,
@@ -9083,6 +9242,142 @@ def check_login_status(account_id: int, platform: str) -> dict[str, Any]:
     if status == "ready":
         result["resolved_login_incidents"] = resolve_login_notification_incidents(account_id, token)
     return result
+
+
+def start_account_emergency_publish(account_id: int, platform: str) -> dict[str, Any]:
+    token = normalize_platform(platform)
+    capability = get_platform(token)
+    if capability is None:
+        raise ValueError("unsupported platform")
+    if not capability.can_publish:
+        raise ValueError("publish not supported")
+    account = _resolve_account_any_id(account_id)
+    if account is None:
+        raise KeyError("account not found")
+    with connect() as conn:
+        ensure_account_platform(conn, account_id, token)
+    refreshed = get_account(account_id) or {}
+    try:
+        _configure_account_clash_pure_vpn(refreshed)
+    except Exception:
+        # Emergency publish must continue even if the VPN controller is not
+        # available. The actual publish step will surface any real browser issue.
+        pass
+    try:
+        open_account_browser(account_id, token, apply_marker=False)
+    except Exception:
+        # If the browser is already open or briefly unavailable, the publish
+        # step can still proceed and will surface the real error if needed.
+        pass
+    from . import matrix_publish as mp
+
+    publish_result = mp.run_account_platform_publish(account_id, token)
+    publish_result.setdefault("platform", token)
+    publish_result.setdefault("account_id", int(account_id))
+    if not bool(publish_result.get("ok")):
+        reason = ""
+        if isinstance(publish_result.get("results"), list) and publish_result["results"]:
+            first_result = publish_result["results"][0] if isinstance(publish_result["results"][0], dict) else {}
+            reason = str(first_result.get("error") or first_result.get("reason") or "").strip()
+        reason = reason or str(publish_result.get("reason") or "publish_failed").strip()
+        raise ValueError(reason)
+    return publish_result
+
+
+def _domestic_publish_account_platforms(account: dict[str, Any]) -> list[dict[str, Any]]:
+    domestic_order = ("wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili")
+    platforms = [item for item in (account.get("platforms") or []) if isinstance(item, dict)]
+    platform_map = {str(item.get("platform") or "").strip(): item for item in platforms}
+    result: list[dict[str, Any]] = []
+    for token in domestic_order:
+        capability = get_platform(token)
+        if capability is None or not capability.can_publish:
+            continue
+        item = platform_map.get(token)
+        if item is None or not bool(item.get("enabled", True)):
+            continue
+        result.append(item)
+    return result
+
+
+def _domestic_open_account_platforms(account: dict[str, Any]) -> list[dict[str, Any]]:
+    domestic_order = ("wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili")
+    platforms = [item for item in (account.get("platforms") or []) if isinstance(item, dict)]
+    platform_map = {str(item.get("platform") or "").strip(): item for item in platforms}
+    result: list[dict[str, Any]] = []
+    for token in domestic_order:
+        capability = get_platform(token)
+        if capability is None or not capability.can_open_browser:
+            continue
+        item = platform_map.get(token)
+        if item is None or not bool(item.get("enabled", True)):
+            continue
+        result.append(item)
+    return result
+
+
+def start_account_domestic_emergency_publish(account_id: int) -> dict[str, Any]:
+    account = _resolve_account_any_id(account_id)
+    if account is None:
+        raise KeyError("account not found")
+    domestic_platforms = _domestic_publish_account_platforms(account)
+    if not domestic_platforms:
+        raise ValueError("domestic_publish_not_supported")
+    from . import matrix_publish as mp
+
+    publish_result = mp.run_account_domestic_publish(account_id)
+    if bool(publish_result.get("skipped")):
+        reason = str(publish_result.get("reason") or "domestic_publish_skipped").strip()
+        raise ValueError(reason)
+    if isinstance(publish_result.get("results"), list):
+        success_count = sum(1 for item in publish_result["results"] if isinstance(item, dict) and bool(item.get("success")))
+        total_count = len(publish_result["results"])
+        publish_result["summary"] = f"国内平台批量发布完成：{success_count}/{total_count} 成功"
+    return publish_result
+
+
+def start_account_domestic_open_browser(account_id: int) -> dict[str, Any]:
+    account = _resolve_account_any_id(account_id)
+    if account is None:
+        raise KeyError("account not found")
+    domestic_platforms = _domestic_open_account_platforms(account)
+    if not domestic_platforms:
+        return {"ok": False, "skipped": True, "reason": "domestic_open_not_supported", "account_id": int(account_id)}
+
+    results: list[dict[str, Any]] = []
+    for item in domestic_platforms:
+        token = str(item.get("platform") or "").strip()
+        try:
+            open_result = open_account_browser(account_id, token)
+            open_result.setdefault("platform", token)
+            open_result.setdefault("account_id", int(account_id))
+            open_result["ok"] = bool(open_result.get("ok", True))
+            results.append(open_result)
+        except Exception as exc:
+            results.append({"ok": False, "platform": token, "account_id": int(account_id), "error": str(exc)})
+    opened_count = sum(1 for item in results if bool(item.get("ok")))
+    total_count = len(results)
+    failed_platforms = [str(item.get("platform") or "").strip() for item in results if not bool(item.get("ok"))]
+    platform_labels = {
+        "wechat": "视频号",
+        "douyin": "抖音",
+        "kuaishou": "快手",
+        "xiaohongshu": "小红书",
+        "bilibili": "B站",
+    }
+    summary = f"国内平台标签已打开：{opened_count}/{total_count}"
+    if failed_platforms:
+        summary = f"{summary}，部分失败：{', '.join(platform_labels.get(platform, platform) for platform in failed_platforms if platform)}"
+    return {
+        "ok": opened_count == total_count,
+        "account_id": int(account_id),
+        "count": total_count,
+        "opened_count": opened_count,
+        "failed_count": total_count - opened_count,
+        "platforms": [str(item.get("platform") or "").strip() for item in domestic_platforms],
+        "results": results,
+        "summary": summary,
+    }
 
 
 def create_task(payload: dict[str, Any]) -> dict[str, Any]:

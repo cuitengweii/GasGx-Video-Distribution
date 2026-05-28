@@ -23,9 +23,10 @@ from .public_settings import (
     resolve_material_dir,
 )
 from . import service
-from .platforms import get_platform
+from .platforms import get_platform, normalize_platform
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
+DOMESTIC_PUBLISH_PLATFORM_ORDER = ("wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili")
 
 
 @dataclass(frozen=True)
@@ -560,6 +561,130 @@ def prepare_workspace(item: PublishPlanItem) -> Path:
     return target
 
 
+def _build_publish_workspace(account_key: str, platform: str) -> Path:
+    run_token = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    token = str(platform or "wechat").strip().lower() or "wechat"
+    safe_account_key = re.sub(r"[^0-9A-Za-z._-]+", "_", str(account_key or "account").strip()) or "account"
+    root = get_paths().runtime_root / "account_publish_runs"
+    return root / f"{run_token}_{safe_account_key}_{token}"
+
+
+def _select_account_source_video(
+    account_id: int,
+    *,
+    videos: list[Path] | None = None,
+    today: str | None = None,
+) -> Path | None:
+    active_today = today or _today_date(_load_timezone()).isoformat()
+    available_videos = list(videos) if videos is not None else list_candidate_videos()
+    if not available_videos:
+        return None
+    locked_assets = _consumed_asset_locks(active_today)
+    locked_key = str(locked_assets.get(int(account_id)) or "").strip()
+    video_by_key = {_relative_asset_key(path): path for path in available_videos}
+    if locked_key:
+        locked_path = video_by_key.get(locked_key)
+        if locked_path is None:
+            candidate = materials_video_dir() / locked_key
+            if candidate.exists() and candidate.is_file():
+                locked_path = candidate
+        if locked_path is not None:
+            return locked_path
+    for path in available_videos:
+        if _asset_allowed_for_account(path, int(account_id)):
+            return path
+    return available_videos[0] if available_videos else None
+
+
+def build_account_platform_publish_item(
+    account_id: int,
+    platform: str,
+    *,
+    source_video: Path | str | None = None,
+    workspace: Path | None = None,
+) -> PublishPlanItem | None:
+    token = normalize_platform(platform)
+    capability = get_platform(token)
+    if capability is None or not capability.can_publish:
+        return None
+    account = service.get_account(int(account_id))
+    if account is None:
+        return None
+    platform_row = service._resolve_account_platform_runtime(account, token)  # type: ignore[attr-defined]
+    if not isinstance(platform_row, dict):
+        return None
+    profile_dir_raw = str(platform_row.get("profile_dir") or account.get("profile_dir") or "").strip()
+    if not profile_dir_raw:
+        return None
+    profile_dir = Path(profile_dir_raw)
+    debug_port = int(platform_row.get("debug_port") or account.get("debug_port") or 0)
+    if debug_port <= 0:
+        return None
+    today = _today_date(_load_timezone()).isoformat()
+    if (int(account_id), token, today) in _consumed_slots(today):
+        return None
+    source_video_path = Path(source_video) if source_video is not None else _select_account_source_video(int(account_id), today=today)
+    if source_video_path is None or not source_video_path.exists():
+        return None
+    account_key = str(account.get("account_key") or f"account-{account.get('id')}").strip()
+    display_name = str(account.get("display_name") or account_key).strip() or account_key
+    vpn_node_key = str(account.get("vpn_node_key") or "").strip()
+    vpn_country_code = str(account.get("vpn_country_code") or "").strip().upper()
+    vpn_country_label = str(account.get("vpn_country_label") or "").strip()
+    vpn_proxy_url = str(account.get("vpn_proxy_url") or "").strip()
+    account_publish_mode = str(account.get("account_publish_mode") or "inherit")
+    fingerprint = dict(platform_row.get("fingerprint") or account.get("fingerprint") or {})
+    return PublishPlanItem(
+        account_id=int(account_id),
+        account_key=account_key,
+        display_name=display_name,
+        account_publish_mode=account_publish_mode,
+        vpn_node_key=vpn_node_key,
+        vpn_country_code=vpn_country_code,
+        vpn_country_label=vpn_country_label,
+        vpn_proxy_url=vpn_proxy_url,
+        profile_dir=profile_dir,
+        debug_port=debug_port,
+        fingerprint=fingerprint,
+        source_video=source_video_path,
+        workspace=Path(workspace) if workspace is not None else _build_publish_workspace(account_key, token),
+        batch_index=0,
+        batch_position=0,
+        platform=token,
+        publish_date=today,
+    )
+
+
+def build_account_domestic_publish_items(account_id: int) -> list[PublishPlanItem]:
+    account = service.get_account(int(account_id))
+    if account is None:
+        return []
+    account_key = str(account.get("account_key") or f"account-{account.get('id')}").strip()
+    today = _today_date(_load_timezone()).isoformat()
+    shared_source = _select_account_source_video(int(account_id), today=today)
+    if shared_source is None:
+        return []
+    existing_platforms = {
+        str(item.get("platform") or "").strip()
+        for item in (account.get("platforms") or [])
+        if isinstance(item, dict) and bool(item.get("enabled", True))
+    }
+    items: list[PublishPlanItem] = []
+    batch_root = get_paths().runtime_root / "account_publish_runs" / f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{re.sub(r'[^0-9A-Za-z._-]+', '_', account_key) or 'account'}_domestic"
+    for platform in DOMESTIC_PUBLISH_PLATFORM_ORDER:
+        if platform not in existing_platforms:
+            continue
+        item = build_account_platform_publish_item(
+            int(account_id),
+            platform,
+            source_video=shared_source,
+            workspace=batch_root / platform,
+        )
+        if item is not None:
+            items.append(item)
+    return items
+
+
 def _runtime_config_for_wechat(settings: dict[str, Any], workspace: Path) -> Path:
     config = {
         "paths": {
@@ -629,10 +754,8 @@ def _runtime_publish_config(platform: str, settings: dict[str, Any], workspace: 
     return _runtime_config_for_non_wechat_platform(platform, settings, workspace)
 
 
-def _publish_item_uses_vpn(job_use_vpn: bool, item: PublishPlanItem) -> bool:
-    # Keep the current global switch, but let an account-level VPN config opt in
-    # even when the batch job itself is not globally VPN-enabled.
-    return bool(job_use_vpn) or bool(str(item.vpn_node_key or "").strip()) or bool(str(item.vpn_proxy_url or "").strip())
+def _publish_item_vpn_enabled(item: PublishPlanItem) -> bool:
+    return bool(str(item.vpn_node_key or "").strip()) or bool(str(item.vpn_proxy_url or "").strip())
 
 
 def _caption_with_topics(settings: dict[str, Any]) -> str:
@@ -690,6 +813,149 @@ def _has_publish_evidence(workspace: Path, platform: str) -> bool:
 
 def _has_wechat_publish_evidence(workspace: Path) -> bool:
     return _has_publish_evidence(workspace, "wechat")
+
+
+def _publish_command_for_item(
+    item: PublishPlanItem,
+    settings: dict[str, Any],
+    runtime_config: Path,
+    *,
+    disable_telegram: bool = False,
+) -> list[str]:
+    token = str(item.platform or "wechat").strip().lower() or "wechat"
+    debug_port = int(item.debug_port)
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "cybercar.pipeline",
+        "--publish-only",
+        "--upload-platforms",
+        token,
+        "--limit",
+        "1",
+        "--config",
+        str(runtime_config),
+        "--workspace",
+        str(item.workspace),
+        "--debug-port",
+        str(debug_port),
+        "--chrome-user-data-dir",
+        str(item.profile_dir),
+        "--upload-timeout",
+        str(int(settings.get("upload_timeout") or 60)),
+    ]
+    if disable_telegram:
+        cmd.extend(
+            [
+                "--disable-notify",
+                "--no-telegram-prefilter",
+                "--no-telegram-collect-notify",
+                "--no-publish-skip-notify",
+            ]
+        )
+    if token == "wechat":
+        cmd.extend(
+            [
+                "--wechat-debug-port",
+                str(debug_port),
+                "--wechat-chrome-user-data-dir",
+                str(item.profile_dir),
+                "--collection-name",
+                str(settings.get("collection_name") or ""),
+            ]
+        )
+    caption = caption_for_publish(settings, item.source_video)
+    if caption:
+        cmd.extend(["--caption", caption])
+    if token == "wechat":
+        if bool(settings.get("declare_original")):
+            cmd.append("--wechat-declare-original")
+        if resolve_effective_publish_mode(str(settings.get("publish_mode") or "publish"), item.account_publish_mode) == "draft":
+            cmd.append("--wechat-save-draft-only")
+        else:
+            cmd.append("--wechat-publish-now")
+    return cmd
+
+
+def _run_publish_item(item: PublishPlanItem, settings: dict[str, Any], *, disable_telegram: bool = False) -> dict[str, Any]:
+    prepared = prepare_workspace(item)
+    runtime_config = _runtime_publish_config(item.platform, settings, item.workspace)
+    token = str(item.platform or "wechat").strip().lower() or "wechat"
+    effective_publish_mode = resolve_effective_publish_mode(
+        str(settings.get("publish_mode") or "publish"),
+        item.account_publish_mode,
+    )
+    vpn_enabled_for_item = _publish_item_vpn_enabled(item)
+    cmd = _publish_command_for_item(item, settings, runtime_config, disable_telegram=disable_telegram)
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_path = item.workspace / f"matrix_{token}_publish.log"
+    with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
+        env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
+        if vpn_enabled_for_item and item.vpn_node_key:
+            # Close any already-open browser for this account first so the
+            # next publish run launches a fresh session under the VPN env.
+            service._configure_account_clash_pure_vpn(  # type: ignore[attr-defined]
+                {
+                    "vpn_node_key": item.vpn_node_key,
+                    "vpn_country_code": item.vpn_country_code,
+                    "vpn_country_label": item.vpn_country_label,
+                }
+            )
+            time.sleep(0.35)
+            service._close_chrome_browser_by_debug_port(item.debug_port)  # type: ignore[attr-defined]
+            time.sleep(0.35)
+            env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
+            if item.vpn_country_code:
+                env["CYBERCAR_VPN_COUNTRY"] = item.vpn_country_code
+            if item.vpn_proxy_url:
+                env["CYBERCAR_PROXY"] = item.vpn_proxy_url
+                env.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
+        extra_args = service.browser_fingerprint_launch_args(item.fingerprint)
+        if extra_args:
+            env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
+        completed = subprocess.run(
+            cmd,
+            cwd=str(get_paths().repo_root),
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    evidence_ok = _has_publish_evidence(item.workspace, token)
+    success = completed.returncode == 0 and evidence_ok
+    record = {
+        "account_id": item.account_id,
+        "account_key": item.account_key,
+        "platform": item.platform,
+        "asset_key": _relative_asset_key(item.source_video),
+        "publish_date": item.publish_date or _today_date(_load_timezone()).isoformat(),
+        "display_name": item.display_name,
+        "video": str(item.source_video),
+        "prepared_video": str(prepared),
+        "profile_dir": str(item.profile_dir),
+        "fingerprint": item.fingerprint,
+        "debug_port": int(item.debug_port),
+        "workspace": str(item.workspace),
+        "account_publish_mode": item.account_publish_mode,
+        "vpn_node_key": item.vpn_node_key,
+        "vpn_country_code": item.vpn_country_code,
+        "vpn_country_label": item.vpn_country_label,
+        "vpn_proxy_url": item.vpn_proxy_url,
+        "vpn_enabled": vpn_enabled_for_item,
+        "effective_publish_mode": effective_publish_mode,
+        "returncode": completed.returncode,
+        "success": success,
+        "evidence_ok": evidence_ok,
+        "log": str(log_path),
+        "started_at": started,
+        "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "telegram_disabled": bool(disable_telegram),
+    }
+    if completed.returncode == 0 and not evidence_ok:
+        record["error"] = f"{token} publish returned 0 but no uploaded_records_{token}.jsonl evidence was written"
+    return record
 
 
 def check_wechat_matrix_login_status(
@@ -831,7 +1097,6 @@ def run_matrix_publish(
     job_settings = _matrix_wechat_job_settings()
     wechat_settings = load_wechat_publish_settings()
     platform_settings = {token: load_platform_publish_settings(token) for token in sorted({item.platform for item in plan})}
-    use_vpn = bool(job_settings.get("use_vpn"))
     if dry_run:
         return {
             "ok": True,
@@ -868,128 +1133,10 @@ def run_matrix_publish(
             }
         for item in plan:
             settings = load_platform_publish_settings(item.platform)
-            debug_port = int(item.debug_port)
-            prepared = prepare_workspace(item)
-            runtime_config = _runtime_publish_config(item.platform, settings, item.workspace)
-            token = str(item.platform or "wechat").strip().lower() or "wechat"
-            effective_publish_mode = resolve_effective_publish_mode(
-                str(settings.get("publish_mode") or "publish"),
-                item.account_publish_mode,
-            )
-            use_vpn_for_item = _publish_item_uses_vpn(use_vpn, item)
-            cmd: list[str] = [
-                sys.executable,
-                "-m",
-                "cybercar.pipeline",
-                "--publish-only",
-                "--upload-platforms",
-                token,
-                "--limit",
-                "1",
-                "--config",
-                str(runtime_config),
-                "--workspace",
-                str(item.workspace),
-                "--debug-port",
-                str(debug_port),
-                "--chrome-user-data-dir",
-                str(item.profile_dir),
-                "--upload-timeout",
-                str(int(settings.get("upload_timeout") or 60)),
-            ]
-            if token == "wechat":
-                cmd.extend(
-                    [
-                        "--wechat-debug-port",
-                        str(debug_port),
-                        "--wechat-chrome-user-data-dir",
-                        str(item.profile_dir),
-                        "--collection-name",
-                        str(settings.get("collection_name") or ""),
-                    ]
-                )
-            caption = caption_for_publish(settings, item.source_video)
-            if caption:
-                cmd.extend(["--caption", caption])
-            if token == "wechat":
-                if bool(settings.get("declare_original")):
-                    cmd.append("--wechat-declare-original")
-                if effective_publish_mode == "draft":
-                    cmd.append("--wechat-save-draft-only")
-                else:
-                    cmd.append("--wechat-publish-now")
-            started = time.strftime("%Y-%m-%d %H:%M:%S")
-            log_path = item.workspace / f"matrix_{token}_publish.log"
-            with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
-                env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
-                if use_vpn_for_item and item.vpn_node_key:
-                    # Close any already-open browser for this account first so the
-                    # next publish run launches a fresh session under the VPN env.
-                    service._configure_account_clash_pure_vpn(
-                        {
-                            "vpn_node_key": item.vpn_node_key,
-                            "vpn_country_code": item.vpn_country_code,
-                            "vpn_country_label": item.vpn_country_label,
-                        }
-                    )
-                    time.sleep(0.35)
-                    service._close_chrome_browser_by_debug_port(debug_port)
-                    time.sleep(0.35)
-                    env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
-                    if item.vpn_country_code:
-                        env["CYBERCAR_VPN_COUNTRY"] = item.vpn_country_code
-                    if item.vpn_proxy_url:
-                        env["CYBERCAR_PROXY"] = item.vpn_proxy_url
-                        env.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
-                extra_args = service.browser_fingerprint_launch_args(item.fingerprint)
-                if extra_args:
-                    env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
-                completed = subprocess.run(
-                    cmd,
-                    cwd=str(get_paths().repo_root),
-                    env=env,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-            evidence_ok = _has_publish_evidence(item.workspace, token)
-            success = completed.returncode == 0 and evidence_ok
-            record = {
-                "account_id": item.account_id,
-                "account_key": item.account_key,
-                "platform": item.platform,
-                "asset_key": _relative_asset_key(item.source_video),
-                "publish_date": item.publish_date or _today_date(_load_timezone()).isoformat(),
-                "display_name": item.display_name,
-                "video": str(item.source_video),
-                "prepared_video": str(prepared),
-                "profile_dir": str(item.profile_dir),
-                "fingerprint": item.fingerprint,
-                "debug_port": debug_port,
-                "workspace": str(item.workspace),
-                "account_publish_mode": item.account_publish_mode,
-                "vpn_node_key": item.vpn_node_key,
-                "vpn_country_code": item.vpn_country_code,
-                "vpn_country_label": item.vpn_country_label,
-                "vpn_proxy_url": item.vpn_proxy_url,
-                "vpn_enabled": use_vpn_for_item,
-                "effective_publish_mode": effective_publish_mode,
-                "returncode": completed.returncode,
-                "success": success,
-                "evidence_ok": evidence_ok,
-                "log": str(log_path),
-                "started_at": started,
-                "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            if completed.returncode == 0 and not evidence_ok:
-                record["error"] = (
-                    f"{token} publish returned 0 but no uploaded_records_{token}.jsonl evidence was written"
-                )
+            record = _run_publish_item(item, settings)
             results.append(record)
             runs.append(record)
-            if success:
+            if record.get("success"):
                 consumed.append(
                     {
                         "asset_key": record["asset_key"],
@@ -1011,5 +1158,126 @@ def run_matrix_publish(
 
 def run_wechat_publish(*, limit: int = 0, dry_run: bool = False) -> dict[str, Any]:
     return run_matrix_publish(limit=limit, dry_run=dry_run, platforms=frozenset({"wechat"}))
+
+
+def run_account_platform_publish(
+    account_id: int,
+    platform: str,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    token = normalize_platform(platform)
+    capability = get_platform(token)
+    if capability is None:
+        return {"ok": False, "skipped": True, "reason": "unsupported_platform", "platform": token}
+    if not capability.can_publish:
+        return {"ok": False, "skipped": True, "reason": "publish_not_supported", "platform": token}
+    item = build_account_platform_publish_item(account_id, token)
+    if item is None:
+        return {"ok": False, "skipped": True, "reason": "no_available_material", "platform": token, "account_id": int(account_id)}
+    settings = load_platform_publish_settings(token)
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "platform": token,
+            "account_id": int(account_id),
+            "settings": settings,
+            "item": _serialize_plan_item(item),
+        }
+
+    locked, lock_payload = _acquire_publish_lock()
+    if not locked:
+        return {"ok": False, "skipped": True, "reason": "publish_lock_active", "lock": lock_payload, "platform": token}
+
+    state = _load_state()
+    consumed = list(state.get("consumed", [])) if isinstance(state.get("consumed"), list) else []
+    runs = list(state.get("runs", [])) if isinstance(state.get("runs"), list) else []
+    try:
+        record = _run_publish_item(item, settings, disable_telegram=True)
+        runs.append(record)
+        if record.get("success"):
+            consumed.append(
+                {
+                    "asset_key": record["asset_key"],
+                    "account_id": item.account_id,
+                    "platform": item.platform,
+                    "publish_date": record["publish_date"],
+                    "success": True,
+                    "finished_at": int(time.time()),
+                    "asset_metadata": _asset_manifest_metadata(item.source_video),
+                }
+            )
+        state["consumed"] = consumed[-500:]
+        state["runs"] = runs[-200:]
+        _save_state(state)
+        return {"ok": bool(record.get("success")), "count": 1, "platform": token, "account_id": item.account_id, "results": [record]}
+    finally:
+        _release_publish_lock()
+
+
+def run_account_domestic_publish(
+    account_id: int,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    account = service.get_account(int(account_id))
+    if account is None:
+        return {"ok": False, "skipped": True, "reason": "account_not_found", "account_id": int(account_id)}
+    items = build_account_domestic_publish_items(int(account_id))
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "account_id": int(account_id),
+            "items": [_serialize_plan_item(item) for item in items],
+        }
+    if not items:
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "no_available_domestic_platforms",
+            "account_id": int(account_id),
+        }
+
+    locked, lock_payload = _acquire_publish_lock()
+    if not locked:
+        return {"ok": False, "skipped": True, "reason": "publish_lock_active", "lock": lock_payload, "account_id": int(account_id)}
+
+    state = _load_state()
+    consumed = list(state.get("consumed", [])) if isinstance(state.get("consumed"), list) else []
+    runs = list(state.get("runs", [])) if isinstance(state.get("runs"), list) else []
+    results: list[dict[str, Any]] = []
+    try:
+        for item in items:
+            settings = load_platform_publish_settings(item.platform)
+            record = _run_publish_item(item, settings, disable_telegram=True)
+            results.append(record)
+            runs.append(record)
+            if record.get("success"):
+                consumed.append(
+                    {
+                        "asset_key": record["asset_key"],
+                        "account_id": item.account_id,
+                        "platform": item.platform,
+                        "publish_date": record["publish_date"],
+                        "success": True,
+                        "finished_at": int(time.time()),
+                        "asset_metadata": _asset_manifest_metadata(item.source_video),
+                    }
+                )
+            state["consumed"] = consumed[-500:]
+            state["runs"] = runs[-200:]
+            _save_state(state)
+        return {
+            "ok": all(item["success"] for item in results),
+            "count": len(results),
+            "account_id": int(account_id),
+            "results": results,
+            "platforms": [item.platform for item in items],
+            "source_video": str(items[0].source_video) if items else "",
+        }
+    finally:
+        _release_publish_lock()
 
 

@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from datetime import date, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,10 +14,14 @@ from gasgx_distribution.matrix_publish import (
     _caption_with_topics,
     caption_for_publish,
     asset_day,
+    _relative_asset_key,
     _runtime_config_for_wechat,
     build_publish_plan,
+    build_account_domestic_publish_items,
     list_candidate_videos,
     publish_lock_path,
+    run_account_platform_publish,
+    run_account_domestic_publish,
     run_matrix_publish,
     run_wechat_publish,
 )
@@ -270,6 +275,165 @@ def test_publish_plan_allows_same_day_multi_platform_slots_with_same_video(monke
     assert [item.source_video.name for item in plan] == ["one.mp4"]
 
 
+def test_account_platform_publish_reuses_locked_source_and_disables_telegram(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat", "douyin"]})
+    base = tmp_path / "runtime" / "materials" / "videos"
+    now = int(time.time())
+    locked = base / "locked.mp4"
+    other = base / "other.mp4"
+    _write_video(locked, now)
+    _write_video(other, now - 10)
+    publish_day = "2026-05-18"
+    state_path = tmp_path / "runtime" / "matrix_publish_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "consumed": [
+                    {
+                        "asset_key": _relative_asset_key(locked),
+                        "account_id": 1,
+                        "platform": "wechat",
+                        "publish_date": publish_day,
+                        "success": True,
+                        "finished_at": now,
+                    }
+                ],
+                "runs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 18))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [locked, other])
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda _workspace, _platform: True)
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "publish",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+    popen_calls: list[list[str]] = []
+
+    class FakeCompleted:
+        returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        popen_calls.append(list(cmd))
+        return FakeCompleted()
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+
+    result = run_account_platform_publish(account_id=1, platform="douyin")
+
+    assert result["ok"] is True
+    assert result["results"][0]["asset_key"] == _relative_asset_key(locked)
+    assert result["results"][0]["video"] == str(locked)
+    assert "--disable-notify" in popen_calls[0]
+    assert "--no-telegram-prefilter" in popen_calls[0]
+    assert "--no-telegram-collect-notify" in popen_calls[0]
+    assert "--no-publish-skip-notify" in popen_calls[0]
+
+
+def test_build_account_domestic_publish_items_reuses_shared_source(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account(
+        {
+            "account_key": "a-01",
+            "display_name": "A",
+            "platforms": ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"],
+        }
+    )
+    base = tmp_path / "runtime" / "materials" / "videos"
+    shared = base / "shared.mp4"
+    other = base / "other.mp4"
+    _write_video(shared, int(time.time()))
+    _write_video(other, int(time.time()) - 10)
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 28))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [other, shared])
+    monkeypatch.setattr(mp, "_consumed_asset_locks", lambda today=None: {1: _relative_asset_key(shared)})
+
+    items = build_account_domestic_publish_items(1)
+
+    assert [item.platform for item in items] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
+    assert {item.source_video.name for item in items} == {"shared.mp4"}
+    assert [item.workspace.name for item in items] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
+
+
+def test_run_account_domestic_publish_reuses_shared_source_and_disables_telegram(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account(
+        {
+            "account_key": "a-01",
+            "display_name": "A",
+            "platforms": ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"],
+        }
+    )
+    base = tmp_path / "runtime" / "materials" / "videos"
+    shared = base / "shared.mp4"
+    other = base / "other.mp4"
+    _write_video(shared, int(time.time()))
+    _write_video(other, int(time.time()) - 10)
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 28))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [other, shared])
+    monkeypatch.setattr(mp, "_consumed_asset_locks", lambda today=None: {1: _relative_asset_key(shared)})
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "publish",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_publish_item(item, settings, *, disable_telegram=False):
+        calls.append(
+            {
+                "platform": item.platform,
+                "source_video": str(item.source_video),
+                "disable_telegram": disable_telegram,
+            }
+        )
+        return {
+            "platform": item.platform,
+            "account_id": item.account_id,
+            "asset_key": _relative_asset_key(item.source_video),
+            "publish_date": item.publish_date,
+            "success": True,
+        }
+
+    monkeypatch.setattr(mp, "_run_publish_item", fake_run_publish_item)
+
+    result = run_account_domestic_publish(1)
+
+    assert result["ok"] is True
+    assert result["count"] == 5
+    assert result["platforms"] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
+    assert result["source_video"] == str(shared)
+    assert {call["source_video"] for call in calls} == {str(shared)}
+    assert all(call["disable_telegram"] is True for call in calls)
+
+
 def test_publish_plan_reuses_locked_asset_for_remaining_platforms(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat", "douyin"]})
@@ -412,7 +576,7 @@ def test_wechat_publish_uses_pipeline_draft_mode(monkeypatch, tmp_path: Path) ->
     assert cmd[cmd.index("--wechat-debug-port") + 1] == cmd[cmd.index("--debug-port") + 1]
 
 
-def test_wechat_publish_uses_account_vpn_even_when_job_vpn_disabled(monkeypatch, tmp_path: Path) -> None:
+def test_wechat_publish_uses_account_vpn_for_bound_accounts(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     vpn_key = "vmess-ca-knyr-b-psakt-net-20101-加拿大-can-x1-0-ver10s"
     service.create_account(
@@ -428,7 +592,6 @@ def test_wechat_publish_uses_account_vpn_even_when_job_vpn_disabled(monkeypatch,
     save_distribution_settings(
         {
             "common": {"publish_mode": "draft"},
-            "jobs": {"matrix_wechat_publish": {"use_vpn": False}},
         }
     )
     clash_calls: list[dict[str, Any]] = []

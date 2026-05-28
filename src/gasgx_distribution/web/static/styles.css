@@ -2210,6 +2210,14 @@ select option {
   min-width: 0;
 }
 
+.account-platform-summary-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .account-platform-summary strong {
   font-size: 13px;
   font-weight: 800;
@@ -2594,6 +2602,78 @@ select option {
 
 .platform-open-btn {
   min-height: 38px;
+}
+
+.platform-wechat-action {
+  min-width: 170px;
+  justify-content: flex-start;
+  align-items: center;
+  padding: 8px 12px;
+  gap: 10px;
+  text-align: left;
+  white-space: normal;
+}
+
+.platform-wechat-action .platform-logo {
+  width: 20px;
+  height: 20px;
+}
+
+.platform-action-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.platform-action-main {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.platform-action-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.platform-wechat-action.is-open {
+  border-color: rgba(93, 214, 44, 0.2);
+  background: rgba(93, 214, 44, 0.08);
+}
+
+.platform-wechat-action.is-countdown {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.platform-wechat-action.is-ready {
+  border-color: rgba(93, 214, 44, 0.34);
+  background: linear-gradient(180deg, rgba(93, 214, 44, 0.22), rgba(93, 214, 44, 0.14));
+  color: #f1ffe7;
+}
+
+.platform-wechat-action.is-opened {
+  border-color: rgba(93, 214, 44, 0.34);
+  background: linear-gradient(180deg, rgba(93, 214, 44, 0.22), rgba(93, 214, 44, 0.14));
+  color: #f1ffe7;
+}
+
+.platform-wechat-action.is-partial {
+  border-color: rgba(255, 193, 7, 0.34);
+  background: linear-gradient(180deg, rgba(255, 193, 7, 0.18), rgba(255, 193, 7, 0.1));
+  color: #fff3c2;
+}
+
+.platform-wechat-action.is-publishing {
+  border-color: rgba(93, 214, 44, 0.22);
+  background: rgba(93, 214, 44, 0.1);
+  color: #dfffc4;
+}
+
+.platform-wechat-action[disabled] {
+  cursor: not-allowed;
+  opacity: 0.88;
 }
 
 .platform-inline-status {

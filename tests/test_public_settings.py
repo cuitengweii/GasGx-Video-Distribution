@@ -465,19 +465,19 @@ def test_bulk_task_status_and_delete_api(monkeypatch, tmp_path: Path) -> None:
     assert client.get("/api/tasks").json() == []
 
 
-def test_distribution_settings_keep_vpn_section_and_use_vpn(monkeypatch, tmp_path: Path) -> None:
+def test_distribution_settings_keep_vpn_section_and_drop_use_vpn(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
 
     saved = save_distribution_settings(
         {
             "common": {},
-            "jobs": {"matrix_wechat_publish": {"use_vpn": True}},
+            "jobs": {"matrix_wechat_publish": {}},
             "platforms": {},
             "vpn": {"subscription_url": "https://example.invalid/subscribe"},
         }
     )
 
-    assert saved["jobs"]["matrix_wechat_publish"]["use_vpn"] is True
+    assert "use_vpn" not in saved["jobs"]["matrix_wechat_publish"]
     assert saved["vpn"]["subscription_url"] == "https://example.invalid/subscribe"
     assert load_distribution_settings()["vpn"]["subscription_url"] == "https://example.invalid/subscribe"
 

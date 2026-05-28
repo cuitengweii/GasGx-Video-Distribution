@@ -37,7 +37,6 @@ DEFAULT_MATRIX_WECHAT_JOB_SETTINGS: dict[str, Any] = {
     "rotate_start_group": True,
     "shuffle_within_batch": True,
     "retry_failed_last": True,
-    "use_vpn": False,
 }
 
 DEFAULT_VPN_SETTINGS: dict[str, Any] = {
@@ -213,7 +212,6 @@ def _normalize_matrix_wechat_job(payload: dict[str, Any]) -> dict[str, Any]:
     merged["rotate_start_group"] = _normalize_bool(merged.get("rotate_start_group"))
     merged["shuffle_within_batch"] = _normalize_bool(merged.get("shuffle_within_batch"))
     merged["retry_failed_last"] = _normalize_bool(merged.get("retry_failed_last"))
-    merged["use_vpn"] = _normalize_bool(merged.get("use_vpn"))
     return merged
 
 

@@ -10,7 +10,9 @@ import contextlib
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from fastapi.testclient import TestClient
 
@@ -2704,7 +2706,7 @@ def test_open_browser_uses_account_specific_profile(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(
         service,
         "_inject_account_browser_marker",
-        lambda account, platform_profile, capability: marker_calls.append((account, platform_profile, capability)) or True,
+        lambda account, platform_profile, capability, **kwargs: marker_calls.append((account, platform_profile, capability)) or True,
     )
 
     result = service.open_account_browser(int(account["id"]), "x")
@@ -2739,16 +2741,59 @@ def test_open_browser_uses_explicit_vpn_proxy_only(monkeypatch, tmp_path: Path) 
     calls: list[dict[str, Any]] = []
     close_calls: list[int] = []
     clash_calls: list[tuple[str, str, dict[str, Any] | None]] = []
+    connect_calls: list[dict[str, Any]] = []
+
+    class FakeTab:
+        def __init__(self, url: str = "") -> None:
+            self.url = url
+            self.tab_id = f"tab-{id(self)}"
+            self.get_calls: list[str] = []
+
+            class _Setter:
+                def auto_handle_alert(self, **_kwargs: Any) -> None:
+                    return None
+
+            self.set = _Setter()
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(url)
+            self.url = url
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://channels.weixin.qq.com/login.html"
+            self.tab_id = "root-tab"
+            self.new_tab_calls: list[bool] = []
+            self.activate_calls: list[Any] = []
+            self.get_calls: list[str] = []
+            self.tabs: list[Any] = [self]
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(url)
+            self.url = url
+
+        def new_tab(self, background: bool = False) -> FakeTab:
+            self.new_tab_calls.append(bool(background))
+            tab = FakeTab()
+            self.tabs.append(tab)
+            return tab
+
+        def activate_tab(self, tab: Any) -> None:
+            self.activate_calls.append(tab)
+
+    fake_page = FakePage()
     monkeypatch.setattr(
         service.engine,
-        "_ensure_chrome_debug_port",
-        lambda **kwargs: calls.append(
+        "_connect_chrome",
+        lambda **kwargs: connect_calls.append(dict(kwargs))
+        or calls.append(
             {
                 "kwargs": kwargs,
                 "proxy": os.environ.get("CYBERCAR_PROXY"),
                 "extra_args": os.environ.get("CYBERCAR_CHROME_EXTRA_ARGS"),
             }
-        ),
+        )
+        or fake_page,
     )
     monkeypatch.setattr(service, "_close_chrome_browser_by_debug_port", lambda debug_port: close_calls.append(int(debug_port)))
     monkeypatch.setattr(
@@ -2775,7 +2820,6 @@ def test_open_browser_uses_explicit_vpn_proxy_only(monkeypatch, tmp_path: Path) 
     result = service.open_account_browser(int(account["id"]), "wechat")
 
     assert result["ok"] is True
-    assert close_calls == [int(updated["platforms"][0]["debug_port"])]
     assert clash_calls == [
         ("GET", "/proxies/SELECT", {}),
         ("PUT", "/proxies/SELECT", {"name": "🇨🇦 ①加拿大 | CAN x1.0{Ver10S}"}),
@@ -2784,7 +2828,75 @@ def test_open_browser_uses_explicit_vpn_proxy_only(monkeypatch, tmp_path: Path) 
     ]
     assert calls
     assert calls[0]["proxy"] == "http://127.0.0.1:7890"
-    assert "--proxy-server=http://127.0.0.1:7890" in str(calls[0]["extra_args"] or "")
+    assert calls[0]["kwargs"]["startup_url"] == "about:blank"
+    assert fake_page.new_tab_calls == [False]
+    assert fake_page.get_calls == ["https://channels.weixin.qq.com/platform/post/create"]
+    assert isinstance(fake_page.tabs[-1], FakeTab)
+    assert fake_page.tabs[-1].get_calls == []
+    assert connect_calls and connect_calls[0]["startup_url"] == "about:blank"
+
+
+def test_open_browser_keeps_existing_session_for_non_wechat_platform(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-douyin-01", "display_name": "GasGx Douyin 01", "platforms": ["douyin"]})
+    close_calls: list[int] = []
+    connect_calls: list[dict[str, Any]] = []
+
+    class FakeTab:
+        def __init__(self, url: str = "") -> None:
+            self.url = url
+            self.tab_id = f"tab-{id(self)}"
+            self.get_calls: list[str] = []
+
+            class _Setter:
+                def auto_handle_alert(self, **_kwargs: Any) -> None:
+                    return None
+
+            self.set = _Setter()
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(url)
+            self.url = url
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://channels.weixin.qq.com/login.html"
+            self.tab_id = "root-tab"
+            self.new_tab_calls: list[bool] = []
+            self.activate_calls: list[Any] = []
+            self.get_calls: list[str] = []
+            self.tabs: list[Any] = [self]
+
+        def get(self, url: str) -> None:
+            self.get_calls.append(url)
+            self.url = url
+
+        def new_tab(self, background: bool = False) -> FakeTab:
+            self.new_tab_calls.append(bool(background))
+            tab = FakeTab()
+            self.tabs.append(tab)
+            return tab
+
+        def activate_tab(self, tab: Any) -> None:
+            self.activate_calls.append(tab)
+
+    fake_page = FakePage()
+    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service.engine, "_is_chrome_debug_port_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(service.engine, "_connect_chrome", lambda **kwargs: connect_calls.append(dict(kwargs)) or fake_page)
+    monkeypatch.setattr(service.engine, "_browser_tabs", lambda page: list(page.tabs))
+    monkeypatch.setattr(service, "_close_chrome_browser_by_debug_port", lambda debug_port: close_calls.append(int(debug_port)))
+    monkeypatch.setattr(service, "_inject_account_browser_marker", lambda *args, **kwargs: True)
+
+    result = service.open_account_browser(int(account["id"]), "douyin")
+
+    assert result["ok"] is True
+    assert close_calls == []
+    assert connect_calls and connect_calls[0]["startup_url"] == "about:blank"
+    assert fake_page.new_tab_calls == [False, False]
+    assert fake_page.get_calls == []
+    assert isinstance(fake_page.tabs[-1], FakeTab)
+    assert fake_page.tabs[-1].get_calls == ["https://creator.douyin.com/creator-micro/content/upload"]
 
 
 def test_account_browser_marker_uses_cdp_current_and_future_documents(monkeypatch) -> None:
@@ -2823,7 +2935,14 @@ def test_account_browser_marker_uses_cdp_current_and_future_documents(monkeypatc
         label = "视频号"
         open_url = "https://channels.weixin.qq.com/platform/post/create"
 
-    monkeypatch.setattr(service.requests, "get", lambda *_args, **_kwargs: FakeResponse())
+    class FakeSession:
+        def __init__(self) -> None:
+            self.trust_env = False
+
+        def get(self, *_args, **_kwargs) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(service.requests, "Session", lambda: FakeSession())
     monkeypatch.setattr(service, "_create_chrome_cdp_connection", lambda *_args, **_kwargs: FakeSocket())
 
     ok = service._inject_account_browser_marker(
@@ -2841,6 +2960,11 @@ def test_account_browser_marker_uses_cdp_current_and_future_documents(monkeypatc
     assert "GasGx test" in source
     assert '"operator_wechat": "aamecc"' in source
     assert "document.title" in source
+    assert "终端执行窗口" not in source
+    assert "accountText" in source
+    assert "windowIdText" in source
+    assert "desiredTitle" in source
+    assert "setInterval(applyTitle, 1200)" in source
     assert "disconnect" in source
     assert "#gasgx-account-marker" in source
     assert "createElement('div')" not in source
@@ -2905,6 +3029,83 @@ def test_account_browser_marker_injects_late_opened_popup_target(monkeypatch) ->
     assert ok is True
     assert "ws://127.0.0.1/devtools/page/a" in sent_targets
     assert "ws://127.0.0.1/devtools/page/b" in sent_targets
+
+
+def test_account_browser_marker_blank_root_only_skips_platform_targets(monkeypatch) -> None:
+    sent: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict[str, str]]:
+            return [
+                {
+                    "type": "page",
+                    "url": "about:blank",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/root",
+                },
+                {
+                    "type": "page",
+                    "url": "https://creator.douyin.com/creator-micro/content/upload",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/platform",
+                },
+            ]
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.last_id = 0
+
+        def send(self, payload: str) -> None:
+            message = json.loads(payload)
+            self.last_id = int(message["id"])
+            sent.append(message)
+
+        def recv(self) -> str:
+            return json.dumps({"id": self.last_id, "result": {}})
+
+        def close(self) -> None:
+            return None
+
+    class FakeCapability:
+        key = "douyin"
+        label = "抖音"
+        open_url = "https://creator.douyin.com/creator-micro/content/upload"
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.trust_env = False
+
+        def get(self, *_args, **_kwargs) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(service.requests, "Session", lambda: FakeSession())
+    monkeypatch.setattr(service, "_create_chrome_cdp_connection", lambda *_args, **_kwargs: FakeSocket())
+
+    ok = service._inject_account_browser_marker(
+        {"id": 9, "account_key": "gasgx-root", "display_name": "GasGx root"},
+        {"debug_port": 12009, "handle": "douyin-root"},
+        FakeCapability(),
+        blank_root_only=True,
+    )
+
+    assert ok is True
+    ws_urls = [item["params"].get("source", "") for item in sent if item["method"] == "Page.addScriptToEvaluateOnNewDocument"]
+    assert len(ws_urls) == 1
+    source = ws_urls[0]
+    assert "GasGx root" in source
+    assert "document.title" in source
+
+
+def test_terminal_marker_page_url_defaults_title_to_account_name(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    account = service.create_account({"account_key": "gasgx-test-07", "display_name": "GasGx test07", "platforms": ["wechat"]})
+
+    page_url = service._terminal_marker_page_url(int(account["id"]), "wechat", "#3B82F6", 3, phase_tag="登录")
+    html = unquote(page_url.split(",", 1)[1])
+
+    assert "<title>【GasGx test07】</title>" in html
+    assert "终端执行窗口" in html
 
 
 def test_find_windows_chrome_pid_by_debug_port_prefers_browser_process(monkeypatch) -> None:
@@ -3518,6 +3719,249 @@ def test_terminal_emergency_publish_route_does_not_mutate_windows(monkeypatch, t
     assert payload["emergency_publish_runs"][0]["account_id"] == account["id"]
     assert popen_calls
     assert "--wechat-publish-now" in popen_calls[0]["cmd"]
+
+
+def test_domestic_emergency_publish_route_dispatches_to_generic_runner(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Domestic A",
+            "display_name": "GasGx Domestic A",
+            "platforms": ["wechat", "douyin"],
+            "notes": "绑定运营微信: aamecc",
+        }
+    )
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        service,
+        "start_account_emergency_publish",
+        lambda account_id, platform: seen.update({"account_id": account_id, "platform": platform}) or {"ok": True, "account_id": account_id, "platform": platform},
+    )
+    client = TestClient(create_app())
+
+    response = client.post(f"/api/accounts/{account['id']}/platforms/douyin/emergency-publish")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["platform"] == "douyin"
+    assert seen == {"account_id": account["id"], "platform": "douyin"}
+
+
+def test_start_account_emergency_publish_skips_login_status_probe(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Direct Publish A",
+            "display_name": "GasGx Direct Publish A",
+            "platforms": ["douyin"],
+            "notes": "缂佹垵鐣炬潻鎰儉瀵邦喕淇? aamecc",
+        }
+    )
+    open_calls: list[tuple[int, str, dict[str, Any]]] = []
+    publish_calls: list[tuple[int, str]] = []
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service,
+        "open_account_browser",
+        lambda account_id, platform, **kwargs: open_calls.append((int(account_id), str(platform), dict(kwargs))) or {"ok": True, "platform": platform},
+    )
+    monkeypatch.setattr(service, "check_login_status", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not pre-check login before publish")))
+    monkeypatch.setattr(
+        mp,
+        "run_account_platform_publish",
+        lambda account_id, platform: publish_calls.append((int(account_id), str(platform))) or {"ok": True, "results": [{"success": True}]},
+    )
+
+    result = service.start_account_emergency_publish(int(account["id"]), "douyin")
+
+    assert result["ok"] is True
+    assert open_calls == [(int(account["id"]), "douyin", {"apply_marker": False})]
+    assert publish_calls == [(int(account["id"]), "douyin")]
+
+
+def test_domestic_open_browser_route_dispatches_to_batch_runner(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Domestic Open A",
+            "display_name": "GasGx Domestic Open A",
+            "platforms": ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"],
+            "notes": "缁戝畾杩愯惀寰俊: aamecc",
+        }
+    )
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        service,
+        "start_account_domestic_open_browser",
+        lambda account_id: seen.update({"account_id": account_id}) or {"ok": True, "account_id": account_id, "platforms": ["wechat", "douyin"]},
+    )
+    client = TestClient(create_app())
+
+    response = client.post(f"/api/accounts/{account['id']}/platforms/domestic/open-browser")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["account_id"] == account["id"]
+    assert payload["platforms"] == ["wechat", "douyin"]
+    assert seen == {"account_id": account["id"]}
+
+
+def test_domestic_emergency_publish_route_dispatches_to_batch_runner(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Domestic Batch A",
+            "display_name": "GasGx Domestic Batch A",
+            "platforms": ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"],
+            "notes": "缁戝畾杩愯惀寰俊: aamecc",
+        }
+    )
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        service,
+        "start_account_domestic_emergency_publish",
+        lambda account_id: seen.update({"account_id": account_id}) or {"ok": True, "account_id": account_id, "platforms": ["wechat", "douyin"]},
+    )
+    client = TestClient(create_app())
+
+    response = client.post(f"/api/accounts/{account['id']}/platforms/domestic/emergency-publish")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["account_id"] == account["id"]
+    assert payload["platforms"] == ["wechat", "douyin"]
+    assert seen == {"account_id": account["id"]}
+
+
+def test_start_account_domestic_open_browser_runs_batch(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Domestic Open B",
+            "display_name": "GasGx Domestic Open B",
+            "platforms": ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"],
+            "notes": "缁戝畾杩愯惀寰俊: aamecc",
+        }
+    )
+    opened: list[str] = []
+
+    def fake_open(account_id: int, platform: str, *, apply_marker: bool = True) -> dict[str, Any]:
+        opened.append(platform)
+        return {"ok": True, "platform": platform, "account_id": account_id, "marker_applied": apply_marker}
+
+    monkeypatch.setattr(service, "open_account_browser", fake_open)
+
+    result = service.start_account_domestic_open_browser(account["id"])
+
+    assert opened == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
+    assert result["ok"] is True
+    assert result["count"] == 5
+    assert result["opened_count"] == 5
+    assert result["failed_count"] == 0
+    assert result["platforms"] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
+    assert result["summary"] == "国内平台标签已打开：5/5"
+
+
+def test_start_account_domestic_open_browser_reports_partial_failure(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Domestic Open C",
+            "display_name": "GasGx Domestic Open C",
+            "platforms": ["wechat", "douyin", "kuaishou"],
+            "notes": "缁戝畾杩愯惀寰俊: aamecc",
+        }
+    )
+    opened: list[str] = []
+
+    def fake_open(account_id: int, platform: str, *, apply_marker: bool = True) -> dict[str, Any]:
+        opened.append(platform)
+        if platform == "douyin":
+            raise RuntimeError("boom")
+        return {"ok": True, "platform": platform, "account_id": account_id, "marker_applied": apply_marker}
+
+    monkeypatch.setattr(service, "open_account_browser", fake_open)
+
+    result = service.start_account_domestic_open_browser(account["id"])
+
+    assert opened == ["wechat", "douyin", "kuaishou"]
+    assert result["ok"] is False
+    assert result["count"] == 3
+    assert result["opened_count"] == 2
+    assert result["failed_count"] == 1
+    assert result["results"][1]["ok"] is False
+    assert result["results"][1]["platform"] == "douyin"
+    assert result["summary"] == "国内平台标签已打开：2/3，部分失败：抖音"
+
+
+def test_start_account_domestic_emergency_publish_runs_batch(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = {
+        "id": 61,
+        "platforms": [
+            {"platform": "wechat", "enabled": True, "login_status": "ready"},
+            {"platform": "douyin", "enabled": True, "login_status": "logged_in"},
+        ],
+    }
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(service, "_resolve_account_any_id", lambda account_id: account if int(account_id) == 61 else None)
+    monkeypatch.setattr(
+        matrix_publish,
+        "run_account_domestic_publish",
+        lambda account_id, dry_run=False: seen.update({"account_id": account_id, "dry_run": dry_run}) or {
+            "ok": True,
+            "account_id": account_id,
+            "results": [{"success": True}, {"success": True}],
+            "platforms": ["wechat", "douyin"],
+        },
+    )
+
+    result = service.start_account_domestic_emergency_publish(61)
+
+    assert seen == {"account_id": 61, "dry_run": False}
+    assert result["summary"] == "国内平台批量发布完成：2/2 成功"
+    assert result["platforms"] == ["wechat", "douyin"]
+
+
+def test_start_account_domestic_emergency_publish_runs_batch_even_when_login_incomplete(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = {
+        "id": 62,
+        "platforms": [
+            {"platform": "wechat", "enabled": True, "login_status": "ready"},
+            {"platform": "douyin", "enabled": True, "login_status": "open"},
+            {"platform": "kuaishou", "enabled": True, "login_status": "logged_in"},
+        ],
+    }
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(service, "_resolve_account_any_id", lambda account_id: account if int(account_id) == 62 else None)
+    monkeypatch.setattr(service, "check_login_status", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not pre-check login before domestic publish")))
+    monkeypatch.setattr(
+        matrix_publish,
+        "run_account_domestic_publish",
+        lambda account_id, dry_run=False: seen.update({"account_id": account_id, "dry_run": dry_run}) or {
+            "ok": True,
+            "account_id": account_id,
+            "results": [{"success": True}, {"success": True}, {"success": True}],
+            "platforms": ["wechat", "douyin", "kuaishou"],
+        },
+    )
+
+    result = service.start_account_domestic_emergency_publish(62)
+
+    assert seen == {"account_id": 62, "dry_run": False}
+    assert result["summary"] == "国内平台批量发布完成：3/3 成功"
+    assert result["platforms"] == ["wechat", "douyin", "kuaishou"]
 
 
 def test_terminal_config_update_clears_stale_qr_when_window_operator_changes(monkeypatch, tmp_path: Path) -> None:
@@ -4435,6 +4879,7 @@ def test_terminal_emergency_publish_keeps_browser_open_for_vpn(monkeypatch, tmp_
     publish_calls: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
 
     monkeypatch.setattr(service, "_load_terminal_state_with_rollover", lambda: runtime_state)
+    monkeypatch.setattr(service, "get_account", lambda _account_id: dict(account))
     monkeypatch.setattr(service, "_resolve_account_any_id", lambda _account_id: dict(account))
     monkeypatch.setattr(service, "_resolve_account_platform_runtime", lambda _account, _platform: dict(platform_row))
     monkeypatch.setattr(
@@ -4503,6 +4948,7 @@ def test_terminal_emergency_publish_opens_browser_when_runtime_is_missing(monkey
 
     monkeypatch.setattr(service, "_load_terminal_state_with_rollover", lambda: runtime_state)
     monkeypatch.setattr(service, "_resolve_account_any_id", lambda _account_id: dict(account))
+    monkeypatch.setattr(service, "get_account", lambda _account_id: dict(account))
     monkeypatch.setattr(service, "_resolve_account_platform_runtime", lambda _account, _platform: dict(platform_row))
     monkeypatch.setattr(
         service,
@@ -4538,6 +4984,90 @@ def test_terminal_emergency_publish_opens_browser_when_runtime_is_missing(monkey
     assert open_calls == [(58, "wechat")]
     assert raise_calls == []
     assert publish_calls
+
+
+def test_terminal_emergency_publish_falls_back_to_any_material_when_today_is_empty(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    runtime_state = {"windows": [], "emergency_publish_runs": []}
+    account = {
+        "id": 58,
+        "account_key": "acc-58",
+        "display_name": "acc-58",
+        "vpn_node_key": "vmess-ca-knyr-b-psakt-net-20101-加拿大-can-x1-0-ver10s",
+        "platforms": [
+            {
+                "platform": "wechat",
+                "profile_dir": str(tmp_path / "profiles" / "wechat"),
+                "debug_port": 9333,
+                "fingerprint": {},
+            }
+        ],
+    }
+    platform_row = {
+        "profile_dir": str(tmp_path / "profiles" / "wechat"),
+        "debug_port": 9333,
+    }
+    sample = tmp_path / "runtime" / "materials" / "videos" / "20260518_batch" / "sample.mp4"
+    sample.parent.mkdir(parents=True, exist_ok=True)
+    sample.write_bytes(b"sample")
+
+    open_calls: list[tuple[int, str]] = []
+    raise_calls: list[tuple[int, str]] = []
+    selected_videos: list[str] = []
+    popen_calls: list[list[str]] = []
+
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(service, "_load_terminal_state_with_rollover", lambda: runtime_state)
+    monkeypatch.setattr(service, "_resolve_account_any_id", lambda _account_id: dict(account))
+    monkeypatch.setattr(service, "get_account", lambda _account_id: dict(account))
+    monkeypatch.setattr(service, "_resolve_account_platform_runtime", lambda _account, _platform: dict(platform_row))
+    monkeypatch.setattr(
+        service,
+        "_terminal_browser_runtime_for_account",
+        lambda *_args, **_kwargs: {"browser_open": False, "debug_port": 9333, "profile_dir": platform_row["profile_dir"]},
+    )
+    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", lambda account_row: True)
+    monkeypatch.setattr(
+        service,
+        "_open_account_browser_for_terminal",
+        lambda account_id, platform: open_calls.append((int(account_id), str(platform))) or {"ok": True, "debug_port": 9333},
+    )
+    monkeypatch.setattr(
+        service,
+        "_raise_account_browser_window",
+        lambda account_id, platform: raise_calls.append((int(account_id), str(platform))) or True,
+    )
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [])
+    monkeypatch.setattr(mp, "_scan_material_candidates", lambda _root: [sample])
+    monkeypatch.setattr(mp, "_consumed_index", lambda today=None: set())
+    monkeypatch.setattr(mp, "_runtime_publish_config", lambda _platform, _settings, workspace: workspace / "runtime.json")
+    monkeypatch.setattr(mp, "caption_for_publish", lambda _settings, _source_video: "caption")
+    monkeypatch.setattr(
+        mp,
+        "prepare_workspace",
+        lambda item: selected_videos.append(item.source_video.name) or item.workspace.mkdir(parents=True, exist_ok=True),
+    )
+
+    class FakeProcess:
+        pid = 4321
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append(list(cmd))
+        return FakeProcess()
+
+    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(service, "_save_terminal_state", lambda _state: None)
+    monkeypatch.setattr(service, "terminal_execution_state", lambda: {"ok": True})
+
+    result = service.start_terminal_emergency_wechat_publish(58)
+
+    assert result == {"ok": True}
+    assert open_calls == [(58, "wechat")]
+    assert raise_calls == []
+    assert selected_videos == ["sample.mp4"]
+    assert popen_calls
 
 
 def test_terminal_poll_moves_finished_publish_run_to_manual_confirm(monkeypatch, tmp_path: Path) -> None:

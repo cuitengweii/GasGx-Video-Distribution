@@ -59,6 +59,7 @@ const PLATFORM_ORDER = [
 const TERMINAL_LOGIN_CONFIRM_TEXT = "扫码后点登录";
 const TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT = "已发布后点下一个";
 const TERMINAL_LEGACY_MANUAL_CONFIRM_TEXT = "发布已执行，等待人工确认";
+const ACCOUNT_PLATFORM_PUBLISH_DELAY_MS = 15000;
 
 const state = {
   accounts: [],
@@ -100,6 +101,13 @@ const state = {
   analytics: {},
   operatorWechats: ["aamecc", "aalbcc"],
 };
+
+const accountPlatformPublishReadyAtByKey = new Map();
+const accountPlatformPublishInFlightByKey = new Map();
+const accountDomesticOpenInFlightByAccountId = new Map();
+const accountDomesticOpenResultByAccountId = new Map();
+const accountDomesticPublishInFlightByAccountId = new Map();
+let accountPlatformPublishCountdownTimer = null;
 
 const TERMINAL_ERROR_GUIDE_ORDER = ["login_browser", "login_probe", "publish_start", "publish_run", "confirm", "unknown"];
 const TERMINAL_ERROR_STAGE_GUIDES = {
@@ -374,8 +382,10 @@ const OPERATION_NOTICE_PATH_HINTS = [
   { test: (path, method) => path === "/api/accounts/repair-config" && method === "POST", category: "账号管理", actionCode: "repair", actionLabel: "修复账号配置" },
   { test: (path, method) => /^\/api\/accounts\/\d+$/.test(path) && method === "PATCH", category: "账号管理", actionCode: "update", actionLabel: "更新账号" },
   { test: (path, method) => /^\/api\/accounts\/\d+$/.test(path) && method === "DELETE", category: "账号管理", actionCode: "delete", actionLabel: "删除账号" },
+  { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/domestic\/open-browser$/.test(path) && method === "POST", category: "账号管理", actionCode: "open", actionLabel: "一键打开国内平台" },
   { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/[^/]+\/open-browser$/.test(path) && method === "POST", category: "账号管理", actionCode: "open", actionLabel: "打开平台浏览器" },
   { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/[^/]+\/login-status$/.test(path) && method === "POST", category: "账号管理", actionCode: "refresh", actionLabel: "检查登录状态" },
+  { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/domestic\/emergency-publish$/.test(path) && method === "POST", category: "账号管理", actionCode: "run_now", actionLabel: "一键发布国内平台" },
   { test: (path, method) => /^\/api\/accounts\/\d+\/platforms\/[^/]+\/emergency-publish$/.test(path) && method === "POST", category: "账号管理", actionCode: "run_now", actionLabel: "紧急发布" },
   { test: (path, method) => path === "/api/tasks" && method === "POST", category: "批量发布", actionCode: "create", actionLabel: "新增队列任务" },
   { test: (path, method) => path === "/api/tasks/bulk-status" && method === "POST", category: "批量发布", actionCode: "update", actionLabel: "批量调整任务状态" },
@@ -2066,6 +2076,461 @@ function platformStatusClass(status) {
   return "error";
 }
 
+function accountPlatformPublishKey(accountId, platform) {
+  return `${String(accountId || "").trim()}:${String(platform || "").trim()}`;
+}
+
+function accountPlatformPublishState(accountId, platform, loginStatus = "") {
+  const key = accountPlatformPublishKey(accountId, platform);
+  if (!key) {
+    return { key, mode: "open", readyAt: 0, remaining: 0 };
+  }
+  if (accountPlatformPublishInFlightByKey.get(key)) {
+    return { key, mode: "publishing", readyAt: 0, remaining: 0 };
+  }
+  const normalizedLoginStatus = String(loginStatus || "").trim().toLowerCase();
+  if (["ready", "active", "logged_in", "success", "ok"].includes(normalizedLoginStatus)) {
+    return { key, mode: "ready", readyAt: 0, remaining: 0 };
+  }
+  const readyAt = Number(accountPlatformPublishReadyAtByKey.get(key) || 0);
+  if (!readyAt) {
+    return { key, mode: "open", readyAt: 0, remaining: 0 };
+  }
+  const remainingMs = readyAt - Date.now();
+  if (remainingMs > 0) {
+    return { key, mode: "countdown", readyAt, remaining: Math.ceil(remainingMs / 1000) };
+  }
+  return { key, mode: "ready", readyAt, remaining: 0 };
+}
+
+function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "") {
+  const platformLabelText = platformLabel(platform);
+  const state = accountPlatformPublishState(accountId, platform, loginStatus);
+  if (state.mode === "publishing") {
+    return {
+      mode: state.mode,
+      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-publishing",
+      disabled: true,
+      main: "发布中",
+      hint: "已发起",
+      ariaLabel: `${platformLabelText}发布中`,
+    };
+  }
+  if (state.mode === "countdown") {
+    return {
+      mode: state.mode,
+      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-countdown",
+      disabled: true,
+      main: "发布",
+      hint: `${state.remaining} 秒后可发`,
+      ariaLabel: `${platformLabelText}发布倒计时 ${state.remaining} 秒`,
+    };
+  }
+  if (state.mode === "ready") {
+    return {
+      mode: state.mode,
+      buttonClass: "btn primary platform-open-btn platform-wechat-action is-ready",
+      disabled: false,
+      main: "发布",
+      hint: "直接发布",
+      ariaLabel: `${platformLabelText}发布，直接发布`,
+    };
+  }
+  return {
+    mode: "open",
+    buttonClass: "btn secondary platform-open-btn platform-wechat-action is-open",
+    disabled: false,
+    main: platformLabelText,
+    hint: "登录 / 打开浏览器",
+    ariaLabel: `${platformLabelText}登录，点击打开浏览器`,
+  };
+}
+
+function accountPlatformPublishButtonMarkup(accountId, platform, loginStatus = "") {
+  const key = accountPlatformPublishKey(accountId, platform);
+  const meta = accountPlatformPublishButtonMeta(accountId, platform, loginStatus);
+  return `
+    <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-platform-action="${escapeHtml(key)}" data-account-platform-action-state="${escapeHtml(meta.mode)}" data-account-platform-login-status="${escapeHtml(String(loginStatus || ""))}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
+      ${platformIcon(platform)}
+      <span class="platform-action-copy">
+        <span class="platform-action-main">${escapeHtml(meta.main)}</span>
+        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+      </span>
+    </button>
+  `;
+}
+
+function accountDomesticPublishKey(accountId) {
+  return String(accountId || "").trim();
+}
+
+function accountDomesticOpenKey(accountId) {
+  return String(accountId || "").trim();
+}
+
+function accountDomesticOpenPlatforms(account) {
+  const order = ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"];
+  const platformMap = new Map((account?.platforms || []).filter((item) => item && typeof item === "object").map((item) => [String(item.platform || "").trim(), item]));
+  return order
+    .map((platform) => {
+      const platformMeta = state.platforms.find((item) => item.key === platform);
+      const platformRow = platformMap.get(platform);
+      if (!platformMeta || platformMeta.region !== "cn" || !platformMeta.can_open_browser) return null;
+      if (!platformRow || !platformRow.enabled) return null;
+      return platformRow;
+    })
+    .filter(Boolean);
+}
+
+function accountDomesticPublishPlatforms(account) {
+  const order = ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"];
+  const platformMap = new Map((account?.platforms || []).filter((item) => item && typeof item === "object").map((item) => [String(item.platform || "").trim(), item]));
+  return order
+    .map((platform) => {
+      const platformMeta = state.platforms.find((item) => item.key === platform);
+      const platformRow = platformMap.get(platform);
+      if (!platformMeta || platformMeta.region !== "cn" || !platformMeta.can_publish) return null;
+      if (!platformRow || !platformRow.enabled) return null;
+      return platformRow;
+    })
+    .filter(Boolean);
+}
+
+function accountDomesticOpenState(account) {
+  const key = accountDomesticOpenKey(account?.id);
+  if (!key) {
+    return { key, mode: "empty", ready: false };
+  }
+  if (accountDomesticOpenInFlightByAccountId.get(key)) {
+    return { key, mode: "opening", ready: false };
+  }
+  const platforms = accountDomesticOpenPlatforms(account);
+  if (!platforms.length) {
+    return { key, mode: "empty", ready: false };
+  }
+  const result = accountDomesticOpenResultByAccountId.get(key);
+  if (result && typeof result === "object") {
+    const mode = String(result.mode || "").trim();
+    if (mode === "opened" || mode === "partial") {
+      return {
+        key,
+        mode,
+        ready: true,
+        openedCount: Number(result.openedCount || 0),
+        totalCount: Number(result.totalCount || platforms.length),
+        failedPlatforms: Array.isArray(result.failedPlatforms) ? result.failedPlatforms : [],
+      };
+    }
+  }
+  return { key, mode: "ready", ready: true, openedCount: 0, totalCount: platforms.length, failedPlatforms: [] };
+}
+
+function accountDomesticOpenButtonMeta(account) {
+  const displayName = cleanAccountDisplayName(account);
+  const stateInfo = accountDomesticOpenState(account);
+  if (stateInfo.mode === "opening") {
+    return {
+      mode: stateInfo.mode,
+      buttonClass: "btn primary platform-open-btn platform-wechat-action is-publishing",
+      disabled: true,
+      main: "打开中",
+      hint: "一键打开国内平台",
+      ariaLabel: `${displayName}国内平台打开中`,
+    };
+  }
+  if (stateInfo.mode === "opened") {
+    const totalCount = Number(stateInfo.totalCount || 0);
+    const openedCount = Number(stateInfo.openedCount || totalCount);
+    return {
+      mode: stateInfo.mode,
+      buttonClass: "btn primary platform-open-btn platform-wechat-action is-opened",
+      disabled: false,
+      main: "已打开",
+      hint: totalCount ? `${openedCount}/${totalCount} 个平台已打开` : "点击重新打开",
+      ariaLabel: `${displayName}国内平台已打开，点击重新打开`,
+    };
+  }
+  if (stateInfo.mode === "partial") {
+    const totalCount = Number(stateInfo.totalCount || 0);
+    const openedCount = Number(stateInfo.openedCount || 0);
+    const failedText = (stateInfo.failedPlatforms || []).map((platform) => platformLabel(platform)).join("、");
+    return {
+      mode: stateInfo.mode,
+      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-partial",
+      disabled: false,
+      main: "部分失败",
+      hint: failedText ? `${openedCount}/${totalCount} 个平台已打开，失败：${failedText}` : "点击重试",
+      ariaLabel: `${displayName}国内平台部分失败，点击重试`,
+    };
+  }
+  if (stateInfo.mode === "empty") {
+    return {
+      mode: stateInfo.mode,
+      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-open",
+      disabled: true,
+      main: "一键打开国内平台",
+      hint: "暂无国内平台",
+      ariaLabel: `${displayName}暂无国内平台`,
+    };
+  }
+  return {
+    mode: "ready",
+    buttonClass: "btn primary platform-open-btn platform-wechat-action is-ready",
+    disabled: false,
+    main: "一键打开国内平台",
+    hint: "点击同步打开",
+    ariaLabel: `${displayName}一键打开国内平台，点击同步打开`,
+  };
+}
+
+function accountDomesticOpenButtonMarkup(account) {
+  const meta = accountDomesticOpenButtonMeta(account);
+  const key = accountDomesticOpenKey(account?.id);
+  const apiId = accountApiId(account);
+  return `
+    <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-api-id="${escapeHtml(String(apiId))}" data-account-domestic-open="${escapeHtml(key)}" data-account-domestic-open-state="${escapeHtml(meta.mode)}" data-open="${escapeHtml(`${key}:domestic`)}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
+      ${platformIcon("wechat")}
+      <span class="platform-action-copy">
+        <span class="platform-action-main">${escapeHtml(meta.main)}</span>
+        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+      </span>
+    </button>
+  `;
+}
+
+async function handleAccountDomesticOpen(domesticOpenButton) {
+  const accountId = String(domesticOpenButton?.dataset.accountDomesticOpen || "").trim();
+  const accountApiIdValue = String(domesticOpenButton?.dataset.accountApiId || accountId || "").trim();
+  if (!accountApiIdValue) return;
+  const restoreButton = setButtonLoading(domesticOpenButton, "打开中");
+  markAccountDomesticOpen(accountId);
+  try {
+    const result = await api(`/api/accounts/${accountApiIdValue}/platforms/domestic/open-browser`, { method: "POST" });
+    const openedCount = Number(result.opened_count ?? result.openedCount ?? 0);
+    const totalCount = Number(result.count ?? result.total_count ?? result.totalCount ?? 0);
+    const failedPlatforms = Array.isArray(result.results)
+      ? result.results.filter((item) => item && typeof item === "object" && !item.ok).map((item) => String(item.platform || "")).filter(Boolean)
+      : [];
+    const mode = result && result.ok ? "opened" : "partial";
+    accountDomesticOpenResultByAccountId.set(accountDomesticOpenKey(accountId), {
+      mode,
+      openedCount,
+      totalCount: totalCount || openedCount || accountDomesticOpenPlatforms(account).length,
+      failedPlatforms,
+      summary: String(result.summary || ""),
+    });
+    if (result && result.ok === false && result.summary) {
+      showAccountCreateErrorToast(String(result.summary || "国内平台标签打开完成，但存在失败项"));
+    }
+  } catch (error) {
+    clearAccountDomesticOpenState(accountId);
+    showAccountCreateErrorToast(formatFriendlyMessage(error?.message || "国内平台打开失败"));
+    return;
+  } finally {
+    clearAccountDomesticOpenState(accountId);
+    restoreButton();
+  }
+  updateAccountDomesticOpenButtons();
+}
+
+function markAccountDomesticOpen(accountId) {
+  const key = accountDomesticOpenKey(accountId);
+  if (!key) return;
+  accountDomesticOpenInFlightByAccountId.set(key, true);
+}
+
+function clearAccountDomesticOpenState(accountId) {
+  const key = accountDomesticOpenKey(accountId);
+  if (!key) return;
+  accountDomesticOpenInFlightByAccountId.delete(key);
+}
+
+function updateAccountDomesticOpenButtons() {
+  const buttons = document.querySelectorAll("[data-account-domestic-open]");
+  buttons.forEach((button) => {
+    const accountId = String(button.dataset.accountDomesticOpen || "").trim();
+    const account = accountById(accountId);
+    if (!account) return;
+    const meta = accountDomesticOpenButtonMeta(account);
+    const nextHtml = `
+      ${platformIcon("wechat")}
+      <span class="platform-action-copy">
+        <span class="platform-action-main">${escapeHtml(meta.main)}</span>
+        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+      </span>
+    `;
+    button.className = meta.buttonClass;
+    button.disabled = meta.disabled;
+    button.dataset.accountDomesticOpenState = meta.mode;
+    button.setAttribute("aria-label", meta.ariaLabel);
+    button.setAttribute("aria-disabled", meta.disabled ? "true" : "false");
+    button.innerHTML = nextHtml;
+  });
+}
+
+function accountDomesticPublishState(account) {
+  const key = accountDomesticPublishKey(account?.id);
+  if (!key) {
+    return { key, mode: "empty", ready: false };
+  }
+  if (accountDomesticPublishInFlightByAccountId.get(key)) {
+    return { key, mode: "publishing", ready: true };
+  }
+  const platforms = accountDomesticPublishPlatforms(account);
+  if (!platforms.length) {
+    return { key, mode: "empty", ready: false };
+  }
+  return { key, mode: "ready", ready: true };
+}
+
+function accountDomesticPublishButtonMeta(account) {
+  const displayName = cleanAccountDisplayName(account);
+  const stateInfo = accountDomesticPublishState(account);
+  if (stateInfo.mode === "publishing") {
+    return {
+      mode: stateInfo.mode,
+      buttonClass: "btn primary platform-open-btn platform-wechat-action is-publishing",
+      disabled: true,
+      main: "发布中",
+      hint: "一键同步发布",
+      ariaLabel: `${displayName}国内平台发布中`,
+    };
+  }
+  if (stateInfo.mode === "ready") {
+    return {
+      mode: stateInfo.mode,
+      buttonClass: "btn primary platform-open-btn platform-wechat-action is-ready",
+      disabled: false,
+      main: "一键发布国内平台",
+      hint: "直接发布",
+      ariaLabel: `${displayName}一键发布国内平台，直接发布`,
+    };
+  }
+  return {
+    mode: "empty",
+    buttonClass: "btn secondary platform-open-btn platform-wechat-action is-open",
+    disabled: true,
+    main: "一键发布国内平台",
+    hint: "暂无国内平台",
+    ariaLabel: `${displayName}暂无国内平台`,
+  };
+}
+
+function accountDomesticPublishButtonMarkup(account) {
+  const meta = accountDomesticPublishButtonMeta(account);
+  const key = accountDomesticPublishKey(account?.id);
+  return `
+    <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-domestic-publish="${escapeHtml(key)}" data-account-domestic-publish-state="${escapeHtml(meta.mode)}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
+      ${platformIcon("wechat")}
+      <span class="platform-action-copy">
+        <span class="platform-action-main">${escapeHtml(meta.main)}</span>
+        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+      </span>
+    </button>
+  `;
+}
+
+function markAccountDomesticPublishing(accountId) {
+  const key = accountDomesticPublishKey(accountId);
+  if (!key) return;
+  accountDomesticPublishInFlightByAccountId.set(key, true);
+}
+
+function clearAccountDomesticPublishState(accountId) {
+  const key = accountDomesticPublishKey(accountId);
+  if (!key) return;
+  accountDomesticPublishInFlightByAccountId.delete(key);
+}
+
+function updateAccountDomesticPublishButtons() {
+  const buttons = document.querySelectorAll("[data-account-domestic-publish]");
+  buttons.forEach((button) => {
+    const accountId = String(button.dataset.accountDomesticPublish || "").trim();
+    const account = accountById(accountId);
+    if (!account) return;
+    const meta = accountDomesticPublishButtonMeta(account);
+    const nextHtml = `
+      ${platformIcon("wechat")}
+      <span class="platform-action-copy">
+        <span class="platform-action-main">${escapeHtml(meta.main)}</span>
+        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+      </span>
+    `;
+    button.className = meta.buttonClass;
+    button.disabled = meta.disabled;
+    button.dataset.accountDomesticPublishState = meta.mode;
+    button.setAttribute("aria-label", meta.ariaLabel);
+    button.setAttribute("aria-disabled", meta.disabled ? "true" : "false");
+    button.innerHTML = nextHtml;
+  });
+}
+
+function startAccountPlatformPublishCountdown(accountId, platform) {
+  const key = accountPlatformPublishKey(accountId, platform);
+  if (!key) return;
+  accountPlatformPublishInFlightByKey.delete(key);
+  accountPlatformPublishReadyAtByKey.set(key, Date.now() + ACCOUNT_PLATFORM_PUBLISH_DELAY_MS);
+}
+
+function markAccountPlatformPublishing(accountId, platform) {
+  const key = accountPlatformPublishKey(accountId, platform);
+  if (!key) return;
+  accountPlatformPublishInFlightByKey.set(key, true);
+}
+
+function clearAccountPlatformPublishState(accountId, platform) {
+  const key = accountPlatformPublishKey(accountId, platform);
+  if (!key) return;
+  accountPlatformPublishReadyAtByKey.delete(key);
+  accountPlatformPublishInFlightByKey.delete(key);
+}
+
+function updateAccountPlatformPublishButtons() {
+  const buttons = document.querySelectorAll("[data-account-platform-action]");
+  if (!buttons.length) {
+    if (accountPlatformPublishCountdownTimer) {
+      window.clearInterval(accountPlatformPublishCountdownTimer);
+      accountPlatformPublishCountdownTimer = null;
+    }
+    return;
+  }
+  const now = Date.now();
+  let hasCountdown = false;
+  buttons.forEach((button) => {
+    if (button.classList.contains("loading")) return;
+    const actionKey = String(button.dataset.accountPlatformAction || "").trim();
+    const [accountId, platform] = actionKey.split(":");
+    const loginStatus = String(button.dataset.accountPlatformLoginStatus || "").trim();
+    const meta = accountPlatformPublishButtonMeta(accountId, platform, loginStatus);
+    const nextHtml = `
+      ${platformIcon(platform)}
+      <span class="platform-action-copy">
+        <span class="platform-action-main">${escapeHtml(meta.main)}</span>
+        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+      </span>
+    `;
+    button.className = meta.buttonClass;
+    button.disabled = meta.disabled;
+    button.dataset.accountPlatformActionState = meta.mode;
+    button.dataset.accountPlatformLoginStatus = loginStatus;
+    button.setAttribute("aria-label", meta.ariaLabel);
+    button.setAttribute("aria-disabled", meta.disabled ? "true" : "false");
+    button.innerHTML = nextHtml;
+    const readyAt = Number(accountPlatformPublishReadyAtByKey.get(actionKey) || 0);
+    if (meta.mode === "countdown" || (readyAt && readyAt > now)) {
+      hasCountdown = true;
+    }
+  });
+  if (hasCountdown) {
+    if (!accountPlatformPublishCountdownTimer) {
+      accountPlatformPublishCountdownTimer = window.setInterval(updateAccountPlatformPublishButtons, 1000);
+    }
+  } else if (accountPlatformPublishCountdownTimer) {
+    window.clearInterval(accountPlatformPublishCountdownTimer);
+    accountPlatformPublishCountdownTimer = null;
+  }
+}
+
 function aiRobotLogo(platform) {
   const logo = AI_ROBOT_LOGOS[platform] || { icon: "simple-icons:simpleicons", bg: "#5dd62c", fg: "101010" };
   const src = `https://api.iconify.design/${logo.icon}.svg?color=%23${logo.fg}`;
@@ -2147,7 +2612,11 @@ function renderPlatformStatusGroup(platforms, region) {
   return `<div class="account-platform-group">
     <div class="region-title compact">${REGION_LABELS[region]}</div>
     <div class="browser-actions">
-      ${items.length ? items.map((p) => `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`).join("") : `<div class="account-platform-empty muted">暂无${REGION_LABELS[region]}</div>`}
+      ${items.length ? items.map((p) => (
+        region === "cn"
+          ? accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)
+          : `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`
+      )).join("") : `<div class="account-platform-empty muted">暂无${REGION_LABELS[region]}</div>`}
     </div>
   </div>`;
 }
@@ -2388,7 +2857,11 @@ function renderAccounts() {
           <div class="account-platform-summary">
             <div class="account-platform-summary-line">
               <strong>平台信息</strong>
-              <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}">${platformExpanded ? "折叠平台信息" : "展开平台信息"}</button>
+              <div class="account-platform-summary-actions">
+                ${accountDomesticOpenButtonMarkup(account)}
+                ${accountDomesticPublishButtonMarkup(account)}
+                <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}">${platformExpanded ? "折叠平台信息" : "展开平台信息"}</button>
+              </div>
             </div>
             <span class="muted">国内平台 / 国外平台</span>
           </div>
@@ -2400,6 +2873,18 @@ function renderAccounts() {
       </div>
     </article>`;
   }).join("") || `<div class="muted">${keyword ? "没有匹配的账号" : "暂无账号"}</div>`;
+  updateAccountDomesticOpenButtons();
+  updateAccountPlatformPublishButtons();
+  updateAccountDomesticPublishButtons();
+  document.querySelectorAll("[data-account-domestic-open]").forEach((button) => {
+    if (button.dataset.accountDomesticOpenBound === "1") return;
+    button.dataset.accountDomesticOpenBound = "1";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleAccountDomesticOpen(button);
+    });
+  });
 }
 
 function accountById(accountId) {
@@ -4091,7 +4576,7 @@ function installGlobalButtonLoading() {
     if (!button || button.disabled || button.classList.contains("loading")) return;
     if (String(button.getAttribute("type") || "").toLowerCase() === "submit") return;
     if (button.dataset.noGlobalLoading === "1") return;
-    if (button.matches("[data-terminal-auto-publish], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-login-open], [data-terminal-cycle-reset], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], [data-save-notification-policy], [data-incident-action], [data-interaction-tab], [data-interaction-comment-run], [data-interaction-private-run], [data-interaction-refresh], #interaction-management-save, #user-menu-toggle, #top-user-toggle")) return;
+    if (button.matches("[data-terminal-auto-publish], [data-terminal-confirm-success], [data-terminal-qr-refresh], [data-terminal-login-open], [data-terminal-cycle-reset], [data-terminal-save-config], #terminal-save-config, #terminal-save-platform-config, [data-open], [data-account-platform-action], [data-account-domestic-open], [data-account-domestic-publish], [data-delete-account], [data-task-bulk-status], [data-task-bulk-delete], [data-task-select-all], [data-task-select], [data-notice-route], [data-save-notification-policy], [data-incident-action], [data-interaction-tab], [data-interaction-comment-run], [data-interaction-private-run], [data-interaction-refresh], #interaction-management-save, #user-menu-toggle, #top-user-toggle")) return;
     pulseButtonLoading(button, "处理中");
   }, true);
 }
@@ -6084,7 +6569,6 @@ function matrixWechatPublishNoticeSnapshot() {
     任务配置: {
       批次大小: Number(job.batch_size || 0),
       启用: Boolean(job.enabled),
-      启用VPN: Boolean(job.use_vpn),
       调度模式: job.schedule_mode || "",
       每日时间: job.daily_time || "",
       运行间隔分钟: Number(job.run_interval_minutes || 0),
@@ -7691,7 +8175,6 @@ function renderDistributionSettings() {
   form.elements["vpn.subscription_url"].value = state.distributionSettings?.vpn?.subscription_url || "";
   form.elements["jobs.matrix_wechat_publish.batch_size"].value = String(matrixJob.batch_size || 5);
   form.elements["jobs.matrix_wechat_publish.enabled"].value = String(matrixJob.enabled === true);
-  form.elements["jobs.matrix_wechat_publish.use_vpn"].value = String(matrixJob.use_vpn === true);
   form.elements["jobs.matrix_wechat_publish.schedule_mode"].value = matrixJob.schedule_mode || "interval";
   form.elements["jobs.matrix_wechat_publish.daily_time"].value = matrixJob.daily_time || "09:00";
   form.elements["jobs.matrix_wechat_publish.run_interval_minutes"].value = String(matrixJob.run_interval_minutes || 1440);
@@ -7847,7 +8330,6 @@ function collectDistributionSettings(form) {
     matrix_wechat_publish: {
       batch_size: Number(data.get("jobs.matrix_wechat_publish.batch_size") || 5),
       enabled: data.get("jobs.matrix_wechat_publish.enabled") === "true",
-      use_vpn: data.get("jobs.matrix_wechat_publish.use_vpn") === "true",
       schedule_mode: data.get("jobs.matrix_wechat_publish.schedule_mode") || "interval",
       daily_time: data.get("jobs.matrix_wechat_publish.daily_time") || "09:00",
       run_interval_minutes: Number(data.get("jobs.matrix_wechat_publish.run_interval_minutes") || 1440),
@@ -9175,6 +9657,70 @@ document.addEventListener("click", async (event) => {
     } finally {
       restoreButton();
     }
+    return;
+  }
+
+  const domesticOpenButton = event.target.closest("[data-account-domestic-open]");
+  if (domesticOpenButton) {
+    await handleAccountDomesticOpen(domesticOpenButton);
+    return;
+  }
+
+  const domesticPublishButton = event.target.closest("[data-account-domestic-publish]");
+  if (domesticPublishButton) {
+    const accountId = String(domesticPublishButton.dataset.accountDomesticPublish || "").trim();
+    const account = accountById(accountId);
+    if (!account) return;
+    const meta = accountDomesticPublishButtonMeta(account);
+    if (!meta.ready) return;
+    const restoreButton = setButtonLoading(domesticPublishButton, "发布中");
+    markAccountDomesticPublishing(accountId);
+    try {
+      const result = await api(`/api/accounts/${accountApiId(account)}/platforms/domestic/emergency-publish`, { method: "POST" });
+      if (result && result.ok === false && result.summary) {
+        showAccountCreateErrorToast(String(result.summary || "国内平台批量发布完成，但存在失败项"));
+      }
+      await refresh();
+    } catch (error) {
+      clearAccountDomesticPublishState(accountId);
+      throw error;
+    } finally {
+      clearAccountDomesticPublishState(accountId);
+      restoreButton();
+    }
+    updateAccountDomesticPublishButtons();
+    return;
+  }
+
+  const platformAction = event.target.closest("[data-account-platform-action]");
+  if (platformAction) {
+    const actionKey = String(platformAction.dataset.accountPlatformAction || "").trim();
+    const [accountId, platform] = actionKey.split(":");
+    const account = accountById(accountId);
+    if (!account) return;
+    const meta = accountPlatformPublishButtonMeta(accountId, platform, String(platformAction.dataset.accountPlatformLoginStatus || "").trim());
+    const restoreButton = setButtonLoading(platformAction, meta.mode === "open" ? "打开中" : "发布中");
+    try {
+    if (meta.mode === "open") {
+        await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/open-browser`, { method: "POST" });
+        startAccountPlatformPublishCountdown(accountId, platform);
+      } else if (meta.mode === "ready") {
+        await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/emergency-publish`, { method: "POST" });
+        markAccountPlatformPublishing(accountId, platform);
+      } else {
+        return;
+      }
+    } catch (error) {
+      if (meta.mode === "open") {
+        clearAccountPlatformPublishState(accountId, platform);
+      } else if (meta.mode === "ready") {
+        accountPlatformPublishInFlightByKey.delete(accountPlatformPublishKey(accountId, platform));
+      }
+      throw error;
+    } finally {
+      restoreButton();
+    }
+    updateAccountPlatformPublishButtons();
     return;
   }
 

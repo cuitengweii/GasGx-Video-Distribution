@@ -998,6 +998,8 @@ def create_app() -> FastAPI:
     @app.post("/api/accounts/{account_id}/platforms/{platform}/open-browser")
     def open_browser(account_id: int, platform: str) -> dict[str, Any]:
         try:
+            if platform == "domestic":
+                return service.start_account_domestic_open_browser(account_id)
             return service.open_account_browser(account_id, platform)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1017,8 +1019,10 @@ def create_app() -> FastAPI:
     def emergency_publish(account_id: int, platform: str) -> dict[str, Any]:
         try:
             with _TERMINAL_EXECUTION_API_LOCK:
+                if platform == "domestic":
+                    return service.start_account_domestic_emergency_publish(account_id)
                 if platform != "wechat":
-                    raise ValueError("unsupported platform")
+                    return service.start_account_emergency_publish(account_id, platform)
                 return service.start_terminal_emergency_wechat_publish(account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
