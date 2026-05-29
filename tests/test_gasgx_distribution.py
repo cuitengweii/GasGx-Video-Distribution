@@ -3767,7 +3767,35 @@ def test_start_account_emergency_publish_skips_login_status_probe(monkeypatch, t
 
     assert result["ok"] is True
     assert open_calls == []
-    assert publish_calls == [(int(account["id"]), "douyin", {"auto_open_chrome": False})]
+    assert publish_calls == [(int(account["id"]), "douyin", {"auto_open_chrome": True})]
+
+
+def test_start_account_emergency_publish_translates_platform_login_failure(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Direct Publish B",
+            "display_name": "GasGx Direct Publish B",
+            "platforms": ["douyin"],
+            "notes": "缂備焦鍨甸悾鐐交閹邦垱鍎夌€甸偊鍠曟穱? aamecc",
+        }
+    )
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(
+        mp,
+        "run_account_platform_publish",
+        lambda account_id, platform, **kwargs: {
+            "ok": False,
+            "platform": platform,
+            "account_id": int(account_id),
+            "results": [{"success": False, "error": "platform_login_required"}],
+        },
+    )
+
+    with pytest.raises(ValueError, match="抖音登录未完成，请先完成登录后再发布"):
+        service.start_account_emergency_publish(int(account["id"]), "douyin")
 
 
 def test_domestic_open_browser_route_dispatches_to_batch_runner(monkeypatch, tmp_path: Path) -> None:
@@ -3914,7 +3942,7 @@ def test_start_account_domestic_emergency_publish_runs_batch(monkeypatch, tmp_pa
 
     result = service.start_account_domestic_emergency_publish(61)
 
-    assert seen == {"account_id": 61, "dry_run": False, "auto_open_chrome": False}
+    assert seen == {"account_id": 61, "dry_run": False, "auto_open_chrome": True}
     assert result["summary"] == "国内平台批量发布完成：2/2 成功"
     assert result["platforms"] == ["wechat", "douyin"]
 
@@ -3946,10 +3974,54 @@ def test_start_account_domestic_emergency_publish_runs_batch_even_when_login_inc
 
     result = service.start_account_domestic_emergency_publish(62)
 
-    assert seen == {"account_id": 62, "dry_run": False, "auto_open_chrome": False}
+    assert seen == {"account_id": 62, "dry_run": False, "auto_open_chrome": True}
     assert result["summary"] == "国内平台批量发布完成：3/3 成功"
     assert result["platforms"] == ["wechat", "douyin", "kuaishou"]
 
+
+def test_start_account_domestic_emergency_publish_blocks_when_wechat_login_unavailable(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = {
+        "id": 63,
+        "platforms": [
+            {"platform": "wechat", "enabled": True, "login_status": "unavailable"},
+            {"platform": "douyin", "enabled": True, "login_status": "ready"},
+        ],
+    }
+    called = {"run": False}
+    monkeypatch.setattr(service, "_resolve_account_any_id", lambda account_id: account if int(account_id) == 63 else None)
+    monkeypatch.setattr(
+        matrix_publish,
+        "run_account_domestic_publish",
+        lambda *args, **kwargs: called.__setitem__("run", True) or {"ok": True},
+    )
+
+    with pytest.raises(ValueError, match="视频号登录已失效，请先重新扫码登录"):
+        service.start_account_domestic_emergency_publish(63)
+
+    assert called["run"] is False
+
+
+def test_start_account_domestic_emergency_publish_translates_no_available_domestic_platforms(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = {
+        "id": 64,
+        "platforms": [
+            {"platform": "wechat", "enabled": True, "login_status": "ready"},
+            {"platform": "douyin", "enabled": True, "login_status": "ready"},
+        ],
+    }
+    monkeypatch.setattr(service, "_resolve_account_any_id", lambda account_id: account if int(account_id) == 64 else None)
+    monkeypatch.setattr(
+        matrix_publish,
+        "run_account_domestic_publish",
+        lambda *args, **kwargs: {"ok": False, "skipped": True, "reason": "no_available_domestic_platforms", "account_id": 64},
+    )
+
+    with pytest.raises(ValueError, match="当前账号今天没有可发布的国内平台，请先检查素材库或明天再试"):
+        service.start_account_domestic_emergency_publish(64)
 
 def test_terminal_config_update_clears_stale_qr_when_window_operator_changes(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)

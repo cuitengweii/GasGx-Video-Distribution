@@ -6554,6 +6554,68 @@ def _friendly_terminal_status_error(message: str) -> str:
     return text
 
 
+def _friendly_account_publish_error(message: str, platform: str) -> str:
+    text = str(message or "").strip()
+    normalized = text.lower()
+    platform_token = normalize_platform(platform)
+    capability = get_platform(platform_token)
+    platform_label_map = {
+        "wechat": "视频号",
+        "douyin": "抖音",
+        "kuaishou": "快手",
+        "xiaohongshu": "小红书",
+        "bilibili": "B站",
+        "tiktok": "TikTok",
+        "x": "X",
+    }
+    if platform_token == "domestic":
+        platform_label = "国内平台"
+    else:
+        platform_label = platform_label_map.get(platform_token) or str(getattr(capability, "label", "") or platform_token or "平台").strip() or "平台"
+    if not text:
+        return f"{platform_label}发布失败，请稍后重试"
+    if "account not found" in normalized:
+        return "账号不存在，请到账号矩阵检查后重试"
+    if "no available material" in normalized or "no_available_material" in normalized:
+        return "当前账号当天没有可用素材，请先检查素材库"
+    if "no available domestic platforms" in normalized or "no_available_domestic_platforms" in normalized:
+        return "当前账号今天没有可发布的国内平台，请先检查素材库或明天再试"
+    if "publish lock active" in normalized or "publish_lock_active" in normalized:
+        return "当前已有发布任务在执行，请稍后再试"
+    if "wechat_login_required" in normalized:
+        return "视频号登录已失效，请先重新扫码登录"
+    if "platform_login_required" in normalized:
+        return f"{platform_label}登录未完成，请先完成登录后再发布"
+    if "publish_unconfirmed" in normalized or "publish was not confirmed" in normalized or "发布未确认" in text:
+        return f"{platform_label}发布未确认，请先检查后台发布结果"
+    if "failed to locate publish button" in normalized:
+        return f"{platform_label}未找到发布按钮，请刷新页面后重试"
+    if "browser" in normalized and ("not open" in normalized or "closed" in normalized or "missing" in normalized):
+        return f"{platform_label}浏览器未就绪，请先打开浏览器后重试"
+    if re.search(r"[A-Za-z]{3,}", text):
+        return f"{platform_label}发布异常，请稍后重试"
+    return text
+
+
+def _domestic_publish_wechat_login_reason(account_id: int, domestic_platforms: list[dict[str, Any]]) -> str:
+    wechat_platform = next(
+        (
+            item
+            for item in domestic_platforms
+            if str(item.get("platform") or "").strip().lower() == "wechat"
+        ),
+        None,
+    )
+    if wechat_platform is None:
+        return ""
+    status = str(wechat_platform.get("login_status") or "").strip().lower()
+    if status in {"ready", "ready_to_publish", "logged_in", "ok"}:
+        return ""
+    if status in {"login_required", "required", "unavailable", "error", "unknown"}:
+        return _friendly_account_publish_error("wechat_login_required", "wechat")
+    return ""
+
+
 def _terminal_publish_failure_reason(run: dict[str, Any]) -> str:
     log_path = str(run.get("log_path") or "").strip()
     if not log_path:
@@ -9297,7 +9359,7 @@ def start_account_emergency_publish(account_id: int, platform: str) -> dict[str,
         ensure_account_platform(conn, account_id, token)
     from . import matrix_publish as mp
 
-    publish_result = mp.run_account_platform_publish(account_id, token, auto_open_chrome=False)
+    publish_result = mp.run_account_platform_publish(account_id, token, auto_open_chrome=True)
     publish_result.setdefault("platform", token)
     publish_result.setdefault("account_id", int(account_id))
     if not bool(publish_result.get("ok")):
@@ -9306,7 +9368,7 @@ def start_account_emergency_publish(account_id: int, platform: str) -> dict[str,
             first_result = publish_result["results"][0] if isinstance(publish_result["results"][0], dict) else {}
             reason = str(first_result.get("error") or first_result.get("reason") or "").strip()
         reason = reason or str(publish_result.get("reason") or "publish_failed").strip()
-        raise ValueError(reason)
+        raise ValueError(_friendly_account_publish_error(reason, token))
     return publish_result
 
 
@@ -9349,12 +9411,15 @@ def start_account_domestic_emergency_publish(account_id: int) -> dict[str, Any]:
     domestic_platforms = _domestic_publish_account_platforms(account)
     if not domestic_platforms:
         raise ValueError("domestic_publish_not_supported")
+    wechat_login_reason = _domestic_publish_wechat_login_reason(account_id, domestic_platforms)
+    if wechat_login_reason:
+        raise ValueError(wechat_login_reason)
     from . import matrix_publish as mp
 
-    publish_result = mp.run_account_domestic_publish(account_id, auto_open_chrome=False)
+    publish_result = mp.run_account_domestic_publish(account_id, auto_open_chrome=True)
     if bool(publish_result.get("skipped")):
         reason = str(publish_result.get("reason") or "domestic_publish_skipped").strip()
-        raise ValueError(reason)
+        raise ValueError(_friendly_account_publish_error(reason, "domestic"))
     if isinstance(publish_result.get("results"), list):
         success_count = sum(1 for item in publish_result["results"] if isinstance(item, dict) and bool(item.get("success")))
         total_count = len(publish_result["results"])

@@ -22484,6 +22484,65 @@ def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
     return contexts
 
 
+def _collect_observation_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
+    contexts: list[Any] = []
+    seen: set[int] = set()
+
+    def _add(ctx: Any) -> None:
+        if not ctx:
+            return
+        key = id(ctx)
+        if key in seen:
+            return
+        seen.add(key)
+        contexts.append(ctx)
+
+    for owner in (primary_ctx, fallback_ctx):
+        _add(owner)
+        peers = []
+        try:
+            for attr_name in ("browser", "page"):
+                peer = getattr(owner, attr_name, None) if owner else None
+                if peer and peer is not owner:
+                    peers.append(peer)
+        except Exception:
+            peers = []
+        for candidate in [owner, *peers]:
+            try:
+                if candidate and callable(getattr(candidate, "get_tabs", None)):
+                    for tab in _browser_tabs(candidate):
+                        _add(tab)
+            except Exception:
+                continue
+    return contexts
+
+
+def _score_publish_snapshot_url(url: str) -> int:
+    lowered = str(url or "").strip().lower()
+    if not lowered:
+        return -100
+    score = 0
+    if lowered == "about:blank":
+        score -= 80
+    else:
+        score += 5
+    if "published=true" in lowered:
+        score += 120
+    if "publish/success" in lowered or "publish/result" in lowered:
+        score += 100
+    if "/publish/" in lowered:
+        score += 40
+    if "manage" in lowered:
+        score += 35
+    if "success" in lowered or "result" in lowered:
+        score += 30
+    if "publish" in lowered:
+        score += 12
+    if "draft" in lowered:
+        score -= 10
+    return score
+
+
 def _read_upload_surface_snapshot_rich(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
     js = r"""
     function collectAllRoots(root) {
@@ -26728,7 +26787,10 @@ def _is_xiaohongshu_publish_button_context(
 
 def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
-        "css:div.publish-video",
+        "css:xhs-publish-btn.publish-page-publish-btn",
+        "xpath://xhs-publish-btn[contains(@class,'publish-page-publish-btn')]",
+        "xpath://xhs-publish-btn[@submit-text='发布' or @submit-text='发布笔记' or @submit-text='发布作品']",
+        "xpath://xhs-publish-btn[@is-publish='true' and @save-disabled='false']",
         "xpath://div[contains(@class,'publish-video')]",
         "xpath://div[contains(@class,'btn-wrapper') and .//*[normalize-space(.)='发布笔记']]",
         "xpath://div[contains(@class,'btn-inner') and .//*[normalize-space(.)='发布笔记']]",
@@ -26772,6 +26834,9 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                 wrap_state = btn.run_js(
                     r"""
                     const norm = (s) => String(s || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+                    const submitText = norm((this && this.getAttribute && this.getAttribute('submit-text')) || '');
+                    const saveDisabled = String((this && this.getAttribute && this.getAttribute('save-disabled')) || '').toLowerCase();
+                    const publishFlag = String((this && this.getAttribute && this.getAttribute('is-publish')) || '').toLowerCase();
                     const nodes = [];
                     let cur = this;
                     for (let i = 0; cur && i < 6; i += 1) {
@@ -26796,7 +26861,12 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                       texts,
                       rectTop: Number(rect && rect.top || 0),
                       viewportHeight: Number(window.innerHeight || document.documentElement.clientHeight || 0),
-                      buttonText: norm((this && this.innerText) || '')
+                      buttonText: norm((this && this.innerText) || (this && this.textContent) || submitText || ''),
+                      submitText,
+                      saveDisabled,
+                      publishFlag,
+                      tagName: String((this && this.tagName) || ''),
+                      cls: String((this && this.className) || ''),
                     };
                     """
                 )
@@ -26805,27 +26875,49 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                     wrapper_texts = tuple(wrap_state.get("texts") or ())
                     rect_top = float(wrap_state.get("rectTop", 0) or 0)
                     viewport_height = float(wrap_state.get("viewportHeight", 0) or 0)
-                    button_text = str(wrap_state.get("buttonText") or "").strip()
+                    button_text = str(wrap_state.get("buttonText") or wrap_state.get("submitText") or "").strip()
+                    submit_text = str(wrap_state.get("submitText") or "").strip()
+                    save_disabled = str(wrap_state.get("saveDisabled") or "").strip().lower()
+                    publish_flag = str(wrap_state.get("publishFlag") or "").strip().lower()
+                    tag_name = str(wrap_state.get("tagName") or "").strip().lower()
+                    cls_name = str(wrap_state.get("cls") or "").strip()
                 else:
                     wrapper_text = str(wrap_state or "").strip()
                     wrapper_texts = ()
                     rect_top = 0.0
                     viewport_height = 0.0
                     button_text = ""
+                    submit_text = ""
+                    save_disabled = ""
+                    publish_flag = ""
+                    tag_name = ""
+                    cls_name = ""
             except Exception:
                 wrapper_text = ""
                 wrapper_texts = ()
                 rect_top = 0.0
                 viewport_height = 0.0
                 button_text = ""
+                submit_text = ""
+                save_disabled = ""
+                publish_flag = ""
+                tag_name = ""
+                cls_name = ""
             wrap_candidates = (wrapper_text,) + wrapper_texts if wrapper_texts else (wrapper_text,)
             chosen_wrap = _pick_xiaohongshu_publish_wrap_text(wrap_candidates)
             sibling_draft = any("\u6682\u5b58\u79bb\u5f00" in text for text in wrap_candidates)
             near_bottom = bool(viewport_height > 0 and rect_top >= (viewport_height * 0.55))
+            if not chosen_wrap and tag_name == "xhs-publish-btn":
+                if submit_text in {"\u53d1\u5e03", "\u53d1\u5e03\u7b14\u8bb0", "\u53d1\u5e03\u4f5c\u54c1", "\u7acb\u5373\u53d1\u5e03"}:
+                    chosen_wrap = "xhs_publish_host"
+                elif "publish-page-publish-btn" in cls_name and button_text in {"\u53d1\u5e03", "\u53d1\u5e03\u7b14\u8bb0", "\u53d1\u5e03\u4f5c\u54c1", "\u7acb\u5373\u53d1\u5e03"}:
+                    chosen_wrap = "xhs_publish_host"
             if not chosen_wrap and button_text in {"\u53d1\u5e03", "\u53d1\u5e03\u7b14\u8bb0", "\u7acb\u5373\u53d1\u5e03"} and (
                 sibling_draft or near_bottom
             ):
                 chosen_wrap = "bottom_publish_area"
+            if not chosen_wrap and submit_text == "\u53d1\u5e03" and publish_flag == "true" and save_disabled == "false":
+                chosen_wrap = "xhs_publish_host"
             if not _is_xiaohongshu_publish_button_context(
                 wrap_candidates,
                 button_text,
@@ -26841,6 +26933,47 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
                 continue
             if not chosen_wrap:
                 continue
+            if tag_name == "xhs-publish-btn" or "publish-page-publish-btn" in cls_name:
+                shadow_root = None
+                for attr_name in ("shadow_root", "sr"):
+                    try:
+                        shadow_root = getattr(btn, attr_name, None)
+                    except Exception:
+                        shadow_root = None
+                    if shadow_root:
+                        break
+                if shadow_root:
+                    shadow_selectors = (
+                        "css:button.ce-btn.bg-red",
+                        "css:button.bg-red",
+                        "xpath://button[contains(@class,'ce-btn') and contains(@class,'bg-red')]",
+                        "xpath://button[contains(@class,'bg-red')]",
+                        "xpath://button[normalize-space(.)='发布' or normalize-space(.)='发布笔记' or normalize-space(.)='发布作品' or normalize-space(.)='立即发布']",
+                    )
+                    for shadow_selector in shadow_selectors:
+                        try:
+                            inner_btn = shadow_root.ele(shadow_selector, timeout=0.8)
+                        except Exception:
+                            inner_btn = None
+                        if not inner_btn or not _is_visible_element(inner_btn):
+                            continue
+                        try:
+                            inner_btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
+                        except Exception:
+                            pass
+                        _humanized_publish_reaction_pause("xiaohongshu shadow publish click")
+                        try:
+                            inner_btn.click()
+                        except Exception:
+                            try:
+                                inner_btn.click(by_js=True)
+                            except Exception:
+                                continue
+                        _log(
+                            f"[Uploader:xiaohongshu] Clicked publish button via shadow root: {selector}; "
+                            f"wrap={chosen_wrap or '-'}"
+                        )
+                        return True
             try:
                 btn.run_js("this.scrollIntoView({block:'center', inline:'nearest'});")
             except Exception:
@@ -26871,6 +27004,7 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
       if (!el) return true;
       if (el.disabled) return true;
       if (String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return true;
+      if (String(el.getAttribute('save-disabled') || '').toLowerCase() === 'true') return true;
       const st = window.getComputedStyle(el);
       if (st.pointerEvents === 'none') return true;
       return false;
@@ -26933,14 +27067,15 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
     for (const root of collectRoots(document)) {
       let nodes = [];
       try {
-        nodes = Array.from(root.querySelectorAll ? root.querySelectorAll('button, [role="button"], a, div, span') : []);
+        nodes = Array.from(root.querySelectorAll ? root.querySelectorAll('xhs-publish-btn, button, [role="button"], a, div, span') : []);
       } catch (e) {
         nodes = [];
       }
       for (const el of nodes) {
         if (!isVisible(el) || disabled(el)) continue;
-        const text = String(el.innerText || el.textContent || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
-        if (!/^(鍙戝竷|鍙戝竷绗旇|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|缁х画鍙戝竷|纭鍙戝竷)$/.test(text)) continue;
+        const attrText = String((el && el.getAttribute && (el.getAttribute('submit-text') || el.getAttribute('aria-label'))) || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+        const text = String(el.innerText || el.textContent || attrText || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+        if (!/^(鍙戝竷|鍙戝竷绗旇|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|缁х画鍙戝竷|纭鍙戝竷)$/.test(text) && !/^(鍙戝竷|鍙戝竷绗旇|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷)$/.test(attrText)) continue;
         const cls = String(el.className || '');
         const parentCls = String((el.parentElement && el.parentElement.className) || '');
         const attrs = [
@@ -26971,15 +27106,21 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
         if (text === '鍙戝竷') score += 18;
         if (text === '纭鍙戝竷') score += 14;
         if (text === '缁х画鍙戝竷') score += 10;
+        if (attrText === '鍙戝竷') score += 20;
+        if (String(el.tagName || '').toLowerCase() === 'xhs-publish-btn') score += 18;
         if (cls.includes('bg-red')) score += 16;
         if (cls.includes('custom-button')) score += 8;
         if (parentCls.includes('publish-page-publish-btn')) score += 12;
         if (/button/i.test(el.tagName || '')) score += 8;
         if (/publish|button|custom-button/.test(attrs.toLowerCase())) score += 6;
+        if (String(el.getAttribute('submit-text') || '') === '发布') score += 18;
+        if (String(el.getAttribute('is-publish') || '').toLowerCase() === 'true') score += 6;
+        if (String(el.getAttribute('save-disabled') || '').toLowerCase() === 'false') score += 6;
         if (wrapText && wrapText.includes('鏆傚瓨绂诲紑')) score += 10;
         if (wrapText && (wrapText.includes('鏇村璁剧疆') || wrapText.includes('瀹氭椂鍙戝竷'))) score += 5;
         if (nearBottom) score += 8;
         if (siblingDraft) score += 10;
+        if (attrText === '发布') score += 14;
         candidates.push({el, score});
       }
     }
@@ -28241,8 +28382,9 @@ def _read_page_snapshot(primary_ctx: Any, fallback_ctx: Any) -> tuple[str, str]:
     return {url, text: text.slice(0, 20000)};
     """
     merged_url = ""
+    merged_url_score = -10_000
     merged_text_parts: list[str] = []
-    for owner in (primary_ctx, fallback_ctx):
+    for owner in _collect_observation_contexts(primary_ctx, fallback_ctx):
         if not owner:
             continue
         try:
@@ -28253,8 +28395,10 @@ def _read_page_snapshot(primary_ctx: Any, fallback_ctx: Any) -> tuple[str, str]:
             continue
         url = str(data.get("url", "") or "").strip()
         text = str(data.get("text", "") or "").strip()
-        if url and not merged_url:
+        score = _score_publish_snapshot_url(url)
+        if score > merged_url_score:
             merged_url = url
+            merged_url_score = score
         if text:
             merged_text_parts.append(text)
     merged_text = "\n".join(merged_text_parts)
@@ -28341,6 +28485,7 @@ def _read_xiaohongshu_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict
     """
     merged: dict[str, Any] = {
         "url": "",
+        "url_score": -10_000,
         "media_count": 0,
         "editor_len": 0,
         "action_texts": [],
@@ -28356,7 +28501,7 @@ def _read_xiaohongshu_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict
         "manage_text_hint": False,
     }
     seen_actions: set[str] = set()
-    for owner in (primary_ctx, fallback_ctx):
+    for owner in _collect_observation_contexts(primary_ctx, fallback_ctx):
         if not owner:
             continue
         try:
@@ -28366,8 +28511,10 @@ def _read_xiaohongshu_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict
         if not isinstance(payload, dict):
             continue
         url = str(payload.get("url", "") or "").strip()
-        if url and not merged["url"]:
+        score = _score_publish_snapshot_url(url)
+        if score > int(merged.get("url_score", -10_000) or -10_000):
             merged["url"] = url
+            merged["url_score"] = score
         merged["media_count"] = max(int(merged.get("media_count", 0) or 0), int(payload.get("media_count", 0) or 0))
         merged["editor_len"] = max(int(merged.get("editor_len", 0) or 0), int(payload.get("editor_len", 0) or 0))
         actions = payload.get("action_texts")
@@ -28393,6 +28540,7 @@ def _read_xiaohongshu_publish_state(primary_ctx: Any, fallback_ctx: Any) -> dict
             "manage_text_hint",
         ):
             merged[key] = bool(merged.get(key)) or bool(payload.get(key))
+    merged.pop("url_score", None)
     return merged
 
 
@@ -28416,7 +28564,11 @@ def _is_xiaohongshu_publish_confirmed_from_state(state: dict[str, Any]) -> bool:
     if bool(state.get("failure_hint")):
         return False
     url = str(state.get("url", "") or "").lower()
-    if "/publish/publish" in url and bool(state.get("publish_entry")):
+    if (
+        "/publish/publish" in url
+        and bool(state.get("publish_entry"))
+        and not any(marker in url for marker in ("published=true", "publish/success", "publish/result"))
+    ):
         return False
     if _is_xiaohongshu_publish_draft_state(state):
         return False

@@ -297,7 +297,12 @@ def test_click_xiaohongshu_primary_publish_button_accepts_publish_video_containe
                     ],
                     "rectTop": 820,
                     "viewportHeight": 1000,
-                    "buttonText": "\u53d1\u5e03\u7b14\u8bb0",
+                    "buttonText": "\u53d1\u5e03",
+                    "submitText": "\u53d1\u5e03",
+                    "saveDisabled": "false",
+                    "publishFlag": "true",
+                    "tagName": "xhs-publish-btn",
+                    "cls": "publish-page-publish-btn",
                 }
             return True
 
@@ -312,6 +317,10 @@ def test_click_xiaohongshu_primary_publish_button_accepts_publish_video_containe
         def ele(self, selector: str, timeout: float = 0.0) -> Any:
             del timeout
             if selector in {
+                "css:xhs-publish-btn.publish-page-publish-btn",
+                "xpath://xhs-publish-btn[contains(@class,'publish-page-publish-btn')]",
+                "xpath://xhs-publish-btn[@submit-text='发布' or @submit-text='发布笔记' or @submit-text='发布作品']",
+                "xpath://xhs-publish-btn[@is-publish='true' and @save-disabled='false']",
                 "css:div.publish-video",
                 "xpath://div[contains(@class,'publish-video')]",
                 "xpath://div[contains(@class,'btn-wrapper') and .//*[normalize-space(.)='\u53d1\u5e03\u7b14\u8bb0']]",
@@ -327,6 +336,88 @@ def test_click_xiaohongshu_primary_publish_button_accepts_publish_video_containe
 
     assert engine._click_xiaohongshu_primary_publish_button(owner, None) is True
     assert owner.button.clicked is True
+
+
+def test_click_xiaohongshu_primary_publish_button_clicks_shadow_button_when_available(monkeypatch) -> None:
+    class FakeInnerButton:
+        def __init__(self) -> None:
+            self.clicked = False
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            del script
+            return True
+
+        def click(self, by_js: bool = False) -> None:
+            del by_js
+            self.clicked = True
+
+    class FakeShadowRoot:
+        def __init__(self, inner_button: FakeInnerButton) -> None:
+            self.inner_button = inner_button
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del timeout
+            if selector in {
+                "css:button.ce-btn.bg-red",
+                "css:button.bg-red",
+                "xpath://button[contains(@class,'ce-btn') and contains(@class,'bg-red')]",
+                "xpath://button[contains(@class,'bg-red')]",
+                "xpath://button[normalize-space(.)='发布' or normalize-space(.)='发布笔记' or normalize-space(.)='发布作品' or normalize-space(.)='立即发布']",
+            }:
+                return self.inner_button
+            return None
+
+    class FakeButton:
+        def __init__(self, shadow_root: FakeShadowRoot) -> None:
+            self.shadow_root = shadow_root
+            self.clicked = False
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "const norm = (s)" in script:
+                return {
+                    "wrap": "\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u516c\u5f00\u53ef\u89c1 \u5b9a\u65f6\u53d1\u5e03",
+                    "texts": [
+                        "\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u516c\u5f00\u53ef\u89c1 \u5b9a\u65f6\u53d1\u5e03",
+                        "\u53d1\u5e03\u7b14\u8bb0",
+                        "\u516c\u5f00\u53ef\u89c1",
+                    ],
+                    "rectTop": 820,
+                    "viewportHeight": 1000,
+                    "buttonText": "\u53d1\u5e03",
+                    "submitText": "\u53d1\u5e03",
+                    "saveDisabled": "false",
+                    "publishFlag": "true",
+                    "tagName": "xhs-publish-btn",
+                    "cls": "publish-page-publish-btn",
+                }
+            return True
+
+        def click(self, by_js: bool = False) -> None:
+            del by_js
+            self.clicked = True
+
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.inner_button = FakeInnerButton()
+            self.button = FakeButton(FakeShadowRoot(self.inner_button))
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del timeout
+            if selector in {
+                "css:xhs-publish-btn.publish-page-publish-btn",
+                "xpath://xhs-publish-btn[contains(@class,'publish-page-publish-btn')]",
+                "xpath://xhs-publish-btn[@submit-text='鍙戝竷' or @submit-text='鍙戝竷绗旇' or @submit-text='鍙戝竷浣滃搧']",
+                "xpath://xhs-publish-btn[@is-publish='true' and @save-disabled='false']",
+            }:
+                return self.button
+            return None
+
+    owner = FakeOwner()
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert engine._click_xiaohongshu_primary_publish_button(owner, None) is True
+    assert owner.button.clicked is False
+    assert owner.inner_button.clicked is True
 
 
 def test_ensure_xiaohongshu_upload_mode_uses_recursive_frame_search(monkeypatch) -> None:
@@ -410,3 +501,146 @@ def test_wait_publish_feedback_rechecks_xiaohongshu_confirm_button(monkeypatch) 
     engine._wait_publish_feedback(None, None, platform_name="xiaohongshu", timeout_seconds=8)
 
     assert state["confirm_calls"] >= 1
+
+
+def test_read_page_snapshot_prefers_published_success_tab() -> None:
+    class FakeCtx:
+        def __init__(self, url: str, text: str) -> None:
+            self.url = url
+            self.text = text
+
+        def run_js(self, *_args: Any, **_kwargs: Any) -> dict[str, str]:
+            return {"url": self.url, "text": self.text}
+
+    class FakePage(FakeCtx):
+        def __init__(self, tabs: list[FakeCtx]) -> None:
+            super().__init__("about:blank", "草稿页")
+            self._tabs = tabs
+
+        def get_tabs(self, tab_type: str = "page") -> list[FakeCtx]:
+            del tab_type
+            return self._tabs
+
+    blank_page = FakePage(
+        [
+            FakeCtx("about:blank", "发布笔记 首页 笔记管理"),
+            FakeCtx("https://creator.xiaohongshu.com/publish/publish?source=&published=true", "发布成功"),
+        ]
+    )
+
+    url, text = engine._read_page_snapshot(blank_page, None)
+
+    assert url == "https://creator.xiaohongshu.com/publish/publish?source=&published=true"
+    assert "发布成功" in text
+
+
+def test_read_xiaohongshu_publish_state_prefers_published_success_tab() -> None:
+    class FakeCtx:
+        def __init__(self, url: str, text: str, *, media_count: int = 0, editor_len: int = 0) -> None:
+            self.url = url
+            self.text = text
+            self.media_count = media_count
+            self.editor_len = editor_len
+
+        def run_js(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "url": self.url,
+                "text": self.text,
+                "media_count": self.media_count,
+                "editor_len": self.editor_len,
+                "action_texts": ["发布"] if self.media_count else [],
+                "has_publish_action": self.media_count > 0,
+                "has_draft_action": False,
+                "has_retry_action": False,
+                "publish_entry": self.media_count > 0,
+                "draft_entry": False,
+                "success_hint": "发布成功" in self.text,
+                "progress_hint": False,
+                "failure_hint": False,
+                "manage_url_hint": "manage" in self.url,
+                "manage_text_hint": "管理" in self.text,
+            }
+
+    class FakePage(FakeCtx):
+        def __init__(self, tabs: list[FakeCtx]) -> None:
+            super().__init__("about:blank", "发布笔记 首页 笔记管理", media_count=1, editor_len=12)
+            self._tabs = tabs
+
+        def get_tabs(self, tab_type: str = "page") -> list[FakeCtx]:
+            del tab_type
+            return self._tabs
+
+    state = engine._read_xiaohongshu_publish_state(
+        FakePage(
+            [
+                FakeCtx("about:blank", "发布笔记 首页 笔记管理", media_count=1, editor_len=12),
+                FakeCtx(
+                    "https://creator.xiaohongshu.com/publish/publish?source=&published=true",
+                    "发布成功",
+                    media_count=0,
+                    editor_len=0,
+                ),
+            ]
+        ),
+        None,
+    )
+
+    assert state["url"] == "https://creator.xiaohongshu.com/publish/publish?source=&published=true"
+    assert engine._is_xiaohongshu_publish_confirmed_from_state(state) is True
+
+
+def test_read_xiaohongshu_publish_state_uses_browser_peer_tabs() -> None:
+    class FakeCtx:
+        def __init__(self, url: str, text: str, *, media_count: int = 0, editor_len: int = 0) -> None:
+            self.url = url
+            self.text = text
+            self.media_count = media_count
+            self.editor_len = editor_len
+
+        def run_js(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "url": self.url,
+                "text": self.text,
+                "media_count": self.media_count,
+                "editor_len": self.editor_len,
+                "action_texts": ["发布"] if self.media_count else [],
+                "has_publish_action": self.media_count > 0,
+                "has_draft_action": False,
+                "has_retry_action": False,
+                "publish_entry": self.media_count > 0,
+                "draft_entry": False,
+                "success_hint": "发布成功" in self.text,
+                "progress_hint": False,
+                "failure_hint": False,
+                "manage_url_hint": "manage" in self.url,
+                "manage_text_hint": "管理" in self.text,
+            }
+
+    class FakeBrowser:
+        def __init__(self, tabs: list[FakeCtx]) -> None:
+            self._tabs = tabs
+
+        def get_tabs(self, tab_type: str = "page") -> list[FakeCtx]:
+            del tab_type
+            return self._tabs
+
+    class FakeWorkTab(FakeCtx):
+        def __init__(self, browser: FakeBrowser) -> None:
+            super().__init__("about:blank", "发布笔记 首页 笔记管理", media_count=1, editor_len=12)
+            self.browser = browser
+
+    browser = FakeBrowser(
+        [
+            FakeCtx("about:blank", "发布笔记 首页 笔记管理", media_count=1, editor_len=12),
+            FakeCtx(
+                "https://creator.xiaohongshu.com/publish/publish?source=&published=true",
+                "发布成功",
+                media_count=0,
+                editor_len=0,
+            ),
+        ]
+    )
+    state = engine._read_xiaohongshu_publish_state(FakeWorkTab(browser), None)
+
+    assert state["url"] == "https://creator.xiaohongshu.com/publish/publish?source=&published=true"
+    assert engine._is_xiaohongshu_publish_confirmed_from_state(state) is True

@@ -1608,6 +1608,12 @@ function formatFriendlyMessage(message) {
   if (text === "pending") return "待处理";
   if (text === "paused") return "已暂停";
   if (text === "unsupported") return "暂不支持";
+  if (text === "no_available_material") return "当前账号当天没有可用素材，请先检查素材库";
+  if (text === "no_available_domestic_platforms") return "当前账号今天没有可发布的国内平台，请先检查素材库或明天再试";
+  if (text === "publish_lock_active") return "当前已有发布任务在执行，请稍后再试";
+  if (text === "platform_login_required") return "平台登录未完成，请先完成登录后再发布";
+  if (text === "wechat_login_required") return "视频号登录已失效，请先重新扫码登录";
+  if (text === "domestic_publish_not_supported") return "当前账号没有可发布的国内平台，请先到账号管理启用平台";
   if (/account not found/i.test(text)) return "账号不存在，请到账号矩阵检查后重试";
   if (/unknown error/i.test(text)) return "未知异常，请稍后重试";
   if (/window not found/i.test(text)) return "窗口不存在，请刷新后重试";
