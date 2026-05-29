@@ -23,9 +23,14 @@ def test_account_matrix_domestic_publish_entry_morphs_from_open_to_publish() -> 
     assert "function accountDomesticOpenButtonMeta(account)" in app
     assert "function accountDomesticOpenButtonMarkup(account)" in app
     assert "async function handleAccountDomesticOpen(domesticOpenButton)" in app
+    assert "async function handleAccountDomesticPublish(domesticPublishButton)" in app
+    assert "const stateInfo = accountDomesticPublishState(account);" in app
     assert "function markAccountDomesticOpen(accountId)" in app
     assert "function clearAccountDomesticOpenState(accountId)" in app
     assert "function updateAccountDomesticOpenButtons()" in app
+    assert "function markAccountDomesticPublishing(accountId)" in app
+    assert "function clearAccountDomesticPublishState(accountId)" in app
+    assert "function updateAccountDomesticPublishButtons()" in app
     assert "function startAccountPlatformPublishCountdown(accountId, platform)" in app
     assert "function markAccountPlatformPublishing(accountId, platform)" in app
     assert "function clearAccountPlatformPublishState(accountId, platform)" in app
@@ -40,10 +45,12 @@ def test_account_matrix_domestic_publish_entry_morphs_from_open_to_publish() -> 
     assert 'data-open="${escapeHtml(`${key}:domestic`)}"' in app
     assert 'data-account-domestic-publish=' in app
     assert 'data-account-domestic-publish-state=' in app
+    assert 'data-account-domestic-publish-bound="1"' not in app
+    assert "if (!stateInfo.ready)" in app
     assert 'data-no-global-loading="1"' in app
     assert 'data-account-domestic-open-bound="1"' not in app
-    assert "\u767b\u5f55 / \u6253\u5f00\u6d4f\u89c8\u5668" in app
     assert "\u76f4\u63a5\u53d1\u5e03" in app
+    assert "setButtonLoading(platformAction, \"发布中\")" in app
     assert "\u4e00\u952e\u6253\u5f00\u56fd\u5185\u5e73\u53f0" in app
     assert "\u6253\u5f00\u4e2d" in app
     assert "\u5df2\u6253\u5f00" in app

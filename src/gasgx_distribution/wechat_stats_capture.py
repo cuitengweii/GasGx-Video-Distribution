@@ -113,7 +113,7 @@ def _pid_is_running(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
-    except OSError:
+    except (OSError, SystemError):
         return False
 
 
@@ -941,10 +941,6 @@ def _capture_account_legacy(
     fingerprint = account.get("wechat_fingerprint") or {}
     apply_runtime_environment = apply_cybercar_environment
     apply_runtime_environment()
-    try:
-        service._configure_account_clash_pure_vpn(account)  # type: ignore[attr-defined]
-    except Exception:
-        pass
     page = None
     capture_page = None
     capture_page_is_new_tab = False
@@ -1012,10 +1008,6 @@ def _capture_account(
     debug_port = int(account.get("wechat_debug_port") or 0)
     fingerprint = account.get("wechat_fingerprint") or {}
     apply_cybercar_environment()
-    try:
-        service._configure_account_clash_pure_vpn(account)  # type: ignore[attr-defined]
-    except Exception:
-        pass
     page = None
     capture_page = None
     capture_page_is_new_tab = False

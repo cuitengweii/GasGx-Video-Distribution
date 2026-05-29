@@ -2083,24 +2083,12 @@ function accountPlatformPublishKey(accountId, platform) {
 function accountPlatformPublishState(accountId, platform, loginStatus = "") {
   const key = accountPlatformPublishKey(accountId, platform);
   if (!key) {
-    return { key, mode: "open", readyAt: 0, remaining: 0 };
+    return { key, mode: "empty", readyAt: 0, remaining: 0 };
   }
   if (accountPlatformPublishInFlightByKey.get(key)) {
     return { key, mode: "publishing", readyAt: 0, remaining: 0 };
   }
-  const normalizedLoginStatus = String(loginStatus || "").trim().toLowerCase();
-  if (["ready", "active", "logged_in", "success", "ok"].includes(normalizedLoginStatus)) {
-    return { key, mode: "ready", readyAt: 0, remaining: 0 };
-  }
-  const readyAt = Number(accountPlatformPublishReadyAtByKey.get(key) || 0);
-  if (!readyAt) {
-    return { key, mode: "open", readyAt: 0, remaining: 0 };
-  }
-  const remainingMs = readyAt - Date.now();
-  if (remainingMs > 0) {
-    return { key, mode: "countdown", readyAt, remaining: Math.ceil(remainingMs / 1000) };
-  }
-  return { key, mode: "ready", readyAt, remaining: 0 };
+  return { key, mode: "ready", readyAt: 0, remaining: 0 };
 }
 
 function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "") {
@@ -2116,16 +2104,6 @@ function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "")
       ariaLabel: `${platformLabelText}发布中`,
     };
   }
-  if (state.mode === "countdown") {
-    return {
-      mode: state.mode,
-      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-countdown",
-      disabled: true,
-      main: "发布",
-      hint: `${state.remaining} 秒后可发`,
-      ariaLabel: `${platformLabelText}发布倒计时 ${state.remaining} 秒`,
-    };
-  }
   if (state.mode === "ready") {
     return {
       mode: state.mode,
@@ -2137,12 +2115,12 @@ function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "")
     };
   }
   return {
-    mode: "open",
-    buttonClass: "btn secondary platform-open-btn platform-wechat-action is-open",
-    disabled: false,
+    mode: "empty",
+    buttonClass: "btn secondary platform-open-btn platform-wechat-action is-empty",
+    disabled: true,
     main: platformLabelText,
-    hint: "登录 / 打开浏览器",
-    ariaLabel: `${platformLabelText}登录，点击打开浏览器`,
+    hint: "暂无可发布平台",
+    ariaLabel: `${platformLabelText}暂无可发布平台`,
   };
 }
 
@@ -2333,6 +2311,34 @@ async function handleAccountDomesticOpen(domesticOpenButton) {
   updateAccountDomesticOpenButtons();
 }
 
+async function handleAccountDomesticPublish(domesticPublishButton) {
+  const accountId = String(domesticPublishButton?.dataset.accountDomesticPublish || "").trim();
+  if (!accountId) return;
+  const account = accountById(accountId);
+  if (!account) return;
+  const stateInfo = accountDomesticPublishState(account);
+  if (!stateInfo.ready) {
+    showAccountCreateErrorToast("该账号暂无可发布的国内平台");
+    return;
+  }
+  const restoreButton = setButtonLoading(domesticPublishButton, "发布中");
+  markAccountDomesticPublishing(accountId);
+  try {
+    const result = await api(`/api/accounts/${accountApiId(account)}/platforms/domestic/emergency-publish`, { method: "POST" });
+    if (result && result.ok === false && result.summary) {
+      showAccountCreateErrorToast(String(result.summary || "国内平台批量发布完成，但存在失败项"));
+    }
+    await refresh();
+  } catch (error) {
+    showAccountCreateErrorToast(formatFriendlyMessage(error?.message || "国内平台发布失败"));
+    return;
+  } finally {
+    clearAccountDomesticPublishState(accountId);
+    restoreButton();
+  }
+  updateAccountDomesticPublishButtons();
+}
+
 function markAccountDomesticOpen(accountId) {
   const key = accountDomesticOpenKey(accountId);
   if (!key) return;
@@ -2494,8 +2500,6 @@ function updateAccountPlatformPublishButtons() {
     }
     return;
   }
-  const now = Date.now();
-  let hasCountdown = false;
   buttons.forEach((button) => {
     if (button.classList.contains("loading")) return;
     const actionKey = String(button.dataset.accountPlatformAction || "").trim();
@@ -2516,16 +2520,8 @@ function updateAccountPlatformPublishButtons() {
     button.setAttribute("aria-label", meta.ariaLabel);
     button.setAttribute("aria-disabled", meta.disabled ? "true" : "false");
     button.innerHTML = nextHtml;
-    const readyAt = Number(accountPlatformPublishReadyAtByKey.get(actionKey) || 0);
-    if (meta.mode === "countdown" || (readyAt && readyAt > now)) {
-      hasCountdown = true;
-    }
   });
-  if (hasCountdown) {
-    if (!accountPlatformPublishCountdownTimer) {
-      accountPlatformPublishCountdownTimer = window.setInterval(updateAccountPlatformPublishButtons, 1000);
-    }
-  } else if (accountPlatformPublishCountdownTimer) {
+  if (accountPlatformPublishCountdownTimer) {
     window.clearInterval(accountPlatformPublishCountdownTimer);
     accountPlatformPublishCountdownTimer = null;
   }
@@ -2747,6 +2743,10 @@ function accountVpnNodeKey(account) {
   return String(account?.vpn_node_key || "").trim();
 }
 
+function accountVpnProxyUrl(account) {
+  return String(account?.vpn_proxy_url || "").trim();
+}
+
 function accountPublishMode(account) {
   const mode = String(account?.account_publish_mode || "inherit").trim().toLowerCase();
   return ["inherit", "publish", "draft"].includes(mode) ? mode : "inherit";
@@ -2843,6 +2843,12 @@ function renderAccounts() {
               </select>
               <span class="account-preference-country" data-account-vpn-country="${account.id}">国家：${escapeHtml(accountVpnCountryLabel(account))}</span>
             </label>
+            <label class="account-setting account-setting-vpn-proxy">
+              <span class="account-setting-label">代理入口</span>
+              <input type="text" data-account-vpn-proxy-url="${account.id}" value="${escapeHtml(accountVpnProxyUrl(account))}" placeholder="http://127.0.0.1:33210">
+              <span class="account-preference-country">当前入口：${escapeHtml(accountVpnProxyUrl(account) || "未配置")}</span>
+              <span class="muted">留空则沿用默认代理入口；填入后优先使用账号自己的入口。</span>
+            </label>
             <label class="account-setting account-setting-publish">
               <span class="account-setting-label">发布方式</span>
               <select data-account-publish-mode="${account.id}">
@@ -2883,6 +2889,15 @@ function renderAccounts() {
       event.preventDefault();
       event.stopPropagation();
       void handleAccountDomesticOpen(button);
+    });
+  });
+  document.querySelectorAll("[data-account-domestic-publish]").forEach((button) => {
+    if (button.dataset.accountDomesticPublishBound === "1") return;
+    button.dataset.accountDomesticPublishBound = "1";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleAccountDomesticPublish(button);
     });
   });
 }
@@ -3067,10 +3082,12 @@ async function updateAccountPreference(select) {
   const account = accountById(row?.dataset.accountId);
   if (!row || !account) return;
   const isVpn = select.matches("[data-account-vpn-node]");
+  const isVpnProxy = select.matches("[data-account-vpn-proxy-url]");
   const isPublishMode = select.matches("[data-account-publish-mode]");
-  if (!isVpn && !isPublishMode) return;
+  if (!isVpn && !isVpnProxy && !isPublishMode) return;
   const payload = {};
   if (isVpn) payload.vpn_node_key = String(select.value || "");
+  if (isVpnProxy) payload.vpn_proxy_url = String(select.value || "").trim();
   if (isPublishMode) payload.account_publish_mode = String(select.value || "inherit");
   const previousDisabled = select.disabled;
   select.disabled = true;
@@ -3082,16 +3099,20 @@ async function updateAccountPreference(select) {
     const countryNodeLabel = countryNode ? vpnNodeCountryLabel(countryNode) : "未绑定";
     const countryNodeLabelNode = row.querySelector(`[data-account-vpn-country="${account.id}"]`);
     if (countryNodeLabelNode) countryNodeLabelNode.textContent = `国家：${countryNodeLabel}`;
+    const proxyInput = row.querySelector(`[data-account-vpn-proxy-url="${account.id}"]`);
+    if (proxyInput instanceof HTMLInputElement) proxyInput.value = accountVpnProxyUrl(updated);
+    const proxySummaryNode = row.querySelector(".account-setting-vpn-proxy .account-preference-country");
+    if (proxySummaryNode) proxySummaryNode.textContent = `当前入口：${accountVpnProxyUrl(updated) || "未配置"}`;
     void emitOperationNotice({
       category: "账号管理",
       view: "accounts",
       view_label: "账号管理",
       action_code: "update",
-      action_label: isVpn ? "绑定VPN节点" : "修改账号发布方式",
+      action_label: isVpn ? "绑定VPN节点" : isVpnProxy ? "修改VPN代理入口" : "修改账号发布方式",
       status: "success",
       summary: `已更新账号「${updated.display_name || account.display_name || account.account_key || account.id}」`,
       params: {
-        修改字段: isVpn ? "VPN 节点" : "账号发布方式",
+        修改字段: isVpn ? "VPN 节点" : isVpnProxy ? "VPN 代理入口" : "账号发布方式",
         提交参数: payload,
         变更前: before,
         变更后: accountNoticeSnapshot(updated),
@@ -6497,6 +6518,7 @@ function accountNoticeSnapshot(account = {}) {
     手机号: accountPhone(account),
     VPN节点: accountVpnNodeLabel(account),
     VPN国家: accountVpnCountryLabel(account),
+    VPN入口: accountVpnProxyUrl(account) || "未配置",
     账号发布方式: accountPublishMode(account),
     备注: account.notes || "",
     发布成功数: Number(account.publish_success_count || 0),
@@ -6515,6 +6537,7 @@ function accountNoticeChangeSnapshot(account, patch = {}) {
   if (patch.status !== undefined) next.status = patch.status;
   if (patch.notes !== undefined) next.notes = patch.notes;
   if (patch.vpn_node_key !== undefined) next.vpn_node_key = patch.vpn_node_key;
+  if (patch.vpn_proxy_url !== undefined) next.vpn_proxy_url = patch.vpn_proxy_url;
   if (patch.account_publish_mode !== undefined) next.account_publish_mode = patch.account_publish_mode;
   return {
     变更前: accountNoticeSnapshot(account),
@@ -8602,8 +8625,8 @@ document.querySelector("#accounts-repair-config")?.addEventListener("click", (ev
 });
 document.querySelector("#accounts-list")?.addEventListener("change", async (event) => {
   const target = event.target;
-  if (!(target instanceof HTMLSelectElement)) return;
-  if (!target.matches("[data-account-vpn-node], [data-account-publish-mode]")) return;
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+  if (!target.matches("[data-account-vpn-node], [data-account-vpn-proxy-url], [data-account-publish-mode]")) return;
   await updateAccountPreference(target);
 });
 document.addEventListener("click", (event) => {
@@ -9668,27 +9691,7 @@ document.addEventListener("click", async (event) => {
 
   const domesticPublishButton = event.target.closest("[data-account-domestic-publish]");
   if (domesticPublishButton) {
-    const accountId = String(domesticPublishButton.dataset.accountDomesticPublish || "").trim();
-    const account = accountById(accountId);
-    if (!account) return;
-    const meta = accountDomesticPublishButtonMeta(account);
-    if (!meta.ready) return;
-    const restoreButton = setButtonLoading(domesticPublishButton, "发布中");
-    markAccountDomesticPublishing(accountId);
-    try {
-      const result = await api(`/api/accounts/${accountApiId(account)}/platforms/domestic/emergency-publish`, { method: "POST" });
-      if (result && result.ok === false && result.summary) {
-        showAccountCreateErrorToast(String(result.summary || "国内平台批量发布完成，但存在失败项"));
-      }
-      await refresh();
-    } catch (error) {
-      clearAccountDomesticPublishState(accountId);
-      throw error;
-    } finally {
-      clearAccountDomesticPublishState(accountId);
-      restoreButton();
-    }
-    updateAccountDomesticPublishButtons();
+    await handleAccountDomesticPublish(domesticPublishButton);
     return;
   }
 
@@ -9699,23 +9702,13 @@ document.addEventListener("click", async (event) => {
     const account = accountById(accountId);
     if (!account) return;
     const meta = accountPlatformPublishButtonMeta(accountId, platform, String(platformAction.dataset.accountPlatformLoginStatus || "").trim());
-    const restoreButton = setButtonLoading(platformAction, meta.mode === "open" ? "打开中" : "发布中");
+    const restoreButton = setButtonLoading(platformAction, "发布中");
     try {
-    if (meta.mode === "open") {
-        await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/open-browser`, { method: "POST" });
-        startAccountPlatformPublishCountdown(accountId, platform);
-      } else if (meta.mode === "ready") {
-        await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/emergency-publish`, { method: "POST" });
-        markAccountPlatformPublishing(accountId, platform);
-      } else {
-        return;
-      }
+      if (meta.mode === "publishing") return;
+      await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/emergency-publish`, { method: "POST" });
+      markAccountPlatformPublishing(accountId, platform);
     } catch (error) {
-      if (meta.mode === "open") {
-        clearAccountPlatformPublishState(accountId, platform);
-      } else if (meta.mode === "ready") {
-        accountPlatformPublishInFlightByKey.delete(accountPlatformPublishKey(accountId, platform));
-      }
+      accountPlatformPublishInFlightByKey.delete(accountPlatformPublishKey(accountId, platform));
       throw error;
     } finally {
       restoreButton();

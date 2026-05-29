@@ -344,6 +344,84 @@ def test_account_platform_publish_reuses_locked_source_and_disables_telegram(mon
     assert "--no-publish-skip-notify" in popen_calls[0]
 
 
+def test_run_account_platform_publish_can_disable_auto_open_chrome(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["douyin"]})
+    base = tmp_path / "runtime" / "materials" / "videos"
+    locked = base / "locked.mp4"
+    _write_video(locked, int(time.time()))
+    state_path = tmp_path / "runtime" / "matrix_publish_state.json"
+    state_path.write_text(json.dumps({"consumed": [], "runs": []}), encoding="utf-8")
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 18))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [locked])
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda _workspace, _platform: True)
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "publish",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+    popen_calls: list[list[str]] = []
+
+    class FakeCompleted:
+        returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        popen_calls.append(list(cmd))
+        return FakeCompleted()
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+
+    result = run_account_platform_publish(account_id=1, platform="douyin", auto_open_chrome=False)
+
+    assert result["ok"] is True
+    assert result["results"][0]["asset_key"] == _relative_asset_key(locked)
+    assert "--no-auto-open-chrome" in popen_calls[0]
+
+
+def test_publish_command_for_item_uses_longer_timeout_for_fast_domestic_publish(tmp_path: Path) -> None:
+    import gasgx_distribution.matrix_publish as mp
+
+    runtime_config = tmp_path / "runtime_config.json"
+    item = SimpleNamespace(
+        platform="douyin",
+        debug_port=16204,
+        profile_dir=tmp_path / "profiles" / "matrix" / "a-01",
+        source_video=tmp_path / "materials" / "shared.mp4",
+        workspace=tmp_path / "workspace",
+        account_publish_mode="inherit",
+    )
+    settings = {
+        "publish_mode": "publish",
+        "upload_timeout": 60,
+        "caption": "caption",
+        "topics": "",
+        "collection_name": "",
+        "declare_original": False,
+    }
+
+    cmd = mp._publish_command_for_item(  # type: ignore[attr-defined]
+        item,
+        settings,
+        runtime_config,
+        disable_telegram=True,
+        auto_open_chrome=False,
+        fast_publish=True,
+    )
+
+    assert "--upload-timeout" in cmd
+    assert cmd[cmd.index("--upload-timeout") + 1] == "120"
+
+
 def test_build_account_domestic_publish_items_reuses_shared_source(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account(
@@ -404,34 +482,122 @@ def test_run_account_domestic_publish_reuses_shared_source_and_disables_telegram
             "declare_original": False,
         },
     )
-    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(mp.service, "browser_fingerprint_launch_args", lambda fingerprint: [])
+    popen_calls: list[list[str]] = []
 
-    def fake_run_publish_item(item, settings, *, disable_telegram=False):
-        calls.append(
-            {
-                "platform": item.platform,
-                "source_video": str(item.source_video),
-                "disable_telegram": disable_telegram,
-            }
-        )
-        return {
-            "platform": item.platform,
-            "account_id": item.account_id,
-            "asset_key": _relative_asset_key(item.source_video),
-            "publish_date": item.publish_date,
-            "success": True,
-        }
+    class FakeCompleted:
+        returncode = 0
 
-    monkeypatch.setattr(mp, "_run_publish_item", fake_run_publish_item)
+    def fake_run(cmd, **kwargs):
+        popen_calls.append(list(cmd))
+        return FakeCompleted()
 
-    result = run_account_domestic_publish(1)
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda _workspace, _platform: True)
+
+    result = run_account_domestic_publish(1, auto_open_chrome=False)
 
     assert result["ok"] is True
     assert result["count"] == 5
     assert result["platforms"] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
     assert result["source_video"] == str(shared)
-    assert {call["source_video"] for call in calls} == {str(shared)}
-    assert all(call["disable_telegram"] is True for call in calls)
+    assert len(popen_calls) == 5
+    uploaded = []
+    for cmd in popen_calls:
+        assert "--disable-notify" in cmd
+        assert "--no-telegram-prefilter" in cmd
+        assert "--no-telegram-collect-notify" in cmd
+        assert "--no-publish-skip-notify" in cmd
+        assert "--no-auto-open-chrome" in cmd
+        assert "--force-publish-now" in cmd
+        assert "--upload-platforms" in cmd
+        uploaded.append(cmd[cmd.index("--upload-platforms") + 1])
+    assert set(uploaded) == {"wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"}
+
+
+def test_run_account_domestic_publish_serializes_platforms(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account(
+        {
+            "account_key": "a-01",
+            "display_name": "A",
+            "platforms": ["douyin", "xiaohongshu"],
+        }
+    )
+    base = tmp_path / "runtime" / "materials" / "videos"
+    shared = base / "shared.mp4"
+    _write_video(shared, int(time.time()))
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 28))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [shared])
+    monkeypatch.setattr(mp, "_consumed_asset_locks", lambda today=None: {1: _relative_asset_key(shared)})
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "publish",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+
+    active = 0
+    max_active = 0
+    call_order: list[str] = []
+
+    def fake_run_publish_item(item, settings, *, disable_telegram, auto_open_chrome, fast_publish):
+        nonlocal active, max_active
+        assert disable_telegram is True
+        assert auto_open_chrome is False
+        assert fast_publish is True
+        call_order.append(f"{item.platform}:start")
+        active += 1
+        max_active = max(max_active, active)
+        time.sleep(0.05)
+        active -= 1
+        call_order.append(f"{item.platform}:end")
+        return {
+            "account_id": item.account_id,
+            "account_key": item.account_key,
+            "platform": item.platform,
+            "asset_key": _relative_asset_key(item.source_video),
+            "publish_date": item.publish_date,
+            "display_name": item.display_name,
+            "video": str(item.source_video),
+            "prepared_video": str(item.source_video),
+            "profile_dir": str(item.profile_dir),
+            "fingerprint": item.fingerprint,
+            "debug_port": int(item.debug_port),
+            "workspace": str(item.workspace),
+            "account_publish_mode": item.account_publish_mode,
+            "vpn_node_key": item.vpn_node_key,
+            "vpn_country_code": item.vpn_country_code,
+            "vpn_country_label": item.vpn_country_label,
+            "vpn_proxy_url": item.vpn_proxy_url,
+            "vpn_enabled": False,
+            "effective_publish_mode": "publish",
+            "returncode": 0,
+            "success": True,
+            "evidence_ok": True,
+            "log": "ok",
+            "started_at": "2026-05-28 00:00:00",
+            "finished_at": "2026-05-28 00:00:01",
+            "telegram_disabled": True,
+        }
+
+    monkeypatch.setattr(mp, "_run_publish_item", fake_run_publish_item)
+
+    result = run_account_domestic_publish(1, auto_open_chrome=False)
+
+    assert result["ok"] is True
+    assert result["platforms"] == ["douyin", "xiaohongshu"]
+    assert max_active == 1
+    assert call_order == ["douyin:start", "douyin:end", "xiaohongshu:start", "xiaohongshu:end"]
 
 
 def test_publish_plan_reuses_locked_asset_for_remaining_platforms(monkeypatch, tmp_path: Path) -> None:
@@ -576,6 +742,66 @@ def test_wechat_publish_uses_pipeline_draft_mode(monkeypatch, tmp_path: Path) ->
     assert cmd[cmd.index("--wechat-debug-port") + 1] == cmd[cmd.index("--debug-port") + 1]
 
 
+def test_emergency_publish_forces_publish_now_over_common_draft(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["douyin"]})
+    _write_video(tmp_path / "runtime" / "materials" / "videos" / "one.mp4", int(time.time()))
+    save_distribution_settings({"common": {"publish_mode": "draft"}, "platforms": {"douyin": {"publish_mode": "inherit"}}})
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 18))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [tmp_path / "runtime" / "materials" / "videos" / "one.mp4"])
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda _workspace, _platform: True)
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "draft",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+    calls: list[list[str]] = []
+
+    class FakeCompleted:
+        returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return FakeCompleted()
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+
+    result = run_account_platform_publish(account_id=1, platform="douyin")
+
+    assert result["ok"] is True
+    cmd = _pipeline_cmd(calls)
+    assert "--force-publish-now" in cmd
+
+    from cybercar.pipeline import _resolve_platform_publish_mode_with_config
+
+    args = SimpleNamespace(
+        force_publish_now=True,
+        publish_only=False,
+        wechat_publish_now=False,
+        wechat_save_draft_only=False,
+        no_save_draft=False,
+        bilibili_auto_publish_random_schedule=False,
+        kuaishou_auto_publish_random_schedule=False,
+    )
+    mode = _resolve_platform_publish_mode_with_config(
+        args,
+        "douyin",
+        {"common": {"publish_mode": "draft"}, "platforms": {"douyin": {"publish_mode": "inherit"}}},
+    )
+    assert mode.publish_now is True
+    assert mode.save_draft is False
+
+
 def test_wechat_publish_uses_account_vpn_for_bound_accounts(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     vpn_key = "vmess-ca-knyr-b-psakt-net-20101-加拿大-can-x1-0-ver10s"
@@ -611,13 +837,12 @@ def test_wechat_publish_uses_account_vpn_for_bound_accounts(monkeypatch, tmp_pat
             (workspaces[0] / "uploaded_records_wechat.jsonl").write_text('{"ok":true}\n', encoding="utf-8")
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", fake_configure_account_clash)
     monkeypatch.setattr("gasgx_distribution.matrix_publish.subprocess.run", fake_run)
 
     result = run_wechat_publish()
 
     assert result["ok"] is True
-    assert clash_calls and clash_calls[0]["vpn_node_key"] == vpn_key
+    assert clash_calls == []
     assert envs
     vpn_env = next(env for env in envs if "CYBERCAR_VPN_NODE_KEY" in env)
     assert vpn_env["CYBERCAR_VPN_NODE_KEY"] == vpn_key

@@ -47,6 +47,7 @@ class AccountPayload(BaseModel):
     notes: str = Field(default="")
     platforms: list[str] = Field(default_factory=list)
     vpn_node_key: str = Field(default="")
+    vpn_proxy_url: str = Field(default="")
     account_publish_mode: str = Field(default="inherit")
 
 

@@ -109,6 +109,279 @@ def test_click_xiaohongshu_primary_publish_button_skips_sidebar_publish_note(mon
     assert footer_button.clicked is True
 
 
+def test_click_xiaohongshu_primary_publish_button_accepts_bottom_publish_note(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(
+            self,
+            *,
+            wrap: str,
+            texts: tuple[str, ...],
+            rect_top: float,
+            button_text: str,
+        ) -> None:
+            self.wrap = wrap
+            self.texts = texts
+            self.rect_top = rect_top
+            self.button_text = button_text
+            self.clicked = False
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "window.getComputedStyle(this)" in script:
+                return True
+            if "const norm = (s)" in script:
+                return {
+                    "wrap": self.wrap,
+                    "texts": list(self.texts),
+                    "rectTop": self.rect_top,
+                    "viewportHeight": 1000,
+                    "buttonText": self.button_text,
+                }
+            return True
+
+        def click(self, by_js: bool = False) -> None:
+            del by_js
+            self.clicked = True
+
+    class FakeOwner:
+        def __init__(self, sidebar_button: FakeButton, footer_button: FakeButton) -> None:
+            self.sidebar_button = sidebar_button
+            self.footer_button = footer_button
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del timeout
+            if selector == "css:button.custom-button.bg-red":
+                return self.sidebar_button
+            if selector == "xpath://button[contains(@class,'custom-button') and contains(@class,'bg-red')]":
+                return self.footer_button
+            return None
+
+    sidebar_button = FakeButton(
+        wrap="\u53d1\u5e03\u7b14\u8bb0 \u9996\u9875 \u7b14\u8bb0\u7ba1\u7406 \u6570\u636e\u770b\u677f",
+        texts=(
+            "\u53d1\u5e03\u7b14\u8bb0",
+            "\u9996\u9875",
+            "\u7b14\u8bb0\u7ba1\u7406",
+        ),
+        rect_top=96,
+        button_text="\u53d1\u5e03\u7b14\u8bb0",
+    )
+    footer_button = FakeButton(
+        wrap="\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u5b9a\u65f6\u53d1\u5e03",
+        texts=(
+            "\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u5b9a\u65f6\u53d1\u5e03",
+            "\u6682\u5b58\u79bb\u5f00 \u53d1\u5e03\u7b14\u8bb0",
+            "\u53d1\u5e03\u7b14\u8bb0",
+        ),
+        rect_top=820,
+        button_text="\u53d1\u5e03\u7b14\u8bb0",
+    )
+    owner = FakeOwner(sidebar_button, footer_button)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert engine._click_xiaohongshu_primary_publish_button(owner, None) is True
+    assert sidebar_button.clicked is False
+    assert footer_button.clicked is True
+
+
+def test_click_xiaohongshu_primary_publish_button_accepts_bottom_publish_work(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(
+            self,
+            *,
+            wrap: str,
+            texts: tuple[str, ...],
+            rect_top: float,
+            button_text: str,
+        ) -> None:
+            self.wrap = wrap
+            self.texts = texts
+            self.rect_top = rect_top
+            self.button_text = button_text
+            self.clicked = False
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            if "window.getComputedStyle(this)" in script:
+                return True
+            if "const norm = (s)" in script:
+                return {
+                    "wrap": self.wrap,
+                    "texts": list(self.texts),
+                    "rectTop": self.rect_top,
+                    "viewportHeight": 1000,
+                    "buttonText": self.button_text,
+                }
+            return True
+
+        def click(self, by_js: bool = False) -> None:
+            del by_js
+            self.clicked = True
+
+    class FakeOwner:
+        def __init__(self, sidebar_button: FakeButton, footer_button: FakeButton) -> None:
+            self.sidebar_button = sidebar_button
+            self.footer_button = footer_button
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del timeout
+            if selector == "css:button.custom-button.bg-red":
+                return self.sidebar_button
+            if selector == "xpath://button[contains(@class,'custom-button') and contains(@class,'bg-red')]":
+                return self.footer_button
+            return None
+
+    sidebar_button = FakeButton(
+        wrap="\u53d1\u5e03\u7b14\u8bb0 \u9996\u9875 \u7b14\u8bb0\u7ba1\u7406 \u6570\u636e\u770b\u677f",
+        texts=(
+            "\u53d1\u5e03\u7b14\u8bb0",
+            "\u9996\u9875",
+            "\u7b14\u8bb0\u7ba1\u7406",
+        ),
+        rect_top=96,
+        button_text="\u53d1\u5e03\u7b14\u8bb0",
+    )
+    footer_button = FakeButton(
+        wrap="\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u5b9a\u65f6\u53d1\u5e03",
+        texts=(
+            "\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u5b9a\u65f6\u53d1\u5e03",
+            "\u6682\u5b58\u79bb\u5f00 \u53d1\u5e03\u4f5c\u54c1",
+            "\u53d1\u5e03\u4f5c\u54c1",
+        ),
+        rect_top=820,
+        button_text="\u53d1\u5e03\u4f5c\u54c1",
+    )
+    owner = FakeOwner(sidebar_button, footer_button)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert engine._click_xiaohongshu_primary_publish_button(owner, None) is True
+    assert sidebar_button.clicked is False
+    assert footer_button.clicked is True
+
+
+def test_click_xiaohongshu_primary_publish_button_uses_shadow_dom_fallback(monkeypatch) -> None:
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.js_scripts: list[str] = []
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del selector, timeout
+            return None
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            self.js_scripts.append(script)
+            if "collectRoots(document)" in script and "shadowRoot" in script and "contentDocument" in script:
+                return True
+            return False
+
+    owner = FakeOwner()
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert engine._click_xiaohongshu_primary_publish_button(owner, None) is True
+    assert len(owner.js_scripts) == 1
+
+
+def test_click_xiaohongshu_primary_publish_button_accepts_publish_video_container(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(self) -> None:
+            self.clicked = False
+            self.run_js_calls: list[str] = []
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            self.run_js_calls.append(script)
+            if "const norm = (s)" in script:
+                return {
+                    "wrap": "\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u516c\u5f00\u53ef\u89c1 \u5b9a\u65f6\u53d1\u5e03",
+                    "texts": [
+                        "\u66f4\u591a\u8bbe\u7f6e \u6536\u8d77 \u516c\u5f00\u53ef\u89c1 \u5b9a\u65f6\u53d1\u5e03",
+                        "\u53d1\u5e03\u7b14\u8bb0",
+                        "\u516c\u5f00\u53ef\u89c1",
+                    ],
+                    "rectTop": 820,
+                    "viewportHeight": 1000,
+                    "buttonText": "\u53d1\u5e03\u7b14\u8bb0",
+                }
+            return True
+
+        def click(self, by_js: bool = False) -> None:
+            del by_js
+            self.clicked = True
+
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.button = FakeButton()
+
+        def ele(self, selector: str, timeout: float = 0.0) -> Any:
+            del timeout
+            if selector in {
+                "css:div.publish-video",
+                "xpath://div[contains(@class,'publish-video')]",
+                "xpath://div[contains(@class,'btn-wrapper') and .//*[normalize-space(.)='\u53d1\u5e03\u7b14\u8bb0']]",
+                "xpath://div[contains(@class,'btn-inner') and .//*[normalize-space(.)='\u53d1\u5e03\u7b14\u8bb0']]",
+                "xpath://span[contains(@class,'btn-text') and normalize-space(.)='\u53d1\u5e03\u7b14\u8bb0']/ancestor::div[contains(@class,'publish-video')][1]",
+                "xpath://span[normalize-space(.)='\u53d1\u5e03\u7b14\u8bb0']/ancestor::div[contains(@class,'publish-video')][1]",
+            }:
+                return self.button
+            return None
+
+    owner = FakeOwner()
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert engine._click_xiaohongshu_primary_publish_button(owner, None) is True
+    assert owner.button.clicked is True
+
+
+def test_ensure_xiaohongshu_upload_mode_uses_recursive_frame_search(monkeypatch) -> None:
+    class FakeOwner:
+        def __init__(self) -> None:
+            self.js_scripts: list[str] = []
+            self.calls = 0
+
+        def run_js(self, script: str, *_args: Any) -> Any:
+            self.js_scripts.append(script)
+            self.calls += 1
+            if self.calls == 1:
+                return {"state": "clicked", "target": "上传视频", "other": "上传图文", "current": "", "available": ["上传视频"]}
+            return {"state": "already", "target": "上传视频", "other": "上传图文", "current": "上传视频", "available": ["上传视频"]}
+
+    owner = FakeOwner()
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert engine._ensure_xiaohongshu_upload_mode(owner, None, prefer_video=True) is True
+    assert len(owner.js_scripts) == 2
+    assert "collectRoots(document)" in owner.js_scripts[0]
+
+
+def test_is_xiaohongshu_publish_button_context_rejects_sidebar_note() -> None:
+    assert not engine._is_xiaohongshu_publish_button_context(
+        ("\u53d1\u5e03\u7b14\u8bb0", "\u9996\u9875", "\u7b14\u8bb0\u7ba1\u7406"),
+        "\u53d1\u5e03\u7b14\u8bb0",
+        "",
+        rect_top=120,
+        viewport_height=1000,
+    )
+
+    assert engine._is_xiaohongshu_publish_button_context(
+        ("footer-area",),
+        "\u53d1\u5e03",
+        "",
+        rect_top=820,
+        viewport_height=1000,
+    )
+    assert engine._is_xiaohongshu_publish_button_context(
+        ("footer-area",),
+        "\u53d1\u5e03\u7b14\u8bb0",
+        "",
+        rect_top=820,
+        viewport_height=1000,
+    )
+    assert engine._is_xiaohongshu_publish_button_context(
+        ("footer-area",),
+        "\u53d1\u5e03\u4f5c\u54c1",
+        "",
+        rect_top=820,
+        viewport_height=1000,
+    )
+
+
 def test_wait_publish_feedback_rechecks_xiaohongshu_confirm_button(monkeypatch) -> None:
     state = {
         "confirmed": False,

@@ -492,12 +492,12 @@ def resolve_account_publish_mode(account: dict[str, Any], base_mode: str) -> str
 
 
 def resolve_account_vpn_proxy(account: dict[str, Any]) -> str:
-    node_key = str(account.get("vpn_node_key") or "").strip()
-    if not node_key:
-        return ""
     proxy = str(account.get("vpn_proxy_url") or "").strip()
     if proxy:
         return proxy
+    node_key = str(account.get("vpn_node_key") or "").strip()
+    if not node_key:
+        return ""
     node = resolve_vpn_node(node_key)
     if not node:
         return ""
@@ -908,10 +908,10 @@ def _normalize_browser_profiles_for_backup(conn) -> int:
         if profile is None:
             conn.execute(
                 """
-                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, vpn_node_key, vpn_proxy_url, account_publish_mode, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (account_id, expected_dir, _profile_debug_port_from_seed(conn, account_key), fingerprint, ts, ts),
+                (account_id, expected_dir, _profile_debug_port_from_seed(conn, account_key), fingerprint, "", "", "inherit", ts, ts),
             )
             Path(expected_dir).mkdir(parents=True, exist_ok=True)
             normalized += 1
@@ -1449,12 +1449,15 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
             remote_updated = int(profile.get("updated_at") or profile.get("created_at") or ts)
             conn.execute(
                 """
-                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, vpn_node_key, vpn_proxy_url, account_publish_mode, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id) DO UPDATE SET
                     profile_dir = excluded.profile_dir,
                     debug_port = excluded.debug_port,
                     fingerprint_json = excluded.fingerprint_json,
+                    vpn_node_key = excluded.vpn_node_key,
+                    vpn_proxy_url = excluded.vpn_proxy_url,
+                    account_publish_mode = excluded.account_publish_mode,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1462,6 +1465,9 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
                     profile_dir,
                     debug_port,
                     fingerprint,
+                    str(profile.get("vpn_node_key") or ""),
+                    str(profile.get("vpn_proxy_url") or ""),
+                    str(profile.get("account_publish_mode") or "inherit"),
                     int(profile.get("created_at") or remote_updated or ts),
                     remote_updated or ts,
                 ),
@@ -1480,10 +1486,10 @@ def pull_accounts_from_supabase_to_sqlite() -> dict[str, Any]:
             fingerprint = json.dumps(build_browser_fingerprint(account_key, "account"), ensure_ascii=False)
             conn.execute(
                 """
-                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, vpn_node_key, vpn_proxy_url, account_publish_mode, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (account_id, profile_dir, _profile_debug_port_from_seed(conn, account_key), fingerprint, ts, ts),
+                (account_id, profile_dir, _profile_debug_port_from_seed(conn, account_key), fingerprint, "", "", "inherit", ts, ts),
             )
             Path(profile_dir).mkdir(parents=True, exist_ok=True)
             imported_profiles += 1
@@ -7230,12 +7236,6 @@ def start_terminal_emergency_wechat_publish(account_id: int) -> dict[str, Any]:
     platform_row = _resolve_account_platform_runtime(account, "wechat")
     if not platform_row:
         raise RuntimeError("wechat platform config missing")
-    try:
-        _configure_account_clash_pure_vpn(account)
-    except Exception:
-        # Emergency supplemental publish must keep going even if the VPN controller
-        # is temporarily unavailable or the account does not have a VPN node.
-        pass
     runtime = _terminal_browser_runtime_for_account(account_id, "wechat")
     if runtime.get("browser_open") is False:
         try:
@@ -8222,6 +8222,7 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
             "debug_port": _profile_debug_port_supabase(account_key),
             "fingerprint_json": build_browser_fingerprint(account_key, "account"),
             "vpn_node_key": str(payload.get("vpn_node_key") or "").strip(),
+            "vpn_proxy_url": str(payload.get("vpn_proxy_url") or "").strip(),
             "account_publish_mode": _normalize_account_publish_mode(payload.get("account_publish_mode")),
             "created_at": ts,
             "updated_at": ts,
@@ -8294,11 +8295,12 @@ def create_account(payload: dict[str, Any]) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE browser_profiles
-            SET vpn_node_key = ?, account_publish_mode = ?, updated_at = ?
+            SET vpn_node_key = ?, vpn_proxy_url = ?, account_publish_mode = ?, updated_at = ?
             WHERE account_id = ?
             """,
             (
                 str(payload.get("vpn_node_key") or "").strip(),
+                str(payload.get("vpn_proxy_url") or "").strip(),
                 _normalize_account_publish_mode(payload.get("account_publish_mode")),
                 ts,
                 account_id,
@@ -8424,10 +8426,22 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
     current_vpn_node_key = str(current_account.get("vpn_node_key") or "").strip()
     next_vpn_node_key = str(payload.get("vpn_node_key") or "").strip() if vpn_node_key_changed else current_vpn_node_key
     vpn_node_key_will_change = vpn_node_key_changed and next_vpn_node_key != current_vpn_node_key
+    vpn_proxy_url_changed = "vpn_proxy_url" in payload
+    current_vpn_proxy_url = str(current_account.get("vpn_proxy_url") or "").strip()
+    next_vpn_proxy_url = str(payload.get("vpn_proxy_url") or "").strip() if vpn_proxy_url_changed else current_vpn_proxy_url
+    vpn_proxy_url_will_change = vpn_proxy_url_changed and next_vpn_proxy_url != current_vpn_proxy_url
     projected_account = dict(current_account)
     if vpn_node_key_changed:
         projected_account["vpn_node_key"] = next_vpn_node_key
+    if vpn_proxy_url_changed:
+        projected_account["vpn_proxy_url"] = next_vpn_proxy_url
     if brand_database_backend() == "supabase":
+        profile_row = _brand_supabase().select_one("browser_profiles", filters={"account_id": account_id})
+        raw_profile_vpn_proxy_url = ""
+        if isinstance(profile_row, dict):
+            raw_profile_vpn_proxy_url = str(profile_row.get("vpn_proxy_url") or "").strip()
+        if vpn_node_key_changed and not vpn_proxy_url_changed:
+            projected_account["vpn_proxy_url"] = raw_profile_vpn_proxy_url
         allowed = {"display_name", "niche", "status", "notes"}
         update = {key: str(payload.get(key) or "").strip() for key in allowed if key in payload}
         if update:
@@ -8436,14 +8450,15 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
         profile_update: dict[str, Any] = {}
         if "vpn_node_key" in payload:
             profile_update["vpn_node_key"] = str(payload.get("vpn_node_key") or "").strip()
+        if "vpn_proxy_url" in payload:
+            profile_update["vpn_proxy_url"] = str(payload.get("vpn_proxy_url") or "").strip()
         if "account_publish_mode" in payload:
             profile_update["account_publish_mode"] = _normalize_account_publish_mode(payload.get("account_publish_mode"))
         if profile_update:
             profile_update["updated_at"] = now_ts()
             _brand_supabase().update("browser_profiles", profile_update, filters={"account_id": account_id})
-        if vpn_node_key_will_change:
+        if vpn_node_key_will_change or vpn_proxy_url_will_change:
             proxy = _resolve_account_launch_proxy(projected_account)
-            profile_row = _brand_supabase().select_one("browser_profiles", filters={"account_id": account_id})
             if isinstance(profile_row, dict):
                 fingerprint = _json_payload(profile_row.get("fingerprint_json"), {})
                 if isinstance(fingerprint, dict):
@@ -8456,7 +8471,7 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
         if update or profile_update:
             _invalidate_supabase_read_cache("accounts")
         updated = get_account(account_id)
-        if vpn_node_key_will_change:
+        if vpn_node_key_will_change or vpn_proxy_url_will_change:
             try:
                 _close_wechat_browser_for_account(account_id)
             except Exception:
@@ -8473,11 +8488,21 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
     profile_update: dict[str, Any] = {}
     if "vpn_node_key" in payload:
         profile_update["vpn_node_key"] = str(payload.get("vpn_node_key") or "").strip()
+    if "vpn_proxy_url" in payload:
+        profile_update["vpn_proxy_url"] = str(payload.get("vpn_proxy_url") or "").strip()
     if "account_publish_mode" in payload:
         profile_update["account_publish_mode"] = _normalize_account_publish_mode(payload.get("account_publish_mode"))
     if not assignments and not profile_update:
         return get_account(account_id)
     with connect() as conn:
+        profile_row = conn.execute("SELECT vpn_proxy_url, fingerprint_json FROM browser_profiles WHERE account_id = ?", (account_id,)).fetchone()
+        raw_profile_vpn_proxy_url = ""
+        raw_profile_fingerprint_json: str | None = None
+        if profile_row is not None:
+            raw_profile_vpn_proxy_url = str(profile_row["vpn_proxy_url"] or "").strip()
+            raw_profile_fingerprint_json = str(profile_row["fingerprint_json"] or "")
+        if vpn_node_key_changed and not vpn_proxy_url_changed:
+            projected_account["vpn_proxy_url"] = raw_profile_vpn_proxy_url
         if assignments:
             assignments.append("updated_at = ?")
             values.append(now_ts())
@@ -8499,6 +8524,9 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
             if "vpn_node_key" in profile_update:
                 profile_assignments.append("vpn_node_key = ?")
                 profile_values.append(profile_update["vpn_node_key"])
+            if "vpn_proxy_url" in profile_update:
+                profile_assignments.append("vpn_proxy_url = ?")
+                profile_values.append(profile_update["vpn_proxy_url"])
             if "account_publish_mode" in profile_update:
                 profile_assignments.append("account_publish_mode = ?")
                 profile_values.append(profile_update["account_publish_mode"])
@@ -8511,12 +8539,19 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
             )
             if vpn_node_key_will_change:
                 proxy = _resolve_account_launch_proxy(projected_account)
-                fingerprint_row = conn.execute(
-                    "SELECT fingerprint_json FROM browser_profiles WHERE account_id = ?",
-                    (account_id,),
-                ).fetchone()
-                if fingerprint_row is not None:
-                    fingerprint = _json_payload(fingerprint_row["fingerprint_json"], {})
+                if raw_profile_fingerprint_json is not None:
+                    fingerprint = _json_payload(raw_profile_fingerprint_json, {})
+                    if isinstance(fingerprint, dict):
+                        fingerprint["proxy_slot"] = proxy
+                        conn.execute(
+                            "UPDATE browser_profiles SET fingerprint_json = ?, updated_at = ? WHERE account_id = ?",
+                            (json.dumps(fingerprint, ensure_ascii=False), now_ts(), account_id),
+                        )
+                        _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
+            elif vpn_proxy_url_will_change:
+                proxy = _resolve_account_launch_proxy(projected_account)
+                if raw_profile_fingerprint_json is not None:
+                    fingerprint = _json_payload(raw_profile_fingerprint_json, {})
                     if isinstance(fingerprint, dict):
                         fingerprint["proxy_slot"] = proxy
                         conn.execute(
@@ -8526,7 +8561,7 @@ def update_account(account_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                         _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
             _enqueue_sync_row(conn, "browser_profiles", "account_id = ?", (account_id,))
     updated = get_account(account_id)
-    if vpn_node_key_will_change:
+    if vpn_node_key_will_change or vpn_proxy_url_will_change:
         try:
             _close_wechat_browser_for_account(account_id)
         except Exception:
@@ -8669,14 +8704,17 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
     fingerprint = build_browser_fingerprint(str(ap["account_key"]), "account")
     conn.execute(
         """
-        INSERT OR IGNORE INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO browser_profiles(account_id, profile_dir, debug_port, fingerprint_json, vpn_node_key, vpn_proxy_url, account_publish_mode, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             account_id,
             str(profile_dir),
             _profile_debug_port_from_seed(conn, str(ap["account_key"])),
             json.dumps(fingerprint, ensure_ascii=False),
+            "",
+            "",
+            "inherit",
             ts,
             ts,
         ),
@@ -8684,7 +8722,9 @@ def ensure_account_platform(conn, account_id: int, platform: str, handle: str = 
     conn.execute(
         """
         UPDATE browser_profiles
-        SET vpn_node_key = COALESCE(vpn_node_key, ''), account_publish_mode = COALESCE(account_publish_mode, 'inherit')
+        SET vpn_node_key = COALESCE(vpn_node_key, ''),
+            vpn_proxy_url = COALESCE(vpn_proxy_url, ''),
+            account_publish_mode = COALESCE(account_publish_mode, 'inherit')
         WHERE account_id = ?
         """,
         (account_id,),
@@ -9107,7 +9147,6 @@ def open_account_browser(
     profile_dir = Path(str(ap["profile_dir"]))
     profile_dir.mkdir(parents=True, exist_ok=True)
     debug_port = int(ap["debug_port"])
-    _configure_account_clash_pure_vpn(refreshed)
     time.sleep(0.35)
     root_startup_url = "about:blank"
     with _account_network_env(refreshed), _chrome_fingerprint_env(ap.get("fingerprint")):
@@ -9256,22 +9295,9 @@ def start_account_emergency_publish(account_id: int, platform: str) -> dict[str,
         raise KeyError("account not found")
     with connect() as conn:
         ensure_account_platform(conn, account_id, token)
-    refreshed = get_account(account_id) or {}
-    try:
-        _configure_account_clash_pure_vpn(refreshed)
-    except Exception:
-        # Emergency publish must continue even if the VPN controller is not
-        # available. The actual publish step will surface any real browser issue.
-        pass
-    try:
-        open_account_browser(account_id, token, apply_marker=False)
-    except Exception:
-        # If the browser is already open or briefly unavailable, the publish
-        # step can still proceed and will surface the real error if needed.
-        pass
     from . import matrix_publish as mp
 
-    publish_result = mp.run_account_platform_publish(account_id, token)
+    publish_result = mp.run_account_platform_publish(account_id, token, auto_open_chrome=False)
     publish_result.setdefault("platform", token)
     publish_result.setdefault("account_id", int(account_id))
     if not bool(publish_result.get("ok")):
@@ -9325,7 +9351,7 @@ def start_account_domestic_emergency_publish(account_id: int) -> dict[str, Any]:
         raise ValueError("domestic_publish_not_supported")
     from . import matrix_publish as mp
 
-    publish_result = mp.run_account_domestic_publish(account_id)
+    publish_result = mp.run_account_domestic_publish(account_id, auto_open_chrome=False)
     if bool(publish_result.get("skipped")):
         reason = str(publish_result.get("reason") or "domestic_publish_skipped").strip()
         raise ValueError(reason)

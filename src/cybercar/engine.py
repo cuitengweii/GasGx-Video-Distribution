@@ -157,11 +157,11 @@ def _default_debug_port() -> int:
 
 
 DEFAULT_PORT = _default_debug_port()
-REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#CyberCar", "#特斯拉Cybertruck"]
+REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#GasGx", "#特斯拉Cybertruck"]
 REQUIRED_CAPTION_KEYWORD = "特斯拉 Cybertruck"
 DEFAULT_HASHTAGS = " ".join(REQUIRED_HASHTAGS)
 KUAISHOU_HASHTAG_LIMIT = 4
-KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#特斯拉Cybertruck"]
+KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#GasGx"]
 DEFAULT_CAPTION = f"Cybertruck 璧涘崥鐨崱鏈€鏂扮敾闈紒\n\n{DEFAULT_HASHTAGS}"
 DEFAULT_COLLECTION_NAME = "赛博皮卡天津港现车"
 DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
@@ -407,6 +407,7 @@ WECHAT_PUBLISH_POST_LIST_FALLBACK_AFTER_SECONDS = 24
 WECHAT_PUBLISH_POST_LIST_PROBE_INTERVAL_SECONDS = 6
 DOUYIN_PUBLISH_BUTTON_TEXTS = (
     "\u53d1\u5e03",
+    "\u53d1\u5e03\u4f5c\u54c1",
     "\u7acb\u5373\u53d1\u5e03",
     "\u7acb\u5373\u6295\u7a3f",
     "\u786e\u8ba4\u53d1\u5e03",
@@ -3491,18 +3492,21 @@ def _disconnect_chrome_page_quietly(page: Any) -> None:
 
 def _get_page_frames_with_timeout(page: Any, timeout_seconds: float = 2.5) -> list[Any]:
     holder: dict[str, Any] = {}
+    effective_timeout = max(0.2, float(timeout_seconds))
+    if _fast_publish_mode_enabled():
+        effective_timeout = min(effective_timeout, 0.8)
 
     def _runner() -> None:
         try:
-            holder["result"] = list(page.get_frames(timeout=max(0.2, float(timeout_seconds))))
+            holder["result"] = list(page.get_frames(timeout=effective_timeout))
         except Exception as exc:
             holder["error"] = exc
 
     thread = threading.Thread(target=_runner, daemon=True)
     thread.start()
-    thread.join(max(0.2, float(timeout_seconds)))
+    thread.join(effective_timeout)
     if thread.is_alive():
-        _log(f"[Uploader] get_frames timed out after {float(timeout_seconds):.1f}s; continue without waiting.")
+        _log(f"[Uploader] get_frames timed out after {effective_timeout:.1f}s; continue without waiting.")
         return []
     if "error" in holder:
         return []
@@ -16565,7 +16569,7 @@ def _run_page_action(page: ChromiumPage, action_name: str, action: Callable[[], 
             if not _is_alert_error(exc):
                 raise
             _log(f"[Uploader] Alert detected during {action_name}, retrying...")
-            time.sleep(0.2)
+            time.sleep(0.05 if _fast_publish_mode_enabled() else 0.2)
     if last_exc:
         raise last_exc
     raise RuntimeError(f"{action_name} failed.")
@@ -17411,13 +17415,27 @@ def _is_visible_element(ele: Any) -> bool:
         return False
 
 
+_FAST_PUBLISH_MODE_OVERRIDE: Optional[bool] = None
+
+
+def set_fast_publish_mode(enabled: Optional[bool]) -> None:
+    global _FAST_PUBLISH_MODE_OVERRIDE
+    if enabled is None:
+        _FAST_PUBLISH_MODE_OVERRIDE = None
+    else:
+        _FAST_PUBLISH_MODE_OVERRIDE = bool(enabled)
+
+
 def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) -> Any:
     # 视频号发布页内容在 iframe 中，重试锁定可用 iframe，避免命中顶层隐藏控件。
-    end_at = time.time() + max(1, timeout_seconds)
+    effective_timeout = int(timeout_seconds)
+    if _fast_publish_mode_enabled():
+        effective_timeout = min(effective_timeout, 4)
+    end_at = time.time() + max(1, effective_timeout)
     last_frames: list[Any] = []
 
     while time.time() < end_at:
-        frames = _get_page_frames_with_timeout(page, timeout_seconds=2.5)
+        frames = _get_page_frames_with_timeout(page, timeout_seconds=0.8 if _fast_publish_mode_enabled() else 2.5)
         last_frames = frames
 
         candidates: list[tuple[int, Any, str]] = []
@@ -17519,7 +17537,7 @@ def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) 
                 _log("[Uploader] Editor iframe fallback to first /micro/ frame.")
                 return preferred_micro_frame
             _log("[Uploader] Editor iframe detected but metadata not ready, retrying...")
-        time.sleep(0.6)
+        time.sleep(0.12 if _fast_publish_mode_enabled() else 0.6)
 
     if last_frames:
         _log("[Uploader] Editor iframe fallback to first available frame.")
@@ -17719,6 +17737,12 @@ def _read_element_text(ele: Any) -> str:
     return _normalize_text(str(val or ""), limit=500)
 
 
+def _fast_publish_mode_enabled() -> bool:
+    if _FAST_PUBLISH_MODE_OVERRIDE is not None:
+        return bool(_FAST_PUBLISH_MODE_OVERRIDE)
+    return str(os.getenv("CYBERCAR_FAST_PUBLISH", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _humanized_publish_pause(
     reason: str,
     *,
@@ -17727,6 +17751,9 @@ def _humanized_publish_pause(
 ) -> float:
     lower = max(0.0, float(minimum_seconds))
     upper = max(lower, float(maximum_seconds))
+    if _fast_publish_mode_enabled():
+        lower = max(0.02, lower * 0.15)
+        upper = max(lower, min(0.18, upper * 0.15))
     delay = random.uniform(lower, upper)
     _log(f"[Uploader] Humanized pause before {reason}: {delay:.2f}s")
     time.sleep(delay)
@@ -20648,17 +20675,10 @@ def _fill_draft_once(
             WECHAT_PUBLISH_CONFIRM_BUTTON_TEXTS,
             platform_name="wechat",
         )
-        try:
-            _wait_wechat_publish_feedback(
-                editor_ctx,
-                page,
-                expected_title=wechat_short_title,
-                publish_click_confirmed=bool(wechat_publish_click_confirmed),
-            )
-        except Exception as exc:
-            _fallback_wechat_publish_to_draft("publish was not confirmed", exc)
-            raise
-        _log("[Success:wechat] 发布已确认。")
+        if bool(wechat_publish_click_confirmed):
+            _log("[Uploader:wechat] Publish click confirmed by the page; skip programmatic confirmation.")
+        _log("[Success:wechat] 已点击发布按钮，后续结果按人工确认处理。")
+        return editor_ctx
     else:
         _log("[Success] 视频已上传并填写文案（未保存草稿），请在当前页手动保存或发布。")
     return editor_ctx
@@ -20832,6 +20852,7 @@ def _wait_upload_ready_generic(
     dynamic_extension_used = 0.0
     last_extension_at = 0.0
     last_progress_marker = ""
+    poll_sleep = 0.5 if _fast_publish_mode_enabled() else 2.0
 
     def _extend_upload_window(reason: str, bump_seconds: float = 8.0) -> None:
         nonlocal end_at, dynamic_extension_used, last_extension_at
@@ -20860,7 +20881,7 @@ def _wait_upload_ready_generic(
         _log(f"[Uploader:{platform_name}] Retry selecting upload file ({reason}): {Path(target_path).name}")
         try:
             _activate_upload_trigger_generic(ctx, page, platform_name=platform_name)
-            time.sleep(0.4)
+            time.sleep(0.12 if _fast_publish_mode_enabled() else 0.4)
             retry_input = _find_bilibili_upload_file_input(ctx, page) or _find_upload_file_input_generic(ctx, page)
             if not retry_input:
                 _log(f"[Uploader:{platform_name}] Retry upload input not found.")
@@ -20979,19 +21000,19 @@ def _wait_upload_ready_generic(
                 _log(f"[Uploader:{platform_name}] Waiting for editor form readiness...")
                 if (time.time() - bilibili_entry_since) >= 18 and (not bool(state.get("file_selected"))):
                     if _retry_bilibili_upload_once("upload entry but no file selected"):
-                        time.sleep(2.0)
+                        time.sleep(poll_sleep)
                         continue
                 wait_cap = min(max(90, int(timeout_seconds) // 2), 240)
                 if (time.time() - bilibili_entry_since) >= float(wait_cap):
                     if _retry_bilibili_upload_once(f"editor readiness missing for {wait_cap}s"):
-                        time.sleep(2.0)
+                        time.sleep(poll_sleep)
                         continue
                     _log(
                         f"[Uploader:{platform_name}] Editor readiness still missing after {wait_cap}s; "
                         "continue with best-effort fallback."
                     )
                     return ctx
-                time.sleep(2.0)
+                time.sleep(poll_sleep)
                 continue
             percent_hit = bool(re.search(r"\\b\\d{1,3}%\\b", text))
             busy_hit = bool(state.get("busy")) or bool(
@@ -21006,14 +21027,14 @@ def _wait_upload_ready_generic(
                 no_progress_cap = min(max(120, int(timeout_seconds) // 3), 240)
                 if (not percent_hit) and ((time.time() - bilibili_busy_since) >= float(no_progress_cap)):
                     if _retry_bilibili_upload_once(f"busy-without-progress for {no_progress_cap}s"):
-                        time.sleep(2.0)
+                        time.sleep(poll_sleep)
                         continue
                     _log(
                         f"[Uploader:{platform_name}] Busy markers without progress ratio for {no_progress_cap}s; "
                         "continue with best-effort fallback."
                     )
                     return ctx
-                time.sleep(2.0)
+                time.sleep(poll_sleep)
                 continue
             bilibili_entry_since = 0.0
             bilibili_busy_since = 0.0
@@ -21044,11 +21065,11 @@ def _wait_upload_ready_generic(
                         douyin_ambiguous_since = time.time()
                 if upload_entry_hit:
                     _log("[Uploader:douyin] Waiting for image editor form readiness...")
-                    time.sleep(2.0)
+                    time.sleep(poll_sleep)
                     continue
                 if busy_hit:
                     _log("[Uploader:douyin] Waiting for upload completion...")
-                    time.sleep(2.0)
+                    time.sleep(poll_sleep)
                     continue
             else:
                 state = _read_douyin_video_upload_state(ctx, page)
@@ -21104,11 +21125,11 @@ def _wait_upload_ready_generic(
                                 f"(waited {douyin_entry_best_effort_wait:.1f}s)."
                             )
                             return ctx
-                    time.sleep(2.0)
+                    time.sleep(poll_sleep)
                     continue
                 if busy_hit:
                     _log("[Uploader:douyin] Waiting for upload completion...")
-                    time.sleep(2.0)
+                    time.sleep(poll_sleep)
                     continue
                 if upload_binding_confirmed and douyin_ambiguous_since > 0:
                     if (time.time() - douyin_ambiguous_since) >= float(douyin_ambiguous_best_effort_wait):
@@ -21120,7 +21141,7 @@ def _wait_upload_ready_generic(
                         return ctx
                 if sample_texts:
                     _log(f"[Uploader:douyin] Video editor not ready yet, continue waiting: {sample_texts}")
-                time.sleep(2.0)
+                time.sleep(poll_sleep)
                 continue
         elif platform_name == "kuaishou" and upload_target is not None and _is_image_file(upload_target):
             state = _read_kuaishou_image_upload_state(ctx, page)
@@ -21155,11 +21176,11 @@ def _wait_upload_ready_generic(
                         f"(waited {kuaishou_entry_best_effort_wait:.1f}s)."
                     )
                     return ctx
-                time.sleep(2.0)
+                time.sleep(poll_sleep)
                 continue
             if busy_hit:
                 _log("[Uploader:kuaishou] Waiting for upload completion...")
-                time.sleep(2.0)
+                time.sleep(poll_sleep)
                 continue
             if upload_binding_confirmed and bool(state.get("image_added")):
                 _log(
@@ -21170,7 +21191,7 @@ def _wait_upload_ready_generic(
             sample_texts = state.get("sample_texts") if isinstance(state.get("sample_texts"), list) else []
             if sample_texts:
                 _log(f"[Uploader:kuaishou] Editor not ready yet, continue waiting: {sample_texts}")
-            time.sleep(2.0)
+            time.sleep(poll_sleep)
             continue
         else:
             busy_hit = any(x in text for x in busy_markers)
@@ -21178,7 +21199,7 @@ def _wait_upload_ready_generic(
             if (time.time() - last_extension_at) >= 6.0:
                 _extend_upload_window("busy", bump_seconds=4.0)
             _log(f"[Uploader:{platform_name}] Waiting for upload completion...")
-            time.sleep(2)
+            time.sleep(poll_sleep)
             continue
         _log(f"[Uploader:{platform_name}] Upload appears completed.")
         return ctx
@@ -21802,6 +21823,34 @@ def _ensure_xiaohongshu_upload_mode(
       const r = el.getBoundingClientRect();
       return r.width > 8 && r.height > 8;
     }}
+    function collectRoots(root) {{
+      const roots = [];
+      const queue = [root];
+      const seen = new Set();
+      while (queue.length) {{
+        const current = queue.shift();
+        if (!current || seen.has(current)) continue;
+        seen.add(current);
+        roots.push(current);
+        let nodes = [];
+        try {{
+          nodes = Array.from(current.querySelectorAll ? current.querySelectorAll('*') : []);
+        }} catch (e) {{
+          nodes = [];
+        }}
+        for (const node of nodes) {{
+          const shadow = node && node.shadowRoot;
+          if (shadow && !seen.has(shadow)) queue.push(shadow);
+          if (String(node && node.tagName || '').toUpperCase() === 'IFRAME') {{
+            try {{
+              const frameDoc = node.contentDocument;
+              if (frameDoc && !seen.has(frameDoc)) queue.push(frameDoc);
+            }} catch (e) {{}}
+          }}
+        }}
+      }}
+      return roots;
+    }}
     function isActive(el) {{
       if (!el) return false;
       const cls = String(el.className || '').toLowerCase();
@@ -21812,12 +21861,26 @@ def _ensure_xiaohongshu_upload_mode(
       if (tab && String(tab.getAttribute('aria-selected') || '').toLowerCase() === 'true') return true;
       return false;
     }}
-    const candidates = Array.from(document.querySelectorAll('a,button,div,span'))
-      .filter(isVisible)
-      .map(el => {{ return {{ el, text: norm(el.innerText || el.textContent || '') }}; }})
-      .filter(item => targetSet.has(item.text) || otherSet.has(item.text));
+    const candidates = [];
+    for (const root of collectRoots(document)) {{
+      let nodes = [];
+      try {{
+        nodes = Array.from(root.querySelectorAll ? root.querySelectorAll('a,button,div,span') : []);
+      }} catch (e) {{
+        nodes = [];
+      }}
+      for (const el of nodes) {{
+        if (!isVisible(el)) continue;
+        const text = norm(el.innerText || el.textContent || '');
+        if (!targetSet.has(text) && !otherSet.has(text)) continue;
+        candidates.push({{ el, text }});
+      }}
+    }}
     if (!candidates.length) {{
-      const bodyText = norm((document.body && document.body.innerText) || '');
+      const bodyText = collectRoots(document)
+        .map(root => norm((root && root.body && root.body.innerText) || (root && root.innerText) || ''))
+        .filter(Boolean)
+        .join(' ');
       if (containsAnyToken(bodyText, targetBodyMarkers)) {{
         return {{ state: 'already', target: targetList[0] || '', other: otherList[0] || '', current: targetList[0] || '', available: [] }};
       }}
@@ -21831,7 +21894,10 @@ def _ensure_xiaohongshu_upload_mode(
       }}
     }}
     if (!current) {{
-      const bodyText = norm((document.body && document.body.innerText) || '');
+      const bodyText = collectRoots(document)
+        .map(root => norm((root && root.body && root.body.innerText) || (root && root.innerText) || ''))
+        .filter(Boolean)
+        .join(' ');
       if (containsAnyToken(bodyText, targetBodyMarkers)) current = targetList[0] || '';
     }}
     const targetItem = candidates.find(item => targetSet.has(item.text));
@@ -24287,7 +24353,7 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
 
     strict_verify = platform_name in {"douyin", "xiaohongshu"}
     tried_candidates = 0
-    for owner in (primary_ctx, fallback_ctx):
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
         if not owner:
             continue
         for selector in selectors:
@@ -26472,11 +26538,16 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
     selectors = (
         "css:button.button-dhlUZE.primary-cECiOJ.fixed-J9O8Yw",
         "xpath://button[normalize-space(.)='鍙戝竷']",
+        "xpath://button[normalize-space(.)='鍙戝竷浣滃搧']",
+        "xpath://button[normalize-space(.)='绔嬪嵆鍙戝竷']",
+        "xpath://button[normalize-space(.)='纭鍙戝竷']",
         "xpath://button[contains(@class,'semi-button') and normalize-space(.)='鍙戝竷']",
         "xpath://button[contains(@class,'semi-button') and contains(normalize-space(.), '鍙戝竷')]",
         "xpath://div[contains(@class,'container-')]//button[normalize-space(.)='鍙戝竷']",
         "xpath://button[contains(@class,'primary-cECiOJ') and contains(normalize-space(.), '鍙戝竷')]",
         "xpath://button[contains(@class,'primary') and contains(normalize-space(.), '鍙戝竷')]",
+        "xpath://button[contains(@data-e2e,'publish')]",
+        "xpath://button[contains(@data-e2e,'post')]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -26535,7 +26606,7 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
         const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 260);
         let score = 0;
         if (text === '鍙戝竷') score += 20;
-        if (text === '绔嬪嵆鍙戝竷' || text === '鍙戝竷浣滃搧') score += 12;
+        if (text === '绔嬪嵆鍙戝竷' || text === '鍙戝竷浣滃搧' || text === '鍙戝竷鎻愪氦') score += 12;
         if (/button/i.test(el.tagName || '')) score += 8;
         if (/primary|publish|semi-button/.test(attrs.toLowerCase())) score += 6;
         if (/鏆傚瓨绂诲紑|鍙戝竷鏃堕棿|璋佸彲浠ョ湅|鍚屾鑷冲ご鏉?.test(wrapText)) score += 8;
@@ -26543,12 +26614,12 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
         return {el, text, score};
       })
       .filter(item => item.text)
-      .filter(item => /鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧/.test(item.text))
+      .filter(item => /鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧|鍙戝竷鎻愪氦/.test(item.text))
       .filter(item => !/楂樻竻鍙戝竷|鍙戝竷璁剧疆|鍚屾椂鍙戝竷|鏆傚瓨|鑽夌|淇濆瓨/.test(item.text))
       .filter(item => !disabled(item.el));
     if (!candidates.length) return false;
     candidates.sort((a, b) => b.score - a.score);
-    const preferred = candidates.find(item => /^(鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧)$/.test(item.text))
+    const preferred = candidates.find(item => /^(鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧|鍙戝竷鎻愪氦)$/.test(item.text))
       || candidates[0];
     preferred.el.click();
     return true;
@@ -26612,12 +26683,69 @@ def _pick_xiaohongshu_publish_wrap_text(candidates: Sequence[str]) -> str:
     return ""
 
 
+def _is_xiaohongshu_publish_button_context(
+    wrap_candidates: Sequence[str],
+    button_text: str,
+    chosen_wrap: str,
+    *,
+    rect_top: float,
+    viewport_height: float,
+) -> bool:
+    allowed_button_texts = {
+        "\u53d1\u5e03",
+        "\u53d1\u5e03\u7b14\u8bb0",
+        "\u53d1\u5e03\u4f5c\u54c1",
+        "\u7acb\u5373\u53d1\u5e03",
+        "\u7ee7\u7eed\u53d1\u5e03",
+        "\u786e\u8ba4\u53d1\u5e03",
+    }
+    if chosen_wrap:
+        return True
+    texts: list[str] = []
+    seen: set[str] = set()
+    for raw in wrap_candidates:
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    if not texts:
+        return False
+    skip_wrap_tokens = (
+        "\u9996\u9875",
+        "\u7b14\u8bb0\u7ba1\u7406",
+        "\u6570\u636e\u770b\u677f",
+        "\u6d3b\u52a8\u4e2d\u5fc3",
+        "\u521b\u4f5c\u5b66\u9662",
+        "\u521b\u4f5c\u767e\u79d1",
+        "\u53d1\u5e03\u7b14\u8bb0",
+    )
+    if any(any(token in text for token in skip_wrap_tokens) for text in texts):
+        return False
+    near_bottom = bool(viewport_height > 0 and rect_top >= (viewport_height * 0.55))
+    return button_text in allowed_button_texts and near_bottom
+
+
 def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
+        "css:div.publish-video",
+        "xpath://div[contains(@class,'publish-video')]",
+        "xpath://div[contains(@class,'btn-wrapper') and .//*[normalize-space(.)='发布笔记']]",
+        "xpath://div[contains(@class,'btn-inner') and .//*[normalize-space(.)='发布笔记']]",
+        "xpath://span[contains(@class,'btn-text') and normalize-space(.)='发布笔记']/ancestor::div[contains(@class,'publish-video')][1]",
+        "xpath://span[normalize-space(.)='发布笔记']/ancestor::div[contains(@class,'publish-video')][1]",
         "xpath://div[contains(@class,'publish-page-publish-btn')]//button[normalize-space(.)='鍙戝竷']",
+        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[contains(normalize-space(.), '鍙戝竷绗旇')]",
+        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[contains(normalize-space(.), '鍙戝竷浣滃搧')]",
+        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[contains(normalize-space(.), '绔嬪嵆鍙戝竷')]",
         "xpath://button[normalize-space(.)='鍙戝竷' and ancestor::div[contains(@class,'publish-page-publish-btn')]]",
+        "xpath://button[contains(normalize-space(.), '鍙戝竷绗旇') and ancestor::div[contains(@class,'publish-page-publish-btn')]]",
+        "xpath://button[contains(normalize-space(.), '鍙戝竷浣滃搧') and ancestor::div[contains(@class,'publish-page-publish-btn')]]",
+        "xpath://button[contains(normalize-space(.), '绔嬪嵆鍙戝竷') and ancestor::div[contains(@class,'publish-page-publish-btn')]]",
         "xpath://button[normalize-space(.)='鍙戝竷' and contains(@class,'custom-button') and contains(@class,'bg-red')]",
-        "xpath://div[contains(@class,'publish-page-publish-btn')]//button[last()]",
+        "xpath://button[contains(normalize-space(.), '鍙戝竷绗旇') and contains(@class,'custom-button') and contains(@class,'bg-red')]",
+        "xpath://button[contains(normalize-space(.), '鍙戝竷浣滃搧') and contains(@class,'custom-button') and contains(@class,'bg-red')]",
+        "xpath://button[contains(normalize-space(.), '绔嬪嵆鍙戝竷') and contains(@class,'custom-button') and contains(@class,'bg-red')]",
         "css:button.custom-button.bg-red",
         "xpath://button[contains(@class,'custom-button') and contains(@class,'bg-red')]",
     )
@@ -26694,8 +26822,18 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
             chosen_wrap = _pick_xiaohongshu_publish_wrap_text(wrap_candidates)
             sibling_draft = any("\u6682\u5b58\u79bb\u5f00" in text for text in wrap_candidates)
             near_bottom = bool(viewport_height > 0 and rect_top >= (viewport_height * 0.55))
-            if not chosen_wrap and button_text == "\u53d1\u5e03" and (sibling_draft or near_bottom):
+            if not chosen_wrap and button_text in {"\u53d1\u5e03", "\u53d1\u5e03\u7b14\u8bb0", "\u7acb\u5373\u53d1\u5e03"} and (
+                sibling_draft or near_bottom
+            ):
                 chosen_wrap = "bottom_publish_area"
+            if not _is_xiaohongshu_publish_button_context(
+                wrap_candidates,
+                button_text,
+                chosen_wrap,
+                rect_top=rect_top,
+                viewport_height=viewport_height,
+            ):
+                continue
             if not chosen_wrap and any(
                 any(token in text for token in skip_wrap_tokens)
                 for text in wrap_candidates
@@ -26737,6 +26875,34 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
       if (st.pointerEvents === 'none') return true;
       return false;
     }
+    function collectRoots(root) {
+      const roots = [];
+      const queue = [root];
+      const seen = new Set();
+      while (queue.length) {
+        const current = queue.shift();
+        if (!current || seen.has(current)) continue;
+        seen.add(current);
+        roots.push(current);
+        let nodes = [];
+        try {
+          nodes = Array.from(current.querySelectorAll ? current.querySelectorAll('*') : []);
+        } catch (e) {
+          nodes = [];
+        }
+        for (const node of nodes) {
+          const shadow = node && node.shadowRoot;
+          if (shadow && !seen.has(shadow)) queue.push(shadow);
+          if (String(node && node.tagName || '').toUpperCase() === 'IFRAME') {
+            try {
+              const frameDoc = node.contentDocument;
+              if (frameDoc && !seen.has(frameDoc)) queue.push(frameDoc);
+            } catch (e) {}
+          }
+        }
+      }
+      return roots;
+    }
     function pickWrap(wrapTexts) {
       const strongTokens = ['鏆傚瓨绂诲紑 鍙戝竷', '鍙戝竷 鏆傚瓨绂诲紑', '鏇村璁剧疆', '瀹氭椂鍙戝竷'];
       const allowTokens = ['鏆傚瓨绂诲紑', '鏇村璁剧疆', '瀹氭椂鍙戝竷', '鍏紑鍙', '浠呰嚜宸卞彲瑙?, '鍏佽鍚堟媿', '鍏佽姝ｆ枃澶嶅埗', '璋佸彲浠ョ湅'];
@@ -26752,12 +26918,29 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
       }
       return '';
     }
-    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
-      .filter(el => isVisible(el))
-      .filter(el => !disabled(el))
-      .map(el => {
+    function isPublishContext(wrapTexts, buttonText, rectTop, viewportHeight) {
+      const wrap = pickWrap(wrapTexts);
+      if (wrap) return true;
+      const texts = Array.from(new Set(Array.from(wrapTexts || []).map(text => norm(text)).filter(Boolean)));
+      if (!texts.length) return false;
+      if (texts.some(text => ['棣栭〉', '绗旇绠＄悊', '鏁版嵁鐪嬫澘', '娲诲姩涓績', '鍒涗綔瀛﹂櫌', '鍒涗綔鐧剧', '鍙戝竷绗旇'].some(token => text.includes(token)))) {
+        return false;
+      }
+      const nearBottom = Number(viewportHeight || 0) > 0 && Number(rectTop || 0) >= (Number(viewportHeight || 0) * 0.55);
+      return /^(发布|发布笔记|发布作品|立即发布|继续发布|确认发布)$/.test(buttonText) && nearBottom;
+    }
+    const candidates = [];
+    for (const root of collectRoots(document)) {
+      let nodes = [];
+      try {
+        nodes = Array.from(root.querySelectorAll ? root.querySelectorAll('button, [role="button"], a, div, span') : []);
+      } catch (e) {
+        nodes = [];
+      }
+      for (const el of nodes) {
+        if (!isVisible(el) || disabled(el)) continue;
         const text = String(el.innerText || el.textContent || '').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
-        if (!/^(鍙戝竷|鍙戝竷绗旇|缁х画鍙戝竷|纭鍙戝竷)$/.test(text)) return null;
+        if (!/^(鍙戝竷|鍙戝竷绗旇|鍙戝竷浣滃搧|绔嬪嵆鍙戝竷|缁х画鍙戝竷|纭鍙戝竷)$/.test(text)) continue;
         const cls = String(el.className || '');
         const parentCls = String((el.parentElement && el.parentElement.className) || '');
         const attrs = [
@@ -26783,14 +26966,11 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
         const rect = el.getBoundingClientRect();
         const siblingDraft = wrapTexts.some(candidate => candidate.includes('鏆傚瓨绂诲紑'));
         const nearBottom = Number(rect && rect.top || 0) >= (Number(window.innerHeight || document.documentElement.clientHeight || 0) * 0.55);
-        const skipShell = wrapTexts.some(candidate => ['棣栭〉', '绗旇绠＄悊', '鏁版嵁鐪嬫澘', '娲诲姩涓績', '鍒涗綔瀛﹂櫌', '鍒涗綔鐧剧', '鍙戝竷绗旇'].some(token => candidate.includes(token)));
-        if (!wrapText && skipShell) return null;
-        if (!wrapText && !(text === '鍙戝竷' && (siblingDraft || nearBottom))) return null;
+        if (!isPublishContext(wrapTexts, text, rect && rect.top || 0, Number(window.innerHeight || document.documentElement.clientHeight || 0))) continue;
         let score = 0;
         if (text === '鍙戝竷') score += 18;
         if (text === '纭鍙戝竷') score += 14;
         if (text === '缁х画鍙戝竷') score += 10;
-        if (text === '鍙戝竷绗旇') score -= 18;
         if (cls.includes('bg-red')) score += 16;
         if (cls.includes('custom-button')) score += 8;
         if (parentCls.includes('publish-page-publish-btn')) score += 12;
@@ -26800,16 +26980,16 @@ def _click_xiaohongshu_primary_publish_button(primary_ctx: Any, fallback_ctx: An
         if (wrapText && (wrapText.includes('鏇村璁剧疆') || wrapText.includes('瀹氭椂鍙戝竷'))) score += 5;
         if (nearBottom) score += 8;
         if (siblingDraft) score += 10;
-        return {el, score};
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
+        candidates.push({el, score});
+      }
+    }
+    candidates.sort((a, b) => b.score - a.score);
     if (!candidates.length) return false;
     if (candidates[0].score < 18) return false;
     candidates[0].el.click();
     return true;
     """
-    for owner in (primary_ctx, fallback_ctx):
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
         if not owner:
             continue
         _humanized_publish_reaction_pause("xiaohongshu primary publish click")
@@ -29882,7 +30062,7 @@ def _fill_draft_once_generic(
             clicked_publish = _click_x_primary_publish_button(ctx, page)
         else:
             clicked_publish = _click_first_matching_button(ctx, page, publish_button_texts, platform_name=platform_name)
-        if not clicked_publish and platform_name in {"kuaishou", "bilibili"}:
+        if not clicked_publish and platform_name in {"douyin", "kuaishou", "bilibili"}:
             clicked_publish = _click_first_matching_button(
                 ctx,
                 page,

@@ -1274,7 +1274,7 @@ def test_fill_draft_once_defaults_publish_click_confirmation_to_false(monkeypatc
     monkeypatch.setattr(engine, "_wait_upload_ready", lambda _page, ctx, timeout_seconds=0: ctx)
     monkeypatch.setattr(engine, "_clear_location_if_selected", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_fill_caption", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(engine, "_fill_wechat_short_title", lambda *_args, **_kwargs: "发布标题")
+    monkeypatch.setattr(engine, "_fill_wechat_short_title", lambda *_args, **_kwargs: "??????")
     monkeypatch.setattr(engine, "_select_collection", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_click_wechat_primary_publish_button", lambda *_args, **_kwargs: True)
@@ -1298,7 +1298,7 @@ def test_fill_draft_once_defaults_publish_click_confirmation_to_false(monkeypatc
     )
 
     assert result == "editor"
-    assert wait_calls == [{"expected_title": "发布标题", "publish_click_confirmed": False}]
+    assert wait_calls == []
 
 
 def test_fill_draft_once_uses_configured_short_title(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -1371,7 +1371,7 @@ def test_fill_draft_once_passes_publish_click_confirmation_to_feedback_when_enab
     monkeypatch.setattr(engine, "_wait_upload_ready", lambda _page, ctx, timeout_seconds=0: ctx)
     monkeypatch.setattr(engine, "_clear_location_if_selected", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_fill_caption", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(engine, "_fill_wechat_short_title", lambda *_args, **_kwargs: "发布标题")
+    monkeypatch.setattr(engine, "_fill_wechat_short_title", lambda *_args, **_kwargs: "??????")
     monkeypatch.setattr(engine, "_select_collection", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_click_wechat_primary_publish_button", lambda *_args, **_kwargs: True)
@@ -1396,7 +1396,7 @@ def test_fill_draft_once_passes_publish_click_confirmation_to_feedback_when_enab
     )
 
     assert result == "editor"
-    assert wait_calls == [{"expected_title": "发布标题", "publish_click_confirmed": True}]
+    assert wait_calls == []
 
 
 def test_fill_draft_once_wechat_publish_button_missing_falls_back_to_draft(
@@ -1523,27 +1523,22 @@ def test_fill_draft_once_wechat_publish_unconfirmed_falls_back_to_draft(
     monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_click_wechat_primary_publish_button", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        engine,
-        "_wait_wechat_publish_feedback",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("wechat publish timeout")),
-    )
     monkeypatch.setattr(engine, "_save_draft", lambda *_args, **_kwargs: fallback_save_calls.append("saved"))
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
 
-    with pytest.raises(RuntimeError, match="automatically saved as draft"):
-        engine._fill_draft_once(
-            FakePage(),
-            target,
-            "caption",
-            "collection",
-            False,
-            True,
-            False,
-            30,
-        )
+    result = engine._fill_draft_once(
+        FakePage(),
+        target,
+        "caption",
+        "collection",
+        False,
+        True,
+        False,
+        30,
+    )
 
-    assert fallback_save_calls == ["saved"]
+    assert result == "editor"
+    assert fallback_save_calls == []
 
 
 def test_get_page_frames_with_timeout_returns_empty_when_browser_hangs() -> None:

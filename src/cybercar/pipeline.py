@@ -515,6 +515,18 @@ def _resolve_platform_publish_mode_with_config(
     runtime_config: dict[str, Any] | None,
 ) -> PlatformPublishMode:
     platform_name = str(platform or "").strip().lower()
+    if bool(getattr(args, "force_publish_now", False)):
+        config = (
+            core.resolve_platform_publish_config(runtime_config, platform_name)
+            if hasattr(core, "resolve_platform_publish_config")
+            else {}
+        )
+        if str(config.get("publish_mode") or "").strip().lower() == "draft":
+            try:
+                core._log(f"[Runner] Ignoring draft publish_mode for emergency publish on {platform_name}.")
+            except Exception:
+                pass
+        return PlatformPublishMode(save_draft=False, publish_now=True)
     config = (
         core.resolve_platform_publish_config(runtime_config, platform_name)
         if hasattr(core, "resolve_platform_publish_config")
@@ -4701,6 +4713,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-auto-open-chrome", action="store_true")
     parser.add_argument(
+        "--fast-publish",
+        action="store_true",
+        help="Reduce publish-side waiting and humanized pauses for emergency one-click publish flows.",
+    )
+    parser.add_argument(
+        "--force-publish-now",
+        action="store_true",
+        help="Ignore draft defaults and force publish_now for emergency publish flows.",
+    )
+    parser.add_argument(
         "--monitor-url",
         default=_env_first("CYBERCAR_MONITOR_URL", default=DEFAULT_MONITOR_URL),
         help="Monitor URL shown in login-required alerts.",
@@ -4959,6 +4981,23 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    if bool(getattr(args, "fast_publish", False)):
+        os.environ["CYBERCAR_FAST_PUBLISH"] = "1"
+        fast_mode_setter = getattr(core, "set_fast_publish_mode", None)
+        if callable(fast_mode_setter):
+            try:
+                fast_mode_setter(True)
+            except Exception:
+                pass
+        try:
+            core._log("[Runner] Fast publish mode enabled.")
+        except Exception:
+            pass
+    if bool(getattr(args, "force_publish_now", False)):
+        try:
+            core._log("[Runner] Emergency publish mode: force publish now enabled.")
+        except Exception:
+            pass
     if bool(getattr(args, "print_effective_config", False)):
         print(json.dumps(_build_effective_runtime_snapshot(args), ensure_ascii=False, indent=2))
         return 0

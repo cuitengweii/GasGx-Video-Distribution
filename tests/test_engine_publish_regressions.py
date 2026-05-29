@@ -328,6 +328,72 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     assert ("SAVE_DRAFT",) in clicked_button_texts
 
 
+def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    clicked_button_texts: list[tuple[str, ...]] = []
+    finalize_calls = {"count": 0}
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://creator.douyin.com/creator-micro/content/upload"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_click_first(_ctx, _page, texts, **_kwargs):
+        text_tuple = tuple(texts or ())
+        clicked_button_texts.append(text_tuple)
+        return text_tuple == engine.DOUYIN_PUBLISH_BUTTON_TEXTS
+
+    def fake_finalize(*_args, **_kwargs):
+        finalize_calls["count"] += 1
+        return "immediate"
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_ensure_douyin_publish_mode", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_douyin_collection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_douyin_primary_publish_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_finalize_douyin_publish", fake_finalize)
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    result = engine._fill_draft_once_generic(
+        page=page,
+        target=target,
+        final_caption="caption",
+        open_url=page.url,
+        platform_name="douyin",
+        save_draft=False,
+        publish_now=True,
+        upload_timeout=30,
+        draft_button_texts=("SAVE_DRAFT",),
+        publish_button_texts=engine.DOUYIN_PUBLISH_BUTTON_TEXTS,
+        collection_name="CyberCar",
+    )
+
+    assert result is page
+    assert engine.DOUYIN_PUBLISH_BUTTON_TEXTS in clicked_button_texts
+    assert finalize_calls["count"] == 1
+
+
 def test_fill_draft_once_generic_xiaohongshu_publish_unconfirmed_manage_verified_treated_as_success(
     monkeypatch,
     tmp_path: Path,
@@ -571,6 +637,14 @@ def test_prepare_caption_for_platform_dedupes_tiktok_repeated_segments() -> None
     raw = "Cybertruck clip drop test.\nCybertruck clip drop test.\nCybertruck clip drop test."
     prepared = engine._prepare_caption_for_platform(raw, "tiktok")
     assert prepared.count("Cybertruck clip drop test.") == 1
+
+
+def test_prepare_caption_for_platform_kuaishou_uses_gasgx_brand_tag() -> None:
+    raw = "GasGx caption with legacy brand tag #CyberCar"
+    prepared = engine._prepare_caption_for_platform(raw, "kuaishou")
+
+    assert "#CyberCar" not in prepared
+    assert "#GasGx" in prepared
 
 
 def test_collapse_repeated_caption_blocks_reduces_duplicate_paragraphs() -> None:

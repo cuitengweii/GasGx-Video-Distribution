@@ -72,7 +72,7 @@ def _pid_is_running(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
-    except OSError:
+    except (OSError, SystemError):
         return False
 
 
@@ -754,6 +754,131 @@ def _runtime_publish_config(platform: str, settings: dict[str, Any], workspace: 
     return _runtime_config_for_non_wechat_platform(platform, settings, workspace)
 
 
+def _runtime_config_for_domestic_batch(
+    items: list[PublishPlanItem],
+    settings_by_platform: dict[str, dict[str, Any]],
+    workspace: Path,
+) -> Path:
+    common_settings = load_distribution_settings().get("common", {})
+    platform_blocks: dict[str, dict[str, Any]] = {}
+    for item in items:
+        token = str(item.platform or "").strip().lower()
+        if not token:
+            continue
+        settings = settings_by_platform.get(token) or load_platform_publish_settings(token)
+        effective_publish_mode = resolve_effective_publish_mode(
+            str(settings.get("publish_mode") or "publish"),
+            item.account_publish_mode,
+        )
+        block: dict[str, Any] = {
+            "save_draft": effective_publish_mode == "draft",
+            "publish_now": effective_publish_mode != "draft",
+            "upload_timeout": int(settings.get("upload_timeout") or common_settings.get("upload_timeout") or 60),
+        }
+        collection_name = str(settings.get("collection_name") or "").strip()
+        if collection_name:
+            block["collection_name"] = collection_name
+        if token == "wechat":
+            block.update(
+                {
+                    "collection_name": str(settings.get("collection_name") or "").strip(),
+                    "short_title": str(settings.get("short_title") or "").strip(),
+                    "location": str(settings.get("location") or "").strip(),
+                    "declare_original": bool(settings.get("declare_original")),
+                    "publish_click_confirmed": False,
+                }
+            )
+        platform_blocks[token] = block
+
+    config = {
+        "paths": {
+            "runtime_root": str(workspace),
+            "profiles_root": "profiles",
+            "default_profile_dir": "default",
+            "wechat_profile_dir": "wechat",
+            "x_profile_dir": "x_collect",
+        },
+        "publish": {"platforms": platform_blocks},
+        "topics": str(common_settings.get("topics") or ""),
+    }
+    path = workspace / "matrix_domestic_publish_config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _domestic_batch_caption(items: list[PublishPlanItem], settings_by_platform: dict[str, dict[str, Any]]) -> str:
+    for item in items:
+        settings = settings_by_platform.get(item.platform) or load_platform_publish_settings(item.platform)
+        caption = caption_for_publish(settings, item.source_video)
+        if caption:
+            return caption
+    return ""
+
+
+def _publish_command_for_domestic_batch(
+    items: list[PublishPlanItem],
+    settings_by_platform: dict[str, dict[str, Any]],
+    runtime_config: Path,
+    *,
+    disable_telegram: bool = False,
+    auto_open_chrome: bool = True,
+) -> list[str]:
+    if not items:
+        return []
+    first = items[0]
+    tokens = [str(item.platform or "").strip().lower() for item in items if str(item.platform or "").strip()]
+    tokens = [token for token in tokens if token]
+    upload_platforms = ",".join(tokens)
+    common_settings = load_distribution_settings().get("common", {})
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "cybercar.pipeline",
+        "--publish-only",
+        "--upload-platforms",
+        upload_platforms,
+        "--limit",
+        "1",
+        "--config",
+        str(runtime_config),
+        "--workspace",
+        str(first.workspace.parent),
+        "--debug-port",
+        str(int(first.debug_port)),
+        "--chrome-user-data-dir",
+        str(first.profile_dir),
+        "--upload-timeout",
+        str(int(common_settings.get("upload_timeout") or 60)),
+    ]
+    if disable_telegram:
+        cmd.extend(
+            [
+                "--disable-notify",
+                "--no-telegram-prefilter",
+                "--no-telegram-collect-notify",
+                "--no-publish-skip-notify",
+            ]
+        )
+    if not auto_open_chrome:
+        cmd.append("--no-auto-open-chrome")
+    caption = _domestic_batch_caption(items, settings_by_platform)
+    if caption:
+        cmd.extend(["--caption", caption])
+    wechat_settings = settings_by_platform.get("wechat")
+    if wechat_settings is not None and "wechat" in tokens:
+        if bool(wechat_settings.get("declare_original")):
+            cmd.append("--wechat-declare-original")
+        if resolve_effective_publish_mode(
+            str(wechat_settings.get("publish_mode") or "publish"),
+            first.account_publish_mode,
+        ) == "draft":
+            cmd.append("--wechat-save-draft-only")
+        else:
+            cmd.append("--wechat-publish-now")
+    return cmd
+
+
 def _publish_item_vpn_enabled(item: PublishPlanItem) -> bool:
     return bool(str(item.vpn_node_key or "").strip()) or bool(str(item.vpn_proxy_url or "").strip())
 
@@ -821,9 +946,14 @@ def _publish_command_for_item(
     runtime_config: Path,
     *,
     disable_telegram: bool = False,
+    auto_open_chrome: bool = True,
+    fast_publish: bool = False,
 ) -> list[str]:
     token = str(item.platform or "wechat").strip().lower() or "wechat"
     debug_port = int(item.debug_port)
+    upload_timeout = int(settings.get("upload_timeout") or 60)
+    if fast_publish and token in {"douyin", "xiaohongshu", "kuaishou", "bilibili"}:
+        upload_timeout = max(upload_timeout, 120)
     cmd: list[str] = [
         sys.executable,
         "-m",
@@ -842,7 +972,7 @@ def _publish_command_for_item(
         "--chrome-user-data-dir",
         str(item.profile_dir),
         "--upload-timeout",
-        str(int(settings.get("upload_timeout") or 60)),
+        str(upload_timeout),
     ]
     if disable_telegram:
         cmd.extend(
@@ -853,6 +983,11 @@ def _publish_command_for_item(
                 "--no-publish-skip-notify",
             ]
         )
+    if not auto_open_chrome:
+        cmd.append("--no-auto-open-chrome")
+    if fast_publish:
+        cmd.append("--fast-publish")
+        cmd.append("--force-publish-now")
     if token == "wechat":
         cmd.extend(
             [
@@ -870,14 +1005,23 @@ def _publish_command_for_item(
     if token == "wechat":
         if bool(settings.get("declare_original")):
             cmd.append("--wechat-declare-original")
-        if resolve_effective_publish_mode(str(settings.get("publish_mode") or "publish"), item.account_publish_mode) == "draft":
+        if fast_publish:
+            cmd.append("--wechat-publish-now")
+        elif resolve_effective_publish_mode(str(settings.get("publish_mode") or "publish"), item.account_publish_mode) == "draft":
             cmd.append("--wechat-save-draft-only")
         else:
             cmd.append("--wechat-publish-now")
     return cmd
 
 
-def _run_publish_item(item: PublishPlanItem, settings: dict[str, Any], *, disable_telegram: bool = False) -> dict[str, Any]:
+def _run_publish_item(
+    item: PublishPlanItem,
+    settings: dict[str, Any],
+    *,
+    disable_telegram: bool = False,
+    auto_open_chrome: bool = True,
+    fast_publish: bool = False,
+) -> dict[str, Any]:
     prepared = prepare_workspace(item)
     runtime_config = _runtime_publish_config(item.platform, settings, item.workspace)
     token = str(item.platform or "wechat").strip().lower() or "wechat"
@@ -886,25 +1030,26 @@ def _run_publish_item(item: PublishPlanItem, settings: dict[str, Any], *, disabl
         item.account_publish_mode,
     )
     vpn_enabled_for_item = _publish_item_vpn_enabled(item)
-    cmd = _publish_command_for_item(item, settings, runtime_config, disable_telegram=disable_telegram)
+    cmd = _publish_command_for_item(
+        item,
+        settings,
+        runtime_config,
+        disable_telegram=disable_telegram,
+        auto_open_chrome=auto_open_chrome,
+        fast_publish=fast_publish,
+    )
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     log_path = item.workspace / f"matrix_{token}_publish.log"
     with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
         env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
-        if vpn_enabled_for_item and item.vpn_node_key:
-            # Close any already-open browser for this account first so the
-            # next publish run launches a fresh session under the VPN env.
-            service._configure_account_clash_pure_vpn(  # type: ignore[attr-defined]
-                {
-                    "vpn_node_key": item.vpn_node_key,
-                    "vpn_country_code": item.vpn_country_code,
-                    "vpn_country_label": item.vpn_country_label,
-                }
-            )
+        if fast_publish:
+            env["CYBERCAR_FAST_PUBLISH"] = "1"
+        if vpn_enabled_for_item and (item.vpn_node_key or item.vpn_proxy_url):
             time.sleep(0.35)
             service._close_chrome_browser_by_debug_port(item.debug_port)  # type: ignore[attr-defined]
             time.sleep(0.35)
-            env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
+            if item.vpn_node_key:
+                env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
             if item.vpn_country_code:
                 env["CYBERCAR_VPN_COUNTRY"] = item.vpn_country_code
             if item.vpn_proxy_url:
@@ -1165,6 +1310,7 @@ def run_account_platform_publish(
     platform: str,
     *,
     dry_run: bool = False,
+    auto_open_chrome: bool = True,
 ) -> dict[str, Any]:
     token = normalize_platform(platform)
     capability = get_platform(token)
@@ -1194,7 +1340,13 @@ def run_account_platform_publish(
     consumed = list(state.get("consumed", [])) if isinstance(state.get("consumed"), list) else []
     runs = list(state.get("runs", [])) if isinstance(state.get("runs"), list) else []
     try:
-        record = _run_publish_item(item, settings, disable_telegram=True)
+        record = _run_publish_item(
+            item,
+            settings,
+            disable_telegram=True,
+            auto_open_chrome=auto_open_chrome,
+            fast_publish=True,
+        )
         runs.append(record)
         if record.get("success"):
             consumed.append(
@@ -1220,6 +1372,7 @@ def run_account_domestic_publish(
     account_id: int,
     *,
     dry_run: bool = False,
+    auto_open_chrome: bool = True,
 ) -> dict[str, Any]:
     account = service.get_account(int(account_id))
     if account is None:
@@ -1239,6 +1392,7 @@ def run_account_domestic_publish(
             "reason": "no_available_domestic_platforms",
             "account_id": int(account_id),
         }
+    settings_by_platform = {item.platform: load_platform_publish_settings(item.platform) for item in items}
 
     locked, lock_payload = _acquire_publish_lock()
     if not locked:
@@ -1249,9 +1403,54 @@ def run_account_domestic_publish(
     runs = list(state.get("runs", [])) if isinstance(state.get("runs"), list) else []
     results: list[dict[str, Any]] = []
     try:
-        for item in items:
-            settings = load_platform_publish_settings(item.platform)
-            record = _run_publish_item(item, settings, disable_telegram=True)
+        started = time.strftime("%Y-%m-%d %H:%M:%S")
+        record_by_item: dict[tuple[int, str], dict[str, Any]] = {}
+        for index, item in enumerate(items):
+            if index > 0:
+                time.sleep(0.35)
+            settings = settings_by_platform[item.platform]
+            try:
+                record = _run_publish_item(
+                    item,
+                    settings,
+                    disable_telegram=True,
+                    auto_open_chrome=auto_open_chrome,
+                    fast_publish=True,
+                )
+            except Exception as exc:
+                record = {
+                    "account_id": item.account_id,
+                    "account_key": item.account_key,
+                    "platform": item.platform,
+                    "asset_key": _relative_asset_key(item.source_video),
+                    "publish_date": item.publish_date or _today_date(_load_timezone()).isoformat(),
+                    "display_name": item.display_name,
+                    "video": str(item.source_video),
+                    "prepared_video": "",
+                    "profile_dir": str(item.profile_dir),
+                    "fingerprint": item.fingerprint,
+                    "debug_port": int(item.debug_port),
+                    "workspace": str(item.workspace),
+                    "account_publish_mode": item.account_publish_mode,
+                    "vpn_node_key": item.vpn_node_key,
+                    "vpn_country_code": item.vpn_country_code,
+                    "vpn_country_label": item.vpn_country_label,
+                    "vpn_proxy_url": item.vpn_proxy_url,
+                    "vpn_enabled": _publish_item_vpn_enabled(item),
+                    "effective_publish_mode": resolve_effective_publish_mode(
+                        str(settings_by_platform[item.platform].get("publish_mode") or "publish"),
+                        item.account_publish_mode,
+                    ),
+                    "returncode": -1,
+                    "success": False,
+                    "evidence_ok": False,
+                    "log": "",
+                    "started_at": started,
+                    "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "telegram_disabled": True,
+                    "error": str(exc),
+                }
+            record_by_item[(item.account_id, item.platform)] = record
             results.append(record)
             runs.append(record)
             if record.get("success"):
@@ -1269,6 +1468,7 @@ def run_account_domestic_publish(
             state["consumed"] = consumed[-500:]
             state["runs"] = runs[-200:]
             _save_state(state)
+        results = [record_by_item.get((item.account_id, item.platform), {}) for item in items]
         return {
             "ok": all(item["success"] for item in results),
             "count": len(results),
