@@ -22,6 +22,7 @@ from .session import capture_login_qr, login_status, open_login
 from .telegram.bootstrap import recover_bot_surface, refresh_home_surface, set_clickable_commands
 from .telegram.supervisor import ensure_worker_running, resolve_supervisor_settings, run_supervisor
 from .telegram.worker import main as telegram_worker_main
+from .wechat_visibility_batch import run_wechat_visibility_batch
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,6 +110,21 @@ def build_parser() -> argparse.ArgumentParser:
     recover.add_argument("--retries", type=int, default=3)
 
     subparsers.add_parser("migrate-legacy")
+
+    wechat_batch = subparsers.add_parser("wechat-visibility-batch")
+    wechat_batch.add_argument(
+        "--target-visibility",
+        default="仅自己可见",
+        help="WeChat visibility to apply in batch runs.",
+    )
+    wechat_batch.add_argument("--batch-min", type=int, default=30)
+    wechat_batch.add_argument("--batch-max", type=int, default=50)
+    wechat_batch.add_argument("--delay-min", type=float, default=1.0)
+    wechat_batch.add_argument("--delay-max", type=float, default=2.0)
+    wechat_batch.add_argument("--chrome-user-data-dir", default="")
+    wechat_batch.add_argument("--state-file", default="")
+    wechat_batch.add_argument("--reset-state", action="store_true")
+    wechat_batch.add_argument("--assume-current-page", action="store_true")
     return parser
 
 
@@ -241,5 +257,19 @@ def main() -> int:
         summary = migrate_legacy_assets()
         _print_json({"copied": summary.copied, "skipped": summary.skipped})
         return 0
+    if command == "wechat-visibility-batch":
+        result = run_wechat_visibility_batch(
+            target_visibility=str(args.target_visibility),
+            batch_min=int(args.batch_min),
+            batch_max=int(args.batch_max),
+            delay_min_seconds=float(args.delay_min),
+            delay_max_seconds=float(args.delay_max),
+            chrome_user_data_dir=str(args.chrome_user_data_dir),
+            state_file=str(args.state_file),
+            reset_state=bool(args.reset_state),
+            assume_current_page=bool(args.assume_current_page),
+        )
+        _print_json(result)
+        return 0 if bool(result.get("ok")) else 1
     parser.error(f"unsupported command: {command}")
     return 2

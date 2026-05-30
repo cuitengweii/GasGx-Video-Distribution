@@ -16393,8 +16393,12 @@ def _ensure_chrome_debug_port(
     chrome_path: Optional[str] = None,
     chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
     startup_url: str = CREATE_POST_URL,
+    allow_existing_debug_browser: bool = False,
 ) -> None:
     if _is_chrome_debug_port_ready(debug_port):
+        if allow_existing_debug_browser:
+            _log(f"[Uploader] Reusing existing debug Chrome on port {debug_port}.")
+            return
         if not _has_debug_chrome_process(debug_port, chrome_user_data_dir):
             running_dir = _find_debug_chrome_profile_by_port(debug_port)
             _log(
@@ -16469,6 +16473,7 @@ def _connect_chrome(
     chrome_path: Optional[str] = None,
     chrome_user_data_dir: str = DEFAULT_CHROME_USER_DATA_DIR,
     startup_url: str = CREATE_POST_URL,
+    allow_existing_debug_browser: bool = False,
 ) -> ChromiumPage:
     if ChromiumPage is None or ChromiumOptions is None:
         raise RuntimeError("DrissionPage is not installed. Run: pip install DrissionPage")
@@ -16484,6 +16489,7 @@ def _connect_chrome(
         chrome_path=chrome_path,
         chrome_user_data_dir=chrome_user_data_dir,
         startup_url=startup_url,
+        allow_existing_debug_browser=allow_existing_debug_browser,
     )
     addr = f"127.0.0.1:{debug_port}"
     last_error: Optional[Exception] = None
