@@ -25132,7 +25132,7 @@ def _build_bilibili_title_from_caption(caption: str, limit: int = 80) -> str:
         line = _trim_bilibili_title_candidate(line, limit=max(limit * 2, 120))
         if not line:
             continue
-        first_sentence = re.split(r"[銆傦紒锛??锛?]+", line, maxsplit=1)[0].strip()
+        first_sentence = re.split(r"[。！!；;]+", line, maxsplit=1)[0].strip()
         first_sentence = _trim_bilibili_title_candidate(first_sentence or line, limit=limit)
         if first_sentence:
             candidates.append(first_sentence)
@@ -25140,7 +25140,7 @@ def _build_bilibili_title_from_caption(caption: str, limit: int = 80) -> str:
     if not candidates:
         fallback = _trim_bilibili_title_candidate(raw, limit=max(limit * 2, 120))
         if fallback:
-            first_sentence = re.split(r"[銆傦紒锛??锛?]+", fallback, maxsplit=1)[0].strip()
+            first_sentence = re.split(r"[。！!；;]+", fallback, maxsplit=1)[0].strip()
             candidates.append(_trim_bilibili_title_candidate(first_sentence or fallback, limit=limit))
 
     for candidate in candidates:
@@ -25490,7 +25490,16 @@ def _fill_bilibili_title_from_caption(
 ) -> str:
     title = _build_bilibili_title_from_caption(caption, limit=80)
     if not title:
-        raise RuntimeError("Failed to build Bilibili title from caption.")
+        fallback_title = _trim_bilibili_title_candidate(
+            _caption_verification_marker(caption) or str(caption or ""),
+            limit=80,
+        )
+        if fallback_title:
+            title = fallback_title
+            _log("[Uploader:bilibili] Title builder returned empty, fallback to normalized caption marker.")
+    if not title:
+        title = "GasGx 自动发布视频"
+        _log("[Uploader:bilibili] Title builder returned empty, fallback to static title.")
 
     expect = re.sub(r"\s+", "", title).lower()
 
@@ -25743,6 +25752,24 @@ def _read_bilibili_creative_statement_state(owner: Any) -> dict[str, Any]:
     const container = findContainer();
     if (!container) return {hasField: false, current: '', source: 'missing_label'};
     const trigger = findSelectRoot(container);
+    const input = (
+      trigger &&
+      (
+        (String(trigger.tagName || '').toLowerCase() === 'input' ? trigger : null) ||
+        (trigger.querySelector && trigger.querySelector('input.bcc-select-input-inner')) ||
+        (trigger.querySelector && trigger.querySelector('input[placeholder*="创作声明"], input[placeholder*="原创声明"]'))
+      )
+    );
+    if (input) {
+      const inputValue = clean(input.value || input.getAttribute('value') || '');
+      const placeholder = clean(input.placeholder || '');
+      return {
+        hasField: true,
+        current: inputValue,
+        source: inputValue ? 'input_value' : 'input_empty',
+        placeholder,
+      };
+    }
     const current = currentText(trigger || container);
     return {
       hasField: true,
@@ -25817,6 +25844,29 @@ def _click_bilibili_creative_statement_prompt_go_declare(primary_ctx: Any, fallb
     for (const root of searchRoots) {
       const rootText = norm((root && root.innerText) || (root && root.textContent) || '');
       if (!rootText || !promptRe.test(rootText)) continue;
+      const domCandidates = [
+        root.querySelector('button.bcc-button.bcc-button-primary.bcc-button-large'),
+        root.querySelector('button.bcc-button.button.bcc-button-primary.bcc-button-large'),
+        root.querySelector('button.bcc-button.button.primary.large'),
+        root.querySelector('button.bcc-button.primary.large'),
+      ].filter(Boolean);
+      for (const node of Array.from(root.querySelectorAll('button')).filter(isVisible)) {
+        const cls = norm(node.className || '').toLowerCase();
+        if (!cls) continue;
+        if (cls.includes('bcc-button') && cls.includes('primary') && cls.includes('large')) {
+          domCandidates.push(node);
+        }
+      }
+      for (const domFirst of domCandidates) {
+        if (!domFirst || !isVisible(domFirst)) continue;
+        if (clickNode(domFirst)) {
+          return {
+            state: 'clicked',
+            text: norm(domFirst.innerText || domFirst.textContent || ''),
+            source: 'bcc-primary-large',
+          };
+        }
+      }
       const nodes = Array.from(root.querySelectorAll('button, [role="button"], a, div, span')).filter(isVisible);
       for (const node of nodes) {
         const text = norm(node.innerText || node.textContent || '');
@@ -26115,7 +26165,6 @@ def _select_bilibili_creative_statement(
     for (const root of openRoots) {
       if (root && openSelect(root)) break;
     }
-    _humanized_publish_settle_pause("bilibili creative statement dropdown open");
     if (trigger && String(trigger.tagName || '').toLowerCase() === 'select') {
       const options = Array.from(trigger.options || []);
       const match = options.find((option) => {
@@ -26220,13 +26269,16 @@ def _select_bilibili_creative_statement(
             _humanized_publish_settle_pause("bilibili creative statement prompt settle")
             continue
         action_states: list[str] = []
+        js_errors: list[str] = []
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
             try:
                 action = owner.run_js(js_select, target)
-            except Exception:
+            except Exception as exc:
                 action = {}
+                js_errors.append(_single_line_preview(str(exc), limit=80) or exc.__class__.__name__)
+            _humanized_publish_settle_pause("bilibili creative statement dropdown open")
             if isinstance(action, dict):
                 action_states.append(str(action.get("state", "") or ""))
             else:
@@ -26246,7 +26298,9 @@ def _select_bilibili_creative_statement(
                 return
         _log(
             f"[Uploader:bilibili] Creative statement select retry {attempt}/6: "
-            f"states={','.join(action_states) or '-'}, target={target}"
+            f"states={','.join(action_states) or '-'}, "
+            f"errors={_single_line_preview('|'.join(js_errors), limit=160) or '-'}, "
+            f"target={target}"
         )
 
     _log(
@@ -26456,7 +26510,6 @@ def _select_bilibili_partition(
     for (const root of openRoots) {
       if (root && openSelect(root)) break;
     }
-    _humanized_publish_settle_pause("bilibili partition dropdown open");
     if (trigger && String(trigger.tagName || '').toLowerCase() === 'select') {
       const options = Array.from(trigger.options || []);
       const match = options.find((option) => {
@@ -26478,6 +26531,7 @@ def _select_bilibili_partition(
     const searchRoots = [];
     const exactMatches = [];
     const genericMatches = [];
+    const fallbackMatches = [];
     Array.from(document.querySelectorAll(
       '.bcc-select-list-wrap, .bcc-select-list, .bcc-select-dropdown, .bcc-select-menu, ' +
       '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown-menu, [role=\"listbox\"]'
@@ -26498,6 +26552,7 @@ def _select_bilibili_partition(
         if (!txt || txt.length > 60) continue;
         if (/^(?:分区|请选择分区|选择分区)$/.test(txt)) continue;
         const optionNorm = txt.replace(/\\s+/g, '');
+        fallbackMatches.push(node);
         const score = optionNorm === targetNorm ? 30 : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 18 : 0);
         if (!score) continue;
         if (optionNorm === targetNorm) {
@@ -26508,12 +26563,16 @@ def _select_bilibili_partition(
       }
     }
     const bestNode = exactMatches[0] || genericMatches[0];
-    if (!bestNode) return {state: 'option_not_found', current: triggerText};
-    const clicked = clickNode(bestNode.closest('.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .option-item, [role=\"option\"], li, button, a, .selector-item') || bestNode);
+    const chosenNode = bestNode || fallbackMatches[0] || null;
+    if (!chosenNode) return {state: 'option_not_found', current: triggerText};
+    const clicked = clickNode(chosenNode.closest('.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .option-item, [role=\"option\"], li, button, a, .selector-item') || chosenNode);
     if (clicked) {
       const after = currentText(input || trigger || container);
       if (after.replace(/\\s+/g, '') === targetNorm) {
-        return {state: 'clicked', current: after, option: clean(bestNode.innerText || bestNode.textContent || '')};
+        return {state: 'clicked', current: after, option: clean(chosenNode.innerText || chosenNode.textContent || '')};
+      }
+      if (!bestNode) {
+        return {state: 'selected_fallback', current: after, option: clean(chosenNode.innerText || chosenNode.textContent || '')};
       }
     }
     if (input && currentText(input).replace(/\\s+/g, '') !== targetNorm) {
@@ -26523,7 +26582,11 @@ def _select_bilibili_partition(
         input.dispatchEvent(new Event('change', {bubbles: true}));
       } catch (e) {}
     }
-    return {state: clicked ? 'clicked' : 'click_fail', current: currentText(input || trigger || container), option: clean(bestNode.innerText || bestNode.textContent || '')};
+    return {
+      state: clicked ? (bestNode ? 'clicked' : 'clicked_fallback') : 'click_fail',
+      current: currentText(input || trigger || container),
+      option: clean(chosenNode.innerText || chosenNode.textContent || ''),
+    };
     """
     js_collapse = """
     try {
@@ -26540,15 +26603,22 @@ def _select_bilibili_partition(
 
     for attempt in range(1, 7):
         action_states: list[str] = []
+        js_errors: list[str] = []
+        fallback_selected = False
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
             try:
                 action = owner.run_js(js_select, target)
-            except Exception:
+            except Exception as exc:
                 action = {}
+                js_errors.append(_single_line_preview(str(exc), limit=80) or exc.__class__.__name__)
+            _humanized_publish_settle_pause("bilibili partition dropdown open")
             if isinstance(action, dict):
-                action_states.append(str(action.get("state", "") or ""))
+                action_state = str(action.get("state", "") or "")
+                action_states.append(action_state)
+                if action_state in {"selected_fallback", "clicked_fallback"}:
+                    fallback_selected = True
             else:
                 action_states.append("none")
             try:
@@ -26564,9 +26634,14 @@ def _select_bilibili_partition(
             if bool(state.get("hasField")) and current == target_norm:
                 _log(f"[Uploader:bilibili] Partition selected: {target}")
                 return
+            if fallback_selected and bool(state.get("hasField")) and current:
+                _log(f"[Uploader:bilibili] Partition fallback selected: {current}")
+                return
         _log(
             f"[Uploader:bilibili] Partition select retry {attempt}/6: "
-            f"states={','.join(action_states) or '-'}, target={target}"
+            f"states={','.join(action_states) or '-'}, "
+            f"errors={_single_line_preview('|'.join(js_errors), limit=160) or '-'}, "
+            f"target={target}"
         )
 
     _log(
@@ -28828,6 +28903,8 @@ def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
     if _click_bilibili_creative_statement_prompt_go_declare(primary_ctx, fallback_ctx):
         _humanized_publish_reaction_pause("bilibili creative statement prompt settle")
         _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
+        # After leaving the declare panel, Bilibili often requires re-triggering primary publish.
+        _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx)
         return False
     selectors = (
         "text:确认投稿",
@@ -28908,17 +28985,21 @@ def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
       if (!isVisible(node)) continue;
       const text = norm(node.innerText || node.textContent || '');
       if (!text || text.length > 24) continue;
+      if (/声明|请选择|发布前请添加/.test(text)) continue;
       const wrap = node.closest('[role="dialog"], .dialog, .modal, .popup, form, section, .publish, .submit, div') || node.parentElement || node;
       const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 320);
       let score = 0;
       if (/^(确认投稿|确认并投稿|继续投稿|继续提交|确定投稿|确认发布|确认提交|确认定时发布|确认定时投稿|去发布)$/.test(text)) score += 30;
-      if (/投稿|发布|提交/.test(text)) score += 14;
-      if (/确认|继续|确定/.test(text)) score += 10;
+      if (/^(确认|继续|确定|去发布)/.test(text)) score += 10;
+      if (/投稿|发布|提交/.test(text)) score += 8;
       if (/取消|返回|草稿|暂存/.test(text)) score -= 40;
       if (/dialog|modal|popup/.test(String((wrap && wrap.className) || ''))) score += 8;
       if (/声明|协议|同意|投稿|发布|稿件|风险/.test(wrapText)) score += 6;
       if (disabled(node)) score -= 80;
-      if (score > 0) candidates.push({node, text, score});
+      if (score > 0) {
+        const clickable = node.closest('button, [role="button"], a') || node;
+        candidates.push({node: clickable, text, score});
+      }
     }
     candidates.sort((a, b) => b.score - a.score);
     if (!candidates.length) return false;
@@ -29236,16 +29317,18 @@ def _is_bilibili_publish_success_snapshot(
 
 def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     # Keep this lightweight: this function is called repeatedly during feedback polling.
+    _choose_douyin_no_self_statement_from_popup(primary_ctx, fallback_ctx)
     selectors = (
-        "text:纭鍙戝竷",
-        "text:缁х画鍙戝竷",
-        "text:浠嶈鍙戝竷",
+        "text:确认发布",
+        "text:继续发布",
+        "text:仍要发布",
         "text:去发布",
-        "text:纭瀹氭椂鍙戝竷",
-        "text:纭畾鍙戝竷",
-        "xpath://button[contains(normalize-space(.), '纭鍙戝竷')]",
-        "xpath://button[contains(normalize-space(.), '缁х画鍙戝竷')]",
-        "xpath://button[contains(normalize-space(.), '纭瀹氭椂鍙戝竷')]",
+        "text:确认定时发布",
+        "text:确定发布",
+        "xpath://button[contains(normalize-space(.), '确认发布')]",
+        "xpath://button[contains(normalize-space(.), '继续发布')]",
+        "xpath://button[contains(normalize-space(.), '确认定时发布')]",
+        "xpath://button[contains(normalize-space(.), '确定发布')]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -29282,15 +29365,21 @@ def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) ->
         .replace(/\\s+/g, ' ')
         .trim();
     }
-    const keywords = ['纭鍙戝竷', '缁х画鍙戝竷', '浠嶈鍙戝竷', '鍘诲彂甯?, '纭瀹氭椂鍙戝竷', '纭畾鍙戝竷'];
-    const nodes = Array.from(document.querySelectorAll('button, [role=\"button\"], a, div, span'))
+    const keywords = ['确认发布', '继续发布', '仍要发布', '去发布', '确认定时发布', '确定发布'];
+    const roots = Array.from(document.querySelectorAll('[role=\"dialog\"], .dialog, .modal, .popup, [class*=\"dialog\"], [class*=\"modal\"]'))
       .filter(el => isVisible(el));
-    for (const node of nodes) {
-      const text = norm(node.innerText || node.textContent || '');
-      if (!text) continue;
-      if (!keywords.some(k => text.includes(k))) continue;
-      node.click();
-      return true;
+    const searchRoots = roots.length ? roots : [document];
+    for (const root of searchRoots) {
+      const nodes = Array.from(root.querySelectorAll('button, [role=\"button\"], a, div, span'))
+        .filter(el => isVisible(el));
+      for (const node of nodes) {
+        const text = norm(node.innerText || node.textContent || '');
+        if (!text) continue;
+        if (!keywords.some(k => text.includes(k))) continue;
+        const target = node.closest('button, [role=\"button\"], a') || node;
+        target.click();
+        return true;
+      }
     }
     return false;
     """
@@ -29304,6 +29393,81 @@ def _click_douyin_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) ->
             ok = False
         if ok:
             _log("[Uploader:douyin] Clicked publish confirm button.")
+            return True
+    return False
+
+
+def _choose_douyin_no_self_statement_from_popup(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) {
+      return String(s || '')
+        .replace(/[\\u200B-\\u200D\\uFEFF]/g, '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        return true;
+      } catch (e) {}
+      return false;
+    }
+    const popupRoots = Array.from(document.querySelectorAll(
+      '[role=\"dialog\"], .dialog, .modal, .popup, .semi-modal, .arco-modal, [class*=\"dialog\"], [class*=\"modal\"]'
+    )).filter(isVisible);
+    const roots = popupRoots.length ? popupRoots : [document.body];
+    const statementRootRe = /(自主声明|创作声明|原创声明|声明)/;
+    const optionRe = /^(无需添加自主声明|无需自主声明|无需声明|内容无需标注)$/;
+    const confirmRe = /^(确认|确定|完成|知道了|继续发布|仍要发布|去发布|发布)$/;
+    let picked = false;
+    for (const root of roots) {
+      const rootText = norm((root && root.innerText) || '');
+      if (!rootText || !statementRootRe.test(rootText)) continue;
+      const nodes = Array.from(root.querySelectorAll('button, [role=\"button\"], a, div, span, li, label')).filter(isVisible);
+      for (const node of nodes) {
+        const text = norm(node.innerText || node.textContent || '');
+        if (!text || !optionRe.test(text)) continue;
+        if (clickNode(node.closest('button, [role=\"button\"], a, li, label') || node)) {
+          picked = true;
+          break;
+        }
+      }
+      if (picked) {
+        const nodes2 = Array.from(root.querySelectorAll('button, [role=\"button\"], a, div, span')).filter(isVisible);
+        for (const node of nodes2) {
+          const text = norm(node.innerText || node.textContent || '');
+          if (!text || !confirmRe.test(text)) continue;
+          if (clickNode(node.closest('button, [role=\"button\"], a') || node)) {
+            return {state: 'picked_and_confirmed', text};
+          }
+        }
+        return {state: 'picked'};
+      }
+    }
+    return {state: 'not_found'};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = {}
+        if not isinstance(result, dict):
+            continue
+        state = str(result.get("state", "") or "").strip().lower()
+        if state in {"picked", "picked_and_confirmed"}:
+            _log("[Uploader:douyin] Popup self-statement handled with no-statement option.")
             return True
     return False
 
@@ -31186,8 +31350,8 @@ def _fill_draft_once_generic(
         _log("[Uploader:douyin] Skip collection selection by design.")
         _log("[Uploader:douyin] Skip self statement selection by design.")
     if platform_name == "bilibili":
-        _fill_bilibili_title_from_caption(ctx, page, final_caption)
         _prepare_bilibili_publish_dom_defaults(ctx, page)
+        _fill_bilibili_title_from_caption(ctx, page, final_caption)
         _select_bilibili_partition(ctx, page, "科技数码")
         _log("[Uploader:bilibili] Skip collection selection by design.")
     if platform_name == "kuaishou":

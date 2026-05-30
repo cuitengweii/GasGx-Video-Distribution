@@ -289,6 +289,9 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
     def fake_partition(_primary_ctx, _fallback_ctx, partition_name: str = "") -> None:
         calls.append(("partition", partition_name))
 
+    def fake_fill_title(*_args, **_kwargs) -> None:
+        calls.append(("title", "filled"))
+
     monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
@@ -296,7 +299,7 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
     monkeypatch.setattr(engine, "_find_bilibili_upload_file_input", lambda *_args, **_kwargs: FakeInput())
     monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
     monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", fake_fill_title)
     monkeypatch.setattr(engine, "_select_bilibili_creative_statement", fake_select)
     monkeypatch.setattr(engine, "_select_bilibili_partition", fake_partition)
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
@@ -325,6 +328,7 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
     assert result is page
     assert calls == [
         ("creative_statement", "内容无需标注"),
+        ("title", "filled"),
         ("partition", "科技数码"),
     ]
 
@@ -341,6 +345,47 @@ def test_prepare_bilibili_publish_dom_defaults_selects_creative_statement(monkey
     engine._prepare_bilibili_publish_dom_defaults(object(), object())
 
     assert calls == ["内容无需标注"]
+
+
+def test_fill_bilibili_title_from_caption_uses_static_fallback_when_builder_empty(monkeypatch) -> None:
+    class FakeCtx:
+        def ele(self, _selector: str, timeout: float = 1.0):
+            return None
+
+        def run_js(self, _script: str, title: str):
+            return {"state": "set", "value": title}
+
+    monkeypatch.setattr(engine, "_build_bilibili_title_from_caption", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(engine, "_caption_verification_marker", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(engine, "_normalize_blocking_timeout", lambda *_args, **_kwargs: 2)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    title = engine._fill_bilibili_title_from_caption(FakeCtx(), FakeCtx(), "", timeout_seconds=2)
+
+    assert title == "GasGx \u81ea\u52a8\u53d1\u5e03\u89c6\u9891"
+
+
+def test_select_bilibili_partition_accepts_fallback_selection(monkeypatch) -> None:
+    logs: list[str] = []
+
+    class FakeCtx:
+        def run_js(self, script: str, *_args):
+            if "selected_fallback" in script:
+                return {"state": "selected_fallback", "current": "动画", "option": "动画"}
+            if "missing_label" in script:
+                return {"hasField": True, "current": "动画", "source": "selection_text"}
+            return True
+
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda message: logs.append(str(message)))
+
+    engine._select_bilibili_partition(FakeCtx(), None, "科技数码")
+
+    assert any("Partition fallback selected" in line for line in logs)
 
 
 def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
