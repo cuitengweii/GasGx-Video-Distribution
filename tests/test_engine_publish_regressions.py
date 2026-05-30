@@ -264,6 +264,78 @@ def test_fill_draft_once_generic_bilibili_uses_generic_publish_fallback(monkeypa
     assert ("立即投稿",) in button_calls
 
 
+def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    creative_statement_calls: list[str] = []
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://member.bilibili.com/platform/upload/video/frame"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_select(_primary_ctx, _fallback_ctx, creative_statement: str = "") -> None:
+        creative_statement_calls.append(creative_statement)
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_bilibili_upload_file_input", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", fake_select)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_reset_bilibili_publish_probe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_bilibili_primary_publish_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_wait_publish_feedback", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    result = engine._fill_draft_once_generic(
+        page=page,
+        target=target,
+        final_caption="caption",
+        open_url=page.url,
+        platform_name="bilibili",
+        save_draft=False,
+        publish_now=True,
+        upload_timeout=30,
+        draft_button_texts=("淇濆瓨鑽夌",),
+        publish_button_texts=("绔嬪嵆鎶曠",),
+    )
+
+    assert result is page
+    assert creative_statement_calls == ["内容无需标注"]
+
+
+def test_prepare_bilibili_publish_dom_defaults_selects_creative_statement(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        engine,
+        "_select_bilibili_creative_statement",
+        lambda *args, **_kwargs: calls.append(args[2] if len(args) > 2 else ""),
+    )
+
+    engine._prepare_bilibili_publish_dom_defaults(object(), object())
+
+    assert calls == ["内容无需标注"]
+
+
 def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     monkeypatch,
     tmp_path: Path,

@@ -3979,7 +3979,7 @@ def test_start_account_domestic_emergency_publish_runs_batch_even_when_login_inc
     assert result["platforms"] == ["wechat", "douyin", "kuaishou"]
 
 
-def test_start_account_domestic_emergency_publish_blocks_when_wechat_login_unavailable(monkeypatch, tmp_path: Path) -> None:
+def test_start_account_domestic_emergency_publish_runs_batch_even_when_wechat_login_unavailable(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
 
     account = {
@@ -3989,18 +3989,24 @@ def test_start_account_domestic_emergency_publish_blocks_when_wechat_login_unava
             {"platform": "douyin", "enabled": True, "login_status": "ready"},
         ],
     }
-    called = {"run": False}
+    seen: dict[str, Any] = {}
     monkeypatch.setattr(service, "_resolve_account_any_id", lambda account_id: account if int(account_id) == 63 else None)
     monkeypatch.setattr(
         matrix_publish,
         "run_account_domestic_publish",
-        lambda *args, **kwargs: called.__setitem__("run", True) or {"ok": True},
+        lambda account_id, dry_run=False, **kwargs: seen.update({"account_id": account_id, "dry_run": dry_run, **kwargs}) or {
+            "ok": True,
+            "account_id": account_id,
+            "results": [{"success": True}, {"success": True}],
+            "platforms": ["wechat", "douyin"],
+        },
     )
 
-    with pytest.raises(ValueError, match="视频号登录已失效，请先重新扫码登录"):
-        service.start_account_domestic_emergency_publish(63)
+    result = service.start_account_domestic_emergency_publish(63)
 
-    assert called["run"] is False
+    assert seen == {"account_id": 63, "dry_run": False, "auto_open_chrome": True}
+    assert result["summary"] == "国内平台批量发布完成：2/2 成功"
+    assert result["platforms"] == ["wechat", "douyin"]
 
 
 def test_start_account_domestic_emergency_publish_translates_no_available_domestic_platforms(monkeypatch, tmp_path: Path) -> None:
@@ -4020,7 +4026,7 @@ def test_start_account_domestic_emergency_publish_translates_no_available_domest
         lambda *args, **kwargs: {"ok": False, "skipped": True, "reason": "no_available_domestic_platforms", "account_id": 64},
     )
 
-    with pytest.raises(ValueError, match="当前账号今天没有可发布的国内平台，请先检查素材库或明天再试"):
+    with pytest.raises(ValueError, match="当前账号暂无可执行的国内平台发布项，请检查素材库或平台启用状态"):
         service.start_account_domestic_emergency_publish(64)
 
 def test_terminal_config_update_clears_stale_qr_when_window_operator_changes(monkeypatch, tmp_path: Path) -> None:

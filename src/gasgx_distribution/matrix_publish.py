@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import random
@@ -8,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
+import traceback
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -27,6 +30,7 @@ from .platforms import get_platform, normalize_platform
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 DOMESTIC_PUBLISH_PLATFORM_ORDER = ("wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili")
+_PUBLISH_AUDIT_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -128,6 +132,94 @@ def _load_state() -> dict[str, Any]:
 
 def _save_state(payload: dict[str, Any]) -> None:
     state_path().write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def publish_audit_log_path() -> Path:
+    path = get_paths().runtime_root / "logs" / "publish_audit.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _is_sensitive_publish_audit_key(key: str) -> bool:
+    lowered = str(key or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered in {
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "auth",
+        "cookie",
+        "cookies",
+        "api_key",
+        "api_secret",
+        "bot_token",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "telegram_api_base",
+    }:
+        return True
+    return lowered.endswith(("_password", "_secret", "_token", "_auth", "_cookie"))
+
+
+def _sanitize_publish_audit_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if _is_sensitive_publish_audit_key(str(key)):
+                sanitized[str(key)] = "[redacted]"
+            else:
+                sanitized[str(key)] = _sanitize_publish_audit_value(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_publish_audit_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_publish_audit_value(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Exception):
+        return str(value)
+    if isinstance(value, str):
+        return value if len(value) <= 20000 else value[:20000] + "…"
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    try:
+        json.dumps(value, ensure_ascii=False)
+        return value
+    except Exception:
+        return str(value)
+
+
+def _append_publish_audit(event: str, **payload: Any) -> None:
+    record = {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "pid": os.getpid(),
+        "event": event,
+    }
+    record.update({key: _sanitize_publish_audit_value(value) for key, value in payload.items()})
+    line = json.dumps(record, ensure_ascii=False)
+    log_path = publish_audit_log_path()
+    with _PUBLISH_AUDIT_LOCK:
+        with log_path.open("a", encoding="utf-8", errors="replace") as log_file:
+            log_file.write(line + "\n")
+
+
+def _domestic_batch_log_path(workspace: Path) -> Path:
+    return workspace / "matrix_domestic_publish.log"
+
+
+def _append_domestic_batch_log(log_path: Path, log_lock: threading.Lock, message: str) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message.rstrip()}\n"
+    with log_lock:
+        with log_path.open("a", encoding="utf-8", errors="replace") as log_file:
+            log_file.write(line)
 
 
 def _video_key(path: Path) -> str:
@@ -602,6 +694,7 @@ def build_account_platform_publish_item(
     *,
     source_video: Path | str | None = None,
     workspace: Path | None = None,
+    ignore_consumed_slot: bool = False,
 ) -> PublishPlanItem | None:
     token = normalize_platform(platform)
     capability = get_platform(token)
@@ -621,7 +714,7 @@ def build_account_platform_publish_item(
     if debug_port <= 0:
         return None
     today = _today_date(_load_timezone()).isoformat()
-    if (int(account_id), token, today) in _consumed_slots(today):
+    if not ignore_consumed_slot and (int(account_id), token, today) in _consumed_slots(today):
         return None
     source_video_path = Path(source_video) if source_video is not None else _select_account_source_video(int(account_id), today=today)
     if source_video_path is None or not source_video_path.exists():
@@ -679,6 +772,7 @@ def build_account_domestic_publish_items(account_id: int) -> list[PublishPlanIte
             platform,
             source_video=shared_source,
             workspace=batch_root / platform,
+            ignore_consumed_slot=True,
         )
         if item is not None:
             items.append(item)
@@ -1040,34 +1134,67 @@ def _run_publish_item(
     )
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     log_path = item.workspace / f"matrix_{token}_publish.log"
-    with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
-        env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
-        if fast_publish:
-            env["CYBERCAR_FAST_PUBLISH"] = "1"
-        if vpn_enabled_for_item and (item.vpn_node_key or item.vpn_proxy_url):
-            time.sleep(0.35)
-            service._close_chrome_browser_by_debug_port(item.debug_port)  # type: ignore[attr-defined]
-            time.sleep(0.35)
-            if item.vpn_node_key:
-                env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
-            if item.vpn_country_code:
-                env["CYBERCAR_VPN_COUNTRY"] = item.vpn_country_code
-            if item.vpn_proxy_url:
-                env["CYBERCAR_PROXY"] = item.vpn_proxy_url
-                env.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
-        extra_args = service.browser_fingerprint_launch_args(item.fingerprint)
-        if extra_args:
-            env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
-        completed = subprocess.run(
-            cmd,
-            cwd=str(get_paths().repo_root),
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+    _append_publish_audit(
+        "publish_item_start",
+        item=_serialize_plan_item(item),
+        settings=settings,
+        runtime_config=str(runtime_config),
+        command=cmd,
+        prepared_video=str(prepared),
+        log_path=str(log_path),
+        disable_telegram=bool(disable_telegram),
+        auto_open_chrome=bool(auto_open_chrome),
+        fast_publish=bool(fast_publish),
+        vpn_enabled=vpn_enabled_for_item,
+        effective_publish_mode=effective_publish_mode,
+    )
+    try:
+        with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
+            env = {**os.environ, "CYBERCAR_DISABLE_REQUIRED_HASHTAGS": "1"}
+            if fast_publish:
+                env["CYBERCAR_FAST_PUBLISH"] = "1"
+            if vpn_enabled_for_item and (item.vpn_node_key or item.vpn_proxy_url):
+                time.sleep(0.35)
+                service._close_chrome_browser_by_debug_port(item.debug_port)  # type: ignore[attr-defined]
+                time.sleep(0.35)
+                if item.vpn_node_key:
+                    env["CYBERCAR_VPN_NODE_KEY"] = item.vpn_node_key
+                if item.vpn_country_code:
+                    env["CYBERCAR_VPN_COUNTRY"] = item.vpn_country_code
+                if item.vpn_proxy_url:
+                    env["CYBERCAR_PROXY"] = item.vpn_proxy_url
+                    env.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
+            extra_args = service.browser_fingerprint_launch_args(item.fingerprint)
+            if extra_args:
+                env["CYBERCAR_CHROME_EXTRA_ARGS"] = json.dumps(extra_args, ensure_ascii=False)
+            completed = subprocess.run(
+                cmd,
+                cwd=str(get_paths().repo_root),
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+    except Exception as exc:
+        _append_publish_audit(
+            "publish_item_error",
+            item=_serialize_plan_item(item),
+            settings=settings,
+            runtime_config=str(runtime_config),
+            command=cmd,
+            prepared_video=str(prepared),
+            log_path=str(log_path),
+            disable_telegram=bool(disable_telegram),
+            auto_open_chrome=bool(auto_open_chrome),
+            fast_publish=bool(fast_publish),
+            vpn_enabled=vpn_enabled_for_item,
+            effective_publish_mode=effective_publish_mode,
+            error=str(exc),
+            error_type=type(exc).__name__,
         )
+        raise
     evidence_ok = _has_publish_evidence(item.workspace, token)
     success = completed.returncode == 0 and evidence_ok
     record = {
@@ -1100,6 +1227,16 @@ def _run_publish_item(
     }
     if completed.returncode == 0 and not evidence_ok:
         record["error"] = f"{token} publish returned 0 but no uploaded_records_{token}.jsonl evidence was written"
+    _append_publish_audit(
+        "publish_item_complete",
+        record=record,
+        item=_serialize_plan_item(item),
+        settings=settings,
+        runtime_config=str(runtime_config),
+        command=cmd,
+        prepared_video=str(prepared),
+        log_path=str(log_path),
+    )
     return record
 
 
@@ -1242,7 +1379,25 @@ def run_matrix_publish(
     job_settings = _matrix_wechat_job_settings()
     wechat_settings = load_wechat_publish_settings()
     platform_settings = {token: load_platform_publish_settings(token) for token in sorted({item.platform for item in plan})}
+    _append_publish_audit(
+        "publish_batch_start",
+        mode="dry_run" if dry_run else "live",
+        limit=int(limit or 0),
+        platforms=sorted(platforms) if platforms is not None else None,
+        item_count=len(plan),
+        items=[_serialize_plan_item(item) for item in plan],
+        batches=[[_serialize_plan_item(item) for item in batch] for batch in plan_batches(plan)],
+        job_settings=job_settings,
+        wechat_settings=wechat_settings,
+        platform_settings=platform_settings,
+    )
     if dry_run:
+        _append_publish_audit(
+            "publish_batch_dry_run",
+            limit=int(limit or 0),
+            platforms=sorted(platforms) if platforms is not None else None,
+            item_count=len(plan),
+        )
         return {
             "ok": True,
             "dry_run": True,
@@ -1255,6 +1410,7 @@ def run_matrix_publish(
 
     locked, lock_payload = _acquire_publish_lock()
     if not locked:
+        _append_publish_audit("publish_batch_lock_active", lock=lock_payload, limit=int(limit or 0), item_count=len(plan))
         return {"ok": False, "skipped": True, "reason": "publish_lock_active", "lock": lock_payload}
 
     state = _load_state()
@@ -1263,11 +1419,19 @@ def run_matrix_publish(
     results: list[dict[str, Any]] = []
     try:
         if not plan:
+            _append_publish_audit("publish_batch_empty", limit=int(limit or 0), platforms=sorted(platforms) if platforms is not None else None)
             return {"ok": True, "count": 0, "results": [], "skipped": True, "reason": "empty_plan"}
         preflight = check_matrix_publish_preflight(plan, notify=True)
         if not preflight.get("ok"):
             wechat_ok = bool(preflight.get("wechat_preflight", {}).get("ok"))
             reason = "wechat_login_required" if not wechat_ok else "platform_login_required"
+            _append_publish_audit(
+                "publish_batch_preflight_blocked",
+                reason=reason,
+                preflight=preflight,
+                limit=int(limit or 0),
+                item_count=len(plan),
+            )
             return {
                 "ok": False,
                 "skipped": True,
@@ -1293,10 +1457,33 @@ def run_matrix_publish(
                         "asset_metadata": _asset_manifest_metadata(item.source_video),
                     }
                 )
-            state["consumed"] = consumed[-500:]
-            state["runs"] = runs[-200:]
-            _save_state(state)
-        return {"ok": all(item["success"] for item in results), "count": len(results), "results": results}
+        state["consumed"] = consumed[-500:]
+        state["runs"] = runs[-200:]
+        _save_state(state)
+        overview = [
+            {
+                "account_id": item.get("account_id"),
+                "platform": item.get("platform"),
+                "success": bool(item.get("success")),
+                "returncode": item.get("returncode"),
+                "evidence_ok": bool(item.get("evidence_ok")),
+                "log": item.get("log"),
+                "error": item.get("error"),
+            }
+            for item in results
+            if isinstance(item, dict)
+        ]
+        ok = all(bool(item.get("success")) for item in results if isinstance(item, dict))
+        _append_publish_audit(
+            "publish_batch_complete",
+            ok=ok,
+            count=len(results),
+            limit=int(limit or 0),
+            item_count=len(plan),
+            overview=overview,
+            results=results,
+        )
+        return {"ok": ok, "count": len(results), "results": results}
     finally:
         _release_publish_lock()
 
@@ -1322,7 +1509,23 @@ def run_account_platform_publish(
     if item is None:
         return {"ok": False, "skipped": True, "reason": "no_available_material", "platform": token, "account_id": int(account_id)}
     settings = load_platform_publish_settings(token)
+    _append_publish_audit(
+        "publish_single_start",
+        account_id=int(account_id),
+        platform=token,
+        dry_run=bool(dry_run),
+        item=_serialize_plan_item(item),
+        settings=settings,
+        auto_open_chrome=bool(auto_open_chrome),
+    )
     if dry_run:
+        _append_publish_audit(
+            "publish_single_dry_run",
+            account_id=int(account_id),
+            platform=token,
+            item=_serialize_plan_item(item),
+            settings=settings,
+        )
         return {
             "ok": True,
             "dry_run": True,
@@ -1334,6 +1537,12 @@ def run_account_platform_publish(
 
     locked, lock_payload = _acquire_publish_lock()
     if not locked:
+        _append_publish_audit(
+            "publish_single_lock_active",
+            account_id=int(account_id),
+            platform=token,
+            lock=lock_payload,
+        )
         return {"ok": False, "skipped": True, "reason": "publish_lock_active", "lock": lock_payload, "platform": token}
 
     state = _load_state()
@@ -1363,6 +1572,13 @@ def run_account_platform_publish(
         state["consumed"] = consumed[-500:]
         state["runs"] = runs[-200:]
         _save_state(state)
+        _append_publish_audit(
+            "publish_single_complete",
+            account_id=item.account_id,
+            platform=token,
+            ok=bool(record.get("success")),
+            record=record,
+        )
         return {"ok": bool(record.get("success")), "count": 1, "platform": token, "account_id": item.account_id, "results": [record]}
     finally:
         _release_publish_lock()
@@ -1393,9 +1609,24 @@ def run_account_domestic_publish(
             "account_id": int(account_id),
         }
     settings_by_platform = {item.platform: load_platform_publish_settings(item.platform) for item in items}
+    _append_publish_audit(
+        "publish_domestic_batch_start",
+        account_id=int(account_id),
+        dry_run=bool(dry_run),
+        account=account,
+        item_count=len(items),
+        items=[_serialize_plan_item(item) for item in items],
+        settings_by_platform=settings_by_platform,
+        auto_open_chrome=bool(auto_open_chrome),
+    )
 
     locked, lock_payload = _acquire_publish_lock()
     if not locked:
+        _append_publish_audit(
+            "publish_domestic_batch_lock_active",
+            account_id=int(account_id),
+            lock=lock_payload,
+        )
         return {"ok": False, "skipped": True, "reason": "publish_lock_active", "lock": lock_payload, "account_id": int(account_id)}
 
     state = _load_state()
@@ -1404,11 +1635,24 @@ def run_account_domestic_publish(
     results: list[dict[str, Any]] = []
     try:
         started = time.strftime("%Y-%m-%d %H:%M:%S")
+        batch_root = items[0].workspace.parent
+        batch_log_path = _domestic_batch_log_path(batch_root)
+        batch_log_lock = threading.Lock()
+        _append_domestic_batch_log(
+            batch_log_path,
+            batch_log_lock,
+            f"[Batch] start account_id={int(account_id)} account_key={account.get('account_key') or ''} platforms={','.join(item.platform for item in items)} source_video={items[0].source_video}",
+        )
         record_by_item: dict[tuple[int, str], dict[str, Any]] = {}
-        for index, item in enumerate(items):
-            if index > 0:
-                time.sleep(0.35)
+
+        def _run_batch_item(item: PublishPlanItem) -> dict[str, Any]:
             settings = settings_by_platform[item.platform]
+            item_started_at = time.perf_counter()
+            _append_domestic_batch_log(
+                batch_log_path,
+                batch_log_lock,
+                f"[Platform:{item.platform}] start workspace={item.workspace} profile_dir={item.profile_dir} debug_port={item.debug_port} source_video={item.source_video}",
+            )
             try:
                 record = _run_publish_item(
                     item,
@@ -1417,8 +1661,22 @@ def run_account_domestic_publish(
                     auto_open_chrome=auto_open_chrome,
                     fast_publish=True,
                 )
+                duration = time.perf_counter() - item_started_at
+                _append_domestic_batch_log(
+                    batch_log_path,
+                    batch_log_lock,
+                    f"[Platform:{item.platform}] finished success={bool(record.get('success'))} returncode={record.get('returncode')} evidence_ok={record.get('evidence_ok')} seconds={duration:.2f}",
+                )
+                return record
             except Exception as exc:
-                record = {
+                duration = time.perf_counter() - item_started_at
+                error_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+                _append_domestic_batch_log(
+                    batch_log_path,
+                    batch_log_lock,
+                    f"[Platform:{item.platform}] exception seconds={duration:.2f} error={exc}\n{error_text}",
+                )
+                return {
                     "account_id": item.account_id,
                     "account_key": item.account_key,
                     "platform": item.platform,
@@ -1450,8 +1708,57 @@ def run_account_domestic_publish(
                     "telegram_disabled": True,
                     "error": str(exc),
                 }
-            record_by_item[(item.account_id, item.platform)] = record
-            results.append(record)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(items)) as executor:
+            futures = {executor.submit(_run_batch_item, item): item for item in items}
+            for future in concurrent.futures.as_completed(futures):
+                item = futures[future]
+                try:
+                    record = future.result()
+                except Exception as exc:
+                    _append_domestic_batch_log(
+                        batch_log_path,
+                        batch_log_lock,
+                        f"[Platform:{item.platform}] future raised unexpectedly error={exc}",
+                    )
+                    record = {
+                        "account_id": item.account_id,
+                        "account_key": item.account_key,
+                        "platform": item.platform,
+                        "asset_key": _relative_asset_key(item.source_video),
+                        "publish_date": item.publish_date or _today_date(_load_timezone()).isoformat(),
+                        "display_name": item.display_name,
+                        "video": str(item.source_video),
+                        "prepared_video": "",
+                        "profile_dir": str(item.profile_dir),
+                        "fingerprint": item.fingerprint,
+                        "debug_port": int(item.debug_port),
+                        "workspace": str(item.workspace),
+                        "account_publish_mode": item.account_publish_mode,
+                        "vpn_node_key": item.vpn_node_key,
+                        "vpn_country_code": item.vpn_country_code,
+                        "vpn_country_label": item.vpn_country_label,
+                        "vpn_proxy_url": item.vpn_proxy_url,
+                        "vpn_enabled": _publish_item_vpn_enabled(item),
+                        "effective_publish_mode": resolve_effective_publish_mode(
+                            str(settings_by_platform[item.platform].get("publish_mode") or "publish"),
+                            item.account_publish_mode,
+                        ),
+                        "returncode": -1,
+                        "success": False,
+                        "evidence_ok": False,
+                        "log": "",
+                        "started_at": started,
+                        "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "telegram_disabled": True,
+                        "error": str(exc),
+                    }
+                record_by_item[(item.account_id, item.platform)] = record
+
+        results = [record_by_item.get((item.account_id, item.platform), {}) for item in items]
+        for item, record in zip(items, results):
+            if not isinstance(record, dict):
+                continue
             runs.append(record)
             if record.get("success"):
                 consumed.append(
@@ -1465,17 +1772,44 @@ def run_account_domestic_publish(
                         "asset_metadata": _asset_manifest_metadata(item.source_video),
                     }
                 )
-            state["consumed"] = consumed[-500:]
-            state["runs"] = runs[-200:]
-            _save_state(state)
-        results = [record_by_item.get((item.account_id, item.platform), {}) for item in items]
+        state["consumed"] = consumed[-500:]
+        state["runs"] = runs[-200:]
+        _save_state(state)
+        _append_domestic_batch_log(
+            batch_log_path,
+            batch_log_lock,
+            f"[Batch] summary ok={bool(results) and all(bool(item.get('success')) for item in results if isinstance(item, dict))} count={len(results)} platforms={','.join(item.platform for item in items)}",
+        )
+        _append_publish_audit(
+            "publish_domestic_batch_complete",
+            account_id=int(account_id),
+            ok=bool(results) and all(bool(item.get("success")) for item in results if isinstance(item, dict)),
+            count=len(results),
+            platforms=[item.platform for item in items],
+            source_video=str(items[0].source_video) if items else "",
+            batch_log=str(batch_log_path),
+            overview=[
+                {
+                    "account_id": item.account_id,
+                    "platform": item.platform,
+                    "success": bool(record.get("success")) if isinstance(record, dict) else False,
+                    "returncode": record.get("returncode") if isinstance(record, dict) else None,
+                    "evidence_ok": bool(record.get("evidence_ok")) if isinstance(record, dict) else False,
+                    "log": record.get("log") if isinstance(record, dict) else "",
+                    "error": record.get("error") if isinstance(record, dict) else "",
+                }
+                for item, record in zip(items, results)
+            ],
+            results=results,
+        )
         return {
-            "ok": all(item["success"] for item in results),
+            "ok": bool(results) and all(bool(item.get("success")) for item in results if isinstance(item, dict)),
             "count": len(results),
             "account_id": int(account_id),
             "results": results,
             "platforms": [item.platform for item in items],
             "source_video": str(items[0].source_video) if items else "",
+            "batch_log": str(batch_log_path),
         }
     finally:
         _release_publish_lock()

@@ -501,6 +501,11 @@ def test_run_account_domestic_publish_reuses_shared_source_and_disables_telegram
     assert result["count"] == 5
     assert result["platforms"] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
     assert result["source_video"] == str(shared)
+    assert Path(result["batch_log"]).name == "matrix_domestic_publish.log"
+    assert Path(result["batch_log"]).exists()
+    batch_log = Path(result["batch_log"]).read_text(encoding="utf-8")
+    assert "[Batch] start" in batch_log
+    assert "[Platform:wechat] start" in batch_log
     assert len(popen_calls) == 5
     uploaded = []
     for cmd in popen_calls:
@@ -596,8 +601,168 @@ def test_run_account_domestic_publish_serializes_platforms(monkeypatch, tmp_path
 
     assert result["ok"] is True
     assert result["platforms"] == ["douyin", "xiaohongshu"]
-    assert max_active == 1
-    assert call_order == ["douyin:start", "douyin:end", "xiaohongshu:start", "xiaohongshu:end"]
+    assert max_active >= 2
+    assert set(call_order) == {"douyin:start", "douyin:end", "xiaohongshu:start", "xiaohongshu:end"}
+
+
+def test_run_account_domestic_publish_writes_audit_log(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account(
+        {
+            "account_key": "a-01",
+            "display_name": "A",
+            "platforms": ["wechat", "douyin"],
+        }
+    )
+    base = tmp_path / "runtime" / "materials" / "videos"
+    shared = base / "shared.mp4"
+    _write_video(shared, int(time.time()))
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 28))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [shared])
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "publish",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda _workspace, _platform: True)
+    monkeypatch.setattr(mp.service, "browser_fingerprint_launch_args", lambda fingerprint: [])
+    monkeypatch.setattr(mp.subprocess, "run", lambda cmd, **kwargs: SimpleNamespace(returncode=0))
+
+    result = run_account_domestic_publish(1, auto_open_chrome=False)
+
+    assert result["ok"] is True
+    audit_path = mp.publish_audit_log_path()
+    assert audit_path.exists()
+    events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    event_names = [item["event"] for item in events]
+    assert "publish_domestic_batch_start" in event_names
+    assert "publish_item_start" in event_names
+    assert "publish_item_complete" in event_names
+    assert "publish_domestic_batch_complete" in event_names
+
+
+def test_run_account_domestic_publish_does_not_precheck_login(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account(
+        {
+            "account_key": "a-01",
+            "display_name": "A",
+            "platforms": ["wechat", "douyin"],
+        }
+    )
+    base = tmp_path / "runtime" / "materials" / "videos"
+    shared = base / "shared.mp4"
+    _write_video(shared, int(time.time()))
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 28))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [shared])
+    monkeypatch.setattr(mp, "check_matrix_publish_preflight", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not precheck login")))
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "publish",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+    monkeypatch.setattr(mp, "_has_publish_evidence", lambda _workspace, _platform: True)
+    monkeypatch.setattr(mp.service, "browser_fingerprint_launch_args", lambda fingerprint: [])
+    monkeypatch.setattr(mp.subprocess, "run", lambda cmd, **kwargs: SimpleNamespace(returncode=0))
+
+    result = run_account_domestic_publish(1, auto_open_chrome=False)
+
+    assert result["ok"] is True
+    assert result["count"] == 2
+    assert result["platforms"] == ["wechat", "douyin"]
+
+
+def test_run_account_domestic_publish_keeps_other_platforms_running_when_one_fails(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.create_account(
+        {
+            "account_key": "a-01",
+            "display_name": "A",
+            "platforms": ["wechat", "douyin", "kuaishou"],
+        }
+    )
+    base = tmp_path / "runtime" / "materials" / "videos"
+    shared = base / "shared.mp4"
+    _write_video(shared, int(time.time()))
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 28))
+    monkeypatch.setattr(mp, "list_candidate_videos", lambda *args, **kwargs: [shared])
+    monkeypatch.setattr(
+        mp,
+        "load_platform_publish_settings",
+        lambda platform: {
+            "publish_mode": "publish",
+            "upload_timeout": 120,
+            "caption": "caption",
+            "topics": "",
+            "collection_name": "",
+            "declare_original": False,
+        },
+    )
+
+    call_order: list[str] = []
+
+    def fake_run_publish_item(item, settings, *, disable_telegram, auto_open_chrome, fast_publish):
+        call_order.append(item.platform)
+        return {
+            "account_id": item.account_id,
+            "account_key": item.account_key,
+            "platform": item.platform,
+            "asset_key": _relative_asset_key(item.source_video),
+            "publish_date": item.publish_date,
+            "display_name": item.display_name,
+            "video": str(item.source_video),
+            "prepared_video": str(item.source_video),
+            "profile_dir": str(item.profile_dir),
+            "fingerprint": item.fingerprint,
+            "debug_port": int(item.debug_port),
+            "workspace": str(item.workspace),
+            "account_publish_mode": item.account_publish_mode,
+            "vpn_node_key": item.vpn_node_key,
+            "vpn_country_code": item.vpn_country_code,
+            "vpn_country_label": item.vpn_country_label,
+            "vpn_proxy_url": item.vpn_proxy_url,
+            "vpn_enabled": False,
+            "effective_publish_mode": "publish",
+            "returncode": 0,
+            "success": item.platform != "wechat",
+            "evidence_ok": item.platform != "wechat",
+            "log": "ok",
+            "started_at": "2026-05-28 00:00:00",
+            "finished_at": "2026-05-28 00:00:01",
+            "telegram_disabled": True,
+        }
+
+    monkeypatch.setattr(mp, "_run_publish_item", fake_run_publish_item)
+
+    result = run_account_domestic_publish(1, auto_open_chrome=False)
+
+    assert result["ok"] is False
+    assert result["count"] == 3
+    assert result["platforms"] == ["wechat", "douyin", "kuaishou"]
+    assert set(call_order) == {"wechat", "douyin", "kuaishou"}
 
 
 def test_publish_plan_reuses_locked_asset_for_remaining_platforms(monkeypatch, tmp_path: Path) -> None:

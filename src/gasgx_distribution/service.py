@@ -6579,7 +6579,7 @@ def _friendly_account_publish_error(message: str, platform: str) -> str:
     if "no available material" in normalized or "no_available_material" in normalized:
         return "当前账号当天没有可用素材，请先检查素材库"
     if "no available domestic platforms" in normalized or "no_available_domestic_platforms" in normalized:
-        return "当前账号今天没有可发布的国内平台，请先检查素材库或明天再试"
+        return "当前账号暂无可执行的国内平台发布项，请检查素材库或平台启用状态"
     if "publish lock active" in normalized or "publish_lock_active" in normalized:
         return "当前已有发布任务在执行，请稍后再试"
     if "wechat_login_required" in normalized:
@@ -9411,9 +9411,6 @@ def start_account_domestic_emergency_publish(account_id: int) -> dict[str, Any]:
     domestic_platforms = _domestic_publish_account_platforms(account)
     if not domestic_platforms:
         raise ValueError("domestic_publish_not_supported")
-    wechat_login_reason = _domestic_publish_wechat_login_reason(account_id, domestic_platforms)
-    if wechat_login_reason:
-        raise ValueError(wechat_login_reason)
     from . import matrix_publish as mp
 
     publish_result = mp.run_account_domestic_publish(account_id, auto_open_chrome=True)
