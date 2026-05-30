@@ -1047,6 +1047,41 @@ def test_wait_publish_feedback_x_accepts_home_page_with_cleared_caption(monkeypa
     assert calls["x_click"] == 0
 
 
+def test_read_page_snapshot_ignores_other_browser_tabs() -> None:
+    class ForeignTab:
+        def run_js(self, _script: str):
+            return {
+                "url": "https://creator.xiaohongshu.com/login?source=&redirectReason=401",
+                "text": "小红书登录页",
+            }
+
+    class BrowserWithForeignTab:
+        def get_tabs(self):
+            return [ForeignTab()]
+
+    class FakeCtx:
+        def __init__(self, url: str, text: str) -> None:
+            self._url = url
+            self._text = text
+            self.browser = BrowserWithForeignTab()
+
+        def run_js(self, _script: str):
+            return {"url": self._url, "text": self._text}
+
+        def get_frames(self, timeout: float = 0):
+            del timeout
+            return []
+
+    primary = FakeCtx("https://creator.douyin.com/creator-micro/content/upload", "抖音发布页")
+    fallback = FakeCtx("https://creator.douyin.com/creator-micro/content/upload", "抖音发布页")
+
+    url, text = engine._read_page_snapshot(primary, fallback)
+
+    assert url.startswith("https://creator.douyin.com/")
+    assert "抖音发布页" in text
+    assert "小红书登录页" not in text
+
+
 def test_wait_publish_feedback_kuaishou_extends_window_when_progress_active(monkeypatch) -> None:
     timeline = {"now": 0.0, "calls": 0}
 
@@ -1099,6 +1134,28 @@ def test_wait_publish_feedback_bilibili_accepts_delivery_success_marker(monkeypa
 
     engine._wait_publish_feedback(object(), object(), platform_name="bilibili", timeout_seconds=8)
     assert timeline["calls"] >= 3
+
+
+def test_click_bilibili_publish_confirm_button_handles_creative_statement_prompt(monkeypatch) -> None:
+    calls = {"select": 0}
+
+    class FakeCtx:
+        def run_js(self, script: str, *_args, **_kwargs):
+            if "去声明" in script and "创作声明" in script:
+                return {"state": "clicked", "text": "去声明"}
+            return False
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "_select_bilibili_creative_statement",
+        lambda *_args, **_kwargs: calls.__setitem__("select", calls["select"] + 1),
+    )
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is False
+    assert calls["select"] == 1
 
 
 def test_is_bilibili_publish_success_snapshot_accepts_view_and_republish_pair() -> None:

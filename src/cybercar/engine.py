@@ -22487,6 +22487,7 @@ def _collect_upload_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
 def _collect_observation_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[Any]:
     contexts: list[Any] = []
     seen: set[int] = set()
+    queue: list[Any] = []
 
     def _add(ctx: Any) -> None:
         if not ctx:
@@ -22496,24 +22497,20 @@ def _collect_observation_contexts(primary_ctx: Any, fallback_ctx: Any) -> list[A
             return
         seen.add(key)
         contexts.append(ctx)
+        queue.append(ctx)
 
     for owner in (primary_ctx, fallback_ctx):
         _add(owner)
-        peers = []
+    while queue:
+        owner = queue.pop(0)
+        if not owner:
+            continue
         try:
-            for attr_name in ("browser", "page"):
-                peer = getattr(owner, attr_name, None) if owner else None
-                if peer and peer is not owner:
-                    peers.append(peer)
+            frames = _get_page_frames_with_timeout(owner, timeout_seconds=1.5)
         except Exception:
-            peers = []
-        for candidate in [owner, *peers]:
-            try:
-                if candidate and callable(getattr(candidate, "get_tabs", None)):
-                    for tab in _browser_tabs(candidate):
-                        _add(tab)
-            except Exception:
-                continue
+            frames = []
+        for frame in frames:
+            _add(frame)
     return contexts
 
 
@@ -25792,6 +25789,64 @@ def _read_bilibili_collection_state(owner: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _click_bilibili_creative_statement_prompt_go_declare(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim(); }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        return true;
+      } catch (e) {}
+      return false;
+    }
+    const promptRe = /(发布前请添加创作声明|请添加创作声明|请选择符合您视频内容的创作声明|请选择创作声明|请选择原创声明|创作声明|原创声明)/;
+    const roots = Array.from(document.querySelectorAll(
+      '[role="dialog"], .dialog, .modal, .popup, .weui-desktop-dialog, .weui-desktop-popover, .arco-modal, .semi-modal, .bcc-dialog, .bcc-modal'
+    )).filter(isVisible);
+    const searchRoots = roots.length ? roots : [document.body];
+    for (const root of searchRoots) {
+      const rootText = norm((root && root.innerText) || (root && root.textContent) || '');
+      if (!rootText || !promptRe.test(rootText)) continue;
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], a, div, span')).filter(isVisible);
+      for (const node of nodes) {
+        const text = norm(node.innerText || node.textContent || '');
+        if (!text) continue;
+        if (!/^去声明$/.test(text) && !/^去声明/.test(text)) continue;
+        const target = node.closest('button, [role="button"], a') || node;
+        if (clickNode(target)) {
+          return {state: 'clicked', text};
+        }
+      }
+    }
+    return {state: 'not_found'};
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js)
+        except Exception:
+            result = {}
+        if not isinstance(result, dict):
+            continue
+        state = str(result.get("state", "") or "").strip().lower()
+        if state == "clicked":
+            _log("[Uploader:bilibili] Creative statement prompt detected; clicked 去声明.")
+            time.sleep(0.6)
+            return True
+    return False
+
+
 def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_name: str) -> None:
     target = str(collection_name or "").strip()
     if not target:
@@ -26060,6 +26115,7 @@ def _select_bilibili_creative_statement(
     for (const root of openRoots) {
       if (root && openSelect(root)) break;
     }
+    _humanized_publish_settle_pause("bilibili creative statement dropdown open");
     if (trigger && String(trigger.tagName || '').toLowerCase() === 'select') {
       const options = Array.from(trigger.options || []);
       const match = options.find((option) => {
@@ -26110,6 +26166,23 @@ def _select_bilibili_creative_statement(
         }
       }
     }
+    if (!exactMatches.length && !genericMatches.length) {
+      const broadNodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span, li, article'))
+        .filter(isVisible);
+      for (const node of broadNodes) {
+        const txt = clean(node.innerText || node.textContent || '');
+        if (!txt || txt.length > 60) continue;
+        if (/^(?:创作声明|原创声明|请选择符合您视频内容的创作声明|请选择创作声明|请选择原创声明)$/.test(txt)) continue;
+        const optionNorm = txt.replace(/\s+/g, '');
+        const score = optionNorm === targetNorm ? 28 : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 14 : 0);
+        if (!score) continue;
+        if (optionNorm === targetNorm) {
+          exactMatches.push(node);
+        } else {
+          genericMatches.push(node);
+        }
+      }
+    }
     const bestNode = exactMatches[0] || genericMatches[0];
     if (!bestNode) return {state: 'option_not_found', current: triggerText};
     const clicked = clickNode(bestNode.closest('.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .option-item, [role="option"], li, button, a, .selector-item') || bestNode);
@@ -26143,6 +26216,9 @@ def _select_bilibili_creative_statement(
     """
 
     for attempt in range(1, 7):
+        if _click_bilibili_creative_statement_prompt_go_declare(primary_ctx, fallback_ctx):
+            _humanized_publish_settle_pause("bilibili creative statement prompt settle")
+            continue
         action_states: list[str] = []
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
@@ -26380,6 +26456,7 @@ def _select_bilibili_partition(
     for (const root of openRoots) {
       if (root && openSelect(root)) break;
     }
+    _humanized_publish_settle_pause("bilibili partition dropdown open");
     if (trigger && String(trigger.tagName || '').toLowerCase() === 'select') {
       const options = Array.from(trigger.options || []);
       const match = options.find((option) => {
@@ -28748,6 +28825,10 @@ def _ensure_bilibili_publish_agreement_checked(primary_ctx: Any, fallback_ctx: A
 
 def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     _ensure_bilibili_publish_agreement_checked(primary_ctx, fallback_ctx)
+    if _click_bilibili_creative_statement_prompt_go_declare(primary_ctx, fallback_ctx):
+        _humanized_publish_reaction_pause("bilibili creative statement prompt settle")
+        _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
+        return False
     selectors = (
         "text:确认投稿",
         "text:确认并投稿",
