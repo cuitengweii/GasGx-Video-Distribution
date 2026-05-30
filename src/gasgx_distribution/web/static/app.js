@@ -2330,11 +2330,10 @@ async function handleAccountDomesticPublish(domesticPublishButton) {
   const restoreButton = setButtonLoading(domesticPublishButton, "发布中");
   markAccountDomesticPublishing(accountId);
   try {
-    const result = await api(`/api/accounts/${accountApiId(account)}/platforms/domestic/emergency-publish`, { method: "POST" });
-    if (result && result.ok === false && result.summary) {
-      showAccountCreateErrorToast(String(result.summary || "国内平台批量发布完成，但存在失败项"));
-    }
-    await refresh();
+    await api(`/api/accounts/${accountApiId(account)}/platforms/domestic/emergency-publish`, {
+      method: "POST",
+      skipOperationNotice: true,
+    });
   } catch (error) {
     showAccountCreateErrorToast(formatFriendlyMessage(error?.message || "国内平台发布失败"));
     return;

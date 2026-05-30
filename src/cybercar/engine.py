@@ -25693,6 +25693,17 @@ def _read_bilibili_creative_statement_state(owner: Any) -> dict[str, Any]:
         .replace(/^请选择(?:创作声明|原创声明)\\s*/g, '')
         .trim();
     }
+    function findContainer() {
+      return Array.from(document.querySelectorAll('.creation-statement-container, .statement-content, .form-item'))
+        .find(el => isVisible(el) && (
+          el.querySelector('input.bcc-select-input-inner[placeholder*="创作声明"], input.bcc-select-input-inner[placeholder*="原创声明"]') ||
+          /(创作声明|原创声明)/.test(norm(el.textContent || ''))
+        ));
+    }
+    function findSelectRoot(container) {
+      if (!container) return null;
+      return container.querySelector('.bcc-select') || container.querySelector('.bcc-select-input-wrap') || container;
+    }
     function currentText(root) {
       if (!root) return '';
       if (String(root.tagName || '').toLowerCase() === 'select') {
@@ -25701,6 +25712,10 @@ def _read_bilibili_creative_statement_state(owner: Any) -> dict[str, Any]:
       }
       if (String(root.tagName || '').toLowerCase() === 'input') {
         return clean(root.value || root.getAttribute('value') || root.placeholder || '');
+      }
+      const input = root.querySelector && root.querySelector('input.bcc-select-input-inner');
+      if (input) {
+        return clean(input.value || input.getAttribute('value') || input.placeholder || '');
       }
       const direct = root.querySelector && (
         root.querySelector('.semi-select-selection-text') ||
@@ -25728,23 +25743,10 @@ def _read_bilibili_creative_statement_state(owner: Any) -> dict[str, Any]:
       )).forEach(el => el.remove());
       return clean(clone.innerText || clone.textContent || '');
     }
-    const label = Array.from(document.querySelectorAll('.form-item .label, .label, label, div, span'))
-      .find(el => isVisible(el) && /(创作声明|原创声明)/.test(norm(el.textContent || '')));
-    if (!label) return {hasField: false, current: '', source: 'missing_label'};
-    const item = label.closest('.form-item, .statement-content, .bcc-select, .video-form-item, .video-form-row') || label.parentElement || label;
-    const trigger = (
-      item.querySelector && (
-        item.querySelector('select') ||
-        item.querySelector('input.bcc-select-input-inner, input[placeholder*="创作声明"], input[placeholder*="原创声明"]') ||
-        item.querySelector('.bcc-select-input-wrap, .bcc-select-input, .bcc-select, .bcc-select-trigger') ||
-        item.querySelector('.bcc-select-iconic, .bcc-select-iconic-down, .bcc-select-icon, [class*="bcc-select"]') ||
-        item.querySelector('[role="combobox"]') ||
-        item.querySelector('[aria-haspopup="listbox"]') ||
-        item.querySelector('.weui-desktop-form__dropdown, .selector, .select, .dropdown') ||
-        item.querySelector('[class*="select"], [class*="dropdown"]')
-      )
-    ) || item;
-    const current = currentText(trigger || item);
+    const container = findContainer();
+    if (!container) return {hasField: false, current: '', source: 'missing_label'};
+    const trigger = findSelectRoot(container);
+    const current = currentText(trigger || container);
     return {
       hasField: true,
       current,
@@ -25966,6 +25968,681 @@ def _select_bilibili_creative_statement(
         .replace(/^请选择(?:创作声明|原创声明)\\s*/g, '')
         .trim();
     }
+    function findContainer() {
+      return Array.from(document.querySelectorAll('.creation-statement-container, .statement-content, .form-item'))
+        .find(el => isVisible(el) && (
+          el.querySelector('input.bcc-select-input-inner[placeholder*="创作声明"], input.bcc-select-input-inner[placeholder*="原创声明"]') ||
+          /(创作声明|原创声明)/.test(norm(el.textContent || ''))
+        ));
+    }
+    function findSelectRoot(container) {
+      if (!container) return null;
+      return container.querySelector('.bcc-select') || container.querySelector('.bcc-select-input-wrap') || container;
+    }
+    function findCurrentInput(root) {
+      if (!root) return null;
+      return root.querySelector('input.bcc-select-input-inner') || root.querySelector('input[placeholder*="创作声明"], input[placeholder*="原创声明"]');
+    }
+    function currentText(root) {
+      if (!root) return '';
+      if (String(root.tagName || '').toLowerCase() === 'select') {
+        const option = root.selectedOptions && root.selectedOptions[0];
+        return clean((option && (option.innerText || option.textContent || option.value)) || root.value || '');
+      }
+      if (String(root.tagName || '').toLowerCase() === 'input') {
+        return clean(root.value || root.getAttribute('value') || root.placeholder || '');
+      }
+      const input = findCurrentInput(root);
+      if (input) {
+        return clean(input.value || input.getAttribute('value') || input.placeholder || '');
+      }
+      const direct = root.querySelector && (
+        root.querySelector('.semi-select-selection-text') ||
+        root.querySelector('.semi-select-selection .semi-select-content-wrapper') ||
+        root.querySelector('.semi-select-selection') ||
+        root.querySelector('.bcc-select-input-inner') ||
+        root.querySelector('.bcc-select-input-text') ||
+        root.querySelector('.bcc-select-input-value') ||
+        root.querySelector('.bcc-select-input-wrap') ||
+        root.querySelector('.weui-desktop-form__dropdown__text') ||
+        root.querySelector('.weui-desktop-form__dropdown__value') ||
+        root.querySelector('.selector-value') ||
+        root.querySelector('.value') ||
+        root.querySelector('.selected') ||
+        root.querySelector('[aria-selected="true"]')
+      );
+      if (direct) {
+        return clean(direct.innerText || direct.textContent || direct.value || '');
+      }
+      const clone = root.cloneNode(true);
+      Array.from(clone.querySelectorAll(
+        '.option-item, .option-list, .weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, ' +
+        '.dropdown-menu, .bcc-select-list-wrap, .bcc-select-list, .bcc-select-dropdown, ' +
+        '[role="listbox"], [role="option"], ul, li'
+      )).forEach(el => el.remove());
+      return clean(clone.innerText || clone.textContent || '');
+    }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        return true;
+      } catch (e) {}
+      return false;
+    }
+    const target = norm(arguments[0] || '');
+    if (!target) return {state: 'skip'};
+    const container = findContainer();
+    if (!container) return {state: 'missing_label'};
+    const trigger = findSelectRoot(container);
+    const input = findCurrentInput(trigger || container);
+    const triggerText = currentText(input || trigger || container);
+    const targetNorm = target.replace(/\s+/g, '');
+    const openRoots = [input, trigger, container];
+    Array.from(document.querySelectorAll('.statement-content, .bcc-select, .bcc-select-input-wrap, .bcc-select-input, .bcc-select-trigger'))
+      .filter(isVisible)
+      .forEach((el) => openRoots.push(el));
+    function openSelect(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try { node.focus && node.focus(); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+        node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+        node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        return true;
+      } catch (e) {}
+      return false;
+    }
+    for (const root of openRoots) {
+      if (root && openSelect(root)) break;
+    }
+    if (trigger && String(trigger.tagName || '').toLowerCase() === 'select') {
+      const options = Array.from(trigger.options || []);
+      const match = options.find((option) => {
+        const optionText = clean(option.innerText || option.textContent || option.value || '');
+        const optionNorm = optionText.replace(/\s+/g, '');
+        return optionNorm === targetNorm || optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm);
+      });
+      if (!match) return {state: 'option_not_found', current: triggerText, available: options.map((option) => clean(option.innerText || option.textContent || option.value || '')).filter(Boolean)};
+      if (trigger.value === match.value || currentText(trigger) === clean(match.innerText || match.textContent || match.value || '')) {
+        return {state: 'already', current: currentText(trigger), option: clean(match.innerText || match.textContent || match.value || '')};
+      }
+      trigger.value = match.value;
+      trigger.dispatchEvent(new Event('input', {bubbles: true}));
+      trigger.dispatchEvent(new Event('change', {bubbles: true}));
+      return {state: 'selected', current: currentText(trigger), option: clean(match.innerText || match.textContent || match.value || '')};
+    }
+    const currentNorm = triggerText.replace(/\s+/g, '');
+    if (currentNorm === targetNorm) return {state: 'already', current: triggerText};
+    const searchRoots = [];
+    const exactMatches = [];
+    const genericMatches = [];
+    Array.from(document.querySelectorAll(
+      '.bcc-select-list-wrap, .bcc-select-list, .bcc-select-dropdown, .bcc-select-menu, ' +
+      '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown-menu, [role="listbox"]'
+    ))
+      .filter(isVisible)
+      .forEach((el) => searchRoots.push(el));
+    if (!searchRoots.length) {
+      searchRoots.push(container, document);
+    }
+    for (const root of searchRoots) {
+      const nodes = Array.from(root.querySelectorAll(
+        '.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .bcc-select-list-item, ' +
+        '.option-item, .bcc-select-option, .bcc-select-option-item, [role="option"], li, button, a'
+      ))
+        .filter(isVisible);
+      for (const node of nodes) {
+        const txt = clean(node.innerText || node.textContent || '');
+        if (!txt || txt.length > 60) continue;
+        if (/^(?:创作声明|原创声明|请选择符合您视频内容的创作声明|请选择创作声明|请选择原创声明)$/.test(txt)) continue;
+        const optionNorm = txt.replace(/\s+/g, '');
+        const score = optionNorm === targetNorm ? 30 : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 18 : 0);
+        if (!score) continue;
+        if (optionNorm === targetNorm) {
+          exactMatches.push(node);
+        } else {
+          genericMatches.push(node);
+        }
+      }
+    }
+    const bestNode = exactMatches[0] || genericMatches[0];
+    if (!bestNode) return {state: 'option_not_found', current: triggerText};
+    const clicked = clickNode(bestNode.closest('.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .option-item, [role="option"], li, button, a, .selector-item') || bestNode);
+    if (clicked) {
+      const after = currentText(input || trigger || container);
+      if (after.replace(/\s+/g, '') === targetNorm) {
+        return {state: 'clicked', current: after, option: clean(bestNode.innerText || bestNode.textContent || '')};
+      }
+    }
+    if (input && currentText(input).replace(/\s+/g, '') !== targetNorm) {
+      try {
+        input.value = target;
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+      } catch (e) {}
+    }
+    return {state: clicked ? 'clicked' : 'click_fail', current: currentText(input || trigger || container), option: clean(bestNode.innerText || bestNode.textContent || '')};
+    """
+
+    js_collapse = """
+    try {
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
+    } catch (e) {}
+    try {
+      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+      document.dispatchEvent(new KeyboardEvent('keyup', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+    } catch (e) {}
+    return true;
+    """
+
+    for attempt in range(1, 7):
+        action_states: list[str] = []
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                action = owner.run_js(js_select, target)
+            except Exception:
+                action = {}
+            if isinstance(action, dict):
+                action_states.append(str(action.get("state", "") or ""))
+            else:
+                action_states.append("none")
+            try:
+                owner.run_js(js_collapse)
+            except Exception:
+                pass
+        _humanized_publish_retry_pause("bilibili creative statement picker settle")
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            state = _read_bilibili_creative_statement_state(owner)
+            current = _normalize_bilibili_creative_statement_value(str(state.get("current", "") or ""))
+            if bool(state.get("hasField")) and current == target_norm:
+                _log(f"[Uploader:bilibili] Creative statement selected: {target}")
+                return
+        _log(
+            f"[Uploader:bilibili] Creative statement select retry {attempt}/6: "
+            f"states={','.join(action_states) or '-'}, target={target}"
+        )
+
+    _log(
+        f"[Uploader:bilibili] Creative statement verify failed after retries, continue without blocking: "
+        f"target={target}"
+    )
+    return
+
+
+def _normalize_bilibili_partition_value(text: str) -> str:
+    value = re.sub(r"\s+", "", str(text or ""))
+    for prefix in (
+        "请选择分区",
+        "选择分区",
+        "分区",
+    ):
+        value = value.replace(prefix, "")
+    value = value.replace("：", "").replace(":", "")
+    return value.strip()
+
+
+def _read_bilibili_partition_state(owner: Any) -> dict[str, Any]:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/\\s+/g, ' ').trim(); }
+    function clean(s) {
+      return norm(s)
+        .replace(/^请选择分区\\s*/g, '')
+        .replace(/^选择分区\\s*/g, '')
+        .replace(/^分区\\s*[:：]?\\s*/g, '')
+        .trim();
+    }
+    function findContainer() {
+      return Array.from(document.querySelectorAll('.form-item, .section, .publish, .video-form-item, .video-form-row'))
+        .find(el => isVisible(el) && (
+          el.querySelector('input.bcc-select-input-inner[placeholder*="分区"], input[placeholder*="分区"]') ||
+          /(分区)/.test(norm(el.textContent || ''))
+        ));
+    }
+    function findSelectRoot(container) {
+      if (!container) return null;
+      return container.querySelector('.bcc-select') || container.querySelector('.bcc-select-input-wrap') || container;
+    }
+    function currentText(root) {
+      if (!root) return '';
+      if (String(root.tagName || '').toLowerCase() === 'select') {
+        const option = root.selectedOptions && root.selectedOptions[0];
+        return clean((option && (option.innerText || option.textContent || option.value)) || root.value || '');
+      }
+      if (String(root.tagName || '').toLowerCase() === 'input') {
+        return clean(root.value || root.getAttribute('value') || root.placeholder || '');
+      }
+      const input = root.querySelector && root.querySelector('input.bcc-select-input-inner');
+      if (input) {
+        return clean(input.value || input.getAttribute('value') || input.placeholder || '');
+      }
+      const direct = root.querySelector && (
+        root.querySelector('.bcc-select-input-text') ||
+        root.querySelector('.bcc-select-input-value') ||
+        root.querySelector('.selected') ||
+        root.querySelector('[aria-selected="true"]')
+      );
+      if (direct) {
+        return clean(direct.innerText || direct.textContent || direct.value || '');
+      }
+      const clone = root.cloneNode(true);
+      Array.from(clone.querySelectorAll('.bcc-select-list-wrap, .bcc-select-list, .bcc-select-dropdown, .bcc-select-menu, ul, li'))
+        .forEach(el => el.remove());
+      return clean(clone.innerText || clone.textContent || '');
+    }
+    const container = findContainer();
+    if (!container) return {hasField: false, current: '', source: 'missing_label'};
+    const trigger = findSelectRoot(container);
+    const current = currentText(trigger || container);
+    return {hasField: true, current, source: current ? 'selection_text' : 'empty'};
+    """
+    try:
+        payload = owner.run_js(js)
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _select_bilibili_partition(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    partition_name: str = "科技数码",
+) -> None:
+    target = str(partition_name or "").strip()
+    if not target:
+        _log("[Uploader:bilibili] Partition empty, skip selection.")
+        return
+    target_norm = _normalize_bilibili_partition_value(target)
+    if not target_norm:
+        _log("[Uploader:bilibili] Partition normalized empty, skip selection.")
+        return
+
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        state = _read_bilibili_partition_state(owner)
+        current = _normalize_bilibili_partition_value(str(state.get("current", "") or ""))
+        if bool(state.get("hasField")) and current == target_norm:
+            _log(f"[Uploader:bilibili] Partition already selected: {target}")
+            return
+
+    js_select = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim(); }
+    function clean(s) {
+      return norm(s)
+        .replace(/^请选择分区\\s*/g, '')
+        .replace(/^选择分区\\s*/g, '')
+        .replace(/^分区\\s*[:：]?\\s*/g, '')
+        .trim();
+    }
+    function findContainer() {
+      return Array.from(document.querySelectorAll('.form-item, .section, .publish, .video-form-item, .video-form-row'))
+        .find(el => isVisible(el) && (
+          el.querySelector('input.bcc-select-input-inner[placeholder*="分区"], input[placeholder*="分区"]') ||
+          /(分区)/.test(norm(el.textContent || ''))
+        ));
+    }
+    function findSelectRoot(container) {
+      if (!container) return null;
+      return container.querySelector('.bcc-select') || container.querySelector('.bcc-select-input-wrap') || container;
+    }
+    function findCurrentInput(root) {
+      if (!root) return null;
+      return root.querySelector('input.bcc-select-input-inner') || root.querySelector('input[placeholder*="分区"]');
+    }
+    function currentText(root) {
+      if (!root) return '';
+      if (String(root.tagName || '').toLowerCase() === 'select') {
+        const option = root.selectedOptions && root.selectedOptions[0];
+        return clean((option && (option.innerText || option.textContent || option.value)) || root.value || '');
+      }
+      if (String(root.tagName || '').toLowerCase() === 'input') {
+        return clean(root.value || root.getAttribute('value') || root.placeholder || '');
+      }
+      const input = findCurrentInput(root);
+      if (input) {
+        return clean(input.value || input.getAttribute('value') || input.placeholder || '');
+      }
+      const direct = root.querySelector && (
+        root.querySelector('.bcc-select-input-text') ||
+        root.querySelector('.bcc-select-input-value') ||
+        root.querySelector('.selected') ||
+        root.querySelector('[aria-selected="true"]')
+      );
+      if (direct) {
+        return clean(direct.innerText || direct.textContent || direct.value || '');
+      }
+      const clone = root.cloneNode(true);
+      Array.from(clone.querySelectorAll(
+        '.bcc-select-list-wrap, .bcc-select-list, .bcc-select-dropdown, .bcc-select-menu, ul, li'
+      )).forEach(el => el.remove());
+      return clean(clone.innerText || clone.textContent || '');
+    }
+    function clickNode(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        return true;
+      } catch (e) {}
+      return false;
+    }
+    const target = norm(arguments[0] || '');
+    if (!target) return {state: 'skip'};
+    const container = findContainer();
+    if (!container) return {state: 'missing_label'};
+    const trigger = findSelectRoot(container);
+    const input = findCurrentInput(trigger || container);
+    const triggerText = currentText(input || trigger || container);
+    const targetNorm = target.replace(/\\s+/g, '');
+    const openRoots = [input, trigger, container];
+    Array.from(document.querySelectorAll('.bcc-select, .bcc-select-input-wrap, .bcc-select-input, .bcc-select-trigger'))
+      .filter(isVisible)
+      .forEach((el) => openRoots.push(el));
+    function openSelect(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try { node.focus && node.focus(); } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      try {
+        node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+        node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+        node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        return true;
+      } catch (e) {}
+      return false;
+    }
+    for (const root of openRoots) {
+      if (root && openSelect(root)) break;
+    }
+    if (trigger && String(trigger.tagName || '').toLowerCase() === 'select') {
+      const options = Array.from(trigger.options || []);
+      const match = options.find((option) => {
+        const optionText = clean(option.innerText || option.textContent || option.value || '');
+        const optionNorm = optionText.replace(/\\s+/g, '');
+        return optionNorm === targetNorm || optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm);
+      });
+      if (!match) return {state: 'option_not_found', current: triggerText, available: options.map((option) => clean(option.innerText || option.textContent || option.value || '')).filter(Boolean)};
+      if (trigger.value === match.value || currentText(trigger) === clean(match.innerText || match.textContent || match.value || '')) {
+        return {state: 'already', current: currentText(trigger), option: clean(match.innerText || match.textContent || match.value || '')};
+      }
+      trigger.value = match.value;
+      trigger.dispatchEvent(new Event('input', {bubbles: true}));
+      trigger.dispatchEvent(new Event('change', {bubbles: true}));
+      return {state: 'selected', current: currentText(trigger), option: clean(match.innerText || match.textContent || match.value || '')};
+    }
+    const currentNorm = triggerText.replace(/\\s+/g, '');
+    if (currentNorm === targetNorm) return {state: 'already', current: triggerText};
+    const searchRoots = [];
+    const exactMatches = [];
+    const genericMatches = [];
+    Array.from(document.querySelectorAll(
+      '.bcc-select-list-wrap, .bcc-select-list, .bcc-select-dropdown, .bcc-select-menu, ' +
+      '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown-menu, [role=\"listbox\"]'
+    ))
+      .filter(isVisible)
+      .forEach((el) => searchRoots.push(el));
+    if (!searchRoots.length) {
+      searchRoots.push(container, document);
+    }
+    for (const root of searchRoots) {
+      const nodes = Array.from(root.querySelectorAll(
+        '.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .bcc-select-list-item, ' +
+        '.option-item, .bcc-select-option, .bcc-select-option-item, [role=\"option\"], li, button, a'
+      ))
+        .filter(isVisible);
+      for (const node of nodes) {
+        const txt = clean(node.innerText || node.textContent || '');
+        if (!txt || txt.length > 60) continue;
+        if (/^(?:分区|请选择分区|选择分区)$/.test(txt)) continue;
+        const optionNorm = txt.replace(/\\s+/g, '');
+        const score = optionNorm === targetNorm ? 30 : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 18 : 0);
+        if (!score) continue;
+        if (optionNorm === targetNorm) {
+          exactMatches.push(node);
+        } else {
+          genericMatches.push(node);
+        }
+      }
+    }
+    const bestNode = exactMatches[0] || genericMatches[0];
+    if (!bestNode) return {state: 'option_not_found', current: triggerText};
+    const clicked = clickNode(bestNode.closest('.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .option-item, [role=\"option\"], li, button, a, .selector-item') || bestNode);
+    if (clicked) {
+      const after = currentText(input || trigger || container);
+      if (after.replace(/\\s+/g, '') === targetNorm) {
+        return {state: 'clicked', current: after, option: clean(bestNode.innerText || bestNode.textContent || '')};
+      }
+    }
+    if (input && currentText(input).replace(/\\s+/g, '') !== targetNorm) {
+      try {
+        input.value = target;
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+      } catch (e) {}
+    }
+    return {state: clicked ? 'clicked' : 'click_fail', current: currentText(input || trigger || container), option: clean(bestNode.innerText || bestNode.textContent || '')};
+    """
+    js_collapse = """
+    try {
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
+    } catch (e) {}
+    try {
+      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+      document.dispatchEvent(new KeyboardEvent('keyup', {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+    } catch (e) {}
+    return true;
+    """
+
+    for attempt in range(1, 7):
+        action_states: list[str] = []
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            try:
+                action = owner.run_js(js_select, target)
+            except Exception:
+                action = {}
+            if isinstance(action, dict):
+                action_states.append(str(action.get("state", "") or ""))
+            else:
+                action_states.append("none")
+            try:
+                owner.run_js(js_collapse)
+            except Exception:
+                pass
+        _humanized_publish_retry_pause("bilibili partition picker settle")
+        for owner in (primary_ctx, fallback_ctx):
+            if not owner:
+                continue
+            state = _read_bilibili_partition_state(owner)
+            current = _normalize_bilibili_partition_value(str(state.get("current", "") or ""))
+            if bool(state.get("hasField")) and current == target_norm:
+                _log(f"[Uploader:bilibili] Partition selected: {target}")
+                return
+        _log(
+            f"[Uploader:bilibili] Partition select retry {attempt}/6: "
+            f"states={','.join(action_states) or '-'}, target={target}"
+        )
+
+    _log(
+        f"[Uploader:bilibili] Partition verify failed after retries, continue without blocking: "
+        f"target={target}"
+    )
+    return
+
+
+def _prepare_bilibili_publish_dom_defaults(primary_ctx: Any, fallback_ctx: Any) -> None:
+    # Keep the publish-page default state explicit so Bilibili can land on the
+    # "content does not need labeling" path before publish confirmation.
+    _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
+
+
+def _normalize_douyin_self_statement_value(text: str) -> str:
+    value = re.sub(r"\s+", "", str(text or ""))
+    for prefix in (
+        "请选择符合您视频内容的自主声明",
+        "请选择符合您视频内容的自声明",
+        "请选择自主声明",
+        "请选择自声明",
+        "选择自主声明",
+        "选择自声明",
+        "自主声明",
+        "自声明",
+    ):
+        value = value.replace(prefix, "")
+    value = value.replace("：", "").replace(":", "")
+    return value.strip()
+
+
+def _read_douyin_self_statement_state(owner: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
+    function clean(s) {
+      return norm(s)
+        .replace(/^(?:自主声明|自声明)\s*[:：]?\s*/g, '')
+        .replace(/^请选择符合您视频内容的(?:自主声明|自声明)\s*/g, '')
+        .replace(/^请选择(?:自主声明|自声明)\s*/g, '')
+        .trim();
+    }
+    function currentText(root) {
+      if (!root) return '';
+      if (String(root.tagName || '').toLowerCase() === 'select') {
+        const option = root.selectedOptions && root.selectedOptions[0];
+        return clean((option && (option.innerText || option.textContent || option.value)) || root.value || '');
+      }
+      if (String(root.tagName || '').toLowerCase() === 'input') {
+        return clean(root.value || root.getAttribute('value') || root.placeholder || '');
+      }
+      const direct = root.querySelector && (
+        root.querySelector('.semi-select-selection-text') ||
+        root.querySelector('.semi-select-selection .semi-select-content-wrapper') ||
+        root.querySelector('.semi-select-selection') ||
+        root.querySelector('.bcc-select-input-inner') ||
+        root.querySelector('.bcc-select-input-text') ||
+        root.querySelector('.bcc-select-input-value') ||
+        root.querySelector('.bcc-select-input-wrap') ||
+        root.querySelector('.weui-desktop-form__dropdown__text') ||
+        root.querySelector('.weui-desktop-form__dropdown__value') ||
+        root.querySelector('.selector-value') ||
+        root.querySelector('.value') ||
+        root.querySelector('.selected') ||
+        root.querySelector('[aria-selected="true"]')
+      );
+      if (direct) {
+        return clean(direct.innerText || direct.textContent || direct.value || '');
+      }
+      const clone = root.cloneNode(true);
+      Array.from(clone.querySelectorAll(
+        '.option-item, .option-list, .weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, ' +
+        '.dropdown-menu, .bcc-select-list-wrap, .bcc-select-list, .bcc-select-dropdown, ' +
+        '[role="listbox"], [role="option"], ul, li'
+      )).forEach(el => el.remove());
+      return clean(clone.innerText || clone.textContent || '');
+    }
+    const label = Array.from(document.querySelectorAll('.form-item .label, .label, label, div, span'))
+      .find(el => isVisible(el) && /(自主声明|自声明)/.test(norm(el.textContent || '')));
+    if (!label) return {hasField: false, current: '', source: 'missing_label'};
+    const item = label.closest('.form-item, .statement-content, .bcc-select, .video-form-item, .video-form-row') || label.parentElement || label;
+    const trigger = (
+      item.querySelector && (
+        item.querySelector('select') ||
+        item.querySelector('input.bcc-select-input-inner, input[placeholder*="自主声明"], input[placeholder*="自声明"]') ||
+        item.querySelector('.bcc-select-input-wrap, .bcc-select-input, .bcc-select, .bcc-select-trigger') ||
+        item.querySelector('.bcc-select-iconic, .bcc-select-iconic-down, .bcc-select-icon, [class*="bcc-select"]') ||
+        item.querySelector('[role="combobox"]') ||
+        item.querySelector('[aria-haspopup="listbox"]') ||
+        item.querySelector('.weui-desktop-form__dropdown, .selector, .select, .dropdown') ||
+        item.querySelector('[class*="select"], [class*="dropdown"]')
+      )
+    ) || item;
+    const current = currentText(trigger || item);
+    return {
+      hasField: true,
+      current,
+      source: current ? 'selection_text' : 'empty',
+    };
+    """
+    try:
+        payload = owner.run_js(js)
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _select_douyin_self_statement(
+    primary_ctx: Any,
+    fallback_ctx: Any,
+    self_statement: str = "无需添加自主声明",
+) -> None:
+    target = str(self_statement or "").strip()
+    if not target:
+        _log("[Uploader:douyin] Self statement empty, skip selection.")
+        return
+    target_norm = _normalize_douyin_self_statement_value(target)
+    if not target_norm:
+        _log("[Uploader:douyin] Self statement normalized empty, skip selection.")
+        return
+
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        state = _read_douyin_self_statement_state(owner)
+        current = _normalize_douyin_self_statement_value(str(state.get("current", "") or ""))
+        if bool(state.get("hasField")) and current == target_norm:
+            _log(f"[Uploader:douyin] Self statement already selected: {target}")
+            return
+
+    js_select = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim(); }
+    function clean(s) {
+      return norm(s)
+        .replace(/^(?:自主声明|自声明)\s*[:：]?\s*/g, '')
+        .replace(/^请选择符合您视频内容的(?:自主声明|自声明)\s*/g, '')
+        .replace(/^请选择(?:自主声明|自声明)\s*/g, '')
+        .trim();
+    }
     function currentText(root) {
       if (!root) return '';
       if (String(root.tagName || '').toLowerCase() === 'select') {
@@ -26003,7 +26680,7 @@ def _select_bilibili_creative_statement(
     }
     function findLabel() {
       return Array.from(document.querySelectorAll('.form-item .label, .label, label, div, span'))
-        .find(el => isVisible(el) && /(创作声明|原创声明)/.test(norm(el.textContent || '')));
+        .find(el => isVisible(el) && /(自主声明|自声明)/.test(norm(el.textContent || '')));
     }
     function findItem(label) {
       return label.closest('.form-item, .statement-content, .bcc-select, .video-form-item, .video-form-row') || label.parentElement || label;
@@ -26012,7 +26689,7 @@ def _select_bilibili_creative_statement(
       return (
         (item.querySelector && (
           item.querySelector('select') ||
-          item.querySelector('input.bcc-select-input-inner, input[placeholder*="创作声明"], input[placeholder*="原创声明"]') ||
+          item.querySelector('input.bcc-select-input-inner, input[placeholder*="自主声明"], input[placeholder*="自声明"]') ||
           item.querySelector('.bcc-select-input-wrap, .bcc-select-input, .bcc-select, .bcc-select-trigger') ||
           item.querySelector('.bcc-select-iconic, .bcc-select-iconic-down, .bcc-select-icon, [class*="bcc-select"]') ||
           item.querySelector('[role="combobox"]') ||
@@ -26098,7 +26775,7 @@ def _select_bilibili_creative_statement(
       for (const node of nodes) {
         const txt = clean(node.innerText || node.textContent || '');
         if (!txt || txt.length > 60) continue;
-        if (/^(?:创作声明|原创声明|请选择符合您视频内容的创作声明|请选择创作声明|请选择原创声明)$/.test(txt)) continue;
+        if (/^(?:自主声明|自声明|请选择符合您视频内容的自主声明|请选择自主声明|请选择自声明)$/.test(txt)) continue;
         const optionNorm = txt.replace(/\s+/g, '');
         let score = 0;
         if (optionNorm === targetNorm) score += 30;
@@ -26146,31 +26823,25 @@ def _select_bilibili_creative_statement(
                 owner.run_js(js_collapse)
             except Exception:
                 pass
-        _humanized_publish_retry_pause("bilibili creative statement picker settle")
+        _humanized_publish_retry_pause("douyin self statement picker settle")
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
-            state = _read_bilibili_creative_statement_state(owner)
-            current = _normalize_bilibili_creative_statement_value(str(state.get("current", "") or ""))
+            state = _read_douyin_self_statement_state(owner)
+            current = _normalize_douyin_self_statement_value(str(state.get("current", "") or ""))
             if bool(state.get("hasField")) and current == target_norm:
-                _log(f"[Uploader:bilibili] Creative statement selected: {target}")
+                _log(f"[Uploader:douyin] Self statement selected: {target}")
                 return
         _log(
-            f"[Uploader:bilibili] Creative statement select retry {attempt}/6: "
+            f"[Uploader:douyin] Self statement select retry {attempt}/6: "
             f"states={','.join(action_states) or '-'}, target={target}"
         )
 
     _log(
-        f"[Uploader:bilibili] Creative statement verify failed after retries, continue without blocking: "
+        f"[Uploader:douyin] Self statement verify failed after retries, continue without blocking: "
         f"target={target}"
     )
     return
-
-
-def _prepare_bilibili_publish_dom_defaults(primary_ctx: Any, fallback_ctx: Any) -> None:
-    # Keep the publish-page default state explicit so Bilibili can land on the
-    # "content does not need labeling" path before publish confirmation.
-    _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
 
 
 def _douyin_collection_state_js() -> str:
@@ -30431,10 +31102,12 @@ def _fill_draft_once_generic(
     if platform_name == "xiaohongshu" and not _is_image_file(target):
         _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)
     if platform_name == "douyin":
-        _select_douyin_collection(ctx, page, collection_name)
+        _log("[Uploader:douyin] Skip collection selection by design.")
+        _log("[Uploader:douyin] Skip self statement selection by design.")
     if platform_name == "bilibili":
         _fill_bilibili_title_from_caption(ctx, page, final_caption)
         _prepare_bilibili_publish_dom_defaults(ctx, page)
+        _select_bilibili_partition(ctx, page, "科技数码")
         _log("[Uploader:bilibili] Skip collection selection by design.")
     if platform_name == "kuaishou":
         _scroll_kuaishou_publish_controls_into_view(ctx, page)

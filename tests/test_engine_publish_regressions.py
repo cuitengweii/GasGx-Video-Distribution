@@ -270,7 +270,7 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
 ) -> None:
     target = tmp_path / "sample.mp4"
     target.write_bytes(b"video")
-    creative_statement_calls: list[str] = []
+    calls: list[tuple[str, str]] = []
 
     class FakeInput:
         def input(self, _value: str) -> None:
@@ -284,7 +284,10 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
             return ""
 
     def fake_select(_primary_ctx, _fallback_ctx, creative_statement: str = "") -> None:
-        creative_statement_calls.append(creative_statement)
+        calls.append(("creative_statement", creative_statement))
+
+    def fake_partition(_primary_ctx, _fallback_ctx, partition_name: str = "") -> None:
+        calls.append(("partition", partition_name))
 
     monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
@@ -295,6 +298,7 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
     monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_select_bilibili_creative_statement", fake_select)
+    monkeypatch.setattr(engine, "_select_bilibili_partition", fake_partition)
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_reset_bilibili_publish_probe", lambda *_args, **_kwargs: None)
@@ -319,7 +323,10 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
     )
 
     assert result is page
-    assert creative_statement_calls == ["内容无需标注"]
+    assert calls == [
+        ("creative_statement", "内容无需标注"),
+        ("partition", "科技数码"),
+    ]
 
 
 def test_prepare_bilibili_publish_dom_defaults_selects_creative_statement(monkeypatch) -> None:
@@ -343,6 +350,8 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     target = tmp_path / "sample.mp4"
     target.write_bytes(b"video")
     clicked_button_texts: list[tuple[str, ...]] = []
+    self_statement_calls: list[str] = []
+    collection_calls: list[str] = []
 
     class FakeInput:
         def input(self, _value: str) -> None:
@@ -368,7 +377,16 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
     monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
     monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(engine, "_select_douyin_collection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_select_douyin_collection",
+        lambda *args, **_kwargs: collection_calls.append(args[2] if len(args) > 2 else ""),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_select_douyin_self_statement",
+        lambda *args, **_kwargs: self_statement_calls.append(args[2] if len(args) > 2 else ""),
+    )
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_click_douyin_primary_publish_button", lambda *_args, **_kwargs: True)
@@ -395,9 +413,11 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
             draft_button_texts=("SAVE_DRAFT",),
             publish_button_texts=("PUBLISH_NOW",),
             collection_name="CyberCar",
-        )
+    )
 
     assert ("SAVE_DRAFT",) in clicked_button_texts
+    assert collection_calls == []
+    assert self_statement_calls == []
 
 
 def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
