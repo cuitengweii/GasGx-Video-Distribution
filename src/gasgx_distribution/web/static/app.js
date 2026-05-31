@@ -108,6 +108,7 @@ const accountDomesticOpenInFlightByAccountId = new Map();
 const accountDomesticOpenResultByAccountId = new Map();
 const accountDomesticPublishInFlightByAccountId = new Map();
 let accountPlatformPublishCountdownTimer = null;
+let accountDomesticPublishCountdownTimer = null;
 
 const TERMINAL_ERROR_GUIDE_ORDER = ["login_browser", "login_probe", "publish_start", "publish_run", "confirm", "unknown"];
 const TERMINAL_ERROR_STAGE_GUIDES = {
@@ -2218,7 +2219,7 @@ function accountDomesticOpenButtonMeta(account) {
       buttonClass: "btn primary platform-open-btn platform-wechat-action is-publishing",
       disabled: true,
       main: "打开中",
-      hint: "一键打开国内平台",
+      hint: "",
       ariaLabel: `${displayName}国内平台打开中`,
     };
   }
@@ -2230,7 +2231,7 @@ function accountDomesticOpenButtonMeta(account) {
       buttonClass: "btn primary platform-open-btn platform-wechat-action is-opened",
       disabled: false,
       main: "已打开",
-      hint: totalCount ? `${openedCount}/${totalCount} 个平台已打开` : "点击重新打开",
+      hint: totalCount ? `${openedCount}/${totalCount} 个平台已打开` : "",
       ariaLabel: `${displayName}国内平台已打开，点击重新打开`,
     };
   }
@@ -2243,7 +2244,7 @@ function accountDomesticOpenButtonMeta(account) {
       buttonClass: "btn secondary platform-open-btn platform-wechat-action is-partial",
       disabled: false,
       main: "部分失败",
-      hint: failedText ? `${openedCount}/${totalCount} 个平台已打开，失败：${failedText}` : "点击重试",
+      hint: failedText ? `${openedCount}/${totalCount} 个平台已打开，失败：${failedText}` : "",
       ariaLabel: `${displayName}国内平台部分失败，点击重试`,
     };
   }
@@ -2253,7 +2254,7 @@ function accountDomesticOpenButtonMeta(account) {
       buttonClass: "btn secondary platform-open-btn platform-wechat-action is-open",
       disabled: true,
       main: "一键打开国内平台",
-      hint: "暂无国内平台",
+      hint: "",
       ariaLabel: `${displayName}暂无国内平台`,
     };
   }
@@ -2262,7 +2263,7 @@ function accountDomesticOpenButtonMeta(account) {
     buttonClass: "btn primary platform-open-btn platform-wechat-action is-ready",
     disabled: false,
     main: "一键打开国内平台",
-    hint: "点击同步打开",
+    hint: "",
     ariaLabel: `${displayName}一键打开国内平台，点击同步打开`,
   };
 }
@@ -2273,7 +2274,6 @@ function accountDomesticOpenButtonMarkup(account) {
   const apiId = accountApiId(account);
   return `
     <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-api-id="${escapeHtml(String(apiId))}" data-account-domestic-open="${escapeHtml(key)}" data-account-domestic-open-state="${escapeHtml(meta.mode)}" data-open="${escapeHtml(`${key}:domestic`)}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
-      ${platformIcon("wechat")}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
         <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
@@ -2314,7 +2314,11 @@ async function handleAccountDomesticOpen(domesticOpenButton) {
     clearAccountDomesticOpenState(accountId);
     restoreButton();
   }
+  if (result && result.ok) {
+    startAccountPlatformPublishCountdown(accountId, "domestic");
+  }
   updateAccountDomesticOpenButtons();
+  updateAccountDomesticPublishButtons();
 }
 
 async function handleAccountDomesticPublish(domesticPublishButton) {
@@ -2364,7 +2368,6 @@ function updateAccountDomesticOpenButtons() {
     if (!account) return;
     const meta = accountDomesticOpenButtonMeta(account);
     const nextHtml = `
-      ${platformIcon("wechat")}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
         <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
@@ -2397,13 +2400,26 @@ function accountDomesticPublishState(account) {
 function accountDomesticPublishButtonMeta(account) {
   const displayName = cleanAccountDisplayName(account);
   const stateInfo = accountDomesticPublishState(account);
+  const key = accountDomesticPublishKey(account?.id);
+  const readyAt = Number(accountPlatformPublishReadyAtByKey.get(key) || 0);
+  const remaining = Math.max(0, Math.ceil((readyAt - Date.now()) / 1000));
+  if (remaining > 0) {
+    return {
+      mode: "cooldown",
+      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-empty",
+      disabled: true,
+      main: `${remaining}s`,
+      hint: "请先打开国内平台",
+      ariaLabel: `${displayName}请先打开国内平台，${remaining} 秒后可发布`,
+    };
+  }
   if (stateInfo.mode === "publishing") {
     return {
       mode: stateInfo.mode,
       buttonClass: "btn primary platform-open-btn platform-wechat-action is-publishing",
       disabled: true,
       main: "发布中",
-      hint: "一键同步发布",
+      hint: "",
       ariaLabel: `${displayName}国内平台发布中`,
     };
   }
@@ -2413,7 +2429,7 @@ function accountDomesticPublishButtonMeta(account) {
       buttonClass: "btn primary platform-open-btn platform-wechat-action is-ready",
       disabled: false,
       main: "一键发布国内平台",
-      hint: "直接发布",
+      hint: "",
       ariaLabel: `${displayName}一键发布国内平台，直接发布`,
     };
   }
@@ -2422,7 +2438,7 @@ function accountDomesticPublishButtonMeta(account) {
     buttonClass: "btn secondary platform-open-btn platform-wechat-action is-open",
     disabled: true,
     main: "一键发布国内平台",
-    hint: "暂无国内平台",
+    hint: "",
     ariaLabel: `${displayName}暂无国内平台`,
   };
 }
@@ -2432,7 +2448,6 @@ function accountDomesticPublishButtonMarkup(account) {
   const key = accountDomesticPublishKey(account?.id);
   return `
     <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-domestic-publish="${escapeHtml(key)}" data-account-domestic-publish-state="${escapeHtml(meta.mode)}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
-      ${platformIcon("wechat")}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
         <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
@@ -2455,16 +2470,17 @@ function clearAccountDomesticPublishState(accountId) {
 
 function updateAccountDomesticPublishButtons() {
   const buttons = document.querySelectorAll("[data-account-domestic-publish]");
+  let needsCountdownTick = false;
   buttons.forEach((button) => {
     const accountId = String(button.dataset.accountDomesticPublish || "").trim();
     const account = accountById(accountId);
     if (!account) return;
     const meta = accountDomesticPublishButtonMeta(account);
+    if (meta.mode === "cooldown") needsCountdownTick = true;
     const nextHtml = `
-      ${platformIcon("wechat")}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
-        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+        ${meta.hint ? `<small class="platform-action-hint">${escapeHtml(meta.hint)}</small>` : ""}
       </span>
     `;
     button.className = meta.buttonClass;
@@ -2474,6 +2490,13 @@ function updateAccountDomesticPublishButtons() {
     button.setAttribute("aria-disabled", meta.disabled ? "true" : "false");
     button.innerHTML = nextHtml;
   });
+  if (accountDomesticPublishCountdownTimer) {
+    window.clearInterval(accountDomesticPublishCountdownTimer);
+    accountDomesticPublishCountdownTimer = null;
+  }
+  if (needsCountdownTick) {
+    accountDomesticPublishCountdownTimer = window.setInterval(updateAccountDomesticPublishButtons, 1000);
+  }
 }
 
 function startAccountPlatformPublishCountdown(accountId, platform) {
@@ -2632,13 +2655,6 @@ function accountPhone(account) {
   return match ? match[1] : "";
 }
 
-function accountSubtitle(account) {
-  const key = String(account?.account_key || "").trim();
-  const niche = String(account?.niche || "").trim();
-  const cleanNiche = /^\?+$/.test(niche) ? "" : niche;
-  return [key, cleanNiche].filter(Boolean).join(" · ");
-}
-
 function accountStatusLabel(status) {
   const normalized = String(status || "").toLowerCase();
   const labels = {
@@ -2752,6 +2768,16 @@ function accountVpnProxyUrl(account) {
   return String(account?.vpn_proxy_url || "").trim();
 }
 
+function isVpnEnabled(setting = state.distributionSettings?.vpn) {
+  const raw = setting?.enabled;
+  if (raw === false) return false;
+  if (raw === true) return true;
+  const text = String(raw ?? "").trim().toLowerCase();
+  if (["false", "0", "no", "off"].includes(text)) return false;
+  if (["true", "1", "yes", "on"].includes(text)) return true;
+  return true;
+}
+
 function accountPublishMode(account) {
   const mode = String(account?.account_publish_mode || "inherit").trim().toLowerCase();
   return ["inherit", "publish", "draft"].includes(mode) ? mode : "inherit";
@@ -2831,15 +2857,10 @@ function renderAccounts() {
               <span class="chip success-chip account-success-chip-inline account-success-chip-after-delete" title="基于真实发布成功记录去重统计">已发布成功 ${account.publish_success_count || 0}</span>
             </div>
           </div>
-          <div class="account-subtitle-row">
-            <div class="account-subtitle">${escapeHtml(accountSubtitle(account))}</div>
-          </div>
           <div class="account-meta-row">
             <div class="account-operator-wechat"><span>运营微信</span><strong>${escapeHtml(operatorWechat || "-")}</strong><button class="account-edit-btn compact" type="button" title="修改绑定运营微信" aria-label="修改绑定运营微信" data-no-global-loading="1" data-account-edit="operator">${accountEditIcon()}</button></div>
             <div class="account-phone-line"><span>手机号</span><strong>${escapeHtml(phone || "-")}</strong><button class="account-edit-btn compact" type="button" title="修改账号手机号" aria-label="修改账号手机号" data-no-global-loading="1" data-account-edit="phone">${accountEditIcon()}</button></div>
           </div>
-        </div>
-        <div class="account-side-stack">
           <div class="account-settings-panel">
             <label class="account-setting account-setting-vpn">
               <span class="account-setting-label">VPN 节点</span>
@@ -2851,8 +2872,6 @@ function renderAccounts() {
             <label class="account-setting account-setting-vpn-proxy">
               <span class="account-setting-label">代理入口</span>
               <input type="text" data-account-vpn-proxy-url="${account.id}" value="${escapeHtml(accountVpnProxyUrl(account))}" placeholder="http://127.0.0.1:33210">
-              <span class="account-preference-country">当前入口：${escapeHtml(accountVpnProxyUrl(account) || "未配置")}</span>
-              <span class="muted">留空则沿用默认代理入口；填入后优先使用账号自己的入口。</span>
             </label>
             <label class="account-setting account-setting-publish">
               <span class="account-setting-label">发布方式</span>
@@ -2874,7 +2893,6 @@ function renderAccounts() {
                 <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}">${platformExpanded ? "折叠平台信息" : "展开平台信息"}</button>
               </div>
             </div>
-            <span class="muted">国内平台 / 国外平台</span>
           </div>
         </div>
         <div class="account-platform-body" id="account-platform-body-${account.id}">
@@ -3106,8 +3124,6 @@ async function updateAccountPreference(select) {
     if (countryNodeLabelNode) countryNodeLabelNode.textContent = `国家：${countryNodeLabel}`;
     const proxyInput = row.querySelector(`[data-account-vpn-proxy-url="${account.id}"]`);
     if (proxyInput instanceof HTMLInputElement) proxyInput.value = accountVpnProxyUrl(updated);
-    const proxySummaryNode = row.querySelector(".account-setting-vpn-proxy .account-preference-country");
-    if (proxySummaryNode) proxySummaryNode.textContent = `当前入口：${accountVpnProxyUrl(updated) || "未配置"}`;
     void emitOperationNotice({
       category: "账号管理",
       view: "accounts",
@@ -3384,17 +3400,19 @@ function renderVpnNodeSummary() {
   const cache = state.vpnNodeCache || {};
   const countries = cache.countries || {};
   const nodeCount = Number(cache.node_count || (state.vpnNodes || []).length || 0);
+  const vpnEnabled = isVpnEnabled();
   if (statusNode) {
     const refreshedAt = Number(cache.refreshed_at || 0);
     statusNode.textContent = refreshedAt ? `已刷新 · ${formatTime(refreshedAt)}` : "未刷新";
   }
   if (summaryNode) {
     const source = String(cache.subscription_url || "").trim();
-    summaryNode.textContent = source ? `当前订阅：${source}` : "当前未配置订阅地址，节点列表来自本地缓存。";
+    summaryNode.textContent = `${vpnEnabled ? "VPN 总开关：开启" : "VPN 总开关：关闭"}；${source ? `当前订阅：${source}` : "当前未配置订阅地址，节点列表来自本地缓存。"}`;
   }
   if (countryNode) {
     const entries = Object.entries(countries);
     countryNode.innerHTML = `
+      <span class="chip ${vpnEnabled ? "success-chip" : "danger-chip"}">总开关 ${vpnEnabled ? "开启" : "关闭"}</span>
       <span class="chip success-chip">节点总数 ${nodeCount}</span>
       ${entries.length ? entries.map(([country, count]) => `<span class="chip">${escapeHtml(country)} ${Number(count || 0)}</span>`).join("") : `<span class="chip">暂无节点</span>`}
     `;
@@ -8200,6 +8218,7 @@ function renderDistributionSettings() {
   form.elements["common.wechat_short_title"].value = common.wechat_short_title || "GasGx燃气发电挖矿";
   form.elements["common.wechat_location"].value = common.wechat_location || "";
   form.elements["common.wechat_caption"].value = common.wechat_caption || "";
+  form.elements["vpn.enabled"].value = String(isVpnEnabled(settings.vpn));
   form.elements["vpn.subscription_url"].value = state.distributionSettings?.vpn?.subscription_url || "";
   form.elements["jobs.matrix_wechat_publish.batch_size"].value = String(matrixJob.batch_size || 5);
   form.elements["jobs.matrix_wechat_publish.enabled"].value = String(matrixJob.enabled === true);
@@ -8352,6 +8371,7 @@ function collectDistributionSettings(form) {
     wechat_caption: data.get("common.wechat_caption") || "",
   };
   const vpn = {
+    enabled: data.get("vpn.enabled") !== "false",
     subscription_url: data.get("vpn.subscription_url") || "",
   };
   const jobs = {

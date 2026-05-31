@@ -241,9 +241,14 @@ def test_list_candidate_videos_includes_batch_subdirectories_and_filters_previou
 
 def test_publish_plan_allows_same_day_multi_platform_slots_with_same_video(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
+    import gasgx_distribution.matrix_publish as mp
+
+    monkeypatch.setattr(mp, "_load_timezone", lambda: timezone.utc)
+    monkeypatch.setattr(mp, "_today_date", lambda _tz: date(2026, 5, 31))
     service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat", "douyin"]})
     base = tmp_path / "runtime" / "materials" / "videos"
-    _write_video(base / "one.mp4", int(time.time()))
+    fixed_ts = int(time.mktime((2026, 5, 31, 10, 0, 0, 0, 0, -1)))
+    _write_video(base / "one.mp4", fixed_ts)
     plan = build_publish_plan()
 
     assert [item.platform for item in plan] == ["douyin", "wechat"]
@@ -258,7 +263,7 @@ def test_publish_plan_allows_same_day_multi_platform_slots_with_same_video(monke
                         "asset_key": "one.mp4",
                         "account_id": 1,
                         "platform": "douyin",
-                        "publish_date": time.strftime("%Y-%m-%d"),
+                            "publish_date": "2026-05-31",
                         "success": True,
                         "finished_at": int(time.time()),
                     }
@@ -275,7 +280,7 @@ def test_publish_plan_allows_same_day_multi_platform_slots_with_same_video(monke
     assert [item.source_video.name for item in plan] == ["one.mp4"]
 
 
-def test_account_platform_publish_reuses_locked_source_and_disables_telegram(monkeypatch, tmp_path: Path) -> None:
+def test_account_platform_publish_skips_consumed_source_and_disables_telegram(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat", "douyin"]})
     base = tmp_path / "runtime" / "materials" / "videos"
@@ -336,8 +341,8 @@ def test_account_platform_publish_reuses_locked_source_and_disables_telegram(mon
     result = run_account_platform_publish(account_id=1, platform="douyin")
 
     assert result["ok"] is True
-    assert result["results"][0]["asset_key"] == _relative_asset_key(locked)
-    assert result["results"][0]["video"] == str(locked)
+    assert result["results"][0]["asset_key"] == _relative_asset_key(other)
+    assert result["results"][0]["video"] == str(other)
     assert "--disable-notify" in popen_calls[0]
     assert "--no-telegram-prefilter" in popen_calls[0]
     assert "--no-telegram-collect-notify" in popen_calls[0]
@@ -446,7 +451,7 @@ def test_build_account_domestic_publish_items_reuses_shared_source(monkeypatch, 
     items = build_account_domestic_publish_items(1)
 
     assert [item.platform for item in items] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
-    assert {item.source_video.name for item in items} == {"shared.mp4"}
+    assert {item.source_video.name for item in items} == {"other.mp4"}
     assert [item.workspace.name for item in items] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
 
 
@@ -500,7 +505,7 @@ def test_run_account_domestic_publish_reuses_shared_source_and_disables_telegram
     assert result["ok"] is True
     assert result["count"] == 5
     assert result["platforms"] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
-    assert result["source_video"] == str(shared)
+    assert result["source_video"] == str(other)
     assert Path(result["batch_log"]).name == "matrix_domestic_publish.log"
     assert Path(result["batch_log"]).exists()
     batch_log = Path(result["batch_log"]).read_text(encoding="utf-8")
@@ -1018,6 +1023,52 @@ def test_wechat_publish_uses_account_vpn_for_bound_accounts(monkeypatch, tmp_pat
     assert "--wechat-save-draft-only" not in cmd
 
 
+def test_wechat_publish_ignores_account_vpn_when_global_switch_is_off(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    vpn_key = "vmess-ca-knyr-b-psakt-net-20101-加拿大-can-x1-0-ver10s"
+    service.create_account(
+        {
+            "account_key": "a-02",
+            "display_name": "A",
+            "platforms": ["wechat"],
+            "account_publish_mode": "publish",
+            "vpn_node_key": vpn_key,
+        }
+    )
+    _write_video(tmp_path / "runtime" / "materials" / "videos" / "one.mp4", int(time.time()))
+    save_distribution_settings(
+        {
+            "common": {"publish_mode": "draft"},
+            "vpn": {"enabled": False, "subscription_url": "https://example.invalid/subscribe"},
+        }
+    )
+    envs: list[dict[str, str]] = []
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        env = dict(kwargs.get("env") or {})
+        envs.append(env)
+        workspaces = list((tmp_path / "runtime" / "matrix_publish_runs").glob("*"))
+        if workspaces:
+            (workspaces[0] / "uploaded_records_wechat.jsonl").write_text('{"ok":true}\n', encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("gasgx_distribution.matrix_publish.subprocess.run", fake_run)
+
+    result = run_wechat_publish()
+
+    assert result["ok"] is True
+    assert envs
+    assert all("CYBERCAR_VPN_NODE_KEY" not in env for env in envs)
+    assert all("CYBERCAR_PROXY" not in env for env in envs)
+    assert all("--proxy-server=" not in str(env.get("CYBERCAR_CHROME_EXTRA_ARGS") or "") for env in envs)
+    assert calls
+    cmd = _pipeline_cmd(calls)
+    assert "--wechat-publish-now" in cmd
+    assert "--wechat-save-draft-only" not in cmd
+
+
 def test_wechat_publish_disables_cybercar_required_hashtags(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     service.create_account({"account_key": "a-01", "display_name": "A", "platforms": ["wechat"]})
@@ -1061,6 +1112,11 @@ def test_wechat_publish_requires_uploaded_record_evidence(monkeypatch, tmp_path:
     assert result["results"][0]["success"] is False
     assert result["results"][0]["evidence_ok"] is False
     assert list_candidate_videos()[0].name == "one.mp4"
+    state = json.loads((tmp_path / "runtime" / "matrix_publish_state.json").read_text(encoding="utf-8"))
+    consumed = state.get("consumed") if isinstance(state, dict) else []
+    assert isinstance(consumed, list) and consumed
+    assert consumed[-1]["asset_key"] == _relative_asset_key(video)
+    assert consumed[-1]["success"] is False
 
 
 def test_douyin_publish_invokes_pipeline_without_wechat_flags(monkeypatch, tmp_path: Path) -> None:

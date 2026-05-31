@@ -491,6 +491,19 @@ def resolve_account_publish_mode(account: dict[str, Any], base_mode: str) -> str
     return resolve_effective_publish_mode(base_mode, account.get("account_publish_mode"))
 
 
+def distribution_vpn_enabled(settings: dict[str, Any] | None = None) -> bool:
+    current = settings if isinstance(settings, dict) else load_distribution_settings_db()
+    vpn_settings = current.get("vpn") if isinstance(current, dict) else {}
+    if not isinstance(vpn_settings, dict):
+        return True
+    enabled = vpn_settings.get("enabled")
+    if isinstance(enabled, bool):
+        return enabled
+    if enabled is None:
+        return True
+    return str(enabled).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def resolve_account_vpn_proxy(account: dict[str, Any]) -> str:
     proxy = str(account.get("vpn_proxy_url") or "").strip()
     if proxy:
@@ -628,6 +641,8 @@ def browser_fingerprint_launch_args(fingerprint: dict[str, Any] | str | None) ->
             width = height = 0
         if width > 0 and height > 0:
             args.append(f"--window-size={width},{height}")
+    if not distribution_vpn_enabled():
+        return args
     proxy = str(fingerprint.get("proxy_slot") or "").strip()
     if proxy:
         args.append(f"--proxy-server={proxy}")
@@ -655,17 +670,19 @@ def _account_network_env(account: dict[str, Any] | None) -> Iterator[None]:
     previous_use_system_proxy = os.environ.get("CYBERCAR_USE_SYSTEM_PROXY")
     previous_vpn_node_key = os.environ.get("CYBERCAR_VPN_NODE_KEY")
     previous_vpn_country = os.environ.get("CYBERCAR_VPN_COUNTRY")
-    proxy = _resolve_account_launch_proxy(account or {})
+    vpn_enabled = distribution_vpn_enabled()
+    proxy = _resolve_account_launch_proxy(account or {}) if vpn_enabled else ""
     node_key = str((account or {}).get("vpn_node_key") or "").strip()
     country = str((account or {}).get("vpn_country_code") or "").strip().upper()
     try:
-        if node_key:
-            os.environ["CYBERCAR_VPN_NODE_KEY"] = node_key
-            if country:
-                os.environ["CYBERCAR_VPN_COUNTRY"] = country
-        if proxy:
-            os.environ["CYBERCAR_PROXY"] = proxy
-            os.environ.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
+        if vpn_enabled:
+            if node_key:
+                os.environ["CYBERCAR_VPN_NODE_KEY"] = node_key
+                if country:
+                    os.environ["CYBERCAR_VPN_COUNTRY"] = country
+            if proxy:
+                os.environ["CYBERCAR_PROXY"] = proxy
+                os.environ.pop("CYBERCAR_USE_SYSTEM_PROXY", None)
         yield
     finally:
         if previous_proxy is None:

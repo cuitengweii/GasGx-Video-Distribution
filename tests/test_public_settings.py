@@ -473,13 +473,39 @@ def test_distribution_settings_keep_vpn_section_and_drop_use_vpn(monkeypatch, tm
             "common": {},
             "jobs": {"matrix_wechat_publish": {}},
             "platforms": {},
-            "vpn": {"subscription_url": "https://example.invalid/subscribe"},
+            "vpn": {"enabled": False, "subscription_url": "https://example.invalid/subscribe"},
         }
     )
 
     assert "use_vpn" not in saved["jobs"]["matrix_wechat_publish"]
+    assert saved["vpn"]["enabled"] is False
     assert saved["vpn"]["subscription_url"] == "https://example.invalid/subscribe"
+    assert load_distribution_settings()["vpn"]["enabled"] is False
     assert load_distribution_settings()["vpn"]["subscription_url"] == "https://example.invalid/subscribe"
+
+
+def test_distribution_settings_preserve_vpn_enabled_when_payload_omits_it(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    save_distribution_settings(
+        {
+            "common": {},
+            "jobs": {"matrix_wechat_publish": {}},
+            "platforms": {},
+            "vpn": {"enabled": False, "subscription_url": "https://example.invalid/subscribe"},
+        }
+    )
+    saved = save_distribution_settings(
+        {
+            "common": {},
+            "jobs": {"matrix_wechat_publish": {}},
+            "platforms": {},
+            "vpn": {"subscription_url": "https://example.invalid/subscribe-2"},
+        }
+    )
+
+    assert saved["vpn"]["enabled"] is False
+    assert saved["vpn"]["subscription_url"] == "https://example.invalid/subscribe-2"
 
 
 def test_resolve_effective_publish_mode_prefers_account_override() -> None:

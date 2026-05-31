@@ -671,21 +671,30 @@ def _select_account_source_video(
     available_videos = list(videos) if videos is not None else list_candidate_videos()
     if not available_videos:
         return None
-    locked_assets = _consumed_asset_locks(active_today)
-    locked_key = str(locked_assets.get(int(account_id)) or "").strip()
-    video_by_key = {_relative_asset_key(path): path for path in available_videos}
-    if locked_key:
-        locked_path = video_by_key.get(locked_key)
-        if locked_path is None:
-            candidate = materials_video_dir() / locked_key
-            if candidate.exists() and candidate.is_file():
-                locked_path = candidate
-        if locked_path is not None:
-            return locked_path
-    for path in available_videos:
+    consumed_asset_keys = _today_consumed_asset_keys(active_today)
+    fresh_videos = [path for path in available_videos if _relative_asset_key(path) not in consumed_asset_keys]
+    if not fresh_videos:
+        return None
+    for path in fresh_videos:
         if _asset_allowed_for_account(path, int(account_id)):
             return path
-    return available_videos[0] if available_videos else None
+    return fresh_videos[0] if fresh_videos else None
+
+
+def _build_consumed_record(item: PublishPlanItem, record: dict[str, Any]) -> dict[str, Any]:
+    asset_key = str(record.get("asset_key") or "").strip() or _relative_asset_key(item.source_video)
+    publish_date = str(record.get("publish_date") or item.publish_date or _today_date(_load_timezone()).isoformat()).strip()
+    return {
+        "asset_key": asset_key,
+        "account_id": int(item.account_id),
+        "platform": str(item.platform),
+        "publish_date": publish_date,
+        "success": bool(record.get("success")),
+        "finished_at": int(time.time()),
+        "asset_metadata": _asset_manifest_metadata(item.source_video),
+        "evidence_ok": bool(record.get("evidence_ok")),
+        "error": str(record.get("error") or "").strip(),
+    }
 
 
 def build_account_platform_publish_item(
@@ -974,6 +983,8 @@ def _publish_command_for_domestic_batch(
 
 
 def _publish_item_vpn_enabled(item: PublishPlanItem) -> bool:
+    if not service.distribution_vpn_enabled():
+        return False
     return bool(str(item.vpn_node_key or "").strip()) or bool(str(item.vpn_proxy_url or "").strip())
 
 
@@ -1445,18 +1456,7 @@ def run_matrix_publish(
             record = _run_publish_item(item, settings)
             results.append(record)
             runs.append(record)
-            if record.get("success"):
-                consumed.append(
-                    {
-                        "asset_key": record["asset_key"],
-                        "account_id": item.account_id,
-                        "platform": item.platform,
-                        "publish_date": record["publish_date"],
-                        "success": True,
-                        "finished_at": int(time.time()),
-                        "asset_metadata": _asset_manifest_metadata(item.source_video),
-                    }
-                )
+            consumed.append(_build_consumed_record(item, record))
         state["consumed"] = consumed[-500:]
         state["runs"] = runs[-200:]
         _save_state(state)
@@ -1557,18 +1557,7 @@ def run_account_platform_publish(
             fast_publish=True,
         )
         runs.append(record)
-        if record.get("success"):
-            consumed.append(
-                {
-                    "asset_key": record["asset_key"],
-                    "account_id": item.account_id,
-                    "platform": item.platform,
-                    "publish_date": record["publish_date"],
-                    "success": True,
-                    "finished_at": int(time.time()),
-                    "asset_metadata": _asset_manifest_metadata(item.source_video),
-                }
-            )
+        consumed.append(_build_consumed_record(item, record))
         state["consumed"] = consumed[-500:]
         state["runs"] = runs[-200:]
         _save_state(state)
@@ -1760,18 +1749,7 @@ def run_account_domestic_publish(
             if not isinstance(record, dict):
                 continue
             runs.append(record)
-            if record.get("success"):
-                consumed.append(
-                    {
-                        "asset_key": record["asset_key"],
-                        "account_id": item.account_id,
-                        "platform": item.platform,
-                        "publish_date": record["publish_date"],
-                        "success": True,
-                        "finished_at": int(time.time()),
-                        "asset_metadata": _asset_manifest_metadata(item.source_video),
-                    }
-                )
+            consumed.append(_build_consumed_record(item, record))
         state["consumed"] = consumed[-500:]
         state["runs"] = runs[-200:]
         _save_state(state)

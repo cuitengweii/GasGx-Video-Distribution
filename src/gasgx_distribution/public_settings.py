@@ -40,6 +40,7 @@ DEFAULT_MATRIX_WECHAT_JOB_SETTINGS: dict[str, Any] = {
 }
 
 DEFAULT_VPN_SETTINGS: dict[str, Any] = {
+    "enabled": True,
     "subscription_url": "",
 }
 
@@ -218,6 +219,7 @@ def _normalize_matrix_wechat_job(payload: dict[str, Any]) -> dict[str, Any]:
 def _normalize_vpn(payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(DEFAULT_VPN_SETTINGS)
     merged.update({key: value for key, value in payload.items() if key in merged})
+    merged["enabled"] = _normalize_bool(merged.get("enabled"))
     merged["subscription_url"] = str(merged.get("subscription_url") or "").strip()
     return merged
 
@@ -376,7 +378,14 @@ def load_distribution_settings() -> dict[str, Any]:
 
 
 def save_distribution_settings(payload: dict[str, Any]) -> dict[str, Any]:
-    settings = _normalize_distribution_settings(payload)
+    normalized_payload = dict(payload)
+    if isinstance(normalized_payload.get("vpn"), dict) and "enabled" not in normalized_payload["vpn"]:
+        current_vpn = _read_json(settings_path()).get("vpn")
+        if isinstance(current_vpn, dict) and "enabled" in current_vpn:
+            vpn_payload = dict(normalized_payload["vpn"])
+            vpn_payload["enabled"] = current_vpn.get("enabled")
+            normalized_payload["vpn"] = vpn_payload
+    settings = _normalize_distribution_settings(normalized_payload)
     settings_path().write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
     return settings
 

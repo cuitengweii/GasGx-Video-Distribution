@@ -65,6 +65,15 @@ def test_required_hashtags_can_be_disabled_for_matrix_distribution(monkeypatch) 
     assert "Cybertruck" not in caption
 
 
+def test_limit_caption_hashtags_truncates_to_max() -> None:
+    caption = "Deploy generators near the source #天然气 #天然气发电机组 #燃气发电机组 #海外发电 #海外挖矿"
+
+    limited = engine._limit_caption_hashtags(caption, 4)
+
+    assert limited.count("#") == 4
+    assert "#海外挖矿" not in limited
+
+
 def test_fill_caption_verifies_configured_caption_when_required_hashtags_disabled(monkeypatch) -> None:
     class FakeEditor:
         tag = "div"
@@ -236,6 +245,7 @@ def test_fill_draft_once_generic_bilibili_uses_generic_publish_fallback(monkeypa
     monkeypatch.setattr(engine, "_find_bilibili_upload_file_input", lambda *_args, **_kwargs: FakeInput())
     monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
     monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_prepare_bilibili_cover_editor", lambda *_args, **_kwargs: Path(target))
     monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
@@ -262,6 +272,66 @@ def test_fill_draft_once_generic_bilibili_uses_generic_publish_fallback(monkeypa
 
     assert result is page
     assert ("立即投稿",) in button_calls
+
+
+def test_fill_draft_once_generic_bilibili_uses_upload_timeout_for_feedback_wait(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"video")
+    captured_timeouts: list[int] = []
+
+    class FakeInput:
+        def input(self, _value: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://member.bilibili.com/platform/upload/video/frame"
+
+        def run_js(self, *_args, **_kwargs):
+            return ""
+
+    def fake_wait(*_args, **kwargs):
+        captured_timeouts.append(int(kwargs.get("timeout_seconds", 0) or 0))
+        return None
+
+    monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_check_platform_login_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_post_editor_context", lambda page, **_kwargs: page)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
+    monkeypatch.setattr(engine, "_find_bilibili_upload_file_input", lambda *_args, **_kwargs: FakeInput())
+    monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_prepare_bilibili_cover_editor", lambda *_args, **_kwargs: Path(target))
+    monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_reset_bilibili_publish_probe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_bilibili_primary_publish_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_click_bilibili_publish_confirm_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_wait_publish_feedback", fake_wait)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    page = FakePage()
+    result = engine._fill_draft_once_generic(
+        page=page,
+        target=target,
+        final_caption="caption",
+        open_url=page.url,
+        platform_name="bilibili",
+        save_draft=False,
+        publish_now=True,
+        upload_timeout=600,
+        draft_button_texts=("淇濆瓨鑽夌",),
+        publish_button_texts=("绔嬪嵆鎶曠",),
+    )
+
+    assert result is page
+    assert 600 in captured_timeouts
 
 
 def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
@@ -299,6 +369,7 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
     monkeypatch.setattr(engine, "_find_bilibili_upload_file_input", lambda *_args, **_kwargs: FakeInput())
     monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
     monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_prepare_bilibili_cover_editor", lambda *_args, **_kwargs: Path(target))
     monkeypatch.setattr(engine, "_fill_bilibili_title_from_caption", fake_fill_title)
     monkeypatch.setattr(engine, "_select_bilibili_creative_statement", fake_select)
     monkeypatch.setattr(engine, "_select_bilibili_partition", fake_partition)
@@ -330,7 +401,101 @@ def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
         ("creative_statement", "内容无需标注"),
         ("title", "filled"),
         ("partition", "科技数码"),
+        ("creative_statement", "内容无需标注"),
     ]
+
+
+def test_ensure_bilibili_cover_image_path_prefers_existing_auto_cover(tmp_path: Path) -> None:
+    target = tmp_path / "vibe_10.mp4"
+    target.write_bytes(b"video")
+    raw_cover = tmp_path / "vibe_10_auto_cover_raw.png"
+    raw_cover.write_bytes(b"raw")
+    cover = tmp_path / "vibe_10_auto_cover.png"
+    cover.write_bytes(b"cover")
+
+    resolved = engine._ensure_bilibili_cover_image_path(target)
+
+    assert resolved == cover
+
+
+def test_ensure_bilibili_cover_image_path_builds_from_raw_cover(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "vibe_10.mp4"
+    target.write_bytes(b"video")
+    raw_cover = tmp_path / "vibe_10_auto_cover_raw.png"
+    raw_cover.write_bytes(b"raw")
+    built_cover = tmp_path / "vibe_10_auto_cover.png"
+    calls: list[tuple[Path, Path, str]] = []
+
+    def fake_decorate(source_path: Path, target_path: Path, title: str) -> None:
+        calls.append((source_path, target_path, title))
+        target_path.write_bytes(b"decorated")
+
+    monkeypatch.setattr(engine, "_decorate_cover", fake_decorate)
+
+    resolved = engine._ensure_bilibili_cover_image_path(target)
+
+    assert resolved == built_cover
+    assert built_cover.exists()
+    assert calls == [(raw_cover, built_cover, "vibe_10")]
+
+
+def test_prepare_bilibili_cover_editor_uploads_both_ratios_and_closes(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "vibe_10.mp4"
+    target.write_bytes(b"video")
+    cover = tmp_path / "vibe_10_auto_cover.png"
+    cover.write_bytes(b"cover")
+
+    click_calls: list[tuple[str, ...]] = []
+    uploaded: list[tuple[str, str]] = []
+    state = {"open": False}
+
+    class FakeInput:
+        def __init__(self, ratio: str) -> None:
+            self.ratio = ratio
+
+        def input(self, value: str) -> None:
+            uploaded.append((self.ratio, Path(value).name))
+
+    inputs = {
+        "4_3": FakeInput("4_3"),
+        "16_9": FakeInput("16_9"),
+    }
+
+    def fake_click_first(_primary_ctx, _fallback_ctx, texts, **_kwargs):
+        click_calls.append(tuple(texts or ()))
+        state["open"] = True
+        return True
+
+    def fake_state(*_args, **_kwargs):
+        return {
+            "open": bool(state["open"]),
+            "submit_visible": bool(state["open"]),
+            "dialog_text": "双比例同步改动" if state["open"] else "",
+        }
+
+    def fake_find(_primary_ctx, _fallback_ctx, ratio: str):
+        return inputs[ratio]
+
+    def fake_submit(_primary_ctx, _fallback_ctx):
+        state["open"] = False
+        return True
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_cover_image_path", lambda *_args, **_kwargs: cover)
+    monkeypatch.setattr(engine, "_click_first_matching_button", fake_click_first)
+    monkeypatch.setattr(engine, "_read_bilibili_cover_editor_state", fake_state)
+    monkeypatch.setattr(engine, "_find_bilibili_cover_editor_file_input", fake_find)
+    monkeypatch.setattr(engine, "_click_bilibili_cover_editor_submit", fake_submit)
+    monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action, retries=3: action())
+    monkeypatch.setattr(engine, "_read_file_input_binding_state", lambda file_input: {"count": 1, "visible": True, "names": [file_input.ratio]})
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._prepare_bilibili_cover_editor(SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), target)
+
+    assert result == cover
+    assert uploaded == [("4_3", "vibe_10_auto_cover.png"), ("16_9", "vibe_10_auto_cover.png")]
+    assert any("封面设置" in tuple_text for tuple_text in click_calls)
 
 
 def test_prepare_bilibili_publish_dom_defaults_selects_creative_statement(monkeypatch) -> None:
@@ -345,6 +510,13 @@ def test_prepare_bilibili_publish_dom_defaults_selects_creative_statement(monkey
     engine._prepare_bilibili_publish_dom_defaults(object(), object())
 
     assert calls == ["内容无需标注"]
+
+
+def test_normalize_bilibili_creative_statement_value_accepts_aliases() -> None:
+    base = engine._normalize_bilibili_creative_statement_value("\u5185\u5bb9\u65e0\u9700\u6807\u6ce8")
+    assert engine._normalize_bilibili_creative_statement_value("\u65e0\u9700\u6dfb\u52a0\u81ea\u4e3b\u58f0\u660e") == base
+    assert engine._normalize_bilibili_creative_statement_value("\u65e0\u9700\u81ea\u4e3b\u58f0\u660e") == base
+    assert engine._normalize_bilibili_creative_statement_value("\u65e0\u9700\u58f0\u660e") == base
 
 
 def test_fill_bilibili_title_from_caption_uses_static_fallback_when_builder_empty(monkeypatch) -> None:
@@ -776,12 +948,12 @@ def test_prepare_caption_for_platform_dedupes_tiktok_repeated_segments() -> None
     assert prepared.count("Cybertruck clip drop test.") == 1
 
 
-def test_prepare_caption_for_platform_kuaishou_uses_gasgx_brand_tag() -> None:
+def test_prepare_caption_for_platform_kuaishou_matches_other_platforms() -> None:
     raw = "GasGx caption with legacy brand tag #CyberCar"
-    prepared = engine._prepare_caption_for_platform(raw, "kuaishou")
+    kuaishou = engine._prepare_caption_for_platform(raw, "kuaishou")
+    douyin = engine._prepare_caption_for_platform(raw, "douyin")
 
-    assert "#CyberCar" not in prepared
-    assert "#GasGx" in prepared
+    assert kuaishou == douyin
 
 
 def test_collapse_repeated_caption_blocks_reduces_duplicate_paragraphs() -> None:
@@ -1155,6 +1327,147 @@ def test_wait_publish_feedback_kuaishou_extends_window_when_progress_active(monk
     assert timeline["calls"] >= 10
 
 
+def test_click_kuaishou_primary_publish_button_uses_bottom_publish_div_selector(monkeypatch) -> None:
+    clicks: list[str] = []
+
+    class FakeBtn:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def run_js(self, _script: str, *_args, **_kwargs):
+            return {
+                "wrap": "发布 取消",
+                "texts": ["发布 取消", "发布", "取消"],
+                "rectTop": 1189,
+                "viewportHeight": 1280,
+                "buttonText": "发布",
+                "submitText": "",
+                "saveDisabled": "",
+                "publishFlag": "",
+                "tagName": "div",
+                "cls": "_button_3a3lq_1 _button-primary_3a3lq_60",
+            }
+
+        def click(self, *_args, **_kwargs) -> None:
+            clicks.append(self.name)
+
+    class FakeCtx:
+        def ele(self, selector: str, *_args, **_kwargs):
+            if "contains(@class,'_button-primary')" in selector and "normalize-space(.)='发布'" in selector:
+                return FakeBtn("publish")
+            return None
+
+        def run_js(self, *_args, **_kwargs):
+            raise AssertionError("JS fallback should not run when the bottom publish div selector matches")
+
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_kuaishou_primary_publish_button(FakeCtx(), FakeCtx()) is True
+    assert clicks == ["publish"]
+
+
+def test_detect_kuaishou_publish_via_network_success(monkeypatch) -> None:
+    monkeypatch.setattr(
+        engine,
+        "_read_kuaishou_publish_probe",
+        lambda ctx: [
+            {
+                "method": "POST",
+                "url": "https://cp.kuaishou.com/rest/cp/works/v2/video/pc/submit?foo=1",
+                "status": 200,
+                "body": "{\"code\":0,\"message\":\"ok\"}",
+            }
+        ],
+    )
+
+    ok, reason = engine._detect_kuaishou_publish_via_network(object())
+
+    assert ok is True
+    assert "submit request succeeded" in reason
+
+
+def test_detect_kuaishou_publish_via_network_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        engine,
+        "_read_kuaishou_publish_probe",
+        lambda ctx: [
+            {
+                "method": "POST",
+                "url": "https://cp.kuaishou.com/rest/cp/works/v2/video/pc/submit?foo=1",
+                "status": 200,
+                "body": "{\"code\":-1,\"message\":\"fail\"}",
+            }
+        ],
+    )
+
+    ok, reason = engine._detect_kuaishou_publish_via_network(object())
+
+    assert ok is False
+    assert "network failure marker" in reason
+
+
+def test_detect_kuaishou_publish_via_network_uses_performance_resources(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_read_kuaishou_publish_probe", lambda ctx: [])
+    monkeypatch.setattr(
+        engine,
+        "_read_kuaishou_publish_resource_entries",
+        lambda ctx: [
+            {
+                "name": "https://cp.kuaishou.com/rest/cp/works/v2/video/pc/submit?foo=1",
+                "initiatorType": "fetch",
+            }
+        ],
+    )
+
+    ok, reason = engine._detect_kuaishou_publish_via_network(object())
+
+    assert ok is True
+    assert "performance resource submit observed" in reason
+
+
+def test_wait_publish_feedback_kuaishou_accepts_network_submit(monkeypatch) -> None:
+    calls = {"net": 0, "dialog": 0}
+    timeline = {"now": 0.0, "calls": 0}
+
+    def fake_time() -> float:
+        return timeline["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        timeline["now"] += float(seconds)
+
+    def fake_snapshot(*_args, **_kwargs):
+        timeline["calls"] += 1
+        return ("https://cp.kuaishou.com/article/publish/video", "")
+
+    def fake_net_probe(ctx):
+        del ctx
+        calls["net"] += 1
+        if calls["net"] >= 2:
+            return True, "submit request succeeded: status=200, url=https://cp.kuaishou.com/rest/cp/works/v2/video/pc/submit"
+        return False, ""
+
+    monkeypatch.setattr(engine.time, "time", fake_time)
+    monkeypatch.setattr(engine.time, "sleep", fake_sleep)
+    monkeypatch.setattr(engine, "_read_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        engine,
+        "_click_kuaishou_publish_confirm_dialog_only",
+        lambda *_args, **_kwargs: calls.__setitem__("dialog", calls["dialog"] + 1) or False,
+    )
+    monkeypatch.setattr(engine, "_detect_kuaishou_publish_via_network", fake_net_probe)
+    monkeypatch.setattr(engine, "_is_kuaishou_publish_confirmed_by_heuristic", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_ensure_kuaishou_not_in_unfinished_edit_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._wait_publish_feedback(object(), object(), platform_name="kuaishou", timeout_seconds=8)
+
+    assert calls["net"] >= 2
+    assert calls["dialog"] >= 1
+    assert timeline["calls"] >= 1
+
+
 def test_wait_publish_feedback_bilibili_accepts_delivery_success_marker(monkeypatch) -> None:
     timeline = {"now": 0.0, "calls": 0}
 
@@ -1173,6 +1486,7 @@ def test_wait_publish_feedback_bilibili_accepts_delivery_success_marker(monkeypa
     monkeypatch.setattr(engine.time, "time", fake_time)
     monkeypatch.setattr(engine.time, "sleep", fake_sleep)
     monkeypatch.setattr(engine, "_read_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(engine, "_click_bilibili_publish_confirm_button", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_retry_bilibili_publish_if_still_editing", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
@@ -1181,12 +1495,179 @@ def test_wait_publish_feedback_bilibili_accepts_delivery_success_marker(monkeypa
     assert timeline["calls"] >= 3
 
 
+def test_click_bilibili_publish_confirm_button_prefers_dialog_confirm_over_nav_posting(monkeypatch) -> None:
+    clicks: list[str] = []
+
+    class FakeBtn:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def run_js(self, script: str, *_args, **_kwargs):
+            if "getBoundingClientRect" in script:
+                return True
+            if "aria-disabled" in script or "disabled" in script:
+                return False
+            if "resolveClickTarget" in script:
+                return {
+                    "tag": "DIV",
+                    "cls": "submit-add",
+                    "text": "立即投稿",
+                    "top": 1180,
+                    "left": 560,
+                    "width": 120,
+                    "height": 40,
+                }
+            return True
+
+        def click(self, *_args, **_kwargs) -> None:
+            clicks.append(self.name)
+
+    class FakeCtx:
+        def ele(self, selector: str, *_args, **_kwargs):
+            if "submit-add" in selector or "立即投稿" in selector:
+                return FakeBtn("confirm")
+            if selector == "text:确认投稿":
+                return FakeBtn("matched")
+            if selector == "text:投稿":
+                return FakeBtn("nav")
+            return None
+
+        def run_js(self, *_args, **_kwargs):
+            raise AssertionError("JS fallback should not run when a confirm selector is available")
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is True
+    assert clicks == ["confirm"]
+
+
+def test_click_bilibili_primary_publish_button_uses_ancestor_target(monkeypatch) -> None:
+    clicks: list[str] = []
+
+    class FakeBtn:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def run_js(self, script: str, *_args, **_kwargs):
+            if "getBoundingClientRect" in script:
+                return True
+            if "aria-disabled" in script or "disabled" in script:
+                return False
+            if "resolveClickTarget" in script:
+                return {
+                    "tag": "DIV",
+                    "cls": "submit-add",
+                    "text": "立即投稿",
+                    "top": 1180,
+                    "left": 560,
+                    "width": 120,
+                    "height": 40,
+                }
+            return True
+
+        def click(self, *_args, **_kwargs) -> None:
+            clicks.append(self.name)
+
+    class FakeCtx:
+        def ele(self, selector: str, *_args, **_kwargs):
+            if "submit-add" in selector or "立即投稿" in selector:
+                return FakeBtn("ancestor")
+            if "立即投稿" in selector or "投稿" in selector:
+                return FakeBtn("matched")
+            return None
+
+        def run_js(self, *_args, **_kwargs):
+            raise AssertionError("JS fallback should not run when selector click succeeds")
+
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_primary_publish_button(FakeCtx(), FakeCtx()) is True
+    assert clicks == ["ancestor"]
+
+
+def test_click_bilibili_publish_confirm_button_uses_ancestor_target(monkeypatch) -> None:
+    clicks: list[str] = []
+
+    class FakeBtn:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def run_js(self, script: str, *_args, **_kwargs):
+            if "getBoundingClientRect" in script:
+                return True
+            if "aria-disabled" in script or "disabled" in script:
+                return False
+            if "resolveClickTarget" in script:
+                return {
+                    "tag": "DIV",
+                    "cls": "submit-add",
+                    "text": "立即投稿",
+                    "top": 1180,
+                    "left": 560,
+                    "width": 120,
+                    "height": 40,
+                }
+            return True
+
+        def click(self, *_args, **_kwargs) -> None:
+            clicks.append(self.name)
+
+    class FakeCtx:
+        def ele(self, selector: str, *_args, **_kwargs):
+            if "submit-add" in selector or "立即投稿" in selector:
+                return FakeBtn("ancestor")
+            if "立即投稿" in selector or "投稿" in selector:
+                return FakeBtn("matched")
+            return None
+
+        def run_js(self, *_args, **_kwargs):
+            raise AssertionError("JS fallback should not run when selector click succeeds")
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is True
+    assert clicks == ["ancestor"]
+
+
+def test_click_bilibili_publish_confirm_button_js_fallback_ignores_nav_posting(monkeypatch) -> None:
+    seen_scripts: list[str] = []
+
+    class FakeCtx:
+        def ele(self, *_args, **_kwargs):
+            return None
+
+        def run_js(self, script: str, *_args, **_kwargs):
+            seen_scripts.append(script)
+            assert "isNavLike" in script
+            assert "[role=\"dialog\"]" in script or "dialog" in script
+            return "投稿"
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is True
+    assert seen_scripts
+
+
 def test_click_bilibili_publish_confirm_button_handles_creative_statement_prompt(monkeypatch) -> None:
     calls = {"select": 0}
 
     class FakeCtx:
         def run_js(self, script: str, *_args, **_kwargs):
-            if "去声明" in script and "创作声明" in script:
+            if "去声明" in script and "dialog" in script:
                 return {"state": "clicked", "text": "去声明"}
             return False
 
@@ -1200,7 +1681,83 @@ def test_click_bilibili_publish_confirm_button_handles_creative_statement_prompt
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
 
     assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is False
-    assert calls["select"] == 1
+    assert calls["select"] == 2
+
+
+def test_click_bilibili_publish_confirm_button_prefers_creative_statement_before_publish(monkeypatch) -> None:
+    order: list[str] = []
+
+    class FakeCtx:
+        def ele(self, *_args, **_kwargs):
+            return None
+
+        def run_js(self, script: str, *_args, **_kwargs):
+            if "确认投稿" in script or "确认发布" in script or "继续投稿" in script:
+                order.append("publish")
+                return True
+            return False
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "_select_bilibili_creative_statement",
+        lambda *_args, **_kwargs: order.append("select"),
+    )
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is True
+    assert order[:2] == ["select", "publish"]
+
+
+def test_click_bilibili_publish_confirm_button_reclicks_primary_after_creative_statement(monkeypatch) -> None:
+    order: list[str] = []
+
+    class FakeCtx:
+        pass
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "_select_bilibili_creative_statement",
+        lambda *_args, **_kwargs: order.append("select"),
+    )
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        engine,
+        "_click_bilibili_primary_publish_button",
+        lambda *_args, **_kwargs: order.append("primary") or True,
+    )
+    monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: ["立即投稿"])
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is True
+    assert order == ["select", "primary"]
+
+
+def test_select_bilibili_creative_statement_keeps_working_when_already_selected(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeCtx:
+        def run_js(self, script: str, *_args, **_kwargs):
+            calls.append(script)
+            return {"state": "already"}
+
+    monkeypatch.setattr(
+        engine,
+        "_read_bilibili_creative_statement_state",
+        lambda *_args, **_kwargs: {"hasField": True, "current": "内容无需标注"},
+    )
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._select_bilibili_creative_statement(FakeCtx(), FakeCtx(), "内容无需标注")
+    assert calls
+    assert any("already_confirmed" in script for script in calls)
 
 
 def test_is_bilibili_publish_success_snapshot_accepts_view_and_republish_pair() -> None:

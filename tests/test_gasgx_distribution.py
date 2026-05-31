@@ -2825,6 +2825,86 @@ def test_open_browser_uses_explicit_vpn_proxy_only(monkeypatch, tmp_path: Path) 
     assert connect_calls and connect_calls[0]["startup_url"] == "about:blank"
 
 
+def test_open_browser_ignores_vpn_when_global_switch_is_off(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+    service.save_distribution_settings_db(
+        {
+            "common": {},
+            "jobs": {"matrix_wechat_publish": {}},
+            "platforms": {},
+            "vpn": {"enabled": False, "subscription_url": "https://example.invalid/subscribe"},
+        }
+    )
+    monkeypatch.setattr(service.engine, "_default_network_proxy", lambda: (_ for _ in ()).throw(AssertionError("default proxy must not be used")))
+    monkeypatch.setattr(service.engine, "_is_chrome_debug_port_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(service, "resolve_account_vpn_proxy", lambda _account: "http://127.0.0.1:7890")
+    monkeypatch.setattr(
+        service,
+        "resolve_vpn_node",
+        lambda node_key, cache=None: {
+            "node_key": node_key,
+            "display_name": "VPN Node",
+            "name": "VPN Node",
+            "server": "example.com",
+        },
+    )
+    account = service.create_account({"account_key": "gasgx-x-03", "display_name": "GasGx X 03", "platforms": ["wechat"]})
+    updated = service.update_account(int(account["id"]), {"vpn_node_key": "vmess-ca-knyr-b-psakt-net-20101-can-x1-0-ver10s"})
+    assert updated is not None
+    calls: list[dict[str, Any]] = []
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://channels.weixin.qq.com/login.html"
+            self.tab_id = "root-tab"
+            self.tabs = [self]
+
+        def get(self, _url: str) -> None:
+            return None
+
+        def new_tab(self, background: bool = False):  # noqa: ARG002
+            class _Tab:
+                tab_id = "tab-1"
+                url = ""
+
+                class _Setter:
+                    def auto_handle_alert(self, **_kwargs: Any) -> None:
+                        return None
+
+                set = _Setter()
+
+                def get(self, _url: str) -> None:
+                    return None
+
+            return _Tab()
+
+        def activate_tab(self, _tab: Any) -> None:
+            return None
+
+    monkeypatch.setattr(
+        service.engine,
+        "_connect_chrome",
+        lambda **kwargs: calls.append(
+            {
+                "kwargs": kwargs,
+                "proxy": os.environ.get("CYBERCAR_PROXY"),
+                "node_key": os.environ.get("CYBERCAR_VPN_NODE_KEY"),
+                "extra_args": os.environ.get("CYBERCAR_CHROME_EXTRA_ARGS"),
+            }
+        )
+        or FakePage(),
+    )
+    monkeypatch.setattr(service, "_inject_account_browser_marker", lambda *args, **kwargs: True)
+
+    result = service.open_account_browser(int(account["id"]), "wechat")
+
+    assert result["ok"] is True
+    assert calls
+    assert calls[0]["proxy"] is None
+    assert calls[0]["node_key"] is None
+    assert not calls[0]["extra_args"] or "--proxy-server=" not in calls[0]["extra_args"]
+
+
 def test_open_browser_keeps_existing_session_for_non_wechat_platform(monkeypatch, tmp_path: Path) -> None:
     _isolated_paths(monkeypatch, tmp_path)
     account = service.create_account({"account_key": "gasgx-douyin-01", "display_name": "GasGx Douyin 01", "platforms": ["douyin"]})

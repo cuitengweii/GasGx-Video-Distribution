@@ -46,6 +46,16 @@ import requests
 _PYTHON_ROOT = Path(__file__).resolve().parents[3]
 
 try:
+    from gasgx_distribution.video_matrix.ffmpeg_tools import extract_frame
+except Exception:  # pragma: no cover - optional runtime dependency resolution
+    extract_frame = None  # type: ignore[assignment]
+
+try:
+    from gasgx_distribution.video_matrix.render import _decorate_cover
+except Exception:  # pragma: no cover - optional runtime dependency resolution
+    _decorate_cover = None  # type: ignore[assignment]
+
+try:
     from .settings import get_paths, load_app_config
 except Exception:  # pragma: no cover
     get_paths = None  # type: ignore
@@ -160,8 +170,6 @@ DEFAULT_PORT = _default_debug_port()
 REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#GasGx", "#特斯拉Cybertruck"]
 REQUIRED_CAPTION_KEYWORD = "特斯拉 Cybertruck"
 DEFAULT_HASHTAGS = " ".join(REQUIRED_HASHTAGS)
-KUAISHOU_HASHTAG_LIMIT = 4
-KUAISHOU_REQUIRED_HASHTAGS = ["#Cybertruck", "#赛博皮卡", "#特斯拉", "#GasGx"]
 DEFAULT_CAPTION = f"Cybertruck 璧涘崥鐨崱鏈€鏂扮敾闈紒\n\n{DEFAULT_HASHTAGS}"
 DEFAULT_COLLECTION_NAME = "赛博皮卡天津港现车"
 DEFAULT_PLATFORM_COLLECTION_NAMES: dict[str, str] = {
@@ -400,6 +408,7 @@ DEFAULT_PLATFORM_PUBLISH_SETTINGS: dict[str, dict[str, Any]] = {
     },
 }
 KUAISHOU_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = MAX_BLOCKING_WAIT_SECONDS
+BILIBILI_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 240
 WECHAT_PUBLISH_FEEDBACK_TIMEOUT_SECONDS = 60
 WECHAT_PUBLISH_FEEDBACK_GRACE_SECONDS = 45
 WECHAT_PUBLISH_POST_LIST_PROBE_AFTER_SECONDS = 12
@@ -14547,6 +14556,16 @@ def _rebuild_caption_with_hashtags(text: str, hashtags: list[str]) -> str:
     return " ".join(clean_tags)
 
 
+def _limit_caption_hashtags(text: str, max_hashtags: int) -> str:
+    limit = max(0, int(max_hashtags))
+    if limit <= 0:
+        return _rebuild_caption_with_hashtags(text, [])
+    hashtags = _extract_caption_hashtags(text)
+    if len(hashtags) <= limit:
+        return str(text or "").strip()
+    return _rebuild_caption_with_hashtags(text, hashtags[:limit])
+
+
 def _caption_segment_key(text: str) -> str:
     normalized = _normalize_text(str(text or ""), limit=500).lower()
     if not normalized:
@@ -14594,26 +14613,7 @@ def _prepare_caption_for_platform(caption: str, platform_name: str) -> str:
                 return trimmed
             return "Cybertruck clip"
         return text
-    if normalized_platform != "kuaishou":
-        return text
-
-    existing = _extract_caption_hashtags(text)
-    chosen: list[str] = []
-    seen: set[str] = set()
-    for tag in (*KUAISHOU_REQUIRED_HASHTAGS, *existing):
-        t = str(tag or "").strip()
-        if not t:
-            continue
-        if not t.startswith("#"):
-            t = f"#{t}"
-        key = t.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        chosen.append(t)
-        if len(chosen) >= KUAISHOU_HASHTAG_LIMIT:
-            break
-    return _rebuild_caption_with_hashtags(text, chosen)
+    return text
 
 
 def _archive_with_sidecar(src: Path, workspace: Workspace, auto_delete_source_files: bool = False) -> None:
@@ -18390,6 +18390,233 @@ def _detect_bilibili_publish_via_network(ctx: Any) -> tuple[bool, str]:
             return True, f"network success marker: status={status}, url={url}"
         if status >= 200 and status < 300 and "archive" in signal:
             return True, f"archive publish request succeeded: status={status}, url={url}"
+    return False, ""
+
+
+def _reset_kuaishou_publish_probe(ctx: Any) -> None:
+    js = """
+    (() => {
+      const key = '__cybercarKuaishouPublishProbe';
+      const state = window[key] || (window[key] = {events: []});
+      function record(evt) {
+        try {
+          state.events.push(Object.assign({ts: Date.now()}, evt || {}));
+          if (state.events.length > 120) state.events = state.events.slice(-120);
+        } catch (e) {}
+      }
+      if (!state.fetchPatched && typeof window.fetch === 'function') {
+        const origFetch = window.fetch.bind(window);
+        window.fetch = async function(input, init) {
+          const method = String((init && init.method) || (input && input.method) || 'GET');
+          const url = String(typeof input === 'string' ? input : ((input && input.url) || ''));
+          try {
+            const resp = await origFetch(input, init);
+            let body = '';
+            try { body = await resp.clone().text(); } catch (e) {}
+            record({api: 'fetch', method, url, status: Number(resp.status) || 0, ok: !!resp.ok, body: String(body || '').slice(0, 1800)});
+            return resp;
+          } catch (err) {
+            record({api: 'fetch', method, url, status: 0, ok: false, error: String(err || '')});
+            throw err;
+          }
+        };
+        state.fetchPatched = true;
+      }
+      if (!state.xhrPatched && window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+        const proto = window.XMLHttpRequest.prototype;
+        const origOpen = proto.open;
+        const origSend = proto.send;
+        proto.open = function(method, url) {
+          this.__cybercarMethod = String(method || 'GET');
+          this.__cybercarUrl = String(url || '');
+          return origOpen.apply(this, arguments);
+        };
+        proto.send = function() {
+          const xhr = this;
+          const onDone = function() {
+            let body = '';
+            try { body = xhr.responseText || ''; } catch (e) {}
+            record({
+              api: 'xhr',
+              method: String(xhr.__cybercarMethod || 'GET'),
+              url: String(xhr.__cybercarUrl || ''),
+              status: Number(xhr.status) || 0,
+              ok: xhr.status >= 200 && xhr.status < 300,
+              body: String(body || '').slice(0, 1800),
+            });
+          };
+          try { xhr.addEventListener('loadend', onDone, {once: true}); } catch (e) { xhr.addEventListener('loadend', onDone); }
+          return origSend.apply(this, arguments);
+        };
+        state.xhrPatched = true;
+      }
+      if (!state.beaconPatched) {
+        try {
+          const navProto = Object.getPrototypeOf(window.navigator);
+          if (navProto && typeof navProto.sendBeacon === 'function') {
+            const origBeacon = navProto.sendBeacon.bind(window.navigator);
+            navProto.sendBeacon = function(url, data) {
+              let body = '';
+              try {
+                if (typeof data === 'string') {
+                  body = data;
+                } else if (data instanceof URLSearchParams) {
+                  body = data.toString();
+                } else if (data instanceof FormData) {
+                  body = Array.from(data.entries()).map(([key, value]) => `${String(key)}=${typeof value === 'string' ? value : '[file]'}`).join('&');
+                } else if (data instanceof Blob) {
+                  body = `[blob:${String(data.type || '')}]`;
+                } else if (data instanceof ArrayBuffer) {
+                  body = '[arraybuffer]';
+                } else {
+                  body = String(data || '');
+                }
+              } catch (e) {}
+              try {
+                const ok = !!origBeacon(url, data);
+                record({
+                  api: 'beacon',
+                  method: 'POST',
+                  url: String(url || ''),
+                  status: ok ? 202 : 0,
+                  ok,
+                  body: String(body || '').slice(0, 1800),
+                });
+                return ok;
+              } catch (err) {
+                record({
+                  api: 'beacon',
+                  method: 'POST',
+                  url: String(url || ''),
+                  status: 0,
+                  ok: false,
+                  body: String(body || '').slice(0, 1800),
+                  error: String(err || ''),
+                });
+                throw err;
+              }
+            };
+            state.beaconPatched = true;
+          }
+        } catch (e) {}
+      }
+      state.events = [];
+      state.lastResetAt = Date.now();
+      return true;
+    })();
+    """
+    try:
+        ctx.run_js(js)
+    except Exception:
+        pass
+
+
+def _read_kuaishou_publish_probe(ctx: Any) -> list[dict[str, Any]]:
+    js = """
+    (() => {
+      const state = window.__cybercarKuaishouPublishProbe;
+      if (!state) return [];
+      const events = Array.isArray(state.events) ? state.events.slice(-60) : [];
+      return events.map(evt => ({
+        api: String((evt && evt.api) || ''),
+        method: String((evt && evt.method) || ''),
+        url: String((evt && evt.url) || ''),
+        status: Number((evt && evt.status) || 0),
+        ok: !!(evt && evt.ok),
+        body: String((evt && evt.body) || ''),
+        error: String((evt && evt.error) || ''),
+        ts: Number((evt && evt.ts) || 0),
+      }));
+    })();
+    """
+    try:
+        payload = ctx.run_js(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            out.append(item)
+    return out
+
+
+def _read_kuaishou_publish_resource_entries(ctx: Any) -> list[dict[str, Any]]:
+    js = """
+    (() => {
+      try {
+        return performance.getEntriesByType('resource').slice(-120).map(entry => ({
+          name: String((entry && entry.name) || ''),
+          initiatorType: String((entry && entry.initiatorType) || ''),
+          startTime: Math.round(Number((entry && entry.startTime) || 0)),
+          duration: Math.round(Number((entry && entry.duration) || 0)),
+        }));
+      } catch (e) {
+        return [];
+      }
+    })();
+    """
+    try:
+        payload = ctx.run_js(js)
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            out.append(item)
+    return out
+
+
+def _detect_kuaishou_publish_via_network(ctx: Any) -> tuple[bool, str]:
+    events = _read_kuaishou_publish_probe(ctx)
+    if not events:
+        events = []
+
+    failure_body_markers = (
+        '"code":-',
+        '"success":false',
+        '"message":"fail"',
+        '"message":"error"',
+        '"errcode":-',
+        '"result":false',
+    )
+    publish_url_markers = (
+        "/rest/cp/works/v2/video/pc/submit",
+        "/rest/cp/works/v2/common/pc/report",
+        "/pc/submit",
+        "/submit",
+    )
+
+    for item in reversed(events):
+        method = str(item.get("method", "") or "").upper()
+        url = str(item.get("url", "") or "")
+        body = str(item.get("body", "") or "")
+        status = int(item.get("status", 0) or 0)
+        signal = f"{url}\n{body}".lower()
+        if method not in {"POST", "PUT"}:
+            continue
+        if not any(token in signal for token in publish_url_markers):
+            continue
+        if any(marker in signal for marker in failure_body_markers):
+            return False, f"network failure marker: status={status}, url={url}"
+        if status >= 200 and status < 300 and "/submit" in signal:
+            return True, f"submit request succeeded: status={status}, url={url}"
+        if status >= 200 and status < 300 and any(token in signal for token in ("/report", "publish")):
+            return True, f"publish-related request succeeded: status={status}, url={url}"
+
+    resource_entries = _read_kuaishou_publish_resource_entries(ctx)
+    for item in reversed(resource_entries):
+        name = str(item.get("name", "") or "")
+        initiator = str(item.get("initiatorType", "") or "").lower()
+        signal = name.lower()
+        if "/rest/cp/works/v2/video/pc/submit" not in signal and "/video/pc/submit" not in signal:
+            continue
+        if initiator and initiator not in {"fetch", "xhr", "xmlhttprequest", "beacon"}:
+            continue
+        return True, f"performance resource submit observed: initiator={initiator or '-'}, url={name}"
     return False, ""
 
 
@@ -25679,7 +25906,14 @@ def _normalize_bilibili_creative_statement_value(text: str) -> str:
     ):
         value = value.replace(prefix, "")
     value = value.replace("：", "").replace(":", "")
-    return value.strip()
+    compact = value.strip()
+    alias_map = {
+        "无需添加自主声明": "无需添加自主声明",
+        "无需自主声明": "无需添加自主声明",
+        "无需声明": "无需添加自主声明",
+        "内容无需标注": "无需添加自主声明",
+    }
+    return alias_map.get(compact, compact)
 
 
 def _read_bilibili_creative_statement_state(owner: Any) -> dict[str, Any]:
@@ -25836,14 +26070,12 @@ def _click_bilibili_creative_statement_prompt_go_declare(primary_ctx: Any, fallb
       } catch (e) {}
       return false;
     }
-    const promptRe = /(发布前请添加创作声明|请添加创作声明|请选择符合您视频内容的创作声明|请选择创作声明|请选择原创声明|创作声明|原创声明)/;
     const roots = Array.from(document.querySelectorAll(
-      '[role="dialog"], .dialog, .modal, .popup, .weui-desktop-dialog, .weui-desktop-popover, .arco-modal, .semi-modal, .bcc-dialog, .bcc-modal'
+      '[role="dialog"], [aria-modal="true"], dialog, .dialog, .modal, .popup, .popover, .weui-desktop-dialog, .weui-desktop-popover, .bcc-dialog, .bcc-modal'
     )).filter(isVisible);
-    const searchRoots = roots.length ? roots : [document.body];
-    for (const root of searchRoots) {
+    for (const root of roots) {
       const rootText = norm((root && root.innerText) || (root && root.textContent) || '');
-      if (!rootText || !promptRe.test(rootText)) continue;
+      if (!rootText || !/声明/.test(rootText)) continue;
       const domCandidates = [
         root.querySelector('button.bcc-button.bcc-button-primary.bcc-button-large'),
         root.querySelector('button.bcc-button.button.bcc-button-primary.bcc-button-large'),
@@ -26048,6 +26280,7 @@ def _select_bilibili_creative_statement(
         _log("[Uploader:bilibili] Creative statement normalized empty, skip selection.")
         return
 
+    already_selected = False
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
             continue
@@ -26055,7 +26288,8 @@ def _select_bilibili_creative_statement(
         current = _normalize_bilibili_creative_statement_value(str(state.get("current", "") or ""))
         if bool(state.get("hasField")) and current == target_norm:
             _log(f"[Uploader:bilibili] Creative statement already selected: {target}")
-            return
+            already_selected = True
+            break
 
     js_select = """
     function isVisible(el) {
@@ -26139,6 +26373,14 @@ def _select_bilibili_creative_statement(
     }
     const target = norm(arguments[0] || '');
     if (!target) return {state: 'skip'};
+    const targetAliases = new Set([
+      target,
+      '无需添加自主声明',
+      '无需自主声明',
+      '无需声明',
+      '内容无需标注',
+    ].map((item) => String(item || '').replace(/\s+/g, '')));
+    const confirmRe = /^(确认|确定|完成|知道了|下一步|继续|继续发布|仍要发布|去发布|发布)$/;
     const container = findContainer();
     if (!container) return {state: 'missing_label'};
     const trigger = findSelectRoot(container);
@@ -26182,7 +26424,34 @@ def _select_bilibili_creative_statement(
       return {state: 'selected', current: currentText(trigger), option: clean(match.innerText || match.textContent || match.value || '')};
     }
     const currentNorm = triggerText.replace(/\s+/g, '');
-    if (currentNorm === targetNorm) return {state: 'already', current: triggerText};
+    const alreadySelected = currentNorm === targetNorm;
+    if (alreadySelected) {
+      function clickConfirmFromRoot(root) {
+        if (!root) return null;
+        const nodes = Array.from(root.querySelectorAll('button, [role="button"], a, div, span, li, label')).filter(isVisible);
+        for (const node of nodes) {
+          const confirmText = clean(node.innerText || node.textContent || '');
+          if (!confirmRe.test(confirmText)) continue;
+          const targetNode = node.closest('button, [role="button"], a') || node;
+          if (clickNode(targetNode)) {
+            return confirmText;
+          }
+        }
+        return null;
+      }
+      const confirmRoots = [container, trigger, document];
+      Array.from(document.querySelectorAll(
+        '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown-menu, [role="listbox"], [role="dialog"], .dialog, .modal, .popup'
+      ))
+        .filter(isVisible)
+        .forEach((el) => confirmRoots.push(el));
+      for (const root of confirmRoots) {
+        const confirmText = clickConfirmFromRoot(root);
+        if (confirmText) {
+          return {state: 'already_confirmed', current: triggerText, confirm: confirmText};
+        }
+      }
+    }
     const searchRoots = [];
     const exactMatches = [];
     const genericMatches = [];
@@ -26206,9 +26475,11 @@ def _select_bilibili_creative_statement(
         if (!txt || txt.length > 60) continue;
         if (/^(?:创作声明|原创声明|请选择符合您视频内容的创作声明|请选择创作声明|请选择原创声明)$/.test(txt)) continue;
         const optionNorm = txt.replace(/\s+/g, '');
-        const score = optionNorm === targetNorm ? 30 : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 18 : 0);
+        const score = targetAliases.has(optionNorm)
+          ? 30
+          : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 18 : 0);
         if (!score) continue;
-        if (optionNorm === targetNorm) {
+        if (targetAliases.has(optionNorm) || optionNorm === targetNorm) {
           exactMatches.push(node);
         } else {
           genericMatches.push(node);
@@ -26223,9 +26494,11 @@ def _select_bilibili_creative_statement(
         if (!txt || txt.length > 60) continue;
         if (/^(?:创作声明|原创声明|请选择符合您视频内容的创作声明|请选择创作声明|请选择原创声明)$/.test(txt)) continue;
         const optionNorm = txt.replace(/\s+/g, '');
-        const score = optionNorm === targetNorm ? 28 : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 14 : 0);
+        const score = targetAliases.has(optionNorm)
+          ? 28
+          : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 14 : 0);
         if (!score) continue;
-        if (optionNorm === targetNorm) {
+        if (targetAliases.has(optionNorm) || optionNorm === targetNorm) {
           exactMatches.push(node);
         } else {
           genericMatches.push(node);
@@ -26233,10 +26506,44 @@ def _select_bilibili_creative_statement(
       }
     }
     const bestNode = exactMatches[0] || genericMatches[0];
-    if (!bestNode) return {state: 'option_not_found', current: triggerText};
+    if (!bestNode) return alreadySelected ? {state: 'already', current: triggerText} : {state: 'option_not_found', current: triggerText};
     const clicked = clickNode(bestNode.closest('.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .option-item, [role="option"], li, button, a, .selector-item') || bestNode);
     if (clicked) {
+      const reconcileInput = input || findCurrentInput(trigger || container);
+      if (reconcileInput) {
+        try {
+          reconcileInput.value = target;
+          reconcileInput.dispatchEvent(new Event('input', {bubbles: true}));
+          reconcileInput.dispatchEvent(new Event('change', {bubbles: true}));
+          reconcileInput.dispatchEvent(new Event('blur', {bubbles: true}));
+          if (typeof reconcileInput.blur === 'function') {
+            reconcileInput.blur();
+          }
+        } catch (e) {}
+      }
       const after = currentText(input || trigger || container);
+      const confirmRoots = [container, trigger, document];
+      Array.from(document.querySelectorAll(
+        '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown-menu, [role="listbox"], [role="dialog"], .dialog, .modal, .popup'
+      ))
+        .filter(isVisible)
+        .forEach((el) => confirmRoots.push(el));
+      for (const confirmRoot of confirmRoots) {
+        const confirmNodes = Array.from(confirmRoot.querySelectorAll('button, [role="button"], a, div, span, li, label')).filter(isVisible);
+        for (const confirmNode of confirmNodes) {
+          const confirmText = clean(confirmNode.innerText || confirmNode.textContent || '');
+          if (!confirmRe.test(confirmText)) continue;
+          const targetNode = confirmNode.closest('button, [role="button"], a') || confirmNode;
+          if (clickNode(targetNode)) {
+            return {
+              state: 'picked_and_confirmed',
+              current: currentText(input || trigger || container),
+              option: clean(bestNode.innerText || bestNode.textContent || ''),
+              confirm: confirmText,
+            };
+          }
+        }
+      }
       if (after.replace(/\s+/g, '') === targetNorm) {
         return {state: 'clicked', current: after, option: clean(bestNode.innerText || bestNode.textContent || '')};
       }
@@ -26308,6 +26615,346 @@ def _select_bilibili_creative_statement(
         f"target={target}"
     )
     return
+
+
+def _ensure_bilibili_cover_image_path(target: Path) -> Path:
+    target_path = Path(target)
+    if not target_path.exists():
+        raise FileNotFoundError(f"Bilibili target video not found: {target_path}")
+
+    stem = target_path.stem.strip() or "bilibili_cover"
+    parent = target_path.parent
+    final_candidates = [
+        parent / f"{stem}_auto_cover.png",
+        parent / f"{stem}_cover.png",
+        parent / f"{stem}.png",
+        parent / f"{stem}_auto_cover.jpg",
+        parent / f"{stem}_cover.jpg",
+        parent / f"{stem}.jpg",
+        parent / f"{stem}_auto_cover.webp",
+        parent / f"{stem}_cover.webp",
+        parent / f"{stem}.webp",
+    ]
+    for candidate in final_candidates:
+        if candidate.exists():
+            return candidate
+
+    cover_sources: list[Path] = []
+    for pattern in (
+        f"{stem}*auto*cover*.png",
+        f"{stem}*cover*.png",
+        f"{stem}*auto*cover*.jpg",
+        f"{stem}*cover*.jpg",
+        f"{stem}*auto*cover*.webp",
+        f"{stem}*cover*.webp",
+    ):
+        cover_sources.extend(
+            path
+            for path in sorted(parent.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+            if path.is_file()
+        )
+
+    def _is_raw_cover(path: Path) -> bool:
+        lowered = path.name.lower()
+        return "raw" in lowered
+
+    cover_sources = [path for path in dict.fromkeys(cover_sources) if not _is_raw_cover(path)]
+    if cover_sources:
+        source = cover_sources[0]
+        if source != final_candidates[0] and _decorate_cover is not None:
+            target_cover = final_candidates[0]
+            _decorate_cover(source, target_cover, stem)
+            if target_cover.exists():
+                return target_cover
+        return source
+
+    raw_candidates = [
+        parent / f"{stem}_auto_cover_raw.png",
+        parent / f"{stem}_raw_cover.png",
+        parent / f"{stem}_cover_raw.png",
+        parent / f"{stem}_raw.png",
+        parent / f"{stem}_auto_cover_raw.jpg",
+        parent / f"{stem}_raw_cover.jpg",
+        parent / f"{stem}_cover_raw.jpg",
+        parent / f"{stem}_raw.jpg",
+    ]
+    raw_source = next((candidate for candidate in raw_candidates if candidate.exists()), None)
+    target_cover = final_candidates[0]
+    if raw_source and _decorate_cover is not None:
+        _decorate_cover(raw_source, target_cover, stem)
+        if target_cover.exists():
+            return target_cover
+
+    if extract_frame is None or _decorate_cover is None:
+        raise RuntimeError(
+            "Unable to build Bilibili cover image because the frame extraction / decoration helpers are unavailable."
+        )
+
+    raw_path = parent / f"{stem}_auto_cover_raw.png"
+    try:
+        extract_frame(target_path, raw_path, timestamp=1.0)
+    except Exception:
+        try:
+            extract_frame(target_path, raw_path, timestamp=0.0)
+        except Exception as exc:
+            raise RuntimeError(f"Unable to extract Bilibili cover frame from {target_path}: {exc}") from exc
+    if not raw_path.exists():
+        raise RuntimeError(f"Unable to build Bilibili cover source frame for {target_path}")
+    _decorate_cover(raw_path, target_cover, stem)
+    if not target_cover.exists():
+        raise RuntimeError(f"Unable to build Bilibili cover image for {target_path}")
+    return target_cover
+
+
+def _read_bilibili_cover_editor_state(primary_ctx: Any, fallback_ctx: Any) -> dict[str, Any]:
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function clean(text) {
+      return String(text || '').replace(/\s+/g, ' ').trim();
+    }
+    function firstVisible(selector) {
+      return Array.from(document.querySelectorAll(selector)).find(isVisible) || null;
+    }
+    const dialogRoots = Array.from(document.querySelectorAll(
+      '.cover-editor, .cover-editor-content, .cover-editor-dialog, .cover-editor-panel, [class*="cover-editor"]'
+    )).filter(isVisible);
+    const submit = firstVisible('.cover-editor-button .button.submit') || firstVisible('.cover-editor-button .submit');
+    const input4 = document.querySelector('.cover-editor-panel-canvas-empty.ratio_4_3 input[type="file"]');
+    const input16 = document.querySelector('.cover-editor-panel-canvas-empty.ratio_16_9 input[type="file"]');
+    const visible4 = isVisible(input4);
+    const visible16 = isVisible(input16);
+    return {
+      open: dialogRoots.length > 0 || visible4 || visible16 || isVisible(submit),
+      dialog_count: dialogRoots.length,
+      has_4_3: !!input4,
+      has_16_9: !!input16,
+      visible_4_3: visible4,
+      visible_16_9: visible16,
+      submit_visible: isVisible(submit),
+      submit_text: clean((submit && (submit.innerText || submit.textContent)) || ''),
+      dialog_text: clean((dialogRoots[0] && (dialogRoots[0].innerText || dialogRoots[0].textContent)) || ''),
+    };
+    """
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload:
+            return payload
+    return {}
+
+
+def _find_bilibili_cover_editor_file_input(primary_ctx: Any, fallback_ctx: Any, ratio: str) -> Any:
+    ratio_token = str(ratio or "").strip()
+    if not ratio_token:
+        return None
+    ratio_token = ratio_token.replace("-", "_")
+    selectors = (
+        f"css:.cover-editor-panel-canvas-empty.ratio_{ratio_token} input[type='file']",
+        f"xpath://div[contains(@class,'cover-editor-panel-canvas-empty') and contains(@class,'ratio_{ratio_token}')]//input[@type='file']",
+        f"xpath://div[contains(@class,'cover-editor') and contains(@class,'ratio_{ratio_token}')]//input[@type='file']",
+        "css:.cover-editor input[type='file']",
+        "xpath://div[contains(@class,'cover-editor')]//input[@type='file']",
+    )
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                ele = owner.ele(selector, timeout=1.2)
+            except Exception:
+                ele = None
+            if ele:
+                return ele
+    return None
+
+
+def _click_bilibili_cover_editor_submit(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    selectors = (
+        "css:.cover-editor-button .button.submit",
+        "xpath://div[contains(@class,'cover-editor-button')]//*[contains(@class,'submit') and contains(normalize-space(.), '完成')]",
+        "xpath://*[contains(@class,'cover-editor') and contains(normalize-space(.), '完成')]",
+    )
+    js = r"""
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(text) {
+      return String(text || '').replace(/\s+/g, ' ').trim();
+    }
+    function forceClick(node) {
+      if (!node) return false;
+      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+      try { node.focus && node.focus(); } catch (e) {}
+      try { node.dispatchEvent(new MouseEvent('pointerdown', {bubbles: true, cancelable: true, view: window, pointerType: 'mouse'})); } catch (e) {}
+      try { node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window})); } catch (e) {}
+      try { node.dispatchEvent(new MouseEvent('pointerup', {bubbles: true, cancelable: true, view: window, pointerType: 'mouse'})); } catch (e) {}
+      try { node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window})); } catch (e) {}
+      try { node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); return true; } catch (e) {}
+      try { node.click(); return true; } catch (e) {}
+      return false;
+    }
+    const roots = Array.from(document.querySelectorAll(
+      '.cover-editor, .cover-editor-content, .cover-editor-dialog, .cover-editor-panel, [class*="cover-editor"]'
+    )).filter(isVisible);
+    for (const root of roots) {
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], div, span, a')).filter(isVisible);
+      for (const node of nodes) {
+        const txt = norm(node.innerText || node.textContent || '');
+        const cls = norm(node.className || '');
+        if (txt === '完成' || /(?:^|\s)submit(?:\s|$)/i.test(cls)) {
+          const target = node.closest('button, [role="button"], a') || node;
+          if (forceClick(target)) {
+            return {state: 'clicked', text: txt || cls};
+          }
+        }
+      }
+    }
+    return {state: 'not_found'};
+    """
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        for selector in selectors:
+            try:
+                ele = owner.ele(selector, timeout=1.2)
+            except Exception:
+                ele = None
+            if not ele or (not _is_visible_element(ele)):
+                continue
+            try:
+                ele.click()
+                _log(f"[Uploader:bilibili] Clicked cover editor submit by selector: {selector}")
+            except Exception:
+                try:
+                    ele.click(by_js=True)
+                    _log(f"[Uploader:bilibili] Clicked cover editor submit by JS click: {selector}")
+                except Exception:
+                    pass
+            try:
+                force_clicked = ele.run_js(
+                    """
+                    function forceClick(node) {
+                      if (!node) return false;
+                      try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+                      try { node.focus && node.focus(); } catch (e) {}
+                      try { node.dispatchEvent(new MouseEvent('pointerdown', {bubbles: true, cancelable: true, view: window, pointerType: 'mouse'})); } catch (e) {}
+                      try { node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window})); } catch (e) {}
+                      try { node.dispatchEvent(new MouseEvent('pointerup', {bubbles: true, cancelable: true, view: window, pointerType: 'mouse'})); } catch (e) {}
+                      try { node.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window})); } catch (e) {}
+                      try { node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); return true; } catch (e) {}
+                      try { node.click(); return true; } catch (e) {}
+                      return false;
+                    }
+                    const target = this.closest('button, [role="button"], a') || this;
+                    return forceClick(target);
+                    """
+                )
+            except Exception:
+                force_clicked = False
+            if bool(force_clicked):
+                _log(f"[Uploader:bilibili] Clicked cover editor submit by force JS: {selector}")
+                return True
+            continue
+        try:
+            payload = owner.run_js(js)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and str(payload.get("state", "")).strip().lower() == "clicked":
+            _log("[Uploader:bilibili] Clicked cover editor submit by JS fallback.")
+            return True
+    return False
+
+
+def _prepare_bilibili_cover_editor(page: ChromiumPage, primary_ctx: Any, fallback_ctx: Any, target: Path) -> Path:
+    cover_path = _ensure_bilibili_cover_image_path(target)
+    _log(f"[Uploader:bilibili] Resolved cover image: {cover_path}")
+
+    state = _read_bilibili_cover_editor_state(primary_ctx, fallback_ctx)
+    if not bool(state.get("open")):
+        opened = False
+        for attempt in range(1, 4):
+            if _click_first_matching_button(primary_ctx, fallback_ctx, ("封面设置", "编辑封面", "设置封面"), platform_name="bilibili"):
+                opened = True
+                _humanized_publish_retry_pause("bilibili cover editor open")
+            state = _read_bilibili_cover_editor_state(primary_ctx, fallback_ctx)
+            if bool(state.get("open")):
+                opened = True
+                break
+            _log(f"[Uploader:bilibili] Cover editor open retry {attempt}/3: open={bool(state.get('open'))}")
+        if not opened and not bool(state.get("open")):
+            raise RuntimeError("Failed to open Bilibili cover editor.")
+
+    ratio_inputs = {
+        "4_3": None,
+        "16_9": None,
+    }
+    for attempt in range(1, 4):
+        for ratio in tuple(ratio_inputs):
+            if ratio_inputs[ratio] is None:
+                ratio_inputs[ratio] = _find_bilibili_cover_editor_file_input(primary_ctx, fallback_ctx, ratio)
+        if all(ratio_inputs.values()):
+            break
+        _log(
+            "[Uploader:bilibili] Cover editor file inputs not ready yet: "
+            f"4_3={bool(ratio_inputs['4_3'])}, 16_9={bool(ratio_inputs['16_9'])}; retry {attempt}/3"
+        )
+        _humanized_publish_retry_pause("bilibili cover input settle")
+        state = _read_bilibili_cover_editor_state(primary_ctx, fallback_ctx)
+        if not bool(state.get("open")):
+            _click_first_matching_button(primary_ctx, fallback_ctx, ("封面设置", "编辑封面", "设置封面"), platform_name="bilibili")
+
+    if not ratio_inputs["4_3"] or not ratio_inputs["16_9"]:
+        raise RuntimeError("Bilibili cover editor did not expose both 4:3 and 16:9 upload inputs.")
+
+    for ratio in ("4_3", "16_9"):
+        file_input = ratio_inputs[ratio]
+        if not file_input:
+            raise RuntimeError(f"Missing Bilibili cover upload input: ratio={ratio}")
+        _run_page_action(
+            page,
+            f"upload bilibili cover {ratio}",
+            lambda fi=file_input: fi.input(str(cover_path)),
+        )
+        bind_state = _read_file_input_binding_state(file_input)
+        _log(
+            f"[Uploader:bilibili] Cover upload bound for ratio={ratio}: "
+            f"count={bind_state.get('count', 0)}, "
+            f"visible={bind_state.get('visible')}, "
+            f"files={_single_line_preview(','.join([str(x) for x in (bind_state.get('names') or [])]), limit=80) or '-'}"
+        )
+        _humanized_publish_retry_pause(f"bilibili cover upload settle {ratio}")
+
+    submit_clicked = False
+    for attempt in range(1, 5):
+        if _click_bilibili_cover_editor_submit(primary_ctx, fallback_ctx):
+            submit_clicked = True
+        else:
+            _log(f"[Uploader:bilibili] Cover editor submit button not found on attempt {attempt}/4.")
+        _humanized_publish_retry_pause(f"bilibili cover submit settle {attempt}")
+        state = _read_bilibili_cover_editor_state(primary_ctx, fallback_ctx)
+        if not bool(state.get("open")):
+            _log(f"[Uploader:bilibili] Cover editor closed after submit attempt {attempt}.")
+            return cover_path
+        visible_texts = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+        if visible_texts:
+            _log(f"[Uploader:bilibili] Cover editor still open after submit attempt {attempt}: {visible_texts}")
+    if submit_clicked:
+        raise RuntimeError("Bilibili cover editor did not close after clicking 完成.")
+    raise RuntimeError("Failed to click Bilibili cover editor submit button.")
 
 
 def _normalize_bilibili_partition_value(text: str) -> str:
@@ -26475,7 +27122,7 @@ def _select_bilibili_partition(
     function clickNode(node) {
       if (!node) return false;
       try { node.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
-      try { node.click(); return true; } catch (e) {}
+            try { node.click(); return true; } catch (e) {}
       try {
         node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
         return true;
@@ -27848,7 +28495,13 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
     candidates.sort((a, b) => b.score - a.score);
     const preferred = candidates.find(item => /^(鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧|鍙戝竷鎻愪氦)$/.test(item.text))
       || candidates[0];
-    preferred.el.click();
+    try {
+      const target = preferred.el.closest('button, [role="button"], a') || preferred.el;
+      target.scrollIntoView({block: 'center', inline: 'nearest'});
+      target.click();
+    } catch (e) {
+      preferred.el.click();
+    }
     return true;
     """
     for owner in (primary_ctx, fallback_ctx):
@@ -28528,6 +29181,10 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
         "xpath://button[normalize-space(.)='确认发布']",
         "xpath://button[normalize-space(.)='发布']",
         "xpath://button[normalize-space(.)='发布作品']",
+        "xpath://div[contains(@class,'_edit-section-btns')]//div[contains(@class,'_button-primary') and normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'_edit-section-btns')]//div[contains(@class,'_button-primary') and contains(normalize-space(.), '发布作品')]",
+        "xpath://div[contains(@class,'_button-primary') and normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'_button-primary') and contains(normalize-space(.), '发布作品')]",
         "xpath://button[normalize-space(.)='鍙戝竷' and ../button[normalize-space(.)='鍙栨秷']]",
         "xpath://button[normalize-space(.)='鍙戝竷浣滃搧' and ../button[normalize-space(.)='鍙栨秷']]",
         "xpath://button[normalize-space(.)='纭鍙戝竷']",
@@ -28734,20 +29391,71 @@ def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
             if disabled:
                 continue
             _humanized_publish_reaction_pause("bilibili primary publish click")
+            click_desc: Any = {}
             try:
-                btn.run_js(
+                click_desc = btn.run_js(
                     """
-                    const target = this.closest('button, [role="button"], a') || this;
-                    target.scrollIntoView({block:'center', inline:'nearest'});
-                    target.click();
+                    function resolveClickTarget(node) {
+                      let target = node.closest('button, [role="button"], a') || node;
+                      if (String(target.tagName || '').toLowerCase() === 'span') {
+                        let parent = target.parentElement;
+                        while (parent && parent !== document.body && String(parent.tagName || '').toLowerCase() === 'span') {
+                          parent = parent.parentElement;
+                        }
+                        if (parent) target = parent;
+                      }
+                      return target || node;
+                    }
+                    const target = resolveClickTarget(this);
+                    const rect = target.getBoundingClientRect();
+                    return {
+                      tag: String(target.tagName || ''),
+                      cls: String(target.className || ''),
+                      text: String((target.innerText || target.textContent || '')).replace(/\\s+/g, ' ').trim(),
+                      top: Math.round(rect.top),
+                      left: Math.round(rect.left),
+                      width: Math.round(rect.width),
+                      height: Math.round(rect.height),
+                    };
                     """
                 )
             except Exception:
+                click_desc = {}
+
+            click_selectors = (
+                "xpath://span[contains(@class,'submit-add')]/parent::*",
+                "xpath://div[normalize-space(.)='立即投稿' and not(@class)]",
+                "xpath://div[normalize-space(.)='立即投稿']",
+            )
+            clicked = False
+            for click_selector in click_selectors:
+                try:
+                    click_target = owner.ele(click_selector, timeout=0.35)
+                except Exception:
+                    click_target = None
+                if not click_target or (not _is_visible_element(click_target)):
+                    continue
+                try:
+                    click_target.click()
+                    clicked = True
+                except Exception:
+                    try:
+                        click_target.click(by_js=True)
+                        clicked = True
+                    except Exception:
+                        continue
+                if isinstance(click_desc, dict):
+                    click_desc["resolved_selector"] = click_selector
+                break
+            if not clicked:
                 try:
                     btn.click(by_js=True)
                 except Exception:
                     continue
-            _log(f"[Uploader:bilibili] Clicked publish button by selector: {selector}")
+            _log(
+                f"[Uploader:bilibili] Clicked publish button by selector: {selector} "
+                f"({_single_line_preview(str(click_desc), limit=180) or '-'})"
+            )
             return True
 
     js = """
@@ -28900,13 +29608,29 @@ def _ensure_bilibili_publish_agreement_checked(primary_ctx: Any, fallback_ctx: A
 
 def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     _ensure_bilibili_publish_agreement_checked(primary_ctx, fallback_ctx)
+    # Prefer resolving the declaration choice before the final publish click so
+    # the flow is "declare first, then submit" instead of only recovering after
+    # the prompt appears.
+    _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
     if _click_bilibili_creative_statement_prompt_go_declare(primary_ctx, fallback_ctx):
         _humanized_publish_reaction_pause("bilibili creative statement prompt settle")
         _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
         # After leaving the declare panel, Bilibili often requires re-triggering primary publish.
         _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx)
-        return False
+    visible_actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
+    has_primary_like = any(
+        any(token in item for token in ("立即投稿", "立即发布"))
+        for item in visible_actions
+    )
+    has_confirm_like = any(
+        any(token in item for token in ("确认投稿", "确认并投稿", "继续投稿", "继续提交", "确定投稿", "确认发布", "确认提交", "确认定时发布", "确认定时投稿", "去发布"))
+        for item in visible_actions
+    )
+    primary_clicked = False
+    if has_primary_like and not has_confirm_like:
+        primary_clicked = _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx)
     selectors = (
+        "text:立即投稿",
         "text:确认投稿",
         "text:确认并投稿",
         "text:继续投稿",
@@ -28917,12 +29641,16 @@ def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
         "text:确认定时发布",
         "text:确认定时投稿",
         "text:去发布",
-        "xpath://button[contains(normalize-space(.), '确认投稿')]",
-        "xpath://button[contains(normalize-space(.), '确认并投稿')]",
-        "xpath://button[contains(normalize-space(.), '继续投稿')]",
-        "xpath://button[contains(normalize-space(.), '继续提交')]",
-        "xpath://button[contains(normalize-space(.), '确认提交')]",
-        "xpath://button[contains(normalize-space(.), '确认发布')]",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='立即投稿']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='确认投稿']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='确认并投稿']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='继续投稿']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='继续提交']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='确认提交']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='确认发布']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='确认定时发布']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='确认定时投稿']",
+        "xpath://*[(@role='dialog' or contains(@class,'dialog') or contains(@class,'modal') or contains(@class,'popup') or contains(@class,'confirm'))]//*[normalize-space(.)='去发布']",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -28951,14 +29679,73 @@ def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
             if disabled:
                 continue
             _humanized_publish_reaction_pause("bilibili publish confirm click")
+            click_desc: dict[str, Any] = {}
             try:
-                btn.click()
+                click_desc = dict(
+                    btn.run_js(
+                        """
+                        function resolveClickTarget(node) {
+                          let target = node.closest('button, [role="button"], a') || node;
+                          if (String(target.tagName || '').toLowerCase() === 'span') {
+                            let parent = target.parentElement;
+                            while (parent && parent !== document.body && String(parent.tagName || '').toLowerCase() === 'span') {
+                              parent = parent.parentElement;
+                            }
+                            if (parent) target = parent;
+                          }
+                          return target || node;
+                        }
+                        const target = resolveClickTarget(this);
+                        const rect = target.getBoundingClientRect();
+                        return {
+                          tag: String(target.tagName || ''),
+                          cls: String(target.className || ''),
+                          text: String((target.innerText || target.textContent || '')).replace(/\\s+/g, ' ').trim(),
+                          top: Math.round(rect.top),
+                          left: Math.round(rect.left),
+                          width: Math.round(rect.width),
+                          height: Math.round(rect.height),
+                        };
+                        """
+                    )
+                    or {}
+                )
             except Exception:
+                click_desc = {}
+            click_selectors = (
+                "xpath://span[contains(@class,'submit-add')]/parent::*",
+                "xpath://div[normalize-space(.)='立即投稿' and not(@class)]",
+                "xpath://div[normalize-space(.)='立即投稿']",
+            )
+            clicked = False
+            for click_selector in click_selectors:
+                try:
+                    click_target = owner.ele(click_selector, timeout=0.35)
+                except Exception:
+                    click_target = None
+                if not click_target or (not _is_visible_element(click_target)):
+                    continue
+                try:
+                    click_target.click()
+                    clicked = True
+                except Exception:
+                    try:
+                        click_target.click(by_js=True)
+                        clicked = True
+                    except Exception:
+                        continue
+                if isinstance(click_desc, dict):
+                    click_desc["resolved_selector"] = click_selector
+                break
+            if not clicked:
                 try:
                     btn.click(by_js=True)
                 except Exception:
                     continue
-            _log(f"[Uploader:bilibili] Clicked publish confirm button by selector: {selector}")
+            _log(
+                f"[Uploader:bilibili] Clicked publish confirm button by selector: {selector} "
+                f"({_single_line_preview(str(click_desc), limit=180) or '-'})"
+            )
             return True
 
     js = """
@@ -28979,31 +29766,88 @@ def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
       const cls = String(el.className || '');
       return /\\bdisabled\\b/i.test(cls);
     }
-    const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
+    function resolveClickTarget(node) {
+      if (!node) return null;
+      let target = node.closest('button, [role="button"], a') || node;
+      if (String(target.tagName || '').toLowerCase() === 'span') {
+        let parent = target.parentElement;
+        while (parent && parent !== document.body && String(parent.tagName || '').toLowerCase() === 'span') {
+          parent = parent.parentElement;
+        }
+        if (parent) target = parent;
+      }
+      return target || node;
+    }
+    function isNavLike(el) {
+      let cur = el;
+      for (let i = 0; cur && i < 6; i += 1, cur = cur.parentElement) {
+        const tag = String(cur.tagName || '').toLowerCase();
+        const role = String((cur.getAttribute && cur.getAttribute('role')) || '').toLowerCase();
+        const id = String(cur.id || '').toLowerCase();
+        const cls = String(cur.className || '').toLowerCase();
+        if (tag === 'nav' || role === 'navigation') return true;
+        if (/(?:^|\\s)(nav|menu|sidebar|header|aside|toolbar|breadcrumb|tabs|topbar|simplebar)(?:\\s|$)/.test(cls)) return true;
+        if (/(?:nav|menu|sidebar|header|aside|toolbar|breadcrumb|tabs)/.test(id)) return true;
+      }
+      return false;
+    }
+    function rootHint(el) {
+      let cur = el;
+      for (let i = 0; cur && i < 6; i += 1, cur = cur.parentElement) {
+        const tag = String(cur.tagName || '').toLowerCase();
+        const role = String((cur.getAttribute && cur.getAttribute('role')) || '').toLowerCase();
+        const cls = String(cur.className || '').toLowerCase();
+        if (tag === 'dialog' || role === 'dialog') return 24;
+        if (/(dialog|modal|popup|popover|confirm|submit|publish|footer|action)/.test(cls)) return 12;
+      }
+      return 0;
+    }
+    const roots = Array.from(document.querySelectorAll(
+      '[role="dialog"], [aria-modal="true"], dialog, .dialog, .modal, .popup, .popover, [class*="dialog"], [class*="modal"], [class*="popup"], [class*="popover"], [class*="confirm"], [class*="submit"], [class*="publish"], form, section, footer, main'
+    )).filter(isVisible);
+    const exactTexts = new Set([
+      '立即投稿',
+      '确认投稿',
+      '确认并投稿',
+      '继续投稿',
+      '继续提交',
+      '确定投稿',
+      '确认发布',
+      '确认提交',
+      '确认定时发布',
+      '确认定时投稿',
+      '去发布',
+      '投稿',
+      '发布',
+      '提交',
+    ]);
     const candidates = [];
-    for (const node of nodes) {
-      if (!isVisible(node)) continue;
-      const text = norm(node.innerText || node.textContent || '');
-      if (!text || text.length > 24) continue;
-      if (/声明|请选择|发布前请添加/.test(text)) continue;
-      const wrap = node.closest('[role="dialog"], .dialog, .modal, .popup, form, section, .publish, .submit, div') || node.parentElement || node;
-      const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 320);
-      let score = 0;
-      if (/^(确认投稿|确认并投稿|继续投稿|继续提交|确定投稿|确认发布|确认提交|确认定时发布|确认定时投稿|去发布)$/.test(text)) score += 30;
-      if (/^(确认|继续|确定|去发布)/.test(text)) score += 10;
-      if (/投稿|发布|提交/.test(text)) score += 8;
-      if (/取消|返回|草稿|暂存/.test(text)) score -= 40;
-      if (/dialog|modal|popup/.test(String((wrap && wrap.className) || ''))) score += 8;
-      if (/声明|协议|同意|投稿|发布|稿件|风险/.test(wrapText)) score += 6;
-      if (disabled(node)) score -= 80;
-      if (score > 0) {
+    for (const root of roots) {
+      const rootText = norm((root && root.innerText) || '');
+      if (!rootText || !/(投稿|发布|提交|确认|去发布|继续)/.test(rootText)) continue;
+      for (const node of Array.from(root.querySelectorAll('button, [role="button"], a, div, span'))) {
+        if (!isVisible(node) || disabled(node) || isNavLike(node)) continue;
+        const text = norm(node.innerText || node.textContent || '');
+        if (!text || text.length > 24) continue;
+        if (!exactTexts.has(text)) continue;
+        if (/声明|请选择|发布前请添加/.test(text)) continue;
         const clickable = node.closest('button, [role="button"], a') || node;
+        let score = 0;
+        if (text === '立即投稿') score += 40;
+        if (/^(确认投稿|确认并投稿|继续投稿|继续提交|确定投稿|确认发布|确认提交|确认定时发布|确认定时投稿|去发布)$/.test(text)) score += 36;
+        if (text === '投稿') score += 18;
+        if (text === '发布') score += 12;
+        if (text === '提交') score += 10;
+        if (/取消|草稿|返回|暂存/.test(rootText + ' ' + text)) score -= 40;
+        if (/取消/.test(rootText)) score += 8;
+        if (/确认|投稿|发布|提交/.test(rootText)) score += 8;
+        score += rootHint(clickable);
         candidates.push({node: clickable, text, score});
       }
     }
     candidates.sort((a, b) => b.score - a.score);
     if (!candidates.length) return false;
-    const chosen = candidates[0].node.closest('button, [role="button"], a') || candidates[0].node;
+    const chosen = resolveClickTarget(candidates[0].node);
     chosen.scrollIntoView({block:'center', inline:'nearest'});
     chosen.click();
     return candidates[0].text || true;
@@ -29022,7 +29866,7 @@ def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
         if bool(result):
             _log("[Uploader:bilibili] Clicked publish confirm button by JS fallback.")
             return True
-    return False
+    return primary_clicked
 
 
 def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
@@ -29034,6 +29878,8 @@ def _click_kuaishou_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
         "xpath://button[normalize-space(.)='确定发布']",
         "xpath://button[normalize-space(.)='仍要发布']",
         "xpath://button[normalize-space(.)='去发布']",
+        "xpath://div[contains(@class,'_button-primary') and normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'_button-primary') and contains(normalize-space(.), '发布作品')]",
         "xpath://span[normalize-space(.)='发布']/ancestor::button[1]",
         "text:确认发布",
         "text:确认定时发布",
@@ -29152,12 +29998,18 @@ def _click_kuaishou_publish_confirm_dialog_only(primary_ctx: Any, fallback_ctx: 
         "xpath://div[@role='dialog']//button[normalize-space(.)='仍要发布']",
         "xpath://div[@role='dialog']//button[normalize-space(.)='去发布']",
         "xpath://div[@role='dialog']//button[normalize-space(.)='发布']",
+        "xpath://div[@role='dialog']//div[contains(@class,'_button-primary') and normalize-space(.)='发布']",
+        "xpath://div[@role='dialog']//div[contains(@class,'_button-primary') and contains(normalize-space(.), '发布作品')]",
         "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='确认发布']",
         "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='继续发布']",
         "xpath://div[contains(@class,'dialog')]//button[normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'dialog')]//div[contains(@class,'_button-primary') and normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'dialog')]//div[contains(@class,'_button-primary') and contains(normalize-space(.), '发布作品')]",
         "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='确认发布']",
         "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='继续发布']",
         "xpath://div[contains(@class,'modal')]//button[normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'modal')]//div[contains(@class,'_button-primary') and normalize-space(.)='发布']",
+        "xpath://div[contains(@class,'modal')]//div[contains(@class,'_button-primary') and contains(normalize-space(.), '发布作品')]",
     )
     for owner in (primary_ctx, fallback_ctx):
         if not owner:
@@ -29245,6 +30097,7 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     url, text = _read_page_snapshot(primary_ctx, fallback_ctx)
     lowered = (text or "").lower()
     success_markers = (
+        "稿件投递成功",
         "投稿成功",
         "投递成功",
         "投稿中",
@@ -29291,6 +30144,11 @@ def _retry_bilibili_publish_if_still_editing(primary_ctx: Any, fallback_ctx: Any
     return True
 
 
+def _resolve_bilibili_publish_feedback_timeout(upload_timeout: int) -> int:
+    normalized = max(1, int(upload_timeout or UPLOAD_TIMEOUT_SECONDS))
+    return max(BILIBILI_PUBLISH_FEEDBACK_TIMEOUT_SECONDS, normalized)
+
+
 
 def _is_bilibili_publish_success_snapshot(
     url: str,
@@ -29299,7 +30157,10 @@ def _is_bilibili_publish_success_snapshot(
 ) -> bool:
     url_lower = str(url or "").lower()
     merged_text = str(text or "")
-    if any(marker in merged_text for marker in ("投稿成功", "投递成功", "提交成功", "已投稿", "已提交", "审核中")):
+    if any(
+        marker in merged_text
+        for marker in ("稿件投递成功", "投稿成功", "投递成功", "提交成功", "已投稿", "已提交", "审核中")
+    ):
         return True
     lowered = merged_text.lower()
     if any(marker in lowered for marker in ("publish success", "submit success", "delivery success", "delivered")):
@@ -30126,7 +30987,7 @@ def _wait_publish_feedback(
         "douyin": ("发布成功", "发布中", "发布完成", "提交成功", "已提交", "审核中"),
         "xiaohongshu": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "发布完成", "已提交"),
         "kuaishou": ("发布成功", "发布中", "已发布", "审核中", "提交成功", "已提交"),
-        "bilibili": ("投稿成功", "投递成功", "投稿中", "已投稿", "已提交", "审核中", "提交成功"),
+        "bilibili": ("稿件投递成功", "投稿成功", "投递成功", "投稿中", "已投稿", "已提交", "审核中", "提交成功"),
         "x": ("Your post was sent", "Post sent", "Posted"),
         "tiktok": ("uploaded", "your video is being uploaded", "post uploaded", "posted"),
     }
@@ -30222,6 +31083,12 @@ def _wait_publish_feedback(
         elif platform_name == "kuaishou":
             # Best effort: some accounts show delayed confirm dialogs after first publish click.
             _click_kuaishou_publish_confirm_dialog_only(primary_ctx, fallback_ctx)
+            net_ok, net_reason = _detect_kuaishou_publish_via_network(primary_ctx)
+            if (not net_ok) and fallback_ctx is not None:
+                net_ok, net_reason = _detect_kuaishou_publish_via_network(fallback_ctx)
+            if net_ok:
+                _log(f"[Uploader:kuaishou] Publish confirmed by network probe: {net_reason}")
+                return
         elif platform_name == "x":
             net_ok, net_reason = _detect_x_publish_via_network(primary_ctx)
             if net_ok:
@@ -30431,9 +31298,17 @@ def _wait_publish_feedback(
             )
             raise RuntimeError("xiaohongshu publish was not confirmed; page returned to draft/compose state.")
     if platform_name == "kuaishou":
+        net_ok, net_reason = _detect_kuaishou_publish_via_network(primary_ctx)
+        if (not net_ok) and fallback_ctx is not None:
+            net_ok, net_reason = _detect_kuaishou_publish_via_network(fallback_ctx)
+        if net_ok:
+            _log(f"[Uploader:kuaishou] Publish confirmed by final network probe: {net_reason}")
+            return
         if _is_kuaishou_publish_confirmed_by_heuristic(primary_ctx, fallback_ctx):
             _log("[Uploader:kuaishou] Publish feedback inferred by final heuristic check.")
             return
+        if net_reason:
+            _log(f"[Uploader:kuaishou] Publish network probe did not confirm success: {net_reason}")
         _ensure_kuaishou_not_in_unfinished_edit_state(primary_ctx, fallback_ctx)
         state = _read_kuaishou_publish_state(primary_ctx, fallback_ctx)
         state_actions = state.get("action_texts")
@@ -30933,6 +31808,9 @@ def _publish_kuaishou_with_random_schedule(
     max_minutes: int,
     expected_tokens: Optional[Sequence[str]] = None,
 ) -> str:
+    _reset_kuaishou_publish_probe(primary_ctx)
+    if fallback_ctx is not primary_ctx and hasattr(fallback_ctx, "run_js"):
+        _reset_kuaishou_publish_probe(fallback_ctx)
     scheduled = _set_kuaishou_random_publish_time(primary_ctx, fallback_ctx, max_minutes=max_minutes)
     # 鏈変簺鏃堕棿閫夋嫨鍣ㄩ渶瑕佸厛纭锛屽啀鐐瑰嚮鍙戝竷
     _click_first_matching_button(primary_ctx, fallback_ctx, ("纭畾", "瀹屾垚"), platform_name="kuaishou")
@@ -30973,6 +31851,7 @@ def _publish_bilibili_with_random_schedule(
     fallback_ctx: Any,
     max_minutes: int,
     expected_tokens: Optional[Sequence[str]] = None,
+    publish_feedback_timeout: int = BILIBILI_PUBLISH_FEEDBACK_TIMEOUT_SECONDS,
 ) -> str:
     scheduled = _set_bilibili_random_publish_time(
         primary_ctx,
@@ -30999,7 +31878,7 @@ def _publish_bilibili_with_random_schedule(
         fallback_ctx,
         platform_name="bilibili",
         expected_tokens=expected_tokens,
-        timeout_seconds=180,
+        timeout_seconds=publish_feedback_timeout,
     )
     _log(f"[Success:bilibili] 已设置随机定时并确认发布（scheduled={scheduled}）")
     return scheduled
@@ -31120,6 +31999,7 @@ def _fill_draft_once_generic(
     staged_with_page_set = False
     upload_already_ready = False
     upload_binding_confirmed = False
+    bilibili_publish_feedback_timeout = _resolve_bilibili_publish_feedback_timeout(upload_timeout)
     if not file_input:
         if before_upload_hook:
             before_upload_hook(ctx, page)
@@ -31320,6 +32200,11 @@ def _fill_draft_once_generic(
     )
     if platform_name in {"douyin", "kuaishou", "bilibili"}:
         _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name)
+    if platform_name == "bilibili":
+        # Make the declaration choice the first Bilibili-specific field action
+        # after the editor is ready, before title/partition filling.
+        _prepare_bilibili_publish_dom_defaults(ctx, page)
+        _prepare_bilibili_cover_editor(page, ctx, page, target)
     text_payload = final_caption
     if platform_name in {"douyin", "xiaohongshu", "kuaishou"} and _is_image_file(target):
         text_payload = _prepare_image_post_text_payload(
@@ -31328,6 +32213,8 @@ def _fill_draft_once_generic(
             platform_name=platform_name,
             caption=final_caption,
         )
+    if platform_name == "kuaishou":
+        text_payload = _limit_caption_hashtags(text_payload, 4)
     if platform_name == "x":
         x_caption_ok = _force_x_non_premium_caption(ctx, page, text_payload)
         x_state = _read_x_publish_composer_state(ctx, page)
@@ -31350,7 +32237,6 @@ def _fill_draft_once_generic(
         _log("[Uploader:douyin] Skip collection selection by design.")
         _log("[Uploader:douyin] Skip self statement selection by design.")
     if platform_name == "bilibili":
-        _prepare_bilibili_publish_dom_defaults(ctx, page)
         _fill_bilibili_title_from_caption(ctx, page, final_caption)
         _select_bilibili_partition(ctx, page, "科技数码")
         _log("[Uploader:bilibili] Skip collection selection by design.")
@@ -31443,7 +32329,7 @@ def _fill_draft_once_generic(
                 _click_bilibili_publish_confirm_button(ctx, page)
             # 闈炴姈闊冲钩鍙板悓鏍疯绛夊緟椤甸潰鍥炴墽锛岄伩鍏嶁€滅偣鍑诲彂甯冨嵆鎴愬姛鈥濈殑璇垽銆?
             if platform_name == "bilibili":
-                wait_seconds = 180
+                wait_seconds = bilibili_publish_feedback_timeout
             elif platform_name == "tiktok":
                 wait_seconds = 180
             elif platform_name == "x":
@@ -31464,6 +32350,10 @@ def _fill_draft_once_generic(
 
         if platform_name == "bilibili":
             _reset_bilibili_publish_probe(ctx)
+        if platform_name == "kuaishou":
+            _reset_kuaishou_publish_probe(ctx)
+            if page is not ctx and hasattr(page, "run_js"):
+                _reset_kuaishou_publish_probe(page)
         if platform_name == "x":
             _reset_x_publish_probe(ctx)
         if platform_name == "douyin":
@@ -31529,7 +32419,7 @@ def _fill_draft_once_generic(
                         page,
                         platform_name="bilibili",
                         expected_tokens=publish_verify_tokens,
-                        timeout_seconds=180,
+                        timeout_seconds=bilibili_publish_feedback_timeout,
                     )
                     _log("[Success:bilibili] 发布已确认（manual-or-auto detected without button click）。")
                     return ctx
@@ -31625,6 +32515,16 @@ def _fill_draft_once_generic(
                     _log(f"[Uploader:bilibili] Publish probe summary: {probe_summary}")
                 if probe_diagnosis:
                     _log(f"[Uploader:bilibili] Publish probe diagnosis: {probe_diagnosis}")
+            if platform_name == "kuaishou":
+                net_ok, net_reason = _detect_kuaishou_publish_via_network(ctx)
+                if (not net_ok) and hasattr(page, "run_js"):
+                    net_ok, net_reason = _detect_kuaishou_publish_via_network(page)
+                if net_ok:
+                    _log(f"[Uploader:kuaishou] Publish accepted by network probe: {net_reason}")
+                    _log("[Success:kuaishou] Publish confirmed via network probe.")
+                    return ctx
+                if net_reason:
+                    _log(f"[Uploader:kuaishou] Publish network probe did not confirm success: {net_reason}")
             if _fallback_publish_to_draft("publish was not confirmed", exc):
                 return ctx
             raise
@@ -31870,6 +32770,7 @@ def fill_draft_bilibili(
                     int(random_schedule_max_minutes),
                 ),
                 expected_tokens=_build_publish_verification_tokens("bilibili", final_caption),
+                publish_feedback_timeout=_resolve_bilibili_publish_feedback_timeout(upload_timeout),
             )
         return target
     finally:

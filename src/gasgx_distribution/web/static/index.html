@@ -322,16 +322,24 @@
           <div class="panel-head">
             <div>
               <h2>VPN 节点管理</h2>
-              <p class="muted">订阅地址保存到本机缓存后，账号管理会读取节点列表并按国家显示。</p>
+              <p class="muted">订阅地址保存到本机缓存后，账号管理会读取节点列表并按国家显示。关闭总开关后会忽略账号绑定的 VPN 节点和代理入口。</p>
             </div>
             <div class="settings-vpn-actions">
               <button class="btn secondary" id="vpn-refresh-nodes" type="button">刷新节点</button>
             </div>
           </div>
           <div class="settings-vpn-grid">
-            <label class="wide-field">订阅地址
-              <input name="vpn.subscription_url" placeholder="https://...">
-            </label>
+            <div class="settings-vpn-main">
+              <label>VPN 总开关
+                <select name="vpn.enabled">
+                  <option value="true">开启</option>
+                  <option value="false">关闭</option>
+                </select>
+              </label>
+              <label class="wide-field">订阅地址
+                <input name="vpn.subscription_url" placeholder="https://...">
+              </label>
+            </div>
             <div class="settings-vpn-summary">
               <span class="system-status" id="vpn-cache-status">未加载</span>
               <p class="muted" id="vpn-cache-summary">启动后会自动读取本地缓存；修改订阅地址后请点击“刷新节点”。</p>
@@ -1235,6 +1243,6 @@
       if (host) node.textContent = host;
     })();
   </script>
-  <script src="/static/app.js?v=20260529-domestic-publish-2"></script>
+  <script src="/static/app.js?v=20260531-vpn-switch-2"></script>
 </body>
 </html>
