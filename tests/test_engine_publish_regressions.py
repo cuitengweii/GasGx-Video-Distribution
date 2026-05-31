@@ -281,6 +281,7 @@ def test_fill_draft_once_generic_bilibili_uses_upload_timeout_for_feedback_wait(
     target = tmp_path / "sample.mp4"
     target.write_bytes(b"video")
     captured_timeouts: list[int] = []
+    captured_cover_recovery: list[bool] = []
 
     class FakeInput:
         def input(self, _value: str) -> None:
@@ -295,6 +296,7 @@ def test_fill_draft_once_generic_bilibili_uses_upload_timeout_for_feedback_wait(
 
     def fake_wait(*_args, **kwargs):
         captured_timeouts.append(int(kwargs.get("timeout_seconds", 0) or 0))
+        captured_cover_recovery.append(bool(kwargs.get("bilibili_cover_recovery")))
         return None
 
     monkeypatch.setattr(engine, "_current_page_matches_publish_entry", lambda *_args, **_kwargs: True)
@@ -332,6 +334,7 @@ def test_fill_draft_once_generic_bilibili_uses_upload_timeout_for_feedback_wait(
 
     assert result is page
     assert 600 in captured_timeouts
+    assert any(captured_cover_recovery)
 
 
 def test_fill_draft_once_generic_bilibili_selects_default_creative_statement(
@@ -699,8 +702,38 @@ def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
     )
 
     assert result is page
+    assert ("\u7acb\u5373\u53d1\u5e03", "\u7acb\u5373\u6295\u7a3f") in clicked_button_texts
+    assert ("\u7acb\u5373\u53d1\u5e03", "\u7acb\u5373\u6295\u7a3f", "\u53d1\u5e03") not in clicked_button_texts
     assert engine.DOUYIN_PUBLISH_BUTTON_TEXTS in clicked_button_texts
     assert finalize_calls["count"] == 1
+
+
+def test_click_douyin_primary_publish_button_uses_js_click_for_bottom_button(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeBtn:
+        def run_js(self, script: str, *_args, **_kwargs):
+            if "getComputedStyle" in script and "getBoundingClientRect" in script:
+                return True
+            if "MouseEvent" in script and "target.click" in script:
+                calls.append("js-click")
+                return True
+            return True
+
+        def click(self, *_args, **_kwargs) -> None:
+            calls.append("native-click")
+
+    class FakeCtx:
+        def ele(self, selector: str, *_args, **_kwargs):
+            if selector == "css:button.button-dhlUZE.primary-cECiOJ.fixed-J9O8Yw":
+                return FakeBtn()
+            return None
+
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_douyin_primary_publish_button(FakeCtx(), None) is True
+    assert calls == ["js-click"]
 
 
 def test_fill_draft_once_generic_xiaohongshu_publish_unconfirmed_manage_verified_treated_as_success(
@@ -1495,6 +1528,78 @@ def test_wait_publish_feedback_bilibili_accepts_delivery_success_marker(monkeypa
     assert timeline["calls"] >= 3
 
 
+def test_wait_publish_feedback_bilibili_recovers_from_missing_cover(monkeypatch) -> None:
+    timeline = {"now": 0.0, "calls": 0}
+    recover_calls: list[int] = []
+
+    def fake_time() -> float:
+        timeline["now"] += 1.0
+        return timeline["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        timeline["now"] += float(seconds)
+
+    def fake_snapshot(*_args, **_kwargs):
+        timeline["calls"] += 1
+        if timeline["calls"] == 1:
+            return ("https://member.bilibili.com/platform/upload/video/frame", "请先上传封面")
+        return ("https://member.bilibili.com/platform/upload/video/frame", "稿件投递成功 查看稿件 再投一条")
+
+    def fake_recover() -> bool:
+        recover_calls.append(1)
+        return True
+
+    monkeypatch.setattr(engine.time, "time", fake_time)
+    monkeypatch.setattr(engine.time, "sleep", fake_sleep)
+    monkeypatch.setattr(engine, "_read_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(engine, "_click_bilibili_publish_confirm_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_retry_bilibili_publish_if_still_editing", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    engine._wait_publish_feedback(
+        object(),
+        object(),
+        platform_name="bilibili",
+        timeout_seconds=8,
+        bilibili_cover_recovery=fake_recover,
+    )
+
+    assert recover_calls == [1]
+    assert timeline["calls"] >= 2
+
+
+def test_publish_bilibili_with_random_schedule_passes_cover_recovery(monkeypatch) -> None:
+    captured: list[object] = []
+
+    def fake_wait(*_args, **kwargs):
+        captured.append(kwargs.get("bilibili_cover_recovery"))
+        return None
+
+    monkeypatch.setattr(engine, "_set_bilibili_random_publish_time", lambda *_args, **_kwargs: "2099-01-01 00:00")
+    monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_click_bilibili_primary_publish_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_click_bilibili_publish_confirm_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_wait_publish_feedback", fake_wait)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    def fake_recover() -> bool:
+        return True
+
+    result = engine._publish_bilibili_with_random_schedule(
+        object(),
+        object(),
+        max_minutes=30,
+        expected_tokens=[],
+        publish_feedback_timeout=240,
+        bilibili_cover_recovery=fake_recover,
+    )
+
+    assert result == "2099-01-01 00:00"
+    assert captured and captured[0] is fake_recover
+
+
 def test_click_bilibili_publish_confirm_button_prefers_dialog_confirm_over_nav_posting(monkeypatch) -> None:
     clicks: list[str] = []
 
@@ -1682,6 +1787,32 @@ def test_click_bilibili_publish_confirm_button_handles_creative_statement_prompt
 
     assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is False
     assert calls["select"] == 2
+
+
+def test_click_bilibili_publish_confirm_button_does_not_submit_when_declare_prompt_remains(monkeypatch) -> None:
+    calls = {"select": 0, "primary": 0}
+
+    class FakeCtx:
+        pass
+
+    monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "_select_bilibili_creative_statement",
+        lambda *_args, **_kwargs: calls.__setitem__("select", calls["select"] + 1),
+    )
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(engine, "_is_bilibili_creative_statement_prompt_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "_click_bilibili_primary_publish_button",
+        lambda *_args, **_kwargs: calls.__setitem__("primary", calls["primary"] + 1) or True,
+    )
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_publish_confirm_button(FakeCtx(), FakeCtx()) is False
+    assert calls == {"select": 2, "primary": 0}
 
 
 def test_click_bilibili_publish_confirm_button_prefers_creative_statement_before_publish(monkeypatch) -> None:

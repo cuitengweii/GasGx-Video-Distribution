@@ -26018,6 +26018,40 @@ def _read_bilibili_creative_statement_state(owner: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _is_bilibili_creative_statement_prompt_visible(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    js = """
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 6 && r.height > 6;
+    }
+    function norm(s) { return String(s || '').replace(/[\\u200B-\\u200D\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim(); }
+    const roots = Array.from(document.querySelectorAll(
+      '[role="dialog"], [aria-modal="true"], dialog, .dialog, .modal, .popup, .popover, .weui-desktop-dialog, .weui-desktop-popover, .bcc-dialog, .bcc-modal'
+    )).filter(isVisible);
+    for (const root of roots) {
+      const rootText = norm((root && root.innerText) || (root && root.textContent) || '');
+      if (!rootText || !/声明/.test(rootText)) continue;
+      const hasGoDeclare = Array.from(root.querySelectorAll('button, [role="button"], a, div, span'))
+        .filter(isVisible)
+        .some(node => /^去声明/.test(norm(node.innerText || node.textContent || '')));
+      if (hasGoDeclare) return true;
+    }
+    return false;
+    """
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            if bool(owner.run_js(js)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _read_bilibili_collection_state(owner: Any) -> dict[str, Any]:
     js = """
     function isVisible(el) {
@@ -26509,18 +26543,6 @@ def _select_bilibili_creative_statement(
     if (!bestNode) return alreadySelected ? {state: 'already', current: triggerText} : {state: 'option_not_found', current: triggerText};
     const clicked = clickNode(bestNode.closest('.bcc-select-option-list li.bcc-option, .bcc-select-option-list article, .option-item, [role="option"], li, button, a, .selector-item') || bestNode);
     if (clicked) {
-      const reconcileInput = input || findCurrentInput(trigger || container);
-      if (reconcileInput) {
-        try {
-          reconcileInput.value = target;
-          reconcileInput.dispatchEvent(new Event('input', {bubbles: true}));
-          reconcileInput.dispatchEvent(new Event('change', {bubbles: true}));
-          reconcileInput.dispatchEvent(new Event('blur', {bubbles: true}));
-          if (typeof reconcileInput.blur === 'function') {
-            reconcileInput.blur();
-          }
-        } catch (e) {}
-      }
       const after = currentText(input || trigger || container);
       const confirmRoots = [container, trigger, document];
       Array.from(document.querySelectorAll(
@@ -26547,13 +26569,6 @@ def _select_bilibili_creative_statement(
       if (after.replace(/\s+/g, '') === targetNorm) {
         return {state: 'clicked', current: after, option: clean(bestNode.innerText || bestNode.textContent || '')};
       }
-    }
-    if (input && currentText(input).replace(/\s+/g, '') !== targetNorm) {
-      try {
-        input.value = target;
-        input.dispatchEvent(new Event('input', {bubbles: true}));
-        input.dispatchEvent(new Event('change', {bubbles: true}));
-      } catch (e) {}
     }
     return {state: clicked ? 'clicked' : 'click_fail', current: currentText(input || trigger || container), option: clean(bestNode.innerText || bestNode.textContent || '')};
     """
@@ -28411,6 +28426,10 @@ def _click_x_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool
 def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
     selectors = (
         "css:button.button-dhlUZE.primary-cECiOJ.fixed-J9O8Yw",
+        "xpath://button[normalize-space(.)='发布']",
+        "xpath://button[normalize-space(.)='发布作品']",
+        "xpath://button[normalize-space(.)='立即发布']",
+        "xpath://button[normalize-space(.)='确认发布']",
         "xpath://button[normalize-space(.)='鍙戝竷']",
         "xpath://button[normalize-space(.)='鍙戝竷浣滃搧']",
         "xpath://button[normalize-space(.)='绔嬪嵆鍙戝竷']",
@@ -28439,7 +28458,22 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
                 pass
             _humanized_publish_reaction_pause("douyin primary publish click")
             try:
-                btn.click()
+                clicked = bool(
+                    btn.run_js(
+                        """
+                        const target = this.closest('button, [role="button"], a') || this;
+                        try { target.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+                        try { target.click(); return true; } catch (e) {}
+                        try {
+                          target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+                          return true;
+                        } catch (e) {}
+                        return false;
+                        """
+                    )
+                )
+                if not clicked:
+                    btn.click()
             except Exception:
                 try:
                     btn.click(by_js=True)
@@ -28479,21 +28513,24 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
         const wrap = el.closest('form, section, footer, .container, .publish, .setting, div') || el.parentElement || el;
         const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 260);
         let score = 0;
+        if (text === '\u53d1\u5e03') score += 28;
+        if (text === '\u7acb\u5373\u53d1\u5e03' || text === '\u53d1\u5e03\u4f5c\u54c1' || text === '\u786e\u8ba4\u53d1\u5e03') score += 18;
         if (text === '鍙戝竷') score += 20;
         if (text === '绔嬪嵆鍙戝竷' || text === '鍙戝竷浣滃搧' || text === '鍙戝竷鎻愪氦') score += 12;
         if (/button/i.test(el.tagName || '')) score += 8;
         if (/primary|publish|semi-button/.test(attrs.toLowerCase())) score += 6;
+        if (/\u6682\u5b58\u79bb\u5f00|\u53d1\u5e03\u65f6\u95f4|\u8c01\u53ef\u4ee5\u770b|\u540c\u65f6\u53d1\u5e03/.test(wrapText)) score += 10;
         if (/鏆傚瓨绂诲紑|鍙戝竷鏃堕棿|璋佸彲浠ョ湅|鍚屾鑷冲ご鏉?.test(wrapText)) score += 8;
         if (text === '閸欐垵绔锋担婊冩惂' && !/鍙戝竷鏃堕棿|绔嬪嵆鍙戝竷|瀹氭椂鍙戝竷|鍙栨秷/.test(wrapText)) score -= 12;
         return {el, text, score};
       })
       .filter(item => item.text)
-      .filter(item => /鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧|鍙戝竷鎻愪氦/.test(item.text))
-      .filter(item => !/楂樻竻鍙戝竷|鍙戝竷璁剧疆|鍚屾椂鍙戝竷|鏆傚瓨|鑽夌|淇濆瓨/.test(item.text))
+      .filter(item => /\u53d1\u5e03|\u7acb\u5373\u53d1\u5e03|\u53d1\u5e03\u4f5c\u54c1|\u786e\u8ba4\u53d1\u5e03|鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧|鍙戝竷鎻愪氦/.test(item.text))
+      .filter(item => !/\u9ad8\u6e05\u53d1\u5e03|\u53d1\u5e03\u8bbe\u7f6e|\u540c\u65f6\u53d1\u5e03|\u6682\u5b58|\u8349\u7a3f|\u4fdd\u5b58|楂樻竻鍙戝竷|鍙戝竷璁剧疆|鍚屾椂鍙戝竷|鏆傚瓨|鑽夌|淇濆瓨/.test(item.text))
       .filter(item => !disabled(item.el));
     if (!candidates.length) return false;
     candidates.sort((a, b) => b.score - a.score);
-    const preferred = candidates.find(item => /^(鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧|鍙戝竷鎻愪氦)$/.test(item.text))
+    const preferred = candidates.find(item => /^(\u53d1\u5e03|\u7acb\u5373\u53d1\u5e03|\u53d1\u5e03\u4f5c\u54c1|\u786e\u8ba4\u53d1\u5e03|鍙戝竷|绔嬪嵆鍙戝竷|鍙戝竷浣滃搧|鍙戝竷鎻愪氦)$/.test(item.text))
       || candidates[0];
     try {
       const target = preferred.el.closest('button, [role="button"], a') || preferred.el;
@@ -28513,7 +28550,7 @@ def _click_douyin_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) ->
         except Exception:
             ok = False
         if ok:
-            _log("[Uploader:douyin] Clicked publish button by dedicated selector.")
+            _log("[Uploader:douyin] Clicked publish button by JS scored selector.")
             return True
     return False
 
@@ -29615,7 +29652,14 @@ def _click_bilibili_publish_confirm_button(primary_ctx: Any, fallback_ctx: Any) 
     if _click_bilibili_creative_statement_prompt_go_declare(primary_ctx, fallback_ctx):
         _humanized_publish_reaction_pause("bilibili creative statement prompt settle")
         _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
-        # After leaving the declare panel, Bilibili often requires re-triggering primary publish.
+        if _is_bilibili_creative_statement_prompt_visible(primary_ctx, fallback_ctx):
+            _log(
+                "[Uploader:bilibili] Creative statement prompt still visible after selection; "
+                "skip submit click until declaration state is accepted."
+            )
+            return False
+        # After leaving the declare panel, Bilibili often requires re-triggering
+        # primary publish, but only after the prompt has actually disappeared.
         _click_bilibili_primary_publish_button(primary_ctx, fallback_ctx)
     visible_actions = _collect_visible_action_texts(primary_ctx, fallback_ctx)
     has_primary_like = any(
@@ -30981,6 +31025,7 @@ def _wait_publish_feedback(
     platform_name: str,
     expected_tokens: Optional[Sequence[str]] = None,
     timeout_seconds: int = 25,
+    bilibili_cover_recovery: Optional[Callable[[], bool]] = None,
 ) -> None:
     x_safe_recovery_caption = f"Cybertruck clip {time.strftime('%m%d-%H%M', time.localtime())}"
     success_text_markers: dict[str, tuple[str, ...]] = {
@@ -30992,7 +31037,7 @@ def _wait_publish_feedback(
         "tiktok": ("uploaded", "your video is being uploaded", "post uploaded", "posted"),
     }
     failure_text_markers: dict[str, tuple[str, ...]] = {
-        "douyin": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "发布时间"),
+        "douyin": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规"),
         "xiaohongshu": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
         "kuaishou": ("发布失败", "发布出错", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
         "bilibili": ("投稿失败", "发布失败", "提交失败", "网络异常", "请完善", "不能为空", "违规", "未通过", "驳回"),
@@ -31049,6 +31094,7 @@ def _wait_publish_feedback(
 
     warned = False
     republish_attempts = 0
+    douyin_reclick_attempts = 0
     bilibili_reclick_attempts = 0
     x_char_recovery_attempted = False
     x_empty_caption_recovery_attempted = False
@@ -31069,6 +31115,25 @@ def _wait_publish_feedback(
         if platform_name == "douyin":
             # Best effort: some accounts show a delayed confirm dialog.
             _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
+
+            if douyin_reclick_attempts < 4 and (now - loop_started) >= (4 + 5 * douyin_reclick_attempts):
+                still_editing = (
+                    ("creator-micro/content/post/video" in url_lower)
+                    or ("creator-micro/content/upload" in url_lower)
+                    or ("\u4f5c\u54c1\u63cf\u8ff0" in text)
+                    or ("\u53d1\u5e03\u6682\u5b58\u79bb\u5f00" in text)
+                    or ("浣滃搧鎻忚堪" in text)
+                )
+                if still_editing:
+                    douyin_reclick_attempts += 1
+                    _log(
+                        "[Uploader:douyin] Still on editor after publish click; "
+                        f"retry direct publish click {douyin_reclick_attempts}/4 without waiting for checker."
+                    )
+                    if _click_douyin_primary_publish_button(primary_ctx, fallback_ctx):
+                        _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
+                        _extend_feedback_window("douyin-direct-reclick", bump_seconds=5.0)
+                    continue
 
             if "鏈彂甯冪殑瑙嗛" in text and "缁х画缂栬緫" in text:
                 if republish_attempts >= 2:
@@ -31165,6 +31230,20 @@ def _wait_publish_feedback(
             _click_xiaohongshu_publish_confirm_button(primary_ctx, fallback_ctx)
         elif platform_name == "bilibili":
             _click_bilibili_publish_confirm_button(primary_ctx, fallback_ctx)
+            if "请先上传封面" in text:
+                if bilibili_cover_recovery is not None:
+                    _log("[Uploader:bilibili] Publish gate reported missing cover; retrying cover editor once.")
+                    try:
+                        recovered = bool(bilibili_cover_recovery())
+                    except Exception as exc:
+                        recovered = False
+                        _log(f"[Uploader:bilibili] Cover recovery failed: {exc}")
+                    if recovered:
+                        _humanized_publish_settle_pause("bilibili cover recovery")
+                        continue
+                raise RuntimeError(
+                    "bilibili publish blocked by missing cover; cover recovery was not available or failed."
+                )
             if bilibili_reclick_attempts < 3 and (time.time() - loop_started) >= (12 * (bilibili_reclick_attempts + 1)):
                 if _retry_bilibili_publish_if_still_editing(primary_ctx, fallback_ctx):
                     bilibili_reclick_attempts += 1
@@ -31852,6 +31931,7 @@ def _publish_bilibili_with_random_schedule(
     max_minutes: int,
     expected_tokens: Optional[Sequence[str]] = None,
     publish_feedback_timeout: int = BILIBILI_PUBLISH_FEEDBACK_TIMEOUT_SECONDS,
+    bilibili_cover_recovery: Optional[Callable[[], bool]] = None,
 ) -> str:
     scheduled = _set_bilibili_random_publish_time(
         primary_ctx,
@@ -31879,6 +31959,7 @@ def _publish_bilibili_with_random_schedule(
         platform_name="bilibili",
         expected_tokens=expected_tokens,
         timeout_seconds=publish_feedback_timeout,
+        bilibili_cover_recovery=bilibili_cover_recovery,
     )
     _log(f"[Success:bilibili] 已设置随机定时并确认发布（scheduled={scheduled}）")
     return scheduled
@@ -32242,6 +32323,26 @@ def _fill_draft_once_generic(
         _log("[Uploader:bilibili] Skip collection selection by design.")
     if platform_name == "kuaishou":
         _scroll_kuaishou_publish_controls_into_view(ctx, page)
+    bilibili_cover_recovery: Optional[Callable[[], bool]] = None
+    if platform_name == "bilibili":
+        bilibili_cover_recovery_attempted = False
+
+        def _recover_bilibili_cover_once() -> bool:
+            nonlocal bilibili_cover_recovery_attempted
+            if bilibili_cover_recovery_attempted:
+                return False
+            bilibili_cover_recovery_attempted = True
+            _log(
+                "[Uploader:bilibili] Publish reported missing cover; reopening cover editor and re-uploading once."
+            )
+            try:
+                _dismiss_unfinished_dialog(ctx, page, platform_name="bilibili")
+            except Exception:
+                pass
+            _prepare_bilibili_cover_editor(page, ctx, page, target)
+            return True
+
+        bilibili_cover_recovery = _recover_bilibili_cover_once
     if save_draft:
         if not _click_first_matching_button(ctx, page, draft_button_texts, platform_name=platform_name):
             if platform_name in {"douyin", "kuaishou", "bilibili"} and _dismiss_unfinished_dialog(ctx, page, platform_name=platform_name):
@@ -32261,7 +32362,7 @@ def _fill_draft_once_generic(
             _click_first_matching_button(
                 ctx,
                 page,
-                ("\u7acb\u5373\u53d1\u5e03", "\u7acb\u5373\u6295\u7a3f", "\u53d1\u5e03"),
+                ("\u7acb\u5373\u53d1\u5e03", "\u7acb\u5373\u6295\u7a3f"),
                 platform_name="douyin",
             )
             douyin_mode = "immediate"
@@ -32346,6 +32447,7 @@ def _fill_draft_once_generic(
                 platform_name=platform_name,
                 expected_tokens=publish_verify_tokens,
                 timeout_seconds=wait_seconds,
+                bilibili_cover_recovery=bilibili_cover_recovery if platform_name == "bilibili" else None,
             )
 
         if platform_name == "bilibili":
@@ -32420,6 +32522,7 @@ def _fill_draft_once_generic(
                         platform_name="bilibili",
                         expected_tokens=publish_verify_tokens,
                         timeout_seconds=bilibili_publish_feedback_timeout,
+                        bilibili_cover_recovery=bilibili_cover_recovery,
                     )
                     _log("[Success:bilibili] 发布已确认（manual-or-auto detected without button click）。")
                     return ctx
@@ -32762,6 +32865,24 @@ def fill_draft_bilibili(
             notify_env_prefix=notify_env_prefix,
         )
         if auto_publish_random_schedule:
+            bilibili_cover_recovery_attempted = False
+
+            def _recover_bilibili_cover_once() -> bool:
+                nonlocal bilibili_cover_recovery_attempted
+                if bilibili_cover_recovery_attempted:
+                    return False
+                bilibili_cover_recovery_attempted = True
+                _log(
+                    "[Uploader:bilibili] Publish reported missing cover during scheduled flow; "
+                    "reopening cover editor and re-uploading once."
+                )
+                try:
+                    _dismiss_unfinished_dialog(ctx, work_page, platform_name="bilibili")
+                except Exception:
+                    pass
+                _prepare_bilibili_cover_editor(work_page, ctx, work_page, target)
+                return True
+
             _publish_bilibili_with_random_schedule(
                 primary_ctx=ctx,
                 fallback_ctx=work_page,
@@ -32771,6 +32892,7 @@ def fill_draft_bilibili(
                 ),
                 expected_tokens=_build_publish_verification_tokens("bilibili", final_caption),
                 publish_feedback_timeout=_resolve_bilibili_publish_feedback_timeout(upload_timeout),
+                bilibili_cover_recovery=_recover_bilibili_cover_once,
             )
         return target
     finally:
