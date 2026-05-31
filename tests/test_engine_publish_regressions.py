@@ -597,6 +597,8 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
     monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
     monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_xiaohongshu_title_from_caption", lambda *_args, **_kwargs: "title")
+    monkeypatch.setattr(engine, "_fill_optional_platform_title_field", lambda *_args, **_kwargs: "title")
     monkeypatch.setattr(
         engine,
         "_select_douyin_collection",
@@ -637,7 +639,7 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
 
     assert ("SAVE_DRAFT",) in clicked_button_texts
     assert collection_calls == []
-    assert self_statement_calls == []
+    assert self_statement_calls == ["无需添加自主声明"]
 
 
 def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
@@ -677,7 +679,10 @@ def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
     monkeypatch.setattr(engine, "_find_upload_file_input_generic", lambda *_args, **_kwargs: FakeInput())
     monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
     monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_build_xiaohongshu_title_from_caption", lambda *_args, **_kwargs: "title")
+    monkeypatch.setattr(engine, "_fill_optional_platform_title_field", lambda *_args, **_kwargs: "title")
     monkeypatch.setattr(engine, "_select_douyin_collection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_douyin_self_statement", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_click_douyin_primary_publish_button", lambda *_args, **_kwargs: False)
@@ -706,6 +711,32 @@ def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
     assert ("\u7acb\u5373\u53d1\u5e03", "\u7acb\u5373\u6295\u7a3f", "\u53d1\u5e03") not in clicked_button_texts
     assert engine.DOUYIN_PUBLISH_BUTTON_TEXTS in clicked_button_texts
     assert finalize_calls["count"] == 1
+
+
+def test_finalize_douyin_publish_skips_feedback_wait(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(engine, "_click_douyin_publish_confirm_button", lambda *_args, **_kwargs: calls.append("confirm") or True)
+    monkeypatch.setattr(engine, "_humanized_publish_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_wait_publish_feedback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("douyin feedback wait should be skipped")),
+    )
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    result = engine._finalize_douyin_publish(object(), object(), "immediate")
+
+    assert result == "immediate"
+    assert calls == ["confirm"]
+
+
+def test_finalize_douyin_publish_requires_confirm_click(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_click_douyin_publish_confirm_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="confirm button was not located"):
+        engine._finalize_douyin_publish(object(), object(), "immediate")
 
 
 def test_click_douyin_primary_publish_button_uses_js_click_for_bottom_button(monkeypatch) -> None:
@@ -1689,10 +1720,43 @@ def test_click_bilibili_primary_publish_button_uses_ancestor_target(monkeypatch)
             raise AssertionError("JS fallback should not run when selector click succeeds")
 
     monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_read_bilibili_creative_statement_state",
+        lambda *_args, **_kwargs: {"hasField": True, "current": "内容无需标注"},
+    )
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
 
     assert engine._click_bilibili_primary_publish_button(FakeCtx(), FakeCtx()) is True
     assert clicks == ["ancestor"]
+
+
+def test_click_bilibili_primary_publish_button_requires_creative_statement_ready(monkeypatch) -> None:
+    class FakeBtn:
+        def run_js(self, *_args, **_kwargs):
+            return False
+
+        def click(self, *_args, **_kwargs) -> None:
+            raise AssertionError("should not click publish when creative statement is not ready")
+
+    class FakeCtx:
+        def ele(self, *_args, **_kwargs):
+            return FakeBtn()
+
+        def run_js(self, *_args, **_kwargs):
+            return False
+
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_read_bilibili_creative_statement_state",
+        lambda *_args, **_kwargs: {"hasField": True, "current": "原创内容"},
+    )
+    monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._click_bilibili_primary_publish_button(FakeCtx(), FakeCtx()) is False
 
 
 def test_click_bilibili_publish_confirm_button_uses_ancestor_target(monkeypatch) -> None:

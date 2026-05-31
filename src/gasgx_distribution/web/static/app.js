@@ -2268,12 +2268,25 @@ function accountDomesticOpenButtonMeta(account) {
   };
 }
 
+function accountDomesticOpenIcon() {
+  return `<span class="platform-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M6 4.8h6.2a2 2 0 0 1 1.4.6l3 3a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6.8a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8"/><path d="M13.5 5v4.2H18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.6 12h4.8M7.6 15h8.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
+}
+
+function accountDomesticPublishIcon() {
+  return `<span class="platform-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4.5 12.5 19.2 4.8a.8.8 0 0 1 1.1 1.1l-4.7 13.8a.8.8 0 0 1-1.5.1l-2.4-5.1-5.1-2.4a.8.8 0 0 1-.1-1.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m11 14 4.8-4.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
+}
+
+function accountPlatformToggleIcon() {
+  return `<span class="platform-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+}
+
 function accountDomesticOpenButtonMarkup(account) {
   const meta = accountDomesticOpenButtonMeta(account);
   const key = accountDomesticOpenKey(account?.id);
   const apiId = accountApiId(account);
   return `
     <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-api-id="${escapeHtml(String(apiId))}" data-account-domestic-open="${escapeHtml(key)}" data-account-domestic-open-state="${escapeHtml(meta.mode)}" data-open="${escapeHtml(`${key}:domestic`)}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
+      ${accountDomesticOpenIcon()}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
         <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
@@ -2368,6 +2381,7 @@ function updateAccountDomesticOpenButtons() {
     if (!account) return;
     const meta = accountDomesticOpenButtonMeta(account);
     const nextHtml = `
+      ${accountDomesticOpenIcon()}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
         <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
@@ -2448,6 +2462,7 @@ function accountDomesticPublishButtonMarkup(account) {
   const key = accountDomesticPublishKey(account?.id);
   return `
     <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-domestic-publish="${escapeHtml(key)}" data-account-domestic-publish-state="${escapeHtml(meta.mode)}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
+      ${accountDomesticPublishIcon()}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
         <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
@@ -2478,6 +2493,7 @@ function updateAccountDomesticPublishButtons() {
     const meta = accountDomesticPublishButtonMeta(account);
     if (meta.mode === "cooldown") needsCountdownTick = true;
     const nextHtml = `
+      ${accountDomesticPublishIcon()}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
         ${meta.hint ? `<small class="platform-action-hint">${escapeHtml(meta.hint)}</small>` : ""}
@@ -2849,11 +2865,6 @@ function renderAccounts() {
             <div class="account-title-main">
               <strong class="account-title">${escapeHtml(title)}</strong>
               <button class="account-edit-btn" type="button" title="修改账号名称" aria-label="修改账号名称" data-no-global-loading="1" data-account-edit="name">${accountEditIcon()}</button>
-              <button class="account-status-toggle ${accountStatusEnabled(account) ? "enabled" : "paused"}" type="button" data-no-global-loading="1" data-account-status-toggle="${account.id}" aria-pressed="${accountStatusEnabled(account)}" title="${accountStatusEnabled(account) ? "点击暂停账号" : "点击启用账号"}">
-                <span class="account-status-toggle-knob" aria-hidden="true"></span>
-                <span>${escapeHtml(accountStatusLabel(account.status))}</span>
-              </button>
-              <button class="btn ghost btn-sm danger-action account-delete-inline" type="button" data-delete-account="${account.id}" data-account-name="${escapeHtml(displayName)}" title="删除账号" aria-label="删除账号">${accountDeleteIcon()}</button>
               <span class="chip success-chip account-success-chip-inline account-success-chip-after-delete" title="基于真实发布成功记录去重统计">已发布成功 ${account.publish_success_count || 0}</span>
             </div>
           </div>
@@ -2867,7 +2878,6 @@ function renderAccounts() {
               <select data-account-vpn-node="${account.id}">
                 ${accountVpnNodeOptionsMarkup(accountVpnNodeKey(account))}
               </select>
-              <span class="account-preference-country" data-account-vpn-country="${account.id}">国家：${escapeHtml(accountVpnCountryLabel(account))}</span>
             </label>
             <label class="account-setting account-setting-vpn-proxy">
               <span class="account-setting-label">代理入口</span>
@@ -2881,16 +2891,22 @@ function renderAccounts() {
             </label>
           </div>
         </div>
+        <div class="account-row-actions">
+          <button class="account-status-toggle ${accountStatusEnabled(account) ? "enabled" : "paused"}" type="button" data-no-global-loading="1" data-account-status-toggle="${account.id}" aria-pressed="${accountStatusEnabled(account)}" title="${accountStatusEnabled(account) ? "点击暂停账号" : "点击启用账号"}">
+            <span class="account-status-toggle-knob" aria-hidden="true"></span>
+            <span>${escapeHtml(accountStatusLabel(account.status))}</span>
+          </button>
+          <button class="btn ghost btn-sm danger-action account-delete-inline" type="button" data-delete-account="${account.id}" data-account-name="${escapeHtml(displayName)}" title="删除账号" aria-label="删除账号">${accountDeleteIcon()}</button>
+        </div>
       </div>
       <div class="account-platform-section ${platformExpanded ? "" : "is-collapsed"}">
         <div class="account-platform-head">
           <div class="account-platform-summary">
             <div class="account-platform-summary-line">
-              <strong>平台信息</strong>
               <div class="account-platform-summary-actions">
                 ${accountDomesticOpenButtonMarkup(account)}
                 ${accountDomesticPublishButtonMarkup(account)}
-                <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}">${platformExpanded ? "折叠平台信息" : "展开平台信息"}</button>
+                <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}" aria-label="${platformExpanded ? "折叠平台信息" : "展开平台信息"}">${accountPlatformToggleIcon()}</button>
               </div>
             </div>
           </div>
@@ -3118,10 +3134,6 @@ async function updateAccountPreference(select) {
     const before = accountNoticeSnapshot(account);
     const updated = await api(`/api/accounts/${accountApiId(account)}`, { method: "PATCH", body: JSON.stringify(payload), skipOperationNotice: true });
     replaceAccountInState(updated);
-    const countryNode = vpnNodeByKey(accountVpnNodeKey(updated));
-    const countryNodeLabel = countryNode ? vpnNodeCountryLabel(countryNode) : "未绑定";
-    const countryNodeLabelNode = row.querySelector(`[data-account-vpn-country="${account.id}"]`);
-    if (countryNodeLabelNode) countryNodeLabelNode.textContent = `国家：${countryNodeLabel}`;
     const proxyInput = row.querySelector(`[data-account-vpn-proxy-url="${account.id}"]`);
     if (proxyInput instanceof HTMLInputElement) proxyInput.value = accountVpnProxyUrl(updated);
     void emitOperationNotice({

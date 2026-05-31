@@ -24591,6 +24591,122 @@ def _force_xiaohongshu_caption(primary_ctx: Any, fallback_ctx: Any, caption: str
     return False
 
 
+def _force_douyin_caption(primary_ctx: Any, fallback_ctx: Any, caption: str) -> bool:
+    target = str(caption or "").strip()
+    verify_marker = _caption_verification_marker(target)
+    if not target or not verify_marker:
+        return False
+    js = r"""
+    function norm(s) {
+      return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function isVisible(el) {
+      if (!el) return false;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    }
+    function readText(node) {
+      if (!node) return '';
+      if (node.isContentEditable || String(node.getAttribute('contenteditable') || '').toLowerCase() === 'plaintext-only') {
+        return norm(node.innerText || node.textContent || '');
+      }
+      if (typeof node.value === 'string') return norm(node.value);
+      return norm(node.textContent || '');
+    }
+    function setText(node, value) {
+      try { node.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+      try { node.focus(); } catch (e) {}
+      try { node.click(); } catch (e) {}
+      const tag = String(node.tagName || '').toLowerCase();
+      const editable = node.isContentEditable || String(node.getAttribute('contenteditable') || '').toLowerCase() === 'plaintext-only';
+      if (editable) {
+        node.innerHTML = '';
+        node.textContent = value;
+      } else if (tag === 'textarea') {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+        if (setter && setter.set) setter.set.call(node, value);
+        else node.value = value;
+      } else {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        if (setter && setter.set) setter.set.call(node, value);
+        else node.value = value;
+      }
+      try {
+        node.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: value}));
+      } catch (e) {
+        node.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+      node.dispatchEvent(new Event('change', {bubbles: true}));
+      node.dispatchEvent(new Event('blur', {bubbles: true}));
+      return readText(node);
+    }
+    const desired = String(arguments[0] || '').trim();
+    if (!desired) return { state: 'skip', value: '' };
+    const candidates = Array.from(document.querySelectorAll(
+      "textarea, input[type='text'], [contenteditable='true'], [contenteditable='plaintext-only'], div[role='textbox'], .input-editor, .notranslate"
+    ))
+      .filter(isVisible)
+      .map((node) => {
+        const attrs = [
+          node.getAttribute('placeholder') || '',
+          node.getAttribute('data-placeholder') || '',
+          node.getAttribute('aria-label') || '',
+          String(node.className || ''),
+          String(node.getAttribute('role') || ''),
+          String(node.getAttribute('data-e2e') || ''),
+        ].join(' ');
+        const wrap = node.closest('form, section, .publish, .editor, .content, .post, .form-item, div') || node.parentElement || node;
+        const wrapText = norm((wrap && wrap.innerText) || '').slice(0, 520);
+        const joined = attrs + ' ' + wrapText;
+        let score = 0;
+        if (/(作品描述|视频描述|描述|文案|caption|desc|content|text)/i.test(joined)) score += 30;
+        if (/post-desc|input-editor|editor|contenteditable|notranslate/i.test(joined)) score += 14;
+        if (String(node.tagName || '').toLowerCase() === 'textarea') score += 12;
+        if (node.isContentEditable || String(node.getAttribute('contenteditable') || '').toLowerCase() === 'plaintext-only') score += 12;
+        if (String(node.getAttribute('role') || '').toLowerCase() === 'textbox') score += 10;
+        if (/(标题|title|topic|话题|合集|位置|地点|商品|链接|搜索|search|cover|封面)/i.test(joined)) score -= 35;
+        const current = readText(node);
+        if (current && current.length > 200) score -= 8;
+        return { node, score, attrs: norm(attrs).slice(0, 120), wrap: wrapText.slice(0, 120) };
+      })
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return { state: 'not_found', value: '' };
+    const chosen = candidates[0];
+    const current = setText(chosen.node, desired);
+    return { state: 'set', value: current, score: chosen.score, attrs: chosen.attrs, wrap: chosen.wrap };
+    """
+    for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        try:
+            result = owner.run_js(js, target)
+        except Exception as exc:
+            _log(f"[Uploader:douyin] Caption JS fallback exception: {_single_line_preview(str(exc), limit=120) or exc.__class__.__name__}")
+            result = None
+        if not isinstance(result, dict):
+            continue
+        state = str(result.get("state") or "").strip().lower()
+        if state != "set":
+            _log(
+                "[Uploader:douyin] Caption JS fallback did not set: "
+                f"state={state or '-'}, score={result.get('score') or '-'}, "
+                f"attrs={_single_line_preview(str(result.get('attrs') or ''), limit=80) or '-'}, "
+                f"wrap={_single_line_preview(str(result.get('wrap') or ''), limit=80) or '-'}"
+            )
+            continue
+        current = _normalize_text(str(result.get("value") or ""), limit=1200)
+        if _caption_marker_exists(current, verify_marker):
+            _log(
+                "[Uploader:douyin] Caption filled and verified by JS fallback "
+                f"(score={result.get('score') or '-'})."
+            )
+            return True
+    return False
+
+
 def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, platform_name: str) -> None:
     caption = _prepare_caption_for_platform(caption, platform_name=platform_name)
     verify_marker = _caption_verification_marker(caption)
@@ -24763,6 +24879,14 @@ def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, pla
                 return
 
     if strict_verify:
+        if platform_name == "douyin" and _force_douyin_caption(primary_ctx, fallback_ctx, caption):
+            return
+        if platform_name == "douyin":
+            _log(
+                "[Uploader:douyin] Caption field not detectable after upload; "
+                "continue by operator policy without blocking publish."
+            )
+            return
         if platform_name == "xiaohongshu":
             if _force_xiaohongshu_caption(primary_ctx, fallback_ctx, caption):
                 return
@@ -26446,7 +26570,7 @@ def _select_bilibili_creative_statement(
       const match = options.find((option) => {
         const optionText = clean(option.innerText || option.textContent || option.value || '');
         const optionNorm = optionText.replace(/\s+/g, '');
-        return optionNorm === targetNorm || optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm);
+        return targetAliases.has(optionNorm) || optionNorm === targetNorm;
       });
       if (!match) return {state: 'option_not_found', current: triggerText, available: options.map((option) => clean(option.innerText || option.textContent || option.value || '')).filter(Boolean)};
       if (trigger.value === match.value || currentText(trigger) === clean(match.innerText || match.textContent || match.value || '')) {
@@ -26511,7 +26635,7 @@ def _select_bilibili_creative_statement(
         const optionNorm = txt.replace(/\s+/g, '');
         const score = targetAliases.has(optionNorm)
           ? 30
-          : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 18 : 0);
+          : (optionNorm === targetNorm ? 18 : 0);
         if (!score) continue;
         if (targetAliases.has(optionNorm) || optionNorm === targetNorm) {
           exactMatches.push(node);
@@ -26530,7 +26654,7 @@ def _select_bilibili_creative_statement(
         const optionNorm = txt.replace(/\s+/g, '');
         const score = targetAliases.has(optionNorm)
           ? 28
-          : (optionNorm.includes(targetNorm) || targetNorm.includes(optionNorm) ? 14 : 0);
+          : (optionNorm === targetNorm ? 14 : 0);
         if (!score) continue;
         if (targetAliases.has(optionNorm) || optionNorm === targetNorm) {
           exactMatches.push(node);
@@ -27622,6 +27746,7 @@ def _select_douyin_self_statement(
 
     for attempt in range(1, 7):
         action_states: list[str] = []
+        clicked_once = False
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
@@ -27630,7 +27755,10 @@ def _select_douyin_self_statement(
             except Exception:
                 action = {}
             if isinstance(action, dict):
-                action_states.append(str(action.get("state", "") or ""))
+                action_state = str(action.get("state", "") or "")
+                action_states.append(action_state)
+                if action_state in {"clicked", "selected"}:
+                    clicked_once = True
             else:
                 action_states.append("none")
             try:
@@ -27645,6 +27773,9 @@ def _select_douyin_self_statement(
             current = _normalize_douyin_self_statement_value(str(state.get("current", "") or ""))
             if bool(state.get("hasField")) and current == target_norm:
                 _log(f"[Uploader:douyin] Self statement selected: {target}")
+                return
+            if clicked_once and not bool(state.get("hasField")):
+                _log(f"[Uploader:douyin] Self statement option clicked and field collapsed: {target}")
                 return
         _log(
             f"[Uploader:douyin] Self statement select retry {attempt}/6: "
@@ -29392,6 +29523,24 @@ def _click_kuaishou_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) 
 
 
 def _click_bilibili_primary_publish_button(primary_ctx: Any, fallback_ctx: Any) -> bool:
+    # Must complete creative statement before any primary publish click.
+    _select_bilibili_creative_statement(primary_ctx, fallback_ctx, "内容无需标注")
+    declaration_ready = False
+    for owner in (primary_ctx, fallback_ctx):
+        if not owner:
+            continue
+        state = _read_bilibili_creative_statement_state(owner)
+        current = _normalize_bilibili_creative_statement_value(str(state.get("current", "") or ""))
+        if bool(state.get("hasField")) and current == "无需添加自主声明":
+            declaration_ready = True
+            break
+    if not declaration_ready:
+        _log(
+            "[Uploader:bilibili] Creative statement not ready "
+            "(expected=内容无需标注/无需添加自主声明); skip primary publish click."
+        )
+        return False
+
     selectors = (
         "xpath://button[contains(@class,'primary') and contains(@class,'submit')]",
         "xpath://button[contains(@class,'publish') and not(@disabled)]",
@@ -31510,33 +31659,18 @@ def _finalize_douyin_publish(
     expected_tokens: Optional[Sequence[str]] = None,
 ) -> str:
     current_mode = str(mode or "immediate")
-    _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
-    try:
-        _wait_publish_feedback(
-            primary_ctx,
-            fallback_ctx,
-            platform_name="douyin",
-            expected_tokens=expected_tokens,
-            timeout_seconds=(90 if current_mode == "scheduled" else 45),
-        )
-        return current_mode
-    except Exception as exc:
-        if current_mode != "scheduled":
-            raise
-        _log(f"[Uploader:douyin] Scheduled publish not confirmed, fallback to immediate: {exc}")
-        _click_first_matching_button(primary_ctx, fallback_ctx, ("绔嬪嵆鍙戝竷",), platform_name="douyin")
-        _humanized_publish_retry_pause("douyin immediate fallback settle")
-        if not _click_douyin_primary_publish_button(primary_ctx, fallback_ctx):
-            raise RuntimeError("douyin immediate fallback failed: publish button not clickable.") from exc
-        _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
-        _wait_publish_feedback(
-            primary_ctx,
-            fallback_ctx,
-            platform_name="douyin",
-            expected_tokens=expected_tokens,
-            timeout_seconds=45,
-        )
-        return "immediate_fallback"
+    confirmed = _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
+    if not confirmed:
+        raise RuntimeError("douyin publish confirm button was not located after primary publish click.")
+    _log(
+        "[Uploader:douyin] Publish confirmation clicked; skip post-submit feedback wait by operator policy."
+    )
+    _humanized_publish_pause(
+        "douyin post-submit settle without feedback polling",
+        minimum_seconds=8.0,
+        maximum_seconds=12.0,
+    )
+    return current_mode
 
 
 def _dismiss_unfinished_dialog(primary_ctx: Any, fallback_ctx: Any, platform_name: str) -> bool:
@@ -32311,12 +32445,26 @@ def _fill_draft_once_generic(
         if not tiktok_caption_ok:
             raise RuntimeError("tiktok caption fill verification failed before publish.")
     else:
+        if platform_name == "douyin":
+            # Douyin surfaces the declaration gate before text fields on some
+            # accounts; settle it first so title/description filling is not
+            # interrupted later by the popup.
+            _select_douyin_self_statement(ctx, page, "无需添加自主声明")
+            douyin_title = _build_xiaohongshu_title_from_caption(final_caption, limit=30)
+            if douyin_title:
+                _fill_optional_platform_title_field(
+                    ctx,
+                    page,
+                    platform_name="douyin",
+                    title=douyin_title,
+                    timeout_seconds=10,
+                    strict=False,
+                )
         _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
     if platform_name == "xiaohongshu" and not _is_image_file(target):
         _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)
     if platform_name == "douyin":
         _log("[Uploader:douyin] Skip collection selection by design.")
-        _log("[Uploader:douyin] Skip self statement selection by design.")
     if platform_name == "bilibili":
         _fill_bilibili_title_from_caption(ctx, page, final_caption)
         _select_bilibili_partition(ctx, page, "科技数码")
@@ -32738,7 +32886,10 @@ def fill_draft_douyin(
             )
         return target
     finally:
-        _close_work_tab(work_page, page, reason="douyin-finish")
+        if publish_now:
+            _log("[Uploader:douyin] Keep publish tab open after publish_now to avoid interrupting platform submission.")
+        else:
+            _close_work_tab(work_page, page, reason="douyin-finish")
 
 
 def fill_draft_xiaohongshu(

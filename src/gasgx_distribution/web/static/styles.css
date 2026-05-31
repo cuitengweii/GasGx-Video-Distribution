@@ -2130,11 +2130,27 @@ select option {
   flex-wrap: wrap;
 }
 
+.account-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
 .account-delete-inline {
-  padding-inline: 10px;
+  min-height: 24px;
+  padding: 3px 6px;
   color: #e71313;
   border-color: rgba(231, 19, 19, 0.42);
   background: rgba(231, 19, 19, 0.08);
+  flex: 0 0 auto;
+}
+
+.account-delete-inline svg {
+  width: 12px;
+  height: 12px;
 }
 
 .account-delete-inline:hover {
@@ -2235,11 +2251,15 @@ select option {
 }
 
 .account-platform-toggle {
-  width: fit-content;
-  padding-inline: 10px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   color: var(--accent-aurora);
   border-color: rgba(93, 214, 44, 0.34);
   background: rgba(93, 214, 44, 0.08);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .account-platform-toggle:hover {
@@ -2248,20 +2268,32 @@ select option {
   background: rgba(93, 214, 44, 0.12);
 }
 
+.account-platform-toggle .platform-action-icon {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.account-platform-toggle .platform-action-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .account-title {
   display: inline-flex;
   align-items: center;
   width: auto;
-  max-width: min(100%, 320px);
+  max-width: min(100%, 420px);
   min-width: 0;
-  min-height: 32px;
-  padding: 5px 11px;
-  border-left: 4px solid var(--accent-aurora);
-  border-radius: 6px;
-  background: rgba(93, 214, 44, 0.12);
+  min-height: 38px;
+  padding: 6px 14px;
+  border-left: 5px solid var(--accent-aurora);
+  border-radius: 8px;
+  background: rgba(93, 214, 44, 0.16);
   color: #f3f7f0;
-  font-size: 18px;
-  line-height: 1.1;
+  font-size: 21px;
+  font-weight: 900;
+  line-height: 1.05;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2341,14 +2373,6 @@ select option {
   box-shadow: 0 0 0 2px rgba(93, 214, 44, 0.12), inset 0 2px 6px rgba(0, 0, 0, 0.55);
 }
 
-.account-setting-vpn .account-preference-country {
-  min-height: 24px;
-  margin-top: 2px;
-  width: fit-content;
-  max-width: 100%;
-  padding: 4px 8px;
-}
-
 .account-setting-vpn {
   min-width: 0;
 }
@@ -2363,22 +2387,6 @@ select option {
 
 .account-setting-publish select {
   width: 100%;
-}
-
-.account-preference-country {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid rgba(93, 214, 44, 0.18);
-  border-radius: 6px;
-  color: var(--accent-aurora);
-  background: rgba(93, 214, 44, 0.08);
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .account-phone-line,
@@ -2506,11 +2514,6 @@ select option {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.account-row .danger-action {
-  grid-column: 1 / -1;
-  justify-self: end;
-}
-
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -2520,10 +2523,10 @@ select option {
 .chip {
   border: 1px solid rgba(93, 214, 44, 0.22);
   border-radius: 999px;
-  padding: 5px 9px;
+  padding: 4px 8px;
   color: var(--text-secondary);
   background: rgba(93, 214, 44, 0.08);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .success-chip {
@@ -2541,16 +2544,16 @@ select option {
 .account-status-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-width: 58px;
-  min-height: 28px;
-  padding: 4px 8px 4px 5px;
+  gap: 5px;
+  min-width: 54px;
+  min-height: 24px;
+  padding: 3px 7px 3px 5px;
   border: 1px solid rgba(93, 214, 44, 0.32);
   border-radius: 999px;
   color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.05);
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 11px;
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -2567,8 +2570,8 @@ select option {
 
 .account-status-toggle-knob {
   position: relative;
-  width: 22px;
-  height: 12px;
+  width: 20px;
+  height: 11px;
   flex: 0 0 auto;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
@@ -2577,17 +2580,17 @@ select option {
 .account-status-toggle-knob::after {
   content: "";
   position: absolute;
-  top: 2px;
+  top: 1.5px;
   left: 2px;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: currentColor;
   transition: transform 0.16s ease;
 }
 
 .account-status-toggle.enabled .account-status-toggle-knob::after {
-  transform: translateX(10px);
+  transform: translateX(9px);
 }
 
 .account-platform-group {
@@ -2610,22 +2613,38 @@ select option {
 }
 
 .platform-open-btn {
-  min-height: 38px;
+  min-height: 34px;
 }
 
 .platform-wechat-action {
-  min-width: 170px;
+  min-width: 156px;
   justify-content: flex-start;
   align-items: center;
-  padding: 8px 12px;
-  gap: 10px;
+  padding: 7px 10px;
+  gap: 8px;
   text-align: left;
   white-space: normal;
 }
 
 .platform-wechat-action .platform-logo {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
+}
+
+.platform-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: currentColor;
+}
+
+.platform-action-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .platform-action-copy {
@@ -2636,13 +2655,13 @@ select option {
 }
 
 .platform-action-main {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
 }
 
 .platform-action-hint {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -3411,10 +3430,6 @@ select option {
   .account-badges {
     justify-content: start;
     justify-items: start;
-  }
-
-  .account-preference-country {
-    width: fit-content;
   }
 
   .settings-common,

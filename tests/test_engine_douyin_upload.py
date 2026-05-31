@@ -466,7 +466,7 @@ def test_stage_generic_upload_via_page_set_accepts_douyin_editor_ready_without_f
     assert page.set.calls == [str(target)]
 
 
-def test_fill_draft_once_generic_selects_douyin_collection_for_video(monkeypatch, tmp_path) -> None:
+def test_fill_draft_once_generic_runs_douyin_statement_title_before_caption(monkeypatch, tmp_path) -> None:
     target = tmp_path / "sample.mp4"
     target.write_bytes(b"x")
     calls: list[tuple[str, str]] = []
@@ -475,17 +475,28 @@ def test_fill_draft_once_generic_selects_douyin_collection_for_video(monkeypatch
     monkeypatch.setattr(engine, "_ensure_douyin_publish_mode", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_run_page_action", lambda _page, _label, action: action())
     monkeypatch.setattr(engine, "_wait_upload_ready_generic", lambda _page, ctx, **_kwargs: ctx)
-    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_fill_caption_generic", lambda *_args, **_kwargs: calls.append(("caption", "")))
     monkeypatch.setattr(engine, "_click_first_matching_button", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_click_douyin_primary_publish_button", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_finalize_douyin_publish", lambda *_args, **_kwargs: "immediate")
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_build_xiaohongshu_title_from_caption", lambda *_args, **_kwargs: "video title")
+    monkeypatch.setattr(
+        engine,
+        "_fill_optional_platform_title_field",
+        lambda *_args, **kwargs: calls.append(("title", str(kwargs.get("title") or ""))) or "video title",
+    )
     monkeypatch.setattr(engine, "_humanized_publish_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_prepare_image_post_text_payload", lambda *_args, **_kwargs: "ignored")
     monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(engine, "_select_douyin_collection", lambda _ctx, _page, name: calls.append(("douyin", name)))
+    monkeypatch.setattr(engine, "_select_douyin_collection", lambda _ctx, _page, name: calls.append(("collection", name)))
+    monkeypatch.setattr(
+        engine,
+        "_select_douyin_self_statement",
+        lambda _ctx, _page, value: calls.append(("statement", value)),
+    )
 
     class FakeInput:
         def input(self, _value: str) -> None:
@@ -516,7 +527,46 @@ def test_fill_draft_once_generic_selects_douyin_collection_for_video(monkeypatch
     )
 
     assert result is page
-    assert calls == [("douyin", "赛博皮卡现车：aawbcc")]
+    assert calls[:3] == [
+        ("statement", "无需添加自主声明"),
+        ("title", "video title"),
+        ("caption", ""),
+    ]
+    assert not any(kind == "collection" for kind, _value in calls)
+
+
+def test_fill_draft_douyin_keeps_publish_tab_open_after_publish_now(monkeypatch, tmp_path) -> None:
+    target = tmp_path / "sample.mp4"
+    target.write_bytes(b"x")
+    closed: list[str] = []
+
+    class FakePage:
+        pass
+
+    monkeypatch.setattr(engine, "_find_latest_processed", lambda _workspace: target)
+    monkeypatch.setattr(engine, "_connect_chrome", lambda **_kwargs: FakePage())
+    monkeypatch.setattr(engine, "_prepare_upload_tab", lambda _page: FakePage())
+    monkeypatch.setattr(engine, "_is_uploaded_content_duplicate", lambda *_args, **_kwargs: (False, {}, "fp"))
+    monkeypatch.setattr(engine, "_load_caption_for_video", lambda _target: "caption")
+    monkeypatch.setattr(engine, "_prepare_caption_for_platform", lambda caption, **_kwargs: caption)
+    monkeypatch.setattr(engine, "_fill_draft_once_generic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_append_draft_upload_history", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_record_uploaded_content_fingerprint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_close_work_tab", lambda *_args, **kwargs: closed.append(str(kwargs.get("reason") or "")))
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    workspace = engine.Workspace(root=tmp_path)
+    result = engine.fill_draft_douyin(
+        workspace,
+        target_video=target,
+        publish_now=True,
+        save_draft=False,
+        check_duplicate_before_upload=True,
+    )
+
+    assert result == target
+    assert closed == []
+
 
 def test_ensure_douyin_publish_mode_image_body_pattern_uses_stable_tokens(monkeypatch) -> None:
     scripts: list[str] = []
@@ -541,4 +591,3 @@ def test_ensure_douyin_publish_mode_image_body_pattern_uses_stable_tokens(monkey
     assert "\\u7ee7\\u7eed\\u6dfb\\u52a0" in joined
     assert "\\u9884\\u89c8\\u56fe\\u6587" in joined
     assert "\\u5bb8sx" not in joined
-
