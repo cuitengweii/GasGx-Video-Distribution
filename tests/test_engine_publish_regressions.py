@@ -607,7 +607,7 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     monkeypatch.setattr(
         engine,
         "_select_douyin_self_statement",
-        lambda *args, **_kwargs: self_statement_calls.append(args[2] if len(args) > 2 else ""),
+        lambda *args, **_kwargs: self_statement_calls.append(args[2] if len(args) > 2 else "") or True,
     )
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
@@ -639,7 +639,7 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
 
     assert ("SAVE_DRAFT",) in clicked_button_texts
     assert collection_calls == []
-    assert self_statement_calls == ["无需添加自主声明"]
+    assert self_statement_calls == ["无需添加自主声明", "无需添加自主声明"]
 
 
 def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
@@ -682,7 +682,7 @@ def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(
     monkeypatch.setattr(engine, "_build_xiaohongshu_title_from_caption", lambda *_args, **_kwargs: "title")
     monkeypatch.setattr(engine, "_fill_optional_platform_title_field", lambda *_args, **_kwargs: "title")
     monkeypatch.setattr(engine, "_select_douyin_collection", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(engine, "_select_douyin_self_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_douyin_self_statement", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_build_publish_verification_tokens", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(engine, "_dismiss_unfinished_dialog", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_click_douyin_primary_publish_button", lambda *_args, **_kwargs: False)
@@ -737,6 +737,14 @@ def test_finalize_douyin_publish_requires_confirm_click(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="confirm button was not located"):
         engine._finalize_douyin_publish(object(), object(), "immediate")
+
+
+def test_finalize_douyin_publish_accepts_manage_page_landing_without_extra_confirm(monkeypatch) -> None:
+    monkeypatch.setattr(engine, "_click_douyin_publish_confirm_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_douyin_manage_page_verification_match", lambda *_args, **_kwargs: "video marker")
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._finalize_douyin_publish(object(), object(), "immediate", expected_tokens=["video marker"]) == "immediate"
 
 
 def test_click_douyin_primary_publish_button_uses_js_click_for_bottom_button(monkeypatch) -> None:
@@ -1672,7 +1680,7 @@ def test_click_bilibili_publish_confirm_button_prefers_dialog_confirm_over_nav_p
             raise AssertionError("JS fallback should not run when a confirm selector is available")
 
     monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
@@ -1720,7 +1728,7 @@ def test_click_bilibili_primary_publish_button_uses_ancestor_target(monkeypatch)
             raise AssertionError("JS fallback should not run when selector click succeeds")
 
     monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         engine,
         "_read_bilibili_creative_statement_state",
@@ -1747,7 +1755,7 @@ def test_click_bilibili_primary_publish_button_requires_creative_statement_ready
         def run_js(self, *_args, **_kwargs):
             return False
 
-    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         engine,
         "_read_bilibili_creative_statement_state",
@@ -1757,6 +1765,18 @@ def test_click_bilibili_primary_publish_button_requires_creative_statement_ready
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
 
     assert engine._click_bilibili_primary_publish_button(FakeCtx(), FakeCtx()) is False
+
+
+def test_select_bilibili_creative_statement_returns_false_when_not_verified(monkeypatch) -> None:
+    class FakeCtx:
+        def run_js(self, *_args, **_kwargs):
+            return {"state": "click_fail"}
+
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._select_bilibili_creative_statement(FakeCtx(), None, "内容无需标注") is False
 
 
 def test_click_bilibili_publish_confirm_button_uses_ancestor_target(monkeypatch) -> None:
@@ -1798,7 +1818,7 @@ def test_click_bilibili_publish_confirm_button_uses_ancestor_target(monkeypatch)
             raise AssertionError("JS fallback should not run when selector click succeeds")
 
     monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_collect_visible_action_texts", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
@@ -1822,7 +1842,7 @@ def test_click_bilibili_publish_confirm_button_js_fallback_ignores_nav_posting(m
             return "投稿"
 
     monkeypatch.setattr(engine, "_ensure_bilibili_publish_agreement_checked", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_select_bilibili_creative_statement", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
@@ -1844,7 +1864,7 @@ def test_click_bilibili_publish_confirm_button_handles_creative_statement_prompt
     monkeypatch.setattr(
         engine,
         "_select_bilibili_creative_statement",
-        lambda *_args, **_kwargs: calls.__setitem__("select", calls["select"] + 1),
+        lambda *_args, **_kwargs: calls.__setitem__("select", calls["select"] + 1) or True,
     )
     monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
@@ -1863,7 +1883,7 @@ def test_click_bilibili_publish_confirm_button_does_not_submit_when_declare_prom
     monkeypatch.setattr(
         engine,
         "_select_bilibili_creative_statement",
-        lambda *_args, **_kwargs: calls.__setitem__("select", calls["select"] + 1),
+        lambda *_args, **_kwargs: calls.__setitem__("select", calls["select"] + 1) or True,
     )
     monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "_is_bilibili_creative_statement_prompt_visible", lambda *_args, **_kwargs: True)
@@ -1896,7 +1916,7 @@ def test_click_bilibili_publish_confirm_button_prefers_creative_statement_before
     monkeypatch.setattr(
         engine,
         "_select_bilibili_creative_statement",
-        lambda *_args, **_kwargs: order.append("select"),
+        lambda *_args, **_kwargs: order.append("select") or True,
     )
     monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine, "_humanized_publish_reaction_pause", lambda *_args, **_kwargs: None)
@@ -1916,7 +1936,7 @@ def test_click_bilibili_publish_confirm_button_reclicks_primary_after_creative_s
     monkeypatch.setattr(
         engine,
         "_select_bilibili_creative_statement",
-        lambda *_args, **_kwargs: order.append("select"),
+        lambda *_args, **_kwargs: order.append("select") or True,
     )
     monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
@@ -1950,9 +1970,39 @@ def test_select_bilibili_creative_statement_keeps_working_when_already_selected(
     monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
 
-    engine._select_bilibili_creative_statement(FakeCtx(), FakeCtx(), "内容无需标注")
-    assert calls
-    assert any("already_confirmed" in script for script in calls)
+    assert engine._select_bilibili_creative_statement(FakeCtx(), FakeCtx(), "内容无需标注") is True
+    assert calls == []
+
+
+def test_select_bilibili_creative_statement_uses_bcc_select_dom(monkeypatch) -> None:
+    calls: list[str] = []
+    read_calls = {"count": 0}
+
+    class FakeCtx:
+        def run_js(self, script: str, *_args, **_kwargs):
+            calls.append(script)
+            if "listCount" in script:
+                return {"state": "opened"}
+            if ".bcc-select-option-list .bcc-option" in script:
+                return {"state": "clicked", "current": "??????", "option": "??????"}
+            return {"state": "opened"}
+
+    def fake_read(*_args, **_kwargs):
+        read_calls["count"] += 1
+        if read_calls["count"] == 1:
+            return {"hasField": True, "current": ""}
+        return {"hasField": True, "current": "??????"}
+
+    monkeypatch.setattr(engine, "_read_bilibili_creative_statement_state", fake_read)
+    monkeypatch.setattr(engine, "_click_bilibili_creative_statement_prompt_go_declare", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_humanized_publish_settle_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_humanized_publish_retry_pause", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
+
+    assert engine._select_bilibili_creative_statement(FakeCtx(), None, "??????") is True
+    joined = "\n".join(calls)
+    assert ".creation-statement-container" in joined
+    assert ".bcc-select-option-list .bcc-option" in joined
 
 
 def test_is_bilibili_publish_success_snapshot_accepts_view_and_republish_pair() -> None:

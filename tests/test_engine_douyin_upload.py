@@ -495,7 +495,7 @@ def test_fill_draft_once_generic_runs_douyin_statement_title_before_caption(monk
     monkeypatch.setattr(
         engine,
         "_select_douyin_self_statement",
-        lambda _ctx, _page, value: calls.append(("statement", value)),
+        lambda _ctx, _page, value: calls.append(("statement", value)) or True,
     )
 
     class FakeInput:
@@ -555,7 +555,16 @@ def test_fill_draft_douyin_keeps_publish_tab_open_after_publish_now(monkeypatch,
     monkeypatch.setattr(engine, "_close_work_tab", lambda *_args, **kwargs: closed.append(str(kwargs.get("reason") or "")))
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
 
-    workspace = engine.Workspace(root=tmp_path)
+    workspace = engine.Workspace(
+        root=tmp_path,
+        downloads=tmp_path / "1_Downloads",
+        processed=tmp_path / "2_Processed",
+        archive=tmp_path / "3_Archive",
+        history=tmp_path / "history.txt",
+        image_downloads=tmp_path / "1_Downloads_Images",
+        image_processed=tmp_path / "2_Processed_Images",
+        image_history=tmp_path / "history_images.txt",
+    )
     result = engine.fill_draft_douyin(
         workspace,
         target_video=target,

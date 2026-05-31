@@ -2276,8 +2276,8 @@ function accountDomesticPublishIcon() {
   return `<span class="platform-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4.5 12.5 19.2 4.8a.8.8 0 0 1 1.1 1.1l-4.7 13.8a.8.8 0 0 1-1.5.1l-2.4-5.1-5.1-2.4a.8.8 0 0 1-.1-1.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m11 14 4.8-4.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-function accountPlatformToggleIcon() {
-  return `<span class="platform-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+function accountPlatformToggleIcon(expanded = false) {
+  return `<span class="platform-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="${expanded ? "m7 14 5-5 5 5" : "m7 10 5 5 5-5"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
 }
 
 function accountDomesticOpenButtonMarkup(account) {
@@ -2906,7 +2906,7 @@ function renderAccounts() {
               <div class="account-platform-summary-actions">
                 ${accountDomesticOpenButtonMarkup(account)}
                 ${accountDomesticPublishButtonMarkup(account)}
-                <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}" aria-label="${platformExpanded ? "折叠平台信息" : "展开平台信息"}">${accountPlatformToggleIcon()}</button>
+                <button class="btn ghost btn-sm account-platform-toggle" type="button" data-no-global-loading="1" data-account-platform-toggle="${account.id}" aria-expanded="${platformExpanded}" aria-controls="account-platform-body-${account.id}" aria-label="${platformExpanded ? "折叠平台信息" : "展开平台信息"}">${accountPlatformToggleIcon(platformExpanded)}</button>
               </div>
             </div>
           </div>

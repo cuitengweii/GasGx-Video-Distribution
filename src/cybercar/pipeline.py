@@ -4472,6 +4472,13 @@ def _run_publish_schedule(ctx: CycleContext, args: argparse.Namespace, email_set
         planned_platforms_by_video=planned_platforms_by_video,
         publish_events=publish_events,
     )
+    if bool(getattr(args, "publish_only", False)):
+        failed_events = [event for event in publish_events if not bool(event.success)]
+        if failed_events:
+            failed_summary = ", ".join(
+                f"{event.platform}:{event.video_name}" for event in failed_events[:5]
+            )
+            raise RuntimeError(f"publish-only failed for {failed_summary}")
 
 
 def _run_one_cycle(args: argparse.Namespace, email_settings: EmailSettings) -> int:
