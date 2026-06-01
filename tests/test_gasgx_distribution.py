@@ -3955,12 +3955,12 @@ def test_start_account_domestic_open_browser_runs_batch(monkeypatch, tmp_path: P
 
     result = service.start_account_domestic_open_browser(account["id"])
 
-    assert opened == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
+    assert opened == ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"]
     assert result["ok"] is True
     assert result["count"] == 5
     assert result["opened_count"] == 5
     assert result["failed_count"] == 0
-    assert result["platforms"] == ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"]
+    assert result["platforms"] == ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"]
     assert result["summary"] == "国内平台标签已打开：5/5"
 
 
@@ -6091,3 +6091,58 @@ def test_supabase_list_accounts_uses_bulk_platform_fetch(monkeypatch, tmp_path: 
     assert len(fake.calls) == 3
     assert fake.calls[1][0] == "browser_profiles"
     assert fake.calls[2][0] == "account_platforms"
+
+def test_start_account_domestic_open_browser_honors_selected_platforms(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = service.create_account(
+        {
+            "account_key": "GasGx Domestic Open Selected",
+            "display_name": "GasGx Domestic Open Selected",
+            "platforms": ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"],
+            "notes": "aamecc",
+        }
+    )
+    opened: list[str] = []
+
+    def fake_open(account_id: int, platform: str, *, apply_marker: bool = True) -> dict[str, Any]:
+        opened.append(platform)
+        return {"ok": True, "platform": platform, "account_id": account_id, "marker_applied": apply_marker}
+
+    monkeypatch.setattr(service, "open_account_browser", fake_open)
+
+    result = service.start_account_domestic_open_browser(account["id"], selected_platforms=["wechat", "xiaohongshu"])
+
+    assert opened == ["wechat", "xiaohongshu"]
+    assert result["platforms"] == ["wechat", "xiaohongshu"]
+    assert result["count"] == 2
+
+
+def test_start_account_domestic_emergency_publish_honors_selected_platforms(monkeypatch, tmp_path: Path) -> None:
+    _isolated_paths(monkeypatch, tmp_path)
+
+    account = {
+        "id": 611,
+        "platforms": [
+            {"platform": "wechat", "enabled": True, "login_status": "ready"},
+            {"platform": "douyin", "enabled": True, "login_status": "logged_in"},
+            {"platform": "xiaohongshu", "enabled": True, "login_status": "logged_in"},
+        ],
+    }
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(service, "_resolve_account_any_id", lambda account_id: account if int(account_id) == 611 else None)
+    monkeypatch.setattr(
+        matrix_publish,
+        "run_account_domestic_publish",
+        lambda account_id, dry_run=False, **kwargs: seen.update({"account_id": account_id, "dry_run": dry_run, **kwargs}) or {
+            "ok": True,
+            "account_id": account_id,
+            "results": [{"success": True}, {"success": True}],
+            "platforms": ["wechat", "xiaohongshu"],
+        },
+    )
+
+    result = service.start_account_domestic_emergency_publish(611, selected_platforms=["wechat", "xiaohongshu"])
+
+    assert seen == {"account_id": 611, "dry_run": False, "auto_open_chrome": True, "selected_platforms": ["wechat", "xiaohongshu"]}
+    assert result["platforms"] == ["wechat", "xiaohongshu"]

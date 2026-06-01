@@ -495,7 +495,7 @@ def test_fill_draft_once_generic_runs_douyin_statement_title_before_caption(monk
     monkeypatch.setattr(
         engine,
         "_select_douyin_self_statement",
-        lambda _ctx, _page, value: calls.append(("statement", value)) or True,
+        lambda _ctx, _page, value, **_kwargs: calls.append(("statement", value)) or True,
     )
 
     class FakeInput:
@@ -528,10 +528,11 @@ def test_fill_draft_once_generic_runs_douyin_statement_title_before_caption(monk
 
     assert result is page
     assert calls[:3] == [
-        ("statement", "无需添加自主声明"),
         ("title", "video title"),
         ("caption", ""),
+        ("title", "video title"),
     ]
+    assert ("statement", "无需添加自主声明") in calls
     assert not any(kind == "collection" for kind, _value in calls)
 
 

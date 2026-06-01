@@ -29,7 +29,7 @@ from . import service
 from .platforms import get_platform, normalize_platform
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
-DOMESTIC_PUBLISH_PLATFORM_ORDER = ("wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili")
+DOMESTIC_PUBLISH_PLATFORM_ORDER = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili")
 _PUBLISH_AUDIT_LOCK = threading.Lock()
 
 
@@ -1578,11 +1578,15 @@ def run_account_domestic_publish(
     *,
     dry_run: bool = False,
     auto_open_chrome: bool = True,
+    selected_platforms: list[str] | None = None,
 ) -> dict[str, Any]:
     account = service.get_account(int(account_id))
     if account is None:
         return {"ok": False, "skipped": True, "reason": "account_not_found", "account_id": int(account_id)}
     items = build_account_domestic_publish_items(int(account_id))
+    if selected_platforms is not None:
+        selected = {str(item or "").strip().lower() for item in selected_platforms if str(item or "").strip()}
+        items = [item for item in items if str(item.platform or "").strip().lower() in selected]
     if dry_run:
         return {
             "ok": True,

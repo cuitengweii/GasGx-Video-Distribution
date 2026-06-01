@@ -9390,7 +9390,7 @@ def start_account_emergency_publish(account_id: int, platform: str) -> dict[str,
 
 
 def _domestic_publish_account_platforms(account: dict[str, Any]) -> list[dict[str, Any]]:
-    domestic_order = ("wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili")
+    domestic_order = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili")
     platforms = [item for item in (account.get("platforms") or []) if isinstance(item, dict)]
     platform_map = {str(item.get("platform") or "").strip(): item for item in platforms}
     result: list[dict[str, Any]] = []
@@ -9406,7 +9406,7 @@ def _domestic_publish_account_platforms(account: dict[str, Any]) -> list[dict[st
 
 
 def _domestic_open_account_platforms(account: dict[str, Any]) -> list[dict[str, Any]]:
-    domestic_order = ("wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili")
+    domestic_order = ("wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili")
     platforms = [item for item in (account.get("platforms") or []) if isinstance(item, dict)]
     platform_map = {str(item.get("platform") or "").strip(): item for item in platforms}
     result: list[dict[str, Any]] = []
@@ -9421,16 +9421,30 @@ def _domestic_open_account_platforms(account: dict[str, Any]) -> list[dict[str, 
     return result
 
 
-def start_account_domestic_emergency_publish(account_id: int) -> dict[str, Any]:
+def start_account_domestic_emergency_publish(account_id: int, *, selected_platforms: list[str] | None = None) -> dict[str, Any]:
     account = _resolve_account_any_id(account_id)
     if account is None:
         raise KeyError("account not found")
     domestic_platforms = _domestic_publish_account_platforms(account)
+    if selected_platforms is not None:
+        selected = {str(item or "").strip().lower() for item in selected_platforms if str(item or "").strip()}
+        domestic_platforms = [
+            item for item in domestic_platforms
+            if str(item.get("platform") or "").strip().lower() in selected
+        ]
     if not domestic_platforms:
         raise ValueError("domestic_publish_not_supported")
     from . import matrix_publish as mp
 
-    publish_result = mp.run_account_domestic_publish(account_id, auto_open_chrome=True)
+    selected_tokens = [str(item.get("platform") or "").strip().lower() for item in domestic_platforms]
+    if selected_platforms is not None:
+        publish_result = mp.run_account_domestic_publish(
+            account_id,
+            auto_open_chrome=True,
+            selected_platforms=selected_tokens,
+        )
+    else:
+        publish_result = mp.run_account_domestic_publish(account_id, auto_open_chrome=True)
     if bool(publish_result.get("skipped")):
         reason = str(publish_result.get("reason") or "domestic_publish_skipped").strip()
         raise ValueError(_friendly_account_publish_error(reason, "domestic"))
@@ -9441,11 +9455,17 @@ def start_account_domestic_emergency_publish(account_id: int) -> dict[str, Any]:
     return publish_result
 
 
-def start_account_domestic_open_browser(account_id: int) -> dict[str, Any]:
+def start_account_domestic_open_browser(account_id: int, *, selected_platforms: list[str] | None = None) -> dict[str, Any]:
     account = _resolve_account_any_id(account_id)
     if account is None:
         raise KeyError("account not found")
     domestic_platforms = _domestic_open_account_platforms(account)
+    if selected_platforms is not None:
+        selected = {str(item or "").strip().lower() for item in selected_platforms if str(item or "").strip()}
+        domestic_platforms = [
+            item for item in domestic_platforms
+            if str(item.get("platform") or "").strip().lower() in selected
+        ]
     if not domestic_platforms:
         return {"ok": False, "skipped": True, "reason": "domestic_open_not_supported", "account_id": int(account_id)}
 

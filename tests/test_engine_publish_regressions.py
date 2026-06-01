@@ -639,7 +639,7 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
 
     assert ("SAVE_DRAFT",) in clicked_button_texts
     assert collection_calls == []
-    assert self_statement_calls == ["无需添加自主声明", "无需添加自主声明"]
+    assert self_statement_calls == ["无需添加自主声明"]
 
 
 def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(

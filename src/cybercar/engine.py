@@ -17561,7 +17561,11 @@ def _select_fresh_douyin_post_editor_tab(page: Any) -> Any:
         url = _platform_tab_url(tab)
         if "creator.douyin.com/creator-micro/content/post/video" not in url:
             continue
-        score = 30 if "enter_from=publish_page" in url else 0
+        score = 20
+        if "enter_from=publish_page" in url:
+            score += 20
+        if "enter_from=home_draft" in url or "enter_from=draft" in url:
+            score += 10
         if _is_same_tab(tab, page):
             score += 10
         candidates.append((score, tab, url))
@@ -21825,12 +21829,13 @@ def _find_upload_file_input_generic(
     preferred_hidden = None
     opposite_visible = None
     opposite_hidden = None
+    selector_timeout = 0.6 if _fast_publish_mode_enabled() else 3
     for owner in _collect_upload_contexts(primary_ctx, fallback_ctx):
         if not owner:
             continue
         for selector in selectors:
             try:
-                ele = owner.ele(selector, timeout=3)
+                ele = owner.ele(selector, timeout=selector_timeout)
                 if not ele:
                     continue
                 mismatched = _is_mismatched_file_input_accept(_read_file_input_accept_text(ele), prefer_video)
@@ -25673,15 +25678,17 @@ def _fill_optional_platform_title_field(
         return ""
 
     expect = re.sub(r"\s+", "", final_title).lower()
-    deadline = time.time() + max(4, int(timeout_seconds))
+    use_selector_loop = not (platform_name == "douyin" and not strict)
+    deadline = time.time() + max(1.0, float(timeout_seconds))
     tried = 0
-    while time.time() < deadline:
+    selector_timeout = 0.35 if platform_name == "douyin" and _fast_publish_mode_enabled() else 1.2
+    while use_selector_loop and time.time() < deadline:
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
             for selector in selectors:
                 try:
-                    ele = owner.ele(selector, timeout=1.2)
+                    ele = owner.ele(selector, timeout=selector_timeout)
                 except Exception:
                     ele = None
                 if not ele or not _is_visible_element(ele):
@@ -25971,20 +25978,26 @@ def _douyin_manage_page_verification_match(
     primary_ctx: Any,
     fallback_ctx: Any,
     expected_tokens: Sequence[str],
+    timeout_seconds: float = 0.0,
 ) -> Optional[str]:
-    for root in (primary_ctx, fallback_ctx):
-        if not root:
-            continue
-        for owner in _browser_tabs(root) if hasattr(root, "get_tabs") else [root]:
-            try:
-                url = _page_current_url(owner)
-            except Exception:
-                url = ""
-            if "/creator-micro/content/manage" not in url:
+    end_at = time.time() + max(0.0, float(timeout_seconds or 0.0))
+    while True:
+        for root in (primary_ctx, fallback_ctx):
+            if not root:
                 continue
-            matched = _page_contains_publish_verification_tokens(owner, expected_tokens)
-            if matched:
-                return matched
+            for owner in _browser_tabs(root) if hasattr(root, "get_tabs") else [root]:
+                try:
+                    url = _page_current_url(owner)
+                except Exception:
+                    url = ""
+                if "/creator-micro/content/manage" not in url:
+                    continue
+                matched = _page_contains_publish_verification_tokens(owner, expected_tokens)
+                if matched:
+                    return matched
+        if time.time() >= end_at:
+            break
+        time.sleep(0.5)
     return None
 
 
@@ -26570,6 +26583,7 @@ def _select_bilibili_collection(primary_ctx: Any, fallback_ctx: Any, collection_
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
                 continue
+            action_state = "none"
             try:
                 action = owner.run_js(js_select, target)
             except Exception:
@@ -27765,6 +27779,8 @@ def _select_douyin_self_statement(
     primary_ctx: Any,
     fallback_ctx: Any,
     self_statement: str = "无需添加自主声明",
+    max_attempts: int = 6,
+    allow_open: bool = True,
 ) -> bool:
     target = str(self_statement or "").strip()
     if not target:
@@ -27783,6 +27799,9 @@ def _select_douyin_self_statement(
         if bool(state.get("hasField")) and current == target_norm:
             _log(f"[Uploader:douyin] Self statement already selected: {target}")
             return True
+    if not allow_open:
+        _log(f"[Uploader:douyin] Self statement not ready in early pass; defer strict selection: {target}")
+        return False
 
     js_select = """
     function isVisible(el) {
@@ -27871,6 +27890,24 @@ def _select_douyin_self_statement(
     }
     const target = norm(arguments[0] || '');
     if (!target) return {state: 'skip'};
+    function handleDeclarationModal() {
+      const declarationModal = Array.from(document.querySelectorAll('.semi-modal-wrap'))
+        .find((el) => isVisible(el) && /对作品内容添加声明/.test(norm(el.innerText || el.textContent || '')));
+      if (!declarationModal) return null;
+      const option = Array.from(declarationModal.querySelectorAll('label.semi-radio'))
+        .find((el) => clean(el.innerText || el.textContent || '').replace(/\s+/g, '') === target.replace(/\s+/g, ''));
+      if (!option) return {state: 'modal_option_not_found'};
+      if (!clickNode(option)) return {state: 'modal_option_click_fail'};
+      const confirm = Array.from(declarationModal.querySelectorAll('button'))
+        .find((el) => norm(el.innerText || el.textContent || '') === '确定');
+      if (!confirm || confirm.disabled || /\bsemi-button-disabled\b/.test(String(confirm.className || ''))) {
+        return {state: 'modal_confirm_disabled'};
+      }
+      if (!clickNode(confirm)) return {state: 'modal_confirm_click_fail'};
+      return {state: 'modal_confirmed', option: target};
+    }
+    const existingModalResult = handleDeclarationModal();
+    if (existingModalResult) return existingModalResult;
     const label = findLabel();
     if (!label) return {state: 'missing_label'};
     const item = findItem(label);
@@ -27915,21 +27952,9 @@ def _select_douyin_self_statement(
     const currentNorm = triggerText.replace(/\s+/g, '');
     if (currentNorm === targetNorm) return {state: 'already', current: triggerText};
     clickNode(trigger || item);
-    const declarationModal = Array.from(document.querySelectorAll('.semi-modal-wrap'))
-      .find((el) => isVisible(el) && /对作品内容添加声明/.test(norm(el.innerText || el.textContent || '')));
-    if (declarationModal) {
-      const option = Array.from(declarationModal.querySelectorAll('label.semi-radio'))
-        .find((el) => clean(el.innerText || el.textContent || '').replace(/\s+/g, '') === targetNorm);
-      if (!option) return {state: 'modal_option_not_found', current: triggerText};
-      if (!clickNode(option)) return {state: 'modal_option_click_fail', current: triggerText};
-      const confirm = Array.from(declarationModal.querySelectorAll('button'))
-        .find((el) => norm(el.innerText || el.textContent || '') === '确定');
-      if (!confirm || confirm.disabled || /\bsemi-button-disabled\b/.test(String(confirm.className || ''))) {
-        return {state: 'modal_confirm_disabled', current: triggerText};
-      }
-      if (!clickNode(confirm)) return {state: 'modal_confirm_click_fail', current: triggerText};
-      return {state: 'clicked', current: triggerText, option: target};
-    }
+    const openedModalResult = handleDeclarationModal();
+    if (openedModalResult) return openedModalResult;
+    return {state: 'opened', current: triggerText};
     const roots = [item];
     Array.from(document.querySelectorAll(
       '.weui-desktop-dialog, .weui-desktop-popover, .weui-desktop-dropdown, .dropdown-menu, ' +
@@ -27980,7 +28005,8 @@ def _select_douyin_self_statement(
     return true;
     """
 
-    for attempt in range(1, 7):
+    attempt_count = max(1, int(max_attempts or 1))
+    for attempt in range(1, attempt_count + 1):
         action_states: list[str] = []
         clicked_once = False
         for owner in (primary_ctx, fallback_ctx):
@@ -27993,14 +28019,15 @@ def _select_douyin_self_statement(
             if isinstance(action, dict):
                 action_state = str(action.get("state", "") or "")
                 action_states.append(action_state)
-                if action_state in {"clicked", "selected"}:
+                if action_state in {"clicked", "selected", "modal_confirmed"}:
                     clicked_once = True
             else:
                 action_states.append("none")
-            try:
-                owner.run_js(js_collapse)
-            except Exception:
-                pass
+            if action_state not in {"opened", "modal_confirmed"}:
+                try:
+                    owner.run_js(js_collapse)
+                except Exception:
+                    pass
         _humanized_publish_retry_pause("douyin self statement picker settle")
         for owner in (primary_ctx, fallback_ctx):
             if not owner:
@@ -28011,7 +28038,7 @@ def _select_douyin_self_statement(
                 _log(f"[Uploader:douyin] Self statement selected: {target}")
                 return True
         _log(
-            f"[Uploader:douyin] Self statement select retry {attempt}/6: "
+            f"[Uploader:douyin] Self statement select retry {attempt}/{attempt_count}: "
             f"states={','.join(action_states) or '-'}, target={target}"
         )
 
@@ -32791,7 +32818,7 @@ def _fill_draft_once_generic(
             # Douyin surfaces the declaration gate before text fields on some
             # accounts; settle it first so title/description filling is not
             # interrupted later by the popup.
-            _select_douyin_self_statement(ctx, page, "无需添加自主声明")
+            _log("[Uploader:douyin] Self statement has highest priority; defer click until Douyin editor is interactive.")
             douyin_title = _build_xiaohongshu_title_from_caption(final_caption, limit=30)
             if douyin_title:
                 _fill_optional_platform_title_field(
@@ -32799,7 +32826,7 @@ def _fill_draft_once_generic(
                     page,
                     platform_name="douyin",
                     title=douyin_title,
-                    timeout_seconds=10,
+                    timeout_seconds=2,
                     strict=False,
                 )
         _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
@@ -32811,6 +32838,17 @@ def _fill_draft_once_generic(
             page = _select_fresh_douyin_post_editor_tab(page)
             ctx = _resolve_post_editor_context(page, timeout_seconds=4)
             if "/creator-micro/content/manage" in _page_current_url(ctx):
+                matched = _douyin_manage_page_verification_match(
+                    ctx,
+                    page,
+                    publish_verify_tokens,
+                    timeout_seconds=5.0,
+                )
+                if matched:
+                    _log(
+                        f"[Uploader:douyin] Editor moved to manage page after caption and matched token: {matched}; treat as landed."
+                    )
+                    return ctx
                 raise RuntimeError("douyin editor context drifted to content manage before publish.")
             douyin_title = _build_xiaohongshu_title_from_caption(final_caption, limit=30)
             if douyin_title:
@@ -32822,7 +32860,7 @@ def _fill_draft_once_generic(
                     timeout_seconds=10,
                     strict=True,
                 )
-            if not _select_douyin_self_statement(ctx, page, "无需添加自主声明"):
+            if not _select_douyin_self_statement(ctx, page, "无需添加自主声明", max_attempts=3):
                 raise RuntimeError("douyin self statement verification failed before publish.")
     if platform_name == "xiaohongshu" and not _is_image_file(target):
         _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)

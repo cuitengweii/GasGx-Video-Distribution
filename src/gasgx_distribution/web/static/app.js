@@ -44,8 +44,8 @@ const AI_ROBOT_LOGOS = {
 const PLATFORM_ORDER = [
   "wechat",
   "douyin",
-  "kuaishou",
   "xiaohongshu",
+  "kuaishou",
   "bilibili",
   "tiktok",
   "x",
@@ -60,6 +60,7 @@ const TERMINAL_LOGIN_CONFIRM_TEXT = "扫码后点登录";
 const TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT = "已发布后点下一个";
 const TERMINAL_LEGACY_MANUAL_CONFIRM_TEXT = "发布已执行，等待人工确认";
 const ACCOUNT_PLATFORM_PUBLISH_DELAY_MS = 15000;
+const ACCOUNT_DOMESTIC_SELECTION_STORAGE_KEY = "gasgx-account-domestic-selection-v1";
 
 const state = {
   accounts: [],
@@ -107,6 +108,7 @@ const accountPlatformPublishInFlightByKey = new Map();
 const accountDomesticOpenInFlightByAccountId = new Map();
 const accountDomesticOpenResultByAccountId = new Map();
 const accountDomesticPublishInFlightByAccountId = new Map();
+const accountDomesticPublishSelectionByAccountId = new Map();
 let accountPlatformPublishCountdownTimer = null;
 let accountDomesticPublishCountdownTimer = null;
 
@@ -194,6 +196,40 @@ let terminalFullLoadingCount = 0;
 let tongjiFollowerChart = null;
 let tongjiVideoChart = null;
 let tongjiResizeBound = false;
+
+function loadAccountDomesticSelections() {
+  try {
+    const raw = localStorage.getItem(ACCOUNT_DOMESTIC_SELECTION_STORAGE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload !== "object") return;
+    Object.entries(payload).forEach(([accountId, selected]) => {
+      if (!Array.isArray(selected)) return;
+      const key = String(accountId || "").trim();
+      if (!key) return;
+      accountDomesticPublishSelectionByAccountId.set(
+        key,
+        new Set(selected.map((item) => String(item || "").trim()).filter(Boolean)),
+      );
+    });
+  } catch (_error) {
+    // ignore broken local cache
+  }
+}
+
+function saveAccountDomesticSelections() {
+  try {
+    const payload = {};
+    accountDomesticPublishSelectionByAccountId.forEach((selected, accountId) => {
+      payload[String(accountId || "").trim()] = selected instanceof Set ? [...selected] : [];
+    });
+    localStorage.setItem(ACCOUNT_DOMESTIC_SELECTION_STORAGE_KEY, JSON.stringify(payload));
+  } catch (_error) {
+    // ignore storage failures
+  }
+}
+
+loadAccountDomesticSelections();
 
 const TERMINAL_BROWSER_WARMUP_TIMEOUT_MS = 12000;
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -2154,7 +2190,7 @@ function accountDomesticOpenKey(accountId) {
 }
 
 function accountDomesticOpenPlatforms(account) {
-  const order = ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"];
+  const order = ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"];
   const platformMap = new Map((account?.platforms || []).filter((item) => item && typeof item === "object").map((item) => [String(item.platform || "").trim(), item]));
   return order
     .map((platform) => {
@@ -2168,7 +2204,7 @@ function accountDomesticOpenPlatforms(account) {
 }
 
 function accountDomesticPublishPlatforms(account) {
-  const order = ["wechat", "douyin", "kuaishou", "xiaohongshu", "bilibili"];
+  const order = ["wechat", "douyin", "xiaohongshu", "kuaishou", "bilibili"];
   const platformMap = new Map((account?.platforms || []).filter((item) => item && typeof item === "object").map((item) => [String(item.platform || "").trim(), item]));
   return order
     .map((platform) => {
@@ -2181,6 +2217,37 @@ function accountDomesticPublishPlatforms(account) {
     .filter(Boolean);
 }
 
+function accountDomesticSelectedPlatforms(account) {
+  const accountId = String(account?.id || "").trim();
+  const available = accountDomesticPublishPlatforms(account).map((item) => String(item.platform || "").trim()).filter(Boolean);
+  if (!available.length) return [];
+  if (!accountDomesticPublishSelectionByAccountId.has(accountId)) {
+    const initial = new Set(available);
+    accountDomesticPublishSelectionByAccountId.set(accountId, initial);
+    saveAccountDomesticSelections();
+    return [...initial];
+  }
+  const selected = accountDomesticPublishSelectionByAccountId.get(accountId);
+  const normalized = available.filter((platform) => selected.has(platform));
+  if ((selected instanceof Set) && selected.size !== normalized.length) {
+    accountDomesticPublishSelectionByAccountId.set(accountId, new Set(normalized));
+    saveAccountDomesticSelections();
+  }
+  return normalized;
+}
+
+function setAccountDomesticPlatformSelected(accountId, platform, selected) {
+  const key = String(accountId || "").trim();
+  const token = String(platform || "").trim();
+  if (!key || !token) return;
+  const picked = accountDomesticPublishSelectionByAccountId.get(key);
+  const next = picked instanceof Set ? new Set(picked) : new Set();
+  if (selected) next.add(token);
+  else next.delete(token);
+  accountDomesticPublishSelectionByAccountId.set(key, next);
+  saveAccountDomesticSelections();
+}
+
 function accountDomesticOpenState(account) {
   const key = accountDomesticOpenKey(account?.id);
   if (!key) {
@@ -2189,7 +2256,8 @@ function accountDomesticOpenState(account) {
   if (accountDomesticOpenInFlightByAccountId.get(key)) {
     return { key, mode: "opening", ready: false };
   }
-  const platforms = accountDomesticOpenPlatforms(account);
+  const selected = accountDomesticSelectedPlatforms(account);
+  const platforms = accountDomesticOpenPlatforms(account).filter((item) => selected.includes(String(item.platform || "").trim()));
   if (!platforms.length) {
     return { key, mode: "empty", ready: false };
   }
@@ -2299,10 +2367,16 @@ async function handleAccountDomesticOpen(domesticOpenButton) {
   const accountId = String(domesticOpenButton?.dataset.accountDomesticOpen || "").trim();
   const accountApiIdValue = String(domesticOpenButton?.dataset.accountApiId || accountId || "").trim();
   if (!accountApiIdValue) return;
+  const account = accountById(accountId);
+  const selectedPlatforms = accountDomesticSelectedPlatforms(account);
+  if (!selectedPlatforms.length) {
+    showAccountCreateErrorToast("请先勾选至少一个国内平台后再执行一键打开");
+    return;
+  }
   const restoreButton = setButtonLoading(domesticOpenButton, "打开中");
   markAccountDomesticOpen(accountId);
   try {
-    const result = await api(`/api/accounts/${accountApiIdValue}/platforms/domestic/open-browser`, { method: "POST" });
+    const result = await api(`/api/accounts/${accountApiIdValue}/platforms/domestic/open-browser?platforms=${encodeURIComponent(selectedPlatforms.join(","))}`, { method: "POST" });
     const openedCount = Number(result.opened_count ?? result.openedCount ?? 0);
     const totalCount = Number(result.count ?? result.total_count ?? result.totalCount ?? 0);
     const failedPlatforms = Array.isArray(result.results)
@@ -2312,7 +2386,7 @@ async function handleAccountDomesticOpen(domesticOpenButton) {
     accountDomesticOpenResultByAccountId.set(accountDomesticOpenKey(accountId), {
       mode,
       openedCount,
-      totalCount: totalCount || openedCount || accountDomesticOpenPlatforms(account).length,
+      totalCount: totalCount || openedCount || selectedPlatforms.length,
       failedPlatforms,
       summary: String(result.summary || ""),
     });
@@ -2341,13 +2415,18 @@ async function handleAccountDomesticPublish(domesticPublishButton) {
   if (!account) return;
   const stateInfo = accountDomesticPublishState(account);
   if (!stateInfo.ready) {
-    showAccountCreateErrorToast("该账号暂无可发布的国内平台");
+    showAccountCreateErrorToast("请先勾选至少一个国内平台后再执行一键发布");
+    return;
+  }
+  const selectedPlatforms = accountDomesticSelectedPlatforms(account);
+  if (!selectedPlatforms.length) {
+    showAccountCreateErrorToast("请先勾选至少一个国内平台后再执行一键发布");
     return;
   }
   const restoreButton = setButtonLoading(domesticPublishButton, "发布中");
   markAccountDomesticPublishing(accountId);
   try {
-    await api(`/api/accounts/${accountApiId(account)}/platforms/domestic/emergency-publish`, {
+    await api(`/api/accounts/${accountApiId(account)}/platforms/domestic/emergency-publish?platforms=${encodeURIComponent(selectedPlatforms.join(","))}`, {
       method: "POST",
       skipOperationNotice: true,
     });
@@ -2404,7 +2483,7 @@ function accountDomesticPublishState(account) {
   if (accountDomesticPublishInFlightByAccountId.get(key)) {
     return { key, mode: "publishing", ready: true };
   }
-  const platforms = accountDomesticPublishPlatforms(account);
+  const platforms = accountDomesticSelectedPlatforms(account);
   if (!platforms.length) {
     return { key, mode: "empty", ready: false };
   }
@@ -2654,7 +2733,13 @@ function renderPlatformStatusGroup(platforms, region) {
     <div class="browser-actions">
       ${items.length ? items.map((p) => (
         region === "cn"
-          ? accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)
+          ? `<div class="account-platform-publish-row">
+              ${accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)}
+              <label class="account-platform-select">
+                <input type="checkbox" data-account-domestic-select="${escapeHtml(String(p.account_id || ""))}:${escapeHtml(String(p.platform || ""))}" ${accountDomesticSelectedPlatforms(accountById(String(p.account_id || ""))).includes(String(p.platform || "")) ? "checked" : ""}>
+                <span>勾选</span>
+              </label>
+            </div>`
           : `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`
       )).join("") : `<div class="account-platform-empty muted">暂无${REGION_LABELS[region]}</div>`}
     </div>
@@ -2937,6 +3022,17 @@ function renderAccounts() {
       event.preventDefault();
       event.stopPropagation();
       void handleAccountDomesticPublish(button);
+    });
+  });
+  document.querySelectorAll("[data-account-domestic-select]").forEach((checkbox) => {
+    if (checkbox.dataset.accountDomesticSelectBound === "1") return;
+    checkbox.dataset.accountDomesticSelectBound = "1";
+    checkbox.addEventListener("change", (event) => {
+      const raw = String(event.currentTarget?.dataset?.accountDomesticSelect || "").trim();
+      const [accountId, platform] = raw.split(":");
+      if (!accountId || !platform) return;
+      setAccountDomesticPlatformSelected(accountId, platform, !!event.currentTarget.checked);
+      updateAccountDomesticPublishButtons();
     });
   });
 }
@@ -10383,3 +10479,4 @@ window.addEventListener("hashchange", () => {
   if (requested.view === "terminal-execution") state.terminalRoute = requested.route;
   activateView(requested.view, false, "initial");
 });
+
