@@ -61,6 +61,7 @@ const TERMINAL_MANUAL_PUBLISH_CONFIRM_TEXT = "已发布后点下一个";
 const TERMINAL_LEGACY_MANUAL_CONFIRM_TEXT = "发布已执行，等待人工确认";
 const ACCOUNT_PLATFORM_PUBLISH_DELAY_MS = 15000;
 const ACCOUNT_DOMESTIC_SELECTION_STORAGE_KEY = "gasgx-account-domestic-selection-v1";
+const ACCOUNT_GLOBAL_OPEN_SELECTION_STORAGE_KEY = "gasgx-account-global-open-selection-v1";
 
 const state = {
   accounts: [],
@@ -109,6 +110,7 @@ const accountDomesticOpenInFlightByAccountId = new Map();
 const accountDomesticOpenResultByAccountId = new Map();
 const accountDomesticPublishInFlightByAccountId = new Map();
 const accountDomesticPublishSelectionByAccountId = new Map();
+const accountGlobalOpenSelectionByAccountId = new Map();
 let accountPlatformPublishCountdownTimer = null;
 let accountDomesticPublishCountdownTimer = null;
 
@@ -229,7 +231,40 @@ function saveAccountDomesticSelections() {
   }
 }
 
+function loadAccountGlobalOpenSelections() {
+  try {
+    const raw = localStorage.getItem(ACCOUNT_GLOBAL_OPEN_SELECTION_STORAGE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload !== "object") return;
+    Object.entries(payload).forEach(([accountId, selected]) => {
+      if (!Array.isArray(selected)) return;
+      const key = String(accountId || "").trim();
+      if (!key) return;
+      accountGlobalOpenSelectionByAccountId.set(
+        key,
+        new Set(selected.map((item) => String(item || "").trim()).filter(Boolean)),
+      );
+    });
+  } catch (_error) {
+    // ignore broken local cache
+  }
+}
+
+function saveAccountGlobalOpenSelections() {
+  try {
+    const payload = {};
+    accountGlobalOpenSelectionByAccountId.forEach((selected, accountId) => {
+      payload[String(accountId || "").trim()] = selected instanceof Set ? [...selected] : [];
+    });
+    localStorage.setItem(ACCOUNT_GLOBAL_OPEN_SELECTION_STORAGE_KEY, JSON.stringify(payload));
+  } catch (_error) {
+    // ignore storage failures
+  }
+}
+
 loadAccountDomesticSelections();
+loadAccountGlobalOpenSelections();
 
 const TERMINAL_BROWSER_WARMUP_TIMEOUT_MS = 12000;
 const SHELL_THEME_KEY = "gasgx-shell-theme";
@@ -2150,11 +2185,11 @@ function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "")
   if (state.mode === "ready") {
     return {
       mode: state.mode,
-      buttonClass: "btn primary platform-open-btn platform-wechat-action is-ready",
+      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-compact",
       disabled: false,
-      main: "发布",
-      hint: "直接发布",
-      ariaLabel: `${platformLabelText}发布，直接发布`,
+      main: platformLabelText,
+      hint: "",
+      ariaLabel: `${platformLabelText}`,
     };
   }
   return {
@@ -2175,7 +2210,7 @@ function accountPlatformPublishButtonMarkup(accountId, platform, loginStatus = "
       ${platformIcon(platform)}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
-        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+        ${meta.hint ? `<small class="platform-action-hint">${escapeHtml(meta.hint)}</small>` : ""}
       </span>
     </button>
   `;
@@ -2197,6 +2232,20 @@ function accountDomesticOpenPlatforms(account) {
       const platformMeta = state.platforms.find((item) => item.key === platform);
       const platformRow = platformMap.get(platform);
       if (!platformMeta || platformMeta.region !== "cn" || !platformMeta.can_open_browser) return null;
+      if (!platformRow || !platformRow.enabled) return null;
+      return platformRow;
+    })
+    .filter(Boolean);
+}
+
+function accountGlobalOpenPlatforms(account) {
+  const order = ["tiktok", "x", "linkedin", "facebook", "youtube", "vk", "instagram"];
+  const platformMap = new Map((account?.platforms || []).filter((item) => item && typeof item === "object").map((item) => [String(item.platform || "").trim(), item]));
+  return order
+    .map((platform) => {
+      const platformMeta = state.platforms.find((item) => item.key === platform);
+      const platformRow = platformMap.get(platform);
+      if (!platformMeta || platformMeta.region === "cn" || !platformMeta.can_open_browser) return null;
       if (!platformRow || !platformRow.enabled) return null;
       return platformRow;
     })
@@ -2234,6 +2283,32 @@ function accountDomesticSelectedPlatforms(account) {
     saveAccountDomesticSelections();
   }
   return normalized;
+}
+
+function accountGlobalSelectedPlatforms(account) {
+  const accountId = String(account?.id || "").trim();
+  const available = accountGlobalOpenPlatforms(account).map((item) => String(item.platform || "").trim()).filter(Boolean);
+  if (!available.length) return [];
+  if (!accountGlobalOpenSelectionByAccountId.has(accountId)) return [];
+  const selected = accountGlobalOpenSelectionByAccountId.get(accountId);
+  const normalized = available.filter((platform) => selected.has(platform));
+  if ((selected instanceof Set) && selected.size !== normalized.length) {
+    accountGlobalOpenSelectionByAccountId.set(accountId, new Set(normalized));
+    saveAccountGlobalOpenSelections();
+  }
+  return normalized;
+}
+
+function setAccountGlobalPlatformSelected(accountId, platform, selected) {
+  const key = String(accountId || "").trim();
+  const token = String(platform || "").trim();
+  if (!key || !token) return;
+  const picked = accountGlobalOpenSelectionByAccountId.get(key);
+  const next = picked instanceof Set ? new Set(picked) : new Set();
+  if (selected) next.add(token);
+  else next.delete(token);
+  accountGlobalOpenSelectionByAccountId.set(key, next);
+  saveAccountGlobalOpenSelections();
 }
 
 function setAccountDomesticPlatformSelected(accountId, platform, selected) {
@@ -2363,6 +2438,46 @@ function accountDomesticOpenButtonMarkup(account) {
   `;
 }
 
+function accountGlobalOpenButtonMeta(account, platform, loginStatus = "") {
+  const platformLabelText = platformLabel(platform);
+  const accountId = String(account?.id || "").trim();
+  const selected = accountGlobalSelectedPlatforms(account).includes(String(platform || "").trim());
+  if (!accountId) {
+    return {
+      mode: "empty",
+      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-compact",
+      disabled: true,
+      main: platformLabelText,
+      hint: "",
+      ariaLabel: platformLabelText,
+      checked: false,
+    };
+  }
+  return {
+    mode: selected ? "ready" : "empty",
+    buttonClass: `btn secondary platform-open-btn platform-wechat-action is-compact${selected ? "" : " is-locked"}`,
+    disabled: !selected,
+    main: platformLabelText,
+    hint: "",
+    ariaLabel: selected ? `${platformLabelText}，点击打开浏览器` : `${platformLabelText}未勾选，无法打开浏览器`,
+    checked: selected,
+  };
+}
+
+function accountGlobalOpenButtonMarkup(account, platform, loginStatus = "") {
+  const apiId = accountApiId(account);
+  const meta = accountGlobalOpenButtonMeta(account, platform, loginStatus);
+  const key = accountPlatformPublishKey(account?.id, platform);
+  return `
+    <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-api-id="${escapeHtml(String(apiId))}" data-account-global-open="${escapeHtml(key)}" data-account-global-open-state="${escapeHtml(meta.mode)}" data-platform="${escapeHtml(String(platform || ""))}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
+      ${platformIcon(platform)}
+      <span class="platform-action-copy">
+        <span class="platform-action-main">${escapeHtml(meta.main)}</span>
+      </span>
+    </button>
+  `;
+}
+
 async function handleAccountDomesticOpen(domesticOpenButton) {
   const accountId = String(domesticOpenButton?.dataset.accountDomesticOpen || "").trim();
   const accountApiIdValue = String(domesticOpenButton?.dataset.accountApiId || accountId || "").trim();
@@ -2406,6 +2521,29 @@ async function handleAccountDomesticOpen(domesticOpenButton) {
   }
   updateAccountDomesticOpenButtons();
   updateAccountDomesticPublishButtons();
+}
+
+async function handleAccountGlobalOpen(globalOpenButton) {
+  const accountId = String(globalOpenButton?.dataset.accountGlobalOpen || "").trim().split(":")[0];
+  const platform = String(globalOpenButton?.dataset.platform || "").trim();
+  if (!accountId || !platform) return;
+  const account = accountById(accountId);
+  if (!account) return;
+  const selected = accountGlobalSelectedPlatforms(account);
+  if (!selected.includes(platform)) {
+    showAccountCreateErrorToast("请先勾选该国外平台后再打开浏览器");
+    return;
+  }
+  const restoreButton = setButtonLoading(globalOpenButton, "打开中");
+  try {
+    await api(`/api/accounts/${accountApiId(account)}/platforms/${platform}/open-browser`, { method: "POST" });
+  } catch (error) {
+    showAccountCreateErrorToast(formatFriendlyMessage(error?.message || "国外平台打开失败"));
+    return;
+  } finally {
+    restoreButton();
+  }
+  updateAccountGlobalOpenButtons();
 }
 
 async function handleAccountDomesticPublish(domesticPublishButton) {
@@ -2475,6 +2613,22 @@ function updateAccountDomesticOpenButtons() {
   });
 }
 
+function updateAccountGlobalOpenButtons() {
+  const buttons = document.querySelectorAll("[data-account-global-open]");
+  buttons.forEach((button) => {
+    const accountId = String(button.dataset.accountApiId || "").trim();
+    const platform = String(button.dataset.platform || "").trim();
+    const account = accountById(accountId);
+    if (!account || !platform) return;
+    const meta = accountGlobalOpenButtonMeta(account, platform);
+    button.className = meta.buttonClass;
+    button.disabled = meta.disabled;
+    button.dataset.accountGlobalOpenState = meta.mode;
+    button.setAttribute("aria-label", meta.ariaLabel);
+    button.setAttribute("aria-disabled", meta.disabled ? "true" : "false");
+  });
+}
+
 function accountDomesticPublishState(account) {
   const key = accountDomesticPublishKey(account?.id);
   if (!key) {
@@ -2523,7 +2677,7 @@ function accountDomesticPublishButtonMeta(account) {
       disabled: false,
       main: "一键发布国内平台",
       hint: "",
-      ariaLabel: `${displayName}一键发布国内平台，直接发布`,
+      ariaLabel: `${displayName}一键发布国内平台`,
     };
   }
   return {
@@ -2544,7 +2698,7 @@ function accountDomesticPublishButtonMarkup(account) {
       ${accountDomesticPublishIcon()}
       <span class="platform-action-copy">
         <span class="platform-action-main">${escapeHtml(meta.main)}</span>
-        <small class="platform-action-hint">${escapeHtml(meta.hint)}</small>
+        ${meta.hint ? `<small class="platform-action-hint">${escapeHtml(meta.hint)}</small>` : ""}
       </span>
     </button>
   `;
@@ -2737,14 +2891,24 @@ function renderPlatformStatusGroup(platforms, region) {
               const account = accountById(String(p.account_id || ""));
               const checked = accountDomesticSelectedPlatforms(account).includes(String(p.platform || ""));
               return `<div class="account-platform-publish-row">
-                ${accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)}
-                <label class="account-platform-select account-platform-select-overlay" title="勾选后参与一键打开/发布">
+                <label class="account-platform-select account-platform-select-chip" title="勾选后参与一键打开/发布">
                   <input type="checkbox" data-account-domestic-select="${escapeHtml(String(p.account_id || ""))}:${escapeHtml(String(p.platform || ""))}" ${checked ? "checked" : ""}>
                   <span>勾选</span>
                 </label>
+                ${accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)}
               </div>`;
             })()
-          : `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`
+          : (() => {
+              const account = accountById(String(p.account_id || ""));
+              const checked = accountGlobalSelectedPlatforms(account).includes(String(p.platform || ""));
+              return `<div class="account-platform-publish-row">
+                <label class="account-platform-select account-platform-select-chip" title="勾选后可打开浏览器">
+                  <input type="checkbox" data-account-global-select="${escapeHtml(String(p.account_id || ""))}:${escapeHtml(String(p.platform || ""))}" ${checked ? "checked" : ""}>
+                  <span>勾选</span>
+                </label>
+                ${accountGlobalOpenButtonMarkup(account, p.platform, p.login_status)}
+              </div>`;
+            })()
       )).join("") : `<div class="account-platform-empty muted">暂无${REGION_LABELS[region]}</div>`}
     </div>
   </div>`;
@@ -3008,6 +3172,7 @@ function renderAccounts() {
     </article>`;
   }).join("") || `<div class="muted">${keyword ? "没有匹配的账号" : "暂无账号"}</div>`;
   updateAccountDomesticOpenButtons();
+  updateAccountGlobalOpenButtons();
   updateAccountPlatformPublishButtons();
   updateAccountDomesticPublishButtons();
   document.querySelectorAll("[data-account-domestic-open]").forEach((button) => {
@@ -3040,6 +3205,29 @@ function renderAccounts() {
     });
     checkbox.addEventListener("click", (event) => {
       event.stopPropagation();
+    });
+  });
+  document.querySelectorAll("[data-account-global-select]").forEach((checkbox) => {
+    if (checkbox.dataset.accountGlobalSelectBound === "1") return;
+    checkbox.dataset.accountGlobalSelectBound = "1";
+    checkbox.addEventListener("change", (event) => {
+      const raw = String(event.currentTarget?.dataset?.accountGlobalSelect || "").trim();
+      const [accountId, platform] = raw.split(":");
+      if (!accountId || !platform) return;
+      setAccountGlobalPlatformSelected(accountId, platform, !!event.currentTarget.checked);
+      updateAccountGlobalOpenButtons();
+    });
+    checkbox.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+  });
+  document.querySelectorAll("[data-account-global-open]").forEach((button) => {
+    if (button.dataset.accountGlobalOpenBound === "1") return;
+    button.dataset.accountGlobalOpenBound = "1";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleAccountGlobalOpen(button);
     });
   });
 }
