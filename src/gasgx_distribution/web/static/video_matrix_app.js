@@ -571,10 +571,19 @@ async function init() {
 function bindNarrativePanelToggle() {
   const toggle = $("narrativePanelToggle");
   if (!toggle) return;
-  toggle.onclick = () => {
+  const panel = $("narrativeTemplatePanel");
+  const togglePanel = () => {
     narrativePanelCollapsed = !narrativePanelCollapsed;
     renderNarrativePanelVisibility();
   };
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    togglePanel();
+  };
+  panel?.querySelector(".narrative-template-toggle-row")?.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    togglePanel();
+  });
   renderNarrativePanelVisibility();
 }
 
@@ -590,10 +599,19 @@ function renderNarrativePanelVisibility() {
 function bindSourcePanelToggle() {
   const toggle = $("sourcePanelToggle");
   if (!toggle) return;
-  toggle.onclick = () => {
+  const panel = $("sourcePanel");
+  const togglePanel = () => {
     sourcePanelCollapsed = !sourcePanelCollapsed;
     renderSourcePanelVisibility();
   };
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    togglePanel();
+  };
+  panel?.querySelector(".source-panel-toggle-row")?.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    togglePanel();
+  });
   renderSourcePanelVisibility();
 }
 
@@ -609,10 +627,19 @@ function renderSourcePanelVisibility() {
 function bindFirstScreenPanelToggle() {
   const toggle = $("firstScreenPanelToggle");
   if (!toggle) return;
-  toggle.onclick = () => {
+  const panel = $("firstScreenPanel");
+  const togglePanel = () => {
     firstScreenPanelCollapsed = !firstScreenPanelCollapsed;
     renderFirstScreenPanelVisibility();
   };
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    togglePanel();
+  };
+  panel?.querySelector(".cover-panel-toggle-row")?.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    togglePanel();
+  });
   renderFirstScreenPanelVisibility();
 }
 
@@ -628,10 +655,19 @@ function renderFirstScreenPanelVisibility() {
 function bindModelMaterialPanelToggle() {
   const toggle = $("modelMaterialPanelToggle");
   if (!toggle) return;
-  toggle.onclick = () => {
+  const panel = $("modelMaterialPanel");
+  const togglePanel = () => {
     modelMaterialPanelCollapsed = !modelMaterialPanelCollapsed;
     renderModelMaterialPanelVisibility();
   };
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    togglePanel();
+  };
+  panel?.querySelector(".cover-panel-toggle-row")?.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    togglePanel();
+  });
   renderModelMaterialPanelVisibility();
 }
 
@@ -647,10 +683,19 @@ function renderModelMaterialPanelVisibility() {
 function bindVideoTemplatePanelToggle() {
   const toggle = $("videoTemplatePanelToggle");
   if (!toggle) return;
-  toggle.onclick = () => {
+  const panel = $("videoTemplatePanel");
+  const togglePanel = () => {
     videoTemplatePanelCollapsed = !videoTemplatePanelCollapsed;
     renderVideoTemplatePanelVisibility();
   };
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    togglePanel();
+  };
+  panel?.querySelector(".cover-panel-toggle-row")?.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    togglePanel();
+  });
   renderVideoTemplatePanelVisibility();
 }
 
@@ -666,10 +711,19 @@ function renderVideoTemplatePanelVisibility() {
 function bindEndingPanelToggle() {
   const toggle = $("endingPanelToggle");
   if (!toggle) return;
-  toggle.onclick = () => {
+  const panel = $("endingPanel");
+  const togglePanel = () => {
     endingPanelCollapsed = !endingPanelCollapsed;
     renderEndingPanelVisibility();
   };
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    togglePanel();
+  };
+  panel?.querySelector(".cover-panel-toggle-row")?.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    togglePanel();
+  });
   renderEndingPanelVisibility();
 }
 

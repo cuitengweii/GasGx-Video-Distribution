@@ -291,6 +291,13 @@
           <p id="jobMessage">点击生成后，这里会显示每一步进度。</p>
           <div id="dedupeReport" class="dedupe-report hidden"></div>
         </div>
+      </section>
+
+      <section class="source-panel is-collapsed" id="sourcePanel">
+        <div class="section-title source-panel-toggle-row">
+          <div class="source-panel-toggle-title"><span>SOURCE LIBRARY</span><b>视频碎片素材目录</b></div>
+          <button id="sourcePanelToggle" class="source-panel-toggle" type="button" aria-expanded="false" aria-controls="sourcePanelBody">展开</button>
+        </div>
         <div class="narrative-template-panel is-collapsed" id="narrativeTemplatePanel">
           <div class="subsection-title narrative-template-toggle-row">
             <div class="narrative-template-toggle-title"><span>NARRATIVE</span><b>叙事骨架轮换</b></div>
@@ -298,15 +305,8 @@
           </div>
           <div class="narrative-template-body" id="narrativePanelBody">
             <div class="narrative-template-note">本批视频会按以下 5 类结构轮换生成。</div>
-            <div data-narrative-templates class="narrative-template-list compact"></div>
+            <div id="narrativeTemplates" data-narrative-templates class="narrative-template-list compact"></div>
           </div>
-        </div>
-      </section>
-
-      <section class="source-panel is-collapsed" id="sourcePanel">
-        <div class="section-title source-panel-toggle-row">
-          <div class="source-panel-toggle-title"><span>SOURCE LIBRARY</span><b>视频碎片素材目录</b></div>
-          <button id="sourcePanelToggle" class="source-panel-toggle" type="button" aria-expanded="false" aria-controls="sourcePanelBody">展开</button>
         </div>
         <div class="source-panel-grid" id="sourcePanelBody">
           <div class="source-library-column">
@@ -341,10 +341,6 @@
               <p class="muted">按顺序选择素材分类和片段秒数，算法会继续按背景音乐节拍对齐。</p>
               <div id="compositionRows" class="composition-rows"></div>
               <button id="addCompositionRow" class="secondary" type="button">添加片段</button>
-            </div>
-            <div class="source-config-column narrative-template-group">
-              <div class="subsection-title"><span>NARRATIVE</span><b>叙事骨架轮换</b></div>
-              <div id="narrativeTemplates" data-narrative-templates class="narrative-template-list"></div>
             </div>
           </div>
         </div>

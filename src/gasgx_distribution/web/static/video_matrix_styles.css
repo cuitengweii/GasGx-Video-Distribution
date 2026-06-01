@@ -295,7 +295,7 @@ body.bgm-modal-open .sidebar {
 .hero p, .section-title span { color: var(--green); font-weight: 900; font-size: 12px; letter-spacing: .08em; }
 .subsection-title {
   display: flex;
-  align-items: end;
+  align-items: center;
   gap: 6px;
   margin: 18px 0 10px;
   padding-top: 16px;
@@ -309,6 +309,7 @@ body.bgm-modal-open .sidebar {
 }
 .subsection-title b {
   font-size: 15px;
+  line-height: 1;
 }
 .hero h1 { margin: 10px 0 12px; font-size: 32px; }
 .hero span, .muted { color: var(--muted); }
@@ -854,12 +855,17 @@ body.bgm-modal-open .sidebar {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 10px;
+  cursor: pointer;
 }
 .source-panel-toggle-title {
   display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
+}
+.source-panel-toggle-title span,
+.source-panel-toggle-title b {
+  line-height: 1;
 }
 .source-panel-toggle {
   width: auto;
@@ -885,12 +891,17 @@ body.bgm-modal-open .sidebar {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  cursor: pointer;
 }
 .cover-panel-toggle-title {
   display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
+}
+.cover-panel-toggle-title span,
+.cover-panel-toggle-title b {
+  line-height: 1;
 }
 .cover-panel-toggle {
   width: auto;
@@ -937,8 +948,8 @@ body.bgm-modal-open .sidebar {
 .source-panel .section-title {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 8px;
   position: relative;
   z-index: 1;
@@ -1231,12 +1242,17 @@ body.bgm-modal-open .sidebar {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  cursor: pointer;
 }
 .narrative-template-toggle-title {
   display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
+}
+.narrative-template-toggle-title span,
+.narrative-template-toggle-title b {
+  line-height: 1;
 }
 .narrative-panel-toggle {
   width: auto;
