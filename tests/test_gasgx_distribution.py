@@ -4933,6 +4933,7 @@ def test_terminal_wechat_publish_command_follows_publish_mode(monkeypatch, tmp_p
     monkeypatch.setattr(mp, "_consumed_index", lambda today=None: set())
     monkeypatch.setattr(mp, "prepare_workspace", lambda item: item.workspace.mkdir(parents=True, exist_ok=True))
     popen_calls: list[dict[str, Any]] = []
+    clash_switch_calls: list[dict[str, Any]] = []
 
     class FakeProcess:
         pid = 4321
@@ -4941,6 +4942,7 @@ def test_terminal_wechat_publish_command_follows_publish_mode(monkeypatch, tmp_p
         popen_calls.append({"cmd": list(cmd), "env": dict(kwargs.get("env") or {})})
         return FakeProcess()
 
+    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", lambda account: clash_switch_calls.append(dict(account)) or True)
     monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
 
     run = service._start_terminal_wechat_publish({"id": 1, "color": "#3B82F6"}, {"id": 1})
@@ -4958,6 +4960,7 @@ def test_terminal_wechat_publish_command_follows_publish_mode(monkeypatch, tmp_p
     assert popen_calls[0]["env"]["CYBERCAR_VPN_NODE_KEY"] == "vmess-ca-knyr-b-psakt-net-20101-加拿大-can-x1-0-ver10s"
     assert popen_calls[0]["env"]["CYBERCAR_VPN_COUNTRY"] == "CA"
     assert popen_calls[0]["env"]["CYBERCAR_PROXY"] == "http://127.0.0.1:7890"
+    assert clash_switch_calls
 
     settings_payload["publish_mode"] = "publish"
     monkeypatch.setattr(
@@ -4992,6 +4995,7 @@ def test_terminal_wechat_publish_command_follows_publish_mode(monkeypatch, tmp_p
     assert "--wechat-publish-now" not in cmd
     assert "--wechat-upload-only" not in cmd
     assert "--no-save-draft" not in cmd
+    assert len(clash_switch_calls) >= 2
     assert popen_calls[1]["env"]["CYBERCAR_VPN_NODE_KEY"] == "vmess-ca-knyr-b-psakt-net-20101-加拿大-can-x1-0-ver10s"
 
 

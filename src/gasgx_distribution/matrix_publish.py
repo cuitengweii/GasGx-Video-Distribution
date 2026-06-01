@@ -1165,6 +1165,11 @@ def _run_publish_item(
             if fast_publish:
                 env["CYBERCAR_FAST_PUBLISH"] = "1"
             if vpn_enabled_for_item and (item.vpn_node_key or item.vpn_proxy_url):
+                if item.vpn_node_key:
+                    try:
+                        service._configure_account_clash_pure_vpn({"vpn_node_key": item.vpn_node_key})  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
                 time.sleep(0.35)
                 service._close_chrome_browser_by_debug_port(item.debug_port)  # type: ignore[attr-defined]
                 time.sleep(0.35)

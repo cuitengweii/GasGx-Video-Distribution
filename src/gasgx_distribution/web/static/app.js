@@ -2733,13 +2733,17 @@ function renderPlatformStatusGroup(platforms, region) {
     <div class="browser-actions">
       ${items.length ? items.map((p) => (
         region === "cn"
-          ? `<div class="account-platform-publish-row">
-              ${accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)}
-              <label class="account-platform-select">
-                <input type="checkbox" data-account-domestic-select="${escapeHtml(String(p.account_id || ""))}:${escapeHtml(String(p.platform || ""))}" ${accountDomesticSelectedPlatforms(accountById(String(p.account_id || ""))).includes(String(p.platform || "")) ? "checked" : ""}>
-                <span>勾选</span>
-              </label>
-            </div>`
+          ? (() => {
+              const account = accountById(String(p.account_id || ""));
+              const checked = accountDomesticSelectedPlatforms(account).includes(String(p.platform || ""));
+              return `<div class="account-platform-publish-row">
+                ${accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)}
+                <label class="account-platform-select account-platform-select-overlay" title="勾选后参与一键打开/发布">
+                  <input type="checkbox" data-account-domestic-select="${escapeHtml(String(p.account_id || ""))}:${escapeHtml(String(p.platform || ""))}" ${checked ? "checked" : ""}>
+                  <span>勾选</span>
+                </label>
+              </div>`;
+            })()
           : `<button class="btn secondary platform-open-btn" data-open="${p.account_id}:${p.platform}">${platformIcon(p.platform)}<span>${platformLabel(p.platform)}</span><span class="platform-inline-status ${platformStatusClass(p.login_status)}">${platformStatusIcon(p.login_status)}${platformStatusLabel(p.login_status)}</span></button>`
       )).join("") : `<div class="account-platform-empty muted">暂无${REGION_LABELS[region]}</div>`}
     </div>
@@ -3033,6 +3037,9 @@ function renderAccounts() {
       if (!accountId || !platform) return;
       setAccountDomesticPlatformSelected(accountId, platform, !!event.currentTarget.checked);
       updateAccountDomesticPublishButtons();
+    });
+    checkbox.addEventListener("click", (event) => {
+      event.stopPropagation();
     });
   });
 }

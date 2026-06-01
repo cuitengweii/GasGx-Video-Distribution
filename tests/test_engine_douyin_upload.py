@@ -466,7 +466,7 @@ def test_stage_generic_upload_via_page_set_accepts_douyin_editor_ready_without_f
     assert page.set.calls == [str(target)]
 
 
-def test_fill_draft_once_generic_runs_douyin_statement_title_before_caption(monkeypatch, tmp_path) -> None:
+def test_fill_draft_once_generic_douyin_fast_path_skips_title_and_statement(monkeypatch, tmp_path) -> None:
     target = tmp_path / "sample.mp4"
     target.write_bytes(b"x")
     calls: list[tuple[str, str]] = []
@@ -527,12 +527,7 @@ def test_fill_draft_once_generic_runs_douyin_statement_title_before_caption(monk
     )
 
     assert result is page
-    assert calls[:3] == [
-        ("title", "video title"),
-        ("caption", ""),
-        ("title", "video title"),
-    ]
-    assert ("statement", "无需添加自主声明") in calls
+    assert calls == [("caption", "")]
     assert not any(kind == "collection" for kind, _value in calls)
 
 

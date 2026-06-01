@@ -6771,6 +6771,11 @@ def _start_terminal_wechat_publish(window: dict[str, Any], current: dict[str, An
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stream = log_path.open("w", encoding="utf-8", errors="replace")
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if distribution_vpn_enabled() and str(account.get("vpn_node_key") or "").strip():
+        try:
+            _configure_account_clash_pure_vpn(account)
+        except Exception:
+            pass
     with _account_network_env(account):
         env = {
             **os.environ,

@@ -2607,9 +2607,8 @@ select option {
 }
 
 .account-platform-publish-row {
+  position: relative;
   display: inline-flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .account-platform-select {
@@ -2622,11 +2621,39 @@ select option {
   user-select: none;
 }
 
+.account-platform-select-overlay {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 6px 2px 4px;
+  border-radius: 999px;
+  background: rgba(15, 15, 15, 0.72);
+  border: 1px solid rgba(93, 214, 44, 0.22);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.16) inset;
+}
+
 .account-platform-select input[type="checkbox"] {
   width: 13px;
   height: 13px;
   margin: 0;
   accent-color: #5dd62c;
+}
+
+.account-platform-select-overlay input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+}
+
+.account-platform-select-overlay span {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.account-platform-publish-row .platform-open-btn {
+  padding-top: 22px;
+  padding-left: 10px;
 }
 
 .account-platform-empty {

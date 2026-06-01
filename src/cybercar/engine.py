@@ -17427,6 +17427,16 @@ def set_fast_publish_mode(enabled: Optional[bool]) -> None:
 
 
 def _resolve_post_editor_context(page: ChromiumPage, timeout_seconds: int = 12) -> Any:
+    current_url = _page_current_url(page)
+    if (
+        "creator.douyin.com/creator-micro/content/upload" in current_url
+        or "creator.douyin.com/creator-micro/content/post/video" in current_url
+        or "creator.douyin.com/creator-micro/content/post/image" in current_url
+        or "creator.douyin.com/creator-micro/content/post/create" in current_url
+    ):
+        _log(f"[Uploader:douyin] Top-level editor context selected by URL: {current_url}")
+        return page
+
     # 视频号发布页内容在 iframe 中，重试锁定可用 iframe，避免命中顶层隐藏控件。
     effective_timeout = int(timeout_seconds)
     if _fast_publish_mode_enabled():
@@ -24771,6 +24781,9 @@ def _force_douyin_caption(primary_ctx: Any, fallback_ctx: Any, caption: str, _re
 def _fill_caption_generic(primary_ctx: Any, fallback_ctx: Any, caption: str, platform_name: str) -> None:
     caption = _prepare_caption_for_platform(caption, platform_name=platform_name)
     verify_marker = _caption_verification_marker(caption)
+    if platform_name == "douyin" and _force_douyin_caption(primary_ctx, fallback_ctx, caption):
+        return
+
     selectors: tuple[str, ...] = (
         "css:textarea",
         "xpath://textarea",
@@ -31934,10 +31947,17 @@ def _finalize_douyin_publish(
     current_mode = str(mode or "immediate")
     confirmed = _click_douyin_publish_confirm_button(primary_ctx, fallback_ctx)
     if not confirmed:
+        _log("[Uploader:douyin] No separate confirm dialog detected after primary publish click; short manage-page verification only.")
+        _humanized_publish_pause(
+            "douyin no-confirm publish settle",
+            minimum_seconds=1.5,
+            maximum_seconds=2.5,
+        )
         matched = _douyin_manage_page_verification_match(
             primary_ctx,
             fallback_ctx,
             expected_tokens or (),
+            timeout_seconds=5.0,
         )
         if matched:
             _log(
@@ -32815,29 +32835,14 @@ def _fill_draft_once_generic(
             raise RuntimeError("tiktok caption fill verification failed before publish.")
     else:
         if platform_name == "douyin":
-            # Douyin surfaces the declaration gate before text fields on some
-            # accounts; settle it first so title/description filling is not
-            # interrupted later by the popup.
-            _log("[Uploader:douyin] Self statement has highest priority; defer click until Douyin editor is interactive.")
-            douyin_title = _build_xiaohongshu_title_from_caption(final_caption, limit=30)
-            if douyin_title:
-                _fill_optional_platform_title_field(
-                    ctx,
-                    page,
-                    platform_name="douyin",
-                    title=douyin_title,
-                    timeout_seconds=2,
-                    strict=False,
-                )
+            _log("[Uploader:douyin] Fast path: skip title and pre-publish self-statement fields.")
         _fill_caption_generic(ctx, page, text_payload, platform_name=platform_name)
         if platform_name == "douyin":
-            # If Douyin restores a previous unfinished draft while focusing the
-            # caption editor, that restored draft can overwrite the declaration
-            # choice made above. Re-assert it after caption verification, right
-            # before publish controls are used.
-            page = _select_fresh_douyin_post_editor_tab(page)
-            ctx = _resolve_post_editor_context(page, timeout_seconds=4)
-            if "/creator-micro/content/manage" in _page_current_url(ctx):
+            # Douyin fast path: description is the only required text field.
+            # If the site has already moved to manage after the caption action,
+            # verify the content there instead of spending time on edit fields.
+            current_url = _page_current_url(ctx)
+            if "/creator-micro/content/manage" in current_url:
                 matched = _douyin_manage_page_verification_match(
                     ctx,
                     page,
@@ -32850,18 +32855,6 @@ def _fill_draft_once_generic(
                     )
                     return ctx
                 raise RuntimeError("douyin editor context drifted to content manage before publish.")
-            douyin_title = _build_xiaohongshu_title_from_caption(final_caption, limit=30)
-            if douyin_title:
-                _fill_optional_platform_title_field(
-                    ctx,
-                    page,
-                    platform_name="douyin",
-                    title=douyin_title,
-                    timeout_seconds=10,
-                    strict=True,
-                )
-            if not _select_douyin_self_statement(ctx, page, "无需添加自主声明", max_attempts=3):
-                raise RuntimeError("douyin self statement verification failed before publish.")
     if platform_name == "xiaohongshu" and not _is_image_file(target):
         _fill_xiaohongshu_title_from_caption(ctx, page, final_caption)
     if platform_name == "douyin":
@@ -33127,6 +33120,10 @@ def _fill_draft_once_generic(
             actions = _collect_visible_action_texts(ctx, page)
             if actions:
                 _log(f"[Uploader:{platform_name}] Visible action texts: {actions}")
+            if platform_name == "douyin":
+                raise RuntimeError(
+                    "douyin E_PUBLISH_BUTTON_MISSING: publish button was not located; skip draft fallback by fast policy."
+                )
             if _fallback_publish_to_draft("publish button was not located"):
                 return ctx
         try:
@@ -33177,6 +33174,22 @@ def _fill_draft_once_generic(
                     return ctx
                 if net_reason:
                     _log(f"[Uploader:kuaishou] Publish network probe did not confirm success: {net_reason}")
+            if platform_name == "douyin":
+                matched = _douyin_manage_page_verification_match(
+                    ctx,
+                    page,
+                    publish_verify_tokens,
+                    timeout_seconds=5.0,
+                )
+                if matched:
+                    _log(
+                        f"[Uploader:douyin] Publish verified in manage page after confirmation error: {matched}"
+                    )
+                    _log(f"[Success:{platform_name}] 发布已确认（mode={douyin_mode}）。")
+                    return ctx
+                raise RuntimeError(
+                    "douyin E_PUBLISH_UNCONFIRMED: publish was not confirmed; skip draft fallback by fast policy."
+                ) from exc
             if _fallback_publish_to_draft("publish was not confirmed", exc):
                 return ctx
             raise

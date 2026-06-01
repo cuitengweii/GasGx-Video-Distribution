@@ -563,7 +563,7 @@ def test_select_bilibili_partition_accepts_fallback_selection(monkeypatch) -> No
     assert any("Partition fallback selected" in line for line in logs)
 
 
-def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
+def test_fill_draft_once_generic_douyin_publish_unconfirmed_skips_draft_fallback(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -622,7 +622,7 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
     monkeypatch.setattr(engine, "_log", lambda *_args, **_kwargs: None)
 
     page = FakePage()
-    with pytest.raises(RuntimeError, match="E_PUBLISH_UNCONFIRMED_DRAFT_SAVED"):
+    with pytest.raises(RuntimeError, match="E_PUBLISH_UNCONFIRMED"):
         engine._fill_draft_once_generic(
             page=page,
             target=target,
@@ -637,9 +637,9 @@ def test_fill_draft_once_generic_douyin_publish_unconfirmed_falls_back_to_draft(
             collection_name="CyberCar",
     )
 
-    assert ("SAVE_DRAFT",) in clicked_button_texts
+    assert ("SAVE_DRAFT",) not in clicked_button_texts
     assert collection_calls == []
-    assert self_statement_calls == ["无需添加自主声明"]
+    assert self_statement_calls == []
 
 
 def test_fill_draft_once_generic_douyin_uses_generic_publish_fallback(

@@ -1007,12 +1007,14 @@ def test_wechat_publish_uses_account_vpn_for_bound_accounts(monkeypatch, tmp_pat
             (workspaces[0] / "uploaded_records_wechat.jsonl").write_text('{"ok":true}\n', encoding="utf-8")
         return SimpleNamespace(returncode=0)
 
+    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", fake_configure_account_clash)
     monkeypatch.setattr("gasgx_distribution.matrix_publish.subprocess.run", fake_run)
 
     result = run_wechat_publish()
 
     assert result["ok"] is True
-    assert clash_calls == []
+    assert clash_calls
+    assert str(clash_calls[0].get("vpn_node_key") or "").strip() == vpn_key
     assert envs
     vpn_env = next(env for env in envs if "CYBERCAR_VPN_NODE_KEY" in env)
     assert vpn_env["CYBERCAR_VPN_NODE_KEY"] == vpn_key
@@ -1044,6 +1046,7 @@ def test_wechat_publish_ignores_account_vpn_when_global_switch_is_off(monkeypatc
     )
     envs: list[dict[str, str]] = []
     calls: list[list[str]] = []
+    clash_calls: list[dict[str, Any]] = []
 
     def fake_run(cmd, **kwargs):
         calls.append(list(cmd))
@@ -1054,11 +1057,13 @@ def test_wechat_publish_ignores_account_vpn_when_global_switch_is_off(monkeypatc
             (workspaces[0] / "uploaded_records_wechat.jsonl").write_text('{"ok":true}\n', encoding="utf-8")
         return SimpleNamespace(returncode=0)
 
+    monkeypatch.setattr(service, "_configure_account_clash_pure_vpn", lambda account: clash_calls.append(dict(account)) or True)
     monkeypatch.setattr("gasgx_distribution.matrix_publish.subprocess.run", fake_run)
 
     result = run_wechat_publish()
 
     assert result["ok"] is True
+    assert clash_calls == []
     assert envs
     assert all("CYBERCAR_VPN_NODE_KEY" not in env for env in envs)
     assert all("CYBERCAR_PROXY" not in env for env in envs)
