@@ -2169,7 +2169,7 @@ function accountPlatformPublishState(accountId, platform, loginStatus = "") {
   return { key, mode: "ready", readyAt: 0, remaining: 0 };
 }
 
-function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "") {
+function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "", selected = true) {
   const platformLabelText = platformLabel(platform);
   const state = accountPlatformPublishState(accountId, platform, loginStatus);
   if (state.mode === "publishing") {
@@ -2185,11 +2185,11 @@ function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "")
   if (state.mode === "ready") {
     return {
       mode: state.mode,
-      buttonClass: "btn secondary platform-open-btn platform-wechat-action is-compact",
-      disabled: false,
+      buttonClass: `btn secondary platform-open-btn platform-wechat-action is-compact${selected ? " is-selected" : " is-locked"}`,
+      disabled: !selected,
       main: platformLabelText,
       hint: "",
-      ariaLabel: `${platformLabelText}`,
+      ariaLabel: selected ? `${platformLabelText}` : `${platformLabelText}未勾选，无法点击`,
     };
   }
   return {
@@ -2202,9 +2202,9 @@ function accountPlatformPublishButtonMeta(accountId, platform, loginStatus = "")
   };
 }
 
-function accountPlatformPublishButtonMarkup(accountId, platform, loginStatus = "") {
+function accountPlatformPublishButtonMarkup(accountId, platform, loginStatus = "", selected = true) {
   const key = accountPlatformPublishKey(accountId, platform);
-  const meta = accountPlatformPublishButtonMeta(accountId, platform, loginStatus);
+  const meta = accountPlatformPublishButtonMeta(accountId, platform, loginStatus, selected);
   return `
     <button class="${meta.buttonClass}" type="button" data-no-global-loading="1" data-account-platform-action="${escapeHtml(key)}" data-account-platform-action-state="${escapeHtml(meta.mode)}" data-account-platform-login-status="${escapeHtml(String(loginStatus || ""))}" aria-label="${escapeHtml(meta.ariaLabel)}" aria-disabled="${meta.disabled ? "true" : "false"}"${meta.disabled ? "disabled" : ""}>
       ${platformIcon(platform)}
@@ -2455,7 +2455,7 @@ function accountGlobalOpenButtonMeta(account, platform, loginStatus = "") {
   }
   return {
     mode: selected ? "ready" : "empty",
-    buttonClass: `btn secondary platform-open-btn platform-wechat-action is-compact${selected ? "" : " is-locked"}`,
+    buttonClass: `btn secondary platform-open-btn platform-wechat-action is-compact${selected ? " is-selected" : " is-locked"}`,
     disabled: !selected,
     main: platformLabelText,
     hint: "",
@@ -2782,7 +2782,9 @@ function updateAccountPlatformPublishButtons() {
     const actionKey = String(button.dataset.accountPlatformAction || "").trim();
     const [accountId, platform] = actionKey.split(":");
     const loginStatus = String(button.dataset.accountPlatformLoginStatus || "").trim();
-    const meta = accountPlatformPublishButtonMeta(accountId, platform, loginStatus);
+    const account = accountById(accountId);
+    const selected = account ? accountDomesticSelectedPlatforms(account).includes(String(platform || "").trim()) : true;
+    const meta = accountPlatformPublishButtonMeta(accountId, platform, loginStatus, selected);
     const nextHtml = `
       ${platformIcon(platform)}
       <span class="platform-action-copy">
@@ -2895,7 +2897,7 @@ function renderPlatformStatusGroup(platforms, region) {
                   <input type="checkbox" data-account-domestic-select="${escapeHtml(String(p.account_id || ""))}:${escapeHtml(String(p.platform || ""))}" ${checked ? "checked" : ""}>
                   <span>勾选</span>
                 </label>
-                ${accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status)}
+                ${accountPlatformPublishButtonMarkup(p.account_id, p.platform, p.login_status, checked)}
               </div>`;
             })()
           : (() => {
@@ -3201,7 +3203,7 @@ function renderAccounts() {
       const [accountId, platform] = raw.split(":");
       if (!accountId || !platform) return;
       setAccountDomesticPlatformSelected(accountId, platform, !!event.currentTarget.checked);
-      updateAccountDomesticPublishButtons();
+      updateAccountPlatformPublishButtons();
     });
     checkbox.addEventListener("click", (event) => {
       event.stopPropagation();

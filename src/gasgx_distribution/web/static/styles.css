@@ -2688,9 +2688,20 @@ select option {
   border-color: rgba(93, 214, 44, 0.24);
 }
 
+.platform-wechat-action.is-compact.is-selected {
+  color: #f1ffe7;
+  background: linear-gradient(180deg, rgba(93, 214, 44, 0.22), rgba(93, 214, 44, 0.14));
+  border-color: rgba(93, 214, 44, 0.34);
+}
+
 .platform-wechat-action.is-compact[disabled],
 .platform-wechat-action.is-compact.is-locked {
   opacity: 0.58;
+}
+
+.platform-wechat-action.is-compact.is-locked {
+  background: #151515;
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .platform-wechat-action .platform-logo {
